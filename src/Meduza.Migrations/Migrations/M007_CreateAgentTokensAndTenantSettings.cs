@@ -14,8 +14,8 @@ public class M007_CreateAgentTokensAndTenantSettings : Migration
             .WithColumn("max_tokens_per_agent").AsInt32().NotNullable().WithDefaultValue(3)
             .WithColumn("agent_heartbeat_interval_seconds").AsInt32().NotNullable().WithDefaultValue(60)
             .WithColumn("agent_offline_threshold_seconds").AsInt32().NotNullable().WithDefaultValue(300)
-            .WithColumn("created_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
-            .WithColumn("updated_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
+            .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
+            .WithColumn("updated_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
 
         Create.Table("agent_tokens")
             .WithColumn("id").AsGuid().PrimaryKey()
@@ -23,13 +23,12 @@ public class M007_CreateAgentTokensAndTenantSettings : Migration
             .WithColumn("token_hash").AsString(128).NotNullable().Unique()
             .WithColumn("token_prefix").AsString(12).NotNullable()
             .WithColumn("description").AsString(500).Nullable()
-            .WithColumn("expires_at").AsDateTimeOffset().NotNullable()
-            .WithColumn("created_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
-            .WithColumn("revoked_at").AsDateTimeOffset().Nullable()
-            .WithColumn("last_used_at").AsDateTimeOffset().Nullable();
+            .WithColumn("expires_at").AsCustom("timestamptz").NotNullable()
+            .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
+            .WithColumn("revoked_at").AsCustom("timestamptz").Nullable()
+            .WithColumn("last_used_at").AsCustom("timestamptz").Nullable();
 
         Create.Index("ix_agent_tokens_agent_id").OnTable("agent_tokens").OnColumn("agent_id");
-        Create.Index("ix_agent_tokens_token_hash").OnTable("agent_tokens").OnColumn("token_hash");
     }
 
     public override void Down()

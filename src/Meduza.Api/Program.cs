@@ -16,11 +16,28 @@ using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+var databaseProvider = builder.Configuration.GetValue<string>("Database:Provider") ?? "Postgres";
+var isSqlite = databaseProvider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase);
+
+string? connectionString = null;
+if (!isSqlite)
+{
+    connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+        ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+}
+
+var sqliteConnectionString = builder.Configuration.GetConnectionString("SqliteConnection")
+    ?? "Data Source=meduza;Mode=Memory;Cache=Shared";
 
 // Database connection factory
-builder.Services.AddSingleton<IDbConnectionFactory>(new PostgresConnectionFactory(connectionString));
+if (isSqlite)
+{
+    builder.Services.AddSingleton<IDbConnectionFactory>(new SqliteConnectionFactory(sqliteConnectionString));
+}
+else
+{
+    builder.Services.AddSingleton<IDbConnectionFactory>(new PostgresConnectionFactory(connectionString!));
+}
 
 // Repositories
 builder.Services.AddScoped<IClientRepository, ClientRepository>();
@@ -72,10 +89,19 @@ builder.Services.AddCors(options =>
 
 // FluentMigrator
 builder.Services.AddFluentMigratorCore()
-    .ConfigureRunner(rb => rb
-        .AddPostgres()
-        .WithGlobalConnectionString(connectionString)
-        .ScanIn(typeof(Meduza.Migrations.Migrations.M001_CreateClients).Assembly).For.Migrations())
+    .ConfigureRunner(rb =>
+    {
+        if (isSqlite)
+        {
+            rb.AddSQLite().WithGlobalConnectionString(sqliteConnectionString);
+        }
+        else
+        {
+            rb.AddPostgres().WithGlobalConnectionString(connectionString!);
+        }
+
+        rb.ScanIn(typeof(Meduza.Migrations.Migrations.M001_CreateClients).Assembly).For.Migrations();
+    })
     .AddLogging(lb => lb.AddFluentMigratorConsole());
 
 var app = builder.Build();

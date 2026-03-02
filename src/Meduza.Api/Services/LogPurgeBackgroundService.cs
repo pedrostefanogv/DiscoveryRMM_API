@@ -1,4 +1,5 @@
 using Meduza.Core.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace Meduza.Api.Services;
@@ -8,13 +9,13 @@ public class LogPurgeBackgroundService : BackgroundService
     private static readonly int[] DefaultAllowedDays = new[] { 30, 90, 180, 365 };
     private const int DefaultRetentionDays = 90;
 
-    private readonly ILogRepository _logRepo;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _config;
     private readonly ILogger<LogPurgeBackgroundService> _logger;
 
-    public LogPurgeBackgroundService(ILogRepository logRepo, IConfiguration config, ILogger<LogPurgeBackgroundService> logger)
+    public LogPurgeBackgroundService(IServiceScopeFactory scopeFactory, IConfiguration config, ILogger<LogPurgeBackgroundService> logger)
     {
-        _logRepo = logRepo;
+        _scopeFactory = scopeFactory;
         _config = config;
         _logger = logger;
     }
@@ -37,7 +38,9 @@ public class LogPurgeBackgroundService : BackgroundService
 
         try
         {
-            var deleted = await _logRepo.PurgeAsync(cutoff);
+            using var scope = _scopeFactory.CreateScope();
+            var logRepo = scope.ServiceProvider.GetRequiredService<ILogRepository>();
+            var deleted = await logRepo.PurgeAsync(cutoff);
             _logger.LogInformation("Log purge completed. Deleted {Count} entries older than {Days} days.", deleted, retentionDays);
         }
         catch (Exception ex) when (!stoppingToken.IsCancellationRequested)

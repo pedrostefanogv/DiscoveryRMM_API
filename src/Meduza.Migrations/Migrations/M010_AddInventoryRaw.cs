@@ -10,7 +10,7 @@ public class M010_AddInventoryRaw : Migration
         Alter.Table("agent_hardware_info")
             .AddColumn("inventory_raw").AsCustom("jsonb").Nullable()
             .AddColumn("inventory_schema_version").AsString(50).Nullable()
-            .AddColumn("inventory_collected_at").AsDateTimeOffset().Nullable();
+            .AddColumn("inventory_collected_at").AsCustom("timestamptz").Nullable();
     }
 
     public override void Down()

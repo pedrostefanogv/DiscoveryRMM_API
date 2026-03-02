@@ -8,7 +8,7 @@ public class M002_CreateSites : Migration
     public override void Up()
     {
         Create.Table("sites")
-            .WithColumn("id").AsGuid().PrimaryKey().WithDefault(SystemMethods.NewGuid)
+            .WithColumn("id").AsGuid().PrimaryKey()
             .WithColumn("client_id").AsGuid().NotNullable().ForeignKey("fk_sites_client", "clients", "id")
             .WithColumn("name").AsString(200).NotNullable()
             .WithColumn("address").AsString(500).Nullable()
@@ -17,8 +17,8 @@ public class M002_CreateSites : Migration
             .WithColumn("zip_code").AsString(20).Nullable()
             .WithColumn("notes").AsString(2000).Nullable()
             .WithColumn("is_active").AsBoolean().NotNullable().WithDefaultValue(true)
-            .WithColumn("created_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
-            .WithColumn("updated_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
+            .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
+            .WithColumn("updated_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
 
         Create.Index("ix_sites_client_id").OnTable("sites").OnColumn("client_id");
     }

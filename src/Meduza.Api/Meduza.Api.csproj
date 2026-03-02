@@ -12,6 +12,7 @@
     <PackageReference Include="FluentValidation.AspNetCore" Version="11.2.2" />
     <PackageReference Include="FluentMigrator.Runner" Version="8.0.1" />
     <PackageReference Include="FluentMigrator.Runner.Postgres" Version="8.0.1" />
+    <PackageReference Include="FluentMigrator.Runner.SQLite" Version="8.0.1" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.3" />
     <PackageReference Include="NATS.Net" Version="2.7.2" />
     <PackageReference Include="Npgsql" Version="10.0.1" />

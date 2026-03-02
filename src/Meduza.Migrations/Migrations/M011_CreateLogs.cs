@@ -8,7 +8,7 @@ public class M011_CreateLogs : Migration
     public override void Up()
     {
         Create.Table("logs")
-            .WithColumn("id").AsGuid().PrimaryKey().WithDefault(SystemMethods.NewGuid)
+            .WithColumn("id").AsGuid().PrimaryKey()
             .WithColumn("client_id").AsGuid().Nullable().ForeignKey("fk_logs_client", "clients", "id")
             .WithColumn("site_id").AsGuid().Nullable().ForeignKey("fk_logs_site", "sites", "id")
             .WithColumn("agent_id").AsGuid().Nullable().ForeignKey("fk_logs_agent", "agents", "id")
@@ -17,7 +17,7 @@ public class M011_CreateLogs : Migration
             .WithColumn("log_source").AsInt32().NotNullable()
             .WithColumn("message").AsString(int.MaxValue).NotNullable()
             .WithColumn("data_json").AsCustom("jsonb").Nullable()
-            .WithColumn("created_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
+            .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
 
         Create.Index("ix_logs_client_id").OnTable("logs").OnColumn("client_id");
         Create.Index("ix_logs_site_id").OnTable("logs").OnColumn("site_id");

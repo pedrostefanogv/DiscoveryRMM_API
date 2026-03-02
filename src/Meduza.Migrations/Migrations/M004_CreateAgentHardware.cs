@@ -8,7 +8,7 @@ public class M004_CreateAgentHardware : Migration
     public override void Up()
     {
         Create.Table("agent_hardware_info")
-            .WithColumn("id").AsGuid().PrimaryKey().WithDefault(SystemMethods.NewGuid)
+            .WithColumn("id").AsGuid().PrimaryKey()
             .WithColumn("agent_id").AsGuid().NotNullable().Unique().ForeignKey("fk_hardware_agent", "agents", "id").Indexed("ix_hardware_agent_id")
             .WithColumn("manufacturer").AsString(200).Nullable()
             .WithColumn("model").AsString(200).Nullable()
@@ -18,11 +18,11 @@ public class M004_CreateAgentHardware : Migration
             .WithColumn("processor_threads").AsInt32().Nullable()
             .WithColumn("total_memory_bytes").AsInt64().Nullable()
             .WithColumn("bios_version").AsString(200).Nullable()
-            .WithColumn("collected_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
-            .WithColumn("updated_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
+            .WithColumn("collected_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
+            .WithColumn("updated_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
 
         Create.Table("disk_info")
-            .WithColumn("id").AsGuid().PrimaryKey().WithDefault(SystemMethods.NewGuid)
+            .WithColumn("id").AsGuid().PrimaryKey()
             .WithColumn("agent_id").AsGuid().NotNullable().ForeignKey("fk_disk_agent", "agents", "id")
             .WithColumn("drive_letter").AsString(10).NotNullable()
             .WithColumn("label").AsString(200).Nullable()
@@ -30,12 +30,12 @@ public class M004_CreateAgentHardware : Migration
             .WithColumn("total_size_bytes").AsInt64().NotNullable()
             .WithColumn("free_space_bytes").AsInt64().NotNullable()
             .WithColumn("media_type").AsString(50).Nullable()
-            .WithColumn("collected_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
+            .WithColumn("collected_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
 
         Create.Index("ix_disk_info_agent_id").OnTable("disk_info").OnColumn("agent_id");
 
         Create.Table("network_adapter_info")
-            .WithColumn("id").AsGuid().PrimaryKey().WithDefault(SystemMethods.NewGuid)
+            .WithColumn("id").AsGuid().PrimaryKey()
             .WithColumn("agent_id").AsGuid().NotNullable().ForeignKey("fk_network_agent", "agents", "id")
             .WithColumn("name").AsString(200).NotNullable()
             .WithColumn("mac_address").AsString(17).Nullable()
@@ -46,7 +46,7 @@ public class M004_CreateAgentHardware : Migration
             .WithColumn("is_dhcp_enabled").AsBoolean().NotNullable().WithDefaultValue(false)
             .WithColumn("adapter_type").AsString(50).Nullable()
             .WithColumn("speed").AsString(50).Nullable()
-            .WithColumn("collected_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
+            .WithColumn("collected_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
 
         Create.Index("ix_network_adapter_agent_id").OnTable("network_adapter_info").OnColumn("agent_id");
     }

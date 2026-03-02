@@ -30,7 +30,7 @@ public class M009_ExpandHardwareInventory : Migration
             .WithColumn("manufacturer").AsString(200).Nullable()
             .WithColumn("part_number").AsString(100).Nullable()
             .WithColumn("serial_number").AsString(100).Nullable()
-            .WithColumn("collected_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
+            .WithColumn("collected_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
 
         Create.Index("ix_memory_module_agent_id").OnTable("memory_module_info").OnColumn("agent_id");
     }

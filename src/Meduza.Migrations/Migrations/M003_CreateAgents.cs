@@ -8,7 +8,7 @@ public class M003_CreateAgents : Migration
     public override void Up()
     {
         Create.Table("agents")
-            .WithColumn("id").AsGuid().PrimaryKey().WithDefault(SystemMethods.NewGuid)
+            .WithColumn("id").AsGuid().PrimaryKey()
             .WithColumn("site_id").AsGuid().NotNullable().ForeignKey("fk_agents_site", "sites", "id")
             .WithColumn("hostname").AsString(200).NotNullable()
             .WithColumn("display_name").AsString(200).Nullable()
@@ -18,9 +18,9 @@ public class M003_CreateAgents : Migration
             .WithColumn("agent_version").AsString(50).Nullable()
             .WithColumn("last_ip_address").AsString(45).Nullable()
             .WithColumn("mac_address").AsString(17).Nullable()
-            .WithColumn("last_seen_at").AsDateTimeOffset().Nullable()
-            .WithColumn("created_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
-            .WithColumn("updated_at").AsDateTimeOffset().NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
+            .WithColumn("last_seen_at").AsCustom("timestamptz").Nullable()
+            .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
+            .WithColumn("updated_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
 
         Create.Index("ix_agents_site_id").OnTable("agents").OnColumn("site_id");
         Create.Index("ix_agents_hostname").OnTable("agents").OnColumn("hostname");
