@@ -47,12 +47,14 @@ builder.Services.AddScoped<IAgentHardwareRepository, AgentHardwareRepository>();
 builder.Services.AddScoped<ICommandRepository, CommandRepository>();
 builder.Services.AddScoped<ITicketRepository, TicketRepository>();
 builder.Services.AddScoped<IAgentTokenRepository, AgentTokenRepository>();
+builder.Services.AddScoped<IDeployTokenRepository, DeployTokenRepository>();
 builder.Services.AddScoped<ITenantSettingsRepository, TenantSettingsRepository>();
 builder.Services.AddScoped<IWorkflowRepository, WorkflowRepository>();
 builder.Services.AddScoped<ILogRepository, LogRepository>();
 
 // Services
 builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
+builder.Services.AddScoped<IDeployTokenService, DeployTokenService>();
 
 // NATS
 var natsUrl = builder.Configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222";

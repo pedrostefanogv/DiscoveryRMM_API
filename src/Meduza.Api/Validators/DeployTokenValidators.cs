@@ -1,0 +1,15 @@
+using FluentValidation;
+using Meduza.Api.Controllers;
+
+namespace Meduza.Api.Validators;
+
+public class CreateDeployTokenRequestValidator : AbstractValidator<CreateDeployTokenRequest>
+{
+    public CreateDeployTokenRequestValidator()
+    {
+        RuleFor(x => x.Description).MaximumLength(200);
+        RuleFor(x => x.ExpiresInHours)
+            .Must(h => !h.HasValue || h.Value is >= 1 and <= 720)
+            .WithMessage("ExpiresInHours must be between 1 and 720.");
+    }
+}
