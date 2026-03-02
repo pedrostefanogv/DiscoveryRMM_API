@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Meduza.Api.Hubs;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
@@ -110,10 +111,35 @@ public class AgentsController : ControllerBase
         var agent = await _agentRepo.GetByIdAsync(id);
         if (agent is null) return NotFound();
 
-        if (request.Hardware is not null)
+        string? inventoryRaw = null;
+        if (request.InventoryRaw.HasValue && request.InventoryRaw.Value.ValueKind != JsonValueKind.Null)
+            inventoryRaw = request.InventoryRaw.Value.GetRawText();
+
+        var hasInventoryPayload = inventoryRaw is not null
+            || request.InventorySchemaVersion is not null
+            || request.InventoryCollectedAt.HasValue;
+
+        if (request.Hardware is not null || hasInventoryPayload)
         {
-            request.Hardware.AgentId = id;
-            await _hardwareRepo.UpsertAsync(request.Hardware);
+            var hardware = request.Hardware ?? new AgentHardwareInfo { AgentId = id };
+            hardware.AgentId = id;
+            if (hasInventoryPayload)
+            {
+                hardware.InventoryRaw = inventoryRaw;
+                hardware.InventorySchemaVersion = request.InventorySchemaVersion;
+                hardware.InventoryCollectedAt = request.InventoryCollectedAt ?? DateTime.UtcNow;
+            }
+            else if (request.Hardware is not null)
+            {
+                var existing = await _hardwareRepo.GetByAgentIdAsync(id);
+                if (existing is not null)
+                {
+                    hardware.InventoryRaw = existing.InventoryRaw;
+                    hardware.InventorySchemaVersion = existing.InventorySchemaVersion;
+                    hardware.InventoryCollectedAt = existing.InventoryCollectedAt;
+                }
+            }
+            await _hardwareRepo.UpsertAsync(hardware);
         }
         if (request.Disks is not null)
             await _hardwareRepo.ReplaceDiskInfoAsync(id, request.Disks);
@@ -201,5 +227,12 @@ public class AgentsController : ControllerBase
 public record CreateAgentRequest(Guid SiteId, string Hostname, string? DisplayName, string? OperatingSystem, string? OsVersion, string? AgentVersion);
 public record UpdateAgentRequest(Guid SiteId, string Hostname, string? DisplayName);
 public record SendCommandRequest(CommandType CommandType, string Payload);
-public record HardwareReportRequest(AgentHardwareInfo? Hardware, List<DiskInfo>? Disks, List<NetworkAdapterInfo>? NetworkAdapters, List<MemoryModuleInfo>? MemoryModules);
+public record HardwareReportRequest(
+    AgentHardwareInfo? Hardware,
+    List<DiskInfo>? Disks,
+    List<NetworkAdapterInfo>? NetworkAdapters,
+    List<MemoryModuleInfo>? MemoryModules,
+    JsonElement? InventoryRaw,
+    string? InventorySchemaVersion,
+    DateTime? InventoryCollectedAt);
 public record CreateTokenRequest(string? Description, int? ExpirationDays);

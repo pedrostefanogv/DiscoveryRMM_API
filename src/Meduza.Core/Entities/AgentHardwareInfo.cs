@@ -5,6 +5,11 @@ public class AgentHardwareInfo
     public Guid Id { get; set; }
     public Guid AgentId { get; set; }
 
+    // Inventario raw (osquery)
+    public string? InventoryRaw { get; set; }
+    public string? InventorySchemaVersion { get; set; }
+    public DateTime? InventoryCollectedAt { get; set; }
+
     // Placa-mãe
     public string? Manufacturer { get; set; }
     public string? Model { get; set; }

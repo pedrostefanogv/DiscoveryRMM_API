@@ -26,6 +26,8 @@ public class AgentHardwareRepository : IAgentHardwareRepository
                    bios_version AS BiosVersion, bios_manufacturer AS BiosManufacturer,
                    os_name AS OsName, os_version AS OsVersion, os_build AS OsBuild,
                    os_architecture AS OsArchitecture,
+                 inventory_raw AS InventoryRaw, inventory_schema_version AS InventorySchemaVersion,
+                 inventory_collected_at AS InventoryCollectedAt,
                    collected_at AS CollectedAt, updated_at AS UpdatedAt
             FROM agent_hardware_info WHERE agent_id = @AgentId
             """, new { AgentId = agentId });
@@ -57,6 +59,9 @@ public class AgentHardwareRepository : IAgentHardwareRepository
                        bios_version = @BiosVersion, bios_manufacturer = @BiosManufacturer,
                        os_name = @OsName, os_version = @OsVersion, os_build = @OsBuild,
                        os_architecture = @OsArchitecture,
+                      inventory_raw = @InventoryRaw,
+                      inventory_schema_version = @InventorySchemaVersion,
+                      inventory_collected_at = @InventoryCollectedAt,
                        collected_at = @CollectedAt, updated_at = @UpdatedAt
                 WHERE id = @Id
                 """, hardware);
@@ -71,12 +76,14 @@ public class AgentHardwareRepository : IAgentHardwareRepository
                        processor, processor_cores, processor_threads, processor_architecture,
                        total_memory_bytes, bios_version, bios_manufacturer,
                        os_name, os_version, os_build, os_architecture,
+                      inventory_raw, inventory_schema_version, inventory_collected_at,
                        collected_at, updated_at)
                 VALUES (@Id, @AgentId, @Manufacturer, @Model, @SerialNumber,
                        @MotherboardManufacturer, @MotherboardModel, @MotherboardSerialNumber,
                        @Processor, @ProcessorCores, @ProcessorThreads, @ProcessorArchitecture,
                        @TotalMemoryBytes, @BiosVersion, @BiosManufacturer,
                        @OsName, @OsVersion, @OsBuild, @OsArchitecture,
+                      @InventoryRaw, @InventorySchemaVersion, @InventoryCollectedAt,
                        @CollectedAt, @UpdatedAt)
                 """, hardware);
         }

@@ -1,4 +1,7 @@
 using System.Text.Json.Serialization;
+using FluentValidation;
+using FluentValidation.AspNetCore;
+using Meduza.Api.Validators;
 using FluentMigrator.Runner;
 using Meduza.Api.Hubs;
 using Meduza.Api.Middleware;
@@ -29,6 +32,7 @@ builder.Services.AddScoped<ITicketRepository, TicketRepository>();
 builder.Services.AddScoped<IAgentTokenRepository, AgentTokenRepository>();
 builder.Services.AddScoped<ITenantSettingsRepository, TenantSettingsRepository>();
 builder.Services.AddScoped<IWorkflowRepository, WorkflowRepository>();
+builder.Services.AddScoped<ILogRepository, LogRepository>();
 
 // Services
 builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
@@ -38,6 +42,7 @@ var natsUrl = builder.Configuration.GetValue<string>("Nats:Url") ?? "nats://loca
 builder.Services.AddSingleton(_ => new NatsConnection(new NatsOpts { Url = natsUrl }));
 builder.Services.AddScoped<IAgentMessaging, NatsAgentMessaging>();
 builder.Services.AddHostedService<NatsBackgroundService>();
+builder.Services.AddHostedService<LogPurgeBackgroundService>();
 
 // Controllers + JSON config
 builder.Services.AddControllers()
@@ -46,6 +51,9 @@ builder.Services.AddControllers()
         opts.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
         opts.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
     });
+
+builder.Services.AddFluentValidationAutoValidation();
+builder.Services.AddValidatorsFromAssemblyContaining<CreateAgentRequestValidator>();
 
 // SignalR for dashboard real-time
 builder.Services.AddSignalR();
