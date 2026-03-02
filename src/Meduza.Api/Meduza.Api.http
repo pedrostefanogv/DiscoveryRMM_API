@@ -1,0 +1,6 @@
+@Meduza.Api_HostAddress = http://localhost:5288
+
+GET {{Meduza.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

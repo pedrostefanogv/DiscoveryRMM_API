@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Meduza.Api/Meduza.Api.csproj" />
+    <Project Path="src/Meduza.Core/Meduza.Core.csproj" />
+    <Project Path="src/Meduza.Infrastructure/Meduza.Infrastructure.csproj" />
+    <Project Path="src/Meduza.Migrations/Meduza.Migrations.csproj" />
+  </Folder>
+</Solution>

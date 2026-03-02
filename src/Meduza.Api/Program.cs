@@ -1,0 +1,103 @@
+using System.Text.Json.Serialization;
+using FluentMigrator.Runner;
+using Meduza.Api.Hubs;
+using Meduza.Api.Middleware;
+using Meduza.Api.Services;
+using Meduza.Core.Interfaces;
+using Meduza.Infrastructure.Data;
+using Meduza.Infrastructure.Messaging;
+using Meduza.Infrastructure.Repositories;
+using Meduza.Infrastructure.Services;
+using NATS.Client.Core;
+using Scalar.AspNetCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+
+// Database connection factory
+builder.Services.AddSingleton<IDbConnectionFactory>(new PostgresConnectionFactory(connectionString));
+
+// Repositories
+builder.Services.AddScoped<IClientRepository, ClientRepository>();
+builder.Services.AddScoped<ISiteRepository, SiteRepository>();
+builder.Services.AddScoped<IAgentRepository, AgentRepository>();
+builder.Services.AddScoped<IAgentHardwareRepository, AgentHardwareRepository>();
+builder.Services.AddScoped<ICommandRepository, CommandRepository>();
+builder.Services.AddScoped<ITicketRepository, TicketRepository>();
+builder.Services.AddScoped<IAgentTokenRepository, AgentTokenRepository>();
+builder.Services.AddScoped<ITenantSettingsRepository, TenantSettingsRepository>();
+builder.Services.AddScoped<IWorkflowRepository, WorkflowRepository>();
+
+// Services
+builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
+
+// NATS
+var natsUrl = builder.Configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222";
+builder.Services.AddSingleton(_ => new NatsConnection(new NatsOpts { Url = natsUrl }));
+builder.Services.AddScoped<IAgentMessaging, NatsAgentMessaging>();
+builder.Services.AddHostedService<NatsBackgroundService>();
+
+// Controllers + JSON config
+builder.Services.AddControllers()
+    .AddJsonOptions(opts =>
+    {
+        opts.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        opts.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+    });
+
+// SignalR for dashboard real-time
+builder.Services.AddSignalR();
+
+// OpenAPI + Scalar
+builder.Services.AddOpenApi();
+
+// CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+        policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+    options.AddPolicy("SignalR", policy =>
+        policy.AllowAnyMethod().AllowAnyHeader().SetIsOriginAllowed(_ => true).AllowCredentials());
+});
+
+// FluentMigrator
+builder.Services.AddFluentMigratorCore()
+    .ConfigureRunner(rb => rb
+        .AddPostgres()
+        .WithGlobalConnectionString(connectionString)
+        .ScanIn(typeof(Meduza.Migrations.Migrations.M001_CreateClients).Assembly).For.Migrations())
+    .AddLogging(lb => lb.AddFluentMigratorConsole());
+
+var app = builder.Build();
+
+// Run migrations on startup
+using (var scope = app.Services.CreateScope())
+{
+    var runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();
+    runner.MigrateUp();
+}
+
+// Seed default workflow states
+await DatabaseSeeder.SeedAsync(app.Services);
+
+// Configure the HTTP request pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+    app.MapScalarApiReference();
+}
+
+app.UseCors("AllowAll");
+
+// Agent token auth middleware (para rotas /api/agent-auth/*)
+app.UseAgentAuth();
+
+app.MapControllers();
+app.MapHub<AgentHub>("/hubs/agent", options =>
+{
+    options.AllowStatefulReconnects = true;
+}).RequireCors("SignalR");
+
+app.Run();

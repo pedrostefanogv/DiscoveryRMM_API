@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.66" />
+    <PackageReference Include="FluentMigrator.Runner" Version="8.0.1" />
+    <PackageReference Include="FluentMigrator.Runner.Postgres" Version="8.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.3" />
+    <PackageReference Include="NATS.Net" Version="2.7.2" />
+    <PackageReference Include="Npgsql" Version="10.0.1" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.12.50" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Meduza.Core\Meduza.Core.csproj" />
+    <ProjectReference Include="..\Meduza.Infrastructure\Meduza.Infrastructure.csproj" />
+    <ProjectReference Include="..\Meduza.Migrations\Meduza.Migrations.csproj" />
+  </ItemGroup>
+
+</Project>
