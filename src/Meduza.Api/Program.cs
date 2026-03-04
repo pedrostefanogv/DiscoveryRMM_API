@@ -1,11 +1,13 @@
 using System.Text.Json.Serialization;
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using Meduza.Api.Filters;
 using Meduza.Api.Validators;
 using FluentMigrator.Runner;
 using Meduza.Api.Hubs;
 using Meduza.Api.Middleware;
 using Meduza.Api.Services;
+using Meduza.Core.Configuration;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
 using Meduza.Infrastructure.Messaging;
@@ -57,6 +59,11 @@ builder.Services.AddScoped<ILogRepository, LogRepository>();
 // Services
 builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
 builder.Services.AddScoped<IDeployTokenService, DeployTokenService>();
+builder.Services.AddScoped<ILoggingService, LoggingService>();
+
+// Configuração de logging automático
+builder.Services.Configure<AutomaticLoggingOptions>(
+    builder.Configuration.GetSection("AutomaticLogging"));
 
 // NATS
 var natsUrl = builder.Configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222";
@@ -90,7 +97,11 @@ builder.Services.AddSingleton<IRedisService, RedisService>();
 builder.Services.AddHostedService<LogPurgeBackgroundService>();
 
 // Controllers + JSON config
-builder.Services.AddControllers()
+builder.Services.AddControllers(options =>
+{
+    // Registra LoggingActionFilter globalmente
+    options.Filters.Add<LoggingActionFilter>();
+})
     .AddJsonOptions(opts =>
     {
         opts.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
@@ -157,6 +168,9 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("AllowAll");
+
+// Middleware de tratamento global de exceções (deve estar no início)
+app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Agent token auth middleware (para rotas /api/agent-auth/*)
 app.UseAgentAuth();
