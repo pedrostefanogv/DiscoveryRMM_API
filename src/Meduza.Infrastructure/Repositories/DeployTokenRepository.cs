@@ -16,7 +16,7 @@ public class DeployTokenRepository : IDeployTokenRepository
         using var conn = _db.CreateConnection();
         return await conn.QuerySingleOrDefaultAsync<DeployToken>(
             """
-            SELECT id, token_hash AS TokenHash, token_prefix AS TokenPrefix, description,
+            SELECT id, client_id AS ClientId, site_id AS SiteId, token_hash AS TokenHash, token_prefix AS TokenPrefix, description,
                    expires_at AS ExpiresAt, created_at AS CreatedAt, revoked_at AS RevokedAt,
                    last_used_at AS LastUsedAt, used_count AS UsedCount, max_uses AS MaxUses
             FROM deploy_tokens WHERE id = @Id
@@ -28,7 +28,7 @@ public class DeployTokenRepository : IDeployTokenRepository
         using var conn = _db.CreateConnection();
         return await conn.QuerySingleOrDefaultAsync<DeployToken>(
             """
-            SELECT id, token_hash AS TokenHash, token_prefix AS TokenPrefix, description,
+            SELECT id, client_id AS ClientId, site_id AS SiteId, token_hash AS TokenHash, token_prefix AS TokenPrefix, description,
                    expires_at AS ExpiresAt, created_at AS CreatedAt, revoked_at AS RevokedAt,
                    last_used_at AS LastUsedAt, used_count AS UsedCount, max_uses AS MaxUses
             FROM deploy_tokens WHERE token_hash = @TokenHash
@@ -40,10 +40,10 @@ public class DeployTokenRepository : IDeployTokenRepository
         using var conn = _db.CreateConnection();
         await conn.ExecuteAsync(
             """
-            INSERT INTO deploy_tokens (id, token_hash, token_prefix, description, expires_at,
-                   created_at, revoked_at, last_used_at, used_count, max_uses)
-            VALUES (@Id, @TokenHash, @TokenPrefix, @Description, @ExpiresAt,
-                   @CreatedAt, @RevokedAt, @LastUsedAt, @UsedCount, @MaxUses)
+             INSERT INTO deploy_tokens (id, client_id, site_id, token_hash, token_prefix, description, expires_at,
+                 created_at, revoked_at, last_used_at, used_count, max_uses)
+             VALUES (@Id, @ClientId, @SiteId, @TokenHash, @TokenPrefix, @Description, @ExpiresAt,
+                 @CreatedAt, @RevokedAt, @LastUsedAt, @UsedCount, @MaxUses)
             """, token);
         return token;
     }
@@ -66,7 +66,7 @@ public class DeployTokenRepository : IDeployTokenRepository
 
         return await conn.QuerySingleOrDefaultAsync<DeployToken>(
             """
-            SELECT id, token_hash AS TokenHash, token_prefix AS TokenPrefix, description,
+            SELECT id, client_id AS ClientId, site_id AS SiteId, token_hash AS TokenHash, token_prefix AS TokenPrefix, description,
                    expires_at AS ExpiresAt, created_at AS CreatedAt, revoked_at AS RevokedAt,
                    last_used_at AS LastUsedAt, used_count AS UsedCount, max_uses AS MaxUses
             FROM deploy_tokens WHERE token_hash = @TokenHash

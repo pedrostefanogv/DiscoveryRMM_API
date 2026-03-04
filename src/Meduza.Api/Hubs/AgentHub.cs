@@ -2,19 +2,25 @@ using System.Collections.Concurrent;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
 using Microsoft.AspNetCore.SignalR;
+using Npgsql;
 
 namespace Meduza.Api.Hubs;
 
 public class AgentHub : Hub
 {
     private static readonly ConcurrentDictionary<string, Guid> ConnectedAgents = new();
+    private static readonly ConcurrentDictionary<Guid, HeartbeatState> LastPersistedHeartbeat = new();
+    private static readonly TimeSpan HeartbeatWriteInterval = TimeSpan.FromSeconds(15);
+
     private readonly IAgentRepository _agentRepo;
     private readonly ICommandRepository _commandRepo;
+    private readonly ILogger<AgentHub> _logger;
 
-    public AgentHub(IAgentRepository agentRepo, ICommandRepository commandRepo)
+    public AgentHub(IAgentRepository agentRepo, ICommandRepository commandRepo, ILogger<AgentHub> logger)
     {
         _agentRepo = agentRepo;
         _commandRepo = commandRepo;
+        _logger = logger;
     }
 
     public override async Task OnConnectedAsync()
@@ -27,6 +33,7 @@ public class AgentHub : Hub
         if (ConnectedAgents.TryRemove(Context.ConnectionId, out var agentId))
         {
             await _agentRepo.UpdateStatusAsync(agentId, AgentStatus.Offline, null);
+            LastPersistedHeartbeat.TryRemove(agentId, out _);
             await Clients.Group("dashboard").SendAsync("AgentStatusChanged", agentId, AgentStatus.Offline);
         }
         await base.OnDisconnectedAsync(exception);
@@ -40,6 +47,7 @@ public class AgentHub : Hub
         ConnectedAgents[Context.ConnectionId] = agentId;
         await Groups.AddToGroupAsync(Context.ConnectionId, $"agent-{agentId}");
         await _agentRepo.UpdateStatusAsync(agentId, AgentStatus.Online, ipAddress);
+        LastPersistedHeartbeat[agentId] = new HeartbeatState(DateTime.UtcNow, ipAddress);
         await Clients.Group("dashboard").SendAsync("AgentStatusChanged", agentId, AgentStatus.Online);
 
         // Envia comandos pendentes
@@ -66,7 +74,24 @@ public class AgentHub : Hub
     /// </summary>
     public async Task Heartbeat(Guid agentId, string? ipAddress)
     {
-        await _agentRepo.UpdateStatusAsync(agentId, AgentStatus.Online, ipAddress);
+        var now = DateTime.UtcNow;
+
+        if (LastPersistedHeartbeat.TryGetValue(agentId, out var state)
+            && now - state.LastPersistedAt < HeartbeatWriteInterval
+            && string.Equals(state.LastIpAddress, ipAddress, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            await _agentRepo.UpdateStatusAsync(agentId, AgentStatus.Online, ipAddress);
+            LastPersistedHeartbeat[agentId] = new HeartbeatState(now, ipAddress);
+        }
+        catch (Exception ex) when (ex is NpgsqlException or TimeoutException)
+        {
+            _logger.LogWarning(ex, "Heartbeat update timed out for agent {AgentId}.", agentId);
+        }
     }
 
     /// <summary>
@@ -85,6 +110,8 @@ public class AgentHub : Hub
         return ConnectedAgents.Values.Contains(agentId);
     }
 
+    public static int ConnectedAgentCount => ConnectedAgents.Count;
+
     /// <summary>
     /// Retorna a connection ID de um agent conectado.
     /// </summary>
@@ -92,4 +119,6 @@ public class AgentHub : Hub
     {
         return ConnectedAgents.FirstOrDefault(x => x.Value == agentId).Key;
     }
+
+    private readonly record struct HeartbeatState(DateTime LastPersistedAt, string? LastIpAddress);
 }

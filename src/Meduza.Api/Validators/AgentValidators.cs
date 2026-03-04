@@ -46,3 +46,16 @@ public class CreateTokenRequestValidator : AbstractValidator<CreateTokenRequest>
             .WithMessage("ExpirationDays must be between 1 and 3650.");
     }
 }
+
+public class RegisterAgentInstallRequestValidator : AbstractValidator<RegisterAgentInstallRequest>
+{
+    public RegisterAgentInstallRequestValidator()
+    {
+        RuleFor(x => x.Hostname).NotEmpty().Length(2, 100);
+        RuleFor(x => x.DisplayName).MaximumLength(100);
+        RuleFor(x => x.OperatingSystem).MaximumLength(100);
+        RuleFor(x => x.OsVersion).MaximumLength(100);
+        RuleFor(x => x.AgentVersion).MaximumLength(100);
+        RuleFor(x => x.MacAddress).MaximumLength(17);
+    }
+}

@@ -32,9 +32,6 @@ public class ClientsController : ControllerBase
         var client = new Client
         {
             Name = request.Name,
-            Document = request.Document,
-            Email = request.Email,
-            Phone = request.Phone,
             Notes = request.Notes
         };
         var created = await _repo.CreateAsync(client);
@@ -48,9 +45,6 @@ public class ClientsController : ControllerBase
         if (client is null) return NotFound();
 
         client.Name = request.Name;
-        client.Document = request.Document;
-        client.Email = request.Email;
-        client.Phone = request.Phone;
         client.Notes = request.Notes;
         client.IsActive = request.IsActive;
 
@@ -66,5 +60,5 @@ public class ClientsController : ControllerBase
     }
 }
 
-public record CreateClientRequest(string Name, string? Document, string? Email, string? Phone, string? Notes);
-public record UpdateClientRequest(string Name, string? Document, string? Email, string? Phone, string? Notes, bool IsActive);
+public record CreateClientRequest(string Name, string? Notes);
+public record UpdateClientRequest(string Name, string? Notes, bool IsActive);

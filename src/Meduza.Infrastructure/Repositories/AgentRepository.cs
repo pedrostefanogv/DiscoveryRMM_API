@@ -4,6 +4,7 @@ using Meduza.Core.Enums;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
+using Npgsql;
 
 namespace Meduza.Infrastructure.Repositories;
 
@@ -90,13 +91,37 @@ public class AgentRepository : IAgentRepository
 
     public async Task UpdateStatusAsync(Guid id, AgentStatus status, string? ipAddress)
     {
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            UPDATE agents SET status = @Status, last_ip_address = @IpAddress,
-                   last_seen_at = @Now, updated_at = @Now
-            WHERE id = @Id
-            """, new { Id = id, Status = (int)status, IpAddress = ipAddress, Now = DateTime.UtcNow });
+        const int maxAttempts = 2;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                using var conn = _db.CreateConnection();
+                await conn.ExecuteAsync(
+                    """
+                    UPDATE agents SET status = @Status, last_ip_address = @IpAddress,
+                           last_seen_at = @Now, updated_at = @Now
+                    WHERE id = @Id
+                    """, new { Id = id, Status = (int)status, IpAddress = ipAddress, Now = DateTime.UtcNow });
+                return;
+            }
+            catch (Exception ex) when (attempt < maxAttempts && IsTransient(ex))
+            {
+                await Task.Delay(150);
+            }
+        }
+    }
+
+    private static bool IsTransient(Exception ex)
+    {
+        if (ex is TimeoutException)
+            return true;
+
+        if (ex is NpgsqlException npgsqlEx)
+            return npgsqlEx.IsTransient || npgsqlEx.InnerException is TimeoutException;
+
+        return false;
     }
 
     public async Task DeleteAsync(Guid id)

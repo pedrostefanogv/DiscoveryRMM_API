@@ -1,6 +1,7 @@
 using FluentValidation;
 using Meduza.Api.Controllers;
 using Meduza.Core.Entities;
+using Meduza.Core.Enums;
 
 namespace Meduza.Api.Validators;
 
@@ -8,6 +9,15 @@ public class HardwareReportRequestValidator : AbstractValidator<HardwareReportRe
 {
     public HardwareReportRequestValidator()
     {
+        RuleFor(x => x.Hostname).Length(2, 100).When(x => x.Hostname is not null);
+        RuleFor(x => x.DisplayName).MaximumLength(100).When(x => x.DisplayName is not null);
+        RuleFor(x => x.Status).IsInEnum().When(x => x.Status.HasValue);
+        RuleFor(x => x.OperatingSystem).MaximumLength(100).When(x => x.OperatingSystem is not null);
+        RuleFor(x => x.OsVersion).MaximumLength(100).When(x => x.OsVersion is not null);
+        RuleFor(x => x.AgentVersion).MaximumLength(100).When(x => x.AgentVersion is not null);
+        RuleFor(x => x.LastIpAddress).MaximumLength(45).When(x => x.LastIpAddress is not null);
+        RuleFor(x => x.MacAddress).MaximumLength(17).When(x => x.MacAddress is not null);
+
         RuleForEach(x => x.Disks).SetValidator(new DiskInfoValidator()).When(x => x.Disks is not null);
         RuleForEach(x => x.NetworkAdapters).SetValidator(new NetworkAdapterInfoValidator()).When(x => x.NetworkAdapters is not null);
         RuleForEach(x => x.MemoryModules).SetValidator(new MemoryModuleInfoValidator()).When(x => x.MemoryModules is not null);

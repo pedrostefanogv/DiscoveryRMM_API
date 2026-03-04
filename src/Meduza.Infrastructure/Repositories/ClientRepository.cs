@@ -17,7 +17,7 @@ public class ClientRepository : IClientRepository
         using var conn = _db.CreateConnection();
         return await conn.QuerySingleOrDefaultAsync<Client>(
             """
-            SELECT id, name, document, email, phone, notes, is_active AS IsActive,
+            SELECT id, name, notes, is_active AS IsActive,
                    created_at AS CreatedAt, updated_at AS UpdatedAt
             FROM clients WHERE id = @Id
             """, new { Id = id });
@@ -27,7 +27,7 @@ public class ClientRepository : IClientRepository
     {
         using var conn = _db.CreateConnection();
         var sql = """
-            SELECT id, name, document, email, phone, notes, is_active AS IsActive,
+            SELECT id, name, notes, is_active AS IsActive,
                    created_at AS CreatedAt, updated_at AS UpdatedAt
             FROM clients
             """;
@@ -45,8 +45,8 @@ public class ClientRepository : IClientRepository
         using var conn = _db.CreateConnection();
         await conn.ExecuteAsync(
             """
-            INSERT INTO clients (id, name, document, email, phone, notes, is_active, created_at, updated_at)
-            VALUES (@Id, @Name, @Document, @Email, @Phone, @Notes, @IsActive, @CreatedAt, @UpdatedAt)
+            INSERT INTO clients (id, name, notes, is_active, created_at, updated_at)
+            VALUES (@Id, @Name, @Notes, @IsActive, @CreatedAt, @UpdatedAt)
             """, client);
         return client;
     }
@@ -57,8 +57,7 @@ public class ClientRepository : IClientRepository
         using var conn = _db.CreateConnection();
         await conn.ExecuteAsync(
             """
-            UPDATE clients SET name = @Name, document = @Document, email = @Email,
-                   phone = @Phone, notes = @Notes, is_active = @IsActive, updated_at = @UpdatedAt
+            UPDATE clients SET name = @Name, notes = @Notes, is_active = @IsActive, updated_at = @UpdatedAt
             WHERE id = @Id
             """, client);
     }

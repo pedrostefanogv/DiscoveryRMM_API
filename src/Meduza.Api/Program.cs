@@ -13,6 +13,7 @@ using Meduza.Infrastructure.Repositories;
 using Meduza.Infrastructure.Services;
 using NATS.Client.Core;
 using Scalar.AspNetCore;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -44,6 +45,7 @@ builder.Services.AddScoped<IClientRepository, ClientRepository>();
 builder.Services.AddScoped<ISiteRepository, SiteRepository>();
 builder.Services.AddScoped<IAgentRepository, AgentRepository>();
 builder.Services.AddScoped<IAgentHardwareRepository, AgentHardwareRepository>();
+builder.Services.AddScoped<IAgentSoftwareRepository, AgentSoftwareRepository>();
 builder.Services.AddScoped<ICommandRepository, CommandRepository>();
 builder.Services.AddScoped<ITicketRepository, TicketRepository>();
 builder.Services.AddScoped<IAgentTokenRepository, AgentTokenRepository>();
@@ -61,6 +63,30 @@ var natsUrl = builder.Configuration.GetValue<string>("Nats:Url") ?? "nats://loca
 builder.Services.AddSingleton(_ => new NatsConnection(new NatsOpts { Url = natsUrl }));
 builder.Services.AddScoped<IAgentMessaging, NatsAgentMessaging>();
 builder.Services.AddHostedService<NatsBackgroundService>();
+builder.Services.AddHostedService<NatsSignalRBridge>();
+
+// Redis
+var redisConnString = builder.Configuration.GetValue<string>("Redis:Connection") ?? "127.0.0.1:6379";
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+{
+    var options = ConfigurationOptions.Parse(redisConnString);
+    var redisPassword = builder.Configuration.GetValue<string>("Redis:Password");
+    if (!string.IsNullOrWhiteSpace(redisPassword))
+    {
+        options.Password = redisPassword;
+    }
+
+    options.AbortOnConnectFail = false;
+    options.ConnectTimeout = 5000;
+    options.AsyncTimeout = 5000;
+    options.SyncTimeout = 5000;
+    options.ConnectRetry = 5;
+    options.KeepAlive = 30;
+    options.ReconnectRetryPolicy = new ExponentialRetry(5000);
+    options.ClientName = "meduza-api";
+    return ConnectionMultiplexer.Connect(options);
+});
+builder.Services.AddSingleton<IRedisService, RedisService>();
 builder.Services.AddHostedService<LogPurgeBackgroundService>();
 
 // Controllers + JSON config
@@ -75,7 +101,12 @@ builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateAgentRequestValidator>();
 
 // SignalR for dashboard real-time
-builder.Services.AddSignalR();
+builder.Services.AddSignalR(options =>
+{
+    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    options.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
+    options.HandshakeTimeout = TimeSpan.FromSeconds(15);
+});
 
 // OpenAPI + Scalar
 builder.Services.AddOpenApi();
@@ -134,6 +165,7 @@ app.MapControllers();
 app.MapHub<AgentHub>("/hubs/agent", options =>
 {
     options.AllowStatefulReconnects = true;
+    options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;
 }).RequireCors("SignalR");
 
 app.Run();

@@ -17,7 +17,7 @@ public class SiteRepository : ISiteRepository
         using var conn = _db.CreateConnection();
         return await conn.QuerySingleOrDefaultAsync<Site>(
             """
-            SELECT id, client_id AS ClientId, name, address, city, state, zip_code AS ZipCode,
+            SELECT id, client_id AS ClientId, name,
                    notes, is_active AS IsActive, created_at AS CreatedAt, updated_at AS UpdatedAt
             FROM sites WHERE id = @Id
             """, new { Id = id });
@@ -27,7 +27,7 @@ public class SiteRepository : ISiteRepository
     {
         using var conn = _db.CreateConnection();
         var sql = """
-            SELECT id, client_id AS ClientId, name, address, city, state, zip_code AS ZipCode,
+            SELECT id, client_id AS ClientId, name,
                    notes, is_active AS IsActive, created_at AS CreatedAt, updated_at AS UpdatedAt
             FROM sites WHERE client_id = @ClientId
             """;
@@ -45,8 +45,8 @@ public class SiteRepository : ISiteRepository
         using var conn = _db.CreateConnection();
         await conn.ExecuteAsync(
             """
-            INSERT INTO sites (id, client_id, name, address, city, state, zip_code, notes, is_active, created_at, updated_at)
-            VALUES (@Id, @ClientId, @Name, @Address, @City, @State, @ZipCode, @Notes, @IsActive, @CreatedAt, @UpdatedAt)
+            INSERT INTO sites (id, client_id, name, notes, is_active, created_at, updated_at)
+            VALUES (@Id, @ClientId, @Name, @Notes, @IsActive, @CreatedAt, @UpdatedAt)
             """, site);
         return site;
     }
@@ -57,8 +57,7 @@ public class SiteRepository : ISiteRepository
         using var conn = _db.CreateConnection();
         await conn.ExecuteAsync(
             """
-            UPDATE sites SET client_id = @ClientId, name = @Name, address = @Address,
-                   city = @City, state = @State, zip_code = @ZipCode, notes = @Notes,
+            UPDATE sites SET client_id = @ClientId, name = @Name, notes = @Notes,
                    is_active = @IsActive, updated_at = @UpdatedAt
             WHERE id = @Id
             """, site);

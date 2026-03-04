@@ -6,6 +6,8 @@ namespace Meduza.Core.Entities;
 public class DeployToken
 {
     public Guid Id { get; set; }
+    public Guid? ClientId { get; set; }
+    public Guid? SiteId { get; set; }
     public string TokenHash { get; set; } = string.Empty;
     public string TokenPrefix { get; set; } = string.Empty;
     public string? Description { get; set; }

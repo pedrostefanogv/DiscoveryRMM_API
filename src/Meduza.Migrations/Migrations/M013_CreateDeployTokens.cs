@@ -9,6 +9,8 @@ public class M013_CreateDeployTokens : Migration
     {
         Create.Table("deploy_tokens")
             .WithColumn("id").AsGuid().PrimaryKey()
+            .WithColumn("client_id").AsGuid().NotNullable().ForeignKey("fk_deploy_tokens_client", "clients", "id")
+            .WithColumn("site_id").AsGuid().NotNullable().ForeignKey("fk_deploy_tokens_site", "sites", "id")
             .WithColumn("token_hash").AsString(128).NotNullable().Unique()
             .WithColumn("token_prefix").AsString(12).NotNullable()
             .WithColumn("description").AsString(500).Nullable()
@@ -20,6 +22,12 @@ public class M013_CreateDeployTokens : Migration
             .WithColumn("max_uses").AsInt32().Nullable();
 
         Create.Index("ix_deploy_tokens_expires_at").OnTable("deploy_tokens").OnColumn("expires_at");
+        Create.Index("ix_deploy_tokens_client_site")
+            .OnTable("deploy_tokens")
+            .OnColumn("client_id")
+            .Ascending()
+            .OnColumn("site_id")
+            .Ascending();
     }
 
     public override void Down()

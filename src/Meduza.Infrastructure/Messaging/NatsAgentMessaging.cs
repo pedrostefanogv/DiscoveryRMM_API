@@ -65,50 +65,110 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
     public async Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken)
     {
+        _logger.LogInformation("NATS subscription tasks starting...");
+
         // Subscrever heartbeats: agent.*.heartbeat
-        _ = Task.Run(async () =>
+        var heartbeatTask = Task.Run(async () =>
         {
-            await foreach (var msg in _connection.SubscribeAsync<string>("agent.*.heartbeat", cancellationToken: cancellationToken))
+            try
             {
-                try
+                await foreach (var msg in _connection.SubscribeAsync<string>("agent.*.heartbeat", cancellationToken: cancellationToken))
                 {
-                    var agentId = ExtractAgentId(msg.Subject);
-                    if (agentId.HasValue)
+                    try
                     {
-                        var heartbeat = JsonSerializer.Deserialize<HeartbeatMessage>(msg.Data ?? "", JsonOptions);
-                        await _agentRepo.UpdateStatusAsync(agentId.Value, AgentStatus.Online, heartbeat?.IpAddress);
+                        var agentId = ExtractAgentId(msg.Subject);
+                        if (agentId.HasValue)
+                        {
+                            var heartbeat = JsonSerializer.Deserialize<HeartbeatMessage>(msg.Data ?? "", JsonOptions);
+                            await _agentRepo.UpdateStatusAsync(agentId.Value, AgentStatus.Online, heartbeat?.IpAddress);
+                            _logger.LogDebug("Heartbeat processed from agent {AgentId} (IP: {IpAddress})", agentId.Value, heartbeat?.IpAddress);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing heartbeat from {Subject}", msg.Subject);
                     }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error processing heartbeat from {Subject}", msg.Subject);
-                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("Heartbeat subscription cancelled.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Fatal error in heartbeat subscription");
             }
         }, cancellationToken);
 
         // Subscrever resultados: agent.*.result
-        _ = Task.Run(async () =>
+        var resultTask = Task.Run(async () =>
         {
-            await foreach (var msg in _connection.SubscribeAsync<string>("agent.*.result", cancellationToken: cancellationToken))
+            try
             {
-                try
+                await foreach (var msg in _connection.SubscribeAsync<string>("agent.*.result", cancellationToken: cancellationToken))
                 {
-                    var result = JsonSerializer.Deserialize<CommandResultMessage>(msg.Data ?? "", JsonOptions);
-                    if (result is not null)
+                    try
                     {
-                        var status = result.ExitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
-                        await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
-                        await PublishDashboardEventAsync("CommandCompleted", result);
+                        var result = JsonSerializer.Deserialize<CommandResultMessage>(msg.Data ?? "", JsonOptions);
+                        if (result is not null)
+                        {
+                            var status = result.ExitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
+                            await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
+                            await PublishDashboardEventAsync("CommandCompleted", result);
+                            _logger.LogDebug("Command result processed: {CommandId} - Exit Code: {ExitCode}", result.CommandId, result.ExitCode);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing command result from {Subject}", msg.Subject);
                     }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error processing command result from {Subject}", msg.Subject);
-                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("Command result subscription cancelled.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Fatal error in result subscription");
             }
         }, cancellationToken);
 
-        _logger.LogInformation("NATS agent message subscriptions started");
+        // Subscrever reports de hardware: agent.*.hardware
+        var hardwareTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var msg in _connection.SubscribeAsync<string>("agent.*.hardware", cancellationToken: cancellationToken))
+                {
+                    try
+                    {
+                        var agentId = ExtractAgentId(msg.Subject);
+                        if (agentId.HasValue)
+                        {
+                            _logger.LogDebug("Hardware report received from agent {AgentId}", agentId.Value);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing hardware report from {Subject}", msg.Subject);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("Hardware subscription cancelled.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Fatal error in hardware subscription");
+            }
+        }, cancellationToken);
+
+        _logger.LogInformation("NATS agent message subscriptions started successfully");
+
+        // Mantém o método ativo enquanto as subscriptions estiverem vivas.
+        await Task.WhenAll(heartbeatTask, resultTask, hardwareTask);
     }
 
     private static Guid? ExtractAgentId(string subject)
@@ -122,7 +182,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _connection.DisposeAsync();
+        // NatsConnection é singleton no DI e não deve ser descartada por este serviço scoped.
+        await ValueTask.CompletedTask;
     }
 
     private record HeartbeatMessage(string? IpAddress, string? AgentVersion);

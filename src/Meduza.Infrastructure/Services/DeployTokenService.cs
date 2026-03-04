@@ -14,7 +14,7 @@ public class DeployTokenService : IDeployTokenService
         _tokenRepo = tokenRepo;
     }
 
-    public async Task<(DeployToken Token, string RawToken)> CreateTokenAsync(string? description, int? expiresInHours = null, bool multiUse = false)
+    public async Task<(DeployToken Token, string RawToken)> CreateTokenAsync(Guid clientId, Guid siteId, string? description, int? expiresInHours = null, bool multiUse = false)
     {
         var hours = expiresInHours ?? 4;
         int? maxUses = multiUse ? null : 1;
@@ -26,6 +26,8 @@ public class DeployTokenService : IDeployTokenService
         var token = new DeployToken
         {
             Id = IdGenerator.NewId(),
+            ClientId = clientId,
+            SiteId = siteId,
             TokenHash = tokenHash,
             TokenPrefix = prefix,
             Description = description,
@@ -42,7 +44,15 @@ public class DeployTokenService : IDeployTokenService
     public async Task<DeployToken?> TryUseTokenAsync(string rawToken)
     {
         var hash = HashToken(rawToken);
-        return await _tokenRepo.TryUseByTokenHashAsync(hash, DateTime.UtcNow);
+        var token = await _tokenRepo.TryUseByTokenHashAsync(hash, DateTime.UtcNow);
+        if (token is null)
+            return null;
+
+        // Bloquear tokens legados sem escopo para evitar instalação fora de cliente/site.
+        if (!token.ClientId.HasValue || !token.SiteId.HasValue)
+            return null;
+
+        return token;
     }
 
     public async Task RevokeTokenAsync(Guid tokenId)

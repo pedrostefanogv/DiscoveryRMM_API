@@ -14,38 +14,48 @@ public class AgentsController : ControllerBase
 {
     private readonly IAgentRepository _agentRepo;
     private readonly IAgentHardwareRepository _hardwareRepo;
+    private readonly IAgentSoftwareRepository _softwareRepo;
     private readonly ICommandRepository _commandRepo;
     private readonly IAgentAuthService _authService;
     private readonly IAgentMessaging _messaging;
     private readonly IHubContext<AgentHub> _hubContext;
+    private readonly int _agentOnlineGraceSeconds;
 
     public AgentsController(
         IAgentRepository agentRepo,
         IAgentHardwareRepository hardwareRepo,
+        IAgentSoftwareRepository softwareRepo,
         ICommandRepository commandRepo,
         IAgentAuthService authService,
         IAgentMessaging messaging,
-        IHubContext<AgentHub> hubContext)
+        IHubContext<AgentHub> hubContext,
+        IConfiguration configuration)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
+        _softwareRepo = softwareRepo;
         _commandRepo = commandRepo;
         _authService = authService;
         _messaging = messaging;
         _hubContext = hubContext;
+        _agentOnlineGraceSeconds = configuration.GetValue<int?>("Realtime:AgentOnlineGraceSeconds") ?? 120;
     }
 
     [HttpGet("by-site/{siteId:guid}")]
     public async Task<IActionResult> GetBySite(Guid siteId)
     {
-        var agents = await _agentRepo.GetBySiteIdAsync(siteId);
+        var agents = (await _agentRepo.GetBySiteIdAsync(siteId)).ToList();
+        foreach (var agent in agents)
+            ApplyEffectiveStatus(agent);
         return Ok(agents);
     }
 
     [HttpGet("by-client/{clientId:guid}")]
     public async Task<IActionResult> GetByClient(Guid clientId)
     {
-        var agents = await _agentRepo.GetByClientIdAsync(clientId);
+        var agents = (await _agentRepo.GetByClientIdAsync(clientId)).ToList();
+        foreach (var agent in agents)
+            ApplyEffectiveStatus(agent);
         return Ok(agents);
     }
 
@@ -53,7 +63,19 @@ public class AgentsController : ControllerBase
     public async Task<IActionResult> GetById(Guid id)
     {
         var agent = await _agentRepo.GetByIdAsync(id);
+        if (agent is not null)
+            ApplyEffectiveStatus(agent);
         return agent is null ? NotFound() : Ok(agent);
+    }
+
+    private void ApplyEffectiveStatus(Agent agent)
+    {
+        if (agent.Status != AgentStatus.Online)
+            return;
+
+        var cutoffUtc = DateTime.UtcNow.AddSeconds(-_agentOnlineGraceSeconds);
+        if (!agent.LastSeenAt.HasValue || agent.LastSeenAt.Value < cutoffUtc)
+            agent.Status = AgentStatus.Offline;
     }
 
     [HttpPost]
@@ -105,50 +127,56 @@ public class AgentsController : ControllerBase
         return Ok(new { Hardware = hardware, Disks = disks, NetworkAdapters = network, MemoryModules = memory });
     }
 
-    [HttpPost("{id:guid}/hardware")]
-    public async Task<IActionResult> ReportHardware(Guid id, [FromBody] HardwareReportRequest request)
+    [HttpGet("{id:guid}/software")]
+    public async Task<IActionResult> GetSoftware(
+        Guid id,
+        [FromQuery] Guid? cursor = null,
+        [FromQuery] int limit = 100,
+        [FromQuery] string? search = null,
+        [FromQuery] string order = "asc")
     {
         var agent = await _agentRepo.GetByIdAsync(id);
         if (agent is null) return NotFound();
 
-        string? inventoryRaw = null;
-        if (request.InventoryRaw.HasValue && request.InventoryRaw.Value.ValueKind != JsonValueKind.Null)
-            inventoryRaw = request.InventoryRaw.Value.GetRawText();
+        var normalizedOrder = order.Trim().ToLowerInvariant();
+        if (normalizedOrder is not ("asc" or "desc"))
+            return BadRequest(new { error = "Invalid order. Use 'asc' or 'desc'." });
 
-        var hasInventoryPayload = inventoryRaw is not null
-            || request.InventorySchemaVersion is not null
-            || request.InventoryCollectedAt.HasValue;
+        var normalizedLimit = Math.Clamp(limit, 1, 500);
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        var descending = normalizedOrder == "desc";
+        var page = await _softwareRepo.GetCurrentByAgentIdPagedAsync(
+            id,
+            cursor,
+            normalizedLimit + 1,
+            normalizedSearch,
+            descending);
 
-        if (request.Hardware is not null || hasInventoryPayload)
+        var hasMore = page.Count > normalizedLimit;
+        var items = hasMore ? page.Take(normalizedLimit).ToList() : page.ToList();
+        var nextCursor = hasMore ? items[^1].InventoryId : (Guid?)null;
+
+        return Ok(new
         {
-            var hardware = request.Hardware ?? new AgentHardwareInfo { AgentId = id };
-            hardware.AgentId = id;
-            if (hasInventoryPayload)
-            {
-                hardware.InventoryRaw = inventoryRaw;
-                hardware.InventorySchemaVersion = request.InventorySchemaVersion;
-                hardware.InventoryCollectedAt = request.InventoryCollectedAt ?? DateTime.UtcNow;
-            }
-            else if (request.Hardware is not null)
-            {
-                var existing = await _hardwareRepo.GetByAgentIdAsync(id);
-                if (existing is not null)
-                {
-                    hardware.InventoryRaw = existing.InventoryRaw;
-                    hardware.InventorySchemaVersion = existing.InventorySchemaVersion;
-                    hardware.InventoryCollectedAt = existing.InventoryCollectedAt;
-                }
-            }
-            await _hardwareRepo.UpsertAsync(hardware);
-        }
-        if (request.Disks is not null)
-            await _hardwareRepo.ReplaceDiskInfoAsync(id, request.Disks);
-        if (request.NetworkAdapters is not null)
-            await _hardwareRepo.ReplaceNetworkAdaptersAsync(id, request.NetworkAdapters);
-        if (request.MemoryModules is not null)
-            await _hardwareRepo.ReplaceMemoryModulesAsync(id, request.MemoryModules);
+            items,
+            count = items.Count,
+            cursor,
+            nextCursor,
+            hasMore,
+            limit = normalizedLimit,
+            search = normalizedSearch,
+            order = normalizedOrder
+        });
+    }
 
-        return Ok();
+    [HttpGet("{id:guid}/software/snapshot")]
+    public async Task<IActionResult> GetSoftwareSnapshot(Guid id)
+    {
+        var agent = await _agentRepo.GetByIdAsync(id);
+        if (agent is null) return NotFound();
+
+        var snapshot = await _softwareRepo.GetSnapshotByAgentIdAsync(id);
+        return Ok(snapshot);
     }
 
     // --- Commands ---
@@ -174,18 +202,31 @@ public class AgentsController : ControllerBase
         };
         var created = await _commandRepo.CreateAsync(command);
 
-        // Tentar enviar via NATS primeiro; fallback para SignalR
+        var sent = false;
+
+        // Tenta NATS primeiro; se falhar, cai para SignalR.
         if (_messaging.IsConnected)
         {
-            await _messaging.SendCommandAsync(id, created.Id, created.CommandType.ToString(), created.Payload);
-            await _commandRepo.UpdateStatusAsync(created.Id, CommandStatus.Sent, null, null, null);
+            try
+            {
+                await _messaging.SendCommandAsync(id, created.Id, created.CommandType.ToString(), created.Payload);
+                sent = true;
+            }
+            catch
+            {
+                sent = false;
+            }
         }
-        else if (AgentHub.IsAgentConnected(id))
+
+        if (!sent && AgentHub.IsAgentConnected(id))
         {
             await _hubContext.Clients.Group($"agent-{id}")
                 .SendAsync("ExecuteCommand", created.Id, created.CommandType, created.Payload);
-            await _commandRepo.UpdateStatusAsync(created.Id, CommandStatus.Sent, null, null, null);
+            sent = true;
         }
+
+        if (sent)
+            await _commandRepo.UpdateStatusAsync(created.Id, CommandStatus.Sent, null, null, null);
 
         return CreatedAtAction(nameof(GetCommands), new { id }, created);
     }
@@ -228,6 +269,14 @@ public record CreateAgentRequest(Guid SiteId, string Hostname, string? DisplayNa
 public record UpdateAgentRequest(Guid SiteId, string Hostname, string? DisplayName);
 public record SendCommandRequest(CommandType CommandType, string Payload);
 public record HardwareReportRequest(
+    string? Hostname,
+    string? DisplayName,
+    AgentStatus? Status,
+    string? OperatingSystem,
+    string? OsVersion,
+    string? AgentVersion,
+    string? LastIpAddress,
+    string? MacAddress,
     AgentHardwareInfo? Hardware,
     List<DiskInfo>? Disks,
     List<NetworkAdapterInfo>? NetworkAdapters,
@@ -236,3 +285,14 @@ public record HardwareReportRequest(
     string? InventorySchemaVersion,
     DateTime? InventoryCollectedAt);
 public record CreateTokenRequest(string? Description, int? ExpirationDays);
+public record SoftwareInventoryReportRequest(
+    DateTime? CollectedAt,
+    List<SoftwareInventoryItemRequest>? Software);
+
+public record SoftwareInventoryItemRequest(
+    string Name,
+    string? Version,
+    string? Publisher,
+    string? InstallId,
+    string? Serial,
+    string? Source);

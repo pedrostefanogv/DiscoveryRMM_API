@@ -34,10 +34,6 @@ public class SitesController : ControllerBase
         {
             ClientId = clientId,
             Name = request.Name,
-            Address = request.Address,
-            City = request.City,
-            State = request.State,
-            ZipCode = request.ZipCode,
             Notes = request.Notes
         };
         var created = await _repo.CreateAsync(site);
@@ -51,10 +47,6 @@ public class SitesController : ControllerBase
         if (site is null || site.ClientId != clientId) return NotFound();
 
         site.Name = request.Name;
-        site.Address = request.Address;
-        site.City = request.City;
-        site.State = request.State;
-        site.ZipCode = request.ZipCode;
         site.Notes = request.Notes;
         site.IsActive = request.IsActive;
 
@@ -72,5 +64,5 @@ public class SitesController : ControllerBase
     }
 }
 
-public record CreateSiteRequest(string Name, string? Address, string? City, string? State, string? ZipCode, string? Notes);
-public record UpdateSiteRequest(string Name, string? Address, string? City, string? State, string? ZipCode, string? Notes, bool IsActive);
+public record CreateSiteRequest(string Name, string? Notes);
+public record UpdateSiteRequest(string Name, string? Notes, bool IsActive);

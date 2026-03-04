@@ -7,6 +7,8 @@ public class CreateDeployTokenRequestValidator : AbstractValidator<CreateDeployT
 {
     public CreateDeployTokenRequestValidator()
     {
+        RuleFor(x => x.ClientId).NotEmpty();
+        RuleFor(x => x.SiteId).NotEmpty();
         RuleFor(x => x.Description).MaximumLength(200);
         RuleFor(x => x.ExpiresInHours)
             .Must(h => !h.HasValue || h.Value is >= 1 and <= 720)

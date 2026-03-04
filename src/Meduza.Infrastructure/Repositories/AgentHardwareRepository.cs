@@ -59,7 +59,7 @@ public class AgentHardwareRepository : IAgentHardwareRepository
                        bios_version = @BiosVersion, bios_manufacturer = @BiosManufacturer,
                        os_name = @OsName, os_version = @OsVersion, os_build = @OsBuild,
                        os_architecture = @OsArchitecture,
-                      inventory_raw = @InventoryRaw,
+                      inventory_raw = @InventoryRaw::jsonb,
                       inventory_schema_version = @InventorySchemaVersion,
                       inventory_collected_at = @InventoryCollectedAt,
                        collected_at = @CollectedAt, updated_at = @UpdatedAt
@@ -83,7 +83,7 @@ public class AgentHardwareRepository : IAgentHardwareRepository
                        @Processor, @ProcessorCores, @ProcessorThreads, @ProcessorArchitecture,
                        @TotalMemoryBytes, @BiosVersion, @BiosManufacturer,
                        @OsName, @OsVersion, @OsBuild, @OsArchitecture,
-                      @InventoryRaw, @InventorySchemaVersion, @InventoryCollectedAt,
+                      @InventoryRaw::jsonb, @InventorySchemaVersion, @InventoryCollectedAt,
                        @CollectedAt, @UpdatedAt)
                 """, hardware);
         }
