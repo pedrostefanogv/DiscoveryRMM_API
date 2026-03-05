@@ -15,16 +15,16 @@ namespace Meduza.Infrastructure.Services;
 public class AgentTokenAuthService : IAgentAuthService
 {
     private readonly IAgentTokenRepository _tokenRepo;
-    private readonly ITenantSettingsRepository _settingsRepo;
+    private readonly IConfigurationResolver _configResolver;
     private readonly IAgentRepository _agentRepo;
 
     public AgentTokenAuthService(
         IAgentTokenRepository tokenRepo,
-        ITenantSettingsRepository settingsRepo,
+        IConfigurationResolver configResolver,
         IAgentRepository agentRepo)
     {
         _tokenRepo = tokenRepo;
-        _settingsRepo = settingsRepo;
+        _configResolver = configResolver;
         _agentRepo = agentRepo;
     }
 
@@ -33,12 +33,11 @@ public class AgentTokenAuthService : IAgentAuthService
         var agent = await _agentRepo.GetByIdAsync(agentId)
             ?? throw new InvalidOperationException("Agent not found");
 
-        // Se não passou expirationDays, buscar do tenant settings
+        // Se não passou expirationDays, resolver via hierarquia de configuração
         if (expirationDays is null)
         {
-            // Buscar o client_id via site
-            var settings = await GetTenantSettingsForAgentAsync(agentId);
-            expirationDays = settings?.TokenExpirationDays ?? 365;
+            var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
+            expirationDays = resolved.TokenExpirationDays;
         }
 
         var rawToken = GenerateRawToken();
@@ -85,13 +84,6 @@ public class AgentTokenAuthService : IAgentAuthService
     public async Task<IEnumerable<AgentToken>> GetTokensByAgentIdAsync(Guid agentId)
     {
         return await _tokenRepo.GetByAgentIdAsync(agentId);
-    }
-
-    private async Task<TenantSettings?> GetTenantSettingsForAgentAsync(Guid agentId)
-    {
-        // TODO: Quando tivermos cache, adicionar aqui
-        // Buscar client_id via agent -> site -> client
-        return null; // Cai no default de 365 dias
     }
 
     private static string GenerateRawToken()

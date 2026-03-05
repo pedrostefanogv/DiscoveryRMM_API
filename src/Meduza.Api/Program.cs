@@ -52,14 +52,26 @@ builder.Services.AddScoped<ICommandRepository, CommandRepository>();
 builder.Services.AddScoped<ITicketRepository, TicketRepository>();
 builder.Services.AddScoped<IAgentTokenRepository, AgentTokenRepository>();
 builder.Services.AddScoped<IDeployTokenRepository, DeployTokenRepository>();
-builder.Services.AddScoped<ITenantSettingsRepository, TenantSettingsRepository>();
 builder.Services.AddScoped<IWorkflowRepository, WorkflowRepository>();
 builder.Services.AddScoped<ILogRepository, LogRepository>();
+builder.Services.AddScoped<IEntityNoteRepository, EntityNoteRepository>();
+
+// Configuration repositories
+builder.Services.AddScoped<IServerConfigurationRepository, ServerConfigurationRepository>();
+builder.Services.AddScoped<IClientConfigurationRepository, ClientConfigurationRepository>();
+builder.Services.AddScoped<ISiteConfigurationRepository, SiteConfigurationRepository>();
+builder.Services.AddScoped<IConfigurationAuditRepository, ConfigurationAuditRepository>();
 
 // Services
+builder.Services.AddScoped<IConfigurationAuditService, ConfigurationAuditService>();
+builder.Services.AddScoped<IConfigurationService, ConfigurationService>();
+builder.Services.AddScoped<IConfigurationResolver, ConfigurationResolver>();
 builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
 builder.Services.AddScoped<IDeployTokenService, DeployTokenService>();
 builder.Services.AddScoped<ILoggingService, LoggingService>();
+
+// IMemoryCache (para ConfigurationResolver)
+builder.Services.AddMemoryCache();
 
 // Configuração de logging automático
 builder.Services.Configure<AutomaticLoggingOptions>(

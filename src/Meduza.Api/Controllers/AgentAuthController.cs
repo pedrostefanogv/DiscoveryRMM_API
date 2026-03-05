@@ -14,17 +14,20 @@ public class AgentAuthController : ControllerBase
     private readonly IAgentHardwareRepository _hardwareRepo;
     private readonly IAgentSoftwareRepository _softwareRepo;
     private readonly ICommandRepository _commandRepo;
+    private readonly IConfigurationResolver _configResolver;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
         IAgentHardwareRepository hardwareRepo,
         IAgentSoftwareRepository softwareRepo,
-        ICommandRepository commandRepo)
+        ICommandRepository commandRepo,
+        IConfigurationResolver configResolver)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
         _softwareRepo = softwareRepo;
         _commandRepo = commandRepo;
+        _configResolver = configResolver;
     }
 
     [HttpGet("me")]
@@ -35,6 +38,23 @@ public class AgentAuthController : ControllerBase
 
         var agent = await _agentRepo.GetByIdAsync(agentId);
         return agent is null ? NotFound() : Ok(agent);
+    }
+
+    /// <summary>
+    /// Retorna a configuração efetiva do agent (hierarquia resolvida: Server → Client → Site).
+    /// Usada pelo agent para saber seu intervalo de inventário, features habilitadas, etc.
+    /// </summary>
+    [HttpGet("me/configuration")]
+    public async Task<IActionResult> GetConfiguration()
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null) return NotFound();
+
+        var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
+        return Ok(resolved);
     }
 
     [HttpGet("me/hardware")]
