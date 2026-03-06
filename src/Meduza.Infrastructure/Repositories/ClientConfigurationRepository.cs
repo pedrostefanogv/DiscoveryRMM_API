@@ -24,6 +24,7 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
                max_tokens_per_agent AS MaxTokensPerAgent,
                agent_heartbeat_interval_seconds AS AgentHeartbeatIntervalSeconds,
                agent_offline_threshold_seconds AS AgentOfflineThresholdSeconds,
+               locked_fields_json AS LockedFieldsJson,
                created_at AS CreatedAt, updated_at AS UpdatedAt,
                created_by AS CreatedBy, updated_by AS UpdatedBy, version
         FROM client_configurations
@@ -51,6 +52,7 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
                 inventory_interval_hours, auto_update_settings_json,
                 token_expiration_days, max_tokens_per_agent,
                 agent_heartbeat_interval_seconds, agent_offline_threshold_seconds,
+                locked_fields_json,
                 created_at, updated_at, created_by, updated_by, version
             ) VALUES (
                 @Id, @ClientId,
@@ -59,6 +61,7 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
                 @InventoryIntervalHours, @AutoUpdateSettingsJson,
                 @TokenExpirationDays, @MaxTokensPerAgent,
                 @AgentHeartbeatIntervalSeconds, @AgentOfflineThresholdSeconds,
+                @LockedFieldsJson,
                 @CreatedAt, @UpdatedAt, @CreatedBy, @UpdatedBy, @Version
             )
             """, config);
@@ -83,6 +86,7 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
                 max_tokens_per_agent = @MaxTokensPerAgent,
                 agent_heartbeat_interval_seconds = @AgentHeartbeatIntervalSeconds,
                 agent_offline_threshold_seconds = @AgentOfflineThresholdSeconds,
+                locked_fields_json = @LockedFieldsJson,
                 updated_at = @UpdatedAt,
                 updated_by = @UpdatedBy,
                 version = @Version

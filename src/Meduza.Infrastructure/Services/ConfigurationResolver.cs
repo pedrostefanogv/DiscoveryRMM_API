@@ -173,25 +173,65 @@ public class ConfigurationResolver : IConfigurationResolver
 
         var site = await _siteRepo.GetBySiteIdAsync(siteId);
         var client = await _clientRepo.GetByClientIdAsync(siteEntity.ClientId);
+        var globalLocks = GetBlockedFields(server.LockedFieldsJson);
+        var clientLocks = GetBlockedFields(client?.LockedFieldsJson);
+        var siteLocks = GetBlockedFields(site?.LockedFieldsJson);
+
+        var blocked = new HashSet<string>(globalLocks, StringComparer.OrdinalIgnoreCase);
+        blocked.UnionWith(clientLocks);
+        blocked.UnionWith(siteLocks);
+
+        var recovery = ResolveValue("RecoveryEnabled", blocked, site?.RecoveryEnabled, client?.RecoveryEnabled, server.RecoveryEnabled);
+        var discovery = ResolveValue("DiscoveryEnabled", blocked, site?.DiscoveryEnabled, client?.DiscoveryEnabled, server.DiscoveryEnabled);
+        var p2p = ResolveValue("P2PFilesEnabled", blocked, site?.P2PFilesEnabled, client?.P2PFilesEnabled, server.P2PFilesEnabled);
+        var support = ResolveValue("SupportEnabled", blocked, site?.SupportEnabled, client?.SupportEnabled, server.SupportEnabled);
+        var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, (bool?)null, (bool?)null, server.KnowledgeBaseEnabled);
+        var appStore = ResolveValue("AppStorePolicy", blocked, site?.AppStorePolicy, client?.AppStorePolicy, server.AppStorePolicy);
+        var inventory = ResolveValue("InventoryIntervalHours", blocked, site?.InventoryIntervalHours, client?.InventoryIntervalHours, server.InventoryIntervalHours);
+        var tokenExp = ResolveValue("TokenExpirationDays", blocked, (int?)null, client?.TokenExpirationDays, server.TokenExpirationDays);
+        var maxTokens = ResolveValue("MaxTokensPerAgent", blocked, (int?)null, client?.MaxTokensPerAgent, server.MaxTokensPerAgent);
+        var heartbeat = ResolveValue("AgentHeartbeatIntervalSeconds", blocked, (int?)null, client?.AgentHeartbeatIntervalSeconds, server.AgentHeartbeatIntervalSeconds);
+        var offline = ResolveValue("AgentOfflineThresholdSeconds", blocked, (int?)null, client?.AgentOfflineThresholdSeconds, server.AgentOfflineThresholdSeconds);
+
+        var autoUpdate = ResolveAutoUpdate(site?.AutoUpdateSettingsJson, client?.AutoUpdateSettingsJson, server.AutoUpdateSettingsJson);
+        var autoUpdateSource = ResolveObjectSource("AutoUpdateSettingsJson", blocked, site?.AutoUpdateSettingsJson, client?.AutoUpdateSettingsJson);
+
+        var ai = ResolveAI(site?.AIIntegrationSettingsJson, client?.AIIntegrationSettingsJson, server.AIIntegrationSettingsJson);
+        var aiSource = ResolveObjectSource("AIIntegrationSettingsJson", blocked, site?.AIIntegrationSettingsJson, client?.AIIntegrationSettingsJson);
 
         var resolved = new ResolvedConfiguration
         {
             SiteId = siteId,
             ClientId = siteEntity.ClientId,
-            RecoveryEnabled    = site?.RecoveryEnabled ?? client?.RecoveryEnabled ?? server.RecoveryEnabled,
-            DiscoveryEnabled   = site?.DiscoveryEnabled ?? client?.DiscoveryEnabled ?? server.DiscoveryEnabled,
-            P2PFilesEnabled    = site?.P2PFilesEnabled ?? client?.P2PFilesEnabled ?? server.P2PFilesEnabled,
-            SupportEnabled     = site?.SupportEnabled ?? client?.SupportEnabled ?? server.SupportEnabled,
-            KnowledgeBaseEnabled   = server.KnowledgeBaseEnabled,
-            AppStorePolicy     = site?.AppStorePolicy ?? client?.AppStorePolicy ?? server.AppStorePolicy,
-            InventoryIntervalHours = site?.InventoryIntervalHours ?? client?.InventoryIntervalHours ?? server.InventoryIntervalHours,
-            TokenExpirationDays    = client?.TokenExpirationDays ?? server.TokenExpirationDays,
-            MaxTokensPerAgent      = client?.MaxTokensPerAgent ?? server.MaxTokensPerAgent,
-            AgentHeartbeatIntervalSeconds = client?.AgentHeartbeatIntervalSeconds ?? server.AgentHeartbeatIntervalSeconds,
-            AgentOfflineThresholdSeconds  = client?.AgentOfflineThresholdSeconds ?? server.AgentOfflineThresholdSeconds,
-            AutoUpdate   = ResolveAutoUpdate(site?.AutoUpdateSettingsJson, client?.AutoUpdateSettingsJson, server.AutoUpdateSettingsJson),
-            AIIntegration = ResolveAI(site?.AIIntegrationSettingsJson, client?.AIIntegrationSettingsJson, server.AIIntegrationSettingsJson),
+            RecoveryEnabled = recovery.Value,
+            DiscoveryEnabled = discovery.Value,
+            P2PFilesEnabled = p2p.Value,
+            SupportEnabled = support.Value,
+            KnowledgeBaseEnabled = knowledge.Value,
+            AppStorePolicy = appStore.Value,
+            InventoryIntervalHours = inventory.Value,
+            TokenExpirationDays = tokenExp.Value,
+            MaxTokensPerAgent = maxTokens.Value,
+            AgentHeartbeatIntervalSeconds = heartbeat.Value,
+            AgentOfflineThresholdSeconds = offline.Value,
+            AutoUpdate = autoUpdate,
+            AIIntegration = ai,
+            BlockedFields = blocked.OrderBy(x => x).ToArray(),
         };
+
+        resolved.Inheritance["RecoveryEnabled"] = (int)recovery.Source;
+        resolved.Inheritance["DiscoveryEnabled"] = (int)discovery.Source;
+        resolved.Inheritance["P2PFilesEnabled"] = (int)p2p.Source;
+        resolved.Inheritance["SupportEnabled"] = (int)support.Source;
+        resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;
+        resolved.Inheritance["AppStorePolicy"] = (int)appStore.Source;
+        resolved.Inheritance["InventoryIntervalHours"] = (int)inventory.Source;
+        resolved.Inheritance["TokenExpirationDays"] = (int)tokenExp.Source;
+        resolved.Inheritance["MaxTokensPerAgent"] = (int)maxTokens.Source;
+        resolved.Inheritance["AgentHeartbeatIntervalSeconds"] = (int)heartbeat.Source;
+        resolved.Inheritance["AgentOfflineThresholdSeconds"] = (int)offline.Source;
+        resolved.Inheritance["AutoUpdate"] = (int)autoUpdateSource;
+        resolved.Inheritance["AIIntegration"] = (int)aiSource;
 
         _cache.Set(cacheKey, resolved, CacheTtl);
         return resolved;
@@ -237,5 +277,52 @@ public class ConfigurationResolver : IConfigurationResolver
         if (string.IsNullOrWhiteSpace(json)) return new T();
         try { return JsonSerializer.Deserialize<T>(json, JsonSerializerOptions.Web) ?? new T(); }
         catch { return new T(); }
+    }
+
+    private static HashSet<string> GetBlockedFields(string? lockedFieldsJson)
+    {
+        if (string.IsNullOrWhiteSpace(lockedFieldsJson))
+            return [];
+
+        try
+        {
+            var fields = JsonSerializer.Deserialize<string[]>(lockedFieldsJson, JsonSerializerOptions.Web) ?? [];
+            return new HashSet<string>(fields, StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static (T Value, ConfigurationPriorityType Source) ResolveValue<T>(
+        string fieldName,
+        HashSet<string> blockedFields,
+        T? siteValue,
+        T? clientValue,
+        T serverValue)
+        where T : struct
+    {
+        var isBlocked = blockedFields.Contains(fieldName);
+
+        if (siteValue.HasValue)
+            return (siteValue.Value, isBlocked ? ConfigurationPriorityType.Block : ConfigurationPriorityType.Site);
+
+        if (clientValue.HasValue)
+            return (clientValue.Value, isBlocked ? ConfigurationPriorityType.Block : ConfigurationPriorityType.Client);
+
+        return (serverValue, isBlocked ? ConfigurationPriorityType.Block : ConfigurationPriorityType.Global);
+    }
+
+    private static ConfigurationPriorityType ResolveObjectSource(
+        string fieldName,
+        HashSet<string> blockedFields,
+        string? siteJson,
+        string? clientJson)
+    {
+        if (blockedFields.Contains(fieldName)) return ConfigurationPriorityType.Block;
+        if (!string.IsNullOrWhiteSpace(siteJson)) return ConfigurationPriorityType.Site;
+        if (!string.IsNullOrWhiteSpace(clientJson)) return ConfigurationPriorityType.Client;
+        return ConfigurationPriorityType.Global;
     }
 }

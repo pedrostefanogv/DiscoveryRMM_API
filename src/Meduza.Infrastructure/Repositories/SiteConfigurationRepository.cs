@@ -21,6 +21,7 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
                inventory_interval_hours AS InventoryIntervalHours,
                auto_update_settings_json AS AutoUpdateSettingsJson,
                timezone, location, contact_person AS ContactPerson, contact_email AS ContactEmail,
+               locked_fields_json AS LockedFieldsJson,
                created_at AS CreatedAt, updated_at AS UpdatedAt,
                created_by AS CreatedBy, updated_by AS UpdatedBy, version
         FROM site_configurations
@@ -54,6 +55,7 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
                 app_store_policy, ai_integration_settings_json,
                 inventory_interval_hours, auto_update_settings_json,
                 timezone, location, contact_person, contact_email,
+                locked_fields_json,
                 created_at, updated_at, created_by, updated_by, version
             ) VALUES (
                 @Id, @SiteId, @ClientId,
@@ -61,6 +63,7 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
                 @AppStorePolicy, @AIIntegrationSettingsJson,
                 @InventoryIntervalHours, @AutoUpdateSettingsJson,
                 @Timezone, @Location, @ContactPerson, @ContactEmail,
+                @LockedFieldsJson,
                 @CreatedAt, @UpdatedAt, @CreatedBy, @UpdatedBy, @Version
             )
             """, config);
@@ -85,6 +88,7 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
                 location = @Location,
                 contact_person = @ContactPerson,
                 contact_email = @ContactEmail,
+                locked_fields_json = @LockedFieldsJson,
                 updated_at = @UpdatedAt,
                 updated_by = @UpdatedBy,
                 version = @Version

@@ -14,16 +14,16 @@ public class ServerConfiguration
     // ============ Funcionalidades globais ============
 
     /// <summary>Recovery automática: detecta se o agent foi instalado antes para reutilizar dados/histórico</summary>
-    public bool RecoveryEnabled { get; set; } = true;
+    public bool RecoveryEnabled { get; set; } = false;
 
     /// <summary>Discovery automática: permite que os agents façam discovery na rede para configurar o servidor</summary>
-    public bool DiscoveryEnabled { get; set; } = true;
+    public bool DiscoveryEnabled { get; set; } = false;
 
     /// <summary>Transferência de arquivos P2P entre agents</summary>
     public bool P2PFilesEnabled { get; set; } = false;
 
     /// <summary>Suporte habilitado (para todos os clientes)</summary>
-    public bool SupportEnabled { get; set; } = true;
+    public bool SupportEnabled { get; set; } = false;
 
     /// <summary>Base de conhecimento habilitada</summary>
     public bool KnowledgeBaseEnabled { get; set; } = false;
@@ -62,6 +62,12 @@ public class ServerConfiguration
 
     /// <summary>Configurações de integração com IA</summary>
     public string AIIntegrationSettingsJson { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Lista de campos bloqueados para sobrescrita em níveis inferiores (JSON array de nomes de propriedade).
+    /// Exemplo: ["DiscoveryEnabled", "InventoryIntervalHours"]
+    /// </summary>
+    public string LockedFieldsJson { get; set; } = "[]";
 
     // ============ Auditoria ============
 

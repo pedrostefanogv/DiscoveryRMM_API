@@ -56,6 +56,12 @@ public class ClientConfiguration
     
     /// <summary>Threshold para considerar agent offline (segundos)</summary>
     public int? AgentOfflineThresholdSeconds { get; set; }
+
+    /// <summary>
+    /// Lista de campos bloqueados no nível de cliente (JSON array de nomes de propriedade).
+    /// Bloqueia sobrescrita nos sites e agents deste cliente.
+    /// </summary>
+    public string LockedFieldsJson { get; set; } = "[]";
     
     // ============ Auditoria ============
     

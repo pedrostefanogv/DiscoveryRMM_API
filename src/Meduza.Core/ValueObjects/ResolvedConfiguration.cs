@@ -50,4 +50,15 @@ public class ResolvedConfiguration
 
     /// <summary>Timestamp da resolução (para cache)</summary>
     public DateTime ResolvedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Origem efetiva de cada campo (0=Block, 2=Global, 3=Client, 4=Site).
+    /// Exemplo: { "DiscoveryEnabled": 3 }
+    /// </summary>
+    public Dictionary<string, int> Inheritance { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Campos bloqueados para sobrescrita em níveis inferiores.
+    /// </summary>
+    public string[] BlockedFields { get; set; } = [];
 }

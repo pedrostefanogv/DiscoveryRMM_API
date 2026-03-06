@@ -29,6 +29,7 @@ public class ServerConfigurationRepository : IServerConfigurationRepository
                    agent_offline_threshold_seconds AS AgentOfflineThresholdSeconds,
                    branding_settings_json AS BrandingSettingsJson,
                    ai_integration_settings_json AS AIIntegrationSettingsJson,
+                   locked_fields_json AS LockedFieldsJson,
                    created_at AS CreatedAt, updated_at AS UpdatedAt,
                    created_by AS CreatedBy, updated_by AS UpdatedBy, version
             FROM server_configurations
@@ -51,6 +52,7 @@ public class ServerConfigurationRepository : IServerConfigurationRepository
                 auto_update_settings_json, token_expiration_days, max_tokens_per_agent,
                 agent_heartbeat_interval_seconds, agent_offline_threshold_seconds,
                 branding_settings_json, ai_integration_settings_json,
+                locked_fields_json,
                 created_at, updated_at, created_by, updated_by, version
             ) VALUES (
                 @Id, @RecoveryEnabled, @DiscoveryEnabled, @P2PFilesEnabled, @SupportEnabled,
@@ -58,6 +60,7 @@ public class ServerConfigurationRepository : IServerConfigurationRepository
                 @AutoUpdateSettingsJson, @TokenExpirationDays, @MaxTokensPerAgent,
                 @AgentHeartbeatIntervalSeconds, @AgentOfflineThresholdSeconds,
                 @BrandingSettingsJson, @AIIntegrationSettingsJson,
+                @LockedFieldsJson,
                 @CreatedAt, @UpdatedAt, @CreatedBy, @UpdatedBy, @Version
             )
             """, config);
@@ -85,6 +88,7 @@ public class ServerConfigurationRepository : IServerConfigurationRepository
                 agent_offline_threshold_seconds = @AgentOfflineThresholdSeconds,
                 branding_settings_json = @BrandingSettingsJson,
                 ai_integration_settings_json = @AIIntegrationSettingsJson,
+                locked_fields_json = @LockedFieldsJson,
                 updated_at = @UpdatedAt,
                 updated_by = @UpdatedBy,
                 version = @Version

@@ -11,10 +11,10 @@ public class M019_CreateConfigurationTables : Migration
         Create.Table("server_configurations")
             .WithColumn("id").AsGuid().PrimaryKey()
             // Funcionalidades
-            .WithColumn("recovery_enabled").AsBoolean().NotNullable().WithDefaultValue(true)
-            .WithColumn("discovery_enabled").AsBoolean().NotNullable().WithDefaultValue(true)
+            .WithColumn("recovery_enabled").AsBoolean().NotNullable().WithDefaultValue(false)
+            .WithColumn("discovery_enabled").AsBoolean().NotNullable().WithDefaultValue(false)
             .WithColumn("p2p_files_enabled").AsBoolean().NotNullable().WithDefaultValue(false)
-            .WithColumn("support_enabled").AsBoolean().NotNullable().WithDefaultValue(true)
+            .WithColumn("support_enabled").AsBoolean().NotNullable().WithDefaultValue(false)
             .WithColumn("knowledge_base_enabled").AsBoolean().NotNullable().WithDefaultValue(false)
             // Loja
             .WithColumn("app_store_policy").AsInt32().NotNullable().WithDefaultValue(1) // PreApproved
@@ -29,6 +29,8 @@ public class M019_CreateConfigurationTables : Migration
             // Branding e IA
             .WithColumn("branding_settings_json").AsCustom("text").NotNullable().WithDefaultValue("")
             .WithColumn("ai_integration_settings_json").AsCustom("text").NotNullable().WithDefaultValue("")
+            // Locks de herança (JSON array de nomes de propriedades)
+            .WithColumn("locked_fields_json").AsCustom("text").NotNullable().WithDefaultValue("[]")
             // Auditoria
             .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
             .WithColumn("updated_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
@@ -57,6 +59,8 @@ public class M019_CreateConfigurationTables : Migration
             .WithColumn("max_tokens_per_agent").AsInt32().Nullable()
             .WithColumn("agent_heartbeat_interval_seconds").AsInt32().Nullable()
             .WithColumn("agent_offline_threshold_seconds").AsInt32().Nullable()
+            // Locks de herança no nível cliente
+            .WithColumn("locked_fields_json").AsCustom("text").NotNullable().WithDefaultValue("[]")
             // Auditoria
             .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
             .WithColumn("updated_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
@@ -87,6 +91,8 @@ public class M019_CreateConfigurationTables : Migration
             .WithColumn("location").AsString(500).Nullable()
             .WithColumn("contact_person").AsString(256).Nullable()
             .WithColumn("contact_email").AsString(256).Nullable()
+            // Locks de herança no nível site
+            .WithColumn("locked_fields_json").AsCustom("text").NotNullable().WithDefaultValue("[]")
             // Auditoria
             .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
             .WithColumn("updated_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)

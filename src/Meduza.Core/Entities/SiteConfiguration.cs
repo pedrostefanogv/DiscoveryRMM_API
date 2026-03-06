@@ -57,6 +57,12 @@ public class SiteConfiguration
     
     /// <summary>Email de contato do site</summary>
     public string? ContactEmail { get; set; }
+
+    /// <summary>
+    /// Lista de campos bloqueados no nível de site (JSON array de nomes de propriedade).
+    /// Bloqueia sobrescrita nos agents deste site (futuro).
+    /// </summary>
+    public string LockedFieldsJson { get; set; } = "[]";
     
     // ============ Auditoria ============
     
