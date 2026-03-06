@@ -1,13 +1,15 @@
 using Meduza.Api.Hubs;
 using Meduza.Api.Services;
+using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
-using Dapper;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using NATS.Client.Core;
 using StackExchange.Redis;
 using System.Diagnostics;
 using System.Net.Sockets;
+using AgentCommandStatus = Meduza.Core.Enums.CommandStatus;
 
 namespace Meduza.Api.Controllers;
 
@@ -19,7 +21,7 @@ public class RealtimeController : ControllerBase
     private readonly IRedisService _redisService;
     private readonly NatsConnection _natsConnection;
     private readonly IConnectionMultiplexer _redisConnection;
-    private readonly IDbConnectionFactory _dbConnectionFactory;
+    private readonly MeduzaDbContext _dbContext;
     private readonly IConfiguration _configuration;
 
     public RealtimeController(
@@ -27,14 +29,14 @@ public class RealtimeController : ControllerBase
         IRedisService redisService,
         NatsConnection natsConnection,
         IConnectionMultiplexer redisConnection,
-        IDbConnectionFactory dbConnectionFactory,
+        MeduzaDbContext dbContext,
         IConfiguration configuration)
     {
         _messaging = messaging;
         _redisService = redisService;
         _natsConnection = natsConnection;
         _redisConnection = redisConnection;
-        _dbConnectionFactory = dbConnectionFactory;
+        _dbContext = dbContext;
         _configuration = configuration;
     }
 
@@ -59,7 +61,7 @@ public class RealtimeController : ControllerBase
         var uptime = now - startedAtUtc;
 
         var redisPingMs = await TryGetRedisPingMsAsync();
-        var databaseConnected = TryOpenDatabaseConnection();
+        var databaseConnected = await TryOpenDatabaseConnectionAsync(cancellationToken);
         var businessStats = await TryGetBusinessStatsAsync(cancellationToken);
         var natsUrl = _configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222";
         var natsTcpReachable = await TryCheckTcpAsync(natsUrl);
@@ -107,13 +109,11 @@ public class RealtimeController : ControllerBase
         });
     }
 
-    private bool TryOpenDatabaseConnection()
+    private async Task<bool> TryOpenDatabaseConnectionAsync(CancellationToken cancellationToken)
     {
         try
         {
-            using var connection = _dbConnectionFactory.CreateConnection();
-            connection.Open();
-            return true;
+            return await _dbContext.Database.CanConnectAsync(cancellationToken);
         }
         catch
         {
@@ -162,67 +162,74 @@ public class RealtimeController : ControllerBase
             var onlineGraceSeconds = _configuration.GetValue<int?>("Realtime:AgentOnlineGraceSeconds") ?? 120;
             var onlineCutoffUtc = DateTime.UtcNow.AddSeconds(-onlineGraceSeconds);
 
-            using var connection = _dbConnectionFactory.CreateConnection();
-            var stats = await connection.QuerySingleAsync<BusinessStatsRow>(
-                new CommandDefinition(
-                    """
-                    SELECT
-                        (SELECT COUNT(*) FROM clients) AS TotalClients,
-                        (SELECT COUNT(*) FROM sites) AS TotalSites,
-                        (SELECT COUNT(*) FROM agents) AS TotalAgents,
-                        (SELECT COUNT(*) FROM agents WHERE status = 0 AND last_seen_at >= @OnlineCutoffUtc) AS AgentsOnline,
-                        (SELECT COUNT(*) FROM agents WHERE status = 1 OR (status = 0 AND (last_seen_at IS NULL OR last_seen_at < @OnlineCutoffUtc))) AS AgentsOffline,
-                        (SELECT COUNT(*) FROM agents WHERE status = 0 AND (last_seen_at IS NULL OR last_seen_at < @OnlineCutoffUtc)) AS AgentsStale,
-                        (SELECT COUNT(*) FROM agents WHERE status = 2) AS AgentsMaintenance,
-                        (SELECT COUNT(*) FROM agents WHERE status = 3) AS AgentsError,
-                        (SELECT COUNT(*) FROM agent_commands) AS TotalCommands,
-                        (SELECT COUNT(*) FROM agent_commands WHERE status = 0) AS CommandsPending,
-                        (SELECT COUNT(*) FROM agent_commands WHERE status = 1) AS CommandsSent,
-                        (SELECT COUNT(*) FROM agent_commands WHERE status = 2) AS CommandsRunning,
-                        (SELECT COUNT(*) FROM agent_commands WHERE status = 3) AS CommandsCompleted,
-                        (SELECT COUNT(*) FROM agent_commands WHERE status IN (4,6)) AS CommandsFailed,
-                        (SELECT COUNT(*) FROM tickets) AS TotalTickets,
-                        (SELECT COUNT(*) FROM tickets WHERE closed_at IS NULL) AS TicketsOpen,
-                        (SELECT COUNT(*) FROM tickets WHERE closed_at IS NOT NULL) AS TicketsClosed
-                    """,
-                    new { OnlineCutoffUtc = onlineCutoffUtc },
-                    cancellationToken: cancellationToken));
+            var totalClients = await _dbContext.Clients.AsNoTracking().CountAsync(cancellationToken);
+            var totalSites = await _dbContext.Sites.AsNoTracking().CountAsync(cancellationToken);
+            var totalAgents = await _dbContext.Agents.AsNoTracking().CountAsync(cancellationToken);
+            var agentsOnline = await _dbContext.Agents.AsNoTracking()
+                .CountAsync(agent => agent.Status == AgentStatus.Online && agent.LastSeenAt >= onlineCutoffUtc, cancellationToken);
+            var agentsOffline = await _dbContext.Agents.AsNoTracking()
+                .CountAsync(agent => agent.Status == AgentStatus.Offline ||
+                    (agent.Status == AgentStatus.Online && (agent.LastSeenAt == null || agent.LastSeenAt < onlineCutoffUtc)), cancellationToken);
+            var agentsStale = await _dbContext.Agents.AsNoTracking()
+                .CountAsync(agent => agent.Status == AgentStatus.Online && (agent.LastSeenAt == null || agent.LastSeenAt < onlineCutoffUtc), cancellationToken);
+            var agentsMaintenance = await _dbContext.Agents.AsNoTracking()
+                .CountAsync(agent => agent.Status == AgentStatus.Maintenance, cancellationToken);
+            var agentsError = await _dbContext.Agents.AsNoTracking()
+                .CountAsync(agent => agent.Status == AgentStatus.Error, cancellationToken);
+
+            var totalCommands = await _dbContext.AgentCommands.AsNoTracking().CountAsync(cancellationToken);
+            var commandsPending = await _dbContext.AgentCommands.AsNoTracking()
+                .CountAsync(command => command.Status == AgentCommandStatus.Pending, cancellationToken);
+            var commandsSent = await _dbContext.AgentCommands.AsNoTracking()
+                .CountAsync(command => command.Status == AgentCommandStatus.Sent, cancellationToken);
+            var commandsRunning = await _dbContext.AgentCommands.AsNoTracking()
+                .CountAsync(command => command.Status == AgentCommandStatus.Running, cancellationToken);
+            var commandsCompleted = await _dbContext.AgentCommands.AsNoTracking()
+                .CountAsync(command => command.Status == AgentCommandStatus.Completed, cancellationToken);
+            var commandsFailed = await _dbContext.AgentCommands.AsNoTracking()
+                .CountAsync(command => command.Status == AgentCommandStatus.Failed || command.Status == AgentCommandStatus.Timeout, cancellationToken);
+
+            var totalTickets = await _dbContext.Tickets.AsNoTracking().CountAsync(cancellationToken);
+            var ticketsOpen = await _dbContext.Tickets.AsNoTracking()
+                .CountAsync(ticket => ticket.ClosedAt == null, cancellationToken);
+            var ticketsClosed = await _dbContext.Tickets.AsNoTracking()
+                .CountAsync(ticket => ticket.ClosedAt != null, cancellationToken);
 
             return new
             {
                 available = true,
                 clients = new
                 {
-                    total = stats.TotalClients
+                    total = totalClients
                 },
                 sites = new
                 {
-                    total = stats.TotalSites
+                    total = totalSites
                 },
                 agents = new
                 {
-                    total = stats.TotalAgents,
-                    online = stats.AgentsOnline,
-                    offline = stats.AgentsOffline,
-                    stale = stats.AgentsStale,
-                    maintenance = stats.AgentsMaintenance,
-                    error = stats.AgentsError,
+                    total = totalAgents,
+                    online = agentsOnline,
+                    offline = agentsOffline,
+                    stale = agentsStale,
+                    maintenance = agentsMaintenance,
+                    error = agentsError,
                     onlineGraceSeconds
                 },
                 commands = new
                 {
-                    total = stats.TotalCommands,
-                    pending = stats.CommandsPending,
-                    sent = stats.CommandsSent,
-                    running = stats.CommandsRunning,
-                    completed = stats.CommandsCompleted,
-                    failed = stats.CommandsFailed
+                    total = totalCommands,
+                    pending = commandsPending,
+                    sent = commandsSent,
+                    running = commandsRunning,
+                    completed = commandsCompleted,
+                    failed = commandsFailed
                 },
                 tickets = new
                 {
-                    total = stats.TotalTickets,
-                    open = stats.TicketsOpen,
-                    closed = stats.TicketsClosed
+                    total = totalTickets,
+                    open = ticketsOpen,
+                    closed = ticketsClosed
                 }
             };
         }
@@ -258,23 +265,4 @@ public class RealtimeController : ControllerBase
         ThreadPool.GetMinThreads(out _, out var ioThreads);
         return ioThreads;
     }
-
-    private sealed record BusinessStatsRow(
-        long TotalClients,
-        long TotalSites,
-        long TotalAgents,
-        long AgentsOnline,
-        long AgentsOffline,
-        long AgentsStale,
-        long AgentsMaintenance,
-        long AgentsError,
-        long TotalCommands,
-        long CommandsPending,
-        long CommandsSent,
-        long CommandsRunning,
-        long CommandsCompleted,
-        long CommandsFailed,
-        long TotalTickets,
-        long TicketsOpen,
-        long TicketsClosed);
 }

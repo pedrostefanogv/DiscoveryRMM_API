@@ -13,6 +13,7 @@ using Meduza.Infrastructure.Data;
 using Meduza.Infrastructure.Messaging;
 using Meduza.Infrastructure.Repositories;
 using Meduza.Infrastructure.Services;
+using Microsoft.EntityFrameworkCore;
 using NATS.Client.Core;
 using Scalar.AspNetCore;
 using StackExchange.Redis;
@@ -22,25 +23,16 @@ var builder = WebApplication.CreateBuilder(args);
 var databaseProvider = builder.Configuration.GetValue<string>("Database:Provider") ?? "Postgres";
 var isSqlite = databaseProvider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase);
 
-string? connectionString = null;
-if (!isSqlite)
-{
-    connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
-        ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
-}
-
-var sqliteConnectionString = builder.Configuration.GetConnectionString("SqliteConnection")
-    ?? "Data Source=meduza;Mode=Memory;Cache=Shared";
-
-// Database connection factory
 if (isSqlite)
 {
-    builder.Services.AddSingleton<IDbConnectionFactory>(new SqliteConnectionFactory(sqliteConnectionString));
+    throw new InvalidOperationException("SQLite is no longer supported during the EF Core migration. Configure Database:Provider=Postgres.");
 }
-else
-{
-    builder.Services.AddSingleton<IDbConnectionFactory>(new PostgresConnectionFactory(connectionString!));
-}
+
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+
+builder.Services.AddDbContext<MeduzaDbContext>(options =>
+    options.UseNpgsql(connectionString, npgsqlOptions => npgsqlOptions.EnableRetryOnFailure()));
 
 // Repositories
 builder.Services.AddScoped<IClientRepository, ClientRepository>();
@@ -147,15 +139,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddFluentMigratorCore()
     .ConfigureRunner(rb =>
     {
-        if (isSqlite)
-        {
-            rb.AddSQLite().WithGlobalConnectionString(sqliteConnectionString);
-        }
-        else
-        {
-            rb.AddPostgres().WithGlobalConnectionString(connectionString!);
-        }
-
+        rb.AddPostgres().WithGlobalConnectionString(connectionString);
         rb.ScanIn(typeof(Meduza.Migrations.Migrations.M001_CreateClients).Assembly).For.Migrations();
     })
     .AddLogging(lb => lb.AddFluentMigratorConsole());

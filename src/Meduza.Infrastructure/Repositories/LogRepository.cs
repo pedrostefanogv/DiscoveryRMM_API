@@ -1,107 +1,63 @@
-using System.Text;
-using Dapper;
 using Meduza.Core.Entities;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Meduza.Infrastructure.Repositories;
 
 public class LogRepository : ILogRepository
 {
-    private readonly IDbConnectionFactory _db;
+    private readonly MeduzaDbContext _db;
 
-    public LogRepository(IDbConnectionFactory db) => _db = db;
+    public LogRepository(MeduzaDbContext db) => _db = db;
 
     public async Task<LogEntry> CreateAsync(LogEntry entry)
     {
         entry.Id = IdGenerator.NewId();
         entry.CreatedAt = DateTime.UtcNow;
 
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            INSERT INTO logs (id, client_id, site_id, agent_id, log_type, log_level, log_source,
-                   message, data_json, created_at)
-            VALUES (@Id, @ClientId, @SiteId, @AgentId, @Type, @Level, @Source,
-                   @Message, @DataJson::jsonb, @CreatedAt)
-            """, entry);
+        _db.Logs.Add(entry);
+        await _db.SaveChangesAsync();
 
         return entry;
     }
 
     public async Task<IEnumerable<LogEntry>> QueryAsync(LogQuery query)
     {
-        using var conn = _db.CreateConnection();
-
-        var sql = new StringBuilder(
-            """
-            SELECT id, client_id AS ClientId, site_id AS SiteId, agent_id AS AgentId,
-                   log_type AS Type, log_level AS Level, log_source AS Source,
-                   message, data_json AS DataJson, created_at AS CreatedAt
-            FROM logs
-            """);
-
-        var where = new List<string>();
-        var parameters = new DynamicParameters();
+        IQueryable<LogEntry> logQuery = _db.Logs.AsNoTracking();
 
         if (query.ClientId.HasValue)
-        {
-            where.Add("client_id = @ClientId");
-            parameters.Add("ClientId", query.ClientId);
-        }
+            logQuery = logQuery.Where(log => log.ClientId == query.ClientId);
         if (query.SiteId.HasValue)
-        {
-            where.Add("site_id = @SiteId");
-            parameters.Add("SiteId", query.SiteId);
-        }
+            logQuery = logQuery.Where(log => log.SiteId == query.SiteId);
         if (query.AgentId.HasValue)
-        {
-            where.Add("agent_id = @AgentId");
-            parameters.Add("AgentId", query.AgentId);
-        }
+            logQuery = logQuery.Where(log => log.AgentId == query.AgentId);
         if (query.Type.HasValue)
-        {
-            where.Add("log_type = @Type");
-            parameters.Add("Type", query.Type);
-        }
+            logQuery = logQuery.Where(log => log.Type == query.Type.Value);
         if (query.Level.HasValue)
-        {
-            where.Add("log_level = @Level");
-            parameters.Add("Level", query.Level);
-        }
+            logQuery = logQuery.Where(log => log.Level == query.Level.Value);
         if (query.Source.HasValue)
-        {
-            where.Add("log_source = @Source");
-            parameters.Add("Source", query.Source);
-        }
+            logQuery = logQuery.Where(log => log.Source == query.Source.Value);
         if (query.From.HasValue)
-        {
-            where.Add("created_at >= @From");
-            parameters.Add("From", query.From);
-        }
+            logQuery = logQuery.Where(log => log.CreatedAt >= query.From.Value);
         if (query.To.HasValue)
-        {
-            where.Add("created_at <= @To");
-            parameters.Add("To", query.To);
-        }
-
-        if (where.Count > 0)
-            sql.Append(" WHERE ").Append(string.Join(" AND ", where));
+            logQuery = logQuery.Where(log => log.CreatedAt <= query.To.Value);
 
         var limit = Math.Clamp(query.Limit, 1, 500);
         var offset = query.Offset < 0 ? 0 : query.Offset;
-        parameters.Add("Limit", limit);
-        parameters.Add("Offset", offset);
 
-        sql.Append(" ORDER BY created_at DESC LIMIT @Limit OFFSET @Offset");
-
-        return await conn.QueryAsync<LogEntry>(sql.ToString(), parameters);
+        return await logQuery
+            .OrderByDescending(log => log.CreatedAt)
+            .Skip(offset)
+            .Take(limit)
+            .ToListAsync();
     }
 
     public async Task<int> PurgeAsync(DateTime cutoff)
     {
-        using var conn = _db.CreateConnection();
-        return await conn.ExecuteAsync("DELETE FROM logs WHERE created_at < @Cutoff", new { Cutoff = cutoff });
+        return await _db.Logs
+            .Where(log => log.CreatedAt < cutoff)
+            .ExecuteDeleteAsync();
     }
 }

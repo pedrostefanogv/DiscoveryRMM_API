@@ -1,40 +1,22 @@
-using Dapper;
 using Meduza.Core.Entities;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Meduza.Infrastructure.Repositories;
 
 public class ClientConfigurationRepository : IClientConfigurationRepository
 {
-    private readonly IDbConnectionFactory _db;
+    private readonly MeduzaDbContext _db;
 
-    public ClientConfigurationRepository(IDbConnectionFactory db) => _db = db;
-
-    private const string SelectColumns = """
-        SELECT id, client_id AS ClientId,
-               recovery_enabled AS RecoveryEnabled, discovery_enabled AS DiscoveryEnabled,
-               p2p_files_enabled AS P2PFilesEnabled, support_enabled AS SupportEnabled,
-               app_store_policy AS AppStorePolicy,
-               ai_integration_settings_json AS AIIntegrationSettingsJson,
-               inventory_interval_hours AS InventoryIntervalHours,
-               auto_update_settings_json AS AutoUpdateSettingsJson,
-               token_expiration_days AS TokenExpirationDays,
-               max_tokens_per_agent AS MaxTokensPerAgent,
-               agent_heartbeat_interval_seconds AS AgentHeartbeatIntervalSeconds,
-               agent_offline_threshold_seconds AS AgentOfflineThresholdSeconds,
-               locked_fields_json AS LockedFieldsJson,
-               created_at AS CreatedAt, updated_at AS UpdatedAt,
-               created_by AS CreatedBy, updated_by AS UpdatedBy, version
-        FROM client_configurations
-        """;
+    public ClientConfigurationRepository(MeduzaDbContext db) => _db = db;
 
     public async Task<ClientConfiguration?> GetByClientIdAsync(Guid clientId)
     {
-        using var conn = _db.CreateConnection();
-        return await conn.QuerySingleOrDefaultAsync<ClientConfiguration>(
-            SelectColumns + " WHERE client_id = @ClientId", new { ClientId = clientId });
+        return await _db.ClientConfigurations
+            .AsNoTracking()
+            .SingleOrDefaultAsync(config => config.ClientId == clientId);
     }
 
     public async Task CreateAsync(ClientConfiguration config)
@@ -42,69 +24,49 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
         config.Id = IdGenerator.NewId();
         config.CreatedAt = DateTime.UtcNow;
         config.UpdatedAt = DateTime.UtcNow;
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            INSERT INTO client_configurations (
-                id, client_id,
-                recovery_enabled, discovery_enabled, p2p_files_enabled, support_enabled,
-                app_store_policy, ai_integration_settings_json,
-                inventory_interval_hours, auto_update_settings_json,
-                token_expiration_days, max_tokens_per_agent,
-                agent_heartbeat_interval_seconds, agent_offline_threshold_seconds,
-                locked_fields_json,
-                created_at, updated_at, created_by, updated_by, version
-            ) VALUES (
-                @Id, @ClientId,
-                @RecoveryEnabled, @DiscoveryEnabled, @P2PFilesEnabled, @SupportEnabled,
-                @AppStorePolicy, @AIIntegrationSettingsJson,
-                @InventoryIntervalHours, @AutoUpdateSettingsJson,
-                @TokenExpirationDays, @MaxTokensPerAgent,
-                @AgentHeartbeatIntervalSeconds, @AgentOfflineThresholdSeconds,
-                @LockedFieldsJson,
-                @CreatedAt, @UpdatedAt, @CreatedBy, @UpdatedBy, @Version
-            )
-            """, config);
+        _db.ClientConfigurations.Add(config);
+        await _db.SaveChangesAsync();
     }
 
     public async Task UpdateAsync(ClientConfiguration config)
     {
         config.UpdatedAt = DateTime.UtcNow;
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            UPDATE client_configurations SET
-                recovery_enabled = @RecoveryEnabled,
-                discovery_enabled = @DiscoveryEnabled,
-                p2p_files_enabled = @P2PFilesEnabled,
-                support_enabled = @SupportEnabled,
-                app_store_policy = @AppStorePolicy,
-                ai_integration_settings_json = @AIIntegrationSettingsJson,
-                inventory_interval_hours = @InventoryIntervalHours,
-                auto_update_settings_json = @AutoUpdateSettingsJson,
-                token_expiration_days = @TokenExpirationDays,
-                max_tokens_per_agent = @MaxTokensPerAgent,
-                agent_heartbeat_interval_seconds = @AgentHeartbeatIntervalSeconds,
-                agent_offline_threshold_seconds = @AgentOfflineThresholdSeconds,
-                locked_fields_json = @LockedFieldsJson,
-                updated_at = @UpdatedAt,
-                updated_by = @UpdatedBy,
-                version = @Version
-            WHERE client_id = @ClientId
-            """, config);
+        var existingConfig = await _db.ClientConfigurations.SingleOrDefaultAsync(existing => existing.ClientId == config.ClientId);
+        if (existingConfig is null)
+            return;
+
+        existingConfig.RecoveryEnabled = config.RecoveryEnabled;
+        existingConfig.DiscoveryEnabled = config.DiscoveryEnabled;
+        existingConfig.P2PFilesEnabled = config.P2PFilesEnabled;
+        existingConfig.SupportEnabled = config.SupportEnabled;
+        existingConfig.AppStorePolicy = config.AppStorePolicy;
+        existingConfig.AIIntegrationSettingsJson = config.AIIntegrationSettingsJson;
+        existingConfig.InventoryIntervalHours = config.InventoryIntervalHours;
+        existingConfig.AutoUpdateSettingsJson = config.AutoUpdateSettingsJson;
+        existingConfig.TokenExpirationDays = config.TokenExpirationDays;
+        existingConfig.MaxTokensPerAgent = config.MaxTokensPerAgent;
+        existingConfig.AgentHeartbeatIntervalSeconds = config.AgentHeartbeatIntervalSeconds;
+        existingConfig.AgentOfflineThresholdSeconds = config.AgentOfflineThresholdSeconds;
+        existingConfig.LockedFieldsJson = config.LockedFieldsJson;
+        existingConfig.UpdatedAt = config.UpdatedAt;
+        existingConfig.UpdatedBy = config.UpdatedBy;
+        existingConfig.Version = config.Version;
+
+        await _db.SaveChangesAsync();
     }
 
     public async Task DeleteAsync(Guid clientId)
     {
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            "DELETE FROM client_configurations WHERE client_id = @ClientId",
-            new { ClientId = clientId });
+        await _db.ClientConfigurations
+            .Where(config => config.ClientId == clientId)
+            .ExecuteDeleteAsync();
     }
 
     public async Task<IEnumerable<ClientConfiguration>> GetAllAsync()
     {
-        using var conn = _db.CreateConnection();
-        return await conn.QueryAsync<ClientConfiguration>(SelectColumns + " ORDER BY created_at");
+        return await _db.ClientConfigurations
+            .AsNoTracking()
+            .OrderBy(config => config.CreatedAt)
+            .ToListAsync();
     }
 }

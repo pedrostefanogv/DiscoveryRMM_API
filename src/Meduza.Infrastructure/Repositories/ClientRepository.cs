@@ -1,39 +1,34 @@
-using Dapper;
 using Meduza.Core.Entities;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Meduza.Infrastructure.Repositories;
 
 public class ClientRepository : IClientRepository
 {
-    private readonly IDbConnectionFactory _db;
+    private readonly MeduzaDbContext _db;
 
-    public ClientRepository(IDbConnectionFactory db) => _db = db;
+    public ClientRepository(MeduzaDbContext db) => _db = db;
 
     public async Task<Client?> GetByIdAsync(Guid id)
     {
-        using var conn = _db.CreateConnection();
-        return await conn.QuerySingleOrDefaultAsync<Client>(
-            """
-            SELECT id, name, notes, is_active AS IsActive,
-                   created_at AS CreatedAt, updated_at AS UpdatedAt
-            FROM clients WHERE id = @Id
-            """, new { Id = id });
+        return await _db.Clients
+            .AsNoTracking()
+            .SingleOrDefaultAsync(client => client.Id == id);
     }
 
     public async Task<IEnumerable<Client>> GetAllAsync(bool includeInactive = false)
     {
-        using var conn = _db.CreateConnection();
-        var sql = """
-            SELECT id, name, notes, is_active AS IsActive,
-                   created_at AS CreatedAt, updated_at AS UpdatedAt
-            FROM clients
-            """;
-        if (!includeInactive) sql += " WHERE is_active = true";
-        sql += " ORDER BY name";
-        return await conn.QueryAsync<Client>(sql);
+        IQueryable<Client> query = _db.Clients.AsNoTracking();
+
+        if (!includeInactive)
+            query = query.Where(client => client.IsActive);
+
+        return await query
+            .OrderBy(client => client.Name)
+            .ToListAsync();
     }
 
     public async Task<Client> CreateAsync(Client client)
@@ -42,30 +37,33 @@ public class ClientRepository : IClientRepository
         client.CreatedAt = DateTime.UtcNow;
         client.UpdatedAt = DateTime.UtcNow;
 
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            INSERT INTO clients (id, name, notes, is_active, created_at, updated_at)
-            VALUES (@Id, @Name, @Notes, @IsActive, @CreatedAt, @UpdatedAt)
-            """, client);
+        _db.Clients.Add(client);
+        await _db.SaveChangesAsync();
         return client;
     }
 
     public async Task UpdateAsync(Client client)
     {
-        client.UpdatedAt = DateTime.UtcNow;
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            UPDATE clients SET name = @Name, notes = @Notes, is_active = @IsActive, updated_at = @UpdatedAt
-            WHERE id = @Id
-            """, client);
+        var existingClient = await _db.Clients.SingleOrDefaultAsync(existing => existing.Id == client.Id);
+        if (existingClient is null)
+            return;
+
+        existingClient.Name = client.Name;
+        existingClient.Notes = client.Notes;
+        existingClient.IsActive = client.IsActive;
+        existingClient.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
     }
 
     public async Task DeleteAsync(Guid id)
     {
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync("UPDATE clients SET is_active = false, updated_at = @Now WHERE id = @Id",
-            new { Id = id, Now = DateTime.UtcNow });
+        var now = DateTime.UtcNow;
+
+        await _db.Clients
+            .Where(client => client.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(client => client.IsActive, _ => false)
+                .SetProperty(client => client.UpdatedAt, _ => now));
     }
 }

@@ -1,60 +1,52 @@
-using Dapper;
 using Meduza.Core.Entities;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Meduza.Infrastructure.Repositories;
 
 public class EntityNoteRepository : IEntityNoteRepository
 {
-    private readonly IDbConnectionFactory _db;
+    private readonly MeduzaDbContext _db;
 
-    public EntityNoteRepository(IDbConnectionFactory db) => _db = db;
-
-    private const string SelectColumns = """
-        SELECT id,
-               client_id AS ClientId,
-               site_id AS SiteId,
-               agent_id AS AgentId,
-               content,
-               author,
-               is_pinned AS IsPinned,
-               created_at AS CreatedAt,
-               updated_at AS UpdatedAt
-        FROM entity_notes
-        """;
+    public EntityNoteRepository(MeduzaDbContext db) => _db = db;
 
     public async Task<EntityNote?> GetByIdAsync(Guid id)
     {
-        using var conn = _db.CreateConnection();
-        return await conn.QuerySingleOrDefaultAsync<EntityNote>(
-            SelectColumns + " WHERE id = @Id",
-            new { Id = id });
+        return await _db.EntityNotes
+            .AsNoTracking()
+            .SingleOrDefaultAsync(note => note.Id == id);
     }
 
     public async Task<IEnumerable<EntityNote>> GetByClientIdAsync(Guid clientId)
     {
-        using var conn = _db.CreateConnection();
-        return await conn.QueryAsync<EntityNote>(
-            SelectColumns + " WHERE client_id = @ClientId ORDER BY is_pinned DESC, created_at DESC",
-            new { ClientId = clientId });
+        return await _db.EntityNotes
+            .AsNoTracking()
+            .Where(note => note.ClientId == clientId)
+            .OrderByDescending(note => note.IsPinned)
+            .ThenByDescending(note => note.CreatedAt)
+            .ToListAsync();
     }
 
     public async Task<IEnumerable<EntityNote>> GetBySiteIdAsync(Guid siteId)
     {
-        using var conn = _db.CreateConnection();
-        return await conn.QueryAsync<EntityNote>(
-            SelectColumns + " WHERE site_id = @SiteId ORDER BY is_pinned DESC, created_at DESC",
-            new { SiteId = siteId });
+        return await _db.EntityNotes
+            .AsNoTracking()
+            .Where(note => note.SiteId == siteId)
+            .OrderByDescending(note => note.IsPinned)
+            .ThenByDescending(note => note.CreatedAt)
+            .ToListAsync();
     }
 
     public async Task<IEnumerable<EntityNote>> GetByAgentIdAsync(Guid agentId)
     {
-        using var conn = _db.CreateConnection();
-        return await conn.QueryAsync<EntityNote>(
-            SelectColumns + " WHERE agent_id = @AgentId ORDER BY is_pinned DESC, created_at DESC",
-            new { AgentId = agentId });
+        return await _db.EntityNotes
+            .AsNoTracking()
+            .Where(note => note.AgentId == agentId)
+            .OrderByDescending(note => note.IsPinned)
+            .ThenByDescending(note => note.CreatedAt)
+            .ToListAsync();
     }
 
     public async Task<EntityNote> CreateAsync(EntityNote note)
@@ -63,21 +55,8 @@ public class EntityNoteRepository : IEntityNoteRepository
         note.CreatedAt = DateTime.UtcNow;
         note.UpdatedAt = DateTime.UtcNow;
 
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            INSERT INTO entity_notes (
-                id, client_id, site_id, agent_id,
-                content, author, is_pinned,
-                created_at, updated_at
-            )
-            VALUES (
-                @Id, @ClientId, @SiteId, @AgentId,
-                @Content, @Author, @IsPinned,
-                @CreatedAt, @UpdatedAt
-            )
-            """,
-            note);
+        _db.EntityNotes.Add(note);
+        await _db.SaveChangesAsync();
 
         return note;
     }
@@ -86,22 +65,22 @@ public class EntityNoteRepository : IEntityNoteRepository
     {
         note.UpdatedAt = DateTime.UtcNow;
 
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            UPDATE entity_notes
-            SET content = @Content,
-                author = @Author,
-                is_pinned = @IsPinned,
-                updated_at = @UpdatedAt
-            WHERE id = @Id
-            """,
-            note);
+        var existingNote = await _db.EntityNotes.SingleOrDefaultAsync(existing => existing.Id == note.Id);
+        if (existingNote is null)
+            return;
+
+        existingNote.Content = note.Content;
+        existingNote.Author = note.Author;
+        existingNote.IsPinned = note.IsPinned;
+        existingNote.UpdatedAt = note.UpdatedAt;
+
+        await _db.SaveChangesAsync();
     }
 
     public async Task DeleteAsync(Guid id)
     {
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync("DELETE FROM entity_notes WHERE id = @Id", new { Id = id });
+        await _db.EntityNotes
+            .Where(note => note.Id == id)
+            .ExecuteDeleteAsync();
     }
 }

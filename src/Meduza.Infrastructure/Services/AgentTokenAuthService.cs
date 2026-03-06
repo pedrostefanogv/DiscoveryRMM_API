@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using Dapper;
 using Meduza.Core.Entities;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;

@@ -1,39 +1,36 @@
-using Dapper;
 using Meduza.Core.Entities;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Meduza.Infrastructure.Repositories;
 
 public class SiteRepository : ISiteRepository
 {
-    private readonly IDbConnectionFactory _db;
+    private readonly MeduzaDbContext _db;
 
-    public SiteRepository(IDbConnectionFactory db) => _db = db;
+    public SiteRepository(MeduzaDbContext db) => _db = db;
 
     public async Task<Site?> GetByIdAsync(Guid id)
     {
-        using var conn = _db.CreateConnection();
-        return await conn.QuerySingleOrDefaultAsync<Site>(
-            """
-            SELECT id, client_id AS ClientId, name,
-                   notes, is_active AS IsActive, created_at AS CreatedAt, updated_at AS UpdatedAt
-            FROM sites WHERE id = @Id
-            """, new { Id = id });
+        return await _db.Sites
+            .AsNoTracking()
+            .SingleOrDefaultAsync(site => site.Id == id);
     }
 
     public async Task<IEnumerable<Site>> GetByClientIdAsync(Guid clientId, bool includeInactive = false)
     {
-        using var conn = _db.CreateConnection();
-        var sql = """
-            SELECT id, client_id AS ClientId, name,
-                   notes, is_active AS IsActive, created_at AS CreatedAt, updated_at AS UpdatedAt
-            FROM sites WHERE client_id = @ClientId
-            """;
-        if (!includeInactive) sql += " AND is_active = true";
-        sql += " ORDER BY name";
-        return await conn.QueryAsync<Site>(sql, new { ClientId = clientId });
+        IQueryable<Site> query = _db.Sites
+            .AsNoTracking()
+            .Where(site => site.ClientId == clientId);
+
+        if (!includeInactive)
+            query = query.Where(site => site.IsActive);
+
+        return await query
+            .OrderBy(site => site.Name)
+            .ToListAsync();
     }
 
     public async Task<Site> CreateAsync(Site site)
@@ -42,31 +39,34 @@ public class SiteRepository : ISiteRepository
         site.CreatedAt = DateTime.UtcNow;
         site.UpdatedAt = DateTime.UtcNow;
 
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            INSERT INTO sites (id, client_id, name, notes, is_active, created_at, updated_at)
-            VALUES (@Id, @ClientId, @Name, @Notes, @IsActive, @CreatedAt, @UpdatedAt)
-            """, site);
+        _db.Sites.Add(site);
+        await _db.SaveChangesAsync();
         return site;
     }
 
     public async Task UpdateAsync(Site site)
     {
-        site.UpdatedAt = DateTime.UtcNow;
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync(
-            """
-            UPDATE sites SET client_id = @ClientId, name = @Name, notes = @Notes,
-                   is_active = @IsActive, updated_at = @UpdatedAt
-            WHERE id = @Id
-            """, site);
+        var existingSite = await _db.Sites.SingleOrDefaultAsync(existing => existing.Id == site.Id);
+        if (existingSite is null)
+            return;
+
+        existingSite.ClientId = site.ClientId;
+        existingSite.Name = site.Name;
+        existingSite.Notes = site.Notes;
+        existingSite.IsActive = site.IsActive;
+        existingSite.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
     }
 
     public async Task DeleteAsync(Guid id)
     {
-        using var conn = _db.CreateConnection();
-        await conn.ExecuteAsync("UPDATE sites SET is_active = false, updated_at = @Now WHERE id = @Id",
-            new { Id = id, Now = DateTime.UtcNow });
+        var now = DateTime.UtcNow;
+
+        await _db.Sites
+            .Where(site => site.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(site => site.IsActive, _ => false)
+                .SetProperty(site => site.UpdatedAt, _ => now));
     }
 }
