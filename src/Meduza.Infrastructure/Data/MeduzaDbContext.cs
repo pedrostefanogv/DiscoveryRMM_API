@@ -27,9 +27,17 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<WorkflowTransition> WorkflowTransitions => Set<WorkflowTransition>();
     public DbSet<SoftwareCatalog> SoftwareCatalogs => Set<SoftwareCatalog>();
     public DbSet<AgentSoftwareInventory> AgentSoftwareInventories => Set<AgentSoftwareInventory>();
+    
+    // New DbSets for ticket enhancements
+    public DbSet<Department> Departments => Set<Department>();
+    public DbSet<WorkflowProfile> WorkflowProfiles => Set<WorkflowProfile>();
+    public DbSet<TicketActivityLog> TicketActivityLogs => Set<TicketActivityLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // Configure global DateTime converter to ensure UTC timestamps
+        ConfigureDateTimeConversion(modelBuilder);
+
         modelBuilder.Entity<Client>(entity =>
         {
             entity.ToTable("clients");
@@ -720,9 +728,17 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(ticket => ticket.Priority)
                 .HasColumnName("priority")
                 .HasConversion<int>();
-            entity.Property(ticket => ticket.AssignedTo)
-                .HasColumnName("assigned_to")
-                .HasMaxLength(200);
+            entity.Property(ticket => ticket.DepartmentId)
+                .HasColumnName("department_id");
+            entity.Property(ticket => ticket.WorkflowProfileId)
+                .HasColumnName("workflow_profile_id");
+            entity.Property(ticket => ticket.AssignedToUserId)
+                .HasColumnName("assigned_to_user_id");
+            entity.Property(ticket => ticket.SlaExpiresAt)
+                .HasColumnName("sla_expires_at")
+                .HasColumnType("timestamptz");
+            entity.Property(ticket => ticket.SlaBreached)
+                .HasColumnName("sla_breached");
             entity.Property(ticket => ticket.Category)
                 .HasColumnName("category")
                 .HasMaxLength(100);
@@ -734,6 +750,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .HasColumnType("timestamptz");
             entity.Property(ticket => ticket.ClosedAt)
                 .HasColumnName("closed_at")
+                .HasColumnType("timestamptz");
+            entity.Property(ticket => ticket.DeletedAt)
+                .HasColumnName("deleted_at")
                 .HasColumnType("timestamptz");
 
             entity.HasOne<Client>()
@@ -747,6 +766,14 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.HasOne<Agent>()
                 .WithMany()
                 .HasForeignKey(ticket => ticket.AgentId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Department>()
+                .WithMany()
+                .HasForeignKey(ticket => ticket.DepartmentId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<WorkflowProfile>()
+                .WithMany()
+                .HasForeignKey(ticket => ticket.WorkflowProfileId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
@@ -1005,5 +1032,159 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .HasForeignKey(transition => transition.ToStateId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
+
+        modelBuilder.Entity<Department>(entity =>
+        {
+            entity.ToTable("departments");
+            entity.HasKey(dept => dept.Id);
+            entity.HasIndex(dept => dept.ClientId)
+                .HasDatabaseName("ix_departments_client_id");
+            entity.HasIndex(dept => dept.IsActive)
+                .HasDatabaseName("ix_departments_is_active");
+
+            entity.Property(dept => dept.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(dept => dept.ClientId)
+                .HasColumnName("client_id");
+            entity.Property(dept => dept.Name)
+                .HasColumnName("name")
+                .HasMaxLength(255);
+            entity.Property(dept => dept.Description)
+                .HasColumnName("description")
+                .HasMaxLength(1000);
+            entity.Property(dept => dept.InheritFromGlobalId)
+                .HasColumnName("inherit_from_global_id");
+            entity.Property(dept => dept.SortOrder)
+                .HasColumnName("sort_order");
+            entity.Property(dept => dept.IsActive)
+                .HasColumnName("is_active");
+            entity.Property(dept => dept.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(dept => dept.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Client>()
+                .WithMany()
+                .HasForeignKey(dept => dept.ClientId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<WorkflowProfile>(entity =>
+        {
+            entity.ToTable("workflow_profiles");
+            entity.HasKey(profile => profile.Id);
+            entity.HasIndex(profile => profile.DepartmentId)
+                .HasDatabaseName("ix_workflow_profiles_dept");
+            entity.HasIndex(profile => profile.ClientId)
+                .HasDatabaseName("ix_workflow_profiles_client");
+
+            entity.Property(profile => profile.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(profile => profile.ClientId)
+                .HasColumnName("client_id");
+            entity.Property(profile => profile.DepartmentId)
+                .HasColumnName("department_id");
+            entity.Property(profile => profile.Name)
+                .HasColumnName("name")
+                .HasMaxLength(255);
+            entity.Property(profile => profile.Description)
+                .HasColumnName("description")
+                .HasMaxLength(1000);
+            entity.Property(profile => profile.SlaHours)
+                .HasColumnName("sla_hours");
+            entity.Property(profile => profile.DefaultPriority)
+                .HasColumnName("default_priority")
+                .HasConversion<string>()
+                .HasMaxLength(50);
+            entity.Property(profile => profile.IsActive)
+                .HasColumnName("is_active");
+            entity.Property(profile => profile.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(profile => profile.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Client>()
+                .WithMany()
+                .HasForeignKey(profile => profile.ClientId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Department>()
+                .WithMany()
+                .HasForeignKey(profile => profile.DepartmentId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<TicketActivityLog>(entity =>
+        {
+            entity.ToTable("ticket_activity_logs");
+            entity.HasKey(log => log.Id);
+            entity.HasIndex(log => log.TicketId)
+                .HasDatabaseName("ix_ticket_activity_logs_ticket");
+            entity.HasIndex(log => log.CreatedAt)
+                .HasDatabaseName("ix_ticket_activity_logs_created")
+                .IsDescending();
+            entity.HasIndex(log => log.Type)
+                .HasDatabaseName("ix_ticket_activity_logs_type");
+
+            entity.Property(log => log.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(log => log.TicketId)
+                .HasColumnName("ticket_id");
+            entity.Property(log => log.Type)
+                .HasColumnName("activity_type")
+                .HasConversion<string>()
+                .HasMaxLength(50);
+            entity.Property(log => log.ChangedByUserId)
+                .HasColumnName("changed_by_user_id");
+            entity.Property(log => log.OldValue)
+                .HasColumnName("old_value")
+                .HasMaxLength(1000);
+            entity.Property(log => log.NewValue)
+                .HasColumnName("new_value")
+                .HasMaxLength(1000);
+            entity.Property(log => log.Comment)
+                .HasColumnName("comment")
+                .HasMaxLength(2000);
+            entity.Property(log => log.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Ticket>()
+                .WithMany()
+                .HasForeignKey(log => log.TicketId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    private static void ConfigureDateTimeConversion(ModelBuilder modelBuilder)
+    {
+        var dateTimeConverter = new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime, DateTime>(
+            v => v.Kind == DateTimeKind.Utc ? v : v.ToUniversalTime(),
+            v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+
+        var nullableDateTimeConverter = new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime?, DateTime?>(
+            v => v.HasValue ? (v.Value.Kind == DateTimeKind.Utc ? v.Value : v.Value.ToUniversalTime()) : null,
+            v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : null);
+
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            foreach (var property in entityType.GetProperties())
+            {
+                if (property.ClrType == typeof(DateTime))
+                {
+                    property.SetValueConverter(dateTimeConverter);
+                }
+                else if (property.ClrType == typeof(DateTime?))
+                {
+                    property.SetValueConverter(nullableDateTimeConverter);
+                }
+            }
+        }
     }
 }

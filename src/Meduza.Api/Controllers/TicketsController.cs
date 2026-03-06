@@ -11,11 +11,25 @@ public class TicketsController : ControllerBase
 {
     private readonly ITicketRepository _repo;
     private readonly IWorkflowRepository _workflowRepo;
+    private readonly IDepartmentRepository _departmentRepo;
+    private readonly IWorkflowProfileRepository _workflowProfileRepo;
+    private readonly ISlaService _slaService;
+    private readonly IActivityLogService _activityLogService;
 
-    public TicketsController(ITicketRepository repo, IWorkflowRepository workflowRepo)
+    public TicketsController(
+        ITicketRepository repo,
+        IWorkflowRepository workflowRepo,
+        IDepartmentRepository departmentRepo,
+        IWorkflowProfileRepository workflowProfileRepo,
+        ISlaService slaService,
+        IActivityLogService activityLogService)
     {
         _repo = repo;
         _workflowRepo = workflowRepo;
+        _departmentRepo = departmentRepo;
+        _workflowProfileRepo = workflowProfileRepo;
+        _slaService = slaService;
+        _activityLogService = activityLogService;
     }
 
     [HttpGet]
@@ -47,18 +61,65 @@ public class TicketsController : ControllerBase
         if (initialState is null)
             return BadRequest("No initial workflow state configured.");
 
+        // Validar departamento se fornecido
+        if (request.DepartmentId.HasValue)
+        {
+            var department = await _departmentRepo.GetByIdAsync(request.DepartmentId.Value);
+            if (department is null)
+                return BadRequest("Departamento não encontrado.");
+        }
+
+        // Validar e carregar workflow profile para calcular SLA
+        WorkflowProfile? workflowProfile = null;
+        DateTime? slaExpiresAt = null;
+
+        if (request.WorkflowProfileId.HasValue)
+        {
+            workflowProfile = await _workflowProfileRepo.GetByIdAsync(request.WorkflowProfileId.Value);
+            if (workflowProfile is null)
+                return BadRequest("Perfil de workflow não encontrado.");
+        }
+        else if (request.DepartmentId.HasValue)
+        {
+            // Se não informou profile, pegar o padrão do departamento
+            workflowProfile = await _workflowProfileRepo.GetDefaultByDepartmentAsync(request.DepartmentId.Value);
+        }
+
+        // Calcular SLA se houver profile
+        if (workflowProfile != null)
+        {
+            var now = DateTime.UtcNow;
+            slaExpiresAt = await _slaService.CalculateSlaExpiryAsync(workflowProfile.Id, now);
+        }
+
         var ticket = new Ticket
         {
             ClientId = request.ClientId,
             SiteId = request.SiteId,
             AgentId = request.AgentId,
+            DepartmentId = request.DepartmentId,
+            WorkflowProfileId = request.WorkflowProfileId,
             Title = request.Title,
             Description = request.Description,
-            Priority = request.Priority,
+            Priority = request.Priority ?? (workflowProfile?.DefaultPriority ?? TicketPriority.Medium),
             Category = request.Category,
-            WorkflowStateId = initialState.Id
+            AssignedToUserId = request.AssignedToUserId,
+            WorkflowStateId = initialState.Id,
+            SlaExpiresAt = slaExpiresAt
         };
+
         var created = await _repo.CreateAsync(ticket);
+
+        // Log da criação
+        await _activityLogService.LogActivityAsync(
+            created.Id,
+            TicketActivityType.Created,
+            null,
+            null,
+            initialState.Id.ToString(),
+            "Ticket criado"
+        );
+
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
@@ -68,11 +129,28 @@ public class TicketsController : ControllerBase
         var ticket = await _repo.GetByIdAsync(id);
         if (ticket is null) return NotFound();
 
+        var oldPriority = ticket.Priority;
+        var oldAssignedTo = ticket.AssignedToUserId;
+
         ticket.Title = request.Title;
         ticket.Description = request.Description;
-        ticket.Priority = request.Priority;
-        ticket.AssignedTo = request.AssignedTo;
         ticket.Category = request.Category;
+
+        // Atualizar prioridade se changing
+        if (request.Priority != oldPriority)
+        {
+            ticket.Priority = request.Priority;
+            await _activityLogService.LogPriorityChangeAsync(
+                id, null, oldPriority.ToString(), request.Priority.ToString()
+            );
+        }
+
+        // Atualizar atribuição se mudou
+        if (request.AssignedToUserId != oldAssignedTo)
+        {
+            ticket.AssignedToUserId = request.AssignedToUserId;
+            await _activityLogService.LogAssignmentAsync(id, null, oldAssignedTo, request.AssignedToUserId);
+        }
 
         await _repo.UpdateAsync(ticket);
         return Ok(ticket);
@@ -88,13 +166,22 @@ public class TicketsController : ControllerBase
         var valid = await _workflowRepo.IsTransitionValidAsync(ticket.WorkflowStateId, request.WorkflowStateId, ticket.ClientId);
         if (!valid) return BadRequest("Invalid workflow transition.");
 
+        var oldStateId = ticket.WorkflowStateId;
+
         // Verificar se o novo estado é final (para setar ClosedAt)
         var newState = await _workflowRepo.GetStateByIdAsync(request.WorkflowStateId);
         if (newState?.IsFinal == true)
             ticket.ClosedAt = DateTime.UtcNow;
 
         await _repo.UpdateWorkflowStateAsync(id, request.WorkflowStateId);
-        return Ok();
+
+        // Log da mudança de estado
+        await _activityLogService.LogStateChangeAsync(id, null, oldStateId, request.WorkflowStateId);
+
+        // Recarregar o ticket atualizado do banco
+        var updatedTicket = await _repo.GetByIdAsync(id);
+
+        return Ok(new { message = "Workflow state updated", ticket = updatedTicket });
     }
 
     // --- Comments ---
@@ -122,9 +209,51 @@ public class TicketsController : ControllerBase
         var created = await _repo.AddCommentAsync(comment);
         return Created($"api/tickets/{id}/comments", created);
     }
+
+    /// <summary>
+    /// Deleta (soft delete) um ticket.
+    /// </summary>
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id)
+    {
+        var ticket = await _repo.GetByIdAsync(id);
+        if (ticket is null) return NotFound();
+
+        await _repo.DeleteAsync(id);
+
+        // Log da exclusão
+        await _activityLogService.LogActivityAsync(
+            id,
+            TicketActivityType.Deleted,
+            null,
+            null,
+            null,
+            "Ticket marcado como deletado"
+        );
+
+        return NoContent();
+    }
 }
 
-public record CreateTicketRequest(Guid ClientId, Guid? SiteId, Guid? AgentId, string Title, string Description, TicketPriority Priority, string? Category);
-public record UpdateTicketRequest(string Title, string Description, TicketPriority Priority, string? AssignedTo, string? Category);
+public record CreateTicketRequest(
+    Guid ClientId,
+    Guid? SiteId,
+    Guid? AgentId,
+    Guid? DepartmentId,
+    Guid? WorkflowProfileId,
+    string Title,
+    string Description,
+    TicketPriority? Priority,
+    string? Category,
+    Guid? AssignedToUserId);
+
+public record UpdateTicketRequest(
+    string Title,
+    string Description,
+    TicketPriority Priority,
+    Guid? AssignedToUserId,
+    string? Category);
+
 public record UpdateWorkflowStateRequest(Guid WorkflowStateId);
-public record AddCommentRequest(string Author, string Content, bool IsInternal = false);
+
+public record AddCommentRequest(string Author, string Content, bool IsInternal);

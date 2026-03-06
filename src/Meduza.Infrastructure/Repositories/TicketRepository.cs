@@ -16,6 +16,7 @@ public class TicketRepository : ITicketRepository
     {
         return await _db.Tickets
             .AsNoTracking()
+            .Where(ticket => ticket.DeletedAt == null)
             .SingleOrDefaultAsync(ticket => ticket.Id == id);
     }
 
@@ -23,7 +24,21 @@ public class TicketRepository : ITicketRepository
     {
         IQueryable<Ticket> query = _db.Tickets
             .AsNoTracking()
-            .Where(ticket => ticket.ClientId == clientId);
+            .Where(ticket => ticket.ClientId == clientId && ticket.DeletedAt == null);
+
+        if (workflowStateId.HasValue)
+            query = query.Where(ticket => ticket.WorkflowStateId == workflowStateId.Value);
+
+        return await query
+            .OrderByDescending(ticket => ticket.CreatedAt)
+            .ToListAsync();
+    }
+
+    public async Task<IEnumerable<Ticket>> GetByAgentIdAsync(Guid agentId, Guid? workflowStateId = null)
+    {
+        IQueryable<Ticket> query = _db.Tickets
+            .AsNoTracking()
+            .Where(ticket => ticket.AgentId == agentId && ticket.DeletedAt == null);
 
         if (workflowStateId.HasValue)
             query = query.Where(ticket => ticket.WorkflowStateId == workflowStateId.Value);
@@ -35,7 +50,9 @@ public class TicketRepository : ITicketRepository
 
     public async Task<IEnumerable<Ticket>> GetAllAsync(Guid? workflowStateId = null, int limit = 100, int offset = 0)
     {
-        IQueryable<Ticket> query = _db.Tickets.AsNoTracking();
+        IQueryable<Ticket> query = _db.Tickets
+            .AsNoTracking()
+            .Where(ticket => ticket.DeletedAt == null);
 
         if (workflowStateId.HasValue)
             query = query.Where(ticket => ticket.WorkflowStateId == workflowStateId.Value);
@@ -74,12 +91,27 @@ public class TicketRepository : ITicketRepository
         existingTicket.Description = ticket.Description;
         existingTicket.WorkflowStateId = ticket.WorkflowStateId;
         existingTicket.Priority = ticket.Priority;
-        existingTicket.AssignedTo = ticket.AssignedTo;
+        existingTicket.AssignedToUserId = ticket.AssignedToUserId;
+        existingTicket.DepartmentId = ticket.DepartmentId;
+        existingTicket.WorkflowProfileId = ticket.WorkflowProfileId;
+        existingTicket.SlaExpiresAt = ticket.SlaExpiresAt;
+        existingTicket.SlaBreached = ticket.SlaBreached;
         existingTicket.Category = ticket.Category;
         existingTicket.UpdatedAt = DateTime.UtcNow;
         existingTicket.ClosedAt = ticket.ClosedAt;
 
         await _db.SaveChangesAsync();
+    }
+
+    public async Task DeleteAsync(Guid id)
+    {
+        var now = DateTime.UtcNow;
+
+        await _db.Tickets
+            .Where(ticket => ticket.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(ticket => ticket.DeletedAt, _ => now)
+                .SetProperty(ticket => ticket.UpdatedAt, _ => now));
     }
 
     public async Task UpdateWorkflowStateAsync(Guid id, Guid workflowStateId)
@@ -118,5 +150,14 @@ public class TicketRepository : ITicketRepository
         await _db.SaveChangesAsync();
 
         return comment;
+    }
+
+    public async Task<List<Ticket>> GetOpenTicketsWithSlaAsync()
+    {
+        return await _db.Tickets
+            .AsNoTracking()
+            .Where(ticket => !ticket.ClosedAt.HasValue && ticket.SlaExpiresAt.HasValue)
+            .OrderBy(ticket => ticket.SlaExpiresAt)
+            .ToListAsync();
     }
 }

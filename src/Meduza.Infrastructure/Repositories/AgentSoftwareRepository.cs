@@ -202,8 +202,6 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             .Select(group => new { Fingerprint = group.Key, Item = group.First() })
             .ToList();
 
-        await using var tx = await _db.Database.BeginTransactionAsync();
-
         var now = DateTime.UtcNow;
 
         await _db.AgentSoftwareInventories
@@ -279,7 +277,6 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         }
 
         await _db.SaveChangesAsync();
-        await tx.CommitAsync();
     }
 
     private async Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryPagedInternalAsync(

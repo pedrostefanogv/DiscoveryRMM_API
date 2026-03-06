@@ -48,6 +48,11 @@ builder.Services.AddScoped<IWorkflowRepository, WorkflowRepository>();
 builder.Services.AddScoped<ILogRepository, LogRepository>();
 builder.Services.AddScoped<IEntityNoteRepository, EntityNoteRepository>();
 
+// New repositories for tickets enhancement (Departments, WorkflowProfiles, ActivityLogs)
+builder.Services.AddScoped<IDepartmentRepository, DepartmentRepository>();
+builder.Services.AddScoped<IWorkflowProfileRepository, WorkflowProfileRepository>();
+builder.Services.AddScoped<ITicketActivityLogRepository, TicketActivityLogRepository>();
+
 // Configuration repositories
 builder.Services.AddScoped<IServerConfigurationRepository, ServerConfigurationRepository>();
 builder.Services.AddScoped<IClientConfigurationRepository, ClientConfigurationRepository>();
@@ -61,6 +66,10 @@ builder.Services.AddScoped<IConfigurationResolver, ConfigurationResolver>();
 builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
 builder.Services.AddScoped<IDeployTokenService, DeployTokenService>();
 builder.Services.AddScoped<ILoggingService, LoggingService>();
+
+// New services for tickets enhancement (SLA, ActivityLog)
+builder.Services.AddScoped<ISlaService, SlaService>();
+builder.Services.AddScoped<IActivityLogService, ActivityLogService>();
 
 // IMemoryCache (para ConfigurationResolver)
 builder.Services.AddMemoryCache();
@@ -99,8 +108,9 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
 });
 builder.Services.AddSingleton<IRedisService, RedisService>();
 builder.Services.AddHostedService<LogPurgeBackgroundService>();
+builder.Services.AddHostedService<SlaMonitoringBackgroundService>();
 
-// Controllers + JSON config
+//  Controllers + JSON config
 builder.Services.AddControllers(options =>
 {
     // Registra LoggingActionFilter globalmente
@@ -108,6 +118,8 @@ builder.Services.AddControllers(options =>
 })
     .AddJsonOptions(opts =>
     {
+        // Permite que a API aceite JSON em camelCase ou PascalCase
+        opts.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
         opts.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
         opts.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
     });

@@ -71,8 +71,6 @@ public class AgentHardwareRepository : IAgentHardwareRepository
 
     public async Task ReplaceDiskInfoAsync(Guid agentId, IEnumerable<DiskInfo> disks)
     {
-        await using var tx = await _db.Database.BeginTransactionAsync();
-
         await _db.DiskInfos
             .Where(disk => disk.AgentId == agentId)
             .ExecuteDeleteAsync();
@@ -87,7 +85,6 @@ public class AgentHardwareRepository : IAgentHardwareRepository
 
         _db.DiskInfos.AddRange(disks);
         await _db.SaveChangesAsync();
-        await tx.CommitAsync();
     }
 
     public async Task<IEnumerable<NetworkAdapterInfo>> GetNetworkAdaptersAsync(Guid agentId)
@@ -100,8 +97,6 @@ public class AgentHardwareRepository : IAgentHardwareRepository
 
     public async Task ReplaceNetworkAdaptersAsync(Guid agentId, IEnumerable<NetworkAdapterInfo> adapters)
     {
-        await using var tx = await _db.Database.BeginTransactionAsync();
-
         await _db.NetworkAdapterInfos
             .Where(adapter => adapter.AgentId == agentId)
             .ExecuteDeleteAsync();
@@ -116,7 +111,6 @@ public class AgentHardwareRepository : IAgentHardwareRepository
 
         _db.NetworkAdapterInfos.AddRange(adapters);
         await _db.SaveChangesAsync();
-        await tx.CommitAsync();
     }
 
     public async Task<IEnumerable<MemoryModuleInfo>> GetMemoryModulesAsync(Guid agentId)
@@ -129,8 +123,6 @@ public class AgentHardwareRepository : IAgentHardwareRepository
 
     public async Task ReplaceMemoryModulesAsync(Guid agentId, IEnumerable<MemoryModuleInfo> modules)
     {
-        await using var tx = await _db.Database.BeginTransactionAsync();
-
         await _db.MemoryModuleInfos
             .Where(module => module.AgentId == agentId)
             .ExecuteDeleteAsync();
@@ -145,6 +137,5 @@ public class AgentHardwareRepository : IAgentHardwareRepository
 
         _db.MemoryModuleInfos.AddRange(modules);
         await _db.SaveChangesAsync();
-        await tx.CommitAsync();
     }
 }
