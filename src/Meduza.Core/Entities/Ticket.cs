@@ -34,6 +34,11 @@ public class Ticket
     public DateTime? SlaExpiresAt { get; set; }
     public bool SlaBreached { get; set; } = false;
     
+    // Avaliação/Rating (0-5 estrelas)
+    public int? Rating { get; set; } // Null = não avaliado, 0-5 = avaliação
+    public DateTime? RatedAt { get; set; }
+    public string? RatedBy { get; set; } // Nome/identificador de quem avaliou
+    
     // Timestamps
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

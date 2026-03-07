@@ -739,6 +739,14 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .HasColumnType("timestamptz");
             entity.Property(ticket => ticket.SlaBreached)
                 .HasColumnName("sla_breached");
+            entity.Property(ticket => ticket.Rating)
+                .HasColumnName("rating");
+            entity.Property(ticket => ticket.RatedAt)
+                .HasColumnName("rated_at")
+                .HasColumnType("timestamptz");
+            entity.Property(ticket => ticket.RatedBy)
+                .HasColumnName("rated_by")
+                .HasMaxLength(255);
             entity.Property(ticket => ticket.Category)
                 .HasColumnName("category")
                 .HasMaxLength(100);

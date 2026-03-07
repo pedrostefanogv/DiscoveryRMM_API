@@ -55,7 +55,30 @@ public class AgentAuthController : ControllerBase
             return Unauthorized(new { error = "Agent not authenticated." });
 
         var agent = await _agentRepo.GetByIdAsync(agentId);
-        return agent is null ? NotFound() : Ok(agent);
+        if (agent is null) return NotFound();
+
+        // Buscar o Site para obter o ClientId
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null) return NotFound(new { error = "Site not found for this agent." });
+
+        // Retornar os dados do agent + clientId
+        return Ok(new
+        {
+            agent.Id,
+            agent.SiteId,
+            ClientId = site.ClientId,
+            agent.Hostname,
+            agent.DisplayName,
+            agent.Status,
+            agent.OperatingSystem,
+            agent.OsVersion,
+            agent.AgentVersion,
+            agent.LastIpAddress,
+            agent.MacAddress,
+            agent.LastSeenAt,
+            agent.CreatedAt,
+            agent.UpdatedAt
+        });
     }
 
     /// <summary>
@@ -255,7 +278,48 @@ public class AgentAuthController : ControllerBase
             return Unauthorized(new { error = "Agent not authenticated." });
 
         var tickets = await _ticketRepo.GetByAgentIdAsync(agentId, workflowStateId);
-        return Ok(tickets);
+        
+        // Enriquecer com informações do workflow state
+        var ticketsWithState = new List<object>();
+        foreach (var ticket in tickets)
+        {
+            var state = await _workflowRepo.GetStateByIdAsync(ticket.WorkflowStateId);
+            ticketsWithState.Add(new
+            {
+                ticket.Id,
+                ticket.ClientId,
+                ticket.SiteId,
+                ticket.AgentId,
+                ticket.DepartmentId,
+                ticket.WorkflowProfileId,
+                ticket.Title,
+                ticket.Description,
+                ticket.Category,
+                ticket.WorkflowStateId,
+                WorkflowState = state != null ? new
+                {
+                    state.Id,
+                    state.Name,
+                    state.Color,
+                    state.IsInitial,
+                    state.IsFinal,
+                    state.SortOrder
+                } : null,
+                ticket.Priority,
+                ticket.AssignedToUserId,
+                ticket.SlaExpiresAt,
+                ticket.SlaBreached,
+                ticket.Rating,
+                ticket.RatedAt,
+                ticket.RatedBy,
+                ticket.CreatedAt,
+                ticket.UpdatedAt,
+                ticket.ClosedAt,
+                ticket.DaysOpen
+            });
+        }
+        
+        return Ok(ticketsWithState);
     }
 
     /// <summary>
@@ -274,7 +338,42 @@ public class AgentAuthController : ControllerBase
         if (ticket.AgentId != agentId)
             return Forbid();
 
-        return Ok(ticket);
+        // Enriquecer com informações do workflow state
+        var state = await _workflowRepo.GetStateByIdAsync(ticket.WorkflowStateId);
+        
+        return Ok(new
+        {
+            ticket.Id,
+            ticket.ClientId,
+            ticket.SiteId,
+            ticket.AgentId,
+            ticket.DepartmentId,
+            ticket.WorkflowProfileId,
+            ticket.Title,
+            ticket.Description,
+            ticket.Category,
+            ticket.WorkflowStateId,
+            WorkflowState = state != null ? new
+            {
+                state.Id,
+                state.Name,
+                state.Color,
+                state.IsInitial,
+                state.IsFinal,
+                state.SortOrder
+            } : null,
+            ticket.Priority,
+            ticket.AssignedToUserId,
+            ticket.SlaExpiresAt,
+            ticket.SlaBreached,
+            ticket.Rating,
+            ticket.RatedAt,
+            ticket.RatedBy,
+            ticket.CreatedAt,
+            ticket.UpdatedAt,
+            ticket.ClosedAt,
+            ticket.DaysOpen
+        });
     }
 
     /// <summary>
@@ -450,6 +549,113 @@ public class AgentAuthController : ControllerBase
         return Ok(new { message = "Workflow state updated", ticket = updatedTicket });
     }
 
+    /// <summary>
+    /// Fecha um ticket e opcionalmente avalia de 0 a 5 estrelas.
+    /// Move o ticket para um estado final (Closed ou Resolved).
+    /// </summary>
+    [HttpPost("me/tickets/{ticketId:guid}/close")]
+    public async Task<IActionResult> CloseAndRateTicket(Guid ticketId, [FromBody] AgentCloseTicketRequest request)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var ticket = await _ticketRepo.GetByIdAsync(ticketId);
+        if (ticket is null)
+            return NotFound(new { error = "Ticket not found." });
+
+        if (ticket.AgentId != agentId)
+            return Forbid();
+
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+
+        // Validar rating se fornecido
+        if (request.Rating.HasValue && (request.Rating.Value < 0 || request.Rating.Value > 5))
+            return BadRequest(new { error = "Rating must be between 0 and 5." });
+
+        // Buscar um estado final para fechar o ticket
+        Guid targetStateId;
+        
+        if (request.WorkflowStateId.HasValue)
+        {
+            // Usar o estado fornecido
+            var targetState = await _workflowRepo.GetStateByIdAsync(request.WorkflowStateId.Value);
+            if (targetState is null)
+                return BadRequest(new { error = "Workflow state not found." });
+            
+            if (!targetState.IsFinal)
+                return BadRequest(new { error = "Specified workflow state is not a final state." });
+            
+            targetStateId = request.WorkflowStateId.Value;
+        }
+        else
+        {
+            // Buscar estado "Closed" ou qualquer estado final
+            var finalStates = await _workflowRepo.GetStatesAsync(ticket.ClientId);
+            var closedState = finalStates.FirstOrDefault(s => s.IsFinal && s.Name.Contains("Closed", StringComparison.OrdinalIgnoreCase))
+                           ?? finalStates.FirstOrDefault(s => s.IsFinal);
+            
+            if (closedState is null)
+                return BadRequest(new { error = "No final workflow state available for this client." });
+            
+            targetStateId = closedState.Id;
+        }
+
+        // Validar se a transição é permitida
+        var valid = await _workflowRepo.IsTransitionValidAsync(ticket.WorkflowStateId, targetStateId, ticket.ClientId);
+        if (!valid)
+            return BadRequest(new { error = "Invalid workflow transition to close ticket." });
+
+        var oldStateId = ticket.WorkflowStateId;
+
+        // Atualizar o ticket
+        ticket.WorkflowStateId = targetStateId;
+        ticket.ClosedAt = DateTime.UtcNow;
+        
+        if (request.Rating.HasValue)
+        {
+            ticket.Rating = request.Rating.Value;
+            ticket.RatedAt = DateTime.UtcNow;
+            ticket.RatedBy = $"Agent: {agent?.Hostname ?? agentId.ToString()}";
+        }
+
+        await _ticketRepo.UpdateAsync(ticket);
+
+        // Log da mudança de estado
+        await _activityLogService.LogActivityAsync(
+            ticketId,
+            TicketActivityType.StateChanged,
+            null,
+            oldStateId.ToString(),
+            targetStateId.ToString(),
+            request.Rating.HasValue 
+                ? $"Ticket fechado pelo agente {agent?.Hostname ?? agentId.ToString()} com avaliação {request.Rating.Value}/5"
+                : $"Ticket fechado pelo agente {agent?.Hostname ?? agentId.ToString()}"
+        );
+
+        // Adicionar comentário se fornecido
+        if (!string.IsNullOrWhiteSpace(request.Comment))
+        {
+            var comment = new TicketComment
+            {
+                TicketId = ticketId,
+                Author = $"Agent: {agent?.Hostname ?? agentId.ToString()}",
+                Content = request.Comment,
+                IsInternal = false
+            };
+            await _ticketRepo.AddCommentAsync(comment);
+        }
+
+        // Recarregar o ticket atualizado
+        var updatedTicket = await _ticketRepo.GetByIdAsync(ticketId);
+
+        return Ok(new 
+        { 
+            message = "Ticket closed successfully", 
+            ticket = updatedTicket,
+            rating = request.Rating
+        });
+    }
+
     private bool TryGetAuthenticatedAgentId(out Guid agentId)
     {
         agentId = Guid.Empty;
@@ -488,3 +694,11 @@ public record AgentAddCommentRequest(
 /// </summary>
 public record AgentUpdateWorkflowStateRequest(
     Guid WorkflowStateId);
+
+/// <summary>
+/// Request para o agente fechar um ticket e opcionalmente avaliar (0-5 estrelas).
+/// </summary>
+public record AgentCloseTicketRequest(
+    int? Rating = null,
+    string? Comment = null,
+    Guid? WorkflowStateId = null);
