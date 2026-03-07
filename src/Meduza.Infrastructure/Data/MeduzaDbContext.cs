@@ -32,6 +32,8 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<WorkflowProfile> WorkflowProfiles => Set<WorkflowProfile>();
     public DbSet<TicketActivityLog> TicketActivityLogs => Set<TicketActivityLog>();
+    public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
+    public DbSet<ReportExecution> ReportExecutions => Set<ReportExecution>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -1166,6 +1168,124 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.HasOne<Ticket>()
                 .WithMany()
                 .HasForeignKey(log => log.TicketId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ReportTemplate>(entity =>
+        {
+            entity.ToTable("report_templates");
+            entity.HasKey(template => template.Id);
+            entity.HasIndex(template => new { template.ClientId, template.DatasetType, template.IsActive })
+                .HasDatabaseName("ix_report_templates_client_dataset_active");
+            entity.HasIndex(template => template.CreatedAt)
+                .HasDatabaseName("ix_report_templates_created_at");
+
+            entity.Property(template => template.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(template => template.ClientId)
+                .HasColumnName("client_id");
+            entity.Property(template => template.Name)
+                .HasColumnName("name")
+                .HasMaxLength(200);
+            entity.Property(template => template.Description)
+                .HasColumnName("description")
+                .HasMaxLength(2000);
+            entity.Property(template => template.DatasetType)
+                .HasColumnName("dataset_type")
+                .HasConversion<int>();
+            entity.Property(template => template.DefaultFormat)
+                .HasColumnName("default_format")
+                .HasConversion<int>();
+            entity.Property(template => template.LayoutJson)
+                .HasColumnName("layout_json")
+                .HasColumnType("jsonb");
+            entity.Property(template => template.FiltersJson)
+                .HasColumnName("filters_json")
+                .HasColumnType("jsonb");
+            entity.Property(template => template.IsActive)
+                .HasColumnName("is_active");
+            entity.Property(template => template.Version)
+                .HasColumnName("version");
+            entity.Property(template => template.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(template => template.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+            entity.Property(template => template.CreatedBy)
+                .HasColumnName("created_by")
+                .HasMaxLength(256);
+            entity.Property(template => template.UpdatedBy)
+                .HasColumnName("updated_by")
+                .HasMaxLength(256);
+
+            entity.HasOne<Client>()
+                .WithMany()
+                .HasForeignKey(template => template.ClientId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ReportExecution>(entity =>
+        {
+            entity.ToTable("report_executions");
+            entity.HasKey(execution => execution.Id);
+            entity.HasIndex(execution => new { execution.ClientId, execution.Status, execution.CreatedAt })
+                .HasDatabaseName("ix_report_executions_client_status_created");
+            entity.HasIndex(execution => execution.TemplateId)
+                .HasDatabaseName("ix_report_executions_template");
+
+            entity.Property(execution => execution.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(execution => execution.TemplateId)
+                .HasColumnName("template_id");
+            entity.Property(execution => execution.ClientId)
+                .HasColumnName("client_id");
+            entity.Property(execution => execution.Format)
+                .HasColumnName("format")
+                .HasConversion<int>();
+            entity.Property(execution => execution.FiltersJson)
+                .HasColumnName("filters_json")
+                .HasColumnType("jsonb");
+            entity.Property(execution => execution.Status)
+                .HasColumnName("status")
+                .HasConversion<int>();
+            entity.Property(execution => execution.ResultPath)
+                .HasColumnName("result_path")
+                .HasMaxLength(500);
+            entity.Property(execution => execution.ResultContentType)
+                .HasColumnName("result_content_type")
+                .HasMaxLength(100);
+            entity.Property(execution => execution.ResultSizeBytes)
+                .HasColumnName("result_size_bytes");
+            entity.Property(execution => execution.RowCount)
+                .HasColumnName("row_count");
+            entity.Property(execution => execution.ErrorMessage)
+                .HasColumnName("error_message")
+                .HasMaxLength(2000);
+            entity.Property(execution => execution.ExecutionTimeMs)
+                .HasColumnName("execution_time_ms");
+            entity.Property(execution => execution.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(execution => execution.StartedAt)
+                .HasColumnName("started_at")
+                .HasColumnType("timestamptz");
+            entity.Property(execution => execution.FinishedAt)
+                .HasColumnName("finished_at")
+                .HasColumnType("timestamptz");
+            entity.Property(execution => execution.CreatedBy)
+                .HasColumnName("created_by")
+                .HasMaxLength(256);
+
+            entity.HasOne<ReportTemplate>()
+                .WithMany()
+                .HasForeignKey(execution => execution.TemplateId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Client>()
+                .WithMany()
+                .HasForeignKey(execution => execution.ClientId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

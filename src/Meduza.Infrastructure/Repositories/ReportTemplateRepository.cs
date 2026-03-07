@@ -1,0 +1,92 @@
+using Meduza.Core.Entities;
+using Meduza.Core.Enums;
+using Meduza.Core.Helpers;
+using Meduza.Core.Interfaces;
+using Meduza.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
+
+namespace Meduza.Infrastructure.Repositories;
+
+public class ReportTemplateRepository : IReportTemplateRepository
+{
+    private readonly MeduzaDbContext _db;
+
+    public ReportTemplateRepository(MeduzaDbContext db) => _db = db;
+
+    public async Task<ReportTemplate> CreateAsync(ReportTemplate template)
+    {
+        template.Id = IdGenerator.NewId();
+        template.CreatedAt = DateTime.UtcNow;
+        template.UpdatedAt = template.CreatedAt;
+
+        _db.ReportTemplates.Add(template);
+        await _db.SaveChangesAsync();
+        return template;
+    }
+
+    public async Task<ReportTemplate?> GetByIdAsync(Guid id, Guid? clientId = null)
+    {
+        return await _db.ReportTemplates
+            .AsNoTracking()
+            .Where(template => template.Id == id)
+            .Where(template => clientId == null || template.ClientId == null || template.ClientId == clientId)
+            .FirstOrDefaultAsync();
+    }
+
+    public async Task<IReadOnlyList<ReportTemplate>> GetAllAsync(Guid? clientId = null, ReportDatasetType? datasetType = null, bool? isActive = true)
+    {
+        IQueryable<ReportTemplate> query = _db.ReportTemplates.AsNoTracking();
+
+        if (clientId.HasValue)
+        {
+            query = query.Where(template => template.ClientId == null || template.ClientId == clientId.Value);
+        }
+
+        if (datasetType.HasValue)
+        {
+            query = query.Where(template => template.DatasetType == datasetType.Value);
+        }
+
+        if (isActive.HasValue)
+        {
+            query = query.Where(template => template.IsActive == isActive.Value);
+        }
+
+        return await query
+            .OrderBy(template => template.Name)
+            .ToListAsync();
+    }
+
+    public async Task UpdateAsync(ReportTemplate template)
+    {
+        var current = await _db.ReportTemplates.FirstOrDefaultAsync(item => item.Id == template.Id);
+        if (current is null)
+            throw new InvalidOperationException($"Report template {template.Id} not found.");
+
+        current.Name = template.Name;
+        current.Description = template.Description;
+        current.DatasetType = template.DatasetType;
+        current.DefaultFormat = template.DefaultFormat;
+        current.LayoutJson = template.LayoutJson;
+        current.FiltersJson = template.FiltersJson;
+        current.IsActive = template.IsActive;
+        current.Version += 1;
+        current.UpdatedAt = DateTime.UtcNow;
+        current.UpdatedBy = template.UpdatedBy;
+
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task<bool> DeleteAsync(Guid id, Guid? clientId = null)
+    {
+        var template = await _db.ReportTemplates
+            .FirstOrDefaultAsync(item => item.Id == id && (clientId == null || item.ClientId == null || item.ClientId == clientId));
+
+        if (template is null)
+            return false;
+
+        _db.ReportTemplates.Remove(template);
+        await _db.SaveChangesAsync();
+        return true;
+    }
+}

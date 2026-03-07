@@ -47,6 +47,18 @@ builder.Services.AddScoped<IDeployTokenRepository, DeployTokenRepository>();
 builder.Services.AddScoped<IWorkflowRepository, WorkflowRepository>();
 builder.Services.AddScoped<ILogRepository, LogRepository>();
 builder.Services.AddScoped<IEntityNoteRepository, EntityNoteRepository>();
+builder.Services.AddScoped<IReportTemplateRepository, ReportTemplateRepository>();
+builder.Services.AddScoped<IReportExecutionRepository, ReportExecutionRepository>();
+builder.Services.AddScoped<IReportDatasetQueryService, ReportDatasetQueryService>();
+builder.Services.AddScoped<IReportService, ReportService>();
+builder.Services.AddScoped<IReportRenderer, XlsxReportRenderer>();
+builder.Services.AddScoped<IReportRenderer, CsvReportRenderer>();
+
+// PDF rendering using Playwright.NET (embedded, no external service required, zero vulnerabilities)
+if (builder.Configuration.GetValue<bool>("Reporting:EnablePdf"))
+{
+    builder.Services.AddScoped<IReportRenderer, PlaywrightPdfReportRenderer>();
+}
 
 // New repositories for tickets enhancement (Departments, WorkflowProfiles, ActivityLogs)
 builder.Services.AddScoped<IDepartmentRepository, DepartmentRepository>();
@@ -77,6 +89,10 @@ builder.Services.AddMemoryCache();
 // Configuração de logging automático
 builder.Services.Configure<AutomaticLoggingOptions>(
     builder.Configuration.GetSection("AutomaticLogging"));
+
+// Configuração de reporting
+builder.Services.Configure<ReportingOptions>(
+    builder.Configuration.GetSection("Reporting"));
 
 // NATS
 var natsUrl = builder.Configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222";
@@ -109,6 +125,7 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
 builder.Services.AddSingleton<IRedisService, RedisService>();
 builder.Services.AddHostedService<LogPurgeBackgroundService>();
 builder.Services.AddHostedService<SlaMonitoringBackgroundService>();
+builder.Services.AddHostedService<ReportGenerationBackgroundService>();
 
 //  Controllers + JSON config
 builder.Services.AddControllers(options =>
