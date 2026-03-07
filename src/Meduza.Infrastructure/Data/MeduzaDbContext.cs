@@ -1286,7 +1286,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.HasOne<Client>()
                 .WithMany()
                 .HasForeignKey(execution => execution.ClientId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.SetNull);
         });
     }
 

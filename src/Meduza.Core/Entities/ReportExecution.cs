@@ -6,7 +6,7 @@ public class ReportExecution
 {
     public Guid Id { get; set; }
     public Guid TemplateId { get; set; }
-    public Guid ClientId { get; set; }
+    public Guid? ClientId { get; set; }
     public ReportFormat Format { get; set; }
     public string? FiltersJson { get; set; }
     public ReportExecutionStatus Status { get; set; } = ReportExecutionStatus.Pending;

@@ -73,15 +73,21 @@ public class UpdateReportTemplateRequestValidator : AbstractValidator<UpdateRepo
     public UpdateReportTemplateRequestValidator(IOptions<ReportingOptions> options)
     {
         var enabledFormats = ReportValidationHelpers.GetEnabledFormats(options.Value);
-        RuleFor(x => x.Name).NotEmpty().Length(2, 200);
+        RuleFor(x => x.Name)
+            .NotEmpty()
+            .Length(2, 200)
+            .When(x => x.Name is not null);
         RuleFor(x => x.Description).MaximumLength(2000);
-        RuleFor(x => x.DatasetType).IsInEnum();
+        RuleFor(x => x.DatasetType!.Value)
+            .IsInEnum()
+            .When(x => x.DatasetType.HasValue);
         RuleFor(x => x.DefaultFormat)
-            .Must(enabledFormats.Contains)
+            .Must(format => !format.HasValue || enabledFormats.Contains(format.Value))
             .WithMessage($"DefaultFormat must be one of: {string.Join(", ", enabledFormats)}.");
         RuleFor(x => x.LayoutJson)
-            .NotEmpty()
-            .Must(ReportValidationHelpers.BeValidJson)
+            .Must(layoutJson =>
+                layoutJson is null ||
+                (!string.IsNullOrWhiteSpace(layoutJson) && ReportValidationHelpers.BeValidJson(layoutJson)))
             .WithMessage("LayoutJson must be valid JSON.");
         RuleFor(x => x.FiltersJson)
             .Must(ReportValidationHelpers.BeValidJsonOrNull)
@@ -96,7 +102,6 @@ public class RunReportRequestValidator : AbstractValidator<RunReportRequest>
     {
         var enabledFormats = ReportValidationHelpers.GetEnabledFormats(options.Value);
         RuleFor(x => x.TemplateId).NotEmpty();
-        RuleFor(x => x.ClientId).NotEmpty();
         RuleFor(x => x.Format)
             .Must(format => !format.HasValue || enabledFormats.Contains(format.Value))
             .WithMessage($"Format must be one of: {string.Join(", ", enabledFormats)}.");

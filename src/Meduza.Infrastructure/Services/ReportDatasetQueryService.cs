@@ -20,9 +20,10 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         _db = db;
     }
 
-    public async Task<ReportQueryResult> QueryAsync(ReportTemplate template, Guid clientId, string? filtersJson, CancellationToken cancellationToken = default)
+    public async Task<ReportQueryResult> QueryAsync(ReportTemplate template, string? filtersJson, CancellationToken cancellationToken = default)
     {
         var filters = ParseFilters(filtersJson);
+        var clientId = GetGuid(filters, "clientId");
 
         return template.DatasetType switch
         {
@@ -35,7 +36,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         };
     }
 
-    private async Task<ReportQueryResult> QuerySoftwareInventoryAsync(Guid clientId, JsonElement filters, CancellationToken cancellationToken)
+    private async Task<ReportQueryResult> QuerySoftwareInventoryAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
         var siteId = GetGuid(filters, "siteId");
@@ -48,7 +49,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
             join cli in _db.Clients.AsNoTracking() on st.ClientId equals cli.Id
             join cat in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals cat.Id
-            where st.ClientId == clientId && inv.IsPresent
+            where inv.IsPresent && (!clientId.HasValue || st.ClientId == clientId.Value)
             select new
             {
                 ClientName = cli.Name,
@@ -98,7 +99,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         };
     }
 
-    private async Task<ReportQueryResult> QueryLogsAsync(Guid clientId, JsonElement filters, CancellationToken cancellationToken)
+    private async Task<ReportQueryResult> QueryLogsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
         var siteId = GetGuid(filters, "siteId");
@@ -106,7 +107,10 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var from = GetDateTime(filters, "from");
         var to = GetDateTime(filters, "to");
 
-        var query = _db.Logs.AsNoTracking().Where(x => x.ClientId == clientId);
+        var query = _db.Logs.AsNoTracking().AsQueryable();
+
+        if (clientId.HasValue)
+            query = query.Where(x => x.ClientId == clientId.Value);
 
         if (siteId.HasValue)
             query = query.Where(x => x.SiteId == siteId.Value);
@@ -185,7 +189,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         };
     }
 
-    private async Task<ReportQueryResult> QueryTicketsAsync(Guid clientId, JsonElement filters, CancellationToken cancellationToken)
+    private async Task<ReportQueryResult> QueryTicketsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
         var siteId = GetGuid(filters, "siteId");
@@ -193,7 +197,10 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var from = GetDateTime(filters, "from");
         var to = GetDateTime(filters, "to");
 
-        var query = _db.Tickets.AsNoTracking().Where(x => x.ClientId == clientId && x.DeletedAt == null);
+        var query = _db.Tickets.AsNoTracking().Where(x => x.DeletedAt == null);
+
+        if (clientId.HasValue)
+            query = query.Where(x => x.ClientId == clientId.Value);
 
         if (siteId.HasValue)
             query = query.Where(x => x.SiteId == siteId.Value);
@@ -232,7 +239,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         };
     }
 
-    private async Task<ReportQueryResult> QueryAgentHardwareAsync(Guid clientId, JsonElement filters, CancellationToken cancellationToken)
+    private async Task<ReportQueryResult> QueryAgentHardwareAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
         var siteId = GetGuid(filters, "siteId");
@@ -242,7 +249,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             from hw in _db.AgentHardwareInfos.AsNoTracking()
             join ag in _db.Agents.AsNoTracking() on hw.AgentId equals ag.Id
             join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
-            where st.ClientId == clientId
+            where !clientId.HasValue || st.ClientId == clientId.Value
             select new
             {
                 SiteId = st.Id,

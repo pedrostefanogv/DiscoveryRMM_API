@@ -32,7 +32,7 @@ public class ReportService : IReportService
         Directory.CreateDirectory(_outputDirectory);
     }
 
-    public async Task<ReportExecution> ProcessExecutionAsync(Guid executionId, Guid clientId, CancellationToken cancellationToken = default)
+    public async Task<ReportExecution> ProcessExecutionAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default)
     {
         var execution = await _executionRepository.GetByIdAsync(executionId, clientId)
             ?? throw new InvalidOperationException($"Report execution {executionId} not found.");
@@ -46,10 +46,10 @@ public class ReportService : IReportService
         {
             await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Running);
 
-            var template = await _templateRepository.GetByIdAsync(execution.TemplateId, clientId)
-                ?? throw new InvalidOperationException($"Template {execution.TemplateId} not found for client {clientId}.");
+            var template = await _templateRepository.GetByIdAsync(execution.TemplateId, null)
+                ?? throw new InvalidOperationException($"Template {execution.TemplateId} not found.");
 
-            var data = await _datasetQueryService.QueryAsync(template, clientId, execution.FiltersJson, cancellationToken);
+            var data = await _datasetQueryService.QueryAsync(template, execution.FiltersJson, cancellationToken);
 
             if (!_renderers.TryGetValue(execution.Format, out var renderer))
                 throw new InvalidOperationException($"Format {execution.Format} is not enabled. Supported formats: {string.Join(", ", _renderers.Keys)}.");
@@ -95,7 +95,7 @@ public class ReportService : IReportService
         return results;
     }
 
-    public async Task<(byte[] Content, string ContentType, string FileName)?> GetDownloadAsync(Guid executionId, Guid clientId, CancellationToken cancellationToken = default)
+    public async Task<(byte[] Content, string ContentType, string FileName)?> GetDownloadAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default)
     {
         var execution = await _executionRepository.GetByIdAsync(executionId, clientId);
         if (execution is null || execution.Status != ReportExecutionStatus.Completed || string.IsNullOrWhiteSpace(execution.ResultPath))

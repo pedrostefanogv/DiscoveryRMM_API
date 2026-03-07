@@ -24,21 +24,25 @@ public class ReportExecutionRepository : IReportExecutionRepository
         return execution;
     }
 
-    public async Task<ReportExecution?> GetByIdAsync(Guid id, Guid clientId)
+    public async Task<ReportExecution?> GetByIdAsync(Guid id, Guid? clientId = null)
     {
         return await _db.ReportExecutions
             .AsNoTracking()
-            .Where(execution => execution.Id == id && execution.ClientId == clientId)
+            .Where(execution => execution.Id == id)
+            .Where(execution => !clientId.HasValue || execution.ClientId == clientId.Value)
             .FirstOrDefaultAsync();
     }
 
-    public async Task<IReadOnlyList<ReportExecution>> GetRecentByClientAsync(Guid clientId, int limit = 50)
+    public async Task<IReadOnlyList<ReportExecution>> GetRecentByClientAsync(Guid? clientId = null, int limit = 50)
     {
         var safeLimit = Math.Clamp(limit, 1, 200);
 
-        return await _db.ReportExecutions
-            .AsNoTracking()
-            .Where(execution => execution.ClientId == clientId)
+        var query = _db.ReportExecutions.AsNoTracking();
+
+        if (clientId.HasValue)
+            query = query.Where(execution => execution.ClientId == clientId.Value);
+
+        return await query
             .OrderByDescending(execution => execution.CreatedAt)
             .Take(safeLimit)
             .ToListAsync();
@@ -56,10 +60,10 @@ public class ReportExecutionRepository : IReportExecutionRepository
             .ToListAsync();
     }
 
-    public async Task UpdateStatusAsync(Guid id, Guid clientId, ReportExecutionStatus status, string? errorMessage = null)
+    public async Task UpdateStatusAsync(Guid id, Guid? clientId, ReportExecutionStatus status, string? errorMessage = null)
     {
         var execution = await _db.ReportExecutions
-            .FirstOrDefaultAsync(item => item.Id == id && item.ClientId == clientId);
+            .FirstOrDefaultAsync(item => item.Id == id && (!clientId.HasValue || item.ClientId == clientId.Value));
 
         if (execution is null)
             throw new InvalidOperationException($"Report execution {id} not found.");
@@ -76,10 +80,10 @@ public class ReportExecutionRepository : IReportExecutionRepository
         await _db.SaveChangesAsync();
     }
 
-    public async Task UpdateResultAsync(Guid id, Guid clientId, string resultPath, string resultContentType, long resultSizeBytes, int rowCount, int executionTimeMs)
+    public async Task UpdateResultAsync(Guid id, Guid? clientId, string resultPath, string resultContentType, long resultSizeBytes, int rowCount, int executionTimeMs)
     {
         var execution = await _db.ReportExecutions
-            .FirstOrDefaultAsync(item => item.Id == id && item.ClientId == clientId);
+            .FirstOrDefaultAsync(item => item.Id == id && (!clientId.HasValue || item.ClientId == clientId.Value));
 
         if (execution is null)
             throw new InvalidOperationException($"Report execution {id} not found.");
