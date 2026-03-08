@@ -79,6 +79,8 @@ public class ReportTemplateRepository : IReportTemplateRepository
 
         current.Name = template.Name;
         current.Description = template.Description;
+        current.Instructions = template.Instructions;
+        current.ExecutionSchemaJson = template.ExecutionSchemaJson;
         current.DatasetType = template.DatasetType;
         current.DefaultFormat = template.DefaultFormat;
         current.LayoutJson = template.LayoutJson;
@@ -115,6 +117,8 @@ public class ReportTemplateRepository : IReportTemplateRepository
             template.ClientId,
             template.Name,
             template.Description,
+            template.Instructions,
+            template.ExecutionSchemaJson,
             template.DatasetType,
             template.DefaultFormat,
             template.LayoutJson,

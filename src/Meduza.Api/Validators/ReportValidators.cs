@@ -53,6 +53,10 @@ public class CreateReportTemplateRequestValidator : AbstractValidator<CreateRepo
         var enabledFormats = ReportValidationHelpers.GetEnabledFormats(options.Value);
         RuleFor(x => x.Name).NotEmpty().Length(2, 200);
         RuleFor(x => x.Description).MaximumLength(2000);
+        RuleFor(x => x.Instructions).MaximumLength(4000);
+        RuleFor(x => x.ExecutionSchemaJson)
+            .Must(ReportValidationHelpers.BeValidJsonOrNull)
+            .WithMessage("ExecutionSchemaJson must be valid JSON when informed.");
         RuleFor(x => x.DatasetType).IsInEnum();
         RuleFor(x => x.DefaultFormat)
             .Must(enabledFormats.Contains)
@@ -78,6 +82,10 @@ public class UpdateReportTemplateRequestValidator : AbstractValidator<UpdateRepo
             .Length(2, 200)
             .When(x => x.Name is not null);
         RuleFor(x => x.Description).MaximumLength(2000);
+        RuleFor(x => x.Instructions).MaximumLength(4000);
+        RuleFor(x => x.ExecutionSchemaJson)
+            .Must(ReportValidationHelpers.BeValidJsonOrNull)
+            .WithMessage("ExecutionSchemaJson must be valid JSON when informed.");
         RuleFor(x => x.DatasetType!.Value)
             .IsInEnum()
             .When(x => x.DatasetType.HasValue);

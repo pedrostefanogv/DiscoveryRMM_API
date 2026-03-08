@@ -1194,6 +1194,12 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(template => template.Description)
                 .HasColumnName("description")
                 .HasMaxLength(2000);
+            entity.Property(template => template.Instructions)
+                .HasColumnName("instructions")
+                .HasMaxLength(4000);
+            entity.Property(template => template.ExecutionSchemaJson)
+                .HasColumnName("execution_schema_json")
+                .HasColumnType("jsonb");
             entity.Property(template => template.DatasetType)
                 .HasColumnName("dataset_type")
                 .HasConversion<int>();

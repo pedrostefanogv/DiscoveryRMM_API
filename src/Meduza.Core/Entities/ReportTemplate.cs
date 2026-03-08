@@ -8,6 +8,8 @@ public class ReportTemplate
     public Guid? ClientId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
+    public string? Instructions { get; set; }
+    public string? ExecutionSchemaJson { get; set; }
     public ReportDatasetType DatasetType { get; set; }
     public ReportFormat DefaultFormat { get; set; } = ReportFormat.Xlsx;
     public string LayoutJson { get; set; } = "{}";
