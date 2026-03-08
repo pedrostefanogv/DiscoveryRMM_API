@@ -64,6 +64,12 @@ public class ServerConfiguration
     public string AIIntegrationSettingsJson { get; set; } = string.Empty;
 
     /// <summary>
+    /// Configurações globais de reporting (JSON).
+    /// Exemplo: {"enablePdf":true,"processingTimeoutSeconds":300,...}
+    /// </summary>
+    public string ReportingSettingsJson { get; set; } = "{}";
+
+    /// <summary>
     /// Lista de campos bloqueados para sobrescrita em níveis inferiores (JSON array de nomes de propriedade).
     /// Exemplo: ["DiscoveryEnabled", "InventoryIntervalHours"]
     /// </summary>

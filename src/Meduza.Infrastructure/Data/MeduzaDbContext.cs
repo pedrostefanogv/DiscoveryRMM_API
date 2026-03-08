@@ -33,7 +33,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<WorkflowProfile> WorkflowProfiles => Set<WorkflowProfile>();
     public DbSet<TicketActivityLog> TicketActivityLogs => Set<TicketActivityLog>();
     public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
+    public DbSet<ReportTemplateHistory> ReportTemplateHistories => Set<ReportTemplateHistory>();
     public DbSet<ReportExecution> ReportExecutions => Set<ReportExecution>();
+    public DbSet<AppNotification> AppNotifications => Set<AppNotification>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -548,6 +550,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.AgentOfflineThresholdSeconds).HasColumnName("agent_offline_threshold_seconds");
             entity.Property(config => config.BrandingSettingsJson).HasColumnName("branding_settings_json");
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
+            entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json");
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
             entity.Property(config => config.CreatedAt)
                 .HasColumnName("created_at")
@@ -1287,6 +1290,92 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .WithMany()
                 .HasForeignKey(execution => execution.ClientId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ReportTemplateHistory>(entity =>
+        {
+            entity.ToTable("report_template_history");
+            entity.HasKey(history => history.Id);
+            entity.HasIndex(history => new { history.TemplateId, history.Version })
+                .HasDatabaseName("ix_report_template_history_template_version");
+            entity.HasIndex(history => history.ChangedAt)
+                .HasDatabaseName("ix_report_template_history_changed_at");
+
+            entity.Property(history => history.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(history => history.TemplateId)
+                .HasColumnName("template_id");
+            entity.Property(history => history.Version)
+                .HasColumnName("version");
+            entity.Property(history => history.ChangeType)
+                .HasColumnName("change_type")
+                .HasMaxLength(32);
+            entity.Property(history => history.SnapshotJson)
+                .HasColumnName("snapshot_json")
+                .HasColumnType("jsonb");
+            entity.Property(history => history.ChangedAt)
+                .HasColumnName("changed_at")
+                .HasColumnType("timestamptz");
+            entity.Property(history => history.ChangedBy)
+                .HasColumnName("changed_by")
+                .HasMaxLength(256);
+        });
+
+        modelBuilder.Entity<AppNotification>(entity =>
+        {
+            entity.ToTable("app_notifications");
+            entity.HasKey(notification => notification.Id);
+            entity.HasIndex(notification => notification.CreatedAt)
+                .HasDatabaseName("ix_app_notifications_created_at");
+            entity.HasIndex(notification => new { notification.Topic, notification.CreatedAt })
+                .HasDatabaseName("ix_app_notifications_topic_created");
+            entity.HasIndex(notification => new { notification.RecipientUserId, notification.IsRead, notification.CreatedAt })
+                .HasDatabaseName("ix_app_notifications_user_read_created");
+            entity.HasIndex(notification => new { notification.RecipientAgentId, notification.IsRead, notification.CreatedAt })
+                .HasDatabaseName("ix_app_notifications_agent_read_created");
+            entity.HasIndex(notification => new { notification.RecipientKey, notification.IsRead, notification.CreatedAt })
+                .HasDatabaseName("ix_app_notifications_key_read_created");
+
+            entity.Property(notification => notification.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(notification => notification.EventType)
+                .HasColumnName("event_type")
+                .HasMaxLength(120);
+            entity.Property(notification => notification.Topic)
+                .HasColumnName("topic")
+                .HasMaxLength(120);
+            entity.Property(notification => notification.Severity)
+                .HasColumnName("severity")
+                .HasConversion<int>();
+            entity.Property(notification => notification.RecipientUserId)
+                .HasColumnName("recipient_user_id");
+            entity.Property(notification => notification.RecipientAgentId)
+                .HasColumnName("recipient_agent_id");
+            entity.Property(notification => notification.RecipientKey)
+                .HasColumnName("recipient_key")
+                .HasMaxLength(256);
+            entity.Property(notification => notification.Title)
+                .HasColumnName("title")
+                .HasMaxLength(200);
+            entity.Property(notification => notification.Message)
+                .HasColumnName("message")
+                .HasMaxLength(2000);
+            entity.Property(notification => notification.PayloadJson)
+                .HasColumnName("payload_json")
+                .HasColumnType("jsonb");
+            entity.Property(notification => notification.IsRead)
+                .HasColumnName("is_read");
+            entity.Property(notification => notification.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(notification => notification.ReadAt)
+                .HasColumnName("read_at")
+                .HasColumnType("timestamptz");
+            entity.Property(notification => notification.CreatedBy)
+                .HasColumnName("created_by")
+                .HasMaxLength(256);
         });
     }
 

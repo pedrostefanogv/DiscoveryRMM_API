@@ -1,9 +1,11 @@
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
+using Meduza.Core.Configuration;
 using System.Text.Json;
 using Meduza.Core.Interfaces;
 using Meduza.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Meduza.Api.Controllers;
 
@@ -18,15 +20,18 @@ public class ConfigurationsController : ControllerBase
     private readonly IConfigurationService _configService;
     private readonly IConfigurationResolver _resolver;
     private readonly IClientRepository _clientRepository;
+    private readonly IOptionsMonitor<ReportingOptions> _reportingOptions;
 
     public ConfigurationsController(
         IConfigurationService configService,
         IConfigurationResolver resolver,
-        IClientRepository clientRepository)
+        IClientRepository clientRepository,
+        IOptionsMonitor<ReportingOptions> reportingOptions)
     {
         _configService = configService;
         _resolver = resolver;
         _clientRepository = clientRepository;
+        _reportingOptions = reportingOptions;
     }
 
     // ============ Server ============
@@ -95,6 +100,47 @@ public class ConfigurationsController : ControllerBase
             globalLockedFields = globalLocks.OrderBy(x => x).ToArray(),
             fields
         });
+    }
+
+    [HttpGet("server/reporting")]
+    public async Task<IActionResult> GetServerReporting()
+    {
+        var server = await _configService.GetServerConfigAsync();
+        var optionsFromFile = _reportingOptions.CurrentValue;
+        var current = DeserializeReporting(server.ReportingSettingsJson) ?? BuildDefaultReporting(optionsFromFile);
+
+        return Ok(current);
+    }
+
+    [HttpPut("server/reporting")]
+    public async Task<IActionResult> UpdateServerReporting([FromBody] ReportingSettingsRequest request)
+    {
+        var optionsFromFile = _reportingOptions.CurrentValue;
+        var allowed = NormalizeAllowedDays(request.AllowedRetentionDays ?? optionsFromFile.AllowedRetentionDays);
+
+        if (!allowed.Contains(request.DatabaseRetentionDays) || !allowed.Contains(request.FileRetentionDays))
+        {
+            return BadRequest(new
+            {
+                error = "DatabaseRetentionDays e FileRetentionDays devem estar em AllowedRetentionDays.",
+                allowedRetentionDays = allowed
+            });
+        }
+
+        var server = await _configService.GetServerConfigAsync();
+
+        var normalized = new ReportingSettingsResponse(
+            request.EnablePdf,
+            request.ProcessingTimeoutSeconds,
+            request.FileDownloadTimeoutSeconds,
+            request.DatabaseRetentionDays,
+            request.FileRetentionDays,
+            allowed);
+
+        server.ReportingSettingsJson = JsonSerializer.Serialize(normalized, JsonSerializerOptions.Web);
+
+        await _configService.UpdateServerAsync(server, HttpContext.Items["Username"] as string ?? "api");
+        return Ok(normalized);
     }
 
     // ============ Client ============
@@ -485,6 +531,60 @@ public class ConfigurationsController : ControllerBase
             return null;
         }
     }
+
+    private static ReportingSettingsResponse BuildDefaultReporting(ReportingOptions options)
+    {
+        var allowed = NormalizeAllowedDays(options.AllowedRetentionDays);
+        var dbDays = allowed.Contains(options.DatabaseRetentionDays) ? options.DatabaseRetentionDays : allowed.Last();
+        var fileDays = allowed.Contains(options.FileRetentionDays) ? options.FileRetentionDays : allowed.Last();
+
+        return new ReportingSettingsResponse(
+            options.EnablePdf,
+            options.ProcessingTimeoutSeconds,
+            options.FileDownloadTimeoutSeconds,
+            dbDays,
+            fileDays,
+            allowed);
+    }
+
+    private static ReportingSettingsResponse? DeserializeReporting(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<ReportingSettingsResponse>(json, JsonSerializerOptions.Web);
+            if (parsed is null)
+                return null;
+
+            var allowed = NormalizeAllowedDays(parsed.AllowedRetentionDays);
+            var dbDays = allowed.Contains(parsed.DatabaseRetentionDays) ? parsed.DatabaseRetentionDays : allowed.Last();
+            var fileDays = allowed.Contains(parsed.FileRetentionDays) ? parsed.FileRetentionDays : allowed.Last();
+
+            return parsed with
+            {
+                DatabaseRetentionDays = dbDays,
+                FileRetentionDays = fileDays,
+                AllowedRetentionDays = allowed
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static int[] NormalizeAllowedDays(int[]? values)
+    {
+        var allowed = (values is { Length: > 0 } ? values : [30, 60, 90])
+            .Where(value => value > 0)
+            .Distinct()
+            .OrderBy(value => value)
+            .ToArray();
+
+        return allowed.Length > 0 ? allowed : [30, 60, 90];
+    }
 }
 
 public class ConfigurationFieldMetadata
@@ -501,3 +601,19 @@ public class ConfigurationFieldMetadata
     public int? LockOwnerForSite { get; set; }
     public int? LockOwnerForAgent { get; set; }
 }
+
+public record ReportingSettingsRequest(
+    bool EnablePdf,
+    int ProcessingTimeoutSeconds,
+    int FileDownloadTimeoutSeconds,
+    int DatabaseRetentionDays,
+    int FileRetentionDays,
+    int[]? AllowedRetentionDays);
+
+public record ReportingSettingsResponse(
+    bool EnablePdf,
+    int ProcessingTimeoutSeconds,
+    int FileDownloadTimeoutSeconds,
+    int DatabaseRetentionDays,
+    int FileRetentionDays,
+    int[] AllowedRetentionDays);

@@ -51,6 +51,8 @@ builder.Services.AddScoped<IReportTemplateRepository, ReportTemplateRepository>(
 builder.Services.AddScoped<IReportExecutionRepository, ReportExecutionRepository>();
 builder.Services.AddScoped<IReportDatasetQueryService, ReportDatasetQueryService>();
 builder.Services.AddScoped<IReportService, ReportService>();
+builder.Services.AddScoped<INotificationRepository, NotificationRepository>();
+builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IReportRenderer, XlsxReportRenderer>();
 builder.Services.AddScoped<IReportRenderer, CsvReportRenderer>();
 
@@ -126,6 +128,7 @@ builder.Services.AddSingleton<IRedisService, RedisService>();
 builder.Services.AddHostedService<LogPurgeBackgroundService>();
 builder.Services.AddHostedService<SlaMonitoringBackgroundService>();
 builder.Services.AddHostedService<ReportGenerationBackgroundService>();
+builder.Services.AddHostedService<ReportRetentionBackgroundService>();
 
 //  Controllers + JSON config
 builder.Services.AddControllers(options =>
@@ -202,6 +205,12 @@ app.UseAgentAuth();
 
 app.MapControllers();
 app.MapHub<AgentHub>("/hubs/agent", options =>
+{
+    options.AllowStatefulReconnects = true;
+    options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;
+}).RequireCors("SignalR");
+
+app.MapHub<NotificationHub>("/hubs/notifications", options =>
 {
     options.AllowStatefulReconnects = true;
     options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;

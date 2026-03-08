@@ -4,6 +4,7 @@ using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace Meduza.Infrastructure.Repositories;
 
@@ -20,6 +21,7 @@ public class ReportTemplateRepository : IReportTemplateRepository
         template.UpdatedAt = template.CreatedAt;
 
         _db.ReportTemplates.Add(template);
+        _db.ReportTemplateHistories.Add(BuildHistorySnapshot(template, "Created", template.Version));
         await _db.SaveChangesAsync();
         return template;
     }
@@ -57,6 +59,18 @@ public class ReportTemplateRepository : IReportTemplateRepository
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<ReportTemplateHistory>> GetHistoryAsync(Guid templateId, int limit = 50)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 200);
+
+        return await _db.ReportTemplateHistories
+            .AsNoTracking()
+            .Where(history => history.TemplateId == templateId)
+            .OrderByDescending(history => history.Version)
+            .Take(safeLimit)
+            .ToListAsync();
+    }
+
     public async Task UpdateAsync(ReportTemplate template)
     {
         var current = await _db.ReportTemplates.FirstOrDefaultAsync(item => item.Id == template.Id);
@@ -74,6 +88,8 @@ public class ReportTemplateRepository : IReportTemplateRepository
         current.UpdatedAt = DateTime.UtcNow;
         current.UpdatedBy = template.UpdatedBy;
 
+        _db.ReportTemplateHistories.Add(BuildHistorySnapshot(current, "Updated", current.Version));
+
         await _db.SaveChangesAsync();
     }
 
@@ -85,8 +101,41 @@ public class ReportTemplateRepository : IReportTemplateRepository
         if (template is null)
             return false;
 
+        _db.ReportTemplateHistories.Add(BuildHistorySnapshot(template, "Deleted", template.Version + 1));
         _db.ReportTemplates.Remove(template);
         await _db.SaveChangesAsync();
         return true;
+    }
+
+    private static ReportTemplateHistory BuildHistorySnapshot(ReportTemplate template, string changeType, int version)
+    {
+        var snapshot = JsonSerializer.Serialize(new
+        {
+            template.Id,
+            template.ClientId,
+            template.Name,
+            template.Description,
+            template.DatasetType,
+            template.DefaultFormat,
+            template.LayoutJson,
+            template.FiltersJson,
+            template.IsActive,
+            Version = version,
+            template.CreatedAt,
+            template.UpdatedAt,
+            template.CreatedBy,
+            template.UpdatedBy
+        });
+
+        return new ReportTemplateHistory
+        {
+            Id = IdGenerator.NewId(),
+            TemplateId = template.Id,
+            Version = version,
+            ChangeType = changeType,
+            SnapshotJson = snapshot,
+            ChangedAt = DateTime.UtcNow,
+            ChangedBy = template.UpdatedBy ?? template.CreatedBy
+        };
     }
 }

@@ -110,6 +110,17 @@ public class ReportsController : ControllerBase
         return template is null ? NotFound() : Ok(template);
     }
 
+    [HttpGet("templates/{id:guid}/history")]
+    public async Task<IActionResult> GetTemplateHistory(Guid id, [FromQuery] int limit = 50)
+    {
+        var template = await _templateRepository.GetByIdAsync(id, null);
+        if (template is null)
+            return NotFound();
+
+        var history = await _templateRepository.GetHistoryAsync(id, limit);
+        return Ok(history);
+    }
+
     [HttpPut("templates/{id:guid}")]
     public async Task<IActionResult> UpdateTemplate(Guid id, [FromBody] UpdateReportTemplateRequest request)
     {
@@ -222,7 +233,30 @@ public class ReportsController : ControllerBase
         if (result is null)
             return NotFound(new { error = "Report file not available." });
 
-        return File(result.Value.Content, result.Value.ContentType, result.Value.FileName);
+        return File(result.Value.Content, result.Value.ContentType, result.Value.FileName, enableRangeProcessing: true);
+    }
+
+    /// <summary>
+    /// Stream download (for large files without loading entire file into memory)
+    /// </summary>
+    [HttpGet("executions/{id:guid}/download-stream")]
+    public async Task<IActionResult> DownloadExecutionStream(Guid id, [FromQuery] Guid? clientId)
+    {
+        var execution = await _executionRepository.GetByIdAsync(id, clientId);
+        if (execution is null || execution.Status != ReportExecutionStatus.Completed || string.IsNullOrWhiteSpace(execution.ResultPath))
+            return NotFound(new { error = "Report file not available." });
+
+        var filePath = execution.ResultPath;
+        if (!System.IO.File.Exists(filePath))
+            return NotFound(new { error = "Report file not found on disk." });
+
+        var fileStream = System.IO.File.OpenRead(filePath);
+        var fileName = Path.GetFileName(filePath);
+        var contentType = string.IsNullOrWhiteSpace(execution.ResultContentType) 
+            ? "application/octet-stream" 
+            : execution.ResultContentType;
+
+        return File(fileStream, contentType, fileName, enableRangeProcessing: true);
     }
 
     private static Guid? TryGetGuidFromFilters(string? filtersJson, string propertyName)

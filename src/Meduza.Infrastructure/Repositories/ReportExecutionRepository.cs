@@ -60,6 +60,30 @@ public class ReportExecutionRepository : IReportExecutionRepository
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<ReportExecution>> GetExpiredAsync(DateTime cutoff, int limit = 1000)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 5000);
+
+        return await _db.ReportExecutions
+            .AsNoTracking()
+            .Where(execution => execution.CreatedAt <= cutoff)
+            .OrderBy(execution => execution.CreatedAt)
+            .Take(safeLimit)
+            .ToListAsync();
+    }
+
+    public async Task<int> DeleteByIdsAsync(IReadOnlyCollection<Guid> ids)
+    {
+        if (ids.Count == 0)
+            return 0;
+
+        var deleted = await _db.ReportExecutions
+            .Where(execution => ids.Contains(execution.Id))
+            .ExecuteDeleteAsync();
+
+        return deleted;
+    }
+
     public async Task UpdateStatusAsync(Guid id, Guid? clientId, ReportExecutionStatus status, string? errorMessage = null)
     {
         var execution = await _db.ReportExecutions
