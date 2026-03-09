@@ -251,6 +251,12 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(info => info.BiosManufacturer)
                 .HasColumnName("bios_manufacturer")
                 .HasMaxLength(200);
+            entity.Property(info => info.BiosDate)
+                .HasColumnName("bios_date")
+                .HasMaxLength(50);
+            entity.Property(info => info.BiosSerialNumber)
+                .HasColumnName("bios_serial_number")
+                .HasMaxLength(100);
             entity.Property(info => info.OsName)
                 .HasColumnName("os_name")
                 .HasMaxLength(200);
@@ -263,6 +269,22 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(info => info.OsArchitecture)
                 .HasColumnName("os_architecture")
                 .HasMaxLength(20);
+            entity.Property(info => info.ProcessorTdpWatts).HasColumnName("processor_tdp_watts");
+            entity.Property(info => info.ProcessorSocket)
+                .HasColumnName("processor_socket")
+                .HasMaxLength(50);
+            entity.Property(info => info.ProcessorFrequencyGhz).HasColumnName("processor_frequency_ghz");
+            entity.Property(info => info.ProcessorReleaseDate)
+                .HasColumnName("processor_release_date")
+                .HasMaxLength(50);
+            entity.Property(info => info.GpuModel)
+                .HasColumnName("gpu_model")
+                .HasMaxLength(300);
+            entity.Property(info => info.GpuMemoryBytes).HasColumnName("gpu_memory_bytes");
+            entity.Property(info => info.GpuDriverVersion)
+                .HasColumnName("gpu_driver_version")
+                .HasMaxLength(100);
+            entity.Property(info => info.TotalDisksCount).HasColumnName("total_disks_count");
             entity.Property(info => info.CollectedAt)
                 .HasColumnName("collected_at")
                 .HasColumnType("timestamptz");

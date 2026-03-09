@@ -5,6 +5,7 @@ using Meduza.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Meduza.Api.Controllers;
 
@@ -145,6 +146,8 @@ public class ReportsController : ControllerBase
         if (template is null)
             return NotFound(new { error = "Template not found." });
 
+        var effectiveFiltersJson = MergeFiltersJson(template.FiltersJson, request.FiltersJson);
+
         var selectedFormat = request.Format ?? template.DefaultFormat;
         if (!_enabledFormats.Contains(selectedFormat))
         {
@@ -159,9 +162,9 @@ public class ReportsController : ControllerBase
         var execution = new ReportExecution
         {
             TemplateId = template.Id,
-            ClientId = TryGetGuidFromFilters(request.FiltersJson ?? template.FiltersJson, "clientId"),
+            ClientId = TryGetGuidFromFilters(effectiveFiltersJson, "clientId"),
             Format = selectedFormat,
-            FiltersJson = request.FiltersJson ?? template.FiltersJson,
+            FiltersJson = effectiveFiltersJson,
             Status = ReportExecutionStatus.Pending,
             CreatedBy = request.CreatedBy
         };
@@ -290,6 +293,39 @@ public class ReportsController : ControllerBase
         }
     }
 
+    private static string? MergeFiltersJson(string? templateFiltersJson, string? runtimeFiltersJson)
+    {
+        if (string.IsNullOrWhiteSpace(templateFiltersJson))
+            return runtimeFiltersJson;
+
+        if (string.IsNullOrWhiteSpace(runtimeFiltersJson))
+            return templateFiltersJson;
+
+        try
+        {
+            var templateNode = JsonNode.Parse(templateFiltersJson) as JsonObject;
+            var runtimeNode = JsonNode.Parse(runtimeFiltersJson) as JsonObject;
+
+            if (templateNode is null)
+                return runtimeFiltersJson;
+
+            if (runtimeNode is null)
+                return templateFiltersJson;
+
+            foreach (var (key, value) in runtimeNode)
+            {
+                templateNode[key] = value?.DeepClone();
+            }
+
+            return templateNode.ToJsonString();
+        }
+        catch
+        {
+            // Se houver qualquer problema de parse/merge, preserva comportamento anterior (runtime sobrescreve template).
+            return runtimeFiltersJson;
+        }
+    }
+
     private static ReportTemplateResponse ToTemplateResponse(ReportTemplate template)
     {
         ReportExecutionSchema? executionSchema = null;
@@ -380,6 +416,59 @@ public class ReportsController : ControllerBase
                 errors.Add($"Filter '{filter.Name}' is required.");
         }
 
+        foreach (var filter in schema.Filters)
+        {
+            if (!HasValue(filters, filter.Name))
+                continue;
+
+            if (filter.Type == ReportFilterFieldType.Enum &&
+                filter.AllowedValues is { Length: > 0 } &&
+                !IsAllowedEnumValue(filters, filter.Name, filter.AllowedValues))
+            {
+                errors.Add($"Filter '{filter.Name}' has invalid value. Allowed: {string.Join(", ", filter.AllowedValues)}.");
+            }
+
+            if (filter.Type is ReportFilterFieldType.Integer or ReportFilterFieldType.Decimal)
+            {
+                var numberValue = GetNumber(filters, filter.Name);
+                if (numberValue.HasValue)
+                {
+                    if (filter.Min.HasValue && numberValue.Value < filter.Min.Value)
+                        errors.Add($"Filter '{filter.Name}' must be greater than or equal to {filter.Min.Value}.");
+
+                    if (filter.Max.HasValue && numberValue.Value > filter.Max.Value)
+                        errors.Add($"Filter '{filter.Name}' must be less than or equal to {filter.Max.Value}.");
+                }
+            }
+
+            if (filter.Type == ReportFilterFieldType.Text && filter.MaxLength.HasValue)
+            {
+                var textValue = GetString(filters, filter.Name);
+                if (!string.IsNullOrEmpty(textValue) && textValue.Length > filter.MaxLength.Value)
+                    errors.Add($"Filter '{filter.Name}' exceeds maximum length of {filter.MaxLength.Value} characters.");
+            }
+
+            if (filter.Type == ReportFilterFieldType.Guid)
+            {
+                var guidValue = GetString(filters, filter.Name);
+                if (!string.IsNullOrEmpty(guidValue) && !Guid.TryParse(guidValue, out _))
+                    errors.Add($"Filter '{filter.Name}' must be a valid GUID.");
+            }
+
+            if (filter.Type == ReportFilterFieldType.DateTime)
+            {
+                var dateValue = GetString(filters, filter.Name);
+                if (!string.IsNullOrEmpty(dateValue) && !DateTime.TryParse(dateValue, out _))
+                    errors.Add($"Filter '{filter.Name}' must be a valid DateTime (ISO 8601 format recommended).");
+            }
+
+            if (filter.Type == ReportFilterFieldType.Boolean)
+            {
+                if (filters.TryGetProperty(filter.Name, out var boolValue) && boolValue.ValueKind != JsonValueKind.True && boolValue.ValueKind != JsonValueKind.False)
+                    errors.Add($"Filter '{filter.Name}' must be a boolean (true/false).");
+            }
+        }
+
         if (HasValue(filters, "orderBy"))
         {
             var orderBy = GetString(filters, "orderBy");
@@ -434,6 +523,26 @@ public class ReportsController : ControllerBase
         return value.GetString();
     }
 
+    private static decimal? GetNumber(JsonElement json, string propertyName)
+    {
+        if (!json.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.Number)
+            return null;
+
+        return value.TryGetDecimal(out var number) ? number : null;
+    }
+
+    private static bool IsAllowedEnumValue(JsonElement json, string propertyName, IReadOnlyCollection<string> allowedValues)
+    {
+        if (!json.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String)
+            return false;
+
+        var current = value.GetString();
+        if (string.IsNullOrWhiteSpace(current))
+            return false;
+
+        return allowedValues.Contains(current, StringComparer.OrdinalIgnoreCase);
+    }
+
     private static IReadOnlyDictionary<ReportDatasetType, ReportDatasetSpecification> BuildDatasetCatalog()
     {
         return new Dictionary<ReportDatasetType, ReportDatasetSpecification>
@@ -444,26 +553,26 @@ public class ReportsController : ControllerBase
                     "clientId", "siteId", "agentId", "softwareName", "publisher", "version", "installedAt"
                 ],
                 ExecutionSchema: new ReportExecutionSchema(
-                    Scope: "global-client-site-agent",
-                    DateMode: "none",
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.None,
                     AllowedOrientations: ["landscape", "portrait"],
                     DefaultOrientation: "landscape",
-                    AllowedSortFields: ["softwareName", "publisher", "version", "lastSeenAt", "agentHostname", "siteName"],
-                    DefaultSortField: "softwareName",
+                    AllowedSortFields: GetEnumNamesAsCamelCase<SoftwareInventoryOrderBy>(),
+                    DefaultSortField: ToCamelCase(nameof(SoftwareInventoryOrderBy.SoftwareName)),
                     AllowedSortDirections: ["asc", "desc"],
                     DefaultSortDirection: "asc",
                     Filters:
                     [
-                        new("clientId", "Cliente", "guid", false, "Escopo opcional por cliente."),
-                        new("siteId", "Site", "guid", false, "Escopo opcional por site."),
-                        new("agentId", "Agente", "guid", false, "Escopo opcional por agente."),
-                        new("softwareName", "Software", "text", false, "Busca parcial por nome do software."),
-                        new("publisher", "Fabricante", "text", false, "Busca parcial por fabricante."),
-                        new("version", "Versao", "text", false, "Filtra por versao exata ou parcial."),
-                        new("limit", "Limite de linhas", "number", false, "Maximo recomendado: 10000."),
-                        new("orderBy", "Ordenar por", "enum", false, "Campo para ordenacao."),
-                        new("orderDirection", "Direcao", "enum", false, "asc ou desc."),
-                        new("orientation", "Orientacao", "enum", false, "landscape ou portrait para renderizacao.")
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID do cliente"),
+                        new("siteId", "Site", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por site.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "clientId", Placeholder: "GUID do site"),
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por agente.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "siteId", Placeholder: "GUID do agente"),
+                        new("softwareName", "Software", ReportFilterFieldType.Text, false, "Filtros", "Busca parcial por nome do software.", UiComponent: ReportFilterUiComponent.TextSearch, Placeholder: "Ex.: Microsoft Office", MaxLength: 200, IsPartialMatch: true),
+                        new("publisher", "Fabricante", ReportFilterFieldType.Text, false, "Filtros", "Busca parcial por fabricante.", UiComponent: ReportFilterUiComponent.TextSearch, Placeholder: "Ex.: Microsoft", MaxLength: 200, IsPartialMatch: true),
+                        new("version", "Versao", ReportFilterFieldType.Text, false, "Filtros", "Filtra por versao exata ou parcial.", UiComponent: ReportFilterUiComponent.TextInput, Placeholder: "Ex.: 23H2", MaxLength: 100, IsPartialMatch: true),
+                        new("orderBy", "Ordenar por", ReportFilterFieldType.Enum, false, "Ordenacao", "Campo para ordenacao dos resultados.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: GetEnumNamesAsCamelCase<SoftwareInventoryOrderBy>(), DefaultValue: ToCamelCase(nameof(SoftwareInventoryOrderBy.SoftwareName))),
+                        new("orderDirection", "Direcao", ReportFilterFieldType.Enum, false, "Ordenacao", "Direcao da ordenacao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["asc", "desc"], DefaultValue: "asc"),
+                        new("orientation", "Orientacao", ReportFilterFieldType.Enum, false, "Formatacao", "Orientacao da pagina do relatorio.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["landscape", "portrait"], DefaultValue: "landscape"),
+                        new("limit", "Limite de linhas", ReportFilterFieldType.Integer, false, "Saida", "Maximo recomendado: 10000.", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
                     ],
                     SampleFilterPresets:
                     [
@@ -477,33 +586,34 @@ public class ReportsController : ControllerBase
                     "clientId", "siteId", "agentId", "type", "level", "source", "from", "to", "message"
                 ],
                 ExecutionSchema: new ReportExecutionSchema(
-                    Scope: "global-client-site-agent",
-                    DateMode: "date-range",
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.RequiredRange,
                     AllowedOrientations: ["landscape", "portrait"],
                     DefaultOrientation: "portrait",
-                    AllowedSortFields: ["createdAt", "level", "source", "type"],
-                    DefaultSortField: "createdAt",
+                    AllowedSortFields: GetEnumNamesAsCamelCase<LogsOrderBy>(),
+                    DefaultSortField: ToCamelCase(nameof(LogsOrderBy.Timestamp)),
                     AllowedSortDirections: ["asc", "desc"],
                     DefaultSortDirection: "desc",
                     Filters:
                     [
-                        new("from", "Data inicial", "datetime", true, "Inicio do intervalo de logs (obrigatorio)."),
-                        new("to", "Data final", "datetime", true, "Fim do intervalo de logs (obrigatorio)."),
-                        new("clientId", "Cliente", "guid", false, "Escopo opcional por cliente."),
-                        new("siteId", "Site", "guid", false, "Escopo opcional por site."),
-                        new("agentId", "Agente", "guid", false, "Escopo opcional por agente."),
-                        new("type", "Tipo", "text", false, "Tipo de log."),
-                        new("level", "Nivel", "text", false, "Nivel: Trace/Info/Warning/Error."),
-                        new("source", "Origem", "text", false, "Origem do evento."),
-                        new("message", "Mensagem", "text", false, "Busca parcial no texto da mensagem."),
-                        new("limit", "Limite de linhas", "number", false, "Maximo recomendado: 10000."),
-                        new("orderBy", "Ordenar por", "enum", false, "Campo para ordenacao."),
-                        new("orderDirection", "Direcao", "enum", false, "asc ou desc.")
+                        new("from", "Data inicial", ReportFilterFieldType.DateTime, true, "Periodo", "Inicio do intervalo de logs (obrigatorio).", UiComponent: ReportFilterUiComponent.DateTimePicker),
+                        new("to", "Data final", ReportFilterFieldType.DateTime, true, "Periodo", "Fim do intervalo de logs (obrigatorio).", UiComponent: ReportFilterUiComponent.DateTimePicker),
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID do cliente"),
+                        new("siteId", "Site", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por site.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "clientId", Placeholder: "GUID do site"),
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por agente.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "siteId", Placeholder: "GUID do agente"),
+                        new("type", "Tipo", ReportFilterFieldType.Text, false, "Filtros", "Tipo de log.", UiComponent: ReportFilterUiComponent.TextInput, Placeholder: "Ex.: Agent", MaxLength: 100),
+                        new("level", "Nivel", ReportFilterFieldType.Enum, false, "Filtros", "Nivel do log.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["Trace", "Debug", "Info", "Warning", "Error", "Critical"]),
+                        new("source", "Origem", ReportFilterFieldType.Text, false, "Filtros", "Origem do evento.", UiComponent: ReportFilterUiComponent.TextInput, Placeholder: "Ex.: System", MaxLength: 100),
+                        new("message", "Mensagem", ReportFilterFieldType.Text, false, "Filtros", "Busca parcial no texto da mensagem.", UiComponent: ReportFilterUiComponent.TextSearch, Placeholder: "Texto contido na mensagem", MaxLength: 1000, IsPartialMatch: true),
+                        new("orderBy", "Ordenar por", ReportFilterFieldType.Enum, false, "Ordenacao", "Campo para ordenacao dos resultados.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: GetEnumNamesAsCamelCase<LogsOrderBy>(), DefaultValue: ToCamelCase(nameof(LogsOrderBy.Timestamp))),
+                        new("orderDirection", "Direcao", ReportFilterFieldType.Enum, false, "Ordenacao", "Direcao da ordenacao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["asc", "desc"], DefaultValue: "desc"),
+                        new("orientation", "Orientacao", ReportFilterFieldType.Enum, false, "Formatacao", "Orientacao da pagina do relatorio.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["landscape", "portrait"], DefaultValue: "portrait"),
+                        new("limit", "Limite de linhas", ReportFilterFieldType.Integer, false, "Saida", "Maximo recomendado: 10000.", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
                     ],
                     SampleFilterPresets:
                     [
-                        new ReportFilterPreset("Ultimas 24h", "Faixa curta para troubleshooting rapido", "{\"from\":\"2026-03-06T00:00:00Z\",\"to\":\"2026-03-07T00:00:00Z\",\"limit\":5000,\"orderBy\":\"createdAt\",\"orderDirection\":\"desc\"}"),
-                        new ReportFilterPreset("Ultimos 7 dias por cliente", "Faixa semanal com escopo de cliente", "{\"clientId\":\"<guid>\",\"from\":\"2026-03-01T00:00:00Z\",\"to\":\"2026-03-07T00:00:00Z\",\"limit\":10000,\"orderBy\":\"createdAt\",\"orderDirection\":\"desc\"}")
+                        new ReportFilterPreset("Ultimas 24h", "Faixa curta para troubleshooting rapido", "{\"from\":\"2026-03-06T00:00:00Z\",\"to\":\"2026-03-07T00:00:00Z\",\"limit\":5000,\"orderBy\":\"timestamp\",\"orderDirection\":\"desc\"}"),
+                        new ReportFilterPreset("Ultimos 7 dias por cliente", "Faixa semanal com escopo de cliente", "{\"clientId\":\"<guid>\",\"from\":\"2026-03-01T00:00:00Z\",\"to\":\"2026-03-07T00:00:00Z\",\"limit\":10000,\"orderBy\":\"timestamp\",\"orderDirection\":\"desc\"}")
                     ])),
 
             [ReportDatasetType.ConfigurationAudit] = new(
@@ -512,30 +622,31 @@ public class ReportsController : ControllerBase
                     "entityType", "entityId", "fieldName", "changedBy", "changedAt", "reason"
                 ],
                 ExecutionSchema: new ReportExecutionSchema(
-                    Scope: "global",
-                    DateMode: "date-range",
+                    ScopeType: ReportScopeType.Global,
+                    DateMode: ReportDateMode.RequiredRange,
                     AllowedOrientations: ["landscape", "portrait"],
                     DefaultOrientation: "portrait",
-                    AllowedSortFields: ["changedAt", "entityType", "changedBy", "fieldName"],
-                    DefaultSortField: "changedAt",
+                    AllowedSortFields: GetEnumNamesAsCamelCase<ConfigurationAuditOrderBy>(),
+                    DefaultSortField: ToCamelCase(nameof(ConfigurationAuditOrderBy.Timestamp)),
                     AllowedSortDirections: ["asc", "desc"],
                     DefaultSortDirection: "desc",
                     Filters:
                     [
-                        new("from", "Data inicial", "datetime", true, "Inicio do intervalo de auditoria (obrigatorio)."),
-                        new("to", "Data final", "datetime", true, "Fim do intervalo de auditoria (obrigatorio)."),
-                        new("entityType", "Tipo de entidade", "text", false, "Ex.: Client, Site, ServerConfiguration."),
-                        new("entityId", "ID da entidade", "guid", false, "Filtrar por entidade especifica."),
-                        new("fieldName", "Campo alterado", "text", false, "Nome do campo alterado."),
-                        new("changedBy", "Alterado por", "text", false, "Usuario responsavel pela alteracao."),
-                        new("reason", "Motivo", "text", false, "Texto livre de motivo da alteracao."),
-                        new("limit", "Limite de linhas", "number", false, "Maximo recomendado: 10000."),
-                        new("orderBy", "Ordenar por", "enum", false, "Campo para ordenacao."),
-                        new("orderDirection", "Direcao", "enum", false, "asc ou desc.")
+                        new("from", "Data inicial", ReportFilterFieldType.DateTime, true, "Periodo", "Inicio do intervalo de auditoria (obrigatorio).", UiComponent: ReportFilterUiComponent.DateTimePicker),
+                        new("to", "Data final", ReportFilterFieldType.DateTime, true, "Periodo", "Fim do intervalo de auditoria (obrigatorio).", UiComponent: ReportFilterUiComponent.DateTimePicker),
+                        new("entityType", "Tipo de entidade", ReportFilterFieldType.Text, false, "Filtros", "Ex.: Client, Site, ServerConfiguration.", UiComponent: ReportFilterUiComponent.TextInput, Placeholder: "Ex.: Site", MaxLength: 100),
+                        new("entityId", "ID da entidade", ReportFilterFieldType.Guid, false, "Filtros", "Filtrar por entidade especifica.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID da entidade"),
+                        new("fieldName", "Campo alterado", ReportFilterFieldType.Text, false, "Filtros", "Nome do campo alterado.", UiComponent: ReportFilterUiComponent.TextInput, Placeholder: "Ex.: RetentionDays", MaxLength: 100),
+                        new("changedBy", "Alterado por", ReportFilterFieldType.Text, false, "Filtros", "Usuario responsavel pela alteracao.", UiComponent: ReportFilterUiComponent.TextInput, Placeholder: "Ex.: admin@empresa.com", MaxLength: 256),
+                        new("reason", "Motivo", ReportFilterFieldType.Text, false, "Filtros", "Texto livre de motivo da alteracao.", UiComponent: ReportFilterUiComponent.TextSearch, Placeholder: "Ex.: Ajuste de politica", MaxLength: 1000, IsPartialMatch: true),
+                        new("orderBy", "Ordenar por", ReportFilterFieldType.Enum, false, "Ordenacao", "Campo para ordenacao dos resultados.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: GetEnumNamesAsCamelCase<ConfigurationAuditOrderBy>(), DefaultValue: ToCamelCase(nameof(ConfigurationAuditOrderBy.Timestamp))),
+                        new("orderDirection", "Direcao", ReportFilterFieldType.Enum, false, "Ordenacao", "Direcao da ordenacao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["asc", "desc"], DefaultValue: "desc"),
+                        new("orientation", "Orientacao", ReportFilterFieldType.Enum, false, "Formatacao", "Orientacao da pagina do relatorio.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["landscape", "portrait"], DefaultValue: "portrait"),
+                        new("limit", "Limite de linhas", ReportFilterFieldType.Integer, false, "Saida", "Maximo recomendado: 10000.", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
                     ],
                     SampleFilterPresets:
                     [
-                        new ReportFilterPreset("Mes atual", "Auditoria mensal em ordem decrescente", "{\"from\":\"2026-03-01T00:00:00Z\",\"to\":\"2026-03-31T23:59:59Z\",\"limit\":10000,\"orderBy\":\"changedAt\",\"orderDirection\":\"desc\"}")
+                        new ReportFilterPreset("Mes atual", "Auditoria mensal em ordem decrescente", "{\"from\":\"2026-03-01T00:00:00Z\",\"to\":\"2026-03-31T23:59:59Z\",\"limit\":10000,\"orderBy\":\"timestamp\",\"orderDirection\":\"desc\"}")
                     ])),
 
             [ReportDatasetType.Tickets] = new(
@@ -544,65 +655,81 @@ public class ReportsController : ControllerBase
                     "clientId", "siteId", "agentId", "workflowStateId", "priority", "createdAt", "closedAt", "slaBreached"
                 ],
                 ExecutionSchema: new ReportExecutionSchema(
-                    Scope: "global-client-site-agent",
-                    DateMode: "optional-date-range",
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.OptionalRange,
                     AllowedOrientations: ["landscape", "portrait"],
                     DefaultOrientation: "landscape",
-                    AllowedSortFields: ["createdAt", "priority", "slaBreached", "closedAt"],
-                    DefaultSortField: "createdAt",
+                    AllowedSortFields: GetEnumNamesAsCamelCase<TicketsOrderBy>(),
+                    DefaultSortField: ToCamelCase(nameof(TicketsOrderBy.Timestamp)),
                     AllowedSortDirections: ["asc", "desc"],
                     DefaultSortDirection: "desc",
                     Filters:
                     [
-                        new("clientId", "Cliente", "guid", false, "Escopo opcional por cliente."),
-                        new("siteId", "Site", "guid", false, "Escopo opcional por site."),
-                        new("agentId", "Agente", "guid", false, "Escopo opcional por agente."),
-                        new("workflowStateId", "Status workflow", "guid", false, "Estado atual do ticket."),
-                        new("priority", "Prioridade", "text", false, "Ex.: Low, Medium, High, Critical."),
-                        new("slaBreached", "SLA violado", "boolean", false, "true/false."),
-                        new("from", "Data inicial", "datetime", false, "Inicio opcional do periodo."),
-                        new("to", "Data final", "datetime", false, "Fim opcional do periodo."),
-                        new("limit", "Limite de linhas", "number", false, "Maximo recomendado: 10000."),
-                        new("orderBy", "Ordenar por", "enum", false, "Campo para ordenacao."),
-                        new("orderDirection", "Direcao", "enum", false, "asc ou desc.")
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID do cliente"),
+                        new("siteId", "Site", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por site.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "clientId", Placeholder: "GUID do site"),
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por agente.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "siteId", Placeholder: "GUID do agente"),
+                        new("workflowStateId", "Status workflow", ReportFilterFieldType.Guid, false, "Filtros", "Estado atual do ticket.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID do estado"),
+                        new("priority", "Prioridade", ReportFilterFieldType.Enum, false, "Filtros", "Prioridade do ticket.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["Low", "Medium", "High", "Critical"]),
+                        new("slaBreached", "SLA violado", ReportFilterFieldType.Boolean, false, "Filtros", "true/false.", UiComponent: ReportFilterUiComponent.Toggle),
+                        new("from", "Data inicial", ReportFilterFieldType.DateTime, false, "Periodo", "Inicio opcional do periodo.", UiComponent: ReportFilterUiComponent.DateTimePicker),
+                        new("to", "Data final", ReportFilterFieldType.DateTime, false, "Periodo", "Fim opcional do periodo.", UiComponent: ReportFilterUiComponent.DateTimePicker),
+                        new("orderBy", "Ordenar por", ReportFilterFieldType.Enum, false, "Ordenacao", "Campo para ordenacao dos resultados.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: GetEnumNamesAsCamelCase<TicketsOrderBy>(), DefaultValue: ToCamelCase(nameof(TicketsOrderBy.Timestamp))),
+                        new("orderDirection", "Direcao", ReportFilterFieldType.Enum, false, "Ordenacao", "Direcao da ordenacao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["asc", "desc"], DefaultValue: "desc"),
+                        new("orientation", "Orientacao", ReportFilterFieldType.Enum, false, "Formatacao", "Orientacao da pagina do relatorio.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["landscape", "portrait"], DefaultValue: "landscape"),
+                        new("limit", "Limite de linhas", ReportFilterFieldType.Integer, false, "Saida", "Maximo recomendado: 10000.", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
                     ],
                     SampleFilterPresets:
                     [
-                        new ReportFilterPreset("Tickets abertos recentes", "Foco no fluxo operacional dos ultimos 7 dias", "{\"from\":\"2026-03-01T00:00:00Z\",\"to\":\"2026-03-07T00:00:00Z\",\"orderBy\":\"createdAt\",\"orderDirection\":\"desc\",\"limit\":5000}"),
+                        new ReportFilterPreset("Tickets abertos recentes", "Foco no fluxo operacional dos ultimos 7 dias", "{\"from\":\"2026-03-01T00:00:00Z\",\"to\":\"2026-03-07T00:00:00Z\",\"orderBy\":\"timestamp\",\"orderDirection\":\"desc\",\"limit\":5000}"),
                         new ReportFilterPreset("Prioridade critica", "Acompanhamento de tickets com impacto alto", "{\"priority\":\"Critical\",\"orderBy\":\"priority\",\"orderDirection\":\"asc\",\"limit\":1000}")
                     ])),
 
             [ReportDatasetType.AgentHardware] = new(
                 Fields:
                 [
-                    "clientId", "siteId", "agentId", "osName", "processor", "totalMemoryBytes", "collectedAt"
+                    "siteName", "agentHostname", "osName", "osVersion", "osBuild", "osArchitecture", "processor", "processorCores", "processorThreads", "processorArchitecture", "totalMemoryGB", "motherboardManufacturer", "motherboardModel", "biosVersion", "biosManufacturer", "collectedAt"
                 ],
                 ExecutionSchema: new ReportExecutionSchema(
-                    Scope: "global-client-site-agent",
-                    DateMode: "none",
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.None,
                     AllowedOrientations: ["landscape", "portrait"],
                     DefaultOrientation: "landscape",
-                    AllowedSortFields: ["siteName", "agentHostname", "collectedAt", "osName"],
-                    DefaultSortField: "siteName",
+                    AllowedSortFields: GetEnumNamesAsCamelCase<AgentHardwareOrderBy>(),
+                    DefaultSortField: ToCamelCase(nameof(AgentHardwareOrderBy.SiteName)),
                     AllowedSortDirections: ["asc", "desc"],
                     DefaultSortDirection: "asc",
                     Filters:
                     [
-                        new("clientId", "Cliente", "guid", false, "Escopo opcional por cliente."),
-                        new("siteId", "Site", "guid", false, "Escopo opcional por site."),
-                        new("agentId", "Agente", "guid", false, "Escopo opcional por agente."),
-                        new("osName", "Sistema operacional", "text", false, "Filtra por nome do SO."),
-                        new("processor", "Processador", "text", false, "Filtra por processador."),
-                        new("limit", "Limite de linhas", "number", false, "Maximo recomendado: 10000."),
-                        new("orderBy", "Ordenar por", "enum", false, "Campo para ordenacao."),
-                        new("orderDirection", "Direcao", "enum", false, "asc ou desc.")
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID do cliente"),
+                        new("siteId", "Site", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por site.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "clientId", Placeholder: "GUID do site"),
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por agente.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "siteId", Placeholder: "GUID do agente"),
+                        new("osName", "Sistema operacional", ReportFilterFieldType.Text, false, "Filtros", "Filtra por nome do SO.", UiComponent: ReportFilterUiComponent.TextSearch, Placeholder: "Ex.: Windows 11", MaxLength: 150, IsPartialMatch: true),
+                        new("processor", "Processador", ReportFilterFieldType.Text, false, "Filtros", "Filtra por processador.", UiComponent: ReportFilterUiComponent.TextSearch, Placeholder: "Ex.: Intel", MaxLength: 200, IsPartialMatch: true),
+                        new("orderBy", "Ordenar por", ReportFilterFieldType.Enum, false, "Ordenacao", "Campo para ordenacao dos resultados.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: GetEnumNamesAsCamelCase<AgentHardwareOrderBy>(), DefaultValue: ToCamelCase(nameof(AgentHardwareOrderBy.SiteName))),
+                        new("orderDirection", "Direcao", ReportFilterFieldType.Enum, false, "Ordenacao", "Direcao da ordenacao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["asc", "desc"], DefaultValue: "asc"),
+                        new("orientation", "Orientacao", ReportFilterFieldType.Enum, false, "Formatacao", "Orientacao da pagina do relatorio.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["landscape", "portrait"], DefaultValue: "landscape"),
+                        new("limit", "Limite de linhas", ReportFilterFieldType.Integer, false, "Saida", "Maximo recomendado: 10000.", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
                     ],
                     SampleFilterPresets:
                     [
-                        new ReportFilterPreset("Inventario geral", "Visao consolidada de hardware", "{\"limit\":5000,\"orderBy\":\"siteName\",\"orderDirection\":\"asc\"}"),
-                        new ReportFilterPreset("Ultima coleta por cliente", "Escopo por cliente ordenado por coleta", "{\"clientId\":\"<guid>\",\"limit\":3000,\"orderBy\":\"collectedAt\",\"orderDirection\":\"desc\"}")
+                        new ReportFilterPreset("Inventario geral", "Visao consolidada de hardware de todos os agentes", "{\"limit\":5000,\"orderBy\":\"siteName\",\"orderDirection\":\"asc\",\"orientation\":\"landscape\"}"),
+                        new ReportFilterPreset("Por cliente com detalhes", "Inventario detalhado de hardware por cliente, ordenado por hostname", "{\"clientId\":\"<guid>\",\"limit\":3000,\"orderBy\":\"agentHostname\",\"orderDirection\":\"asc\",\"orientation\":\"landscape\"}"),
+                        new ReportFilterPreset("Ultima coleta", "Agentes ordenados por data de coleta mais recente", "{\"limit\":5000,\"orderBy\":\"collectedAt\",\"orderDirection\":\"desc\",\"orientation\":\"landscape\"}")
                     ]))
         };
+    }
+
+    private static string[] GetEnumNamesAsCamelCase<TEnum>() where TEnum : struct, Enum
+    {
+        return Enum.GetNames<TEnum>().Select(ToCamelCase).ToArray();
+    }
+
+    private static string ToCamelCase(string value)
+    {
+        if (string.IsNullOrEmpty(value) || char.IsLower(value[0]))
+            return value;
+
+        return char.ToLowerInvariant(value[0]) + value.Substring(1);
     }
 }
 
@@ -660,8 +787,8 @@ public record ReportDatasetSpecification(
     ReportExecutionSchema ExecutionSchema);
 
 public record ReportExecutionSchema(
-    string Scope,
-    string DateMode,
+    ReportScopeType ScopeType,
+    ReportDateMode DateMode,
     string[] AllowedOrientations,
     string DefaultOrientation,
     string[] AllowedSortFields,
@@ -674,9 +801,20 @@ public record ReportExecutionSchema(
 public record ReportFilterDefinition(
     string Name,
     string Label,
-    string Type,
+    ReportFilterFieldType Type,
     bool Required,
-    string? Description);
+    string? Group,
+    string? Description,
+    ReportFilterUiComponent? UiComponent = null,
+    string? DependsOn = null,
+    string? DefaultValue = null,
+    string? Placeholder = null,
+    string[]? AllowedValues = null,
+    string[]? AllowedValueLabels = null,
+    decimal? Min = null,
+    decimal? Max = null,
+    int? MaxLength = null,
+    bool IsPartialMatch = false);
 
 public record ReportFilterPreset(
     string Name,

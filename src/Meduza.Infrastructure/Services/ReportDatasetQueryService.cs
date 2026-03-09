@@ -42,6 +42,8 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var siteId = GetGuid(filters, "siteId");
         var agentId = GetGuid(filters, "agentId");
         var softwareName = GetString(filters, "softwareName");
+        var orderBy = GetEnum(filters, "orderBy", SoftwareInventoryOrderBy.SoftwareName);
+        var descending = GetSortDescending(filters, defaultValue: false);
 
         var query =
             from inv in _db.AgentSoftwareInventories.AsNoTracking()
@@ -72,9 +74,29 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         if (!string.IsNullOrWhiteSpace(softwareName))
             query = query.Where(x => EF.Functions.ILike(x.SoftwareName, $"%{softwareName}%"));
 
-        var rowsRaw = await query
-            .OrderBy(x => x.SoftwareName)
-            .ThenBy(x => x.AgentHostname)
+        var orderedQuery = orderBy switch
+        {
+            SoftwareInventoryOrderBy.Publisher => descending
+                ? query.OrderByDescending(x => x.Publisher).ThenByDescending(x => x.SoftwareName)
+                : query.OrderBy(x => x.Publisher).ThenBy(x => x.SoftwareName),
+            SoftwareInventoryOrderBy.Version => descending
+                ? query.OrderByDescending(x => x.Version).ThenByDescending(x => x.SoftwareName)
+                : query.OrderBy(x => x.Version).ThenBy(x => x.SoftwareName),
+            SoftwareInventoryOrderBy.LastSeenAt => descending
+                ? query.OrderByDescending(x => x.LastSeenAt).ThenBy(x => x.SoftwareName)
+                : query.OrderBy(x => x.LastSeenAt).ThenBy(x => x.SoftwareName),
+            SoftwareInventoryOrderBy.AgentHostname => descending
+                ? query.OrderByDescending(x => x.AgentHostname).ThenBy(x => x.SoftwareName)
+                : query.OrderBy(x => x.AgentHostname).ThenBy(x => x.SoftwareName),
+            SoftwareInventoryOrderBy.SiteName => descending
+                ? query.OrderByDescending(x => x.SiteName).ThenBy(x => x.SoftwareName)
+                : query.OrderBy(x => x.SiteName).ThenBy(x => x.SoftwareName),
+            _ => descending
+                ? query.OrderByDescending(x => x.SoftwareName).ThenByDescending(x => x.AgentHostname)
+                : query.OrderBy(x => x.SoftwareName).ThenBy(x => x.AgentHostname)
+        };
+
+        var rowsRaw = await orderedQuery
             .Take(limit)
             .ToListAsync(cancellationToken);
 
@@ -106,6 +128,8 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var agentId = GetGuid(filters, "agentId");
         var from = GetDateTime(filters, "from");
         var to = GetDateTime(filters, "to");
+        var orderBy = GetEnum(filters, "orderBy", LogsOrderBy.Timestamp);
+        var descending = GetSortDescending(filters, defaultValue: true);
 
         var query = _db.Logs.AsNoTracking().AsQueryable();
 
@@ -121,8 +145,23 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         if (to.HasValue)
             query = query.Where(x => x.CreatedAt <= to.Value);
 
-        var rowsRaw = await query
-            .OrderByDescending(x => x.CreatedAt)
+        var orderedQuery = orderBy switch
+        {
+            LogsOrderBy.Level => descending
+                ? query.OrderByDescending(x => x.Level).ThenByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.Level).ThenByDescending(x => x.CreatedAt),
+            LogsOrderBy.Source => descending
+                ? query.OrderByDescending(x => x.Source).ThenByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.Source).ThenByDescending(x => x.CreatedAt),
+            LogsOrderBy.Type => descending
+                ? query.OrderByDescending(x => x.Type).ThenByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.Type).ThenByDescending(x => x.CreatedAt),
+            _ => descending
+                ? query.OrderByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.CreatedAt)
+        };
+
+        var rowsRaw = await orderedQuery
             .Take(limit)
             .ToListAsync(cancellationToken);
 
@@ -153,6 +192,8 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var from = GetDateTime(filters, "from");
         var to = GetDateTime(filters, "to");
         var changedBy = GetString(filters, "changedBy");
+        var orderBy = GetEnum(filters, "orderBy", ConfigurationAuditOrderBy.Timestamp);
+        var descending = GetSortDescending(filters, defaultValue: true);
 
         var query = _db.ConfigurationAudits.AsNoTracking().AsQueryable();
 
@@ -163,8 +204,23 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         if (!string.IsNullOrWhiteSpace(changedBy))
             query = query.Where(x => x.ChangedBy == changedBy);
 
-        var rowsRaw = await query
-            .OrderByDescending(x => x.ChangedAt)
+        var orderedQuery = orderBy switch
+        {
+            ConfigurationAuditOrderBy.EntityType => descending
+                ? query.OrderByDescending(x => x.EntityType).ThenByDescending(x => x.ChangedAt)
+                : query.OrderBy(x => x.EntityType).ThenByDescending(x => x.ChangedAt),
+            ConfigurationAuditOrderBy.ChangedBy => descending
+                ? query.OrderByDescending(x => x.ChangedBy).ThenByDescending(x => x.ChangedAt)
+                : query.OrderBy(x => x.ChangedBy).ThenByDescending(x => x.ChangedAt),
+            ConfigurationAuditOrderBy.FieldName => descending
+                ? query.OrderByDescending(x => x.FieldName).ThenByDescending(x => x.ChangedAt)
+                : query.OrderBy(x => x.FieldName).ThenByDescending(x => x.ChangedAt),
+            _ => descending
+                ? query.OrderByDescending(x => x.ChangedAt)
+                : query.OrderBy(x => x.ChangedAt)
+        };
+
+        var rowsRaw = await orderedQuery
             .Take(limit)
             .ToListAsync(cancellationToken);
 
@@ -196,6 +252,8 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var workflowStateId = GetGuid(filters, "workflowStateId");
         var from = GetDateTime(filters, "from");
         var to = GetDateTime(filters, "to");
+        var orderBy = GetEnum(filters, "orderBy", TicketsOrderBy.Timestamp);
+        var descending = GetSortDescending(filters, defaultValue: true);
 
         var query = _db.Tickets.AsNoTracking().Where(x => x.DeletedAt == null);
 
@@ -211,8 +269,23 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         if (to.HasValue)
             query = query.Where(x => x.CreatedAt <= to.Value);
 
-        var rowsRaw = await query
-            .OrderByDescending(x => x.CreatedAt)
+        var orderedQuery = orderBy switch
+        {
+            TicketsOrderBy.Priority => descending
+                ? query.OrderByDescending(x => x.Priority).ThenByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.Priority).ThenByDescending(x => x.CreatedAt),
+            TicketsOrderBy.SlaBreached => descending
+                ? query.OrderByDescending(x => x.SlaBreached).ThenByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.SlaBreached).ThenByDescending(x => x.CreatedAt),
+            TicketsOrderBy.ClosedAt => descending
+                ? query.OrderByDescending(x => x.ClosedAt).ThenByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.ClosedAt).ThenByDescending(x => x.CreatedAt),
+            _ => descending
+                ? query.OrderByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.CreatedAt)
+        };
+
+        var rowsRaw = await orderedQuery
             .Take(limit)
             .ToListAsync(cancellationToken);
 
@@ -244,6 +317,8 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var limit = GetLimit(filters);
         var siteId = GetGuid(filters, "siteId");
         var agentId = GetGuid(filters, "agentId");
+        var orderBy = GetEnum(filters, "orderBy", AgentHardwareOrderBy.SiteName);
+        var descending = GetSortDescending(filters, defaultValue: false);
 
         var query =
             from hw in _db.AgentHardwareInfos.AsNoTracking()
@@ -256,11 +331,31 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
                 SiteName = st.Name,
                 AgentId = ag.Id,
                 AgentHostname = ag.Hostname,
+                // OS
                 hw.OsName,
                 hw.OsVersion,
+                hw.OsBuild,
+                hw.OsArchitecture,
+                // Processador
                 hw.Processor,
+                hw.ProcessorCores,
+                hw.ProcessorThreads,
+                hw.ProcessorArchitecture,
+                // Memória
                 hw.TotalMemoryBytes,
-                hw.CollectedAt
+                // Placa-mãe
+                hw.Manufacturer,
+                hw.Model,
+                hw.SerialNumber,
+                hw.MotherboardManufacturer,
+                hw.MotherboardModel,
+                hw.MotherboardSerialNumber,
+                // BIOS
+                hw.BiosVersion,
+                hw.BiosManufacturer,
+                // Metadata
+                hw.CollectedAt,
+                hw.InventorySchemaVersion
             };
 
         if (siteId.HasValue)
@@ -268,30 +363,62 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         if (agentId.HasValue)
             query = query.Where(x => x.AgentId == agentId.Value);
 
-        var rowsRaw = await query
-            .OrderBy(x => x.SiteName)
-            .ThenBy(x => x.AgentHostname)
+        var orderedQuery = orderBy switch
+        {
+            AgentHardwareOrderBy.AgentHostname => descending
+                ? query.OrderByDescending(x => x.AgentHostname).ThenBy(x => x.SiteName)
+                : query.OrderBy(x => x.AgentHostname).ThenBy(x => x.SiteName),
+            AgentHardwareOrderBy.CollectedAt => descending
+                ? query.OrderByDescending(x => x.CollectedAt).ThenBy(x => x.SiteName)
+                : query.OrderBy(x => x.CollectedAt).ThenBy(x => x.SiteName),
+            AgentHardwareOrderBy.OsName => descending
+                ? query.OrderByDescending(x => x.OsName).ThenBy(x => x.SiteName)
+                : query.OrderBy(x => x.OsName).ThenBy(x => x.SiteName),
+            _ => descending
+                ? query.OrderByDescending(x => x.SiteName).ThenByDescending(x => x.AgentHostname)
+                : query.OrderBy(x => x.SiteName).ThenBy(x => x.AgentHostname)
+        };
+
+        var rowsRaw = await orderedQuery
             .Take(limit)
             .ToListAsync(cancellationToken);
 
         var rows = rowsRaw
             .Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
             {
-                ["siteId"] = x.SiteId,
                 ["siteName"] = x.SiteName,
-                ["agentId"] = x.AgentId,
                 ["agentHostname"] = x.AgentHostname,
+                // OS Info
                 ["osName"] = x.OsName,
                 ["osVersion"] = x.OsVersion,
+                ["osBuild"] = x.OsBuild,
+                ["osArchitecture"] = x.OsArchitecture,
+                // Processor Info
                 ["processor"] = x.Processor,
+                ["processorCores"] = x.ProcessorCores,
+                ["processorThreads"] = x.ProcessorThreads,
+                ["processorArchitecture"] = x.ProcessorArchitecture,
+                // Memory Info
+                ["totalMemoryGB"] = x.TotalMemoryBytes.HasValue ? decimal.Round(x.TotalMemoryBytes.Value / 1024m / 1024m / 1024m, 2) : (object?)null,
                 ["totalMemoryBytes"] = x.TotalMemoryBytes,
+                // Motherboard Info
+                ["manufacturer"] = x.Manufacturer,
+                ["model"] = x.Model,
+                ["serialNumber"] = x.SerialNumber,
+                ["motherboardManufacturer"] = x.MotherboardManufacturer,
+                ["motherboardModel"] = x.MotherboardModel,
+                ["motherboardSerialNumber"] = x.MotherboardSerialNumber,
+                // BIOS Info
+                ["biosVersion"] = x.BiosVersion,
+                ["biosManufacturer"] = x.BiosManufacturer,
+                // Metadata
                 ["collectedAt"] = x.CollectedAt
             })
             .ToList();
 
         return new ReportQueryResult
         {
-            Columns = ["siteId", "siteName", "agentId", "agentHostname", "osName", "osVersion", "processor", "totalMemoryBytes", "collectedAt"],
+            Columns = ["siteName", "agentHostname", "osName", "osVersion", "osBuild", "osArchitecture", "processor", "processorCores", "processorThreads", "processorArchitecture", "totalMemoryGB", "motherboardManufacturer", "motherboardModel", "biosVersion", "biosManufacturer", "collectedAt"],
             Rows = rows
         };
     }
@@ -348,5 +475,23 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
     {
         var value = GetString(filters, property);
         return DateTime.TryParse(value, out var dateTime) ? dateTime : null;
+    }
+
+    private static bool GetSortDescending(JsonElement filters, bool defaultValue)
+    {
+        var direction = GetString(filters, "orderDirection");
+        if (string.IsNullOrWhiteSpace(direction))
+            return defaultValue;
+
+        return direction.Equals("desc", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static TEnum GetEnum<TEnum>(JsonElement filters, string property, TEnum defaultValue) where TEnum : struct, Enum
+    {
+        var value = GetString(filters, property);
+        if (string.IsNullOrWhiteSpace(value))
+            return defaultValue;
+
+        return Enum.TryParse<TEnum>(value, ignoreCase: true, out var result) ? result : defaultValue;
     }
 }

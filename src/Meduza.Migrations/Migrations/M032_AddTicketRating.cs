@@ -13,7 +13,8 @@ public class M032_AddTicketRating : Migration
             .AddColumn("rated_at").AsCustom("timestamptz").Nullable()
             .AddColumn("rated_by").AsString(255).Nullable();
 
-        // Adiciona check constraint para garantir que rating seja 0-5
+        // CHECK constraint permanece em SQL porque no FluentMigrator 8.0.1
+        // não há API fluente equivalente para criação/remoção deste tipo de constraint.
         Execute.Sql(@"
             ALTER TABLE tickets 
             ADD CONSTRAINT chk_tickets_rating 
@@ -28,6 +29,7 @@ public class M032_AddTicketRating : Migration
 
     public override void Down()
     {
+        // Mantém SQL direto para remover o CHECK, pelo mesmo motivo da criação no Up.
         Execute.Sql("ALTER TABLE tickets DROP CONSTRAINT IF EXISTS chk_tickets_rating");
         Delete.Index("ix_tickets_rating").OnTable("tickets");
         Delete.Column("rating").FromTable("tickets");

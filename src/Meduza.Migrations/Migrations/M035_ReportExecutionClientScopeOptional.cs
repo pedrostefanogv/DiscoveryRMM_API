@@ -24,7 +24,8 @@ public class M035_ReportExecutionClientScopeOptional : Migration
     {
         Delete.ForeignKey("FK_report_executions_client_id_clients_id").OnTable("report_executions");
 
-        Execute.Sql("DELETE FROM report_executions WHERE client_id IS NULL;");
+        Delete.FromTable("report_executions")
+            .Row(new { client_id = (Guid?)null });
 
         Alter.Table("report_executions")
             .AlterColumn("client_id")
