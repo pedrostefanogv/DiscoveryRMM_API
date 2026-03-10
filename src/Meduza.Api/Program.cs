@@ -85,6 +85,21 @@ builder.Services.AddScoped<ILoggingService, LoggingService>();
 builder.Services.AddScoped<ISlaService, SlaService>();
 builder.Services.AddScoped<IActivityLogService, ActivityLogService>();
 
+// AI Chat & MCP
+// Validação de API Key OpenAI
+var openAiKey = builder.Configuration["OpenAI:ApiKey"];
+if (string.IsNullOrEmpty(openAiKey) && !builder.Environment.IsDevelopment())
+{
+    throw new InvalidOperationException(
+        "CRITICAL: OpenAI:ApiKey must be set in production environment (env var OPENAI__APIKEY)");
+}
+
+builder.Services.AddSingleton<ILlmProvider, OpenAiProvider>();
+builder.Services.AddScoped<IAiChatService, AiChatService>();
+builder.Services.AddScoped<IAiChatSessionRepository, AiChatSessionRepository>();
+builder.Services.AddScoped<IAiChatMessageRepository, AiChatMessageRepository>();
+builder.Services.AddScoped<IAiChatJobRepository, AiChatJobRepository>();
+
 // IMemoryCache (para ConfigurationResolver)
 builder.Services.AddMemoryCache();
 
@@ -129,6 +144,7 @@ builder.Services.AddHostedService<LogPurgeBackgroundService>();
 builder.Services.AddHostedService<SlaMonitoringBackgroundService>();
 builder.Services.AddHostedService<ReportGenerationBackgroundService>();
 builder.Services.AddHostedService<ReportRetentionBackgroundService>();
+builder.Services.AddHostedService<AiChatRetentionBackgroundService>();
 
 //  Controllers + JSON config
 builder.Services.AddControllers(options =>

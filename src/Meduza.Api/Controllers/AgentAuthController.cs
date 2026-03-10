@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
@@ -21,6 +22,7 @@ public class AgentAuthController : ControllerBase
     private readonly ISiteRepository _siteRepo;
     private readonly ISlaService _slaService;
     private readonly IActivityLogService _activityLogService;
+    private readonly IAiChatService _aiChatService;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
@@ -33,7 +35,8 @@ public class AgentAuthController : ControllerBase
         IWorkflowProfileRepository workflowProfileRepo,
         ISiteRepository siteRepo,
         ISlaService slaService,
-        IActivityLogService activityLogService)
+        IActivityLogService activityLogService,
+        IAiChatService aiChatService)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -46,6 +49,7 @@ public class AgentAuthController : ControllerBase
         _siteRepo = siteRepo;
         _slaService = slaService;
         _activityLogService = activityLogService;
+        _aiChatService = aiChatService;
     }
 
     [HttpGet("me")]
@@ -654,6 +658,93 @@ public class AgentAuthController : ControllerBase
             ticket = updatedTicket,
             rating = request.Rating
         });
+    }
+
+    /// <summary>
+    /// Chat síncrono com IA (respostas curtas, < 5s)
+    /// </summary>
+    [HttpPost("me/ai-chat")]
+    public async Task<IActionResult> ChatSync([FromBody] AgentChatRequest request, CancellationToken ct)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        try
+        {
+            var response = await _aiChatService.ProcessSyncAsync(
+                agentId, 
+                request.Message, 
+                request.SessionId, 
+                ct);
+            return Ok(response);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (OperationCanceledException)
+        {
+            return StatusCode(408, new { error = "Request timeout" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = "Internal error processing chat request" });
+        }
+    }
+
+    /// <summary>
+    /// Chat assíncrono com IA (respostas longas, processamento em background)
+    /// </summary>
+    [HttpPost("me/ai-chat/async")]
+    public async Task<IActionResult> ChatAsync([FromBody] AgentChatAsyncRequest request, CancellationToken ct)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        try
+        {
+            var jobId = await _aiChatService.ProcessAsyncAsync(
+                agentId, 
+                request.Message, 
+                request.SessionId, 
+                ct);
+            return Accepted(new 
+            { 
+                jobId, 
+                statusUrl = $"/api/agent-auth/me/ai-chat/jobs/{jobId}" 
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = "Internal error creating async chat job" });
+        }
+    }
+
+    /// <summary>
+    /// Consulta status de job assíncrono de chat
+    /// </summary>
+    [HttpGet("me/ai-chat/jobs/{jobId}")]
+    public async Task<IActionResult> GetJobStatus(Guid jobId, CancellationToken ct)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        try
+        {
+            var status = await _aiChatService.GetJobStatusAsync(jobId, agentId, ct);
+            if (status == null)
+                return NotFound(new { error = "Job not found or unauthorized" });
+            
+            return Ok(status);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = "Internal error retrieving job status" });
+        }
     }
 
     private bool TryGetAuthenticatedAgentId(out Guid agentId)

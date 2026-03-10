@@ -219,8 +219,21 @@ public class LoggingService : ILoggingService
         // Remove padrões de senha/token
         sanitized = System.Text.RegularExpressions.Regex.Replace(
             sanitized,
-            @"(password|passwd|pwd|token|auth|secret|key|api_key)[\s]*[:=][\s]*[^\s]+",
+            @"(password|passwd|pwd|token|auth|secret|key|api_key|apikey|authorization|bearer)[\s]*[:=][\s]*[^\s&]+",
             "$1=[REDACTED]",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        // Remove padrões OpenAI específicos (sk-proj-, sk-)
+        sanitized = System.Text.RegularExpressions.Regex.Replace(
+            sanitized,
+            @"sk-proj-[a-zA-Z0-9_-]+",
+            "sk-proj-[REDACTED]",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        sanitized = System.Text.RegularExpressions.Regex.Replace(
+            sanitized,
+            @"sk-[a-zA-Z0-9]{48,}",
+            "sk-[REDACTED]",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         return sanitized;

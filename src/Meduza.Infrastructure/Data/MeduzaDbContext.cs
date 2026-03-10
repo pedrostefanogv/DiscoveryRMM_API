@@ -36,6 +36,12 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<ReportTemplateHistory> ReportTemplateHistories => Set<ReportTemplateHistory>();
     public DbSet<ReportExecution> ReportExecutions => Set<ReportExecution>();
     public DbSet<AppNotification> AppNotifications => Set<AppNotification>();
+    
+    // AI Chat & MCP
+    public DbSet<AiChatSession> AiChatSessions => Set<AiChatSession>();
+    public DbSet<AiChatMessage> AiChatMessages => Set<AiChatMessage>();
+    public DbSet<AiChatJob> AiChatJobs => Set<AiChatJob>();
+    public DbSet<McpToolPolicy> McpToolPolicies => Set<McpToolPolicy>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
