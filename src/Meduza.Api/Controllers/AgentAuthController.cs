@@ -23,6 +23,7 @@ public class AgentAuthController : ControllerBase
     private readonly ISlaService _slaService;
     private readonly IActivityLogService _activityLogService;
     private readonly IAiChatService _aiChatService;
+    private readonly IAppStoreService _appStoreService;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
@@ -36,7 +37,8 @@ public class AgentAuthController : ControllerBase
         ISiteRepository siteRepo,
         ISlaService slaService,
         IActivityLogService activityLogService,
-        IAiChatService aiChatService)
+        IAiChatService aiChatService,
+        IAppStoreService appStoreService)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -50,6 +52,7 @@ public class AgentAuthController : ControllerBase
         _slaService = slaService;
         _activityLogService = activityLogService;
         _aiChatService = aiChatService;
+        _appStoreService = appStoreService;
     }
 
     [HttpGet("me")]
@@ -100,6 +103,35 @@ public class AgentAuthController : ControllerBase
 
         var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
         return Ok(resolved);
+    }
+
+    [HttpGet("me/app-store")]
+    public async Task<IActionResult> GetAppStoreEffective(
+        [FromQuery] AppInstallationType installationType = AppInstallationType.Winget,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null) return NotFound();
+
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null) return NotFound(new { error = "Site not found for this agent." });
+
+        var effective = await _appStoreService.GetEffectiveAppsAsync(
+            site.ClientId,
+            site.Id,
+            agent.Id,
+            installationType,
+            cancellationToken);
+
+        return Ok(new
+        {
+            installationType,
+            count = effective.Count,
+            items = effective
+        });
     }
 
     [HttpGet("me/hardware")]

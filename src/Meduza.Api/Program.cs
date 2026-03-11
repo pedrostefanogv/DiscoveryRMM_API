@@ -72,6 +72,8 @@ builder.Services.AddScoped<IServerConfigurationRepository, ServerConfigurationRe
 builder.Services.AddScoped<IClientConfigurationRepository, ClientConfigurationRepository>();
 builder.Services.AddScoped<ISiteConfigurationRepository, SiteConfigurationRepository>();
 builder.Services.AddScoped<IConfigurationAuditRepository, ConfigurationAuditRepository>();
+builder.Services.AddScoped<IAppApprovalRuleRepository, AppApprovalRuleRepository>();
+builder.Services.AddScoped<IAppApprovalAuditRepository, AppApprovalAuditRepository>();
 
 // Services
 builder.Services.AddScoped<IConfigurationAuditService, ConfigurationAuditService>();
@@ -84,6 +86,9 @@ builder.Services.AddScoped<ILoggingService, LoggingService>();
 // New services for tickets enhancement (SLA, ActivityLog)
 builder.Services.AddScoped<ISlaService, SlaService>();
 builder.Services.AddScoped<IActivityLogService, ActivityLogService>();
+builder.Services.AddScoped<IAppStoreService, AppStoreService>();
+builder.Services.AddScoped<IAppApprovalAuditService, AppApprovalAuditService>();
+builder.Services.AddHttpClient();
 
 // AI Chat & MCP
 // Validação de API Key OpenAI

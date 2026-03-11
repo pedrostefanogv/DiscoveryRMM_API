@@ -42,6 +42,8 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<AiChatMessage> AiChatMessages => Set<AiChatMessage>();
     public DbSet<AiChatJob> AiChatJobs => Set<AiChatJob>();
     public DbSet<McpToolPolicy> McpToolPolicies => Set<McpToolPolicy>();
+    public DbSet<AppApprovalRule> AppApprovalRules => Set<AppApprovalRule>();
+    public DbSet<AppApprovalAudit> AppApprovalAudits => Set<AppApprovalAudit>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -1410,6 +1412,125 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(notification => notification.CreatedBy)
                 .HasColumnName("created_by")
                 .HasMaxLength(256);
+        });
+
+        modelBuilder.Entity<AppApprovalRule>(entity =>
+        {
+            entity.ToTable("app_approval_rules");
+            entity.HasKey(rule => rule.Id);
+            entity.HasIndex(rule => new
+                {
+                    rule.ScopeType,
+                    rule.ClientId,
+                    rule.SiteId,
+                    rule.AgentId,
+                    rule.InstallationType,
+                    rule.PackageId
+                })
+                .HasDatabaseName("ux_app_approval_rules_unique")
+                .IsUnique();
+
+            entity.Property(rule => rule.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(rule => rule.ScopeType)
+                .HasColumnName("scope_type")
+                .HasConversion<int>();
+            entity.Property(rule => rule.ClientId)
+                .HasColumnName("client_id");
+            entity.Property(rule => rule.SiteId)
+                .HasColumnName("site_id");
+            entity.Property(rule => rule.AgentId)
+                .HasColumnName("agent_id");
+            entity.Property(rule => rule.InstallationType)
+                .HasColumnName("installation_type")
+                .HasConversion<int>();
+            entity.Property(rule => rule.PackageId)
+                .HasColumnName("package_id")
+                .HasMaxLength(300);
+            entity.Property(rule => rule.Action)
+                .HasColumnName("action")
+                .HasConversion<int>();
+            entity.Property(rule => rule.AutoUpdateEnabled)
+                .HasColumnName("auto_update_enabled");
+            entity.Property(rule => rule.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(rule => rule.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Client>()
+                .WithMany()
+                .HasForeignKey(rule => rule.ClientId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Site>()
+                .WithMany()
+                .HasForeignKey(rule => rule.SiteId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(rule => rule.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AppApprovalAudit>(entity =>
+        {
+            entity.ToTable("app_approval_audits");
+            entity.HasKey(audit => audit.Id);
+            entity.HasIndex(audit => new { audit.InstallationType, audit.PackageId, audit.ChangedAt })
+                .HasDatabaseName("ix_app_approval_audits_package_changed");
+
+            entity.Property(audit => audit.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(audit => audit.RuleId)
+                .HasColumnName("rule_id");
+            entity.Property(audit => audit.ChangeType)
+                .HasColumnName("change_type")
+                .HasConversion<int>();
+            entity.Property(audit => audit.ScopeType)
+                .HasColumnName("scope_type")
+                .HasConversion<int>();
+            entity.Property(audit => audit.ClientId)
+                .HasColumnName("client_id");
+            entity.Property(audit => audit.SiteId)
+                .HasColumnName("site_id");
+            entity.Property(audit => audit.AgentId)
+                .HasColumnName("agent_id");
+            entity.Property(audit => audit.InstallationType)
+                .HasColumnName("installation_type")
+                .HasConversion<int>();
+            entity.Property(audit => audit.PackageId)
+                .HasColumnName("package_id")
+                .HasMaxLength(300);
+            entity.Property(audit => audit.OldAction)
+                .HasColumnName("old_action")
+                .HasConversion<int?>();
+            entity.Property(audit => audit.NewAction)
+                .HasColumnName("new_action")
+                .HasConversion<int?>();
+            entity.Property(audit => audit.OldAutoUpdateEnabled)
+                .HasColumnName("old_auto_update_enabled");
+            entity.Property(audit => audit.NewAutoUpdateEnabled)
+                .HasColumnName("new_auto_update_enabled");
+            entity.Property(audit => audit.Reason)
+                .HasColumnName("reason")
+                .HasMaxLength(2000);
+            entity.Property(audit => audit.ChangedBy)
+                .HasColumnName("changed_by")
+                .HasMaxLength(256);
+            entity.Property(audit => audit.IpAddress)
+                .HasColumnName("ip_address")
+                .HasMaxLength(64);
+            entity.Property(audit => audit.ChangedAt)
+                .HasColumnName("changed_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<AppApprovalRule>()
+                .WithMany()
+                .HasForeignKey(audit => audit.RuleId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
     }
 
