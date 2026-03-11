@@ -73,3 +73,23 @@ public class EffectiveApprovedAppPageDto
     public bool HasMore { get; set; }
     public IReadOnlyList<EffectiveApprovedAppDto> Items { get; set; } = [];
 }
+
+public class ChocolateySyncResultDto
+{
+    public bool Success { get; set; }
+    public int PackagesUpserted { get; set; }
+    public int PagesProcessed { get; set; }
+    public DateTime SyncedAt { get; set; }
+    public TimeSpan Duration { get; set; }
+    public string? Error { get; set; }
+}
+
+public class WingetSyncResultDto
+{
+    public bool Success { get; set; }
+    public int PackagesUpserted { get; set; }
+    public DateTime SyncedAt { get; set; }
+    public DateTime? SourceGeneratedAt { get; set; }
+    public TimeSpan Duration { get; set; }
+    public string? Error { get; set; }
+}

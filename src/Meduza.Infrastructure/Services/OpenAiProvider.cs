@@ -1,5 +1,4 @@
 using Meduza.Core.Interfaces;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Net.Http.Headers;
 using System.Text;
@@ -11,24 +10,17 @@ namespace Meduza.Infrastructure.Services;
 public class OpenAiProvider : ILlmProvider
 {
     private readonly HttpClient _httpClient;
-    private readonly string _apiKey;
-    private readonly string _model;
     private readonly ILogger<OpenAiProvider> _logger;
 
-    public OpenAiProvider(IConfiguration config, ILogger<OpenAiProvider> logger)
+    private const string DefaultBaseUrl = "https://api.openai.com/v1/";
+
+    public OpenAiProvider(ILogger<OpenAiProvider> logger)
     {
-        _apiKey = config["OpenAI:ApiKey"] 
-            ?? throw new InvalidOperationException("OpenAI:ApiKey not configured in environment");
-        _model = config["OpenAI:Model"] ?? "gpt-4-turbo";
-        
-        var timeoutSeconds = int.TryParse(config["OpenAI:TimeoutSeconds"], out var timeout) ? timeout : 30;
-        
         _httpClient = new HttpClient
         {
-            BaseAddress = new Uri("https://api.openai.com/v1/"),
-            Timeout = TimeSpan.FromSeconds(timeoutSeconds)
+            BaseAddress = new Uri(DefaultBaseUrl),
+            Timeout = TimeSpan.FromSeconds(30)
         };
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
         _logger = logger;
     }
 
@@ -40,10 +32,20 @@ public class OpenAiProvider : ILlmProvider
     {
         try
         {
+            var model = options.Model;
+            if (string.IsNullOrWhiteSpace(model))
+                throw new InvalidOperationException("Modelo de IA não definido no banco para o escopo atual.");
+
+            var apiKey = options.ApiKey;
+            if (string.IsNullOrWhiteSpace(apiKey))
+                throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
+
+            var baseUrl = string.IsNullOrWhiteSpace(options.BaseUrl) ? DefaultBaseUrl : options.BaseUrl;
+
             // IMPORTANTE: NUNCA logar _apiKey
             _logger.LogInformation(
                 "Calling OpenAI with {MessageCount} messages, maxTokens={MaxTokens}, model={Model}", 
-                messages.Count, options.MaxTokens, _model);
+                messages.Count, options.MaxTokens, model);
 
             // Preparar mensagens no formato OpenAI
             var openAiMessages = new List<object>
@@ -75,7 +77,7 @@ public class OpenAiProvider : ILlmProvider
             // Montar payload
             var payload = new
             {
-                model = _model,
+                model,
                 messages = openAiMessages,
                 max_tokens = options.MaxTokens,
                 temperature = options.Temperature,
@@ -101,7 +103,14 @@ public class OpenAiProvider : ILlmProvider
                 Encoding.UTF8,
                 "application/json");
 
-            var response = await _httpClient.PostAsync("chat/completions", content, cancellationToken);
+            var requestUri = new Uri(new Uri(baseUrl), "chat/completions");
+            using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+            {
+                Content = content
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+            var response = await _httpClient.SendAsync(request, cancellationToken);
             
             if (!response.IsSuccessStatusCode)
             {

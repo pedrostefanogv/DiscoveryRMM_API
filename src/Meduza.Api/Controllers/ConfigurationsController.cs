@@ -40,7 +40,7 @@ public class ConfigurationsController : ControllerBase
     public async Task<IActionResult> GetServer()
     {
         var config = await _configService.GetServerConfigAsync();
-        return Ok(config);
+        return Ok(SanitizeServerConfiguration(config));
     }
 
     [HttpPut("server")]
@@ -51,7 +51,7 @@ public class ConfigurationsController : ControllerBase
 
         var updated = await _configService.UpdateServerAsync(config,
             HttpContext.Items["Username"] as string ?? "api");
-        return Ok(updated);
+        return Ok(SanitizeServerConfiguration(updated));
     }
 
     [HttpPatch("server")]
@@ -59,7 +59,7 @@ public class ConfigurationsController : ControllerBase
     {
         var updated = await _configService.PatchServerAsync(updates,
             HttpContext.Items["Username"] as string ?? "api");
-        return Ok(updated);
+        return Ok(SanitizeServerConfiguration(updated));
     }
 
     [HttpPost("server/reset")]
@@ -67,7 +67,7 @@ public class ConfigurationsController : ControllerBase
     {
         var reset = await _configService.ResetServerAsync(
             HttpContext.Items["Username"] as string ?? "api");
-        return Ok(reset);
+        return Ok(SanitizeServerConfiguration(reset));
     }
 
     [HttpGet("server/metadata")]
@@ -223,7 +223,7 @@ public class ConfigurationsController : ControllerBase
 
         var updated = await _configService.UpdateClientAsync(clientId, config,
             HttpContext.Items["Username"] as string ?? "api");
-        return Ok(updated);
+        return Ok(SanitizeClientConfiguration(updated));
     }
 
     [HttpPatch("clients/{clientId:guid}")]
@@ -231,7 +231,7 @@ public class ConfigurationsController : ControllerBase
     {
         var updated = await _configService.PatchClientAsync(clientId, updates,
             HttpContext.Items["Username"] as string ?? "api");
-        return Ok(updated);
+        return Ok(SanitizeClientConfiguration(updated));
     }
 
     [HttpDelete("clients/{clientId:guid}")]
@@ -265,7 +265,7 @@ public class ConfigurationsController : ControllerBase
         try
         {
             var resolved = await _resolver.ResolveForSiteAsync(siteId);
-            return Ok(resolved);
+            return Ok(SanitizeResolvedConfiguration(resolved));
         }
         catch (InvalidOperationException ex)
         {
@@ -279,7 +279,7 @@ public class ConfigurationsController : ControllerBase
         try
         {
             var resolved = await _resolver.ResolveForSiteAsync(siteId);
-            return Ok(resolved);
+            return Ok(SanitizeResolvedConfiguration(resolved));
         }
         catch (InvalidOperationException ex)
         {
@@ -368,7 +368,7 @@ public class ConfigurationsController : ControllerBase
         {
             var updated = await _configService.UpdateSiteAsync(siteId, config,
                 HttpContext.Items["Username"] as string ?? "api");
-            return Ok(updated);
+            return Ok(SanitizeSiteConfiguration(updated));
         }
         catch (InvalidOperationException ex)
         {
@@ -383,7 +383,7 @@ public class ConfigurationsController : ControllerBase
         {
             var updated = await _configService.PatchSiteAsync(siteId, updates,
                 HttpContext.Items["Username"] as string ?? "api");
-            return Ok(updated);
+            return Ok(SanitizeSiteConfiguration(updated));
         }
         catch (InvalidOperationException ex)
         {
@@ -479,6 +479,7 @@ public class ConfigurationsController : ControllerBase
         var ai = DeserializeOrDefault<AIIntegrationSettings>(client?.AIIntegrationSettingsJson)
             ?? DeserializeOrDefault<AIIntegrationSettings>(server.AIIntegrationSettingsJson)
             ?? new AIIntegrationSettings();
+        ai.ApiKey = null;
 
         return new
         {
@@ -529,6 +530,50 @@ public class ConfigurationsController : ControllerBase
         catch
         {
             return null;
+        }
+    }
+
+    private static ServerConfiguration SanitizeServerConfiguration(ServerConfiguration config)
+    {
+        config.AIIntegrationSettingsJson = SanitizeAiJson(config.AIIntegrationSettingsJson);
+        return config;
+    }
+
+    private static ClientConfiguration SanitizeClientConfiguration(ClientConfiguration config)
+    {
+        config.AIIntegrationSettingsJson = SanitizeAiJson(config.AIIntegrationSettingsJson);
+        return config;
+    }
+
+    private static SiteConfiguration SanitizeSiteConfiguration(SiteConfiguration config)
+    {
+        config.AIIntegrationSettingsJson = SanitizeAiJson(config.AIIntegrationSettingsJson);
+        return config;
+    }
+
+    private static ResolvedConfiguration SanitizeResolvedConfiguration(ResolvedConfiguration config)
+    {
+        if (config.AIIntegration is not null)
+            config.AIIntegration.ApiKey = null;
+        return config;
+    }
+
+    private static string SanitizeAiJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return string.Empty;
+
+        try
+        {
+            var ai = JsonSerializer.Deserialize<AIIntegrationSettings>(json, JsonSerializerOptions.Web);
+            if (ai is null)
+                return json;
+            ai.ApiKey = null;
+            return JsonSerializer.Serialize(ai, JsonSerializerOptions.Web);
+        }
+        catch
+        {
+            return json;
         }
     }
 

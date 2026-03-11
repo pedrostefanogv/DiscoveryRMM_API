@@ -32,7 +32,11 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
     ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
 
 builder.Services.AddDbContext<MeduzaDbContext>(options =>
-    options.UseNpgsql(connectionString, npgsqlOptions => npgsqlOptions.EnableRetryOnFailure()));
+    options.UseNpgsql(connectionString, npgsqlOptions =>
+    {
+        npgsqlOptions.EnableRetryOnFailure();
+        npgsqlOptions.UseVector();
+    }));
 
 // Repositories
 builder.Services.AddScoped<IClientRepository, ClientRepository>();
@@ -74,6 +78,8 @@ builder.Services.AddScoped<ISiteConfigurationRepository, SiteConfigurationReposi
 builder.Services.AddScoped<IConfigurationAuditRepository, ConfigurationAuditRepository>();
 builder.Services.AddScoped<IAppApprovalRuleRepository, AppApprovalRuleRepository>();
 builder.Services.AddScoped<IAppApprovalAuditRepository, AppApprovalAuditRepository>();
+builder.Services.AddScoped<IChocolateyPackageRepository, ChocolateyPackageRepository>();
+builder.Services.AddScoped<IWingetPackageRepository, WingetPackageRepository>();
 
 // Services
 builder.Services.AddScoped<IConfigurationAuditService, ConfigurationAuditService>();
@@ -88,22 +94,26 @@ builder.Services.AddScoped<ISlaService, SlaService>();
 builder.Services.AddScoped<IActivityLogService, ActivityLogService>();
 builder.Services.AddScoped<IAppStoreService, AppStoreService>();
 builder.Services.AddScoped<IAppApprovalAuditService, AppApprovalAuditService>();
+builder.Services.AddScoped<IChocolateyPackageSyncService, ChocolateyPackageSyncService>();
+builder.Services.AddScoped<IWingetPackageSyncService, WingetPackageSyncService>();
+builder.Services.AddSingleton<ChocolateyApiClient>();
+builder.Services.AddSingleton<WingetFeedClient>();
 builder.Services.AddHttpClient();
 
 // AI Chat & MCP
-// Validação de API Key OpenAI
-var openAiKey = builder.Configuration["OpenAI:ApiKey"];
-if (string.IsNullOrEmpty(openAiKey) && !builder.Environment.IsDevelopment())
-{
-    throw new InvalidOperationException(
-        "CRITICAL: OpenAI:ApiKey must be set in production environment (env var OPENAI__APIKEY)");
-}
-
 builder.Services.AddSingleton<ILlmProvider, OpenAiProvider>();
 builder.Services.AddScoped<IAiChatService, AiChatService>();
 builder.Services.AddScoped<IAiChatSessionRepository, AiChatSessionRepository>();
 builder.Services.AddScoped<IAiChatMessageRepository, AiChatMessageRepository>();
 builder.Services.AddScoped<IAiChatJobRepository, AiChatJobRepository>();
+
+// Knowledge Base
+builder.Services.AddScoped<IKnowledgeArticleRepository, KnowledgeArticleRepository>();
+builder.Services.AddScoped<IKnowledgeChunkRepository, KnowledgeChunkRepository>();
+builder.Services.AddScoped<IEmbeddingProvider, OpenAiEmbeddingProvider>();
+builder.Services.AddScoped<IKnowledgeChunkingService, KnowledgeChunkingService>();
+builder.Services.AddScoped<IKnowledgeMcpTool, KnowledgeMcpTool>();
+builder.Services.AddHostedService<KnowledgeEmbeddingBackgroundService>();
 
 // IMemoryCache (para ConfigurationResolver)
 builder.Services.AddMemoryCache();

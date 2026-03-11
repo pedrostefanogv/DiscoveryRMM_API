@@ -3,26 +3,47 @@ using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace Meduza.Infrastructure.Repositories;
 
 public class AgentHardwareRepository : IAgentHardwareRepository
 {
     private readonly MeduzaDbContext _db;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public AgentHardwareRepository(MeduzaDbContext db) => _db = db;
 
     public async Task<AgentHardwareInfo?> GetByAgentIdAsync(Guid agentId)
     {
-                return await _db.AgentHardwareInfos
-                        .AsNoTracking()
-                        .SingleOrDefaultAsync(info => info.AgentId == agentId);
+        return await _db.AgentHardwareInfos
+            .AsNoTracking()
+            .SingleOrDefaultAsync(info => info.AgentId == agentId);
     }
 
-    public async Task UpsertAsync(AgentHardwareInfo hardware)
+    public async Task<AgentHardwareComponents> GetComponentsAsync(Guid agentId)
     {
-        hardware.UpdatedAt = DateTime.UtcNow;
-        hardware.CollectedAt = DateTime.UtcNow;
+        var json = await _db.AgentHardwareInfos
+            .AsNoTracking()
+            .Where(info => info.AgentId == agentId)
+            .Select(info => info.HardwareComponentsJson)
+            .SingleOrDefaultAsync();
+
+        return DeserializeComponents(json) ?? new AgentHardwareComponents();
+    }
+
+    public async Task UpsertAsync(AgentHardwareInfo hardware, AgentHardwareComponents? components = null)
+    {
+        var now = DateTime.UtcNow;
+        hardware.UpdatedAt = now;
+        hardware.CollectedAt = now;
+        hardware.TotalDisksCount = components?.Disks.Count;
+
+        if (components is not null)
+            hardware.HardwareComponentsJson = JsonSerializer.Serialize(components, JsonOptions);
 
         var existing = await _db.AgentHardwareInfos
             .SingleOrDefaultAsync(info => info.AgentId == hardware.AgentId);
@@ -52,90 +73,29 @@ public class AgentHardwareRepository : IAgentHardwareRepository
             existing.OsBuild = hardware.OsBuild;
             existing.OsArchitecture = hardware.OsArchitecture;
             existing.InventoryRaw = hardware.InventoryRaw;
+            existing.HardwareComponentsJson = hardware.HardwareComponentsJson;
             existing.InventorySchemaVersion = hardware.InventorySchemaVersion;
             existing.InventoryCollectedAt = hardware.InventoryCollectedAt;
             existing.CollectedAt = hardware.CollectedAt;
             existing.UpdatedAt = hardware.UpdatedAt;
+            existing.TotalDisksCount = hardware.TotalDisksCount;
         }
 
         await _db.SaveChangesAsync();
     }
 
-    public async Task<IEnumerable<DiskInfo>> GetDisksAsync(Guid agentId)
+    private static AgentHardwareComponents? DeserializeComponents(string? json)
     {
-        return await _db.DiskInfos
-            .AsNoTracking()
-            .Where(disk => disk.AgentId == agentId)
-            .ToListAsync();
-    }
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
 
-    public async Task ReplaceDiskInfoAsync(Guid agentId, IEnumerable<DiskInfo> disks)
-    {
-        await _db.DiskInfos
-            .Where(disk => disk.AgentId == agentId)
-            .ExecuteDeleteAsync();
-
-        var now = DateTime.UtcNow;
-        foreach (var disk in disks)
+        try
         {
-            disk.Id = IdGenerator.NewId();
-            disk.AgentId = agentId;
-            disk.CollectedAt = now;
+            return JsonSerializer.Deserialize<AgentHardwareComponents>(json, JsonOptions);
         }
-
-        _db.DiskInfos.AddRange(disks);
-        await _db.SaveChangesAsync();
-    }
-
-    public async Task<IEnumerable<NetworkAdapterInfo>> GetNetworkAdaptersAsync(Guid agentId)
-    {
-        return await _db.NetworkAdapterInfos
-            .AsNoTracking()
-            .Where(adapter => adapter.AgentId == agentId)
-            .ToListAsync();
-    }
-
-    public async Task ReplaceNetworkAdaptersAsync(Guid agentId, IEnumerable<NetworkAdapterInfo> adapters)
-    {
-        await _db.NetworkAdapterInfos
-            .Where(adapter => adapter.AgentId == agentId)
-            .ExecuteDeleteAsync();
-
-        var now = DateTime.UtcNow;
-        foreach (var adapter in adapters)
+        catch (JsonException)
         {
-            adapter.Id = IdGenerator.NewId();
-            adapter.AgentId = agentId;
-            adapter.CollectedAt = now;
+            return null;
         }
-
-        _db.NetworkAdapterInfos.AddRange(adapters);
-        await _db.SaveChangesAsync();
-    }
-
-    public async Task<IEnumerable<MemoryModuleInfo>> GetMemoryModulesAsync(Guid agentId)
-    {
-        return await _db.MemoryModuleInfos
-            .AsNoTracking()
-            .Where(module => module.AgentId == agentId)
-            .ToListAsync();
-    }
-
-    public async Task ReplaceMemoryModulesAsync(Guid agentId, IEnumerable<MemoryModuleInfo> modules)
-    {
-        await _db.MemoryModuleInfos
-            .Where(module => module.AgentId == agentId)
-            .ExecuteDeleteAsync();
-
-        var now = DateTime.UtcNow;
-        foreach (var module in modules)
-        {
-            module.Id = IdGenerator.NewId();
-            module.AgentId = agentId;
-            module.CollectedAt = now;
-        }
-
-        _db.MemoryModuleInfos.AddRange(modules);
-        await _db.SaveChangesAsync();
     }
 }

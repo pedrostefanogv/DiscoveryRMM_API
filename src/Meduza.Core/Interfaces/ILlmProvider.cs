@@ -18,6 +18,9 @@ public record LlmMessage(
 public record LlmOptions(
     int MaxTokens = 1000,
     double Temperature = 0.7,
+    string? Model = null,
+    string? BaseUrl = null,
+    string? ApiKey = null,
     bool EnableTools = false,
     List<LlmTool>? Tools = null);
 

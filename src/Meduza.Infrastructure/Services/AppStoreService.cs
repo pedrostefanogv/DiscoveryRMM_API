@@ -2,34 +2,32 @@ using System.Text.Json;
 using Meduza.Core.DTOs;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
-using Microsoft.Extensions.Caching.Memory;
 
 namespace Meduza.Infrastructure.Services;
 
 public class AppStoreService : IAppStoreService
 {
-    private const string WingetLatestPackagesUrl = "https://github.com/pedrostefanogv/winget-package-explo/releases/latest/download/packages.json";
-    private const string WingetCacheKey = "app_store_winget_packages";
-    private static readonly HttpClient SharedHttpClient = CreateHttpClient();
-
     private readonly IAppApprovalRuleRepository _approvalRepo;
     private readonly IAppApprovalAuditService _auditService;
     private readonly ISiteRepository _siteRepository;
     private readonly IAgentRepository _agentRepository;
-    private readonly IMemoryCache _cache;
+    private readonly IWingetPackageRepository _wingetRepo;
+    private readonly IChocolateyPackageRepository _chocolateyRepo;
 
     public AppStoreService(
         IAppApprovalRuleRepository approvalRepo,
         IAppApprovalAuditService auditService,
         ISiteRepository siteRepository,
         IAgentRepository agentRepository,
-        IMemoryCache cache)
+        IWingetPackageRepository wingetRepo,
+        IChocolateyPackageRepository chocolateyRepo)
     {
         _approvalRepo = approvalRepo;
         _auditService = auditService;
         _siteRepository = siteRepository;
         _agentRepository = agentRepository;
-        _cache = cache;
+        _wingetRepo = wingetRepo;
+        _chocolateyRepo = chocolateyRepo;
     }
 
     public async Task<AppCatalogSearchResultDto> SearchCatalogAsync(
@@ -45,73 +43,24 @@ public class AppStoreService : IAppStoreService
         var normalizedArch = string.IsNullOrWhiteSpace(architecture) ? null : architecture.Trim();
         var normalizedCursor = string.IsNullOrWhiteSpace(cursor) ? null : cursor.Trim();
 
-        if (installationType != AppInstallationType.Winget)
-        {
-            return new AppCatalogSearchResultDto
-            {
-                GeneratedAt = null,
-                TotalPackagesInSource = 0,
-                ReturnedItems = 0,
-                Cursor = normalizedCursor,
-                NextCursor = null,
-                Limit = normalizedLimit,
-                HasMore = false,
-                Search = normalizedSearch,
-                Architecture = normalizedArch,
-                Items = []
-            };
-        }
+        if (installationType == AppInstallationType.Chocolatey)
+            return await SearchChocolateyCatalogAsync(normalizedSearch, normalizedLimit, normalizedCursor, cancellationToken);
 
-        var feed = await GetWingetFeedAsync(cancellationToken);
-        IEnumerable<AppCatalogPackageDto> query = feed.Packages;
-
-        if (!string.IsNullOrWhiteSpace(normalizedSearch))
-        {
-            query = query.Where(x =>
-                ContainsIgnoreCase(x.Id, normalizedSearch) ||
-                ContainsIgnoreCase(x.Name, normalizedSearch) ||
-                ContainsIgnoreCase(x.Publisher, normalizedSearch) ||
-                ContainsIgnoreCase(x.Description, normalizedSearch) ||
-                x.Tags.Any(tag => ContainsIgnoreCase(tag, normalizedSearch)));
-        }
-
-        if (!string.IsNullOrWhiteSpace(normalizedArch))
-        {
-            query = query.Where(x => x.InstallerUrlsByArch.Keys.Any(k => k.Equals(normalizedArch, StringComparison.OrdinalIgnoreCase)));
-        }
-
-        var filtered = query
-            .OrderBy(x => x.Name)
-            .ThenBy(x => x.Id)
-            .ToList();
-
-        if (!string.IsNullOrWhiteSpace(normalizedCursor) && TryDecodeCatalogCursor(normalizedCursor, out var cursorName, out var cursorId))
-        {
-            filtered = filtered
-                .Where(x => CompareCatalogSort(x, cursorName, cursorId) > 0)
-                .ToList();
-        }
-
-        var pageSlice = filtered
-            .Take(normalizedLimit + 1)
-            .ToList();
-
-        var hasMore = pageSlice.Count > normalizedLimit;
-        var items = hasMore ? pageSlice.Take(normalizedLimit).ToList() : pageSlice;
-        var nextCursor = hasMore ? EncodeCatalogCursor(items[^1]) : null;
+        if (installationType == AppInstallationType.Winget)
+            return await SearchWingetCatalogAsync(normalizedSearch, normalizedArch, normalizedLimit, normalizedCursor, cancellationToken);
 
         return new AppCatalogSearchResultDto
         {
-            GeneratedAt = feed.GeneratedAt,
-            TotalPackagesInSource = feed.TotalPackages,
-            ReturnedItems = items.Count,
+            GeneratedAt = null,
+            TotalPackagesInSource = 0,
+            ReturnedItems = 0,
             Cursor = normalizedCursor,
-            NextCursor = nextCursor,
+            NextCursor = null,
             Limit = normalizedLimit,
-            HasMore = hasMore,
+            HasMore = false,
             Search = normalizedSearch,
             Architecture = normalizedArch,
-            Items = items
+            Items = []
         };
     }
 
@@ -120,14 +69,16 @@ public class AppStoreService : IAppStoreService
         string packageId,
         CancellationToken cancellationToken = default)
     {
-        if (installationType != AppInstallationType.Winget)
-            return null;
-
         if (string.IsNullOrWhiteSpace(packageId))
             return null;
 
-        var feed = await GetWingetFeedAsync(cancellationToken);
-        return feed.Packages.FirstOrDefault(x => x.Id.Equals(packageId.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (installationType == AppInstallationType.Chocolatey)
+            return await GetChocolateyPackageByIdAsync(packageId.Trim(), cancellationToken);
+
+        if (installationType == AppInstallationType.Winget)
+            return await GetWingetPackageByIdAsync(packageId.Trim(), cancellationToken);
+
+        return null;
     }
 
     public async Task<AppApprovalRuleResolvedDto> UpsertRuleAsync(
@@ -142,14 +93,21 @@ public class AppStoreService : IAppStoreService
         string? ipAddress,
         CancellationToken cancellationToken = default)
     {
-        var normalizedPackageId = NormalizePackageId(packageId);
+        var normalizedPackageId = NormalizePackageId(packageId, installationType);
         var (clientId, siteId, agentId) = ResolveScopeIds(scopeType, scopeId);
 
         if (installationType == AppInstallationType.Winget)
         {
             var package = await GetCatalogPackageByIdAsync(installationType, normalizedPackageId, cancellationToken);
             if (package is null)
-                throw new InvalidOperationException($"Package '{normalizedPackageId}' nao encontrado no catalogo Winget mais recente.");
+                throw new InvalidOperationException($"Package '{normalizedPackageId}' nao encontrado no catalogo Winget. Execute uma sincronizacao primeiro.");
+        }
+
+        if (installationType == AppInstallationType.Chocolatey)
+        {
+            var package = await GetCatalogPackageByIdAsync(installationType, normalizedPackageId, cancellationToken);
+            if (package is null)
+                throw new InvalidOperationException($"Package '{normalizedPackageId}' nao encontrado no catalogo Chocolatey. Execute uma sincronizacao primeiro.");
         }
 
         var existing = await _approvalRepo.GetByUniqueKeyAsync(
@@ -334,7 +292,7 @@ public class AppStoreService : IAppStoreService
         string packageId,
         CancellationToken cancellationToken = default)
     {
-        var normalizedPackageId = NormalizePackageId(packageId);
+        var normalizedPackageId = NormalizePackageId(packageId, installationType);
         var scopeContext = await ResolveScopeContextAsync(scopeType, scopeId);
         var rules = await LoadRulesForContextAsync(scopeContext.ClientId, scopeContext.SiteId, scopeContext.AgentId, installationType);
         var selectedRules = SelectLatestRulesForPackage(rules, normalizedPackageId, scopeContext.ScopeType);
@@ -414,69 +372,15 @@ public class AppStoreService : IAppStoreService
         };
     }
 
-    private async Task<WingetFeedSnapshot> GetWingetFeedAsync(CancellationToken cancellationToken)
-    {
-        if (_cache.TryGetValue<WingetFeedSnapshot>(WingetCacheKey, out var cached) && cached is not null)
-            return cached;
-
-        using var response = await SharedHttpClient.GetAsync(WingetLatestPackagesUrl, cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-
-        var root = json.RootElement;
-        var generated = TryGetDateTime(root, "generated");
-        var count = TryGetInt(root, "count");
-
-        var packages = new List<AppCatalogPackageDto>();
-        if (root.TryGetProperty("packages", out var packagesElement) && packagesElement.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in packagesElement.EnumerateArray())
-            {
-                var dto = new AppCatalogPackageDto
-                {
-                    Id = TryGetString(item, "id"),
-                    Name = TryGetString(item, "name"),
-                    Publisher = TryGetString(item, "publisher"),
-                    Version = TryGetString(item, "version"),
-                    Description = TryGetString(item, "description"),
-                    Homepage = TryGetString(item, "homepage"),
-                    License = TryGetString(item, "license"),
-                    Category = TryGetString(item, "category"),
-                    Icon = TryGetString(item, "icon"),
-                    InstallCommand = TryGetString(item, "installCommand"),
-                    LastUpdated = TryGetDateTime(item, "lastUpdated"),
-                    Tags = ParseStringArray(item, "tags"),
-                    InstallerUrlsByArch = ParseInstallerUrls(item)
-                };
-
-                if (!string.IsNullOrWhiteSpace(dto.Id))
-                    packages.Add(dto);
-            }
-        }
-
-        var snapshot = new WingetFeedSnapshot
-        {
-            GeneratedAt = generated,
-            TotalPackages = count > 0 ? count : packages.Count,
-            Packages = packages
-        };
-
-        _cache.Set(WingetCacheKey, snapshot, new MemoryCacheEntryOptions
-        {
-            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10)
-        });
-
-        return snapshot;
-    }
-
-    private static string NormalizePackageId(string packageId)
+    private static string NormalizePackageId(string packageId, AppInstallationType installationType = AppInstallationType.Winget)
     {
         if (string.IsNullOrWhiteSpace(packageId))
             throw new InvalidOperationException("PackageId e obrigatorio.");
 
-        return packageId.Trim();
+        // Chocolatey package IDs are case-insensitive; normalize to lowercase.
+        return installationType == AppInstallationType.Chocolatey
+            ? packageId.Trim().ToLowerInvariant()
+            : packageId.Trim();
     }
 
     private static (Guid? ClientId, Guid? SiteId, Guid? AgentId) ResolveScopeIds(AppApprovalScopeType scopeType, Guid? scopeId)
@@ -598,7 +502,9 @@ public class AppStoreService : IAppStoreService
                 effective.Add(state);
         }
 
-        if (installationType != AppInstallationType.Winget)
+        var packageIndex = await GetCatalogPackageIndexAsync(installationType, cancellationToken);
+
+        if (installationType != AppInstallationType.Winget && installationType != AppInstallationType.Chocolatey)
         {
             return effective
                 .OrderBy(x => x.PackageId)
@@ -611,8 +517,6 @@ public class AppStoreService : IAppStoreService
                 })
                 .ToList();
         }
-
-        var packageIndex = await GetCatalogPackageIndexAsync(installationType, cancellationToken);
         return effective
             .OrderBy(x => x.PackageId)
             .Select(x =>
@@ -767,11 +671,202 @@ public class AppStoreService : IAppStoreService
         AppInstallationType installationType,
         CancellationToken cancellationToken)
     {
+        if (installationType == AppInstallationType.Chocolatey)
+            return await BuildChocolateyPackageIndexAsync(cancellationToken);
+
         if (installationType != AppInstallationType.Winget)
             return new Dictionary<string, AppCatalogPackageDto>(StringComparer.OrdinalIgnoreCase);
 
-        var feed = await GetWingetFeedAsync(cancellationToken);
-        return feed.Packages.ToDictionary(x => x.Id, x => x, StringComparer.OrdinalIgnoreCase);
+        return await BuildWingetPackageIndexAsync(cancellationToken);
+    }
+
+    // ── Winget helpers ───────────────────────────────────────────────────────
+
+    private async Task<AppCatalogSearchResultDto> SearchWingetCatalogAsync(
+        string? search,
+        string? architecture,
+        int limit,
+        string? cursor,
+        CancellationToken cancellationToken)
+    {
+        var offset = DecodeWingetCursor(cursor);
+        var (items, total) = await _wingetRepo.SearchAsync(search, architecture, limit + 1, offset, cancellationToken);
+
+        var hasMore = items.Count > limit;
+        var page = hasMore ? items.Take(limit).ToList() : (IReadOnlyList<Meduza.Core.Entities.WingetPackage>)items;
+        var nextCursor = hasMore ? EncodeWingetCursor(offset + limit) : null;
+
+        return new AppCatalogSearchResultDto
+        {
+            GeneratedAt = page.FirstOrDefault()?.SourceGeneratedAt,
+            TotalPackagesInSource = total,
+            ReturnedItems = page.Count,
+            Cursor = cursor,
+            NextCursor = nextCursor,
+            Limit = limit,
+            HasMore = hasMore,
+            Search = search,
+            Architecture = architecture,
+            Items = page.Select(MapWingetToDto).ToList()
+        };
+    }
+
+    private async Task<AppCatalogPackageDto?> GetWingetPackageByIdAsync(
+        string packageId,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        var pkg = await _wingetRepo.GetByPackageIdAsync(packageId);
+        return pkg is null ? null : MapWingetToDto(pkg);
+    }
+
+    private async Task<IReadOnlyDictionary<string, AppCatalogPackageDto>> BuildWingetPackageIndexAsync(
+        CancellationToken cancellationToken)
+    {
+        var (items, _) = await _wingetRepo.SearchAsync(null, null, int.MaxValue, 0, cancellationToken);
+        return items.ToDictionary(
+            x => x.PackageId,
+            MapWingetToDto,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static AppCatalogPackageDto MapWingetToDto(Meduza.Core.Entities.WingetPackage pkg)
+    {
+        Dictionary<string, string>? installerUrls;
+        try
+        {
+            installerUrls = JsonSerializer.Deserialize<Dictionary<string, string>>(pkg.InstallerUrlsJson);
+        }
+        catch (JsonException)
+        {
+            installerUrls = null;
+        }
+
+        return new AppCatalogPackageDto
+        {
+            Id = pkg.PackageId,
+            Name = pkg.Name,
+            Publisher = pkg.Publisher,
+            Version = pkg.Version,
+            Description = pkg.Description,
+            Homepage = pkg.Homepage,
+            License = pkg.License,
+            Category = pkg.Category,
+            Icon = pkg.Icon,
+            InstallCommand = pkg.InstallCommand,
+            LastUpdated = pkg.LastUpdated,
+            Tags = pkg.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+            InstallerUrlsByArch = installerUrls ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        };
+    }
+
+    private static string? EncodeWingetCursor(int offset)
+    {
+        if (offset <= 0) return null;
+        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"winget:{offset}"));
+    }
+
+    private static int DecodeWingetCursor(string? cursor)
+    {
+        if (string.IsNullOrWhiteSpace(cursor)) return 0;
+        try
+        {
+            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            if (raw.StartsWith("winget:") && int.TryParse(raw[7..], out var offset))
+                return offset;
+        }
+        catch (FormatException) { }
+        return 0;
+    }
+
+    // ── Chocolatey helpers ───────────────────────────────────────────────────
+
+    private async Task<AppCatalogSearchResultDto> SearchChocolateyCatalogAsync(
+        string? search,
+        int limit,
+        string? cursor,
+        CancellationToken cancellationToken)
+    {
+        var offset = DecodeChocolateyCursor(cursor);
+        var (items, total) = await _chocolateyRepo.SearchAsync(search, limit + 1, offset, cancellationToken);
+
+        var hasMore = items.Count > limit;
+        var page = hasMore ? items.Take(limit).ToList() : (IReadOnlyList<Meduza.Core.Entities.ChocolateyPackage>)items;
+        var nextCursor = hasMore ? EncodeChocolateyCursor(offset + limit) : null;
+
+        return new AppCatalogSearchResultDto
+        {
+            GeneratedAt = null,
+            TotalPackagesInSource = total,
+            ReturnedItems = page.Count,
+            Cursor = cursor,
+            NextCursor = nextCursor,
+            Limit = limit,
+            HasMore = hasMore,
+            Search = search,
+            Architecture = null,
+            Items = page.Select(MapChocolateyToDto).ToList()
+        };
+    }
+
+    private async Task<AppCatalogPackageDto?> GetChocolateyPackageByIdAsync(
+        string packageId,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        var pkg = await _chocolateyRepo.GetByPackageIdAsync(packageId);
+        return pkg is null ? null : MapChocolateyToDto(pkg);
+    }
+
+    private async Task<IReadOnlyDictionary<string, AppCatalogPackageDto>> BuildChocolateyPackageIndexAsync(
+        CancellationToken cancellationToken)
+    {
+        // Build a full dictionary for packages already approved (IDs known from rules).
+        // We search without filter to get all available packages, using large limit.
+        var (items, _) = await _chocolateyRepo.SearchAsync(null, int.MaxValue, 0, cancellationToken);
+        return items.ToDictionary(
+            x => x.PackageId,
+            MapChocolateyToDto,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static AppCatalogPackageDto MapChocolateyToDto(Meduza.Core.Entities.ChocolateyPackage pkg)
+    {
+        return new AppCatalogPackageDto
+        {
+            Id = pkg.PackageId,
+            Name = pkg.Name,
+            Publisher = pkg.Publisher,
+            Version = pkg.Version,
+            Description = pkg.Description,
+            Homepage = pkg.Homepage,
+            License = pkg.LicenseUrl,
+            Category = string.Empty,
+            Icon = string.Empty,
+            InstallCommand = $"choco install {pkg.PackageId}",
+            LastUpdated = pkg.LastUpdated,
+            Tags = pkg.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+            InstallerUrlsByArch = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        };
+    }
+
+    private static string? EncodeChocolateyCursor(int offset)
+    {
+        if (offset <= 0) return null;
+        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"choco:{offset}"));
+    }
+
+    private static int DecodeChocolateyCursor(string? cursor)
+    {
+        if (string.IsNullOrWhiteSpace(cursor)) return 0;
+        try
+        {
+            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            if (raw.StartsWith("choco:") && int.TryParse(raw[6..], out var offset))
+                return offset;
+        }
+        catch (FormatException) { }
+        return 0;
     }
 
     private static bool MatchesDiffSearch(string packageId, AppCatalogPackageDto? package, string? search)
@@ -794,43 +889,6 @@ public class AppStoreService : IAppStoreService
             || ContainsIgnoreCase(app.Name, search)
             || ContainsIgnoreCase(app.Publisher, search)
             || ContainsIgnoreCase(app.Description, search);
-    }
-
-    private static string EncodeCatalogCursor(AppCatalogPackageDto item)
-    {
-        var raw = $"{item.Name}\n{item.Id}";
-        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(raw));
-    }
-
-    private static bool TryDecodeCatalogCursor(string cursor, out string name, out string id)
-    {
-        name = string.Empty;
-        id = string.Empty;
-
-        try
-        {
-            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
-            var parts = raw.Split('\n', 2);
-            if (parts.Length != 2)
-                return false;
-
-            name = parts[0];
-            id = parts[1];
-            return !string.IsNullOrWhiteSpace(id);
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-    }
-
-    private static int CompareCatalogSort(AppCatalogPackageDto item, string cursorName, string cursorId)
-    {
-        var nameComparison = string.Compare(item.Name, cursorName, StringComparison.OrdinalIgnoreCase);
-        if (nameComparison != 0)
-            return nameComparison;
-
-        return string.Compare(item.Id, cursorId, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<AppApprovalScopeType> GetApplicableScopes(AppApprovalScopeType scopeType)
@@ -896,29 +954,6 @@ public class AppStoreService : IAppStoreService
         };
     }
 
-    private static DateTime? TryGetDateTime(JsonElement element, string propertyName)
-    {
-        var raw = TryGetString(element, propertyName);
-        if (DateTime.TryParse(raw, out var parsed))
-            return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
-
-        return null;
-    }
-
-    private static int TryGetInt(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var value))
-            return 0;
-
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var intValue))
-            return intValue;
-
-        if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out var parsedFromString))
-            return parsedFromString;
-
-        return 0;
-    }
-
     private static IReadOnlyList<string> ParseStringArray(JsonElement element, string propertyName)
     {
         if (!element.TryGetProperty(propertyName, out var array) || array.ValueKind != JsonValueKind.Array)
@@ -958,13 +993,6 @@ public class AppStoreService : IAppStoreService
         return result;
     }
 
-    private sealed class WingetFeedSnapshot
-    {
-        public DateTime? GeneratedAt { get; init; }
-        public int TotalPackages { get; init; }
-        public IReadOnlyList<AppCatalogPackageDto> Packages { get; init; } = [];
-    }
-
     private sealed class EffectiveResolvedRule
     {
         public string PackageId { get; init; } = string.Empty;
@@ -977,11 +1005,4 @@ public class AppStoreService : IAppStoreService
 
     private sealed record ScopeContext(AppApprovalScopeType ScopeType, Guid? ClientId, Guid? SiteId, Guid? AgentId);
 
-    private static HttpClient CreateHttpClient()
-    {
-        var client = new HttpClient();
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("Meduza-AppStore/1.0");
-        client.Timeout = TimeSpan.FromSeconds(30);
-        return client;
-    }
 }

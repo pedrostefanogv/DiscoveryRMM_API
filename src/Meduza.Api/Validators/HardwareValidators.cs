@@ -18,9 +18,15 @@ public class HardwareReportRequestValidator : AbstractValidator<HardwareReportRe
         RuleFor(x => x.LastIpAddress).MaximumLength(45).When(x => x.LastIpAddress is not null);
         RuleFor(x => x.MacAddress).MaximumLength(17).When(x => x.MacAddress is not null);
 
-        RuleForEach(x => x.Disks).SetValidator(new DiskInfoValidator()).When(x => x.Disks is not null);
-        RuleForEach(x => x.NetworkAdapters).SetValidator(new NetworkAdapterInfoValidator()).When(x => x.NetworkAdapters is not null);
-        RuleForEach(x => x.MemoryModules).SetValidator(new MemoryModuleInfoValidator()).When(x => x.MemoryModules is not null);
+        RuleForEach(x => x.Components!.Disks)
+            .SetValidator(new DiskInfoValidator())
+            .When(x => x.Components?.Disks is not null);
+        RuleForEach(x => x.Components!.NetworkAdapters)
+            .SetValidator(new NetworkAdapterInfoValidator())
+            .When(x => x.Components?.NetworkAdapters is not null);
+        RuleForEach(x => x.Components!.MemoryModules)
+            .SetValidator(new MemoryModuleInfoValidator())
+            .When(x => x.Components?.MemoryModules is not null);
     }
 }
 

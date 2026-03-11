@@ -22,4 +22,46 @@ public class AIIntegrationSettings
     
     /// <summary>Máximo de tokens por requisição</summary>
     public int MaxTokensPerRequest { get; set; } = 2000;
+
+    /// <summary>Provedor de IA (ex: openai, azure-openai, anthropic)</summary>
+    public string Provider { get; set; } = "openai";
+
+    /// <summary>API key do provedor (somente gravação via API; nunca deve ser exposta em respostas)</summary>
+    public string? ApiKey { get; set; }
+
+    /// <summary>URL base da API do provedor (opcional)</summary>
+    public string? BaseUrl { get; set; } = "https://api.openai.com/v1/";
+
+    /// <summary>Modelo de chat (ex: gpt-4o-mini)</summary>
+    public string? ChatModel { get; set; } = "gpt-4-turbo";
+
+    /// <summary>Modelo de embedding (ex: text-embedding-3-small)</summary>
+    public string? EmbeddingModel { get; set; } = "text-embedding-3-small";
+
+    /// <summary>Prompt base configurável para o assistente</summary>
+    public string? PromptTemplate { get; set; }
+
+    /// <summary>Temperatura de geração para respostas</summary>
+    public double Temperature { get; set; } = 0.7;
+
+    /// <summary>Habilita pipeline de embeddings</summary>
+    public bool EmbeddingEnabled { get; set; } = true;
+
+    /// <summary>Habilita embeddings da base de artigos</summary>
+    public bool EmbeddingArticlesEnabled { get; set; } = true;
+
+    /// <summary>Máximo de mensagens de histórico enviadas ao LLM</summary>
+    public int MaxHistoryMessages { get; set; } = 10;
+
+    /// <summary>Máximo de tokens usados como contexto da KB no prompt</summary>
+    public int MaxKbContextTokens { get; set; } = 2000;
+
+    /// <summary>Limite de requests por minuto para controle de custo</summary>
+    public int RateLimitPerMinute { get; set; } = 60;
+
+    /// <summary>Orçamento diário de tokens por escopo</summary>
+    public int TokenBudgetDaily { get; set; } = 200000;
+
+    /// <summary>Habilita enforcement de controles de custo</summary>
+    public bool CostControlEnabled { get; set; } = false;
 }

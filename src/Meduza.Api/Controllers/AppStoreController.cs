@@ -11,15 +11,21 @@ public class AppStoreController : ControllerBase
     private readonly IAppStoreService _appStoreService;
     private readonly ISiteRepository _siteRepository;
     private readonly IAgentRepository _agentRepository;
+    private readonly IChocolateyPackageSyncService _chocolateySyncService;
+    private readonly IWingetPackageSyncService _wingetSyncService;
 
     public AppStoreController(
         IAppStoreService appStoreService,
         ISiteRepository siteRepository,
-        IAgentRepository agentRepository)
+        IAgentRepository agentRepository,
+        IChocolateyPackageSyncService chocolateySyncService,
+        IWingetPackageSyncService wingetSyncService)
     {
         _appStoreService = appStoreService;
         _siteRepository = siteRepository;
         _agentRepository = agentRepository;
+        _chocolateySyncService = chocolateySyncService;
+        _wingetSyncService = wingetSyncService;
     }
 
     [HttpGet("catalog")]
@@ -229,6 +235,48 @@ public class AppStoreController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    /// <summary>
+    /// Triggers an on-demand synchronization of the Chocolatey Community Repository catalog
+    /// into the local PostgreSQL database. Safe to call multiple times; performs upserts.
+    /// Depending on the catalog size (~11k packages) this may take 1–3 minutes.
+    /// Returns 409 Conflict if a sync is already in progress.
+    /// </summary>
+    [HttpPost("chocolatey/sync")]
+    public async Task<IActionResult> SyncChocolateyCatalog(CancellationToken cancellationToken = default)
+    {
+        var result = await _chocolateySyncService.SyncCatalogAsync(cancellationToken);
+
+        if (!result.Success && result.Error?.Contains("already in progress") == true)
+            return StatusCode(409, result);
+
+        if (!result.Success && result.Error?.Contains("resume from the last successful page", StringComparison.OrdinalIgnoreCase) == true)
+            return StatusCode(202, result);
+
+        if (!result.Success)
+            return StatusCode(500, result);
+
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Triggers an on-demand synchronization of the Winget catalog
+    /// into the local PostgreSQL database. Safe to call multiple times; performs upserts.
+    /// Returns 409 Conflict if a sync is already in progress.
+    /// </summary>
+    [HttpPost("winget/sync")]
+    public async Task<IActionResult> SyncWingetCatalog(CancellationToken cancellationToken = default)
+    {
+        var result = await _wingetSyncService.SyncCatalogAsync(cancellationToken);
+
+        if (!result.Success && result.Error?.Contains("already in progress") == true)
+            return StatusCode(409, result);
+
+        if (!result.Success)
+            return StatusCode(500, result);
+
+        return Ok(result);
     }
 }
 

@@ -1,5 +1,6 @@
 using Meduza.Core.Entities;
 using Microsoft.EntityFrameworkCore;
+using Pgvector.EntityFrameworkCore;
 
 namespace Meduza.Infrastructure.Data;
 
@@ -15,10 +16,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<ClientConfiguration> ClientConfigurations => Set<ClientConfiguration>();
     public DbSet<DeployToken> DeployTokens => Set<DeployToken>();
     public DbSet<EntityNote> EntityNotes => Set<EntityNote>();
-    public DbSet<DiskInfo> DiskInfos => Set<DiskInfo>();
     public DbSet<LogEntry> Logs => Set<LogEntry>();
-    public DbSet<MemoryModuleInfo> MemoryModuleInfos => Set<MemoryModuleInfo>();
-    public DbSet<NetworkAdapterInfo> NetworkAdapterInfos => Set<NetworkAdapterInfo>();
     public DbSet<ServerConfiguration> ServerConfigurations => Set<ServerConfiguration>();
     public DbSet<SiteConfiguration> SiteConfigurations => Set<SiteConfiguration>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
@@ -44,11 +42,21 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<McpToolPolicy> McpToolPolicies => Set<McpToolPolicy>();
     public DbSet<AppApprovalRule> AppApprovalRules => Set<AppApprovalRule>();
     public DbSet<AppApprovalAudit> AppApprovalAudits => Set<AppApprovalAudit>();
+    public DbSet<ChocolateyPackage> ChocolateyPackages => Set<ChocolateyPackage>();
+    public DbSet<WingetPackage> WingetPackages => Set<WingetPackage>();
+
+    // Knowledge Base
+    public DbSet<KnowledgeArticle> KnowledgeArticles => Set<KnowledgeArticle>();
+    public DbSet<KnowledgeArticleChunk> KnowledgeArticleChunks => Set<KnowledgeArticleChunk>();
+    public DbSet<TicketKnowledgeLink> TicketKnowledgeLinks => Set<TicketKnowledgeLink>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configure global DateTime converter to ensure UTC timestamps
         ConfigureDateTimeConversion(modelBuilder);
+
+        // Habilita suporte pgvector
+        modelBuilder.HasPostgresExtension("vector");
 
         modelBuilder.Entity<Client>(entity =>
         {
@@ -220,6 +228,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(info => info.InventoryRaw)
                 .HasColumnName("inventory_raw")
                 .HasColumnType("jsonb");
+            entity.Property(info => info.HardwareComponentsJson)
+                .HasColumnName("hardware_components_json")
+                .HasColumnType("jsonb");
             entity.Property(info => info.InventorySchemaVersion)
                 .HasColumnName("inventory_schema_version")
                 .HasMaxLength(50);
@@ -303,125 +314,6 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.HasOne<Agent>()
                 .WithMany()
                 .HasForeignKey(info => info.AgentId)
-                .OnDelete(DeleteBehavior.Restrict);
-        });
-
-        modelBuilder.Entity<DiskInfo>(entity =>
-        {
-            entity.ToTable("disk_info");
-            entity.HasKey(disk => disk.Id);
-            entity.HasIndex(disk => disk.AgentId)
-                .HasDatabaseName("ix_disk_info_agent_id");
-
-            entity.Property(disk => disk.Id)
-                .HasColumnName("id")
-                .ValueGeneratedNever();
-            entity.Property(disk => disk.AgentId).HasColumnName("agent_id");
-            entity.Property(disk => disk.DriveLetter)
-                .HasColumnName("drive_letter")
-                .HasMaxLength(10);
-            entity.Property(disk => disk.Label)
-                .HasColumnName("label")
-                .HasMaxLength(200);
-            entity.Property(disk => disk.FileSystem)
-                .HasColumnName("file_system")
-                .HasMaxLength(50);
-            entity.Property(disk => disk.TotalSizeBytes).HasColumnName("total_size_bytes");
-            entity.Property(disk => disk.FreeSpaceBytes).HasColumnName("free_space_bytes");
-            entity.Property(disk => disk.MediaType)
-                .HasColumnName("media_type")
-                .HasMaxLength(50);
-            entity.Property(disk => disk.CollectedAt)
-                .HasColumnName("collected_at")
-                .HasColumnType("timestamptz");
-
-            entity.HasOne<Agent>()
-                .WithMany()
-                .HasForeignKey(disk => disk.AgentId)
-                .OnDelete(DeleteBehavior.Restrict);
-        });
-
-        modelBuilder.Entity<NetworkAdapterInfo>(entity =>
-        {
-            entity.ToTable("network_adapter_info");
-            entity.HasKey(adapter => adapter.Id);
-            entity.HasIndex(adapter => adapter.AgentId)
-                .HasDatabaseName("ix_network_adapter_agent_id");
-
-            entity.Property(adapter => adapter.Id)
-                .HasColumnName("id")
-                .ValueGeneratedNever();
-            entity.Property(adapter => adapter.AgentId).HasColumnName("agent_id");
-            entity.Property(adapter => adapter.Name)
-                .HasColumnName("name")
-                .HasMaxLength(200);
-            entity.Property(adapter => adapter.MacAddress)
-                .HasColumnName("mac_address")
-                .HasMaxLength(17);
-            entity.Property(adapter => adapter.IpAddress)
-                .HasColumnName("ip_address")
-                .HasMaxLength(45);
-            entity.Property(adapter => adapter.SubnetMask)
-                .HasColumnName("subnet_mask")
-                .HasMaxLength(45);
-            entity.Property(adapter => adapter.Gateway)
-                .HasColumnName("gateway")
-                .HasMaxLength(45);
-            entity.Property(adapter => adapter.DnsServers)
-                .HasColumnName("dns_servers")
-                .HasMaxLength(500);
-            entity.Property(adapter => adapter.IsDhcpEnabled).HasColumnName("is_dhcp_enabled");
-            entity.Property(adapter => adapter.AdapterType)
-                .HasColumnName("adapter_type")
-                .HasMaxLength(50);
-            entity.Property(adapter => adapter.Speed)
-                .HasColumnName("speed")
-                .HasMaxLength(50);
-            entity.Property(adapter => adapter.CollectedAt)
-                .HasColumnName("collected_at")
-                .HasColumnType("timestamptz");
-
-            entity.HasOne<Agent>()
-                .WithMany()
-                .HasForeignKey(adapter => adapter.AgentId)
-                .OnDelete(DeleteBehavior.Restrict);
-        });
-
-        modelBuilder.Entity<MemoryModuleInfo>(entity =>
-        {
-            entity.ToTable("memory_module_info");
-            entity.HasKey(module => module.Id);
-            entity.HasIndex(module => module.AgentId)
-                .HasDatabaseName("ix_memory_module_agent_id");
-
-            entity.Property(module => module.Id)
-                .HasColumnName("id")
-                .ValueGeneratedNever();
-            entity.Property(module => module.AgentId).HasColumnName("agent_id");
-            entity.Property(module => module.Slot)
-                .HasColumnName("slot")
-                .HasMaxLength(50);
-            entity.Property(module => module.CapacityBytes).HasColumnName("capacity_bytes");
-            entity.Property(module => module.SpeedMhz).HasColumnName("speed_mhz");
-            entity.Property(module => module.MemoryType)
-                .HasColumnName("memory_type")
-                .HasMaxLength(50);
-            entity.Property(module => module.Manufacturer)
-                .HasColumnName("manufacturer")
-                .HasMaxLength(200);
-            entity.Property(module => module.PartNumber)
-                .HasColumnName("part_number")
-                .HasMaxLength(100);
-            entity.Property(module => module.SerialNumber)
-                .HasColumnName("serial_number")
-                .HasMaxLength(100);
-            entity.Property(module => module.CollectedAt)
-                .HasColumnName("collected_at")
-                .HasColumnType("timestamptz");
-
-            entity.HasOne<Agent>()
-                .WithMany()
-                .HasForeignKey(module => module.AgentId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
@@ -1531,6 +1423,199 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .WithMany()
                 .HasForeignKey(audit => audit.RuleId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ChocolateyPackage>(entity =>
+        {
+            entity.ToTable("chocolatey_packages");
+            entity.HasKey(p => p.Id);
+            entity.HasIndex(p => p.PackageId)
+                .HasDatabaseName("ux_chocolatey_packages_package_id")
+                .IsUnique();
+
+            entity.Property(p => p.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(p => p.PackageId)
+                .HasColumnName("package_id")
+                .HasMaxLength(300);
+            entity.Property(p => p.Name)
+                .HasColumnName("name")
+                .HasMaxLength(500);
+            entity.Property(p => p.Publisher)
+                .HasColumnName("publisher")
+                .HasMaxLength(500);
+            entity.Property(p => p.Version)
+                .HasColumnName("version")
+                .HasMaxLength(100);
+            entity.Property(p => p.Description)
+                .HasColumnName("description")
+                .HasColumnType("text");
+            entity.Property(p => p.Homepage)
+                .HasColumnName("homepage")
+                .HasMaxLength(2000);
+            entity.Property(p => p.LicenseUrl)
+                .HasColumnName("license_url")
+                .HasMaxLength(2000);
+            entity.Property(p => p.Tags)
+                .HasColumnName("tags")
+                .HasMaxLength(2000);
+            entity.Property(p => p.DownloadCount)
+                .HasColumnName("download_count");
+            entity.Property(p => p.LastUpdated)
+                .HasColumnName("last_updated")
+                .HasColumnType("timestamptz");
+            entity.Property(p => p.SyncedAt)
+                .HasColumnName("synced_at")
+                .HasColumnType("timestamptz");
+            entity.Property(p => p.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+        });
+
+        modelBuilder.Entity<WingetPackage>(entity =>
+        {
+            entity.ToTable("winget_packages");
+            entity.HasKey(p => p.Id);
+            entity.HasIndex(p => p.PackageId)
+                .HasDatabaseName("ux_winget_packages_package_id")
+                .IsUnique();
+
+            entity.Property(p => p.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(p => p.PackageId)
+                .HasColumnName("package_id")
+                .HasMaxLength(300);
+            entity.Property(p => p.Name)
+                .HasColumnName("name")
+                .HasMaxLength(500);
+            entity.Property(p => p.Publisher)
+                .HasColumnName("publisher")
+                .HasMaxLength(500);
+            entity.Property(p => p.Version)
+                .HasColumnName("version")
+                .HasMaxLength(100);
+            entity.Property(p => p.Description)
+                .HasColumnName("description")
+                .HasColumnType("text");
+            entity.Property(p => p.Homepage)
+                .HasColumnName("homepage")
+                .HasMaxLength(2000);
+            entity.Property(p => p.License)
+                .HasColumnName("license")
+                .HasMaxLength(500);
+            entity.Property(p => p.Category)
+                .HasColumnName("category")
+                .HasMaxLength(250);
+            entity.Property(p => p.Icon)
+                .HasColumnName("icon")
+                .HasMaxLength(2000);
+            entity.Property(p => p.InstallCommand)
+                .HasColumnName("install_command")
+                .HasMaxLength(1000);
+            entity.Property(p => p.Tags)
+                .HasColumnName("tags")
+                .HasColumnType("text");
+            entity.Property(p => p.InstallerUrlsJson)
+                .HasColumnName("installer_urls_json")
+                .HasColumnType("text");
+            entity.Property(p => p.LastUpdated)
+                .HasColumnName("last_updated")
+                .HasColumnType("timestamptz");
+            entity.Property(p => p.SourceGeneratedAt)
+                .HasColumnName("source_generated_at")
+                .HasColumnType("timestamptz");
+            entity.Property(p => p.SyncedAt)
+                .HasColumnName("synced_at")
+                .HasColumnType("timestamptz");
+            entity.Property(p => p.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+        });
+
+        // ── Knowledge Base ─────────────────────────────────────────────
+
+        modelBuilder.Entity<KnowledgeArticle>(entity =>
+        {
+            entity.ToTable("knowledge_articles");
+            entity.HasKey(a => a.Id);
+            entity.HasIndex(a => a.ClientId).HasDatabaseName("ix_ka_client_id");
+            entity.HasIndex(a => a.SiteId).HasDatabaseName("ix_ka_site_id");
+            entity.HasIndex(a => a.IsPublished).HasDatabaseName("ix_ka_is_published");
+            entity.HasIndex(a => a.DeletedAt).HasDatabaseName("ix_ka_deleted_at");
+
+            entity.Property(a => a.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(a => a.ClientId).HasColumnName("client_id");
+            entity.Property(a => a.SiteId).HasColumnName("site_id");
+            entity.Property(a => a.Title).HasColumnName("title").HasMaxLength(500);
+            entity.Property(a => a.Content).HasColumnName("content");
+            entity.Property(a => a.Category).HasColumnName("category").HasMaxLength(200);
+            entity.Property(a => a.TagsJson).HasColumnName("tags_json").HasColumnType("jsonb");
+            entity.Property(a => a.Author).HasColumnName("author").HasMaxLength(256);
+            entity.Property(a => a.IsPublished).HasColumnName("is_published");
+            entity.Property(a => a.PublishedAt).HasColumnName("published_at").HasColumnType("timestamptz");
+            entity.Property(a => a.LastChunkedAt).HasColumnName("last_chunked_at").HasColumnType("timestamptz");
+            entity.Property(a => a.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(a => a.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            entity.Property(a => a.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+
+            entity.HasOne<Client>()
+                .WithMany()
+                .HasForeignKey(a => a.ClientId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Site>()
+                .WithMany()
+                .HasForeignKey(a => a.SiteId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<KnowledgeArticleChunk>(entity =>
+        {
+            entity.ToTable("knowledge_article_chunks");
+            entity.HasKey(c => c.Id);
+            entity.HasIndex(c => c.ArticleId).HasDatabaseName("ix_kac_article_id");
+            entity.HasIndex(c => c.EmbeddingGeneratedAt).HasDatabaseName("ix_kac_no_embedding");
+
+            entity.Property(c => c.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(c => c.ArticleId).HasColumnName("article_id");
+            entity.Property(c => c.ChunkIndex).HasColumnName("chunk_index");
+            entity.Property(c => c.SectionTitle).HasColumnName("section_title").HasMaxLength(500);
+            entity.Property(c => c.Content).HasColumnName("content");
+            entity.Property(c => c.TokenCount).HasColumnName("token_count");
+            entity.Property(c => c.Embedding).HasColumnName("embedding").HasColumnType("vector(1536)");
+            entity.Property(c => c.EmbeddingGeneratedAt).HasColumnName("embedding_generated_at").HasColumnType("timestamptz");
+
+            entity.HasOne(c => c.Article)
+                .WithMany(a => a.Chunks)
+                .HasForeignKey(c => c.ArticleId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TicketKnowledgeLink>(entity =>
+        {
+            entity.ToTable("ticket_knowledge_links");
+            entity.HasKey(l => l.Id);
+            entity.HasIndex(l => l.TicketId).HasDatabaseName("ix_tkl_ticket_id");
+            entity.HasIndex(l => new { l.TicketId, l.ArticleId })
+                .IsUnique()
+                .HasDatabaseName("uq_tkl_ticket_article");
+
+            entity.Property(l => l.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(l => l.TicketId).HasColumnName("ticket_id");
+            entity.Property(l => l.ArticleId).HasColumnName("article_id");
+            entity.Property(l => l.LinkedBy).HasColumnName("linked_by").HasMaxLength(256);
+            entity.Property(l => l.Note).HasColumnName("note").HasMaxLength(2000);
+            entity.Property(l => l.LinkedAt).HasColumnName("linked_at").HasColumnType("timestamptz");
+
+            entity.HasOne(l => l.Ticket)
+                .WithMany()
+                .HasForeignKey(l => l.TicketId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(l => l.Article)
+                .WithMany(a => a.TicketLinks)
+                .HasForeignKey(l => l.ArticleId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 

@@ -121,10 +121,14 @@ public class AgentsController : ControllerBase
     public async Task<IActionResult> GetHardware(Guid id)
     {
         var hardware = await _hardwareRepo.GetByAgentIdAsync(id);
-        var disks = await _hardwareRepo.GetDisksAsync(id);
-        var network = await _hardwareRepo.GetNetworkAdaptersAsync(id);
-        var memory = await _hardwareRepo.GetMemoryModulesAsync(id);
-        return Ok(new { Hardware = hardware, Disks = disks, NetworkAdapters = network, MemoryModules = memory });
+        var components = await _hardwareRepo.GetComponentsAsync(id);
+        return Ok(new
+        {
+            Hardware = hardware,
+            Disks = components.Disks,
+            NetworkAdapters = components.NetworkAdapters,
+            MemoryModules = components.MemoryModules
+        });
     }
 
     [HttpGet("{id:guid}/software")]
@@ -278,12 +282,14 @@ public record HardwareReportRequest(
     string? LastIpAddress,
     string? MacAddress,
     AgentHardwareInfo? Hardware,
-    List<DiskInfo>? Disks,
-    List<NetworkAdapterInfo>? NetworkAdapters,
-    List<MemoryModuleInfo>? MemoryModules,
+    HardwareComponentsPayload? Components,
     JsonElement? InventoryRaw,
     string? InventorySchemaVersion,
     DateTime? InventoryCollectedAt);
+public record HardwareComponentsPayload(
+    List<DiskInfo>? Disks,
+    List<NetworkAdapterInfo>? NetworkAdapters,
+    List<MemoryModuleInfo>? MemoryModules);
 public record CreateTokenRequest(string? Description, int? ExpirationDays);
 public record SoftwareInventoryReportRequest(
     DateTime? CollectedAt,

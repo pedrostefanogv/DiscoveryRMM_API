@@ -3,6 +3,7 @@ using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
+using Meduza.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Meduza.Api.Controllers;
@@ -24,6 +25,7 @@ public class AgentAuthController : ControllerBase
     private readonly IActivityLogService _activityLogService;
     private readonly IAiChatService _aiChatService;
     private readonly IAppStoreService _appStoreService;
+    private readonly IKnowledgeArticleRepository _knowledgeRepo;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
@@ -38,7 +40,8 @@ public class AgentAuthController : ControllerBase
         ISlaService slaService,
         IActivityLogService activityLogService,
         IAiChatService aiChatService,
-        IAppStoreService appStoreService)
+        IAppStoreService appStoreService,
+        IKnowledgeArticleRepository knowledgeRepo)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -53,6 +56,7 @@ public class AgentAuthController : ControllerBase
         _activityLogService = activityLogService;
         _aiChatService = aiChatService;
         _appStoreService = appStoreService;
+        _knowledgeRepo = knowledgeRepo;
     }
 
     [HttpGet("me")]
@@ -102,6 +106,8 @@ public class AgentAuthController : ControllerBase
         if (agent is null) return NotFound();
 
         var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
+        if (resolved.AIIntegration is not null)
+            resolved.AIIntegration.ApiKey = null;
         return Ok(resolved);
     }
 
@@ -141,11 +147,15 @@ public class AgentAuthController : ControllerBase
             return Unauthorized(new { error = "Agent not authenticated." });
 
         var hardware = await _hardwareRepo.GetByAgentIdAsync(agentId);
-        var disks = await _hardwareRepo.GetDisksAsync(agentId);
-        var network = await _hardwareRepo.GetNetworkAdaptersAsync(agentId);
-        var memory = await _hardwareRepo.GetMemoryModulesAsync(agentId);
+        var components = await _hardwareRepo.GetComponentsAsync(agentId);
 
-        return Ok(new { Hardware = hardware, Disks = disks, NetworkAdapters = network, MemoryModules = memory });
+        return Ok(new
+        {
+            Hardware = hardware,
+            Disks = components.Disks,
+            NetworkAdapters = components.NetworkAdapters,
+            MemoryModules = components.MemoryModules
+        });
     }
 
     [HttpPost("me/hardware")]
@@ -211,7 +221,7 @@ public class AgentAuthController : ControllerBase
             || request.InventorySchemaVersion is not null
             || request.InventoryCollectedAt.HasValue;
 
-        if (request.Hardware is not null || hasInventoryPayload)
+        if (request.Hardware is not null || hasInventoryPayload || request.Components is not null)
         {
             var hardware = request.Hardware ?? new AgentHardwareInfo { AgentId = agentId };
             hardware.AgentId = agentId;
@@ -233,17 +243,20 @@ public class AgentAuthController : ControllerBase
                 }
             }
 
-            await _hardwareRepo.UpsertAsync(hardware);
+            var existingComponents = await _hardwareRepo.GetComponentsAsync(agentId);
+            var components = request.Components;
+            var consolidated = new AgentHardwareComponents
+            {
+                Disks = components?.Disks ?? existingComponents.Disks,
+                NetworkAdapters = components?.NetworkAdapters ?? existingComponents.NetworkAdapters,
+                MemoryModules = components?.MemoryModules ?? existingComponents.MemoryModules
+            };
+
+            hardware.HardwareComponentsJson = JsonSerializer.Serialize(consolidated);
+            hardware.TotalDisksCount = consolidated.Disks.Count;
+
+            await _hardwareRepo.UpsertAsync(hardware, consolidated);
         }
-
-        if (request.Disks is not null)
-            await _hardwareRepo.ReplaceDiskInfoAsync(agentId, request.Disks);
-
-        if (request.NetworkAdapters is not null)
-            await _hardwareRepo.ReplaceNetworkAdaptersAsync(agentId, request.NetworkAdapters);
-
-        if (request.MemoryModules is not null)
-            await _hardwareRepo.ReplaceMemoryModulesAsync(agentId, request.MemoryModules);
 
         return Ok();
     }
@@ -789,6 +802,98 @@ public class AgentAuthController : ControllerBase
         agentId = parsed;
         return true;
     }
+
+    // ─── Base de Conhecimento ─────────────────────────────────────────
+
+    /// <summary>
+    /// Lista artigos da KB acessíveis pelo agente (site + cliente + global).
+    /// </summary>
+    [HttpGet("knowledge")]
+    public async Task<IActionResult> GetKnowledge(
+        [FromQuery] string? category = null,
+        CancellationToken ct = default)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null) return NotFound(new { error = "Agent not found." });
+
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null) return NotFound(new { error = "Site not found." });
+
+        var articles = await _knowledgeRepo.ListByScopeAsync(
+            site.ClientId, agent.SiteId, publishedOnly: true, category, ct);
+
+        var response = articles.Select(a => new
+        {
+            a.Id,
+            a.Title,
+            a.Category,
+            Tags = string.IsNullOrEmpty(a.TagsJson)
+                ? Array.Empty<string>()
+                : System.Text.Json.JsonSerializer.Deserialize<string[]>(a.TagsJson),
+            a.Author,
+            Scope = GetKbScope(a.ClientId, a.SiteId),
+            a.PublishedAt,
+            a.UpdatedAt
+        });
+
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// Retorna o conteúdo completo de um artigo da KB (apenas se o agente tiver acesso).
+    /// </summary>
+    [HttpGet("knowledge/{articleId:guid}")]
+    public async Task<IActionResult> GetKnowledgeArticle(
+        Guid articleId,
+        CancellationToken ct = default)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null) return NotFound(new { error = "Agent not found." });
+
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null) return NotFound(new { error = "Site not found." });
+
+        var article = await _knowledgeRepo.GetByIdAsync(articleId, ct);
+        if (article is null || !article.IsPublished)
+            return NotFound(new { error = "Artigo não encontrado ou não publicado." });
+
+        // Valida que o artigo está no escopo acessível pelo agente
+        var accessible = article.ClientId == null   // global
+            || (article.ClientId == site.ClientId && article.SiteId == null)   // cliente
+            || (article.ClientId == site.ClientId && article.SiteId == agent.SiteId); // site
+
+        if (!accessible)
+            return Forbid();
+
+        return Ok(new
+        {
+            article.Id,
+            article.Title,
+            article.Content,
+            article.Category,
+            Tags = string.IsNullOrEmpty(article.TagsJson)
+                ? Array.Empty<string>()
+                : System.Text.Json.JsonSerializer.Deserialize<string[]>(article.TagsJson),
+            article.Author,
+            Scope = GetKbScope(article.ClientId, article.SiteId),
+            article.PublishedAt,
+            article.UpdatedAt
+        });
+    }
+
+    private static string GetKbScope(Guid? clientId, Guid? siteId) =>
+        (clientId, siteId) switch
+        {
+            (null, null) => "Global",
+            (not null, null) => "Client",
+            _ => "Site"
+        };
 }
 
 // === Agent-specific request DTOs ===

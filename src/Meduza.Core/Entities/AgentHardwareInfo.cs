@@ -7,6 +7,7 @@ public class AgentHardwareInfo
 
     // Inventario raw (osquery)
     public string? InventoryRaw { get; set; }
+    public string? HardwareComponentsJson { get; set; }
     public string? InventorySchemaVersion { get; set; }
     public DateTime? InventoryCollectedAt { get; set; }
 
