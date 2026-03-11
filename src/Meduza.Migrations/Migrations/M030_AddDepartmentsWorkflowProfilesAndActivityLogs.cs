@@ -2,11 +2,20 @@ using FluentMigrator;
 
 namespace Meduza.Migrations.Migrations;
 
-[Migration(30)]
+[Migration(20260306_030)]
 public class M030_AddDepartmentsWorkflowProfilesAndActivityLogs : Migration
 {
     public override void Up()
     {
+        // Compatibilidade: se a migration legada (versão 30) já foi aplicada,
+        // as tabelas principais existirão e não devemos tentar recriar tudo.
+        if (Schema.Table("departments").Exists()
+            && Schema.Table("workflow_profiles").Exists()
+            && Schema.Table("ticket_activity_logs").Exists())
+        {
+            return;
+        }
+
         // Tabela de Departamentos
         Create.Table("departments")
             .WithColumn("id").AsGuid().PrimaryKey()

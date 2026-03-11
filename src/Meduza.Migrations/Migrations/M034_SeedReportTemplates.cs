@@ -2,11 +2,34 @@ using FluentMigrator;
 
 namespace Meduza.Migrations.Migrations;
 
-[Migration(34, "Seed predefined report templates")]
+[Migration(20260307_034, "Seed predefined report templates")]
 public class M034_SeedReportTemplates : Migration
 {
+  private bool HasLegacySeededTemplates()
+  {
+    var hasSeed = false;
+
+    Execute.WithConnection((connection, transaction) =>
+    {
+      using var command = connection.CreateCommand();
+      command.Transaction = transaction;
+      command.CommandText = "SELECT 1 FROM report_templates WHERE created_by = 'migration' LIMIT 1";
+
+      var result = command.ExecuteScalar();
+      hasSeed = result is not null and not DBNull;
+    });
+
+    return hasSeed;
+  }
+
   public override void Up()
   {
+    // Compatibilidade: evita duplicar seeds em bases que já executaram a versão legada (34).
+    if (HasLegacySeededTemplates())
+    {
+      return;
+    }
+
     Insert.IntoTable("report_templates").Row(new
     {
       id = Guid.NewGuid(),
