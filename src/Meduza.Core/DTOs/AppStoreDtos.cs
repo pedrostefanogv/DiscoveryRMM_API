@@ -33,6 +33,25 @@ public class AppCatalogSearchResultDto
     public IReadOnlyList<AppCatalogPackageDto> Items { get; set; } = [];
 }
 
+public class UpsertCustomAppCatalogPackageRequest
+{
+    public string PackageId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? Publisher { get; set; }
+    public string? Version { get; set; }
+    public string? Description { get; set; }
+    public string? IconUrl { get; set; }
+    public string? SiteUrl { get; set; }
+    public string? InstallCommand { get; set; }
+    public string? MetadataJson { get; set; }
+    public string? FileObjectKey { get; set; }
+    public string? FileBucket { get; set; }
+    public string? FilePublicUrl { get; set; }
+    public string? FileContentType { get; set; }
+    public long? FileSizeBytes { get; set; }
+    public string? FileChecksum { get; set; }
+}
+
 public class AppApprovalRuleResolvedDto
 {
     public Guid RuleId { get; set; }
@@ -72,6 +91,18 @@ public class EffectiveApprovedAppPageDto
     public int ReturnedItems { get; set; }
     public bool HasMore { get; set; }
     public IReadOnlyList<EffectiveApprovedAppDto> Items { get; set; } = [];
+}
+
+public class AppCatalogSyncResultDto
+{
+    public AppInstallationType InstallationType { get; set; }
+    public bool Success { get; set; }
+    public int PackagesUpserted { get; set; }
+    public int PagesProcessed { get; set; }
+    public DateTime SyncedAt { get; set; }
+    public DateTime? SourceGeneratedAt { get; set; }
+    public TimeSpan Duration { get; set; }
+    public string? Error { get; set; }
 }
 
 public class ChocolateySyncResultDto

@@ -9,25 +9,31 @@ public class AppStoreService : IAppStoreService
 {
     private readonly IAppApprovalRuleRepository _approvalRepo;
     private readonly IAppApprovalAuditService _auditService;
+    private readonly IConfigurationResolver _configurationResolver;
     private readonly ISiteRepository _siteRepository;
     private readonly IAgentRepository _agentRepository;
     private readonly IWingetPackageRepository _wingetRepo;
     private readonly IChocolateyPackageRepository _chocolateyRepo;
+    private readonly IAppPackageRepository _appPackageRepo;
 
     public AppStoreService(
         IAppApprovalRuleRepository approvalRepo,
         IAppApprovalAuditService auditService,
+        IConfigurationResolver configurationResolver,
         ISiteRepository siteRepository,
         IAgentRepository agentRepository,
         IWingetPackageRepository wingetRepo,
-        IChocolateyPackageRepository chocolateyRepo)
+        IChocolateyPackageRepository chocolateyRepo,
+        IAppPackageRepository appPackageRepo)
     {
         _approvalRepo = approvalRepo;
         _auditService = auditService;
+        _configurationResolver = configurationResolver;
         _siteRepository = siteRepository;
         _agentRepository = agentRepository;
         _wingetRepo = wingetRepo;
         _chocolateyRepo = chocolateyRepo;
+        _appPackageRepo = appPackageRepo;
     }
 
     public async Task<AppCatalogSearchResultDto> SearchCatalogAsync(
@@ -42,25 +48,32 @@ public class AppStoreService : IAppStoreService
         var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
         var normalizedArch = string.IsNullOrWhiteSpace(architecture) ? null : architecture.Trim();
         var normalizedCursor = string.IsNullOrWhiteSpace(cursor) ? null : cursor.Trim();
+        var offset = DecodeUnifiedCursor(normalizedCursor);
 
-        if (installationType == AppInstallationType.Chocolatey)
-            return await SearchChocolateyCatalogAsync(normalizedSearch, normalizedLimit, normalizedCursor, cancellationToken);
+        var (items, total) = await _appPackageRepo.SearchAsync(
+            installationType,
+            normalizedSearch,
+            normalizedArch,
+            normalizedLimit + 1,
+            offset,
+            cancellationToken);
 
-        if (installationType == AppInstallationType.Winget)
-            return await SearchWingetCatalogAsync(normalizedSearch, normalizedArch, normalizedLimit, normalizedCursor, cancellationToken);
+        var hasMore = items.Count > normalizedLimit;
+        var page = hasMore ? items.Take(normalizedLimit).ToList() : items.ToList();
+        var nextCursor = hasMore ? EncodeUnifiedCursor(offset + normalizedLimit) : null;
 
         return new AppCatalogSearchResultDto
         {
-            GeneratedAt = null,
-            TotalPackagesInSource = 0,
-            ReturnedItems = 0,
-            Cursor = normalizedCursor,
-            NextCursor = null,
+            GeneratedAt = page.FirstOrDefault()?.SourceGeneratedAt,
+            TotalPackagesInSource = total,
+            ReturnedItems = page.Count,
+            Cursor = cursor,
+            NextCursor = nextCursor,
             Limit = normalizedLimit,
-            HasMore = false,
+            HasMore = hasMore,
             Search = normalizedSearch,
             Architecture = normalizedArch,
-            Items = []
+            Items = page.Select(MapUnifiedToDto).ToList()
         };
     }
 
@@ -72,13 +85,46 @@ public class AppStoreService : IAppStoreService
         if (string.IsNullOrWhiteSpace(packageId))
             return null;
 
-        if (installationType == AppInstallationType.Chocolatey)
-            return await GetChocolateyPackageByIdAsync(packageId.Trim(), cancellationToken);
+        var package = await _appPackageRepo.GetByInstallationTypeAndPackageIdAsync(
+            installationType,
+            packageId.Trim(),
+            cancellationToken);
 
-        if (installationType == AppInstallationType.Winget)
-            return await GetWingetPackageByIdAsync(packageId.Trim(), cancellationToken);
+        return package is null ? null : MapUnifiedToDto(package);
+    }
 
-        return null;
+    public async Task<AppCatalogPackageDto> UpsertCustomCatalogPackageAsync(
+        UpsertCustomAppCatalogPackageRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.PackageId))
+            throw new InvalidOperationException("PackageId e obrigatorio.");
+
+        if (string.IsNullOrWhiteSpace(request.Name))
+            throw new InvalidOperationException("Name e obrigatorio.");
+
+        var saved = await _appPackageRepo.UpsertCustomAsync(new Meduza.Core.Entities.AppPackage
+        {
+            InstallationType = AppInstallationType.Custom,
+            PackageId = request.PackageId,
+            Name = request.Name.Trim(),
+            Publisher = request.Publisher,
+            Version = request.Version,
+            Description = request.Description,
+            IconUrl = request.IconUrl,
+            SiteUrl = request.SiteUrl,
+            InstallCommand = request.InstallCommand,
+            MetadataJson = request.MetadataJson,
+            FileObjectKey = request.FileObjectKey,
+            FileBucket = request.FileBucket,
+            FilePublicUrl = request.FilePublicUrl,
+            FileContentType = request.FileContentType,
+            FileSizeBytes = request.FileSizeBytes,
+            FileChecksum = request.FileChecksum,
+            LastUpdated = DateTime.UtcNow
+        }, cancellationToken);
+
+        return MapUnifiedToDto(saved);
     }
 
     public async Task<AppApprovalRuleResolvedDto> UpsertRuleAsync(
@@ -231,6 +277,16 @@ public class AppStoreService : IAppStoreService
         AppInstallationType installationType,
         CancellationToken cancellationToken = default)
     {
+        var policy = await ResolvePolicyForDirectScopeAsync(clientId, siteId, agentId, cancellationToken);
+        if (policy == AppStorePolicyType.Disabled)
+            return [];
+
+        if (policy == AppStorePolicyType.All)
+            return await BuildAllCatalogAsEffectiveAppsAsync(
+                installationType,
+                GetDirectSourceScope(clientId, siteId, agentId),
+                cancellationToken);
+
         return await BuildEffectiveApprovedAppsAsync(clientId, siteId, agentId, installationType, cancellationToken);
     }
 
@@ -247,6 +303,37 @@ public class AppStoreService : IAppStoreService
         var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
         var normalizedCursor = string.IsNullOrWhiteSpace(cursor) ? null : cursor.Trim();
         var scopeContext = await ResolveScopeContextAsync(scopeType, scopeId);
+        var policy = await ResolvePolicyForScopeAsync(scopeContext, cancellationToken);
+
+        if (policy == AppStorePolicyType.Disabled)
+        {
+            return new EffectiveApprovedAppPageDto
+            {
+                ScopeType = scopeType,
+                ScopeId = scopeId,
+                InstallationType = installationType,
+                Search = normalizedSearch,
+                Cursor = normalizedCursor,
+                NextCursor = null,
+                Limit = normalizedLimit,
+                ReturnedItems = 0,
+                HasMore = false,
+                Items = []
+            };
+        }
+
+        if (policy == AppStorePolicyType.All)
+        {
+            return await BuildEffectivePageFromCatalogAsync(
+                scopeType,
+                scopeId,
+                installationType,
+                normalizedSearch,
+                normalizedLimit,
+                normalizedCursor,
+                cancellationToken);
+        }
+
         var effective = await BuildEffectiveApprovedAppsAsync(
             scopeContext.ClientId,
             scopeContext.SiteId,
@@ -294,9 +381,31 @@ public class AppStoreService : IAppStoreService
     {
         var normalizedPackageId = NormalizePackageId(packageId, installationType);
         var scopeContext = await ResolveScopeContextAsync(scopeType, scopeId);
+        var policy = await ResolvePolicyForScopeAsync(scopeContext, cancellationToken);
+        var package = await GetCatalogPackageByIdAsync(installationType, normalizedPackageId, cancellationToken);
+
+        if (policy == AppStorePolicyType.Disabled)
+        {
+            return BuildPolicyDrivenDiffDto(
+                installationType,
+                normalizedPackageId,
+                package,
+                false,
+                "Bloqueado pela politica efetiva AppStorePolicy=Disabled.");
+        }
+
+        if (policy == AppStorePolicyType.All)
+        {
+            return BuildPolicyDrivenDiffDto(
+                installationType,
+                normalizedPackageId,
+                package,
+                true,
+                "Permitido pela politica efetiva AppStorePolicy=All.");
+        }
+
         var rules = await LoadRulesForContextAsync(scopeContext.ClientId, scopeContext.SiteId, scopeContext.AgentId, installationType);
         var selectedRules = SelectLatestRulesForPackage(rules, normalizedPackageId, scopeContext.ScopeType);
-        var package = await GetCatalogPackageByIdAsync(installationType, normalizedPackageId, cancellationToken);
 
         return BuildPackageDiffDto(scopeContext, installationType, normalizedPackageId, selectedRules, package);
     }
@@ -314,6 +423,37 @@ public class AppStoreService : IAppStoreService
         var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
         var normalizedCursor = string.IsNullOrWhiteSpace(cursor) ? null : cursor.Trim();
         var scopeContext = await ResolveScopeContextAsync(scopeType, scopeId);
+        var policy = await ResolvePolicyForScopeAsync(scopeContext, cancellationToken);
+
+        if (policy == AppStorePolicyType.Disabled)
+        {
+            return new AppEffectivePackageDiffPageDto
+            {
+                ScopeType = scopeType,
+                ScopeId = scopeId,
+                InstallationType = installationType,
+                Search = normalizedSearch,
+                ReturnedItems = 0,
+                Cursor = normalizedCursor,
+                NextCursor = null,
+                Limit = normalizedLimit,
+                HasMore = false,
+                Items = []
+            };
+        }
+
+        if (policy == AppStorePolicyType.All)
+        {
+            return await BuildDiffPageFromCatalogAsync(
+                scopeType,
+                scopeId,
+                installationType,
+                normalizedSearch,
+                normalizedLimit,
+                normalizedCursor,
+                cancellationToken);
+        }
+
         var rules = await LoadRulesForContextAsync(scopeContext.ClientId, scopeContext.SiteId, scopeContext.AgentId, installationType);
         var packageIndex = await GetCatalogPackageIndexAsync(installationType, cancellationToken);
 
@@ -383,6 +523,73 @@ public class AppStoreService : IAppStoreService
             : packageId.Trim();
     }
 
+    private async Task<AppStorePolicyType> ResolvePolicyForScopeAsync(
+        ScopeContext scopeContext,
+        CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+
+        if (scopeContext.SiteId.HasValue)
+        {
+            var resolved = await _configurationResolver.ResolveForSiteAsync(scopeContext.SiteId.Value);
+            return resolved.AppStorePolicy;
+        }
+
+        var server = await _configurationResolver.GetServerAsync();
+        if (scopeContext.ClientId.HasValue)
+        {
+            var client = await _configurationResolver.GetClientAsync(scopeContext.ClientId.Value);
+            return client?.AppStorePolicy ?? server.AppStorePolicy;
+        }
+
+        return server.AppStorePolicy;
+    }
+
+    private async Task<AppStorePolicyType> ResolvePolicyForDirectScopeAsync(
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        CancellationToken cancellationToken)
+    {
+        if (siteId.HasValue)
+        {
+            var resolved = await _configurationResolver.ResolveForSiteAsync(siteId.Value);
+            return resolved.AppStorePolicy;
+        }
+
+        if (agentId.HasValue)
+        {
+            var agent = await _agentRepository.GetByIdAsync(agentId.Value);
+            if (agent is null)
+                throw new InvalidOperationException("Agent not found.");
+
+            var resolved = await _configurationResolver.ResolveForSiteAsync(agent.SiteId);
+            return resolved.AppStorePolicy;
+        }
+
+        var scopeContext = new ScopeContext(
+            clientId.HasValue ? AppApprovalScopeType.Client : AppApprovalScopeType.Global,
+            clientId,
+            null,
+            null);
+
+        return await ResolvePolicyForScopeAsync(scopeContext, cancellationToken);
+    }
+
+    private static AppApprovalScopeType GetDirectSourceScope(Guid? clientId, Guid? siteId, Guid? agentId)
+    {
+        if (agentId.HasValue)
+            return AppApprovalScopeType.Agent;
+
+        if (siteId.HasValue)
+            return AppApprovalScopeType.Site;
+
+        if (clientId.HasValue)
+            return AppApprovalScopeType.Client;
+
+        return AppApprovalScopeType.Global;
+    }
+
     private static (Guid? ClientId, Guid? SiteId, Guid? AgentId) ResolveScopeIds(AppApprovalScopeType scopeType, Guid? scopeId)
     {
         return scopeType switch
@@ -446,6 +653,107 @@ public class AppStoreService : IAppStoreService
             rules.AddRange(await _approvalRepo.GetByScopeAsync(AppApprovalScopeType.Agent, agentId.Value, installationType));
 
         return rules;
+    }
+
+    private async Task<IReadOnlyList<EffectiveApprovedAppDto>> BuildAllCatalogAsEffectiveAppsAsync(
+        AppInstallationType installationType,
+        AppApprovalScopeType sourceScope,
+        CancellationToken cancellationToken)
+    {
+        var items = await _appPackageRepo.GetAllByInstallationTypeAsync(installationType, cancellationToken);
+        return items
+            .OrderBy(x => x.PackageId, StringComparer.OrdinalIgnoreCase)
+            .Select(x => MapCatalogToEffectiveDto(MapUnifiedToDto(x), installationType, sourceScope))
+            .ToList();
+    }
+
+    private async Task<EffectiveApprovedAppPageDto> BuildEffectivePageFromCatalogAsync(
+        AppApprovalScopeType scopeType,
+        Guid? scopeId,
+        AppInstallationType installationType,
+        string? search,
+        int limit,
+        string? cursor,
+        CancellationToken cancellationToken)
+    {
+        var offset = DecodeUnifiedCursor(cursor);
+        var (items, _) = await _appPackageRepo.SearchAsync(
+            installationType,
+            search,
+            null,
+            limit + 1,
+            offset,
+            cancellationToken);
+
+        var hasMore = items.Count > limit;
+        var page = hasMore ? items.Take(limit).ToList() : items.ToList();
+        var nextCursor = hasMore ? EncodeUnifiedCursor(offset + limit) : null;
+
+        return new EffectiveApprovedAppPageDto
+        {
+            ScopeType = scopeType,
+            ScopeId = scopeId,
+            InstallationType = installationType,
+            Search = search,
+            Cursor = cursor,
+            NextCursor = nextCursor,
+            Limit = limit,
+            ReturnedItems = page.Count,
+            HasMore = hasMore,
+            Items = page
+                .Select(x => MapCatalogToEffectiveDto(MapUnifiedToDto(x), installationType, scopeType))
+                .ToList()
+        };
+    }
+
+    private async Task<AppEffectivePackageDiffPageDto> BuildDiffPageFromCatalogAsync(
+        AppApprovalScopeType scopeType,
+        Guid? scopeId,
+        AppInstallationType installationType,
+        string? search,
+        int limit,
+        string? cursor,
+        CancellationToken cancellationToken)
+    {
+        var offset = DecodeUnifiedCursor(cursor);
+        var (items, _) = await _appPackageRepo.SearchAsync(
+            installationType,
+            search,
+            null,
+            limit + 1,
+            offset,
+            cancellationToken);
+
+        var hasMore = items.Count > limit;
+        var page = hasMore ? items.Take(limit).ToList() : items.ToList();
+        var nextCursor = hasMore ? EncodeUnifiedCursor(offset + limit) : null;
+
+        var diffItems = page
+            .Select(x =>
+            {
+                var dto = MapUnifiedToDto(x);
+                return BuildPolicyDrivenDiffDto(
+                    installationType,
+                    dto.Id,
+                    dto,
+                    true,
+                    "Permitido pela politica efetiva AppStorePolicy=All.");
+            })
+            .ToList();
+
+        return new AppEffectivePackageDiffPageDto
+        {
+            ScopeType = scopeType,
+            ScopeId = scopeId,
+            InstallationType = installationType,
+            Search = search,
+            ReturnedItems = diffItems.Count,
+            Cursor = cursor,
+            NextCursor = nextCursor,
+            Limit = limit,
+            HasMore = hasMore,
+            Items = diffItems
+        };
     }
 
     private async Task<IReadOnlyList<EffectiveApprovedAppDto>> BuildEffectiveApprovedAppsAsync(
@@ -671,13 +979,126 @@ public class AppStoreService : IAppStoreService
         AppInstallationType installationType,
         CancellationToken cancellationToken)
     {
-        if (installationType == AppInstallationType.Chocolatey)
-            return await BuildChocolateyPackageIndexAsync(cancellationToken);
+        var items = await _appPackageRepo.GetAllByInstallationTypeAsync(installationType, cancellationToken);
+        return items.ToDictionary(
+            x => x.PackageId,
+            MapUnifiedToDto,
+            StringComparer.OrdinalIgnoreCase);
+    }
 
-        if (installationType != AppInstallationType.Winget)
-            return new Dictionary<string, AppCatalogPackageDto>(StringComparer.OrdinalIgnoreCase);
+    private static AppCatalogPackageDto MapUnifiedToDto(Meduza.Core.Entities.AppPackage pkg)
+    {
+        var installerUrls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var tags = Array.Empty<string>();
+        var category = string.Empty;
+        var license = string.Empty;
 
-        return await BuildWingetPackageIndexAsync(cancellationToken);
+        if (!string.IsNullOrWhiteSpace(pkg.MetadataJson))
+        {
+            try
+            {
+                using var json = JsonDocument.Parse(pkg.MetadataJson);
+                var root = json.RootElement;
+                tags = ParseStringArray(root, "tags").ToArray();
+                installerUrls = ParseInstallerUrls(root).ToDictionary(k => k.Key, v => v.Value, StringComparer.OrdinalIgnoreCase);
+                category = TryGetString(root, "category");
+                license = TryGetString(root, "license");
+                if (string.IsNullOrWhiteSpace(license))
+                    license = TryGetString(root, "licenseUrl");
+            }
+            catch (JsonException)
+            {
+                // Metadata malformado nao deve derrubar listagem.
+            }
+        }
+
+        return new AppCatalogPackageDto
+        {
+            Id = pkg.PackageId,
+            Name = pkg.Name,
+            Publisher = pkg.Publisher ?? string.Empty,
+            Version = pkg.Version ?? string.Empty,
+            Description = pkg.Description ?? string.Empty,
+            Homepage = pkg.SiteUrl ?? string.Empty,
+            License = license,
+            Category = category,
+            Icon = pkg.IconUrl ?? string.Empty,
+            InstallCommand = pkg.InstallCommand ?? string.Empty,
+            LastUpdated = pkg.LastUpdated,
+            Tags = tags,
+            InstallerUrlsByArch = installerUrls
+        };
+    }
+
+    private static EffectiveApprovedAppDto MapCatalogToEffectiveDto(
+        AppCatalogPackageDto package,
+        AppInstallationType installationType,
+        AppApprovalScopeType sourceScope)
+    {
+        return new EffectiveApprovedAppDto
+        {
+            InstallationType = installationType,
+            PackageId = package.Id,
+            Name = package.Name,
+            Description = package.Description,
+            IconUrl = package.Icon,
+            Publisher = package.Publisher,
+            Version = package.Version,
+            InstallCommand = package.InstallCommand,
+            InstallerUrlsByArch = package.InstallerUrlsByArch,
+            AutoUpdateEnabled = false,
+            SourceScope = sourceScope
+        };
+    }
+
+    private static AppApprovalPackageDiffDto BuildPolicyDrivenDiffDto(
+        AppInstallationType installationType,
+        string packageId,
+        AppCatalogPackageDto? package,
+        bool isAllowed,
+        string reason)
+    {
+        return new AppApprovalPackageDiffDto
+        {
+            InstallationType = installationType,
+            PackageId = packageId,
+            PackageName = package?.Name ?? string.Empty,
+            Publisher = package?.Publisher ?? string.Empty,
+            Description = package?.Description ?? string.Empty,
+            Version = package?.Version ?? string.Empty,
+            IconUrl = package?.Icon ?? string.Empty,
+            IsAllowed = isAllowed,
+            AutoUpdateEnabled = false,
+            EffectiveSourceScope = null,
+            EffectiveReason = reason,
+            Levels = []
+        };
+    }
+
+    private static string? EncodeUnifiedCursor(int offset)
+    {
+        if (offset <= 0)
+            return null;
+
+        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"app:{offset}"));
+    }
+
+    private static int DecodeUnifiedCursor(string? cursor)
+    {
+        if (string.IsNullOrWhiteSpace(cursor))
+            return 0;
+
+        try
+        {
+            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            if (raw.StartsWith("app:") && int.TryParse(raw[4..], out var offset))
+                return offset;
+        }
+        catch (FormatException)
+        {
+        }
+
+        return 0;
     }
 
     // ── Winget helpers ───────────────────────────────────────────────────────

@@ -42,6 +42,8 @@ builder.Services.AddDbContext<MeduzaDbContext>(options =>
 builder.Services.AddScoped<IClientRepository, ClientRepository>();
 builder.Services.AddScoped<ISiteRepository, SiteRepository>();
 builder.Services.AddScoped<IAgentRepository, AgentRepository>();
+builder.Services.AddScoped<IAgentLabelRepository, AgentLabelRepository>();
+builder.Services.AddScoped<IAgentLabelRuleRepository, AgentLabelRuleRepository>();
 builder.Services.AddScoped<IAgentHardwareRepository, AgentHardwareRepository>();
 builder.Services.AddScoped<IAgentSoftwareRepository, AgentSoftwareRepository>();
 builder.Services.AddScoped<ICommandRepository, CommandRepository>();
@@ -78,6 +80,7 @@ builder.Services.AddScoped<ISiteConfigurationRepository, SiteConfigurationReposi
 builder.Services.AddScoped<IConfigurationAuditRepository, ConfigurationAuditRepository>();
 builder.Services.AddScoped<IAppApprovalRuleRepository, AppApprovalRuleRepository>();
 builder.Services.AddScoped<IAppApprovalAuditRepository, AppApprovalAuditRepository>();
+builder.Services.AddScoped<IAppPackageRepository, AppPackageRepository>();
 builder.Services.AddScoped<IChocolateyPackageRepository, ChocolateyPackageRepository>();
 builder.Services.AddScoped<IWingetPackageRepository, WingetPackageRepository>();
 
@@ -86,6 +89,7 @@ builder.Services.AddScoped<IConfigurationAuditService, ConfigurationAuditService
 builder.Services.AddScoped<IConfigurationService, ConfigurationService>();
 builder.Services.AddScoped<IConfigurationResolver, ConfigurationResolver>();
 builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
+builder.Services.AddScoped<IAgentAutoLabelingService, AgentAutoLabelingService>();
 builder.Services.AddScoped<IDeployTokenService, DeployTokenService>();
 builder.Services.AddScoped<ILoggingService, LoggingService>();
 
@@ -94,6 +98,7 @@ builder.Services.AddScoped<ISlaService, SlaService>();
 builder.Services.AddScoped<IActivityLogService, ActivityLogService>();
 builder.Services.AddScoped<IAppStoreService, AppStoreService>();
 builder.Services.AddScoped<IAppApprovalAuditService, AppApprovalAuditService>();
+builder.Services.AddScoped<IAppCatalogSyncService, AppCatalogSyncService>();
 builder.Services.AddScoped<IChocolateyPackageSyncService, ChocolateyPackageSyncService>();
 builder.Services.AddScoped<IWingetPackageSyncService, WingetPackageSyncService>();
 builder.Services.AddSingleton<ChocolateyApiClient>();
@@ -160,6 +165,7 @@ builder.Services.AddHostedService<SlaMonitoringBackgroundService>();
 builder.Services.AddHostedService<ReportGenerationBackgroundService>();
 builder.Services.AddHostedService<ReportRetentionBackgroundService>();
 builder.Services.AddHostedService<AiChatRetentionBackgroundService>();
+builder.Services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
 
 //  Controllers + JSON config
 builder.Services.AddControllers(options =>

@@ -1,5 +1,6 @@
 using FluentValidation;
 using Meduza.Api.Controllers;
+using Meduza.Core.DTOs;
 using Meduza.Core.Enums;
 
 namespace Meduza.Api.Validators;
@@ -24,5 +25,49 @@ public class UpsertAppApprovalRuleRequestValidator : AbstractValidator<UpsertApp
             .Null()
             .When(x => x.ScopeType == AppApprovalScopeType.Global)
             .WithMessage("ScopeId must be null for Global scope.");
+    }
+}
+
+public class UpsertCustomAppCatalogPackageRequestValidator : AbstractValidator<UpsertCustomAppCatalogPackageRequest>
+{
+    public UpsertCustomAppCatalogPackageRequestValidator()
+    {
+        RuleFor(x => x.PackageId)
+            .NotEmpty()
+            .MaximumLength(300);
+
+        RuleFor(x => x.Name)
+            .NotEmpty()
+            .MaximumLength(500);
+
+        RuleFor(x => x.Publisher)
+            .MaximumLength(500);
+
+        RuleFor(x => x.Version)
+            .MaximumLength(100);
+
+        RuleFor(x => x.IconUrl)
+            .MaximumLength(2000);
+
+        RuleFor(x => x.SiteUrl)
+            .MaximumLength(2000);
+
+        RuleFor(x => x.InstallCommand)
+            .MaximumLength(1000);
+
+        RuleFor(x => x.FileObjectKey)
+            .MaximumLength(1000);
+
+        RuleFor(x => x.FileBucket)
+            .MaximumLength(200);
+
+        RuleFor(x => x.FilePublicUrl)
+            .MaximumLength(2000);
+
+        RuleFor(x => x.FileContentType)
+            .MaximumLength(200);
+
+        RuleFor(x => x.FileChecksum)
+            .MaximumLength(200);
     }
 }

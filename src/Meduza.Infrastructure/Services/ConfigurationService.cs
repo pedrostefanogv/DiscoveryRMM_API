@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Meduza.Core.Configuration;
 using Meduza.Core.Entities;
 using Meduza.Core.Interfaces;
 
@@ -470,7 +471,7 @@ public class ConfigurationService : IConfigurationService
         try
         {
             var fields = JsonSerializer.Deserialize<string[]>(lockedFieldsJson, JsonSerializerOptions.Web) ?? [];
-            return new HashSet<string>(fields, StringComparer.OrdinalIgnoreCase);
+            return ConfigurationFieldCatalog.NormalizeFieldSet(fields);
         }
         catch
         {
@@ -483,7 +484,8 @@ public class ConfigurationService : IConfigurationService
         // null no patch significa "voltar para herança" e é permitido mesmo quando bloqueado.
         if (value is null) return;
 
-        if (blockedFields.Contains(fieldName))
+        var normalizedFieldName = ConfigurationFieldCatalog.NormalizeFieldName(fieldName);
+        if (blockedFields.Contains(normalizedFieldName))
             throw new InvalidOperationException($"Field '{fieldName}' is blocked at a higher level and cannot be overridden at {level} level.");
     }
 
@@ -496,7 +498,8 @@ public class ConfigurationService : IConfigurationService
                 prop.Name.Equals(nameof(SiteConfiguration.LockedFieldsJson), StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            if (!blockedFields.Contains(prop.Name))
+            var normalizedPropertyName = ConfigurationFieldCatalog.NormalizeFieldName(prop.Name);
+            if (!blockedFields.Contains(normalizedPropertyName))
                 continue;
 
             var value = prop.GetValue(config);

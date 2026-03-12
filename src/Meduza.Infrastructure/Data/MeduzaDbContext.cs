@@ -42,8 +42,12 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<McpToolPolicy> McpToolPolicies => Set<McpToolPolicy>();
     public DbSet<AppApprovalRule> AppApprovalRules => Set<AppApprovalRule>();
     public DbSet<AppApprovalAudit> AppApprovalAudits => Set<AppApprovalAudit>();
+    public DbSet<AppPackage> AppPackages => Set<AppPackage>();
     public DbSet<ChocolateyPackage> ChocolateyPackages => Set<ChocolateyPackage>();
     public DbSet<WingetPackage> WingetPackages => Set<WingetPackage>();
+    public DbSet<AgentLabelRule> AgentLabelRules => Set<AgentLabelRule>();
+    public DbSet<AgentLabel> AgentLabels => Set<AgentLabel>();
+    public DbSet<AgentLabelRuleMatch> AgentLabelRuleMatches => Set<AgentLabelRuleMatch>();
 
     // Knowledge Base
     public DbSet<KnowledgeArticle> KnowledgeArticles => Set<KnowledgeArticle>();
@@ -448,6 +452,116 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
+        modelBuilder.Entity<AgentLabelRule>(entity =>
+        {
+            entity.ToTable("agent_label_rules");
+            entity.HasKey(rule => rule.Id);
+            entity.HasIndex(rule => rule.IsEnabled)
+                .HasDatabaseName("ix_agent_label_rules_is_enabled");
+            entity.HasIndex(rule => rule.Label)
+                .HasDatabaseName("ix_agent_label_rules_label");
+
+            entity.Property(rule => rule.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(rule => rule.Name)
+                .HasColumnName("name")
+                .HasMaxLength(200);
+            entity.Property(rule => rule.Label)
+                .HasColumnName("label")
+                .HasMaxLength(120);
+            entity.Property(rule => rule.IsEnabled)
+                .HasColumnName("is_enabled");
+            entity.Property(rule => rule.ApplyMode)
+                .HasColumnName("apply_mode")
+                .HasConversion<int>();
+            entity.Property(rule => rule.ExpressionJson)
+                .HasColumnName("expression_json")
+                .HasColumnType("jsonb");
+            entity.Property(rule => rule.CreatedBy)
+                .HasColumnName("created_by")
+                .HasMaxLength(256);
+            entity.Property(rule => rule.UpdatedBy)
+                .HasColumnName("updated_by")
+                .HasMaxLength(256);
+            entity.Property(rule => rule.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(rule => rule.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+        });
+
+        modelBuilder.Entity<AgentLabel>(entity =>
+        {
+            entity.ToTable("agent_labels");
+            entity.HasKey(label => label.Id);
+            entity.HasIndex(label => new { label.AgentId, label.Label })
+                .IsUnique()
+                .HasDatabaseName("ux_agent_labels_agent_label");
+
+            entity.Property(label => label.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(label => label.AgentId)
+                .HasColumnName("agent_id");
+            entity.Property(label => label.Label)
+                .HasColumnName("label")
+                .HasMaxLength(120);
+            entity.Property(label => label.SourceType)
+                .HasColumnName("source_type")
+                .HasConversion<int>();
+            entity.Property(label => label.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(label => label.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(label => label.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentLabelRuleMatch>(entity =>
+        {
+            entity.ToTable("agent_label_rule_matches");
+            entity.HasKey(match => match.Id);
+            entity.HasIndex(match => new { match.RuleId, match.AgentId })
+                .IsUnique()
+                .HasDatabaseName("ux_agent_label_rule_matches_rule_agent");
+            entity.HasIndex(match => new { match.AgentId, match.Label })
+                .HasDatabaseName("ix_agent_label_rule_matches_agent_label");
+
+            entity.Property(match => match.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(match => match.RuleId)
+                .HasColumnName("rule_id");
+            entity.Property(match => match.AgentId)
+                .HasColumnName("agent_id");
+            entity.Property(match => match.Label)
+                .HasColumnName("label")
+                .HasMaxLength(120);
+            entity.Property(match => match.MatchedAt)
+                .HasColumnName("matched_at")
+                .HasColumnType("timestamptz");
+            entity.Property(match => match.LastEvaluatedAt)
+                .HasColumnName("last_evaluated_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<AgentLabelRule>()
+                .WithMany()
+                .HasForeignKey(match => match.RuleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(match => match.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<ServerConfiguration>(entity =>
         {
             entity.ToTable("server_configurations");
@@ -460,6 +574,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
+            entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy)
                 .HasColumnName("app_store_policy")
@@ -504,6 +619,8 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
+            entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
+            entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy)
                 .HasColumnName("app_store_policy")
                 .HasConversion<int?>();
@@ -551,6 +668,8 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
+            entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
+            entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy)
                 .HasColumnName("app_store_policy")
                 .HasConversion<int?>();
@@ -1423,6 +1542,81 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .WithMany()
                 .HasForeignKey(audit => audit.RuleId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AppPackage>(entity =>
+        {
+            entity.ToTable("app_packages");
+            entity.HasKey(p => p.Id);
+            entity.HasIndex(p => new { p.InstallationType, p.PackageId })
+                .HasDatabaseName("ux_app_packages_installation_package")
+                .IsUnique();
+
+            entity.Property(p => p.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(p => p.InstallationType)
+                .HasColumnName("installation_type")
+                .HasConversion<int>();
+            entity.Property(p => p.PackageId)
+                .HasColumnName("package_id")
+                .HasMaxLength(300);
+            entity.Property(p => p.Name)
+                .HasColumnName("name")
+                .HasMaxLength(500);
+            entity.Property(p => p.Publisher)
+                .HasColumnName("publisher")
+                .HasMaxLength(500);
+            entity.Property(p => p.Version)
+                .HasColumnName("version")
+                .HasMaxLength(100);
+            entity.Property(p => p.Description)
+                .HasColumnName("description")
+                .HasColumnType("text");
+            entity.Property(p => p.IconUrl)
+                .HasColumnName("icon_url")
+                .HasMaxLength(2000);
+            entity.Property(p => p.SiteUrl)
+                .HasColumnName("site_url")
+                .HasMaxLength(2000);
+            entity.Property(p => p.InstallCommand)
+                .HasColumnName("install_command")
+                .HasMaxLength(1000);
+            entity.Property(p => p.MetadataJson)
+                .HasColumnName("metadata_json")
+                .HasColumnType("jsonb");
+            entity.Property(p => p.FileObjectKey)
+                .HasColumnName("file_object_key")
+                .HasMaxLength(1000);
+            entity.Property(p => p.FileBucket)
+                .HasColumnName("file_bucket")
+                .HasMaxLength(200);
+            entity.Property(p => p.FilePublicUrl)
+                .HasColumnName("file_public_url")
+                .HasMaxLength(2000);
+            entity.Property(p => p.FileContentType)
+                .HasColumnName("file_content_type")
+                .HasMaxLength(200);
+            entity.Property(p => p.FileSizeBytes)
+                .HasColumnName("file_size_bytes");
+            entity.Property(p => p.FileChecksum)
+                .HasColumnName("file_checksum")
+                .HasMaxLength(200);
+            entity.Property(p => p.SourceGeneratedAt)
+                .HasColumnName("source_generated_at")
+                .HasColumnType("timestamptz");
+            entity.Property(p => p.LastUpdated)
+                .HasColumnName("last_updated")
+                .HasColumnType("timestamptz");
+            entity.Property(p => p.SyncedAt)
+                .HasColumnName("synced_at")
+                .HasColumnType("timestamptz");
+            entity.Property(p => p.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(p => p.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
         });
 
         modelBuilder.Entity<ChocolateyPackage>(entity =>

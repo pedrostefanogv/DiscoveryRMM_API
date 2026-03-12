@@ -414,22 +414,7 @@ public class ConfigurationsController : ControllerBase
         }
     }
 
-    private static readonly string[] ManagedFields =
-    [
-        "RecoveryEnabled",
-        "DiscoveryEnabled",
-        "P2PFilesEnabled",
-        "SupportEnabled",
-        "KnowledgeBaseEnabled",
-        "AppStorePolicy",
-        "InventoryIntervalHours",
-        "AutoUpdateSettingsJson",
-        "AIIntegrationSettingsJson",
-        "TokenExpirationDays",
-        "MaxTokensPerAgent",
-        "AgentHeartbeatIntervalSeconds",
-        "AgentOfflineThresholdSeconds"
-    ];
+    private static readonly string[] ManagedFields = ConfigurationFieldCatalog.ManagedFields;
 
     private static HashSet<string> ParseLockedFields(string? json)
     {
@@ -439,7 +424,7 @@ public class ConfigurationsController : ControllerBase
         try
         {
             var values = JsonSerializer.Deserialize<string[]>(json, JsonSerializerOptions.Web) ?? [];
-            return new HashSet<string>(values, StringComparer.OrdinalIgnoreCase);
+            return ConfigurationFieldCatalog.NormalizeFieldSet(values);
         }
         catch
         {
@@ -484,11 +469,12 @@ public class ConfigurationsController : ControllerBase
         return new
         {
             ClientId = clientId,
-            RecoveryEnabled = client?.RecoveryEnabled ?? server.RecoveryEnabled,
-            DiscoveryEnabled = client?.DiscoveryEnabled ?? server.DiscoveryEnabled,
-            P2PFilesEnabled = client?.P2PFilesEnabled ?? server.P2PFilesEnabled,
-            SupportEnabled = client?.SupportEnabled ?? server.SupportEnabled,
-            KnowledgeBaseEnabled = server.KnowledgeBaseEnabled,
+            DeviceRecoveryEnabled = client?.DeviceRecoveryEnabled ?? server.DeviceRecoveryEnabled,
+            AgentNetworkDiscoveryEnabled = client?.AgentNetworkDiscoveryEnabled ?? server.AgentNetworkDiscoveryEnabled,
+            P2PTransferEnabled = client?.P2PTransferEnabled ?? server.P2PTransferEnabled,
+            RemoteSupportMeshCentralEnabled = client?.RemoteSupportMeshCentralEnabled ?? server.RemoteSupportMeshCentralEnabled,
+            ChatAIEnabled = client?.ChatAIEnabled ?? server.ChatAIEnabled,
+            KnowledgeBaseEnabled = client?.KnowledgeBaseEnabled ?? server.KnowledgeBaseEnabled,
             AppStorePolicy = client?.AppStorePolicy ?? server.AppStorePolicy,
             InventoryIntervalHours = client?.InventoryIntervalHours ?? server.InventoryIntervalHours,
             TokenExpirationDays = client?.TokenExpirationDays ?? server.TokenExpirationDays,
@@ -501,11 +487,12 @@ public class ConfigurationsController : ControllerBase
             BlockedFields = blocked.OrderBy(x => x).ToArray(),
             Inheritance = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
             {
-                ["RecoveryEnabled"] = client?.RecoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
-                ["DiscoveryEnabled"] = client?.DiscoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
-                ["P2PFilesEnabled"] = client?.P2PFilesEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
-                ["SupportEnabled"] = client?.SupportEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
-                ["KnowledgeBaseEnabled"] = (int)ConfigurationPriorityType.Global,
+                ["DeviceRecoveryEnabled"] = client?.DeviceRecoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["AgentNetworkDiscoveryEnabled"] = client?.AgentNetworkDiscoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["P2PTransferEnabled"] = client?.P2PTransferEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["RemoteSupportMeshCentralEnabled"] = client?.RemoteSupportMeshCentralEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["ChatAIEnabled"] = client?.ChatAIEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["KnowledgeBaseEnabled"] = client?.KnowledgeBaseEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["AppStorePolicy"] = client?.AppStorePolicy is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["InventoryIntervalHours"] = client?.InventoryIntervalHours is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["TokenExpirationDays"] = client?.TokenExpirationDays is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,

@@ -4,6 +4,7 @@ using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
 using Meduza.Core.ValueObjects;
+using Meduza.Core.Configuration;
 
 namespace Meduza.Infrastructure.Services;
 
@@ -181,11 +182,12 @@ public class ConfigurationResolver : IConfigurationResolver
         blocked.UnionWith(clientLocks);
         blocked.UnionWith(siteLocks);
 
-        var recovery = ResolveValue("RecoveryEnabled", blocked, site?.RecoveryEnabled, client?.RecoveryEnabled, server.RecoveryEnabled);
-        var discovery = ResolveValue("DiscoveryEnabled", blocked, site?.DiscoveryEnabled, client?.DiscoveryEnabled, server.DiscoveryEnabled);
-        var p2p = ResolveValue("P2PFilesEnabled", blocked, site?.P2PFilesEnabled, client?.P2PFilesEnabled, server.P2PFilesEnabled);
-        var support = ResolveValue("SupportEnabled", blocked, site?.SupportEnabled, client?.SupportEnabled, server.SupportEnabled);
-        var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, (bool?)null, (bool?)null, server.KnowledgeBaseEnabled);
+        var recovery = ResolveValue("DeviceRecoveryEnabled", blocked, site?.DeviceRecoveryEnabled, client?.DeviceRecoveryEnabled, server.DeviceRecoveryEnabled);
+        var discovery = ResolveValue("AgentNetworkDiscoveryEnabled", blocked, site?.AgentNetworkDiscoveryEnabled, client?.AgentNetworkDiscoveryEnabled, server.AgentNetworkDiscoveryEnabled);
+        var p2p = ResolveValue("P2PTransferEnabled", blocked, site?.P2PTransferEnabled, client?.P2PTransferEnabled, server.P2PTransferEnabled);
+        var support = ResolveValue("RemoteSupportMeshCentralEnabled", blocked, site?.RemoteSupportMeshCentralEnabled, client?.RemoteSupportMeshCentralEnabled, server.RemoteSupportMeshCentralEnabled);
+        var chatAi = ResolveValue("ChatAIEnabled", blocked, site?.ChatAIEnabled, client?.ChatAIEnabled, server.ChatAIEnabled);
+        var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, site?.KnowledgeBaseEnabled, client?.KnowledgeBaseEnabled, server.KnowledgeBaseEnabled);
         var appStore = ResolveValue("AppStorePolicy", blocked, site?.AppStorePolicy, client?.AppStorePolicy, server.AppStorePolicy);
         var inventory = ResolveValue("InventoryIntervalHours", blocked, site?.InventoryIntervalHours, client?.InventoryIntervalHours, server.InventoryIntervalHours);
         var tokenExp = ResolveValue("TokenExpirationDays", blocked, (int?)null, client?.TokenExpirationDays, server.TokenExpirationDays);
@@ -207,6 +209,7 @@ public class ConfigurationResolver : IConfigurationResolver
             DiscoveryEnabled = discovery.Value,
             P2PFilesEnabled = p2p.Value,
             SupportEnabled = support.Value,
+            ChatAIEnabled = chatAi.Value,
             KnowledgeBaseEnabled = knowledge.Value,
             AppStorePolicy = appStore.Value,
             InventoryIntervalHours = inventory.Value,
@@ -220,9 +223,14 @@ public class ConfigurationResolver : IConfigurationResolver
         };
 
         resolved.Inheritance["RecoveryEnabled"] = (int)recovery.Source;
+        resolved.Inheritance["DeviceRecoveryEnabled"] = (int)recovery.Source;
         resolved.Inheritance["DiscoveryEnabled"] = (int)discovery.Source;
+        resolved.Inheritance["AgentNetworkDiscoveryEnabled"] = (int)discovery.Source;
         resolved.Inheritance["P2PFilesEnabled"] = (int)p2p.Source;
+        resolved.Inheritance["P2PTransferEnabled"] = (int)p2p.Source;
         resolved.Inheritance["SupportEnabled"] = (int)support.Source;
+        resolved.Inheritance["RemoteSupportMeshCentralEnabled"] = (int)support.Source;
+        resolved.Inheritance["ChatAIEnabled"] = (int)chatAi.Source;
         resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;
         resolved.Inheritance["AppStorePolicy"] = (int)appStore.Source;
         resolved.Inheritance["InventoryIntervalHours"] = (int)inventory.Source;
@@ -287,7 +295,7 @@ public class ConfigurationResolver : IConfigurationResolver
         try
         {
             var fields = JsonSerializer.Deserialize<string[]>(lockedFieldsJson, JsonSerializerOptions.Web) ?? [];
-            return new HashSet<string>(fields, StringComparer.OrdinalIgnoreCase);
+            return ConfigurationFieldCatalog.NormalizeFieldSet(fields);
         }
         catch
         {

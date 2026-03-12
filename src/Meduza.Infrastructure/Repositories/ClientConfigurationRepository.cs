@@ -39,6 +39,8 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
         existingConfig.DiscoveryEnabled = config.DiscoveryEnabled;
         existingConfig.P2PFilesEnabled = config.P2PFilesEnabled;
         existingConfig.SupportEnabled = config.SupportEnabled;
+        existingConfig.ChatAIEnabled = config.ChatAIEnabled;
+        existingConfig.KnowledgeBaseEnabled = config.KnowledgeBaseEnabled;
         existingConfig.AppStorePolicy = config.AppStorePolicy;
         existingConfig.AIIntegrationSettingsJson = config.AIIntegrationSettingsJson;
         existingConfig.InventoryIntervalHours = config.InventoryIntervalHours;

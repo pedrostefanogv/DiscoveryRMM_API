@@ -18,6 +18,10 @@ public interface IAppStoreService
         string packageId,
         CancellationToken cancellationToken = default);
 
+    Task<AppCatalogPackageDto> UpsertCustomCatalogPackageAsync(
+        UpsertCustomAppCatalogPackageRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<AppApprovalRuleResolvedDto> UpsertRuleAsync(
         AppApprovalScopeType scopeType,
         Guid? scopeId,

@@ -16,14 +16,49 @@ public class ServerConfiguration
     /// <summary>Recovery automática: detecta se o agent foi instalado antes para reutilizar dados/histórico</summary>
     public bool RecoveryEnabled { get; set; } = false;
 
+    /// <summary>Recuperacao de dispositivo com reaproveitamento de identidade do agent</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool DeviceRecoveryEnabled
+    {
+        get => RecoveryEnabled;
+        set => RecoveryEnabled = value;
+    }
+
     /// <summary>Discovery automática: permite que os agents façam discovery na rede para configurar o servidor</summary>
     public bool DiscoveryEnabled { get; set; } = false;
+
+    /// <summary>Descoberta de agents via rede para auto configuracao</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool AgentNetworkDiscoveryEnabled
+    {
+        get => DiscoveryEnabled;
+        set => DiscoveryEnabled = value;
+    }
 
     /// <summary>Transferência de arquivos P2P entre agents</summary>
     public bool P2PFilesEnabled { get; set; } = false;
 
+    /// <summary>Transferencia P2P de arquivos entre agents na mesma rede</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool P2PTransferEnabled
+    {
+        get => P2PFilesEnabled;
+        set => P2PFilesEnabled = value;
+    }
+
     /// <summary>Suporte habilitado (para todos os clientes)</summary>
     public bool SupportEnabled { get; set; } = false;
+
+    /// <summary>Suporte remoto via agent integrado ao MeshCentral</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool RemoteSupportMeshCentralEnabled
+    {
+        get => SupportEnabled;
+        set => SupportEnabled = value;
+    }
+
+    /// <summary>Chat de IA para suporte operacional</summary>
+    public bool ChatAIEnabled { get; set; } = false;
 
     /// <summary>Base de conhecimento habilitada</summary>
     public bool KnowledgeBaseEnabled { get; set; } = false;

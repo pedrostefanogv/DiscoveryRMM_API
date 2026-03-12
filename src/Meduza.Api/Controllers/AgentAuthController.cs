@@ -26,6 +26,7 @@ public class AgentAuthController : ControllerBase
     private readonly IAiChatService _aiChatService;
     private readonly IAppStoreService _appStoreService;
     private readonly IKnowledgeArticleRepository _knowledgeRepo;
+    private readonly IAgentAutoLabelingService _agentAutoLabelingService;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
@@ -41,7 +42,8 @@ public class AgentAuthController : ControllerBase
         IActivityLogService activityLogService,
         IAiChatService aiChatService,
         IAppStoreService appStoreService,
-        IKnowledgeArticleRepository knowledgeRepo)
+        IKnowledgeArticleRepository knowledgeRepo,
+        IAgentAutoLabelingService agentAutoLabelingService)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -57,6 +59,7 @@ public class AgentAuthController : ControllerBase
         _aiChatService = aiChatService;
         _appStoreService = appStoreService;
         _knowledgeRepo = knowledgeRepo;
+        _agentAutoLabelingService = agentAutoLabelingService;
     }
 
     [HttpGet("me")]
@@ -256,6 +259,7 @@ public class AgentAuthController : ControllerBase
             hardware.TotalDisksCount = consolidated.Disks.Count;
 
             await _hardwareRepo.UpsertAsync(hardware, consolidated);
+            await _agentAutoLabelingService.EvaluateAgentAsync(agentId, "hardware-updated");
         }
 
         return Ok();
@@ -312,6 +316,7 @@ public class AgentAuthController : ControllerBase
             });
 
         await _softwareRepo.ReplaceInventoryAsync(agentId, collectedAt, software);
+        await _agentAutoLabelingService.EvaluateAgentAsync(agentId, "software-inventory-updated");
         return Ok(new { Message = "Software inventory updated." });
     }
 

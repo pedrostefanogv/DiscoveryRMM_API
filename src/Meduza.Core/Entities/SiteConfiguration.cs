@@ -16,15 +16,53 @@ public class SiteConfiguration
     
     /// <summary>Recovery automática: null = herda cliente/servidor</summary>
     public bool? RecoveryEnabled { get; set; }
+
+    /// <summary>Recuperacao de dispositivo com reaproveitamento de identidade do agent</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool? DeviceRecoveryEnabled
+    {
+        get => RecoveryEnabled;
+        set => RecoveryEnabled = value;
+    }
     
     /// <summary>Discovery automática: null = herda cliente/servidor</summary>
     public bool? DiscoveryEnabled { get; set; }
+
+    /// <summary>Descoberta de agents via rede para auto configuracao</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool? AgentNetworkDiscoveryEnabled
+    {
+        get => DiscoveryEnabled;
+        set => DiscoveryEnabled = value;
+    }
     
     /// <summary>P2P Files: null = herda cliente/servidor</summary>
     public bool? P2PFilesEnabled { get; set; }
+
+    /// <summary>Transferencia P2P de arquivos entre agents na mesma rede</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool? P2PTransferEnabled
+    {
+        get => P2PFilesEnabled;
+        set => P2PFilesEnabled = value;
+    }
     
     /// <summary>Suporte: null = herda cliente/servidor</summary>
     public bool? SupportEnabled { get; set; }
+
+    /// <summary>Suporte remoto via agent integrado ao MeshCentral</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public bool? RemoteSupportMeshCentralEnabled
+    {
+        get => SupportEnabled;
+        set => SupportEnabled = value;
+    }
+
+    /// <summary>Chat de IA para suporte (null = herda cliente/servidor)</summary>
+    public bool? ChatAIEnabled { get; set; }
+
+    /// <summary>Base de conhecimento habilitada (null = herda cliente/servidor)</summary>
+    public bool? KnowledgeBaseEnabled { get; set; }
     
     // ============ Loja de aplicativos ============
 
