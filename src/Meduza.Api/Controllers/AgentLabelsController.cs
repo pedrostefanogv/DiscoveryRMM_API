@@ -37,6 +37,24 @@ public class AgentLabelsController : ControllerBase
         return Ok(labels);
     }
 
+    [HttpGet("rules/{ruleId:guid}/agents")]
+    public async Task<IActionResult> GetAgentsByRule(Guid ruleId)
+    {
+        var rule = await _ruleRepository.GetByIdAsync(ruleId);
+        if (rule is null)
+            return NotFound(new { Error = "Label rule not found." });
+
+        var agents = await _labelRepository.GetAgentsByRuleIdAsync(ruleId);
+        return Ok(new
+        {
+            RuleId = rule.Id,
+            RuleName = rule.Name,
+            Label = rule.Label,
+            rule.Description,
+            Agents = agents
+        });
+    }
+
     [HttpGet("rules")]
     public async Task<IActionResult> GetRules([FromQuery] bool includeDisabled = true)
     {

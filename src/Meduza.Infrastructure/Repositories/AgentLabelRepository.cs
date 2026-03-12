@@ -2,6 +2,7 @@ using Meduza.Core.Entities;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Meduza.Core.DTOs;
 
 namespace Meduza.Infrastructure.Repositories;
 
@@ -17,6 +18,24 @@ public class AgentLabelRepository : IAgentLabelRepository
             .AsNoTracking()
             .Where(label => label.AgentId == agentId)
             .OrderBy(label => label.Label)
+            .ToListAsync();
+    }
+
+    public async Task<IReadOnlyList<AgentLabelRuleAgentResponse>> GetAgentsByRuleIdAsync(Guid ruleId)
+    {
+        return await (from match in _db.AgentLabelRuleMatches.AsNoTracking()
+                      join agent in _db.Agents.AsNoTracking() on match.AgentId equals agent.Id
+                      where match.RuleId == ruleId
+                      orderby agent.Hostname
+                      select new AgentLabelRuleAgentResponse
+                      {
+                          AgentId = agent.Id,
+                          Hostname = agent.Hostname,
+                          DisplayName = agent.DisplayName,
+                          Status = agent.Status,
+                          MatchedAt = match.MatchedAt,
+                          LastEvaluatedAt = match.LastEvaluatedAt
+                      })
             .ToListAsync();
     }
 }

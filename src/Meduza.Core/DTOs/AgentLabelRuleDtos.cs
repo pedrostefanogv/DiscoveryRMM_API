@@ -61,3 +61,13 @@ public class AgentLabelRuleDryRunResponse
     public bool WouldRemoveLabel { get; set; }
     public IReadOnlyList<string> CurrentAutomaticLabels { get; set; } = [];
 }
+
+public class AgentLabelRuleAgentResponse
+{
+    public Guid AgentId { get; set; }
+    public string Hostname { get; set; } = string.Empty;
+    public string? DisplayName { get; set; }
+    public AgentStatus Status { get; set; }
+    public DateTime MatchedAt { get; set; }
+    public DateTime LastEvaluatedAt { get; set; }
+}
