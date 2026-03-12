@@ -65,32 +65,31 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     {
         var config = await _serverConfigRepository.GetOrCreateDefaultAsync();
         var settings = ObjectStorageSettingsFromServerConfiguration(config);
-
         return settings.Validate();
+    }
 
-        /// <summary>
-        /// Testar conectividade com o storage usando as configurações atuais do servidor.
-        /// </summary>
-        public async Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Testar conectividade com o storage usando as configurações atuais do servidor.
+    /// </summary>
+    public async Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        var config = await _serverConfigRepository.GetOrCreateDefaultAsync();
+        var settings = ObjectStorageSettingsFromServerConfiguration(config);
+        var validationErrors = settings.Validate();
+
+        if (validationErrors.Count > 0)
         {
-            var config = await _serverConfigRepository.GetOrCreateDefaultAsync();
-            var settings = ObjectStorageSettingsFromServerConfiguration(config);
-            var validationErrors = settings.Validate();
-
-            if (validationErrors.Count > 0)
-            {
-                return new ObjectStorageTestResult(
-                    Success: false,
-                    ConfigurationValid: false,
-                    BucketReachable: false,
-                    Errors: validationErrors.ToArray(),
-                    LatencyMs: 0);
-            }
-
-            var childLogger = _loggerFactory.CreateLogger<MinioObjectStorageProvider>();
-            var service = new MinioObjectStorageProvider(settings, childLogger);
-            return await service.TestConnectionAsync(cancellationToken);
+            return new ObjectStorageTestResult(
+                Success: false,
+                ConfigurationValid: false,
+                BucketReachable: false,
+                Errors: validationErrors.ToArray(),
+                LatencyMs: 0);
         }
+
+        var childLogger = _loggerFactory.CreateLogger<MinioObjectStorageProvider>();
+        var service = new MinioObjectStorageProvider(settings, childLogger);
+        return await service.TestConnectionAsync(cancellationToken);
     }
 
     /// <summary>

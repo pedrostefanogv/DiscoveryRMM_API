@@ -198,36 +198,35 @@ public class MinioObjectStorageProvider : IObjectStorageService
         catch (ObjectNotFoundException)
         {
             return null;
+        }
+    }
 
-            public async Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
-            {
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                try
-                {
-                    var existsArgs = new BucketExistsArgs().WithBucket(_bucketName);
-                    var exists = await _client.BucketExistsAsync(existsArgs, cancellationToken);
-                    sw.Stop();
+    public async Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var existsArgs = new BucketExistsArgs().WithBucket(_bucketName);
+            var exists = await _client.BucketExistsAsync(existsArgs, cancellationToken);
+            sw.Stop();
 
-                    return new ObjectStorageTestResult(
-                        Success: exists,
-                        ConfigurationValid: true,
-                        BucketReachable: exists,
-                        Errors: exists ? [] : [$"Bucket '{_bucketName}' não encontrado ou não acessível com as credenciais fornecidas."],
-                        LatencyMs: sw.ElapsedMilliseconds);
-                }
-                catch (Exception ex)
-                {
-                    sw.Stop();
-                    _logger.LogWarning(ex, "Object storage connection test failed for bucket {Bucket}", _bucketName);
-                    return new ObjectStorageTestResult(
-                        Success: false,
-                        ConfigurationValid: true,
-                        BucketReachable: false,
-                        Errors: [ex.Message],
-                        LatencyMs: sw.ElapsedMilliseconds);
-                }
-            }
-
+            return new ObjectStorageTestResult(
+                Success: exists,
+                ConfigurationValid: true,
+                BucketReachable: exists,
+                Errors: exists ? [] : [$"Bucket '{_bucketName}' não encontrado ou não acessível com as credenciais fornecidas."],
+                LatencyMs: sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            _logger.LogWarning(ex, "Object storage connection test failed for bucket {Bucket}", _bucketName);
+            return new ObjectStorageTestResult(
+                Success: false,
+                ConfigurationValid: true,
+                BucketReachable: false,
+                Errors: [ex.Message],
+                LatencyMs: sw.ElapsedMilliseconds);
         }
     }
 

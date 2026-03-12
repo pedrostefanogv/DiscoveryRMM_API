@@ -1,4 +1,5 @@
 using Meduza.Core.Enums;
+using Meduza.Core.ValueObjects;
 
 namespace Meduza.Core.Interfaces;
 
