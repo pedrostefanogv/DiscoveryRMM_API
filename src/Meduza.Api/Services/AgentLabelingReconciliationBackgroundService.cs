@@ -26,7 +26,7 @@ public class AgentLabelingReconciliationBackgroundService : BackgroundService
             {
                 using var scope = _serviceProvider.CreateScope();
                 var service = scope.ServiceProvider.GetRequiredService<IAgentAutoLabelingService>();
-                await service.ReprocessAllAgentsAsync("periodic-reconciliation", stoppingToken);
+                await service.ReprocessAllAgentsAsync("periodic-reconciliation", cancellationToken: stoppingToken);
                 _logger.LogInformation("Agent label reconciliation finished.");
             }
             catch (OperationCanceledException)

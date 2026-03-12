@@ -25,6 +25,12 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     private readonly IAgentLabelRuleRepository _ruleRepository;
     private readonly ILogger<AgentAutoLabelingService> _logger;
 
+    private readonly record struct PreparedRule(
+        Guid RuleId,
+        string Label,
+        AgentLabelApplyMode ApplyMode,
+        AgentLabelRuleExpressionNodeDto Expression);
+
     public AgentAutoLabelingService(
         MeduzaDbContext db,
         IAgentRepository agentRepository,
@@ -43,19 +49,164 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
 
     public async Task EvaluateAgentAsync(Guid agentId, string reason, CancellationToken cancellationToken = default)
     {
-        var agent = await _agentRepository.GetByIdAsync(agentId);
-        if (agent is null)
+        var rules = await PrepareEnabledRulesAsync(cancellationToken);
+        if (rules.Count == 0)
             return;
 
-        var rules = await _ruleRepository.GetEnabledAsync();
+        await EvaluateAgentWithRulesAsync(agentId, reason, rules, cancellationToken);
+    }
+
+    public async Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, CancellationToken cancellationToken = default)
+    {
+        var safeBatchSize = Math.Clamp(batchSize, 25, 1000);
+        var rules = await PrepareEnabledRulesAsync(cancellationToken);
         if (rules.Count == 0)
+            return;
+
+        Guid? cursor = null;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var currentBatch = await _db.Agents
+                .AsNoTracking()
+                .Where(agent => !cursor.HasValue || agent.Id.CompareTo(cursor.Value) > 0)
+                .OrderBy(agent => agent.Id)
+                .Select(agent => agent.Id)
+                .Take(safeBatchSize)
+                .ToListAsync(cancellationToken);
+
+            if (currentBatch.Count == 0)
+                break;
+
+            foreach (var agentId in currentBatch)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await EvaluateAgentWithRulesAsync(agentId, reason, rules, cancellationToken);
+            }
+
+            cursor = currentBatch[^1];
+        }
+    }
+
+    public async Task<AgentLabelRuleDryRunResponse> DryRunAsync(AgentLabelRuleDryRunRequest request, CancellationToken cancellationToken = default)
+    {
+        var agent = await _agentRepository.GetByIdAsync(request.AgentId);
+        if (agent is null)
+            throw new InvalidOperationException("Agent not found.");
+
+        var hardware = await _hardwareRepository.GetByAgentIdAsync(request.AgentId);
+        var software = (await _softwareRepository.GetCurrentByAgentIdAsync(request.AgentId)).ToList();
+        var matched = EvaluateNode(request.Expression, agent, hardware, software);
+
+        var automaticLabels = await _db.AgentLabels
+            .AsNoTracking()
+            .Where(label => label.AgentId == request.AgentId && label.SourceType == AgentLabelSourceType.Automatic)
+            .Select(label => label.Label)
+            .OrderBy(label => label)
+            .ToListAsync(cancellationToken);
+
+        var hasLabel = !string.IsNullOrWhiteSpace(request.Label)
+            && automaticLabels.Contains(request.Label, StringComparer.OrdinalIgnoreCase);
+
+        return new AgentLabelRuleDryRunResponse
+        {
+            AgentId = request.AgentId,
+            Matched = matched,
+            Label = request.Label,
+            WouldAddLabel = matched && !string.IsNullOrWhiteSpace(request.Label) && !hasLabel,
+            WouldRemoveLabel =
+                !matched
+                && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
+                && !string.IsNullOrWhiteSpace(request.Label)
+                && hasLabel,
+            CurrentAutomaticLabels = automaticLabels
+        };
+    }
+
+    private async Task EvaluateAgentWithRulesAsync(
+        Guid agentId,
+        string reason,
+        IReadOnlyList<PreparedRule> rules,
+        CancellationToken cancellationToken)
+    {
+        var agent = await _agentRepository.GetByIdAsync(agentId);
+        if (agent is null)
             return;
 
         var hardware = await _hardwareRepository.GetByAgentIdAsync(agentId);
         var software = (await _softwareRepository.GetCurrentByAgentIdAsync(agentId)).ToList();
 
-        var now = DateTime.UtcNow;
+        var ruleIds = rules.Select(rule => rule.RuleId).ToList();
+        var existingMatches = await _db.AgentLabelRuleMatches
+            .Where(match => match.AgentId == agentId && ruleIds.Contains(match.RuleId))
+            .ToDictionaryAsync(match => match.RuleId, cancellationToken);
 
+        var now = DateTime.UtcNow;
+        var matchStateChanged = false;
+
+        foreach (var rule in rules)
+        {
+            var matched = EvaluateNode(rule.Expression, agent, hardware, software);
+            var hasExistingMatch = existingMatches.TryGetValue(rule.RuleId, out var existing);
+
+            if (matched)
+            {
+                if (!hasExistingMatch)
+                {
+                    _db.AgentLabelRuleMatches.Add(new AgentLabelRuleMatch
+                    {
+                        Id = IdGenerator.NewId(),
+                        RuleId = rule.RuleId,
+                        AgentId = agentId,
+                        Label = rule.Label,
+                        MatchedAt = now,
+                        LastEvaluatedAt = now
+                    });
+                    matchStateChanged = true;
+                    continue;
+                }
+
+                if (!string.Equals(existing!.Label, rule.Label, StringComparison.OrdinalIgnoreCase))
+                {
+                    existing.Label = rule.Label;
+                    existing.LastEvaluatedAt = now;
+                    matchStateChanged = true;
+                }
+
+                continue;
+            }
+
+            if (!hasExistingMatch)
+                continue;
+
+            if (rule.ApplyMode == AgentLabelApplyMode.ApplyAndRemove)
+            {
+                _db.AgentLabelRuleMatches.Remove(existing!);
+                matchStateChanged = true;
+            }
+        }
+
+        if (matchStateChanged)
+            await _db.SaveChangesAsync(cancellationToken);
+
+        var labelsChanged = await SyncEffectiveLabelsAsync(agentId, now, cancellationToken);
+        if (labelsChanged)
+            await _db.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Agent auto-labeling evaluated for {AgentId}. Reason: {Reason}",
+            agentId,
+            reason);
+    }
+
+    private async Task<IReadOnlyList<PreparedRule>> PrepareEnabledRulesAsync(CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+
+        var rules = await _ruleRepository.GetEnabledAsync();
+        if (rules.Count == 0)
+            return [];
+
+        var prepared = new List<PreparedRule>(rules.Count);
         foreach (var rule in rules)
         {
             var expression = TryDeserializeExpression(rule.ExpressionJson);
@@ -65,31 +216,10 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 continue;
             }
 
-            var matched = EvaluateNode(expression, agent, hardware, software);
-            await UpsertOrRemoveMatchAsync(rule, agentId, matched, now, cancellationToken);
+            prepared.Add(new PreparedRule(rule.Id, rule.Label, rule.ApplyMode, expression));
         }
 
-        await SyncEffectiveLabelsAsync(agentId, now, cancellationToken);
-
-        _logger.LogInformation(
-            "Agent auto-labeling evaluated for {AgentId}. Reason: {Reason}",
-            agentId,
-            reason);
-    }
-
-    public async Task ReprocessAllAgentsAsync(string reason, CancellationToken cancellationToken = default)
-    {
-        var agentIds = await _db.Agents
-            .AsNoTracking()
-            .OrderBy(agent => agent.Id)
-            .Select(agent => agent.Id)
-            .ToListAsync(cancellationToken);
-
-        foreach (var agentId in agentIds)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await EvaluateAgentAsync(agentId, reason, cancellationToken);
-        }
+        return prepared;
     }
 
     private static AgentLabelRuleExpressionNodeDto? TryDeserializeExpression(string json)
@@ -107,60 +237,15 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         }
     }
 
-    private async Task UpsertOrRemoveMatchAsync(
-        AgentLabelRule rule,
-        Guid agentId,
-        bool matched,
-        DateTime now,
-        CancellationToken cancellationToken)
-    {
-        var existing = await _db.AgentLabelRuleMatches
-            .SingleOrDefaultAsync(
-                item => item.RuleId == rule.Id && item.AgentId == agentId,
-                cancellationToken);
-
-        if (matched)
-        {
-            if (existing is null)
-            {
-                _db.AgentLabelRuleMatches.Add(new AgentLabelRuleMatch
-                {
-                    Id = IdGenerator.NewId(),
-                    RuleId = rule.Id,
-                    AgentId = agentId,
-                    Label = rule.Label,
-                    MatchedAt = now,
-                    LastEvaluatedAt = now
-                });
-            }
-            else
-            {
-                existing.Label = rule.Label;
-                existing.LastEvaluatedAt = now;
-            }
-
-            await _db.SaveChangesAsync(cancellationToken);
-            return;
-        }
-
-        if (existing is null)
-            return;
-
-        if (rule.ApplyMode == AgentLabelApplyMode.ApplyAndRemove)
-        {
-            _db.AgentLabelRuleMatches.Remove(existing);
-            await _db.SaveChangesAsync(cancellationToken);
-            return;
-        }
-
-        existing.LastEvaluatedAt = now;
-        await _db.SaveChangesAsync(cancellationToken);
-    }
-
-    private async Task SyncEffectiveLabelsAsync(Guid agentId, DateTime now, CancellationToken cancellationToken)
+    private async Task<bool> SyncEffectiveLabelsAsync(Guid agentId, DateTime now, CancellationToken cancellationToken)
     {
         var automaticLabelsFromMatches = await _db.AgentLabelRuleMatches
             .AsNoTracking()
+            .Join(
+                _db.AgentLabelRules.AsNoTracking().Where(rule => rule.IsEnabled),
+                match => match.RuleId,
+                rule => rule.Id,
+                (match, _) => match)
             .Where(item => item.AgentId == agentId)
             .Select(item => item.Label)
             .Distinct()
@@ -173,6 +258,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         var existingSet = existingAutomaticLabels
             .Select(item => item.Label)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var changed = false;
 
         foreach (var label in automaticLabelsFromMatches)
         {
@@ -188,6 +274,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 CreatedAt = now,
                 UpdatedAt = now
             });
+            changed = true;
         }
 
         var shouldKeep = automaticLabelsFromMatches
@@ -196,15 +283,13 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         foreach (var label in existingAutomaticLabels)
         {
             if (shouldKeep.Contains(label.Label))
-            {
-                label.UpdatedAt = now;
                 continue;
-            }
 
             _db.AgentLabels.Remove(label);
+            changed = true;
         }
 
-        await _db.SaveChangesAsync(cancellationToken);
+        return changed;
     }
 
     private static bool EvaluateNode(

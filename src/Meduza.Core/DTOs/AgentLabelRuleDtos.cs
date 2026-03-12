@@ -40,3 +40,21 @@ public class AgentLabelRuleResponse
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
+
+public class AgentLabelRuleDryRunRequest
+{
+    public Guid AgentId { get; set; }
+    public string? Label { get; set; }
+    public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
+    public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
+}
+
+public class AgentLabelRuleDryRunResponse
+{
+    public Guid AgentId { get; set; }
+    public bool Matched { get; set; }
+    public string? Label { get; set; }
+    public bool WouldAddLabel { get; set; }
+    public bool WouldRemoveLabel { get; set; }
+    public IReadOnlyList<string> CurrentAutomaticLabels { get; set; } = [];
+}

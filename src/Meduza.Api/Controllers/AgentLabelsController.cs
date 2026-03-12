@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
+using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -47,6 +48,10 @@ public class AgentLabelsController : ControllerBase
     [HttpPost("rules")]
     public async Task<IActionResult> CreateRule([FromBody] CreateAgentLabelRuleRequest request, CancellationToken cancellationToken)
     {
+        var validationErrors = ValidateRulePayload(request.Name, request.Label, request.Expression);
+        if (validationErrors.Count > 0)
+            return BadRequest(new { Errors = validationErrors });
+
         var expressionJson = JsonSerializer.Serialize(request.Expression, JsonOptions);
         var createdBy = HttpContext.Items["Username"] as string ?? "api";
 
@@ -61,13 +66,17 @@ public class AgentLabelsController : ControllerBase
             UpdatedBy = createdBy
         });
 
-        await _autoLabelingService.ReprocessAllAgentsAsync($"rule-created:{rule.Id}", cancellationToken);
+        await _autoLabelingService.ReprocessAllAgentsAsync($"rule-created:{rule.Id}", cancellationToken: cancellationToken);
         return Ok(MapRule(rule));
     }
 
     [HttpPut("rules/{id:guid}")]
     public async Task<IActionResult> UpdateRule(Guid id, [FromBody] UpdateAgentLabelRuleRequest request, CancellationToken cancellationToken)
     {
+        var validationErrors = ValidateRulePayload(request.Name, request.Label, request.Expression);
+        if (validationErrors.Count > 0)
+            return BadRequest(new { Errors = validationErrors });
+
         var existing = await _ruleRepository.GetByIdAsync(id);
         if (existing is null)
             return NotFound();
@@ -80,7 +89,7 @@ public class AgentLabelsController : ControllerBase
         existing.UpdatedBy = HttpContext.Items["Username"] as string ?? "api";
 
         await _ruleRepository.UpdateAsync(existing);
-        await _autoLabelingService.ReprocessAllAgentsAsync($"rule-updated:{id}", cancellationToken);
+        await _autoLabelingService.ReprocessAllAgentsAsync($"rule-updated:{id}", cancellationToken: cancellationToken);
 
         var updated = await _ruleRepository.GetByIdAsync(id);
         return Ok(MapRule(updated!));
@@ -90,15 +99,36 @@ public class AgentLabelsController : ControllerBase
     public async Task<IActionResult> DeleteRule(Guid id, CancellationToken cancellationToken)
     {
         await _ruleRepository.DeleteAsync(id);
-        await _autoLabelingService.ReprocessAllAgentsAsync($"rule-deleted:{id}", cancellationToken);
+        await _autoLabelingService.ReprocessAllAgentsAsync($"rule-deleted:{id}", cancellationToken: cancellationToken);
         return NoContent();
     }
 
     [HttpPost("reprocess")]
     public async Task<IActionResult> ReprocessAll(CancellationToken cancellationToken)
     {
-        await _autoLabelingService.ReprocessAllAgentsAsync("manual-reprocess", cancellationToken);
+        await _autoLabelingService.ReprocessAllAgentsAsync("manual-reprocess", cancellationToken: cancellationToken);
         return Ok(new { Message = "Reprocess finished." });
+    }
+
+    [HttpPost("rules/dry-run")]
+    public async Task<IActionResult> DryRun([FromBody] AgentLabelRuleDryRunRequest request, CancellationToken cancellationToken)
+    {
+        var expressionErrors = AgentLabelExpressionValidator.Validate(request.Expression);
+        if (expressionErrors.Count > 0)
+            return BadRequest(new { Errors = expressionErrors });
+
+        if (!string.IsNullOrWhiteSpace(request.Label) && request.Label.Length > 120)
+            return BadRequest(new { Errors = new[] { "Label exceeds maximum length of 120." } });
+
+        try
+        {
+            var result = await _autoLabelingService.DryRunAsync(request, cancellationToken);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
     }
 
     private static AgentLabelRuleResponse MapRule(AgentLabelRule rule)
@@ -128,5 +158,23 @@ public class AgentLabelsController : ControllerBase
         {
             return new AgentLabelRuleExpressionNodeDto();
         }
+    }
+
+    private static List<string> ValidateRulePayload(string name, string label, AgentLabelRuleExpressionNodeDto expression)
+    {
+        var errors = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(name))
+            errors.Add("Name is required.");
+        else if (name.Length > 200)
+            errors.Add("Name exceeds maximum length of 200.");
+
+        if (string.IsNullOrWhiteSpace(label))
+            errors.Add("Label is required.");
+        else if (label.Length > 120)
+            errors.Add("Label exceeds maximum length of 120.");
+
+        errors.AddRange(AgentLabelExpressionValidator.Validate(expression));
+        return errors;
     }
 }
