@@ -48,7 +48,7 @@ public class AgentLabelsController : ControllerBase
     [HttpPost("rules")]
     public async Task<IActionResult> CreateRule([FromBody] CreateAgentLabelRuleRequest request, CancellationToken cancellationToken)
     {
-        var validationErrors = ValidateRulePayload(request.Name, request.Label, request.Expression);
+        var validationErrors = ValidateRulePayload(request.Name, request.Label, request.Description, request.Expression);
         if (validationErrors.Count > 0)
             return BadRequest(new { Errors = validationErrors });
 
@@ -59,6 +59,7 @@ public class AgentLabelsController : ControllerBase
         {
             Name = request.Name,
             Label = request.Label,
+            Description = request.Description,
             ApplyMode = request.ApplyMode,
             IsEnabled = true,
             ExpressionJson = expressionJson,
@@ -73,7 +74,7 @@ public class AgentLabelsController : ControllerBase
     [HttpPut("rules/{id:guid}")]
     public async Task<IActionResult> UpdateRule(Guid id, [FromBody] UpdateAgentLabelRuleRequest request, CancellationToken cancellationToken)
     {
-        var validationErrors = ValidateRulePayload(request.Name, request.Label, request.Expression);
+        var validationErrors = ValidateRulePayload(request.Name, request.Label, request.Description, request.Expression);
         if (validationErrors.Count > 0)
             return BadRequest(new { Errors = validationErrors });
 
@@ -83,6 +84,7 @@ public class AgentLabelsController : ControllerBase
 
         existing.Name = request.Name;
         existing.Label = request.Label;
+        existing.Description = request.Description;
         existing.IsEnabled = request.IsEnabled;
         existing.ApplyMode = request.ApplyMode;
         existing.ExpressionJson = JsonSerializer.Serialize(request.Expression, JsonOptions);
@@ -139,6 +141,7 @@ public class AgentLabelsController : ControllerBase
             Id = rule.Id,
             Name = rule.Name,
             Label = rule.Label,
+            Description = rule.Description,
             IsEnabled = rule.IsEnabled,
             ApplyMode = rule.ApplyMode,
             Expression = expression,
@@ -160,7 +163,7 @@ public class AgentLabelsController : ControllerBase
         }
     }
 
-    private static List<string> ValidateRulePayload(string name, string label, AgentLabelRuleExpressionNodeDto expression)
+    private static List<string> ValidateRulePayload(string name, string label, string? description, AgentLabelRuleExpressionNodeDto expression)
     {
         var errors = new List<string>();
 
@@ -173,6 +176,9 @@ public class AgentLabelsController : ControllerBase
             errors.Add("Label is required.");
         else if (label.Length > 120)
             errors.Add("Label exceeds maximum length of 120.");
+
+        if (!string.IsNullOrWhiteSpace(description) && description.Length > 2000)
+            errors.Add("Description exceeds maximum length of 2000.");
 
         errors.AddRange(AgentLabelExpressionValidator.Validate(expression));
         return errors;

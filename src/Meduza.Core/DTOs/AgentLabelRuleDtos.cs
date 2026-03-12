@@ -16,6 +16,7 @@ public class CreateAgentLabelRuleRequest
 {
     public string Name { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
+    public string? Description { get; set; }
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
 }
@@ -24,6 +25,7 @@ public class UpdateAgentLabelRuleRequest
 {
     public string Name { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
+    public string? Description { get; set; }
     public bool IsEnabled { get; set; } = true;
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
@@ -34,6 +36,7 @@ public class AgentLabelRuleResponse
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
+    public string? Description { get; set; }
     public bool IsEnabled { get; set; }
     public AgentLabelApplyMode ApplyMode { get; set; }
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();

@@ -61,6 +61,7 @@ public class AgentLabelRuleRepository : IAgentLabelRuleRepository
 
         existing.Name = rule.Name;
         existing.Label = rule.Label;
+        existing.Description = rule.Description;
         existing.IsEnabled = rule.IsEnabled;
         existing.ApplyMode = rule.ApplyMode;
         existing.ExpressionJson = rule.ExpressionJson;

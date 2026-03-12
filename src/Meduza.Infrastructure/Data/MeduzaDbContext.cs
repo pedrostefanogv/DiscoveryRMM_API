@@ -470,6 +470,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(rule => rule.Label)
                 .HasColumnName("label")
                 .HasMaxLength(120);
+            entity.Property(rule => rule.Description)
+                .HasColumnName("description")
+                .HasMaxLength(2000);
             entity.Property(rule => rule.IsEnabled)
                 .HasColumnName("is_enabled");
             entity.Property(rule => rule.ApplyMode)
