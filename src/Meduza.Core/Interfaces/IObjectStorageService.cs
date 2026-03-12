@@ -84,4 +84,10 @@ public interface IObjectStorageService
     /// <param name="objectKey">Chave do objeto</param>
     /// <param name="cancellationToken">Token de cancelamento</param>
     Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Testar conectividade com o storage e verificar acesso ao bucket.
+    /// Não lança exceção — retorna resultado estruturado mesmo em caso de falha.
+    /// </summary>
+    Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default);
 }

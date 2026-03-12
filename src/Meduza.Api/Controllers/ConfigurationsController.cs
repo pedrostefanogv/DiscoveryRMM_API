@@ -21,17 +21,20 @@ public class ConfigurationsController : ControllerBase
     private readonly IConfigurationResolver _resolver;
     private readonly IClientRepository _clientRepository;
     private readonly IOptionsMonitor<ReportingOptions> _reportingOptions;
+    private readonly IObjectStorageProviderFactory _storageFactory;
 
     public ConfigurationsController(
         IConfigurationService configService,
         IConfigurationResolver resolver,
         IClientRepository clientRepository,
-        IOptionsMonitor<ReportingOptions> reportingOptions)
+        IOptionsMonitor<ReportingOptions> reportingOptions,
+        IObjectStorageProviderFactory storageFactory)
     {
         _configService = configService;
         _resolver = resolver;
         _clientRepository = clientRepository;
         _reportingOptions = reportingOptions;
+        _storageFactory = storageFactory;
     }
 
     // ============ Server ============
@@ -167,6 +170,14 @@ public class ConfigurationsController : ControllerBase
     }
 
     // ============ Client ============
+
+    [HttpPost("server/object-storage/test")]
+    public async Task<IActionResult> TestObjectStorageConnection(CancellationToken cancellationToken)
+    {
+        var result = await _storageFactory.TestConnectionAsync(cancellationToken);
+        return Ok(result);
+    }
+
 
     [HttpGet("clients/{clientId:guid}")]
     public async Task<IActionResult> GetClient(Guid clientId)

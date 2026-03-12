@@ -27,4 +27,11 @@ public interface IObjectStorageProviderFactory
     /// </summary>
     /// <returns>Lista de erros (vazio se válida)</returns>
     Task<List<string>> ValidateConfigurationAsync();
+
+    /// <summary>
+    /// Testar conectividade com o storage usando as configurações atuais.
+    /// Valida os campos obrigatórios e tenta acessar o bucket configurado.
+    /// Não lança exceção — retorna resultado estruturado mesmo em caso de falha.
+    /// </summary>
+    Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default);
 }
