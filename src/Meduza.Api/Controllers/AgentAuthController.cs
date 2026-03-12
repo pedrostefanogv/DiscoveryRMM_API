@@ -228,6 +228,7 @@ public class AgentAuthController : ControllerBase
         {
             var hardware = request.Hardware ?? new AgentHardwareInfo { AgentId = agentId };
             hardware.AgentId = agentId;
+            var reportedAt = request.InventoryCollectedAt ?? DateTime.UtcNow;
 
             if (hasInventoryPayload)
             {
@@ -248,11 +249,31 @@ public class AgentAuthController : ControllerBase
 
             var existingComponents = await _hardwareRepo.GetComponentsAsync(agentId);
             var components = request.Components;
+            var componentsFromInventory = TryBuildComponentsFromInventoryRaw(inventoryRaw, agentId, reportedAt);
+
+            var disks = components?.Disks;
+            if ((disks is null || disks.Count == 0) && componentsFromInventory is not null && componentsFromInventory.Disks.Count > 0)
+                disks = componentsFromInventory.Disks;
+            if (disks is null || disks.Count == 0)
+                disks = existingComponents.Disks;
+
+            var networkAdapters = components?.NetworkAdapters;
+            if ((networkAdapters is null || networkAdapters.Count == 0) && componentsFromInventory is not null && componentsFromInventory.NetworkAdapters.Count > 0)
+                networkAdapters = componentsFromInventory.NetworkAdapters;
+            if (networkAdapters is null || networkAdapters.Count == 0)
+                networkAdapters = existingComponents.NetworkAdapters;
+
+            var memoryModules = components?.MemoryModules;
+            if ((memoryModules is null || memoryModules.Count == 0) && componentsFromInventory is not null && componentsFromInventory.MemoryModules.Count > 0)
+                memoryModules = componentsFromInventory.MemoryModules;
+            if (memoryModules is null || memoryModules.Count == 0)
+                memoryModules = existingComponents.MemoryModules;
+
             var consolidated = new AgentHardwareComponents
             {
-                Disks = components?.Disks ?? existingComponents.Disks,
-                NetworkAdapters = components?.NetworkAdapters ?? existingComponents.NetworkAdapters,
-                MemoryModules = components?.MemoryModules ?? existingComponents.MemoryModules
+                Disks = disks,
+                NetworkAdapters = networkAdapters,
+                MemoryModules = memoryModules
             };
 
             hardware.HardwareComponentsJson = JsonSerializer.Serialize(consolidated);
@@ -263,6 +284,195 @@ public class AgentAuthController : ControllerBase
         }
 
         return Ok();
+    }
+
+    private static AgentHardwareComponents? TryBuildComponentsFromInventoryRaw(string? inventoryRaw, Guid agentId, DateTime collectedAt)
+    {
+        if (string.IsNullOrWhiteSpace(inventoryRaw))
+            return null;
+
+        JsonElement root;
+        if (!TryParseInventoryRoot(inventoryRaw, out root))
+            return null;
+
+        var result = new AgentHardwareComponents
+        {
+            Disks = ParseDisks(root, agentId, collectedAt),
+            NetworkAdapters = ParseNetworkAdapters(root, agentId, collectedAt),
+            MemoryModules = ParseMemoryModules(root, agentId, collectedAt)
+        };
+
+        return result.Disks.Count == 0 && result.NetworkAdapters.Count == 0 && result.MemoryModules.Count == 0
+            ? null
+            : result;
+    }
+
+    private static bool TryParseInventoryRoot(string inventoryRaw, out JsonElement root)
+    {
+        root = default;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(inventoryRaw);
+            var element = doc.RootElement;
+
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                var innerJson = element.GetString();
+                if (string.IsNullOrWhiteSpace(innerJson))
+                    return false;
+
+                using var innerDoc = JsonDocument.Parse(innerJson);
+                root = innerDoc.RootElement.Clone();
+                return true;
+            }
+
+            if (element.ValueKind != JsonValueKind.Object)
+                return false;
+
+            root = element.Clone();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static List<DiskInfo> ParseDisks(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<DiskInfo>();
+        if (!root.TryGetProperty("disks", out var disksElement) || disksElement.ValueKind != JsonValueKind.Array)
+            return result;
+
+        foreach (var item in disksElement.EnumerateArray())
+        {
+            var driveLetter = GetString(item, "driveLetter")?.Trim();
+            if (string.IsNullOrWhiteSpace(driveLetter))
+                continue;
+
+            result.Add(new DiskInfo
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                DriveLetter = driveLetter,
+                Label = GetString(item, "label"),
+                FileSystem = GetString(item, "fileSystem"),
+                TotalSizeBytes = GetLong(item, "totalSizeBytes"),
+                FreeSpaceBytes = GetLong(item, "freeSpaceBytes"),
+                MediaType = GetString(item, "mediaType"),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    private static List<NetworkAdapterInfo> ParseNetworkAdapters(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<NetworkAdapterInfo>();
+        if (!root.TryGetProperty("networkAdapters", out var adaptersElement) || adaptersElement.ValueKind != JsonValueKind.Array)
+            return result;
+
+        foreach (var item in adaptersElement.EnumerateArray())
+        {
+            var name = GetString(item, "name")?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            result.Add(new NetworkAdapterInfo
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                Name = name,
+                MacAddress = GetString(item, "macAddress"),
+                IpAddress = GetString(item, "ipAddress"),
+                SubnetMask = GetString(item, "subnetMask"),
+                Gateway = GetString(item, "gateway"),
+                DnsServers = GetString(item, "dnsServers"),
+                IsDhcpEnabled = GetBool(item, "isDhcpEnabled"),
+                AdapterType = GetString(item, "adapterType"),
+                Speed = GetString(item, "speed"),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    private static List<MemoryModuleInfo> ParseMemoryModules(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<MemoryModuleInfo>();
+        if (!root.TryGetProperty("memoryModules", out var modulesElement) || modulesElement.ValueKind != JsonValueKind.Array)
+            return result;
+
+        foreach (var item in modulesElement.EnumerateArray())
+        {
+            var capacityBytes = GetLong(item, "capacityBytes");
+            if (capacityBytes <= 0)
+                continue;
+
+            result.Add(new MemoryModuleInfo
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                Slot = GetString(item, "slot"),
+                CapacityBytes = capacityBytes,
+                SpeedMhz = GetNullableInt(item, "speedMhz"),
+                MemoryType = GetString(item, "memoryType"),
+                Manufacturer = GetString(item, "manufacturer"),
+                PartNumber = GetString(item, "partNumber"),
+                SerialNumber = GetString(item, "serialNumber"),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    private static string? GetString(JsonElement obj, string propertyName)
+        => obj.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static long GetLong(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var value))
+            return 0;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number when value.TryGetInt64(out var number) => number,
+            JsonValueKind.String when long.TryParse(value.GetString(), out var parsed) => parsed,
+            _ => 0
+        };
+    }
+
+    private static int? GetNullableInt(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var value))
+            return null;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number when value.TryGetInt32(out var number) => number,
+            JsonValueKind.String when int.TryParse(value.GetString(), out var parsed) => parsed,
+            _ => null
+        };
+    }
+
+    private static bool GetBool(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var value))
+            return false;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
+            _ => false
+        };
     }
 
     [HttpGet("me/commands")]

@@ -53,6 +53,17 @@ public class ReportRetentionBackgroundService : BackgroundService
             var fileCutoff = DateTime.UtcNow.AddDays(-fileRetentionDays);
 
             var reportRepo = scope.ServiceProvider.GetRequiredService<IReportExecutionRepository>();
+            var storageFactory = scope.ServiceProvider.GetRequiredService<IObjectStorageProviderFactory>();
+            var storageValidationErrors = await storageFactory.ValidateConfigurationAsync();
+            if (storageValidationErrors.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Report retention skipped: object storage not configured. Errors: {Errors}",
+                    string.Join("; ", storageValidationErrors));
+                return;
+            }
+
+            var storageService = storageFactory.CreateObjectStorageService();
 
             var expired = await reportRepo.GetExpiredAsync(dbCutoff, 5000);
             if (expired.Count == 0)
@@ -69,25 +80,21 @@ public class ReportRetentionBackgroundService : BackgroundService
 
             foreach (var execution in expired)
             {
-                if (string.IsNullOrWhiteSpace(execution.ResultPath))
+                if (string.IsNullOrWhiteSpace(execution.StorageObjectKey))
                     continue;
 
-                // Remove only files older than configured file retention.
                 if (execution.CreatedAt > fileCutoff)
                     continue;
 
                 try
                 {
-                    if (File.Exists(execution.ResultPath))
-                    {
-                        File.Delete(execution.ResultPath);
-                        deletedFiles++;
-                    }
+                    await storageService.DeleteAsync(execution.StorageObjectKey, stoppingToken);
+                    deletedFiles++;
                 }
                 catch (Exception ex)
                 {
                     fileErrors++;
-                    _logger.LogWarning(ex, "Failed to delete report file: {FilePath}", execution.ResultPath);
+                    _logger.LogWarning(ex, "Failed to delete report object: {ObjectKey}", execution.StorageObjectKey);
                 }
             }
 

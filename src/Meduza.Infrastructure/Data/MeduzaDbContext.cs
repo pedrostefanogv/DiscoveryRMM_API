@@ -54,6 +54,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<KnowledgeArticleChunk> KnowledgeArticleChunks => Set<KnowledgeArticleChunk>();
     public DbSet<TicketKnowledgeLink> TicketKnowledgeLinks => Set<TicketKnowledgeLink>();
 
+    // Object Storage & Attachments (genérico para qualquer escopo)
+    public DbSet<Attachment> Attachments => Set<Attachment>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configure global DateTime converter to ensure UTC timestamps
@@ -61,6 +64,43 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
 
         // Habilita suporte pgvector
         modelBuilder.HasPostgresExtension("vector");
+
+        // Configurar Attachment (genérico para múltiplos escopos)
+        modelBuilder.Entity<Attachment>(entity =>
+        {
+            entity.ToTable("attachments");
+            entity.HasKey(a => a.Id);
+            
+            // Índices para queries eficientes
+            entity.HasIndex(a => new { a.EntityType, a.EntityId })
+                .HasDatabaseName("ix_attachments_entity_type_id");
+            entity.HasIndex(a => a.ClientId)
+                .HasDatabaseName("ix_attachments_client_id");
+            entity.HasIndex(a => a.CreatedAt)
+                .HasDatabaseName("ix_attachments_created_at");
+            entity.HasIndex(a => a.DeletedAt)
+                .HasDatabaseName("ix_attachments_deleted_at");
+            entity.HasIndex(a => a.StorageObjectKey)
+                .HasDatabaseName("ix_attachments_storage_object_key");
+
+            // Mapeamento de colunas
+            entity.Property(a => a.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(a => a.EntityType).HasColumnName("entity_type").HasMaxLength(100);
+            entity.Property(a => a.EntityId).HasColumnName("entity_id");
+            entity.Property(a => a.ClientId).HasColumnName("client_id");
+            entity.Property(a => a.FileName).HasColumnName("file_name").HasMaxLength(500);
+            entity.Property(a => a.Description).HasColumnName("description").HasMaxLength(1000);
+            entity.Property(a => a.StorageObjectKey).HasColumnName("storage_object_key").HasMaxLength(1000);
+            entity.Property(a => a.StorageBucket).HasColumnName("storage_bucket").HasMaxLength(200);
+            entity.Property(a => a.ContentType).HasColumnName("content_type").HasMaxLength(200);
+            entity.Property(a => a.SizeBytes).HasColumnName("size_bytes");
+            entity.Property(a => a.StorageChecksum).HasColumnName("storage_checksum").HasMaxLength(200);
+            entity.Property(a => a.StorageProviderType).HasColumnName("storage_provider_type");
+            entity.Property(a => a.UploadedBy).HasColumnName("uploaded_by").HasMaxLength(256);
+            entity.Property(a => a.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(a => a.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            entity.Property(a => a.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+        });
 
         modelBuilder.Entity<Client>(entity =>
         {
@@ -591,6 +631,15 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.BrandingSettingsJson).HasColumnName("branding_settings_json");
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json");
+            entity.Property(config => config.TicketAttachmentSettingsJson).HasColumnName("ticket_attachment_settings_json");
+            entity.Property(config => config.ObjectStorageBucketName).HasColumnName("object_storage_bucket_name");
+            entity.Property(config => config.ObjectStorageEndpoint).HasColumnName("object_storage_endpoint");
+            entity.Property(config => config.ObjectStorageRegion).HasColumnName("object_storage_region");
+            entity.Property(config => config.ObjectStorageAccessKey).HasColumnName("object_storage_access_key");
+            entity.Property(config => config.ObjectStorageSecretKey).HasColumnName("object_storage_secret_key");
+            entity.Property(config => config.ObjectStorageUrlTtlHours).HasColumnName("object_storage_url_ttl_hours");
+            entity.Property(config => config.ObjectStorageUsePathStyle).HasColumnName("object_storage_use_path_style");
+            entity.Property(config => config.ObjectStorageSslVerify).HasColumnName("object_storage_ssl_verify");
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
             entity.Property(config => config.CreatedAt)
                 .HasColumnName("created_at")
@@ -1304,14 +1353,28 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(execution => execution.Status)
                 .HasColumnName("status")
                 .HasConversion<int>();
-            entity.Property(execution => execution.ResultPath)
-                .HasColumnName("result_path")
-                .HasMaxLength(500);
-            entity.Property(execution => execution.ResultContentType)
-                .HasColumnName("result_content_type")
-                .HasMaxLength(100);
-            entity.Property(execution => execution.ResultSizeBytes)
-                .HasColumnName("result_size_bytes");
+            entity.Property(execution => execution.StorageProviderType)
+                .HasColumnName("storage_provider_type");
+            entity.Property(execution => execution.StorageBucket)
+                .HasColumnName("storage_bucket")
+                .HasMaxLength(200);
+            entity.Property(execution => execution.StorageObjectKey)
+                .HasColumnName("storage_object_key")
+                .HasMaxLength(1000);
+            entity.Property(execution => execution.StorageContentType)
+                .HasColumnName("storage_content_type")
+                .HasMaxLength(200);
+            entity.Property(execution => execution.StorageSizeBytes)
+                .HasColumnName("storage_size_bytes");
+            entity.Property(execution => execution.StorageChecksum)
+                .HasColumnName("storage_checksum")
+                .HasMaxLength(200);
+            entity.Property(execution => execution.StoragePresignedUrl)
+                .HasColumnName("storage_presigned_url")
+                .HasMaxLength(2000);
+            entity.Property(execution => execution.StoragePresignedUrlGeneratedAt)
+                .HasColumnName("storage_presigned_url_generated_at")
+                .HasColumnType("timestamptz");
             entity.Property(execution => execution.RowCount)
                 .HasColumnName("row_count");
             entity.Property(execution => execution.ErrorMessage)

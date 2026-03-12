@@ -105,6 +105,38 @@ public class ServerConfiguration
     public string ReportingSettingsJson { get; set; } = "{}";
 
     /// <summary>
+    /// Configurações globais de anexos de tickets (JSON).
+    /// Exemplo: {"enabled":true,"maxFileSizeBytes":10485760,"allowedContentTypes":["image/jpeg","image/png","application/pdf"]}
+    /// </summary>
+    public string TicketAttachmentSettingsJson { get; set; } = "{}";
+
+    // ============ Object Storage (S3-compatível) ============
+
+    /// <summary>Nome do bucket global para armazenamento</summary>
+    public string ObjectStorageBucketName { get; set; } = string.Empty;
+
+    /// <summary>Endpoint do provedor S3-compatível (ex: s3.amazonaws.com, api.cloudflare.com)</summary>
+    public string ObjectStorageEndpoint { get; set; } = string.Empty;
+
+    /// <summary>Região do provedor (ex: us-east-1, auto)</summary>
+    public string ObjectStorageRegion { get; set; } = string.Empty;
+
+    /// <summary>Access Key ID para autenticação</summary>
+    public string ObjectStorageAccessKey { get; set; } = string.Empty;
+
+    /// <summary>Secret Key para autenticação (criptografada em repouso)</summary>
+    public string ObjectStorageSecretKey { get; set; } = string.Empty;
+
+    /// <summary>TTL padrão para URLs pré-assinadas do download (horas, default 24)</summary>
+    public int ObjectStorageUrlTtlHours { get; set; } = 24;
+
+    /// <summary>Usar path-style URLs em vez de virtual-hosted (necessário para alguns provedores S3-compat)</summary>
+    public bool ObjectStorageUsePathStyle { get; set; } = false;
+
+    /// <summary>Verificar certificado SSL (false apenas para dev com self-signed)</summary>
+    public bool ObjectStorageSslVerify { get; set; } = true;
+
+    /// <summary>
     /// Lista de campos bloqueados para sobrescrita em níveis inferiores (JSON array de nomes de propriedade).
     /// Exemplo: ["DiscoveryEnabled", "InventoryIntervalHours"]
     /// </summary>

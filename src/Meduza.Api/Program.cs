@@ -84,6 +84,14 @@ builder.Services.AddScoped<IAppPackageRepository, AppPackageRepository>();
 builder.Services.AddScoped<IChocolateyPackageRepository, ChocolateyPackageRepository>();
 builder.Services.AddScoped<IWingetPackageRepository, WingetPackageRepository>();
 
+// Object Storage & Attachments (genérico para qualquer escopo)
+builder.Services.AddScoped<IAttachmentRepository, AttachmentRepository>();
+builder.Services.AddScoped<IObjectStorageProviderFactory, ObjectStorageProviderFactory>();
+builder.Services.AddScoped<IAttachmentService, AttachmentService>();
+// Factory resolve IObjectStorageService dinamicamente baseado em ServerConfiguration
+builder.Services.AddScoped<IObjectStorageService>(sp =>
+    sp.GetRequiredService<IObjectStorageProviderFactory>().CreateObjectStorageService());
+
 // Services
 builder.Services.AddScoped<IConfigurationAuditService, ConfigurationAuditService>();
 builder.Services.AddScoped<IConfigurationService, ConfigurationService>();

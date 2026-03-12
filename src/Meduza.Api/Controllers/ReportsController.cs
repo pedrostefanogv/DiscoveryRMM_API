@@ -217,8 +217,8 @@ public class ReportsController : ControllerBase
             executionId = processed.Id,
             status = processed.Status,
             rowCount = processed.RowCount,
-            contentType = processed.ResultContentType,
-            resultSizeBytes = processed.ResultSizeBytes,
+            contentType = processed.StorageContentType,
+            resultSizeBytes = processed.StorageSizeBytes,
             downloadPath
         });
     }
@@ -240,34 +240,24 @@ public class ReportsController : ControllerBase
     [HttpGet("executions/{id:guid}/download")]
     public async Task<IActionResult> DownloadExecution(Guid id, [FromQuery] Guid? clientId)
     {
-        var result = await _reportService.GetDownloadAsync(id, clientId);
-        if (result is null)
+        var url = await _reportService.GetPresignedDownloadUrlAsync(id, clientId);
+        if (string.IsNullOrWhiteSpace(url))
             return NotFound(new { error = "Report file not available." });
 
-        return File(result.Value.Content, result.Value.ContentType, result.Value.FileName, enableRangeProcessing: true);
+        return Redirect(url);
     }
 
     /// <summary>
-    /// Stream download (for large files without loading entire file into memory)
+    /// Compat endpoint: mantém rota antiga e redireciona para URL pré-assinada.
     /// </summary>
     [HttpGet("executions/{id:guid}/download-stream")]
     public async Task<IActionResult> DownloadExecutionStream(Guid id, [FromQuery] Guid? clientId)
     {
-        var execution = await _executionRepository.GetByIdAsync(id, clientId);
-        if (execution is null || execution.Status != ReportExecutionStatus.Completed || string.IsNullOrWhiteSpace(execution.ResultPath))
+        var url = await _reportService.GetPresignedDownloadUrlAsync(id, clientId);
+        if (string.IsNullOrWhiteSpace(url))
             return NotFound(new { error = "Report file not available." });
 
-        var filePath = execution.ResultPath;
-        if (!System.IO.File.Exists(filePath))
-            return NotFound(new { error = "Report file not found on disk." });
-
-        var fileStream = System.IO.File.OpenRead(filePath);
-        var fileName = Path.GetFileName(filePath);
-        var contentType = string.IsNullOrWhiteSpace(execution.ResultContentType) 
-            ? "application/octet-stream" 
-            : execution.ResultContentType;
-
-        return File(fileStream, contentType, fileName, enableRangeProcessing: true);
+        return Redirect(url);
     }
 
     private static Guid? TryGetGuidFromFilters(string? filtersJson, string propertyName)

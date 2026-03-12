@@ -143,6 +143,29 @@ public class ConfigurationsController : ControllerBase
         return Ok(normalized);
     }
 
+    [HttpGet("server/ticket-attachments")]
+    public async Task<IActionResult> GetServerTicketAttachments()
+    {
+        var server = await _configService.GetServerConfigAsync();
+        var settings = TicketAttachmentSettings.FromJson(server.TicketAttachmentSettingsJson);
+        return Ok(settings);
+    }
+
+    [HttpPut("server/ticket-attachments")]
+    public async Task<IActionResult> UpdateServerTicketAttachments([FromBody] TicketAttachmentSettings request)
+    {
+        request ??= new TicketAttachmentSettings();
+        var errors = request.Validate();
+        if (errors.Length > 0)
+            return BadRequest(new { errors });
+
+        var server = await _configService.GetServerConfigAsync();
+        server.TicketAttachmentSettingsJson = request.ToJson();
+
+        await _configService.UpdateServerAsync(server, HttpContext.Items["Username"] as string ?? "api");
+        return Ok(TicketAttachmentSettings.FromJson(server.TicketAttachmentSettingsJson));
+    }
+
     // ============ Client ============
 
     [HttpGet("clients/{clientId:guid}")]

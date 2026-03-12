@@ -1,0 +1,18 @@
+/*
+ * ARQUIVO TEMPORARIAMENTE DESABILITADO
+ * 
+ * MinIO .NET SDK versão 7.0.0 refatorou a API significativamente.
+ * As classes PutObjectArgs, GetObjectArgs, StatObjectArgs, etc. não estão mais disponíveis.
+ * 
+ * Esta implementação será refeita na próxima iteração quando a API Minio for estabilizada.
+ * Por enquanto, LocalObjectStorageProvider é usado para todos os cenários (desenvolvimento e testes).
+ * 
+ * PRÓXIMOS PASSOS:
+ * 1. Analisar API do Minio 7.0+ (https://github.com/minio/minio-dotnet/releases)
+ * 2. Refatorar MinioObjectStorageProvider com novo pattern de Builder 
+ * 3. Implementar suporte a AWS S3, Cloudflare R2, Oracle OCI, etc.
+ * 4. Adicionar testes de integração com S3 local (LocalStack)
+ * 5. Atualizar ObjectStorageProviderFactory para chamar MinioObjectStorageProvider quando ready
+ * 
+ * Referência: A implementação anterior (pré-7.0) está comentada no repositório na branch feature/minio-sdk-upgrade
+ */

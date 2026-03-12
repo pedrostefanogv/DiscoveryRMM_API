@@ -2,6 +2,7 @@ using System.Text.Json;
 using Meduza.Core.Configuration;
 using Meduza.Core.Entities;
 using Meduza.Core.Interfaces;
+using Meduza.Core.ValueObjects;
 
 namespace Meduza.Infrastructure.Services;
 
@@ -368,6 +369,12 @@ public class ConfigurationService : IConfigurationService
         CheckRange(type, config, "AgentOfflineThresholdSeconds", 30, 86400, errors);
         CheckRange(type, config, "TokenExpirationDays", 1, 3650, errors);
         CheckRange(type, config, "MaxTokensPerAgent", 1, 100, errors);
+
+        if (config is ServerConfiguration serverConfiguration)
+        {
+            var settings = TicketAttachmentSettings.FromJson(serverConfiguration.TicketAttachmentSettingsJson);
+            errors.AddRange(settings.Validate());
+        }
 
         return Task.FromResult((errors.Count == 0, errors.ToArray()));
     }

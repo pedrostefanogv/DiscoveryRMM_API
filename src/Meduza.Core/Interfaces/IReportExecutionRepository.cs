@@ -12,5 +12,15 @@ public interface IReportExecutionRepository
     Task<IReadOnlyList<ReportExecution>> GetExpiredAsync(DateTime cutoff, int limit = 1000);
     Task<int> DeleteByIdsAsync(IReadOnlyCollection<Guid> ids);
     Task UpdateStatusAsync(Guid id, Guid? clientId, ReportExecutionStatus status, string? errorMessage = null);
-    Task UpdateResultAsync(Guid id, Guid? clientId, string resultPath, string resultContentType, long resultSizeBytes, int rowCount, int executionTimeMs);
+    Task UpdateResultAsync(
+        Guid id,
+        Guid? clientId,
+        string storageObjectKey,
+        string storageBucket,
+        string storageContentType,
+        long storageSizeBytes,
+        string? storageChecksum,
+        int storageProviderType,
+        int rowCount,
+        int executionTimeMs);
 }

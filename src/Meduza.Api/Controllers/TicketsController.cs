@@ -1,6 +1,7 @@
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
+using Meduza.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Meduza.Api.Controllers;
@@ -15,6 +16,8 @@ public class TicketsController : ControllerBase
     private readonly IWorkflowProfileRepository _workflowProfileRepo;
     private readonly ISlaService _slaService;
     private readonly IActivityLogService _activityLogService;
+    private readonly IAttachmentService _attachmentService;
+    private readonly IServerConfigurationRepository _serverConfigurationRepository;
 
     public TicketsController(
         ITicketRepository repo,
@@ -22,7 +25,9 @@ public class TicketsController : ControllerBase
         IDepartmentRepository departmentRepo,
         IWorkflowProfileRepository workflowProfileRepo,
         ISlaService slaService,
-        IActivityLogService activityLogService)
+        IActivityLogService activityLogService,
+        IAttachmentService attachmentService,
+        IServerConfigurationRepository serverConfigurationRepository)
     {
         _repo = repo;
         _workflowRepo = workflowRepo;
@@ -30,6 +35,8 @@ public class TicketsController : ControllerBase
         _workflowProfileRepo = workflowProfileRepo;
         _slaService = slaService;
         _activityLogService = activityLogService;
+        _attachmentService = attachmentService;
+        _serverConfigurationRepository = serverConfigurationRepository;
     }
 
     [HttpGet]
@@ -210,6 +217,116 @@ public class TicketsController : ControllerBase
         return Created($"api/tickets/{id}/comments", created);
     }
 
+    [HttpGet("{id:guid}/attachments")]
+    public async Task<IActionResult> GetAttachments(Guid id)
+    {
+        var ticket = await _repo.GetByIdAsync(id);
+        if (ticket is null)
+            return NotFound();
+
+        var attachments = await _attachmentService.GetAttachmentsForEntityAsync("Ticket", id);
+        return Ok(attachments);
+    }
+
+    [HttpPost("{id:guid}/attachments/presigned-upload")]
+    public async Task<IActionResult> PrepareAttachmentUpload(Guid id, [FromBody] PrepareTicketAttachmentUploadRequest request)
+    {
+        var ticket = await _repo.GetByIdAsync(id);
+        if (ticket is null)
+            return NotFound();
+
+        if (string.IsNullOrWhiteSpace(request.FileName) || string.IsNullOrWhiteSpace(request.ContentType))
+            return BadRequest(new { error = "FileName e ContentType são obrigatórios." });
+
+        if (request.SizeBytes <= 0)
+            return BadRequest(new { error = "SizeBytes deve ser maior que zero." });
+
+        var settings = await GetTicketAttachmentSettingsAsync();
+        if (!settings.Enabled)
+            return BadRequest(new { error = "Upload de anexos para tickets está desabilitado." });
+
+        if (!settings.IsContentTypeAllowed(request.ContentType))
+            return BadRequest(new
+            {
+                error = "Tipo de arquivo não permitido para tickets.",
+                allowedContentTypes = settings.AllowedContentTypes
+            });
+
+        if (request.SizeBytes > settings.MaxFileSizeBytes)
+            return BadRequest(new
+            {
+                error = "Arquivo excede o tamanho máximo permitido.",
+                maxFileSizeBytes = settings.MaxFileSizeBytes
+            });
+
+        var prepared = await _attachmentService.PreparePresignedUploadAsync(
+            "Ticket",
+            id,
+            ticket.ClientId,
+            request.FileName,
+            request.ContentType,
+            request.SizeBytes,
+            settings.PresignedUploadUrlTtlMinutes);
+
+        return Ok(prepared);
+    }
+
+    [HttpPost("{id:guid}/attachments/complete-upload")]
+    public async Task<IActionResult> CompleteAttachmentUpload(Guid id, [FromBody] CompleteTicketAttachmentUploadRequest request)
+    {
+        var ticket = await _repo.GetByIdAsync(id);
+        if (ticket is null)
+            return NotFound();
+
+        if (request.AttachmentId == Guid.Empty)
+            return BadRequest(new { error = "AttachmentId inválido." });
+
+        if (string.IsNullOrWhiteSpace(request.ObjectKey) ||
+            string.IsNullOrWhiteSpace(request.FileName) ||
+            string.IsNullOrWhiteSpace(request.ContentType))
+        {
+            return BadRequest(new { error = "ObjectKey, FileName e ContentType são obrigatórios." });
+        }
+
+        if (request.SizeBytes <= 0)
+            return BadRequest(new { error = "SizeBytes deve ser maior que zero." });
+
+        var settings = await GetTicketAttachmentSettingsAsync();
+        if (!settings.Enabled)
+            return BadRequest(new { error = "Upload de anexos para tickets está desabilitado." });
+
+        if (!settings.IsContentTypeAllowed(request.ContentType))
+            return BadRequest(new
+            {
+                error = "Tipo de arquivo não permitido para tickets.",
+                allowedContentTypes = settings.AllowedContentTypes
+            });
+
+        if (request.SizeBytes > settings.MaxFileSizeBytes)
+            return BadRequest(new
+            {
+                error = "Arquivo excede o tamanho máximo permitido.",
+                maxFileSizeBytes = settings.MaxFileSizeBytes
+            });
+
+        var expectedPrefix = $"clients/{ticket.ClientId:N}/ticket/{id:N}/attachments/{request.AttachmentId:N}/";
+        if (!request.ObjectKey.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = "ObjectKey inválido para este ticket/cliente." });
+
+        var attachment = await _attachmentService.CompletePresignedUploadAsync(
+            request.AttachmentId,
+            "Ticket",
+            id,
+            ticket.ClientId,
+            request.FileName,
+            request.ContentType,
+            request.SizeBytes,
+            request.ObjectKey,
+            request.UploadedBy);
+
+        return Created($"api/tickets/{id}/attachments/{attachment.Id}", attachment);
+    }
+
     /// <summary>
     /// Deleta (soft delete) um ticket.
     /// </summary>
@@ -232,6 +349,12 @@ public class TicketsController : ControllerBase
         );
 
         return NoContent();
+    }
+
+    private async Task<TicketAttachmentSettings> GetTicketAttachmentSettingsAsync()
+    {
+        var serverConfig = await _serverConfigurationRepository.GetOrCreateDefaultAsync();
+        return TicketAttachmentSettings.FromJson(serverConfig.TicketAttachmentSettingsJson);
     }
 }
 
@@ -257,3 +380,16 @@ public record UpdateTicketRequest(
 public record UpdateWorkflowStateRequest(Guid WorkflowStateId);
 
 public record AddCommentRequest(string Author, string Content, bool IsInternal);
+
+public record PrepareTicketAttachmentUploadRequest(
+    string FileName,
+    string ContentType,
+    long SizeBytes);
+
+public record CompleteTicketAttachmentUploadRequest(
+    Guid AttachmentId,
+    string ObjectKey,
+    string FileName,
+    string ContentType,
+    long SizeBytes,
+    string? UploadedBy);

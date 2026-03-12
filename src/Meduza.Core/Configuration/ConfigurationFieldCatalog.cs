@@ -22,6 +22,7 @@ public static class ConfigurationFieldCatalog
         "InventoryIntervalHours",
         "AutoUpdateSettingsJson",
         "AIIntegrationSettingsJson",
+        "TicketAttachmentSettingsJson",
         "TokenExpirationDays",
         "MaxTokensPerAgent",
         "AgentHeartbeatIntervalSeconds",

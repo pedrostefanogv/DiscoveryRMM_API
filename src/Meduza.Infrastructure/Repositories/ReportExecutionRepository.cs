@@ -104,7 +104,17 @@ public class ReportExecutionRepository : IReportExecutionRepository
         await _db.SaveChangesAsync();
     }
 
-    public async Task UpdateResultAsync(Guid id, Guid? clientId, string resultPath, string resultContentType, long resultSizeBytes, int rowCount, int executionTimeMs)
+    public async Task UpdateResultAsync(
+        Guid id,
+        Guid? clientId,
+        string storageObjectKey,
+        string storageBucket,
+        string storageContentType,
+        long storageSizeBytes,
+        string? storageChecksum,
+        int storageProviderType,
+        int rowCount,
+        int executionTimeMs)
     {
         var execution = await _db.ReportExecutions
             .FirstOrDefaultAsync(item => item.Id == id && (!clientId.HasValue || item.ClientId == clientId.Value));
@@ -112,9 +122,12 @@ public class ReportExecutionRepository : IReportExecutionRepository
         if (execution is null)
             throw new InvalidOperationException($"Report execution {id} not found.");
 
-        execution.ResultPath = resultPath;
-        execution.ResultContentType = resultContentType;
-        execution.ResultSizeBytes = resultSizeBytes;
+        execution.StorageObjectKey = storageObjectKey;
+        execution.StorageBucket = storageBucket;
+        execution.StorageContentType = storageContentType;
+        execution.StorageSizeBytes = storageSizeBytes;
+        execution.StorageChecksum = storageChecksum;
+        execution.StorageProviderType = storageProviderType;
         execution.RowCount = rowCount;
         execution.ExecutionTimeMs = executionTimeMs;
         execution.Status = ReportExecutionStatus.Completed;

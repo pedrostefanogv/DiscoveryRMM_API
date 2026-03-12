@@ -17,10 +17,10 @@ public class ReportService : IReportService
     private readonly IReportDatasetQueryService _datasetQueryService;
     private readonly Dictionary<ReportFormat, IReportRenderer> _renderers;
     private readonly INotificationService _notificationService;
+    private readonly IObjectStorageProviderFactory _storageProviderFactory;
     private readonly ILogger<ReportService> _logger;
     private readonly IMemoryCache _cache;
     private readonly ReportingOptions _options;
-    private readonly string _outputDirectory;
     
     // Cache key pattern for report results
     private const string CacheKeyFormat = "report-exec:{0}";
@@ -31,6 +31,7 @@ public class ReportService : IReportService
         IReportTemplateRepository templateRepository,
         IReportDatasetQueryService datasetQueryService,
         INotificationService notificationService,
+        IObjectStorageProviderFactory storageProviderFactory,
         IEnumerable<IReportRenderer> renderers,
         IMemoryCache cache,
         IOptions<ReportingOptions> options,
@@ -41,14 +42,12 @@ public class ReportService : IReportService
         _templateRepository = templateRepository;
         _datasetQueryService = datasetQueryService;
         _notificationService = notificationService;
+        _storageProviderFactory = storageProviderFactory;
         _cache = cache;
         _options = options.Value;
         _logger = logger;
 
         _renderers = renderers.ToDictionary(renderer => renderer.Format);
-
-        _outputDirectory = Path.Combine(AppContext.BaseDirectory, "report-exports");
-        Directory.CreateDirectory(_outputDirectory);
     }
 
     public async Task<ReportExecution> ProcessExecutionAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default)
@@ -96,16 +95,26 @@ public class ReportService : IReportService
             var document = await renderer.RenderAsync(template.Name, data, timeoutCts.Token);
 
             var fileName = $"report-{executionId:N}.{document.FileExtension}";
-            var filePath = Path.Combine(_outputDirectory, fileName);
-            await File.WriteAllBytesAsync(filePath, document.Content, timeoutCts.Token);
+            var objectKey = ComposeReportObjectKey(clientId, executionId, fileName);
+
+            var storageService = _storageProviderFactory.CreateObjectStorageService();
+            await using var contentStream = new MemoryStream(document.Content, writable: false);
+            var storageObject = await storageService.UploadAsync(
+                objectKey,
+                contentStream,
+                document.ContentType,
+                timeoutCts.Token);
 
             var elapsed = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds;
             await _executionRepository.UpdateResultAsync(
                 executionId,
                 clientId,
-                filePath,
+                storageObject.ObjectKey,
+                storageObject.Bucket,
                 document.ContentType,
-                document.Content.LongLength,
+                storageObject.SizeBytes,
+                storageObject.Checksum,
+                (int)storageObject.StorageProvider,
                 data.Rows.Count,
                 elapsed);
 
@@ -192,49 +201,38 @@ public class ReportService : IReportService
         return results;
     }
 
-    public async Task<(byte[] Content, string ContentType, string FileName)?> GetDownloadAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default)
+    public async Task<string?> GetPresignedDownloadUrlAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default)
     {
-        // Try cache first to avoid DB query on repeated downloads
         var cacheKey = string.Format(CacheKeyFormat, executionId);
         ReportExecution? execution = null;
-        
+
         if (!_cache.TryGetValue(cacheKey, out execution))
         {
-            // Cache miss - fetch from DB
             execution = await _executionRepository.GetByIdAsync(executionId, clientId);
             if (execution is not null)
             {
-                // Cache for 1 hour to avoid repeated DB queries
                 _cache.Set(cacheKey, execution, TimeSpan.FromHours(1));
             }
         }
-        
-        if (execution is null || execution.Status != ReportExecutionStatus.Completed || string.IsNullOrWhiteSpace(execution.ResultPath))
+
+        if (execution is null || execution.Status != ReportExecutionStatus.Completed || string.IsNullOrWhiteSpace(execution.StorageObjectKey))
             return null;
 
-        if (!File.Exists(execution.ResultPath))
-            return null;
+        var serverConfig = await _serverConfigurationRepository.GetOrCreateDefaultAsync();
+        var ttlHours = serverConfig.ObjectStorageUrlTtlHours > 0 ? serverConfig.ObjectStorageUrlTtlHours : 24;
 
-        // Use streaming for large files - don't load entire file into memory
-        var fileInfo = new FileInfo(execution.ResultPath);
-        
-        // Only load into memory if file is reasonably sized (< 50MB)
-        // For larger files, consider returning a FileStream and updating controller
-        if (fileInfo.Length > 52_428_800) // 50MB threshold
-        {
-            _logger.LogWarning("Report file {FileName} is {SizeBytes} bytes. Consider implementing streaming download.", 
-                fileInfo.Name, fileInfo.Length);
-        }
+        var storageService = _storageProviderFactory.CreateObjectStorageService();
+        var downloadUrl = await storageService.GetPresignedDownloadUrlAsync(execution.StorageObjectKey, ttlHours, cancellationToken);
 
-        var content = await File.ReadAllBytesAsync(execution.ResultPath, cancellationToken);
-        var fileName = Path.GetFileName(execution.ResultPath);
-        var contentType = string.IsNullOrWhiteSpace(execution.ResultContentType)
-            ? "application/octet-stream"
-            : execution.ResultContentType;
+        return downloadUrl;
+    }
 
-        _logger.LogInformation("Downloaded report {ExecutionId} ({SizeBytes} bytes)", executionId, fileInfo.Length);
-
-        return (content, contentType, fileName);
+    private static string ComposeReportObjectKey(Guid? clientId, Guid executionId, string fileName)
+    {
+        var safeFileName = string.IsNullOrWhiteSpace(fileName) ? $"report-{executionId:N}.bin" : fileName.Trim();
+        return clientId.HasValue && clientId.Value != Guid.Empty
+            ? $"clients/{clientId.Value:N}/reports/{executionId:N}/{safeFileName}"
+            : $"global/reports/{executionId:N}/{safeFileName}";
     }
 
     private async Task<ReportingOptions> GetEffectiveReportingOptionsAsync()
