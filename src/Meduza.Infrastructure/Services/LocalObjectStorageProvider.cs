@@ -271,6 +271,14 @@ public class LocalObjectStorageProvider : IObjectStorageService
         }
     }
 
+    public Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ObjectStorageTestResult(
+            Success: false,
+            ConfigurationValid: false,
+            BucketReachable: false,
+            Errors: ["Local storage provider está desativado. Use o provider S3-compatível (MinIO)."],
+            LatencyMs: 0));
+
     /// <summary>
     /// Normalizar object key para caminho local seguro.
     /// Evitar path traversal attacks.

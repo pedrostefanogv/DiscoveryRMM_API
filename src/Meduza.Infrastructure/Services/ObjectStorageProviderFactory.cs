@@ -124,55 +124,55 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
             UsePathStyle = serverConfig.ObjectStorageUsePathStyle,
             SslVerify = serverConfig.ObjectStorageSslVerify
         };
+    }
+}
 
-    /// <summary>
-    /// Provider retornado quando o object storage não está configurado.
-    /// Todas as operações lançam InvalidOperationException com mensagem clara.
-    /// TestConnectionAsync retorna resultado estruturado sem lançar.
-    /// </summary>
-    file sealed class NotConfiguredObjectStorageProvider : IObjectStorageService
+/// <summary>
+/// Provider retornado quando o object storage não está configurado.
+/// Todas as operações lançam InvalidOperationException com mensagem clara.
+/// TestConnectionAsync retorna resultado estruturado sem lançar.
+/// </summary>
+file sealed class NotConfiguredObjectStorageProvider : IObjectStorageService
+{
+    private readonly string _reason;
+
+    public NotConfiguredObjectStorageProvider(List<string> errors)
     {
-        private readonly string _reason;
-
-        public NotConfiguredObjectStorageProvider(List<string> errors)
-        {
-            _reason = string.Join("; ", errors);
-        }
-
-        private InvalidOperationException NotConfigured() =>
-            new($"Object storage não está configurado e não pode ser usado. Configure o storage em Configurações > Servidor. Detalhes: {_reason}");
-
-        public Task<StorageObject> UploadAsync(string objectKey, Stream content, string contentType, CancellationToken cancellationToken = default)
-            => throw NotConfigured();
-
-        public Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default)
-            => throw NotConfigured();
-
-        public Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default)
-            => throw NotConfigured();
-
-        public Task DeleteAsync(string objectKey, CancellationToken cancellationToken = default)
-            => throw NotConfigured();
-
-        public Task DeleteByPrefixAsync(string prefix, CancellationToken cancellationToken = default)
-            => throw NotConfigured();
-
-        public Task<string> GetPresignedDownloadUrlAsync(string objectKey, int ttlHours, CancellationToken cancellationToken = default)
-            => throw NotConfigured();
-
-        public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
-            => throw NotConfigured();
-
-        public Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
-            => throw NotConfigured();
-
-        public Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ObjectStorageTestResult(
-                Success: false,
-                ConfigurationValid: false,
-                BucketReachable: false,
-                Errors: [_reason],
-                LatencyMs: 0));
+        _reason = string.Join("; ", errors);
     }
-    }
+
+    private InvalidOperationException NotConfigured() =>
+        new($"Object storage não está configurado e não pode ser usado. Configure o storage em Configurações > Servidor. Detalhes: {_reason}");
+
+    public Task<StorageObject> UploadAsync(string objectKey, Stream content, string contentType, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task DeleteAsync(string objectKey, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task DeleteByPrefixAsync(string prefix, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<string> GetPresignedDownloadUrlAsync(string objectKey, int ttlHours, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ObjectStorageTestResult(
+            Success: false,
+            ConfigurationValid: false,
+            BucketReachable: false,
+            Errors: [_reason],
+            LatencyMs: 0));
 }
