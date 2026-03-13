@@ -6,5 +6,6 @@ public enum ReportDatasetType
     Logs = 1,
     ConfigurationAudit = 2,
     Tickets = 3,
-    AgentHardware = 4
+    AgentHardware = 4,
+    AgentInventoryComposite = 5
 }

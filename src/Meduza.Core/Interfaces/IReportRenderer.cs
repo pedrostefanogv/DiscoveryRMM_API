@@ -6,5 +6,5 @@ namespace Meduza.Core.Interfaces;
 public interface IReportRenderer
 {
     ReportFormat Format { get; }
-    Task<ReportDocument> RenderAsync(string title, ReportQueryResult data, CancellationToken cancellationToken = default);
+    Task<ReportDocument> RenderAsync(ReportRenderContext context, ReportQueryResult data, CancellationToken cancellationToken = default);
 }

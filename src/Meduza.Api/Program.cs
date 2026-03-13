@@ -56,6 +56,7 @@ builder.Services.AddScoped<IEntityNoteRepository, EntityNoteRepository>();
 builder.Services.AddScoped<IReportTemplateRepository, ReportTemplateRepository>();
 builder.Services.AddScoped<IReportExecutionRepository, ReportExecutionRepository>();
 builder.Services.AddScoped<IReportDatasetQueryService, ReportDatasetQueryService>();
+builder.Services.AddScoped<IReportHtmlComposer, ReportHtmlComposer>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<INotificationRepository, NotificationRepository>();
 builder.Services.AddScoped<INotificationService, NotificationService>();

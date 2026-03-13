@@ -1,7 +1,9 @@
 using Meduza.Core.Configuration;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
+using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
+using Meduza.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
@@ -43,12 +45,124 @@ public class ReportsController : ControllerBase
             .Select(item => new
             {
                 type = item.Key,
+                key = ToCamelCase(item.Key.ToString()),
+                name = GetDatasetDisplayName(item.Key),
+                description = GetDatasetDescription(item.Key),
                 fields = item.Value.Fields,
+                fieldMetadata = item.Value.Fields.Select(field => new
+                {
+                    name = field,
+                    dataType = InferFieldType(field),
+                    isJoinKey = IsJoinKeyField(field)
+                }),
+                joinCapabilities = new
+                {
+                    supportsJoin = true,
+                    allowedJoinTypes = new[] { "left", "inner" },
+                    preferredKeys = item.Value.Fields.Where(IsJoinKeyField).ToArray(),
+                    defaultJoinType = "left"
+                },
                 formats = _enabledFormats,
-                executionSchema = item.Value.ExecutionSchema
+                executionSchema = item.Value.ExecutionSchema,
+                supportsAsPrimarySource = true,
+                supportsAsSecondarySource = true
             });
 
         return Ok(datasets);
+    }
+
+    [HttpGet("layout-schema")]
+    public IActionResult GetLayoutSchema()
+    {
+        return Ok(new
+        {
+            previewModes = new[] { "document", "html" },
+            responseDispositions = new[] { "inline", "attachment" },
+            orientations = ReportLayoutValidator.GetSupportedOrientations(),
+            columnFormats = ReportLayoutValidator.GetSupportedColumnFormats(),
+            summaryAggregates = ReportLayoutValidator.GetSupportedSummaryAggregates(),
+            limits = ReportLayoutValidator.GetLimits(),
+            multiSource = new
+            {
+                enabled = true,
+                aliasPattern = "^[A-Za-z_][A-Za-z0-9_]*$",
+                allowedJoinTypes = new[] { "left", "inner" },
+                fieldReferenceMode = "alias.field",
+                dataSourceContract = new
+                {
+                    requiredFields = new[] { "datasetType", "alias" },
+                    joinRequiredFromIndex = 1,
+                    joinFields = new[] { "joinToAlias", "sourceKey", "targetKey", "joinType" }
+                },
+                examples = new[]
+                {
+                    "hw.agentHostname",
+                    "sw.softwareName",
+                    "labels.automaticLabels"
+                }
+            },
+            notes = new[]
+            {
+                "Use columns for a single main table.",
+                "Use sections for multiple subtables in the same report or group.",
+                "Use groupDetails to render key-value cards above each grouped section.",
+                "Use groupBy with groupTitleTemplate to create sections such as Agent X followed by its data.",
+                "For multi-source reports, use layout.dataSources and reference fields as alias.field."
+            }
+        });
+    }
+
+    [HttpGet("autocomplete")]
+    public IActionResult GetAutocomplete(
+        [FromQuery] string? term,
+        [FromQuery] ReportDatasetType? datasetType,
+        [FromQuery] string? alias)
+    {
+        var normalizedTerm = string.IsNullOrWhiteSpace(term)
+            ? null
+            : term.Trim();
+
+        var datasets = DatasetCatalog
+            .Where(item => !datasetType.HasValue || item.Key == datasetType.Value)
+            .Select(item =>
+            {
+                var defaultAlias = string.IsNullOrWhiteSpace(alias)
+                    ? GetDefaultAlias(item.Key)
+                    : alias.Trim();
+
+                var fields = item.Value.Fields
+                    .Select(field => new
+                    {
+                        datasetType = item.Key,
+                        datasetKey = ToCamelCase(item.Key.ToString()),
+                        datasetName = GetDatasetDisplayName(item.Key),
+                        field,
+                        reference = $"{defaultAlias}.{field}",
+                        dataType = InferFieldType(field),
+                        isJoinKey = IsJoinKeyField(field),
+                        defaultAlias
+                    });
+
+                if (normalizedTerm is null)
+                    return fields;
+
+                return fields.Where(entry =>
+                    entry.field.Contains(normalizedTerm, StringComparison.OrdinalIgnoreCase)
+                    || entry.reference.Contains(normalizedTerm, StringComparison.OrdinalIgnoreCase)
+                    || entry.datasetName.Contains(normalizedTerm, StringComparison.OrdinalIgnoreCase));
+            })
+            .SelectMany(item => item)
+            .OrderBy(item => item.datasetName)
+            .ThenBy(item => item.field)
+            .Take(500)
+            .ToArray();
+
+        return Ok(new
+        {
+            fieldReferenceMode = "alias.field",
+            total = datasets.Length,
+            items = datasets
+        });
     }
 
     [HttpPost("templates")]
@@ -223,6 +337,102 @@ public class ReportsController : ControllerBase
         });
     }
 
+    [HttpPost("preview")]
+    public async Task<IActionResult> PreviewReport([FromBody] PreviewReportRequest request, CancellationToken cancellationToken)
+    {
+        if (request.TemplateId is null && request.Template is null)
+        {
+            return BadRequest(new
+            {
+                error = "TemplateId or template draft must be provided for preview."
+            });
+        }
+
+        ReportTemplate? baseTemplate = null;
+        if (request.TemplateId.HasValue)
+        {
+            baseTemplate = await _templateRepository.GetByIdAsync(request.TemplateId.Value, null);
+            if (baseTemplate is null)
+                return NotFound(new { error = "Template not found." });
+        }
+
+        var (effectiveTemplate, previewErrors) = BuildPreviewTemplate(baseTemplate, request.Template);
+        if (previewErrors.Count > 0)
+        {
+            return BadRequest(new
+            {
+                error = "Invalid preview template.",
+                details = previewErrors
+            });
+        }
+
+        var layoutErrors = ReportLayoutValidator.ValidateJson(effectiveTemplate!.LayoutJson);
+        if (layoutErrors.Count > 0)
+        {
+            return BadRequest(new
+            {
+                error = "Invalid report layout for preview.",
+                details = layoutErrors
+            });
+        }
+
+        effectiveTemplate.FiltersJson = MergeFiltersJson(effectiveTemplate.FiltersJson, request.FiltersJson);
+
+        var previewMode = string.Equals(request.PreviewMode, "html", StringComparison.OrdinalIgnoreCase)
+            ? "html"
+            : "document";
+
+        var selectedFormat = request.Format ?? effectiveTemplate.DefaultFormat;
+        if (previewMode != "html" && !_enabledFormats.Contains(selectedFormat))
+        {
+            return BadRequest(new
+            {
+                error = "Format not enabled in current reporting configuration.",
+                requested = selectedFormat,
+                enabled = _enabledFormats
+            });
+        }
+
+        var validationErrors = ValidateTemplateFilters(
+            effectiveTemplate.DatasetType,
+            effectiveTemplate.FiltersJson,
+            DeserializeExecutionSchema(effectiveTemplate.ExecutionSchemaJson, effectiveTemplate.DatasetType));
+
+        if (validationErrors.Count > 0)
+        {
+            return BadRequest(new
+            {
+                error = "Invalid report filters for preview.",
+                datasetType = effectiveTemplate.DatasetType,
+                details = validationErrors
+            });
+        }
+
+        if (previewMode == "html")
+        {
+            var htmlPreview = await _reportService.PreviewHtmlAsync(effectiveTemplate, effectiveTemplate.FiltersJson, cancellationToken);
+            Response.Headers.Append("X-Report-Preview", "true");
+            Response.Headers.Append("X-Report-RowCount", htmlPreview.RowCount.ToString());
+            Response.Headers.Append("X-Report-Title", htmlPreview.Title);
+            Response.Headers.Append("X-Report-Format", "Html");
+
+            return Content(htmlPreview.Html, "text/html; charset=utf-8");
+        }
+
+        var preview = await _reportService.PreviewAsync(effectiveTemplate, selectedFormat, effectiveTemplate.FiltersJson, cancellationToken);
+        Response.Headers.Append("X-Report-Preview", "true");
+        Response.Headers.Append("X-Report-RowCount", preview.RowCount.ToString());
+        Response.Headers.Append("X-Report-Title", preview.Title);
+        Response.Headers.Append("X-Report-Format", selectedFormat.ToString());
+
+        var downloadName = BuildPreviewFileName(request.FileName, preview.Title, preview.Document.FileExtension);
+        var disposition = string.Equals(request.ResponseDisposition, "attachment", StringComparison.OrdinalIgnoreCase)
+            ? "attachment"
+            : "inline";
+        Response.Headers.ContentDisposition = $"{disposition}; filename=\"{downloadName}\"";
+        return File(preview.Document.Content, preview.Document.ContentType);
+    }
+
     [HttpGet("executions/{id:guid}")]
     public async Task<IActionResult> GetExecutionById(Guid id, [FromQuery] Guid? clientId)
     {
@@ -318,26 +528,7 @@ public class ReportsController : ControllerBase
 
     private static ReportTemplateResponse ToTemplateResponse(ReportTemplate template)
     {
-        ReportExecutionSchema? executionSchema = null;
-
-        // Prioridade: schema customizado do template > schema padrão do dataset
-        if (!string.IsNullOrWhiteSpace(template.ExecutionSchemaJson))
-        {
-            try
-            {
-                executionSchema = JsonSerializer.Deserialize<ReportExecutionSchema>(template.ExecutionSchemaJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            }
-            catch
-            {
-                // Falha ao deserializar schema customizado, usa padrão do dataset
-                DatasetCatalog.TryGetValue(template.DatasetType, out var fallback);
-                executionSchema = fallback?.ExecutionSchema;
-            }
-        }
-        else if (DatasetCatalog.TryGetValue(template.DatasetType, out var specification))
-        {
-            executionSchema = specification.ExecutionSchema;
-        }
+        var executionSchema = DeserializeExecutionSchema(template.ExecutionSchemaJson, template.DatasetType);
 
         return new ReportTemplateResponse(
             template.Id,
@@ -357,6 +548,113 @@ public class ReportsController : ControllerBase
             template.UpdatedBy,
             executionSchema,
             template.ExecutionSchemaJson);
+    }
+
+    private static ReportExecutionSchema? DeserializeExecutionSchema(string? executionSchemaJson, ReportDatasetType datasetType)
+    {
+        if (!string.IsNullOrWhiteSpace(executionSchemaJson))
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<ReportExecutionSchema>(executionSchemaJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+            catch
+            {
+                // ignora e usa schema padrão do dataset
+            }
+        }
+
+        return DatasetCatalog.TryGetValue(datasetType, out var specification)
+            ? specification.ExecutionSchema
+            : null;
+    }
+
+    private static (ReportTemplate? Template, List<string> Errors) BuildPreviewTemplate(ReportTemplate? baseTemplate, PreviewReportTemplateDraft? draft)
+    {
+        var errors = new List<string>();
+
+        if (baseTemplate is null && draft is null)
+        {
+            errors.Add("A preview template or a persisted templateId is required.");
+            return (null, errors);
+        }
+
+        var template = baseTemplate is null
+            ? new ReportTemplate
+            {
+                Name = "Preview Report",
+                LayoutJson = "{}",
+                DefaultFormat = ReportFormat.Xlsx
+            }
+            : new ReportTemplate
+            {
+                Id = baseTemplate.Id,
+                ClientId = baseTemplate.ClientId,
+                Name = baseTemplate.Name,
+                Description = baseTemplate.Description,
+                Instructions = baseTemplate.Instructions,
+                ExecutionSchemaJson = baseTemplate.ExecutionSchemaJson,
+                DatasetType = baseTemplate.DatasetType,
+                DefaultFormat = baseTemplate.DefaultFormat,
+                LayoutJson = baseTemplate.LayoutJson,
+                FiltersJson = baseTemplate.FiltersJson,
+                IsActive = baseTemplate.IsActive,
+                Version = baseTemplate.Version,
+                CreatedAt = baseTemplate.CreatedAt,
+                UpdatedAt = baseTemplate.UpdatedAt,
+                CreatedBy = baseTemplate.CreatedBy,
+                UpdatedBy = baseTemplate.UpdatedBy
+            };
+
+        if (draft is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(draft.Name))
+                template.Name = draft.Name;
+            if (draft.Description is not null)
+                template.Description = draft.Description;
+            if (draft.Instructions is not null)
+                template.Instructions = draft.Instructions;
+            if (draft.ExecutionSchemaJson is not null)
+                template.ExecutionSchemaJson = draft.ExecutionSchemaJson;
+            if (draft.DatasetType.HasValue)
+                template.DatasetType = draft.DatasetType.Value;
+            if (draft.DefaultFormat.HasValue)
+                template.DefaultFormat = draft.DefaultFormat.Value;
+            if (draft.LayoutJson is not null)
+                template.LayoutJson = draft.LayoutJson;
+            if (draft.FiltersJson is not null)
+                template.FiltersJson = draft.FiltersJson;
+        }
+
+        if (string.IsNullOrWhiteSpace(template.Name))
+            template.Name = "Preview Report";
+
+        if (string.IsNullOrWhiteSpace(template.LayoutJson))
+            template.LayoutJson = "{}";
+
+        if (template.DatasetType == default && baseTemplate is null && draft?.DatasetType is null)
+            errors.Add("DatasetType is required when previewing a draft template.");
+
+        return (template, errors);
+    }
+
+    private static string BuildPreviewFileName(string? requestedFileName, string title, string extension)
+    {
+        var candidate = string.IsNullOrWhiteSpace(requestedFileName) ? title : requestedFileName;
+        candidate = string.IsNullOrWhiteSpace(candidate) ? "report-preview" : candidate.Trim();
+
+        var sanitized = new string(candidate
+            .Select(ch => System.IO.Path.GetInvalidFileNameChars().Contains(ch) ? '-' : ch)
+            .ToArray())
+            .Trim();
+
+        if (string.IsNullOrWhiteSpace(sanitized))
+            sanitized = "report-preview";
+
+        if (!sanitized.EndsWith($".{extension}", StringComparison.OrdinalIgnoreCase))
+            sanitized = $"{sanitized}.{extension}";
+
+        return sanitized;
     }
 
     private static List<string> ValidateTemplateFilters(ReportDatasetType datasetType, string? filtersJson, ReportExecutionSchema? customSchema = null)
@@ -540,7 +838,7 @@ public class ReportsController : ControllerBase
             [ReportDatasetType.SoftwareInventory] = new(
                 Fields:
                 [
-                    "clientId", "siteId", "agentId", "softwareName", "publisher", "version", "installedAt"
+                    "clientName", "siteName", "agentId", "agentHostname", "automaticLabels", "softwareName", "publisher", "version", "lastSeenAt"
                 ],
                 ExecutionSchema: new ReportExecutionSchema(
                     ScopeType: ReportScopeType.ClientSiteAgent,
@@ -677,7 +975,7 @@ public class ReportsController : ControllerBase
             [ReportDatasetType.AgentHardware] = new(
                 Fields:
                 [
-                    "siteName", "agentHostname", "osName", "osVersion", "osBuild", "osArchitecture", "processor", "processorCores", "processorThreads", "processorArchitecture", "totalMemoryGB", "motherboardManufacturer", "motherboardModel", "biosVersion", "biosManufacturer", "collectedAt"
+                    "clientName", "siteName", "agentId", "agentHostname", "automaticLabels", "osName", "osVersion", "osBuild", "osArchitecture", "processor", "processorCores", "processorThreads", "processorArchitecture", "processorFrequencyGhz", "processorSocket", "processorTdpWatts", "totalMemoryGB", "totalMemoryBytes", "gpuModel", "gpuMemoryGB", "gpuDriverVersion", "totalDisksCount", "motherboardManufacturer", "motherboardModel", "biosVersion", "biosManufacturer", "biosDate", "biosSerialNumber", "inventorySchemaVersion", "inventoryCollectedAt", "collectedAt"
                 ],
                 ExecutionSchema: new ReportExecutionSchema(
                     ScopeType: ReportScopeType.ClientSiteAgent,
@@ -705,6 +1003,37 @@ public class ReportsController : ControllerBase
                         new ReportFilterPreset("Inventario geral", "Visao consolidada de hardware de todos os agentes", "{\"limit\":5000,\"orderBy\":\"siteName\",\"orderDirection\":\"asc\",\"orientation\":\"landscape\"}"),
                         new ReportFilterPreset("Por cliente com detalhes", "Inventario detalhado de hardware por cliente, ordenado por hostname", "{\"clientId\":\"<guid>\",\"limit\":3000,\"orderBy\":\"agentHostname\",\"orderDirection\":\"asc\",\"orientation\":\"landscape\"}"),
                         new ReportFilterPreset("Ultima coleta", "Agentes ordenados por data de coleta mais recente", "{\"limit\":5000,\"orderBy\":\"collectedAt\",\"orderDirection\":\"desc\",\"orientation\":\"landscape\"}")
+                    ])),
+
+            [ReportDatasetType.AgentInventoryComposite] = new(
+                Fields:
+                [
+                    "clientName", "siteName", "agentId", "agentHostname", "automaticLabels", "osName", "osVersion", "processor", "totalMemoryGB", "totalDisksCount", "softwareName", "publisher", "softwareVersion", "softwareLastSeenAt", "hardwareCollectedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "landscape",
+                    AllowedSortFields: GetEnumNamesAsCamelCase<AgentInventoryCompositeOrderBy>(),
+                    DefaultSortField: ToCamelCase(nameof(AgentInventoryCompositeOrderBy.AgentHostname)),
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID do cliente"),
+                        new("siteId", "Site", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por site.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "clientId", Placeholder: "GUID do site"),
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por agente.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "siteId", Placeholder: "GUID do agente"),
+                        new("softwareName", "Software", ReportFilterFieldType.Text, false, "Filtros", "Busca parcial por nome do software.", UiComponent: ReportFilterUiComponent.TextSearch, Placeholder: "Ex.: Microsoft Office", MaxLength: 200, IsPartialMatch: true),
+                        new("orderBy", "Ordenar por", ReportFilterFieldType.Enum, false, "Ordenacao", "Campo para ordenacao dos resultados.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: GetEnumNamesAsCamelCase<AgentInventoryCompositeOrderBy>(), DefaultValue: ToCamelCase(nameof(AgentInventoryCompositeOrderBy.AgentHostname))),
+                        new("orderDirection", "Direcao", ReportFilterFieldType.Enum, false, "Ordenacao", "Direcao da ordenacao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["asc", "desc"], DefaultValue: "asc"),
+                        new("orientation", "Orientacao", ReportFilterFieldType.Enum, false, "Formatacao", "Orientacao da pagina do relatorio.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["landscape", "portrait"], DefaultValue: "landscape"),
+                        new("limit", "Limite de linhas", ReportFilterFieldType.Integer, false, "Saida", "Maximo recomendado: 10000.", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
+                    ],
+                    SampleFilterPresets:
+                    [
+                        new ReportFilterPreset("Hardware + software por agente", "Combina dados basicos de hardware com lista de softwares por agente", "{\"limit\":5000,\"orderBy\":\"agentHostname\",\"orderDirection\":\"asc\",\"orientation\":\"landscape\"}"),
+                        new ReportFilterPreset("Por cliente", "Inventario composto com escopo de cliente", "{\"clientId\":\"<guid>\",\"limit\":3000,\"orderBy\":\"siteName\",\"orderDirection\":\"asc\"}")
                     ]))
         };
     }
@@ -720,6 +1049,69 @@ public class ReportsController : ControllerBase
             return value;
 
         return char.ToLowerInvariant(value[0]) + value.Substring(1);
+    }
+
+    private static string GetDatasetDisplayName(ReportDatasetType datasetType)
+    {
+        return datasetType switch
+        {
+            ReportDatasetType.SoftwareInventory => "Software Inventory",
+            ReportDatasetType.Logs => "System Logs",
+            ReportDatasetType.ConfigurationAudit => "Configuration Audit",
+            ReportDatasetType.Tickets => "Tickets",
+            ReportDatasetType.AgentHardware => "Agent Hardware",
+            ReportDatasetType.AgentInventoryComposite => "Agent Inventory Composite",
+            _ => datasetType.ToString()
+        };
+    }
+
+    private static string GetDatasetDescription(ReportDatasetType datasetType)
+    {
+        return datasetType switch
+        {
+            ReportDatasetType.SoftwareInventory => "Installed software by agent/site/client.",
+            ReportDatasetType.Logs => "Operational logs with period and severity filters.",
+            ReportDatasetType.ConfigurationAudit => "Configuration change history and audit trail.",
+            ReportDatasetType.Tickets => "Ticket lifecycle, SLA and workflow data.",
+            ReportDatasetType.AgentHardware => "Hardware inventory and system specs by agent.",
+            ReportDatasetType.AgentInventoryComposite => "Pre-joined hardware and software inventory by agent.",
+            _ => "Dataset available for reporting."
+        };
+    }
+
+    private static bool IsJoinKeyField(string field)
+    {
+        return field.Equals("clientId", StringComparison.OrdinalIgnoreCase)
+            || field.Equals("siteId", StringComparison.OrdinalIgnoreCase)
+            || field.Equals("agentId", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string InferFieldType(string field)
+    {
+        if (field.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
+            return "guid";
+        if (field.EndsWith("At", StringComparison.OrdinalIgnoreCase) || field.EndsWith("Date", StringComparison.OrdinalIgnoreCase))
+            return "datetime";
+        if (field.Contains("count", StringComparison.OrdinalIgnoreCase) || field.Contains("bytes", StringComparison.OrdinalIgnoreCase) || field.Contains("gb", StringComparison.OrdinalIgnoreCase))
+            return "number";
+        if (field.StartsWith("is", StringComparison.OrdinalIgnoreCase) || field.EndsWith("Breached", StringComparison.OrdinalIgnoreCase))
+            return "boolean";
+
+        return "text";
+    }
+
+    private static string GetDefaultAlias(ReportDatasetType datasetType)
+    {
+        return datasetType switch
+        {
+            ReportDatasetType.SoftwareInventory => "sw",
+            ReportDatasetType.AgentHardware => "hw",
+            ReportDatasetType.Logs => "log",
+            ReportDatasetType.ConfigurationAudit => "audit",
+            ReportDatasetType.Tickets => "tk",
+            ReportDatasetType.AgentInventoryComposite => "inv",
+            _ => "src"
+        };
     }
 }
 
@@ -752,6 +1144,25 @@ public record RunReportRequest(
     string? FiltersJson,
     string? CreatedBy,
     bool RunAsync = false);
+
+public record PreviewReportRequest(
+    Guid? TemplateId,
+    PreviewReportTemplateDraft? Template,
+    ReportFormat? Format,
+    string? FiltersJson,
+    string? FileName,
+    string? ResponseDisposition = "inline",
+    string? PreviewMode = "document");
+
+public record PreviewReportTemplateDraft(
+    string? Name,
+    string? Description,
+    string? Instructions,
+    string? ExecutionSchemaJson,
+    ReportDatasetType? DatasetType,
+    ReportFormat? DefaultFormat,
+    string? LayoutJson,
+    string? FiltersJson);
 
 public record ReportTemplateResponse(
     Guid Id,

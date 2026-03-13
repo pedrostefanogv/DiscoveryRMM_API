@@ -7,6 +7,16 @@ GET {{baseUrl}}/api/reports/datasets
 
 ###
 
+### 1.1 Ver schema de layout para builder visual do frontend
+GET {{baseUrl}}/api/reports/layout-schema
+
+###
+
+### 1.2 Autocomplete de campos para builder (multi-fonte)
+GET {{baseUrl}}/api/reports/autocomplete?term=agent&datasetType=AgentHardware
+
+###
+
 ### 2. Listar todos os templates de relatório
 GET {{baseUrl}}/api/reports/templates
 
@@ -17,7 +27,75 @@ GET {{baseUrl}}/api/reports/templates?clientId={{clientId}}
 
 ###
 
-### 4. Executar 'Software Inventory' - Modo Síncrono (Retorna resultado imediatamente)
+### 4. Preview de relatório em memória com template draft inline
+# Retorna o arquivo diretamente sem criar execução e sem persistir em disco/S3
+POST {{baseUrl}}/api/reports/preview
+Content-Type: application/json
+
+{
+  "format": "Pdf",
+  "previewMode": "document",
+  "responseDisposition": "inline",
+  "filtersJson": "{\"limit\": 100, \"orderBy\": \"agentHostname\", \"orderDirection\": \"asc\"}",
+  "template": {
+    "name": "Software por Agente - Preview",
+    "datasetType": "SoftwareInventory",
+    "layoutJson": "{\"title\":\"Software por Agente\",\"subtitle\":\"Preview sem persistencia\",\"orientation\":\"landscape\",\"groupBy\":\"agentHostname\",\"groupTitleTemplate\":\"Agent {value}\",\"hideGroupColumn\":true,\"groupDetails\":[{\"field\":\"clientName\",\"header\":\"Cliente\"},{\"field\":\"siteName\",\"header\":\"Site\"}],\"groupSummaries\":[{\"label\":\"Softwares distintos\",\"field\":\"softwareName\",\"aggregate\":\"countDistinct\"}],\"style\":{\"primaryColor\":\"#0b5fff\",\"headerBackgroundColor\":\"#16324f\",\"alternateRowColor\":\"#eef4ff\"},\"columns\":[{\"field\":\"agentHostname\",\"header\":\"Agente\"},{\"field\":\"softwareName\",\"header\":\"Software\"},{\"field\":\"publisher\",\"header\":\"Fabricante\"},{\"field\":\"version\",\"header\":\"Versao\"},{\"field\":\"lastSeenAt\",\"header\":\"Ultima visualizacao\",\"format\":\"datetime\"}]}"
+  }
+}
+
+###
+
+### 4.1 Preview HTML para iframe srcdoc ou blob HTML no frontend
+POST {{baseUrl}}/api/reports/preview
+Content-Type: application/json
+
+{
+  "previewMode": "html",
+  "template": {
+    "name": "Software por Agente - HTML",
+    "datasetType": "SoftwareInventory",
+    "layoutJson": "{\"title\":\"Software por Agente\",\"groupBy\":\"agentHostname\",\"groupTitleTemplate\":\"Agent {value}\",\"groupDetails\":[{\"field\":\"siteName\",\"header\":\"Site\"}],\"columns\":[{\"field\":\"softwareName\",\"header\":\"Software\"},{\"field\":\"publisher\",\"header\":\"Fabricante\"},{\"field\":\"version\",\"header\":\"Versao\"}]}"
+  }
+}
+
+###
+
+### 5. Preview reutilizando template salvo com overrides temporários
+POST {{baseUrl}}/api/reports/preview
+Content-Type: application/json
+
+{
+  "templateId": "992e5e0b-e2e0-4d2f-8d87-0119fa486afe",
+  "format": "Pdf",
+  "responseDisposition": "inline",
+  "filtersJson": "{\"agentId\":\"00000000-0000-0000-0000-000000000000\",\"limit\":500}",
+  "template": {
+    "name": "Software Inventory - Preview Agrupado",
+    "layoutJson": "{\"title\":\"Inventario Agrupado\",\"groupBy\":\"agentHostname\",\"groupTitleTemplate\":\"Agent {value} ({count})\"}"
+  }
+}
+
+###
+
+### 6. Preview forçando download em vez de inline
+POST {{baseUrl}}/api/reports/preview
+Content-Type: application/json
+
+{
+  "format": "Pdf",
+  "responseDisposition": "attachment",
+  "fileName": "software-preview.pdf",
+  "template": {
+    "name": "Software por Agente - Download",
+    "datasetType": "SoftwareInventory",
+    "layoutJson": "{\"title\":\"Software por Agente\",\"groupBy\":\"agentHostname\",\"columns\":[{\"field\":\"softwareName\",\"header\":\"Software\"},{\"field\":\"publisher\",\"header\":\"Fabricante\"},{\"field\":\"version\",\"header\":\"Versao\"}]}"
+  }
+}
+
+###
+
+### 7. Executar 'Software Inventory' - Modo Síncrono (Retorna resultado imediatamente)
 # Nota: Retorna o arquivo diretamente (útil para ferramentas de BI)
 POST {{baseUrl}}/api/reports/run
 Content-Type: application/json
@@ -32,7 +110,7 @@ Content-Type: application/json
 
 ###
 
-### 5. Executar 'System Logs' - Modo Assíncrono (Enfilera para background processing)
+### 8. Executar 'System Logs' - Modo Assíncrono (Enfilera para background processing)
 # Retorna executionId para polling posterior
 POST {{baseUrl}}/api/reports/run
 Content-Type: application/json
@@ -47,7 +125,7 @@ Content-Type: application/json
 
 ###
 
-### 6. Executar 'Configuration Audit' com Filtro Customizado
+### 9. Executar 'Configuration Audit' com Filtro Customizado
 # Sobrescreve os filtros padrão do template
 POST {{baseUrl}}/api/reports/run
 Content-Type: application/json
@@ -63,7 +141,7 @@ Content-Type: application/json
 
 ###
 
-### 7. Executar 'Tickets' em Formato PDF
+### 10. Executar 'Tickets' em Formato PDF
 # Requer EnablePdf: true em appsettings.json
 POST {{baseUrl}}/api/reports/run
 Content-Type: application/json
@@ -78,7 +156,7 @@ Content-Type: application/json
 
 ###
 
-### 8. Executar 'Hardware Inventory' em Formato CSV
+### 11. Executar 'Hardware Inventory' em Formato CSV
 POST {{baseUrl}}/api/reports/run
 Content-Type: application/json
 
@@ -92,24 +170,24 @@ Content-Type: application/json
 
 ###
 
-### 9. Obter Status de Execução Pendente (necessário template ID do passo 5)
+### 12. Obter Status de Execução Pendente (necessário template ID do passo 8)
 # Substitua {executionId} com o ID retornado
 GET {{baseUrl}}/api/reports/executions/{executionId}?clientId={{clientId}}
 
 ###
 
-### 10. Listar Últimas 10 Execuções de um Cliente
+### 13. Listar Últimas 10 Execuções de um Cliente
 GET {{baseUrl}}/api/reports/executions?clientId={{clientId}}&limit=10
 
 ###
 
-### 11. Download de Relatório Gerado
+### 14. Download de Relatório Gerado
 # Substitua {executionId} com um ID válido de execução completada
 GET {{baseUrl}}/api/reports/executions/{executionId}/download?clientId={{clientId}}
 
 ###
 
-### 12. Criar Novo Template Customizado (Exemplo: Top 100 softwares)
+### 15. Criar Novo Template Customizado (Exemplo: Top 100 softwares)
 POST {{baseUrl}}/api/reports/templates
 Content-Type: application/json
 
@@ -126,7 +204,7 @@ Content-Type: application/json
 
 ###
 
-### 13. Atualizar Template Existente
+### 16. Atualizar Template Existente
 # Substitua {templateId} com um ID válido
 PUT {{baseUrl}}/api/reports/templates/{templateId}
 Content-Type: application/json
@@ -145,7 +223,7 @@ Content-Type: application/json
 
 ###
 
-### 14. Deletar Template Customizado
+### 17. Deletar Template Customizado
 # Substitua {templateId} com um ID válido
 DELETE {{baseUrl}}/api/reports/templates/{templateId}?clientId={{clientId}}
 

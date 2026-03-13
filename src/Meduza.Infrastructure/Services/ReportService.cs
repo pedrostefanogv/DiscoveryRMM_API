@@ -2,6 +2,7 @@ using Meduza.Core.Configuration;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
+using Meduza.Core.ValueObjects;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -15,6 +16,7 @@ public class ReportService : IReportService
     private readonly IServerConfigurationRepository _serverConfigurationRepository;
     private readonly IReportTemplateRepository _templateRepository;
     private readonly IReportDatasetQueryService _datasetQueryService;
+    private readonly IReportHtmlComposer _htmlComposer;
     private readonly Dictionary<ReportFormat, IReportRenderer> _renderers;
     private readonly INotificationService _notificationService;
     private readonly IObjectStorageProviderFactory _storageProviderFactory;
@@ -30,6 +32,7 @@ public class ReportService : IReportService
         IServerConfigurationRepository serverConfigurationRepository,
         IReportTemplateRepository templateRepository,
         IReportDatasetQueryService datasetQueryService,
+        IReportHtmlComposer htmlComposer,
         INotificationService notificationService,
         IObjectStorageProviderFactory storageProviderFactory,
         IEnumerable<IReportRenderer> renderers,
@@ -41,6 +44,7 @@ public class ReportService : IReportService
         _serverConfigurationRepository = serverConfigurationRepository;
         _templateRepository = templateRepository;
         _datasetQueryService = datasetQueryService;
+        _htmlComposer = htmlComposer;
         _notificationService = notificationService;
         _storageProviderFactory = storageProviderFactory;
         _cache = cache;
@@ -73,7 +77,7 @@ public class ReportService : IReportService
                 // Return cached result if already processed
                 var cacheKey = string.Format(CacheKeyFormat, executionId);
                 if (_cache.TryGetValue(cacheKey, out ReportExecution? cached))
-                    return cached;
+                    return cached!;
                 return execution;
             }
 
@@ -88,11 +92,7 @@ public class ReportService : IReportService
                 ?? throw new InvalidOperationException($"Template {execution.TemplateId} not found.");
 
             var data = await _datasetQueryService.QueryAsync(template, execution.FiltersJson, timeoutCts.Token);
-
-            if (!_renderers.TryGetValue(execution.Format, out var renderer))
-                throw new InvalidOperationException($"Format {execution.Format} is not enabled. Supported formats: {string.Join(", ", _renderers.Keys)}.");
-
-            var document = await renderer.RenderAsync(template.Name, data, timeoutCts.Token);
+            var document = await RenderDocumentAsync(template, execution.Format, data, timeoutCts.Token);
 
             var fileName = $"report-{executionId:N}.{document.FileExtension}";
             var objectKey = ComposeReportObjectKey(clientId, executionId, fileName);
@@ -201,6 +201,43 @@ public class ReportService : IReportService
         return results;
     }
 
+    public async Task<ReportPreviewResult> PreviewAsync(ReportTemplate template, ReportFormat format, string? filtersJson = null, CancellationToken cancellationToken = default)
+    {
+        var effectiveOptions = await GetEffectiveReportingOptionsAsync();
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveOptions.ProcessingTimeoutSeconds));
+
+        var data = await _datasetQueryService.QueryAsync(template, filtersJson, timeoutCts.Token);
+        var document = await RenderDocumentAsync(template, format, data, timeoutCts.Token);
+        var context = BuildRenderContext(template);
+
+        return new ReportPreviewResult
+        {
+            Document = document,
+            RowCount = data.Rows.Count,
+            Title = context.Title
+        };
+    }
+
+    public async Task<ReportHtmlPreviewResult> PreviewHtmlAsync(ReportTemplate template, string? filtersJson = null, CancellationToken cancellationToken = default)
+    {
+        var effectiveOptions = await GetEffectiveReportingOptionsAsync();
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveOptions.ProcessingTimeoutSeconds));
+
+        var data = await _datasetQueryService.QueryAsync(template, filtersJson, timeoutCts.Token);
+        var context = BuildRenderContext(template);
+
+        return new ReportHtmlPreviewResult
+        {
+            Html = _htmlComposer.Compose(context, data),
+            RowCount = data.Rows.Count,
+            Title = context.Title
+        };
+    }
+
     public async Task<string?> GetPresignedDownloadUrlAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default)
     {
         var cacheKey = string.Format(CacheKeyFormat, executionId);
@@ -233,6 +270,23 @@ public class ReportService : IReportService
         return clientId.HasValue && clientId.Value != Guid.Empty
             ? $"clients/{clientId.Value:N}/reports/{executionId:N}/{safeFileName}"
             : $"global/reports/{executionId:N}/{safeFileName}";
+    }
+
+    private Task<ReportDocument> RenderDocumentAsync(ReportTemplate template, ReportFormat format, ReportQueryResult data, CancellationToken cancellationToken)
+    {
+        if (!_renderers.TryGetValue(format, out var renderer))
+            throw new InvalidOperationException($"Format {format} is not enabled. Supported formats: {string.Join(", ", _renderers.Keys)}.");
+
+        return renderer.RenderAsync(BuildRenderContext(template), data, cancellationToken);
+    }
+
+    private static ReportRenderContext BuildRenderContext(ReportTemplate template)
+    {
+        return new ReportRenderContext
+        {
+            TemplateName = string.IsNullOrWhiteSpace(template.Name) ? "Report Preview" : template.Name,
+            LayoutJson = template.LayoutJson
+        };
     }
 
     private async Task<ReportingOptions> GetEffectiveReportingOptionsAsync()

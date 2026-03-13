@@ -2,6 +2,7 @@ using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
 using Meduza.Core.ValueObjects;
 using Microsoft.Playwright;
+using System.Text;
 
 namespace Meduza.Infrastructure.Services;
 
@@ -14,10 +15,16 @@ public class PlaywrightPdfReportRenderer : IReportRenderer
 {
     private static IBrowser? _browser;
     private static readonly SemaphoreSlim _browserLock = new(1, 1);
+    private readonly IReportHtmlComposer _htmlComposer;
+
+    public PlaywrightPdfReportRenderer(IReportHtmlComposer htmlComposer)
+    {
+        _htmlComposer = htmlComposer;
+    }
 
     public ReportFormat Format => ReportFormat.Pdf;
 
-    public async Task<ReportDocument> RenderAsync(string title, ReportQueryResult data, CancellationToken cancellationToken = default)
+    public async Task<ReportDocument> RenderAsync(ReportRenderContext context, ReportQueryResult data, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -40,20 +47,23 @@ public class PlaywrightPdfReportRenderer : IReportRenderer
             }
 
             // Create a new context and page for this request
-            var context = await _browser.NewContextAsync();
+            var browserContext = await _browser.NewContextAsync();
             try
             {
-                var page = await context.NewPageAsync();
+                var page = await browserContext.NewPageAsync();
                 try
                 {
                     // Build HTML table
-                    var html = BuildHtmlTable(title, data);
+                    var html = _htmlComposer.Compose(context, data);
+                    var layout = ReportLayoutDefinitionParser.ParseOrDefault(context.LayoutJson);
 
                     // Load HTML and render PDF
                     await page.SetContentAsync(html);
                     var pdfBytes = await page.PdfAsync(new PagePdfOptions
                     {
                         Format = "A4",
+                        Landscape = string.Equals(layout.Orientation, "landscape", StringComparison.OrdinalIgnoreCase),
+                        PrintBackground = true,
                         Margin = new()
                         {
                             Top = "20mm",
@@ -77,7 +87,7 @@ public class PlaywrightPdfReportRenderer : IReportRenderer
             }
             finally
             {
-                await context.CloseAsync();
+                await browserContext.CloseAsync();
             }
         }
         catch (Exception ex)
@@ -86,68 +96,4 @@ public class PlaywrightPdfReportRenderer : IReportRenderer
         }
     }
 
-    private string BuildHtmlTable(string title, ReportQueryResult data)
-    {
-        var html = """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 10px; color: #333; }
-                    h1 { color: #0066cc; border-bottom: 2px solid #0066cc; padding-bottom: 10px; }
-                    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-                    th { 
-                        background-color: #0066cc; 
-                        color: white; 
-                        padding: 12px; 
-                        text-align: left; 
-                        border: 1px solid #004499;
-                        font-weight: bold;
-                    }
-                    td { 
-                        padding: 10px; 
-                        border: 1px solid #ddd; 
-                        text-align: left;
-                    }
-                    tr:nth-child(even) { background-color: #f9f9f9; }
-                    tr:hover { background-color: #f0f0f0; }
-                </style>
-            </head>
-            <body>
-                <h1>{TITLE}</h1>
-                <table>
-                    <thead>
-                        <tr>{HEADERS}</tr>
-                    </thead>
-                    <tbody>
-                        {ROWS}
-                    </tbody>
-                </table>
-            </body>
-            </html>
-            """;
-
-        // Build headers
-        var headers = string.Join("", data.Columns.Select(col => $"<th>{HtmlEscape(col)}</th>"));
-
-        // Build rows - convert IReadOnlyList<IReadOnlyDictionary> to HTML table rows
-        var rowsHtml = string.Join("\n", data.Rows.Select(row =>
-        {
-            var cells = data.Columns.Select(col =>
-            {
-                var value = row.ContainsKey(col) ? row[col] : null;
-                return $"<td>{HtmlEscape(value?.ToString() ?? "")}</td>";
-            });
-            return $"<tr>{string.Join("", cells)}</tr>";
-        }));
-
-        return html
-            .Replace("{TITLE}", HtmlEscape(title))
-            .Replace("{HEADERS}", headers)
-            .Replace("{ROWS}", rowsHtml);
-    }
-
-    private string HtmlEscape(string? text) =>
-        System.Net.WebUtility.HtmlEncode(text ?? "");
 }

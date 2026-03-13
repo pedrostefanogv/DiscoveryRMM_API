@@ -41,3 +41,11 @@ public enum AgentHardwareOrderBy
     CollectedAt = 2,
     OsName = 3
 }
+
+public enum AgentInventoryCompositeOrderBy
+{
+    SiteName = 0,
+    AgentHostname = 1,
+    SoftwareName = 2,
+    CollectedAt = 3
+}
