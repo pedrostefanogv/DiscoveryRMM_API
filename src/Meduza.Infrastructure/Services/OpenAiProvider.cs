@@ -1,6 +1,7 @@
 using Meduza.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -154,6 +155,119 @@ public class OpenAiProvider : ILlmProvider
         {
             _logger.LogError(ex, "Error calling OpenAI API");
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Chama a OpenAI com stream=true e yield os tokens incrementalmente via IAsyncEnumerable.
+    /// Não suporta tool calls — a resposta é apenas texto.
+    /// </summary>
+    public async IAsyncEnumerable<string> StreamAsync(
+        string systemPrompt,
+        List<LlmMessage> messages,
+        LlmOptions options,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var model = options.Model;
+        if (string.IsNullOrWhiteSpace(model))
+            throw new InvalidOperationException("Modelo de IA não definido no banco para o escopo atual.");
+
+        var apiKey = options.ApiKey;
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
+
+        var baseUrl = string.IsNullOrWhiteSpace(options.BaseUrl) ? DefaultBaseUrl : options.BaseUrl;
+
+        _logger.LogInformation(
+            "StreamAsync OpenAI: {MessageCount} messages, model={Model}",
+            messages.Count, model);
+
+        // Montar mensagens
+        var openAiMessages = new List<object>
+        {
+            new { role = "system", content = systemPrompt }
+        };
+
+        foreach (var msg in messages)
+        {
+            openAiMessages.Add(new { role = msg.Role, content = msg.Content });
+        }
+
+        var payload = new
+        {
+            model,
+            messages = openAiMessages,
+            max_tokens = options.MaxTokens,
+            temperature = options.Temperature,
+            stream = true
+        };
+
+        var requestBody = new StringContent(
+            JsonSerializer.Serialize(payload),
+            Encoding.UTF8,
+            "application/json");
+
+        var requestUri = new Uri(new Uri(baseUrl), "chat/completions");
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
+        {
+            Content = requestBody
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+        using var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogError("OpenAI stream error: {StatusCode} - {Error}", response.StatusCode, errorBody);
+            throw new HttpRequestException($"OpenAI API returned {response.StatusCode}");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new System.IO.StreamReader(stream);
+
+        string? line;
+        while ((line = await reader.ReadLineAsync(cancellationToken)) != null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrEmpty(line))
+                continue;
+
+            // Cada linha SSE começa com "data: "
+            if (!line.StartsWith("data: ", StringComparison.Ordinal))
+                continue;
+
+            var data = line["data: ".Length..];
+
+            if (data == "[DONE]")
+                yield break;
+
+            string? token = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(data);
+                var choices = doc.RootElement.GetProperty("choices");
+                if (choices.GetArrayLength() == 0) continue;
+
+                var delta = choices[0].GetProperty("delta");
+                if (delta.TryGetProperty("content", out var contentProp) &&
+                    contentProp.ValueKind == JsonValueKind.String)
+                {
+                    token = contentProp.GetString();
+                }
+            }
+            catch (JsonException)
+            {
+                // linha malformada — ignorar
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(token))
+                yield return token;
         }
     }
 

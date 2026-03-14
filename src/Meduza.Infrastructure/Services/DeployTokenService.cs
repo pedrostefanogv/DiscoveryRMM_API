@@ -60,6 +60,19 @@ public class DeployTokenService : IDeployTokenService
         await _tokenRepo.RevokeAsync(tokenId);
     }
 
+    public async Task<DeployToken?> GetValidatedByIdAsync(Guid tokenId, string rawToken)
+    {
+        var token = await _tokenRepo.GetByIdAsync(tokenId);
+        if (token is null)
+            return null;
+
+        var hash = HashToken(rawToken);
+        if (!string.Equals(token.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return token;
+    }
+
     private static string GenerateRawToken()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);

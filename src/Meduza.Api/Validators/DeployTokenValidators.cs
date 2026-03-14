@@ -13,5 +13,9 @@ public class CreateDeployTokenRequestValidator : AbstractValidator<CreateDeployT
         RuleFor(x => x.ExpiresInHours)
             .Must(h => !h.HasValue || h.Value is >= 1 and <= 720)
             .WithMessage("ExpiresInHours must be between 1 and 720.");
+
+        RuleFor(x => x.Delivery)
+            .Must(v => string.IsNullOrWhiteSpace(v) || v.Equals("token", StringComparison.OrdinalIgnoreCase) || v.Equals("installer", StringComparison.OrdinalIgnoreCase))
+            .WithMessage("Delivery must be 'token' or 'installer'.");
     }
 }

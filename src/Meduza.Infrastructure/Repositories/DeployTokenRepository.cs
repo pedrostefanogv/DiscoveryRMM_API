@@ -60,4 +60,13 @@ public class DeployTokenRepository : IDeployTokenRepository
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(token => token.RevokedAt, _ => now));
     }
+
+    public async Task<IEnumerable<DeployToken>> GetByClientSiteAsync(Guid clientId, Guid siteId)
+    {
+        return await _db.DeployTokens
+            .AsNoTracking()
+            .Where(token => token.ClientId == clientId && token.SiteId == siteId)
+            .OrderByDescending(token => token.CreatedAt)
+            .ToListAsync();
+    }
 }

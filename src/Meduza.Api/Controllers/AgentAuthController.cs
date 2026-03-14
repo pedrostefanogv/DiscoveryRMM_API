@@ -1007,6 +1007,59 @@ public class AgentAuthController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Chat com IA via SSE streaming — tokens são entregues incrementalmente.
+    /// O cliente deve consumir o response body como text/event-stream.
+    ///
+    /// Protocolo de eventos:
+    ///   data: {"type":"token","content":"texto"}       — fragmento incremental
+    ///   data: {"type":"done","sessionId":"...","latencyMs":123}  — fim do stream
+    ///   data: {"type":"error","error":"mensagem"}      — erro
+    /// </summary>
+    [HttpPost("me/ai-chat/stream")]
+    public async Task ChatStream([FromBody] AgentChatRequest request, CancellationToken ct)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(new { error = "Agent not authenticated." }, ct);
+            return;
+        }
+
+        HttpContext.Response.Headers["Content-Type"] = "text/event-stream; charset=utf-8";
+        HttpContext.Response.Headers["Cache-Control"] = "no-cache";
+        HttpContext.Response.Headers["X-Accel-Buffering"] = "no";
+        HttpContext.Response.Headers["Connection"] = "keep-alive";
+
+        var jsonOptions = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
+
+        try
+        {
+            await foreach (var chunk in _aiChatService.StreamAsync(agentId, request.Message, request.SessionId, ct))
+            {
+                var data = System.Text.Json.JsonSerializer.Serialize(chunk, jsonOptions);
+                await HttpContext.Response.WriteAsync($"data: {data}\n\n", ct);
+                await HttpContext.Response.Body.FlushAsync(ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // cliente desconectou — sem ação
+        }
+        catch (Exception)
+        {
+            if (!HttpContext.Response.HasStarted) return;
+            var errData = System.Text.Json.JsonSerializer.Serialize(
+                new { type = "error", error = "Internal stream error" });
+            await HttpContext.Response.WriteAsync($"data: {errData}\n\n", ct);
+            await HttpContext.Response.Body.FlushAsync(ct);
+        }
+    }
+
     private bool TryGetAuthenticatedAgentId(out Guid agentId)
     {
         agentId = Guid.Empty;

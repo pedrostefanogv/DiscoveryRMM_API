@@ -9,4 +9,5 @@ public interface IDeployTokenRepository
     Task<DeployToken> CreateAsync(DeployToken token);
     Task<DeployToken?> TryUseByTokenHashAsync(string tokenHash, DateTime now);
     Task RevokeAsync(Guid id);
+    Task<IEnumerable<DeployToken>> GetByClientSiteAsync(Guid clientId, Guid siteId);
 }

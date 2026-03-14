@@ -100,6 +100,7 @@ builder.Services.AddScoped<IConfigurationResolver, ConfigurationResolver>();
 builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
 builder.Services.AddScoped<IAgentAutoLabelingService, AgentAutoLabelingService>();
 builder.Services.AddScoped<IDeployTokenService, DeployTokenService>();
+builder.Services.AddScoped<IAgentPackageService, AgentPackageService>();
 builder.Services.AddScoped<ILoggingService, LoggingService>();
 
 // New services for tickets enhancement (SLA, ActivityLog)
@@ -175,6 +176,7 @@ builder.Services.AddHostedService<ReportGenerationBackgroundService>();
 builder.Services.AddHostedService<ReportRetentionBackgroundService>();
 builder.Services.AddHostedService<AiChatRetentionBackgroundService>();
 builder.Services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
+builder.Services.AddHostedService<AgentPackagePrebuildHostedService>();
 
 //  Controllers + JSON config
 builder.Services.AddControllers(options =>

@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Meduza.Core.DTOs;
@@ -512,10 +514,157 @@ public class AiChatService : IAiChatService
         }
     }
     
-    #region Private Methods
-    
     /// <summary>
-    /// Valida a mensagem do usuário
+    /// Streaming SSE: retorna chunks incrementais enquanto o LLM gera tokens.
+    /// Persiste as mensagens no DB ao final do stream.
+    /// Não suporta tool calls — o contexto da KB é injetado no system prompt via RAG.
+    /// </summary>
+    public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(
+        Guid agentId,
+        string message,
+        Guid? sessionId,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
+        var startTime = DateTime.UtcNow;
+        var stopwatch = Stopwatch.StartNew();
+
+        AiChatSession? session = null;
+        LlmOptions? llmOptions = null;
+        string? systemPrompt = null;
+        List<LlmMessage>? llmMessages = null;
+        int nextSeq = 1;
+        bool setupOk = false;
+        string? setupError = null;
+
+        try
+        {
+            ValidateUserInput(message);
+
+            var agent = await _agentRepository.GetByIdAsync(agentId);
+            if (agent == null)
+                throw new ArgumentException($"Agent {agentId} não encontrado");
+
+            var site = await _siteRepository.GetByIdAsync(agent.SiteId);
+            if (site == null)
+                throw new ArgumentException($"Site {agent.SiteId} não encontrado");
+
+            var aiSettings = await ResolveAiSettingsAsync(agent.SiteId, ct);
+
+            if (!aiSettings.Enabled || !aiSettings.ChatAIEnabled)
+                throw new InvalidOperationException("Chat IA está desabilitado para este escopo.");
+
+            if (sessionId.HasValue)
+            {
+                var existing = await _sessionRepository.GetByIdAsync(sessionId.Value, agentId, ct);
+                session = existing ?? throw new ArgumentException($"Sessão {sessionId} não encontrada");
+            }
+            else
+            {
+                session = await _sessionRepository.CreateAsync(new AiChatSession
+                {
+                    Id = Guid.NewGuid(),
+                    AgentId = agentId,
+                    SiteId = agent.SiteId,
+                    ClientId = site.ClientId,
+                    Topic = "general",
+                    CreatedAt = startTime,
+                    CreatedByIp = "0.0.0.0",
+                    TraceId = traceId,
+                    ExpiresAt = startTime.AddDays(SessionExpirationDays)
+                }, ct);
+            }
+
+            var history = await _messageRepository.GetRecentBySessionAsync(
+                session.Id, ClampHistoryMessages(aiSettings), ct);
+
+            nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
+
+            systemPrompt = await BuildSystemPromptAsync(agent, session, message, aiSettings, ct);
+
+            llmMessages = history
+                .OrderBy(m => m.SequenceNumber)
+                .Select(m => new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName))
+                .ToList();
+            llmMessages.Add(new LlmMessage("user", message));
+
+            llmOptions = new LlmOptions(
+                MaxTokens: ClampMaxTokens(aiSettings),
+                Temperature: ClampTemperature(aiSettings),
+                Model: string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
+                BaseUrl: string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
+                ApiKey: string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
+                EnableTools: false);
+
+            setupOk = true;
+        }
+        catch (Exception ex)
+        {
+            setupError = ex.Message;
+            _logger.LogError(ex, "[{TraceId}] StreamAsync setup falhou para AgentId={AgentId}", traceId, agentId);
+        }
+
+        if (!setupOk || session == null || llmOptions == null || systemPrompt == null || llmMessages == null)
+        {
+            yield return new AiChatStreamChunk(Type: "error", Error: setupError ?? "Erro interno");
+            yield break;
+        }
+
+        // ── Streaming de tokens ───────────────────────────────────────────────
+        var contentBuilder = new StringBuilder();
+
+        await foreach (var token in _llmProvider.StreamAsync(systemPrompt, llmMessages, llmOptions, ct))
+        {
+            contentBuilder.Append(token);
+            yield return new AiChatStreamChunk(Type: "token", Content: token);
+        }
+
+        stopwatch.Stop();
+        var fullContent = contentBuilder.ToString();
+
+        // ── Persistência pós-stream ───────────────────────────────────────────
+        try
+        {
+            await _messageRepository.CreateAsync(new AiChatMessage
+            {
+                Id = Guid.NewGuid(),
+                SessionId = session.Id,
+                SequenceNumber = nextSeq,
+                Role = "user",
+                Content = message,
+                CreatedAt = startTime,
+                TraceId = traceId
+            }, ct);
+
+            await _messageRepository.CreateAsync(new AiChatMessage
+            {
+                Id = Guid.NewGuid(),
+                SessionId = session.Id,
+                SequenceNumber = nextSeq + 1,
+                Role = "assistant",
+                Content = fullContent,
+                LatencyMs = (int)stopwatch.ElapsedMilliseconds,
+                CreatedAt = DateTime.UtcNow,
+                TraceId = traceId
+            }, ct);
+
+            _logger.LogInformation(
+                "[{TraceId}] StreamAsync concluído: AgentId={AgentId}, Latency={LatencyMs}ms",
+                traceId, agentId, stopwatch.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[{TraceId}] Falha ao persistir mensagens do stream", traceId);
+            // Não interrompe o cliente — stream já foi entregue
+        }
+
+        yield return new AiChatStreamChunk(
+            Type: "done",
+            SessionId: session.Id,
+            LatencyMs: (int)stopwatch.ElapsedMilliseconds);
+    }
+
+    #region Private Methods
     /// Rejeita: vazio, > 2KB, padrões maliciosos
     /// </summary>
     private void ValidateUserInput(string message)

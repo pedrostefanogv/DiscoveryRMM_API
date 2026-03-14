@@ -7,6 +7,16 @@ public interface ILlmProvider
         List<LlmMessage> messages,
         LlmOptions options,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retorna tokens da resposta incrementalmente (SSE streaming).
+    /// Não suporta tool calls — use CompleteAsync para isso.
+    /// </summary>
+    IAsyncEnumerable<string> StreamAsync(
+        string systemPrompt,
+        List<LlmMessage> messages,
+        LlmOptions options,
+        CancellationToken cancellationToken = default);
 }
 
 public record LlmMessage(

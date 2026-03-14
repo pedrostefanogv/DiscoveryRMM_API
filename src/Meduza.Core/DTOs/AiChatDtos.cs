@@ -34,3 +34,20 @@ public record AgentChatJobStatus(
     DateTime CreatedAt,
     DateTime? CompletedAt
 );
+
+// ── SSE Streaming ─────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Chunk emitido durante streaming SSE.
+/// Type = "token"  → Content contém o fragmento de texto incremental.
+/// Type = "done"   → SessionId, TokensUsed e LatencyMs estão preenchidos.
+/// Type = "error"  → Error contém a mensagem de erro.
+/// </summary>
+public record AiChatStreamChunk(
+    string Type,
+    string? Content = null,
+    Guid? SessionId = null,
+    int? TokensUsed = null,
+    int? LatencyMs = null,
+    string? Error = null
+);
