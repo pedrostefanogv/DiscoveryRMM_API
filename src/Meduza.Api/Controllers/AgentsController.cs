@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Meduza.Api.Hubs;
+using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
@@ -17,6 +18,9 @@ public class AgentsController : ControllerBase
     private readonly IAgentSoftwareRepository _softwareRepo;
     private readonly ICommandRepository _commandRepo;
     private readonly IAgentAuthService _authService;
+    private readonly IAutomationTaskService _automationTaskService;
+    private readonly IAutomationScriptService _automationScriptService;
+    private readonly IAutomationExecutionReportRepository _automationExecutionReportRepository;
     private readonly IAgentMessaging _messaging;
     private readonly IHubContext<AgentHub> _hubContext;
     private readonly int _agentOnlineGraceSeconds;
@@ -27,6 +31,9 @@ public class AgentsController : ControllerBase
         IAgentSoftwareRepository softwareRepo,
         ICommandRepository commandRepo,
         IAgentAuthService authService,
+        IAutomationTaskService automationTaskService,
+        IAutomationScriptService automationScriptService,
+        IAutomationExecutionReportRepository automationExecutionReportRepository,
         IAgentMessaging messaging,
         IHubContext<AgentHub> hubContext,
         IConfiguration configuration)
@@ -36,6 +43,9 @@ public class AgentsController : ControllerBase
         _softwareRepo = softwareRepo;
         _commandRepo = commandRepo;
         _authService = authService;
+        _automationTaskService = automationTaskService;
+        _automationScriptService = automationScriptService;
+        _automationExecutionReportRepository = automationExecutionReportRepository;
         _messaging = messaging;
         _hubContext = hubContext;
         _agentOnlineGraceSeconds = configuration.GetValue<int?>("Realtime:AgentOnlineGraceSeconds") ?? 120;
@@ -204,16 +214,184 @@ public class AgentsController : ControllerBase
             CommandType = request.CommandType,
             Payload = request.Payload
         };
+        var created = await DispatchCommandAsync(command);
+
+        return CreatedAtAction(nameof(GetCommands), new { id }, created);
+    }
+
+    [HttpPost("{id:guid}/automation/tasks/{taskId:guid}/run-now")]
+    public async Task<IActionResult> RunAutomationTaskNow(Guid id, Guid taskId, CancellationToken cancellationToken = default)
+    {
+        var agent = await _agentRepo.GetByIdAsync(id);
+        if (agent is null) return NotFound();
+
+        var task = await _automationTaskService.GetByIdAsync(taskId, includeInactive: false, cancellationToken);
+        if (task is null)
+            return NotFound(new { error = "Automation task not found or inactive." });
+
+        var command = await BuildAgentCommandFromTaskAsync(id, task, cancellationToken);
+        var created = await DispatchCommandAsync(command);
+        await CreateExecutionReportAsync(created, task.Id, task.ScriptId, AutomationExecutionSourceType.RunNow, new
+        {
+            mode = "task-run-now",
+            actionType = task.ActionType.ToString()
+        });
+
+        return CreatedAtAction(nameof(GetCommands), new { id }, new
+        {
+            command = created,
+            automationTaskId = task.Id,
+            actionType = task.ActionType.ToString()
+        });
+    }
+
+    [HttpPost("{id:guid}/automation/scripts/{scriptId:guid}/run-now")]
+    public async Task<IActionResult> RunAutomationScriptNow(Guid id, Guid scriptId, CancellationToken cancellationToken = default)
+    {
+        var agent = await _agentRepo.GetByIdAsync(id);
+        if (agent is null) return NotFound();
+
+        var script = await _automationScriptService.GetByIdAsync(scriptId, includeInactive: false, cancellationToken);
+        if (script is null)
+            return NotFound(new { error = "Automation script not found or inactive." });
+
+        var command = new AgentCommand
+        {
+            AgentId = id,
+            CommandType = CommandType.Script,
+            Payload = script.Content
+        };
+
+        var created = await DispatchCommandAsync(command);
+        await CreateExecutionReportAsync(created, null, script.Id, AutomationExecutionSourceType.RunNow, new
+        {
+            mode = "script-run-now",
+            version = script.Version,
+            contentHash = script.ContentHashSha256
+        });
+        return CreatedAtAction(nameof(GetCommands), new { id }, new
+        {
+            command = created,
+            automationScriptId = script.Id,
+            scriptVersion = script.Version,
+            contentHash = script.ContentHashSha256
+        });
+    }
+
+    [HttpPost("{id:guid}/automation/force-sync")]
+    public async Task<IActionResult> ForceAutomationSync(Guid id, [FromBody] ForceAutomationSyncRequest? request)
+    {
+        var agent = await _agentRepo.GetByIdAsync(id);
+        if (agent is null) return NotFound();
+
+        var normalized = request ?? new ForceAutomationSyncRequest();
+        var payload = JsonSerializer.Serialize(new
+        {
+            Operation = "force-sync",
+            Policies = normalized.Policies,
+            Inventory = normalized.Inventory,
+            Software = normalized.Software,
+            AppStore = normalized.AppStore,
+            RequestedAt = DateTime.UtcNow
+        });
+
+        var command = new AgentCommand
+        {
+            AgentId = id,
+            // SystemInfo permite reaproveitar pipeline de sincronizacao de estado do agente.
+            CommandType = CommandType.SystemInfo,
+            Payload = payload
+        };
+
+        var created = await DispatchCommandAsync(command);
+        await CreateExecutionReportAsync(created, null, null, AutomationExecutionSourceType.ForceSync, normalized);
+        return CreatedAtAction(nameof(GetCommands), new { id }, new
+        {
+            command = created,
+            sync = normalized
+        });
+    }
+
+    private async Task<AgentCommand> BuildAgentCommandFromTaskAsync(Guid agentId, AutomationTaskDetailDto task, CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+
+        return task.ActionType switch
+        {
+            AutomationTaskActionType.RunScript => await BuildRunScriptCommandAsync(agentId, task),
+            AutomationTaskActionType.InstallPackage => BuildPackageCommand(agentId, task, install: true),
+            AutomationTaskActionType.UpdatePackage => BuildPackageCommand(agentId, task, install: false),
+            AutomationTaskActionType.CustomCommand => BuildCustomCommand(agentId, task),
+            _ => throw new InvalidOperationException("Unsupported automation task action type.")
+        };
+    }
+
+    private async Task<AgentCommand> BuildRunScriptCommandAsync(Guid agentId, AutomationTaskDetailDto task)
+    {
+        if (!task.ScriptId.HasValue)
+            throw new InvalidOperationException("Automation task has no ScriptId for RunScript action.");
+
+        var script = await _automationScriptService.GetByIdAsync(task.ScriptId.Value, includeInactive: false);
+        if (script is null)
+            throw new InvalidOperationException("Referenced automation script not found or inactive.");
+
+        return new AgentCommand
+        {
+            AgentId = agentId,
+            CommandType = CommandType.Script,
+            Payload = script.Content
+        };
+    }
+
+    private static AgentCommand BuildPackageCommand(Guid agentId, AutomationTaskDetailDto task, bool install)
+    {
+        if (!task.InstallationType.HasValue || string.IsNullOrWhiteSpace(task.PackageId))
+            throw new InvalidOperationException("Automation task package action requires InstallationType and PackageId.");
+
+        var packageId = task.PackageId.Trim();
+        var payload = task.InstallationType.Value switch
+        {
+            AppInstallationType.Winget => install
+                ? $"winget install --id {packageId} --silent --accept-package-agreements --accept-source-agreements"
+                : $"winget upgrade --id {packageId} --silent --accept-package-agreements --accept-source-agreements",
+            AppInstallationType.Chocolatey => install
+                ? $"choco install {packageId} -y"
+                : $"choco upgrade {packageId} -y",
+            _ => throw new InvalidOperationException("Unsupported package installation type for run-now command.")
+        };
+
+        return new AgentCommand
+        {
+            AgentId = agentId,
+            CommandType = CommandType.PowerShell,
+            Payload = payload
+        };
+    }
+
+    private static AgentCommand BuildCustomCommand(Guid agentId, AutomationTaskDetailDto task)
+    {
+        if (string.IsNullOrWhiteSpace(task.CommandPayload))
+            throw new InvalidOperationException("Automation task custom action requires CommandPayload.");
+
+        return new AgentCommand
+        {
+            AgentId = agentId,
+            CommandType = CommandType.PowerShell,
+            Payload = task.CommandPayload
+        };
+    }
+
+    private async Task<AgentCommand> DispatchCommandAsync(AgentCommand command)
+    {
         var created = await _commandRepo.CreateAsync(command);
 
         var sent = false;
 
-        // Tenta NATS primeiro; se falhar, cai para SignalR.
         if (_messaging.IsConnected)
         {
             try
             {
-                await _messaging.SendCommandAsync(id, created.Id, created.CommandType.ToString(), created.Payload);
+                await _messaging.SendCommandAsync(created.AgentId, created.Id, created.CommandType.ToString(), created.Payload);
                 sent = true;
             }
             catch
@@ -222,9 +400,9 @@ public class AgentsController : ControllerBase
             }
         }
 
-        if (!sent && AgentHub.IsAgentConnected(id))
+        if (!sent && AgentHub.IsAgentConnected(created.AgentId))
         {
-            await _hubContext.Clients.Group($"agent-{id}")
+            await _hubContext.Clients.Group($"agent-{created.AgentId}")
                 .SendAsync("ExecuteCommand", created.Id, created.CommandType, created.Payload);
             sent = true;
         }
@@ -232,7 +410,49 @@ public class AgentsController : ControllerBase
         if (sent)
             await _commandRepo.UpdateStatusAsync(created.Id, CommandStatus.Sent, null, null, null);
 
-        return CreatedAtAction(nameof(GetCommands), new { id }, created);
+        return created;
+    }
+
+    [HttpGet("{id:guid}/automation/executions")]
+    public async Task<IActionResult> GetAutomationExecutionHistory(Guid id, [FromQuery] int limit = 50)
+    {
+        var agent = await _agentRepo.GetByIdAsync(id);
+        if (agent is null) return NotFound();
+
+        var items = await _automationExecutionReportRepository.GetByAgentIdAsync(id, limit);
+        return Ok(items.Select(item => new AutomationExecutionReportDto
+        {
+            Id = item.Id,
+            CommandId = item.CommandId,
+            AgentId = item.AgentId,
+            TaskId = item.TaskId,
+            ScriptId = item.ScriptId,
+            SourceType = item.SourceType.ToString(),
+            Status = item.Status.ToString(),
+            CorrelationId = item.CorrelationId,
+            CreatedAt = item.CreatedAt,
+            AcknowledgedAt = item.AcknowledgedAt,
+            ResultReceivedAt = item.ResultReceivedAt,
+            ExitCode = item.ExitCode,
+            ErrorMessage = item.ErrorMessage,
+            RequestMetadataJson = item.RequestMetadataJson,
+            AckMetadataJson = item.AckMetadataJson,
+            ResultMetadataJson = item.ResultMetadataJson
+        }));
+    }
+
+    private async Task CreateExecutionReportAsync(AgentCommand command, Guid? taskId, Guid? scriptId, AutomationExecutionSourceType sourceType, object requestMetadata)
+    {
+        await _automationExecutionReportRepository.CreateAsync(new AutomationExecutionReport
+        {
+            CommandId = command.Id,
+            AgentId = command.AgentId,
+            TaskId = taskId,
+            ScriptId = scriptId,
+            SourceType = sourceType,
+            Status = AutomationExecutionStatus.Dispatched,
+            RequestMetadataJson = JsonSerializer.Serialize(requestMetadata)
+        });
     }
 
     // --- Token Management ---
@@ -291,6 +511,11 @@ public record HardwareComponentsPayload(
     List<NetworkAdapterInfo>? NetworkAdapters,
     List<MemoryModuleInfo>? MemoryModules);
 public record CreateTokenRequest(string? Description, int? ExpirationDays);
+public record ForceAutomationSyncRequest(
+    bool Policies = true,
+    bool Inventory = false,
+    bool Software = false,
+    bool AppStore = false);
 public record SoftwareInventoryReportRequest(
     DateTime? CollectedAt,
     List<SoftwareInventoryItemRequest>? Software);

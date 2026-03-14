@@ -42,6 +42,11 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<McpToolPolicy> McpToolPolicies => Set<McpToolPolicy>();
     public DbSet<AppApprovalRule> AppApprovalRules => Set<AppApprovalRule>();
     public DbSet<AppApprovalAudit> AppApprovalAudits => Set<AppApprovalAudit>();
+    public DbSet<AutomationScriptDefinition> AutomationScriptDefinitions => Set<AutomationScriptDefinition>();
+    public DbSet<AutomationScriptAudit> AutomationScriptAudits => Set<AutomationScriptAudit>();
+    public DbSet<AutomationTaskDefinition> AutomationTaskDefinitions => Set<AutomationTaskDefinition>();
+    public DbSet<AutomationTaskAudit> AutomationTaskAudits => Set<AutomationTaskAudit>();
+    public DbSet<AutomationExecutionReport> AutomationExecutionReports => Set<AutomationExecutionReport>();
     public DbSet<AppPackage> AppPackages => Set<AppPackage>();
     public DbSet<ChocolateyPackage> ChocolateyPackages => Set<ChocolateyPackage>();
     public DbSet<WingetPackage> WingetPackages => Set<WingetPackage>();
@@ -1608,6 +1613,275 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .WithMany()
                 .HasForeignKey(audit => audit.RuleId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AutomationScriptDefinition>(entity =>
+        {
+            entity.ToTable("automation_script_definitions");
+            entity.HasKey(script => script.Id);
+            entity.HasIndex(script => new { script.ClientId, script.IsActive, script.UpdatedAt })
+                .HasDatabaseName("ix_automation_scripts_client_active_updated");
+            entity.HasIndex(script => new { script.Name, script.Version })
+                .HasDatabaseName("ix_automation_scripts_name_version");
+
+            entity.Property(script => script.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(script => script.ClientId)
+                .HasColumnName("client_id");
+            entity.Property(script => script.Name)
+                .HasColumnName("name")
+                .HasMaxLength(200);
+            entity.Property(script => script.Summary)
+                .HasColumnName("summary")
+                .HasMaxLength(2000);
+            entity.Property(script => script.ScriptType)
+                .HasColumnName("script_type")
+                .HasConversion<int>();
+            entity.Property(script => script.Version)
+                .HasColumnName("version")
+                .HasMaxLength(50);
+            entity.Property(script => script.ExecutionFrequency)
+                .HasColumnName("execution_frequency")
+                .HasMaxLength(100);
+            entity.Property(script => script.TriggerModesJson)
+                .HasColumnName("trigger_modes_json")
+                .HasColumnType("jsonb");
+            entity.Property(script => script.Content)
+                .HasColumnName("content")
+                .HasColumnType("text");
+            entity.Property(script => script.ParametersSchemaJson)
+                .HasColumnName("parameters_schema_json")
+                .HasColumnType("jsonb");
+            entity.Property(script => script.MetadataJson)
+                .HasColumnName("metadata_json")
+                .HasColumnType("jsonb");
+            entity.Property(script => script.IsActive)
+                .HasColumnName("is_active");
+            entity.Property(script => script.LastUpdatedAt)
+                .HasColumnName("last_updated_at")
+                .HasColumnType("timestamptz");
+            entity.Property(script => script.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(script => script.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Client>()
+                .WithMany()
+                .HasForeignKey(script => script.ClientId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AutomationScriptAudit>(entity =>
+        {
+            entity.ToTable("automation_script_audits");
+            entity.HasKey(audit => audit.Id);
+            entity.HasIndex(audit => new { audit.ScriptId, audit.ChangedAt })
+                .HasDatabaseName("ix_automation_script_audits_script_changed");
+
+            entity.Property(audit => audit.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(audit => audit.ScriptId)
+                .HasColumnName("script_id");
+            entity.Property(audit => audit.ChangeType)
+                .HasColumnName("change_type")
+                .HasConversion<int>();
+            entity.Property(audit => audit.Reason)
+                .HasColumnName("reason")
+                .HasMaxLength(2000);
+            entity.Property(audit => audit.OldValueJson)
+                .HasColumnName("old_value_json")
+                .HasColumnType("jsonb");
+            entity.Property(audit => audit.NewValueJson)
+                .HasColumnName("new_value_json")
+                .HasColumnType("jsonb");
+            entity.Property(audit => audit.ChangedBy)
+                .HasColumnName("changed_by")
+                .HasMaxLength(256);
+            entity.Property(audit => audit.IpAddress)
+                .HasColumnName("ip_address")
+                .HasMaxLength(64);
+            entity.Property(audit => audit.CorrelationId)
+                .HasColumnName("correlation_id")
+                .HasMaxLength(64);
+            entity.Property(audit => audit.ChangedAt)
+                .HasColumnName("changed_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<AutomationScriptDefinition>()
+                .WithMany()
+                .HasForeignKey(audit => audit.ScriptId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AutomationTaskDefinition>(entity =>
+        {
+            entity.ToTable("automation_task_definitions");
+            entity.HasKey(task => task.Id);
+            entity.HasIndex(task => new { task.ScopeType, task.ClientId, task.SiteId, task.AgentId })
+                .HasDatabaseName("ix_automation_tasks_scope");
+            entity.HasIndex(task => new { task.IsActive, task.UpdatedAt })
+                .HasDatabaseName("ix_automation_tasks_active_updated");
+
+            entity.Property(task => task.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(task => task.Name)
+                .HasColumnName("name")
+                .HasMaxLength(200);
+            entity.Property(task => task.Description)
+                .HasColumnName("description")
+                .HasMaxLength(2000);
+            entity.Property(task => task.ActionType)
+                .HasColumnName("action_type")
+                .HasConversion<int>();
+            entity.Property(task => task.InstallationType)
+                .HasColumnName("installation_type")
+                .HasConversion<int?>();
+            entity.Property(task => task.PackageId)
+                .HasColumnName("package_id")
+                .HasMaxLength(300);
+            entity.Property(task => task.ScriptId)
+                .HasColumnName("script_id");
+            entity.Property(task => task.CommandPayload)
+                .HasColumnName("command_payload")
+                .HasColumnType("text");
+            entity.Property(task => task.ScopeType)
+                .HasColumnName("scope_type")
+                .HasConversion<int>();
+            entity.Property(task => task.ClientId)
+                .HasColumnName("client_id");
+            entity.Property(task => task.SiteId)
+                .HasColumnName("site_id");
+            entity.Property(task => task.AgentId)
+                .HasColumnName("agent_id");
+            entity.Property(task => task.IncludeTagsJson)
+                .HasColumnName("include_tags_json")
+                .HasColumnType("jsonb");
+            entity.Property(task => task.ExcludeTagsJson)
+                .HasColumnName("exclude_tags_json")
+                .HasColumnType("jsonb");
+            entity.Property(task => task.TriggerImmediate)
+                .HasColumnName("trigger_immediate");
+            entity.Property(task => task.TriggerRecurring)
+                .HasColumnName("trigger_recurring");
+            entity.Property(task => task.TriggerOnUserLogin)
+                .HasColumnName("trigger_on_user_login");
+            entity.Property(task => task.TriggerOnAgentCheckIn)
+                .HasColumnName("trigger_on_agent_check_in");
+            entity.Property(task => task.ScheduleCron)
+                .HasColumnName("schedule_cron")
+                .HasMaxLength(100);
+            entity.Property(task => task.RequiresApproval)
+                .HasColumnName("requires_approval");
+            entity.Property(task => task.IsActive)
+                .HasColumnName("is_active");
+            entity.Property(task => task.LastUpdatedAt)
+                .HasColumnName("last_updated_at")
+                .HasColumnType("timestamptz");
+            entity.Property(task => task.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(task => task.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Client>()
+                .WithMany()
+                .HasForeignKey(task => task.ClientId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne<Site>()
+                .WithMany()
+                .HasForeignKey(task => task.SiteId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(task => task.AgentId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne<AutomationScriptDefinition>()
+                .WithMany()
+                .HasForeignKey(task => task.ScriptId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AutomationTaskAudit>(entity =>
+        {
+            entity.ToTable("automation_task_audits");
+            entity.HasKey(audit => audit.Id);
+            entity.HasIndex(audit => new { audit.TaskId, audit.ChangedAt })
+                .HasDatabaseName("ix_automation_task_audits_task_changed");
+
+            entity.Property(audit => audit.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(audit => audit.TaskId)
+                .HasColumnName("task_id");
+            entity.Property(audit => audit.ChangeType)
+                .HasColumnName("change_type")
+                .HasConversion<int>();
+            entity.Property(audit => audit.Reason)
+                .HasColumnName("reason")
+                .HasMaxLength(2000);
+            entity.Property(audit => audit.OldValueJson)
+                .HasColumnName("old_value_json")
+                .HasColumnType("jsonb");
+            entity.Property(audit => audit.NewValueJson)
+                .HasColumnName("new_value_json")
+                .HasColumnType("jsonb");
+            entity.Property(audit => audit.ChangedBy)
+                .HasColumnName("changed_by")
+                .HasMaxLength(256);
+            entity.Property(audit => audit.IpAddress)
+                .HasColumnName("ip_address")
+                .HasMaxLength(64);
+            entity.Property(audit => audit.CorrelationId)
+                .HasColumnName("correlation_id")
+                .HasMaxLength(64);
+            entity.Property(audit => audit.ChangedAt)
+                .HasColumnName("changed_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<AutomationTaskDefinition>()
+                .WithMany()
+                .HasForeignKey(audit => audit.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AutomationExecutionReport>(entity =>
+        {
+            entity.ToTable("automation_execution_reports");
+            entity.HasKey(report => report.Id);
+            entity.HasIndex(report => report.CommandId)
+                .HasDatabaseName("ux_automation_execution_reports_command")
+                .IsUnique();
+            entity.HasIndex(report => new { report.AgentId, report.CreatedAt })
+                .HasDatabaseName("ix_automation_execution_reports_agent_created");
+
+            entity.Property(report => report.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(report => report.CommandId).HasColumnName("command_id");
+            entity.Property(report => report.AgentId).HasColumnName("agent_id");
+            entity.Property(report => report.TaskId).HasColumnName("task_id");
+            entity.Property(report => report.ScriptId).HasColumnName("script_id");
+            entity.Property(report => report.SourceType).HasColumnName("source_type").HasConversion<int>();
+            entity.Property(report => report.Status).HasColumnName("status").HasConversion<int>();
+            entity.Property(report => report.CorrelationId).HasColumnName("correlation_id").HasMaxLength(64);
+            entity.Property(report => report.RequestMetadataJson).HasColumnName("request_metadata_json").HasColumnType("jsonb");
+            entity.Property(report => report.AckMetadataJson).HasColumnName("ack_metadata_json").HasColumnType("jsonb");
+            entity.Property(report => report.ResultMetadataJson).HasColumnName("result_metadata_json").HasColumnType("jsonb");
+            entity.Property(report => report.AcknowledgedAt).HasColumnName("acknowledged_at").HasColumnType("timestamptz");
+            entity.Property(report => report.ResultReceivedAt).HasColumnName("result_received_at").HasColumnType("timestamptz");
+            entity.Property(report => report.ExitCode).HasColumnName("exit_code");
+            entity.Property(report => report.ErrorMessage).HasColumnName("error_message").HasMaxLength(4000);
+            entity.Property(report => report.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(report => report.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+
+            entity.HasOne<Agent>().WithMany().HasForeignKey(report => report.AgentId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<AgentCommand>().WithMany().HasForeignKey(report => report.CommandId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<AutomationTaskDefinition>().WithMany().HasForeignKey(report => report.TaskId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne<AutomationScriptDefinition>().WithMany().HasForeignKey(report => report.ScriptId).OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<AppPackage>(entity =>

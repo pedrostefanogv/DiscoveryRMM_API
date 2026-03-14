@@ -9,5 +9,6 @@ public enum LogType
     Agent = 4,
     Ticket = 5,
     Workflow = 6,
-    AiChat = 7
+    AiChat = 7,
+    Automation = 8
 }
