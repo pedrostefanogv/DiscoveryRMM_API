@@ -13,17 +13,20 @@ public class AppStoreController : ControllerBase
     private readonly ISiteRepository _siteRepository;
     private readonly IAgentRepository _agentRepository;
     private readonly IAppCatalogSyncService _appCatalogSyncService;
+    private readonly ISyncInvalidationPublisher _syncInvalidationPublisher;
 
     public AppStoreController(
         IAppStoreService appStoreService,
         ISiteRepository siteRepository,
         IAgentRepository agentRepository,
-        IAppCatalogSyncService appCatalogSyncService)
+        IAppCatalogSyncService appCatalogSyncService,
+        ISyncInvalidationPublisher syncInvalidationPublisher)
     {
         _appStoreService = appStoreService;
         _siteRepository = siteRepository;
         _agentRepository = agentRepository;
         _appCatalogSyncService = appCatalogSyncService;
+        _syncInvalidationPublisher = syncInvalidationPublisher;
     }
 
     [HttpGet("catalog")]
@@ -67,6 +70,11 @@ public class AppStoreController : ControllerBase
         try
         {
             var item = await _appStoreService.UpsertCustomCatalogPackageAsync(request, cancellationToken);
+            await _syncInvalidationPublisher.PublishGlobalAsync(
+                SyncResourceType.AppStore,
+                "app-store-custom-catalog-upsert",
+                AppInstallationType.Custom,
+                cancellationToken: cancellationToken);
             return Ok(item);
         }
         catch (InvalidOperationException ex)
@@ -111,6 +119,14 @@ public class AppStoreController : ControllerBase
                 HttpContext.Items["Username"] as string ?? "api",
                 HttpContext.Connection.RemoteIpAddress?.ToString(),
                 cancellationToken);
+
+            await _syncInvalidationPublisher.PublishByScopeAsync(
+                SyncResourceType.AppStore,
+                request.ScopeType,
+                request.ScopeId,
+                "app-store-approval-upsert",
+                request.InstallationType,
+                cancellationToken: cancellationToken);
 
             return Ok(rule);
         }
@@ -194,6 +210,11 @@ public class AppStoreController : ControllerBase
             HttpContext.Items["Username"] as string ?? "api",
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             cancellationToken);
+
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.AppStore,
+            "app-store-approval-deleted",
+            cancellationToken: cancellationToken);
         return NoContent();
     }
 
@@ -269,6 +290,12 @@ public class AppStoreController : ControllerBase
 
         if (!result.Success)
             return StatusCode(500, result);
+
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.AppStore,
+            "app-store-catalog-synced",
+            installationType,
+            cancellationToken: cancellationToken);
 
         return Ok(result);
     }

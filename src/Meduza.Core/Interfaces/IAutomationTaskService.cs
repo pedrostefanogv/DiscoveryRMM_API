@@ -28,5 +28,6 @@ public interface IAutomationTaskService
     Task<AutomationTaskDetailDto?> RestoreAsync(Guid id, string? changedBy, string? ipAddress, string correlationId, string? reason, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AutomationTaskAuditDto>> GetAuditAsync(Guid id, int limit = 100, CancellationToken cancellationToken = default);
     Task<AutomationTaskTargetPreviewPageDto?> PreviewTargetAgentsAsync(Guid taskId, int limit = 50, int offset = 0, CancellationToken cancellationToken = default);
+    Task<string> GetPolicyFingerprintForAgentAsync(Guid agentId, CancellationToken cancellationToken = default);
     Task<AgentAutomationPolicySyncResponse> SyncPolicyForAgentAsync(Guid agentId, AgentAutomationPolicySyncRequest request, string? changedBy, string? ipAddress, string correlationId, CancellationToken cancellationToken = default);
 }

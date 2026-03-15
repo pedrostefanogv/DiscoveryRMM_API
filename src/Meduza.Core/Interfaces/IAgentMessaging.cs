@@ -1,5 +1,7 @@
 namespace Meduza.Core.Interfaces;
 
+using Meduza.Core.DTOs;
+
 /// <summary>
 /// Abstração para envio de mensagens em tempo real para agents.
 /// Implementação: NATS. Preparado para troca de transport.
@@ -11,6 +13,9 @@ public interface IAgentMessaging
 
     /// <summary>Publica evento para o dashboard (broadcast).</summary>
     Task PublishDashboardEventAsync(string eventType, object data);
+
+    /// <summary>Envia um ping leve de invalidacao de sync para um agent especifico.</summary>
+    Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingDto ping, CancellationToken cancellationToken = default);
 
     /// <summary>Registra handler para mensagens de agents (heartbeat, command result, hardware report).</summary>
     Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken);

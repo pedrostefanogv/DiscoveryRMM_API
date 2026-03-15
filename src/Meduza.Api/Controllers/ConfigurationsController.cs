@@ -22,19 +22,22 @@ public class ConfigurationsController : ControllerBase
     private readonly IClientRepository _clientRepository;
     private readonly IOptionsMonitor<ReportingOptions> _reportingOptions;
     private readonly IObjectStorageProviderFactory _storageFactory;
+    private readonly ISyncInvalidationPublisher _syncInvalidationPublisher;
 
     public ConfigurationsController(
         IConfigurationService configService,
         IConfigurationResolver resolver,
         IClientRepository clientRepository,
         IOptionsMonitor<ReportingOptions> reportingOptions,
-        IObjectStorageProviderFactory storageFactory)
+        IObjectStorageProviderFactory storageFactory,
+        ISyncInvalidationPublisher syncInvalidationPublisher)
     {
         _configService = configService;
         _resolver = resolver;
         _clientRepository = clientRepository;
         _reportingOptions = reportingOptions;
         _storageFactory = storageFactory;
+        _syncInvalidationPublisher = syncInvalidationPublisher;
     }
 
     // ============ Server ============
@@ -54,6 +57,9 @@ public class ConfigurationsController : ControllerBase
 
         var updated = await _configService.UpdateServerAsync(config,
             HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.Configuration,
+            "server-configuration-updated");
         return Ok(SanitizeServerConfiguration(updated));
     }
 
@@ -62,6 +68,9 @@ public class ConfigurationsController : ControllerBase
     {
         var updated = await _configService.PatchServerAsync(updates,
             HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.Configuration,
+            "server-configuration-patched");
         return Ok(SanitizeServerConfiguration(updated));
     }
 
@@ -70,6 +79,9 @@ public class ConfigurationsController : ControllerBase
     {
         var reset = await _configService.ResetServerAsync(
             HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.Configuration,
+            "server-configuration-reset");
         return Ok(SanitizeServerConfiguration(reset));
     }
 
@@ -143,6 +155,9 @@ public class ConfigurationsController : ControllerBase
         server.ReportingSettingsJson = JsonSerializer.Serialize(normalized, JsonSerializerOptions.Web);
 
         await _configService.UpdateServerAsync(server, HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.Configuration,
+            "server-reporting-updated");
         return Ok(normalized);
     }
 
@@ -166,6 +181,9 @@ public class ConfigurationsController : ControllerBase
         server.TicketAttachmentSettingsJson = request.ToJson();
 
         await _configService.UpdateServerAsync(server, HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.Configuration,
+            "server-ticket-attachments-updated");
         return Ok(TicketAttachmentSettings.FromJson(server.TicketAttachmentSettingsJson));
     }
 
@@ -257,6 +275,11 @@ public class ConfigurationsController : ControllerBase
 
         var updated = await _configService.UpdateClientAsync(clientId, config,
             HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishByScopeAsync(
+            SyncResourceType.Configuration,
+            AppApprovalScopeType.Client,
+            clientId,
+            "client-configuration-updated");
         return Ok(SanitizeClientConfiguration(updated));
     }
 
@@ -265,6 +288,11 @@ public class ConfigurationsController : ControllerBase
     {
         var updated = await _configService.PatchClientAsync(clientId, updates,
             HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishByScopeAsync(
+            SyncResourceType.Configuration,
+            AppApprovalScopeType.Client,
+            clientId,
+            "client-configuration-patched");
         return Ok(SanitizeClientConfiguration(updated));
     }
 
@@ -273,6 +301,11 @@ public class ConfigurationsController : ControllerBase
     {
         await _configService.DeleteClientConfigAsync(clientId,
             HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishByScopeAsync(
+            SyncResourceType.Configuration,
+            AppApprovalScopeType.Client,
+            clientId,
+            "client-configuration-deleted");
         return NoContent();
     }
 
@@ -283,6 +316,11 @@ public class ConfigurationsController : ControllerBase
         {
             await _configService.ResetClientPropertyAsync(clientId, propertyName,
                 HttpContext.Items["Username"] as string ?? "api");
+            await _syncInvalidationPublisher.PublishByScopeAsync(
+                SyncResourceType.Configuration,
+                AppApprovalScopeType.Client,
+                clientId,
+                "client-configuration-property-reset");
             return NoContent();
         }
         catch (InvalidOperationException ex)
@@ -402,6 +440,11 @@ public class ConfigurationsController : ControllerBase
         {
             var updated = await _configService.UpdateSiteAsync(siteId, config,
                 HttpContext.Items["Username"] as string ?? "api");
+            await _syncInvalidationPublisher.PublishByScopeAsync(
+                SyncResourceType.Configuration,
+                AppApprovalScopeType.Site,
+                siteId,
+                "site-configuration-updated");
             return Ok(SanitizeSiteConfiguration(updated));
         }
         catch (InvalidOperationException ex)
@@ -417,6 +460,11 @@ public class ConfigurationsController : ControllerBase
         {
             var updated = await _configService.PatchSiteAsync(siteId, updates,
                 HttpContext.Items["Username"] as string ?? "api");
+            await _syncInvalidationPublisher.PublishByScopeAsync(
+                SyncResourceType.Configuration,
+                AppApprovalScopeType.Site,
+                siteId,
+                "site-configuration-patched");
             return Ok(SanitizeSiteConfiguration(updated));
         }
         catch (InvalidOperationException ex)
@@ -430,6 +478,11 @@ public class ConfigurationsController : ControllerBase
     {
         await _configService.DeleteSiteConfigAsync(siteId,
             HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishByScopeAsync(
+            SyncResourceType.Configuration,
+            AppApprovalScopeType.Site,
+            siteId,
+            "site-configuration-deleted");
         return NoContent();
     }
 
@@ -440,6 +493,11 @@ public class ConfigurationsController : ControllerBase
         {
             await _configService.ResetSitePropertyAsync(siteId, propertyName,
                 HttpContext.Items["Username"] as string ?? "api");
+            await _syncInvalidationPublisher.PublishByScopeAsync(
+                SyncResourceType.Configuration,
+                AppApprovalScopeType.Site,
+                siteId,
+                "site-configuration-property-reset");
             return NoContent();
         }
         catch (InvalidOperationException ex)

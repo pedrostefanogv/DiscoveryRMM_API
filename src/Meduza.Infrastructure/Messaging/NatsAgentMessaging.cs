@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Meduza.Core.DTOs;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -61,6 +62,19 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         }, JsonOptions);
 
         await _connection.PublishAsync("dashboard.events", message);
+    }
+
+    public async Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingDto ping, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var subject = $"agent.{agentId}.sync.ping";
+        var message = JsonSerializer.Serialize(ping, JsonOptions);
+        await _connection.PublishAsync(subject, message);
+        _logger.LogDebug("Sync ping published to agent {AgentId} for resource {Resource} (revision {Revision})",
+            agentId,
+            ping.Resource,
+            ping.Revision);
     }
 
     public async Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken)

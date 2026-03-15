@@ -102,6 +102,9 @@ builder.Services.AddScoped<IObjectStorageService>(sp =>
 builder.Services.AddScoped<IConfigurationAuditService, ConfigurationAuditService>();
 builder.Services.AddScoped<IConfigurationService, ConfigurationService>();
 builder.Services.AddScoped<IConfigurationResolver, ConfigurationResolver>();
+builder.Services.AddSingleton<ISyncPingDispatchQueue, SyncPingDispatchBackgroundService>();
+builder.Services.AddHostedService(sp => (SyncPingDispatchBackgroundService)sp.GetRequiredService<ISyncPingDispatchQueue>());
+builder.Services.AddScoped<ISyncInvalidationPublisher, SyncInvalidationPublisher>();
 builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
 builder.Services.AddScoped<IAgentAutoLabelingService, AgentAutoLabelingService>();
 builder.Services.AddScoped<IDeployTokenService, DeployTokenService>();

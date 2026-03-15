@@ -484,30 +484,7 @@ public class AutomationTaskService : IAutomationTaskService
     {
         _ = cancellationToken;
 
-        var agent = await _agentRepository.GetByIdAsync(agentId)
-            ?? throw new InvalidOperationException("Agent not found.");
-        var site = await _siteRepository.GetByIdAsync(agent.SiteId)
-            ?? throw new InvalidOperationException("Site not found for agent.");
-
-        var labels = await _agentLabelRepository.GetByAgentIdAsync(agentId);
-        var labelSet = labels
-            .Select(label => label.Label)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var globalTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Global, null, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
-        var clientTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Client, site.ClientId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
-        var siteTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Site, site.Id, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
-        var agentTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Agent, agentId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
-
-        var applicable = globalTasks
-            .Concat(clientTasks)
-            .Concat(siteTasks)
-            .Concat(agentTasks)
-            .GroupBy(task => task.Id)
-            .Select(group => group.First())
-            .Where(task => MatchesTagFilters(task, labelSet))
-            .OrderBy(task => task.Id)
-            .ToList();
+        var (agent, site, applicable) = await ResolveApplicablePolicyTasksAsync(agentId);
 
         var policyKey = BuildPolicyKey(applicable);
         var fingerprint = ComputeHash(policyKey);
@@ -607,6 +584,44 @@ public class AutomationTaskService : IAutomationTaskService
             TaskCount = taskDtos.Count,
             Tasks = taskDtos
         };
+    }
+
+    public async Task<string> GetPolicyFingerprintForAgentAsync(Guid agentId, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        var (_, _, applicable) = await ResolveApplicablePolicyTasksAsync(agentId);
+        var policyKey = BuildPolicyKey(applicable);
+        return ComputeHash(policyKey);
+    }
+
+    private async Task<(Agent Agent, Site Site, List<AutomationTaskDefinition> ApplicableTasks)> ResolveApplicablePolicyTasksAsync(Guid agentId)
+    {
+        var agent = await _agentRepository.GetByIdAsync(agentId)
+            ?? throw new InvalidOperationException("Agent not found.");
+        var site = await _siteRepository.GetByIdAsync(agent.SiteId)
+            ?? throw new InvalidOperationException("Site not found for agent.");
+
+        var labels = await _agentLabelRepository.GetByAgentIdAsync(agentId);
+        var labelSet = labels
+            .Select(label => label.Label)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var globalTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Global, null, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
+        var clientTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Client, site.ClientId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
+        var siteTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Site, site.Id, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
+        var agentTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Agent, agentId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
+
+        var applicable = globalTasks
+            .Concat(clientTasks)
+            .Concat(siteTasks)
+            .Concat(agentTasks)
+            .GroupBy(task => task.Id)
+            .Select(group => group.First())
+            .Where(task => MatchesTagFilters(task, labelSet))
+            .OrderBy(task => task.Id)
+            .ToList();
+
+        return (agent, site, applicable);
     }
 
     private async Task ValidateActionPayloadAsync(AutomationTaskActionType actionType, AppInstallationType? installationType, string? packageId, Guid? scriptId, string? commandPayload)

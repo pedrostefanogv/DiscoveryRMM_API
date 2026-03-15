@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
@@ -17,6 +19,7 @@ public class AgentAuthController : ControllerBase
     private readonly IAgentSoftwareRepository _softwareRepo;
     private readonly ICommandRepository _commandRepo;
     private readonly IConfigurationResolver _configResolver;
+    private readonly IConfigurationService _configService;
     private readonly ITicketRepository _ticketRepo;
     private readonly IWorkflowRepository _workflowRepo;
     private readonly IWorkflowProfileRepository _workflowProfileRepo;
@@ -36,6 +39,7 @@ public class AgentAuthController : ControllerBase
         IAgentSoftwareRepository softwareRepo,
         ICommandRepository commandRepo,
         IConfigurationResolver configResolver,
+        IConfigurationService configService,
         ITicketRepository ticketRepo,
         IWorkflowRepository workflowRepo,
         IWorkflowProfileRepository workflowProfileRepo,
@@ -54,6 +58,7 @@ public class AgentAuthController : ControllerBase
         _softwareRepo = softwareRepo;
         _commandRepo = commandRepo;
         _configResolver = configResolver;
+        _configService = configService;
         _ticketRepo = ticketRepo;
         _workflowRepo = workflowRepo;
         _workflowProfileRepo = workflowProfileRepo;
@@ -147,6 +152,97 @@ public class AgentAuthController : ControllerBase
             count = effective.Count,
             items = effective
         });
+    }
+
+    [HttpGet("me/sync-manifest")]
+    public async Task<IActionResult> GetSyncManifest(CancellationToken cancellationToken = default)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null) return NotFound();
+
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null) return NotFound(new { error = "Site not found for this agent." });
+
+        var serverConfig = await _configService.GetServerConfigAsync();
+        var clientConfig = await _configService.GetClientConfigAsync(site.ClientId);
+        var siteConfig = await _configService.GetSiteConfigAsync(site.Id);
+        var automationFingerprint = await _automationTaskService.GetPolicyFingerprintForAgentAsync(agentId, cancellationToken);
+
+        var wingetApps = await _appStoreService.GetEffectiveAppsAsync(
+            site.ClientId,
+            site.Id,
+            agent.Id,
+            AppInstallationType.Winget,
+            cancellationToken);
+
+        var chocolateyApps = await _appStoreService.GetEffectiveAppsAsync(
+            site.ClientId,
+            site.Id,
+            agent.Id,
+            AppInstallationType.Chocolatey,
+            cancellationToken);
+
+        var customApps = await _appStoreService.GetEffectiveAppsAsync(
+            site.ClientId,
+            site.Id,
+            agent.Id,
+            AppInstallationType.Custom,
+            cancellationToken);
+
+        var resources = new List<AgentSyncManifestResourceDto>
+        {
+            new()
+            {
+                Resource = SyncResourceType.Configuration,
+                Revision = $"cfg:{serverConfig.Version}:{clientConfig?.Version ?? 0}:{siteConfig?.Version ?? 0}",
+                RecommendedSyncInSeconds = 300,
+                Endpoint = "/api/agent-auth/me/configuration"
+            },
+            new()
+            {
+                Resource = SyncResourceType.AutomationPolicy,
+                Revision = $"automation:{automationFingerprint}",
+                RecommendedSyncInSeconds = 180,
+                Endpoint = "/api/agent-auth/me/automation/policy-sync",
+            },
+            new()
+            {
+                Resource = SyncResourceType.AppStore,
+                Variant = AppInstallationType.Winget.ToString(),
+                Revision = $"app-store:winget:{ComputeAppStoreRevision(wingetApps)}",
+                RecommendedSyncInSeconds = 900,
+                Endpoint = "/api/agent-auth/me/app-store?installationType=Winget"
+            },
+            new()
+            {
+                Resource = SyncResourceType.AppStore,
+                Variant = AppInstallationType.Chocolatey.ToString(),
+                Revision = $"app-store:chocolatey:{ComputeAppStoreRevision(chocolateyApps)}",
+                RecommendedSyncInSeconds = 900,
+                Endpoint = "/api/agent-auth/me/app-store?installationType=Chocolatey"
+            },
+            new()
+            {
+                Resource = SyncResourceType.AppStore,
+                Variant = AppInstallationType.Custom.ToString(),
+                Revision = $"app-store:custom:{ComputeAppStoreRevision(customApps)}",
+                RecommendedSyncInSeconds = 900,
+                Endpoint = "/api/agent-auth/me/app-store?installationType=Custom"
+            }
+        };
+
+        var manifest = new AgentSyncManifestDto
+        {
+            GeneratedAtUtc = DateTime.UtcNow,
+            RecommendedPollSeconds = 900,
+            MaxStaleSeconds = 86400,
+            Resources = resources
+        };
+
+        return Ok(manifest);
     }
 
     [HttpPost("me/automation/policy-sync")]
@@ -1249,6 +1345,26 @@ public class AgentAuthController : ControllerBase
 
         agentId = parsed;
         return true;
+    }
+
+    private static string ComputeAppStoreRevision(IReadOnlyList<EffectiveApprovedAppDto> items)
+    {
+        if (items.Count == 0)
+            return "empty";
+
+        var builder = new StringBuilder(items.Count * 64);
+        foreach (var item in items
+                     .OrderBy(x => x.PackageId, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(x => x.Version, StringComparer.OrdinalIgnoreCase))
+        {
+            builder
+                .Append(item.PackageId).Append('|')
+                .Append(item.Version).Append('|')
+                .Append(item.AutoUpdateEnabled).Append(';');
+        }
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     // ─── Base de Conhecimento ─────────────────────────────────────────

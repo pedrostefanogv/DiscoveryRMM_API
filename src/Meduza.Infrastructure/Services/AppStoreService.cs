@@ -1022,7 +1022,7 @@ public class AppStoreService : IAppStoreService
             Homepage = pkg.SiteUrl ?? string.Empty,
             License = license,
             Category = category,
-            Icon = pkg.IconUrl ?? string.Empty,
+            Icon = ResolveIconUrl(pkg.IconUrl, pkg.SiteUrl),
             InstallCommand = pkg.InstallCommand ?? string.Empty,
             LastUpdated = pkg.LastUpdated,
             Tags = tags,
@@ -1173,7 +1173,7 @@ public class AppStoreService : IAppStoreService
             Homepage = pkg.Homepage,
             License = pkg.License,
             Category = pkg.Category,
-            Icon = pkg.Icon,
+            Icon = ResolveIconUrl(pkg.Icon, pkg.Homepage),
             InstallCommand = pkg.InstallCommand,
             LastUpdated = pkg.LastUpdated,
             Tags = pkg.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
@@ -1263,7 +1263,7 @@ public class AppStoreService : IAppStoreService
             Homepage = pkg.Homepage,
             License = pkg.LicenseUrl,
             Category = string.Empty,
-            Icon = string.Empty,
+            Icon = ResolveIconUrl(null, pkg.Homepage),
             InstallCommand = $"choco install {pkg.PackageId}",
             LastUpdated = pkg.LastUpdated,
             Tags = pkg.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
@@ -1358,6 +1358,25 @@ public class AppStoreService : IAppStoreService
     private static bool ContainsIgnoreCase(string? source, string value)
     {
         return source?.Contains(value, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static string ResolveIconUrl(string? iconUrl, string? siteUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(iconUrl))
+            return iconUrl;
+
+        if (string.IsNullOrWhiteSpace(siteUrl))
+            return string.Empty;
+
+        var trimmedSiteUrl = siteUrl.Trim();
+        if (Uri.TryCreate(trimmedSiteUrl, UriKind.Absolute, out var siteUri)
+            && !string.IsNullOrWhiteSpace(siteUri.Host))
+        {
+            var host = Uri.EscapeDataString(siteUri.Host);
+            return $"https://www.google.com/s2/favicons?domain={host}&sz=64";
+        }
+
+        return trimmedSiteUrl;
     }
 
     private static string TryGetString(JsonElement element, string propertyName)
