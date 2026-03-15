@@ -13,6 +13,14 @@ namespace Meduza.Api.Controllers;
 [Route("api/[controller]")]
 public class AgentsController : ControllerBase
 {
+    private enum PackageCommandOperation
+    {
+        Install,
+        Update,
+        Remove,
+        UpdateOrInstall
+    }
+
     private readonly IAgentRepository _agentRepo;
     private readonly IAgentHardwareRepository _hardwareRepo;
     private readonly IAgentSoftwareRepository _softwareRepo;
@@ -319,8 +327,10 @@ public class AgentsController : ControllerBase
         return task.ActionType switch
         {
             AutomationTaskActionType.RunScript => await BuildRunScriptCommandAsync(agentId, task),
-            AutomationTaskActionType.InstallPackage => BuildPackageCommand(agentId, task, install: true),
-            AutomationTaskActionType.UpdatePackage => BuildPackageCommand(agentId, task, install: false),
+            AutomationTaskActionType.InstallPackage => BuildPackageCommand(agentId, task, PackageCommandOperation.Install),
+            AutomationTaskActionType.UpdatePackage => BuildPackageCommand(agentId, task, PackageCommandOperation.Update),
+            AutomationTaskActionType.RemovePackage => BuildPackageCommand(agentId, task, PackageCommandOperation.Remove),
+            AutomationTaskActionType.UpdateOrInstallPackage => BuildPackageCommand(agentId, task, PackageCommandOperation.UpdateOrInstall),
             AutomationTaskActionType.CustomCommand => BuildCustomCommand(agentId, task),
             _ => throw new InvalidOperationException("Unsupported automation task action type.")
         };
@@ -343,7 +353,7 @@ public class AgentsController : ControllerBase
         };
     }
 
-    private static AgentCommand BuildPackageCommand(Guid agentId, AutomationTaskDetailDto task, bool install)
+    private static AgentCommand BuildPackageCommand(Guid agentId, AutomationTaskDetailDto task, PackageCommandOperation operation)
     {
         if (!task.InstallationType.HasValue || string.IsNullOrWhiteSpace(task.PackageId))
             throw new InvalidOperationException("Automation task package action requires InstallationType and PackageId.");
@@ -351,12 +361,26 @@ public class AgentsController : ControllerBase
         var packageId = task.PackageId.Trim();
         var payload = task.InstallationType.Value switch
         {
-            AppInstallationType.Winget => install
-                ? $"winget install --id {packageId} --silent --accept-package-agreements --accept-source-agreements"
-                : $"winget upgrade --id {packageId} --silent --accept-package-agreements --accept-source-agreements",
-            AppInstallationType.Chocolatey => install
-                ? $"choco install {packageId} -y"
-                : $"choco upgrade {packageId} -y",
+            AppInstallationType.Winget => operation switch
+            {
+                PackageCommandOperation.Install
+                    => $"winget install --id {packageId} --silent --accept-package-agreements --accept-source-agreements",
+                PackageCommandOperation.Update
+                    => $"winget upgrade --id {packageId} --silent --accept-package-agreements --accept-source-agreements",
+                PackageCommandOperation.Remove
+                    => $"winget uninstall --id {packageId} --silent --accept-source-agreements",
+                PackageCommandOperation.UpdateOrInstall
+                    => $"winget upgrade --id {packageId} --silent --accept-package-agreements --accept-source-agreements ; if ($LASTEXITCODE -ne 0) {{ winget install --id {packageId} --silent --accept-package-agreements --accept-source-agreements }}",
+                _ => throw new InvalidOperationException("Unsupported package command operation for run-now command.")
+            },
+            AppInstallationType.Chocolatey => operation switch
+            {
+                PackageCommandOperation.Install => $"choco install {packageId} -y",
+                PackageCommandOperation.Update => $"choco upgrade {packageId} -y",
+                PackageCommandOperation.Remove => $"choco uninstall {packageId} -y",
+                PackageCommandOperation.UpdateOrInstall => $"choco upgrade {packageId} -y --ignore-not-installed ; if ($LASTEXITCODE -ne 0) {{ choco install {packageId} -y }}",
+                _ => throw new InvalidOperationException("Unsupported package command operation for run-now command.")
+            },
             _ => throw new InvalidOperationException("Unsupported package installation type for run-now command.")
         };
 

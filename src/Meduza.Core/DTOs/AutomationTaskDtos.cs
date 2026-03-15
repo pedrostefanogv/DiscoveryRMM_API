@@ -55,6 +55,30 @@ public class AutomationTaskAuditDto
     public DateTime ChangedAt { get; set; }
 }
 
+public class AutomationTaskTargetPreviewItemDto
+{
+    public Guid AgentId { get; set; }
+    public Guid SiteId { get; set; }
+    public string Hostname { get; set; } = string.Empty;
+    public string? DisplayName { get; set; }
+    public AgentStatus Status { get; set; }
+    public IReadOnlyList<string> AgentTags { get; set; } = [];
+}
+
+public class AutomationTaskTargetPreviewPageDto
+{
+    public Guid TaskId { get; set; }
+    public string TaskName { get; set; } = string.Empty;
+    public AppApprovalScopeType ScopeType { get; set; }
+    public IReadOnlyList<string> IncludeTags { get; set; } = [];
+    public IReadOnlyList<string> ExcludeTags { get; set; } = [];
+    public IReadOnlyList<AutomationTaskTargetPreviewItemDto> Items { get; set; } = [];
+    public int Count { get; set; }
+    public int Total { get; set; }
+    public int Limit { get; set; }
+    public int Offset { get; set; }
+}
+
 public class CreateAutomationTaskRequest
 {
     public string Name { get; set; } = string.Empty;

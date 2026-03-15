@@ -21,6 +21,14 @@ public class AgentRepository : IAgentRepository
             .SingleOrDefaultAsync(agent => agent.Id == id);
     }
 
+    public async Task<IEnumerable<Agent>> GetAllAsync()
+    {
+        return await _db.Agents
+            .AsNoTracking()
+            .OrderBy(agent => agent.Hostname)
+            .ToListAsync();
+    }
+
     public async Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId)
     {
         return await _db.Agents

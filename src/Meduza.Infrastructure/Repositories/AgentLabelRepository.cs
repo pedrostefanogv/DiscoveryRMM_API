@@ -21,6 +21,19 @@ public class AgentLabelRepository : IAgentLabelRepository
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds)
+    {
+        if (agentIds.Count == 0)
+            return [];
+
+        return await _db.AgentLabels
+            .AsNoTracking()
+            .Where(label => agentIds.Contains(label.AgentId))
+            .OrderBy(label => label.AgentId)
+            .ThenBy(label => label.Label)
+            .ToListAsync();
+    }
+
     public async Task<IReadOnlyList<AgentLabelRuleAgentResponse>> GetAgentsByRuleIdAsync(Guid ruleId)
     {
         return await (from match in _db.AgentLabelRuleMatches.AsNoTracking()

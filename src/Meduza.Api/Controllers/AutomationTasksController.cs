@@ -132,6 +132,20 @@ public class AutomationTasksController : ControllerBase
         });
     }
 
+    [HttpGet("{id:guid}/preview-agents")]
+    public async Task<IActionResult> PreviewTargetAgents(
+        Guid id,
+        [FromQuery] int limit = 50,
+        [FromQuery] int offset = 0,
+        CancellationToken cancellationToken = default)
+    {
+        var preview = await _service.PreviewTargetAgentsAsync(id, limit, offset, cancellationToken);
+        if (preview is null)
+            return NotFound();
+
+        return Ok(preview);
+    }
+
     private string GetOrCreateCorrelationId()
     {
         if (Request.Headers.TryGetValue("X-Correlation-Id", out var values))

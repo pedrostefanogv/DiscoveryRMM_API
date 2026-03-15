@@ -282,6 +282,77 @@ public class AutomationTaskService : IAutomationTaskService
         }).ToList();
     }
 
+    public async Task<AutomationTaskTargetPreviewPageDto?> PreviewTargetAgentsAsync(
+        Guid taskId,
+        int limit = 50,
+        int offset = 0,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var task = await _taskRepository.GetByIdAsync(taskId, includeInactive: true);
+        if (task is null)
+            return null;
+
+        var safeLimit = Math.Clamp(limit, 1, 200);
+        var safeOffset = Math.Max(0, offset);
+
+        var candidates = (await ResolveScopeAgentsAsync(task))
+            .GroupBy(agent => agent.Id)
+            .Select(group => group.First())
+            .OrderBy(agent => agent.Hostname)
+            .ToList();
+
+        var includeTags = ParseTags(task.IncludeTagsJson);
+        var excludeTags = ParseTags(task.ExcludeTagsJson);
+        var hasTagFilters = includeTags.Count > 0 || excludeTags.Count > 0;
+
+        var labels = hasTagFilters
+            ? await _agentLabelRepository.GetByAgentIdsAsync(candidates.Select(agent => agent.Id).ToList())
+            : [];
+
+        var labelsByAgent = labels
+            .GroupBy(label => label.AgentId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(label => label.Label)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(label => label)
+                    .ToList() as IReadOnlyList<string>);
+
+        var applicable = candidates
+            .Where(agent => MatchesTagFilters(includeTags, excludeTags, labelsByAgent.TryGetValue(agent.Id, out var agentTags) ? agentTags : []))
+            .ToList();
+
+        var page = applicable
+            .Skip(safeOffset)
+            .Take(safeLimit)
+            .Select(agent => new AutomationTaskTargetPreviewItemDto
+            {
+                AgentId = agent.Id,
+                SiteId = agent.SiteId,
+                Hostname = agent.Hostname,
+                DisplayName = agent.DisplayName,
+                Status = agent.Status,
+                AgentTags = labelsByAgent.TryGetValue(agent.Id, out var agentTags) ? agentTags : []
+            })
+            .ToList();
+
+        return new AutomationTaskTargetPreviewPageDto
+        {
+            TaskId = task.Id,
+            TaskName = task.Name,
+            ScopeType = task.ScopeType,
+            IncludeTags = includeTags,
+            ExcludeTags = excludeTags,
+            Items = page,
+            Count = page.Count,
+            Total = applicable.Count,
+            Limit = safeLimit,
+            Offset = safeOffset
+        };
+    }
+
     public async Task<AgentAutomationPolicySyncResponse> SyncPolicyForAgentAsync(
         Guid agentId,
         AgentAutomationPolicySyncRequest request,
@@ -423,6 +494,8 @@ public class AutomationTaskService : IAutomationTaskService
         {
             case AutomationTaskActionType.InstallPackage:
             case AutomationTaskActionType.UpdatePackage:
+            case AutomationTaskActionType.RemovePackage:
+            case AutomationTaskActionType.UpdateOrInstallPackage:
                 if (!installationType.HasValue)
                     throw new InvalidOperationException("InstallationType is required for package actions.");
                 if (string.IsNullOrWhiteSpace(packageId))
@@ -442,6 +515,37 @@ public class AutomationTaskService : IAutomationTaskService
                     throw new InvalidOperationException("CommandPayload is required for CustomCommand action.");
                 break;
         }
+    }
+
+    private async Task<IReadOnlyList<Agent>> ResolveScopeAgentsAsync(AutomationTaskDefinition task)
+    {
+        return task.ScopeType switch
+        {
+            AppApprovalScopeType.Global => (await _agentRepository.GetAllAsync()).ToList(),
+            AppApprovalScopeType.Client when task.ClientId.HasValue => (await _agentRepository.GetByClientIdAsync(task.ClientId.Value)).ToList(),
+            AppApprovalScopeType.Site when task.SiteId.HasValue => (await _agentRepository.GetBySiteIdAsync(task.SiteId.Value)).ToList(),
+            AppApprovalScopeType.Agent when task.AgentId.HasValue => await ResolveSingleAgentAsync(task.AgentId.Value),
+            _ => []
+        };
+    }
+
+    private async Task<IReadOnlyList<Agent>> ResolveSingleAgentAsync(Guid agentId)
+    {
+        var agent = await _agentRepository.GetByIdAsync(agentId);
+        return agent is null ? [] : [agent];
+    }
+
+    private static bool MatchesTagFilters(IReadOnlyList<string> include, IReadOnlyList<string> exclude, IReadOnlyList<string> labels)
+    {
+        var labelSet = labels.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (include.Count > 0 && !include.Any(labelSet.Contains))
+            return false;
+
+        if (exclude.Count > 0 && exclude.Any(labelSet.Contains))
+            return false;
+
+        return true;
     }
 
     private static void ValidateTask(AutomationTaskDefinition task)
