@@ -9,6 +9,9 @@ using Meduza.Api.Middleware;
 using Meduza.Api.Services;
 using Meduza.Core.Configuration;
 using Meduza.Core.Interfaces;
+using Meduza.Core.Interfaces.Auth;
+using Meduza.Core.Interfaces.Identity;
+using Meduza.Core.Interfaces.Security;
 using Meduza.Infrastructure.Data;
 using Meduza.Infrastructure.Messaging;
 using Meduza.Infrastructure.Repositories;
@@ -195,6 +198,23 @@ builder.Services.AddHostedService<AiChatRetentionBackgroundService>();
 builder.Services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
 builder.Services.AddHostedService<AgentPackagePrebuildHostedService>();
 
+// ── Identity & Auth ───────────────────────────────────────────────────────
+// Repos
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<IUserGroupRepository, UserGroupRepository>();
+builder.Services.AddScoped<IRoleRepository, RoleRepository>();
+builder.Services.AddScoped<IUserSessionRepository, UserSessionRepository>();
+builder.Services.AddScoped<IApiTokenRepository, ApiTokenRepository>();
+builder.Services.AddScoped<IUserMfaKeyRepository, UserMfaKeyRepository>();
+// Services
+builder.Services.AddScoped<IPasswordService, UserPasswordService>();
+builder.Services.AddSingleton<IJwtService, JwtService>();
+builder.Services.AddScoped<IFido2Service, Fido2AuthService>();
+builder.Services.AddScoped<IOtpService, OtpAuthService>();
+builder.Services.AddScoped<IUserAuthService, UserAuthService>();
+builder.Services.AddScoped<IApiTokenService, ApiTokenService>();
+builder.Services.AddScoped<IPermissionService, PermissionService>();
+
 //  Controllers + JSON config
 builder.Services.AddControllers(options =>
 {
@@ -267,6 +287,10 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Agent token auth middleware (para rotas /api/agent-auth/*)
 app.UseAgentAuth();
+
+// API key e JWT user auth (para todos os demais endpoints)
+app.UseApiTokenAuth();
+app.UseUserAuth();
 
 app.MapControllers();
 app.MapHub<AgentHub>("/hubs/agent", options =>
