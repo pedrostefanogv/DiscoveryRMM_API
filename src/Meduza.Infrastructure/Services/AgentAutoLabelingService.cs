@@ -17,12 +17,15 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     {
         PropertyNameCaseInsensitive = true
     };
+    private const string EnabledRulesCacheKey = "label-rules:enabled";
+    private const int EnabledRulesCacheTtlSeconds = 300;
 
     private readonly MeduzaDbContext _db;
     private readonly IAgentRepository _agentRepository;
     private readonly IAgentHardwareRepository _hardwareRepository;
     private readonly IAgentSoftwareRepository _softwareRepository;
     private readonly IAgentLabelRuleRepository _ruleRepository;
+    private readonly IRedisService _redisService;
     private readonly ILogger<AgentAutoLabelingService> _logger;
 
     private readonly record struct PreparedRule(
@@ -37,6 +40,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         IAgentHardwareRepository hardwareRepository,
         IAgentSoftwareRepository softwareRepository,
         IAgentLabelRuleRepository ruleRepository,
+        IRedisService redisService,
         ILogger<AgentAutoLabelingService> logger)
     {
         _db = db;
@@ -44,6 +48,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         _hardwareRepository = hardwareRepository;
         _softwareRepository = softwareRepository;
         _ruleRepository = ruleRepository;
+        _redisService = redisService;
         _logger = logger;
     }
 
@@ -202,7 +207,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     {
         _ = cancellationToken;
 
-        var rules = await _ruleRepository.GetEnabledAsync();
+        var rules = await GetCachedEnabledRulesAsync();
         if (rules.Count == 0)
             return [];
 
@@ -220,6 +225,33 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         }
 
         return prepared;
+    }
+
+    private async Task<IReadOnlyList<AgentLabelRule>> GetCachedEnabledRulesAsync()
+    {
+        var cached = await _redisService.GetAsync(EnabledRulesCacheKey);
+        if (!string.IsNullOrWhiteSpace(cached))
+        {
+            try
+            {
+                var deserialized = JsonSerializer.Deserialize<List<AgentLabelRule>>(cached, JsonOptions);
+                if (deserialized is not null)
+                    return deserialized;
+            }
+            catch (JsonException)
+            {
+                await _redisService.DeleteAsync(EnabledRulesCacheKey);
+            }
+        }
+
+        var rules = await _ruleRepository.GetEnabledAsync();
+        if (rules.Count > 0)
+        {
+            var payload = JsonSerializer.Serialize(rules, JsonOptions);
+            await _redisService.SetAsync(EnabledRulesCacheKey, payload, EnabledRulesCacheTtlSeconds);
+        }
+
+        return rules;
     }
 
     private static AgentLabelRuleExpressionNodeDto? TryDeserializeExpression(string json)

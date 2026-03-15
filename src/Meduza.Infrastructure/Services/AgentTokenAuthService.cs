@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using Meduza.Core.Entities;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
@@ -13,18 +14,24 @@ namespace Meduza.Infrastructure.Services;
 /// </summary>
 public class AgentTokenAuthService : IAgentAuthService
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const int MaxTokenCacheTtlSeconds = 600;
+
     private readonly IAgentTokenRepository _tokenRepo;
     private readonly IConfigurationResolver _configResolver;
     private readonly IAgentRepository _agentRepo;
+    private readonly IRedisService _redisService;
 
     public AgentTokenAuthService(
         IAgentTokenRepository tokenRepo,
         IConfigurationResolver configResolver,
-        IAgentRepository agentRepo)
+        IAgentRepository agentRepo,
+        IRedisService redisService)
     {
         _tokenRepo = tokenRepo;
         _configResolver = configResolver;
         _agentRepo = agentRepo;
+        _redisService = redisService;
     }
 
     public async Task<(AgentToken Token, string RawToken)> CreateTokenAsync(Guid agentId, string? description, int? expirationDays = null)
@@ -55,29 +62,54 @@ public class AgentTokenAuthService : IAgentAuthService
         };
 
         await _tokenRepo.CreateAsync(token);
+        await CacheTokenAsync(token);
         return (token, rawToken);
     }
 
     public async Task<AgentToken?> ValidateTokenAsync(string rawToken)
     {
         var hash = HashToken(rawToken);
-        var token = await _tokenRepo.GetByTokenHashAsync(hash);
+        var cacheKey = GetTokenCacheKey(hash);
+        var token = await TryGetCachedTokenAsync(cacheKey);
+
+        if (token is null)
+        {
+            token = await _tokenRepo.GetByTokenHashAsync(hash);
+            if (token is not null)
+                await CacheTokenAsync(token);
+        }
 
         if (token is null || !token.IsValid)
+        {
+            await _redisService.DeleteAsync(cacheKey);
             return null;
+        }
 
         await _tokenRepo.UpdateLastUsedAsync(token.Id);
+        token.LastUsedAt = DateTime.UtcNow;
+        await CacheTokenAsync(token);
         return token;
     }
 
     public async Task RevokeTokenAsync(Guid tokenId)
     {
+        var token = await _tokenRepo.GetByIdAsync(tokenId);
         await _tokenRepo.RevokeAsync(tokenId);
+
+        if (!string.IsNullOrWhiteSpace(token?.TokenHash))
+            await _redisService.DeleteAsync(GetTokenCacheKey(token.TokenHash));
     }
 
     public async Task RevokeAllTokensAsync(Guid agentId)
     {
+        var tokens = (await _tokenRepo.GetByAgentIdAsync(agentId)).ToList();
         await _tokenRepo.RevokeAllByAgentIdAsync(agentId);
+
+        foreach (var token in tokens)
+        {
+            if (!string.IsNullOrWhiteSpace(token.TokenHash))
+                await _redisService.DeleteAsync(GetTokenCacheKey(token.TokenHash));
+        }
     }
 
     public async Task<IEnumerable<AgentToken>> GetTokensByAgentIdAsync(Guid agentId)
@@ -97,4 +129,40 @@ public class AgentTokenAuthService : IAgentAuthService
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexStringLower(hash);
     }
+
+    private async Task<AgentToken?> TryGetCachedTokenAsync(string cacheKey)
+    {
+        var cached = await _redisService.GetAsync(cacheKey);
+        if (string.IsNullOrWhiteSpace(cached))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<AgentToken>(cached, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            await _redisService.DeleteAsync(cacheKey);
+            return null;
+        }
+    }
+
+    private async Task CacheTokenAsync(AgentToken token)
+    {
+        if (string.IsNullOrWhiteSpace(token.TokenHash))
+            return;
+
+        var ttl = token.ExpiresAt - DateTime.UtcNow;
+        if (ttl <= TimeSpan.Zero)
+        {
+            await _redisService.DeleteAsync(GetTokenCacheKey(token.TokenHash));
+            return;
+        }
+
+        var effectiveTtl = (int)Math.Max(1, Math.Min(MaxTokenCacheTtlSeconds, Math.Floor(ttl.TotalSeconds)));
+        var payload = JsonSerializer.Serialize(token, JsonOptions);
+        await _redisService.SetAsync(GetTokenCacheKey(token.TokenHash), payload, effectiveTtl);
+    }
+
+    private static string GetTokenCacheKey(string tokenHash) => $"token:hash:{tokenHash}";
 }

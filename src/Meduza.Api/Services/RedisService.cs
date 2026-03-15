@@ -1,32 +1,8 @@
+using Meduza.Core.Interfaces;
 using StackExchange.Redis;
 using System.Collections.Concurrent;
 
 namespace Meduza.Api.Services;
-
-/// <summary>
-/// Serviço para gerenciar cache e pub/sub via Redis.
-/// Complementa NATS com capacidade de cache distribuído.
-/// </summary>
-public interface IRedisService
-{
-    /// <summary>Verificar se Redis está conectado.</summary>
-    bool IsConnected { get; }
-
-    /// <summary>Obter um valor do cache.</summary>
-    Task<string?> GetAsync(string key);
-
-    /// <summary>Armazenar um valor em cache com TTL (segundos).</summary>
-    Task SetAsync(string key, string value, int expirySeconds = 3600);
-
-    /// <summary>Remover uma chave do cache.</summary>
-    Task DeleteAsync(string key);
-
-    /// <summary>Publicar mensagem em um canal Redis.</summary>
-    Task PublishAsync(string channel, string message);
-
-    /// <summary>Inscrever-se a um canal Redis.</summary>
-    Task SubscribeAsync(string channel, Action<string, string> handler);
-}
 
 public class RedisService : IRedisService
 {
@@ -83,6 +59,35 @@ public class RedisService : IRedisService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error deleting key {Key} from Redis", key);
+        }
+    }
+
+    public async Task DeleteByPrefixAsync(string prefix)
+    {
+        try
+        {
+            var endpoints = _connection.GetEndPoints();
+            if (endpoints.Length == 0)
+                return;
+
+            foreach (var endpoint in endpoints)
+            {
+                var server = _connection.GetServer(endpoint);
+                if (!server.IsConnected)
+                    continue;
+
+                var keys = server.Keys(pattern: $"{prefix}*").ToArray();
+                if (keys.Length == 0)
+                    continue;
+
+                var db = _connection.GetDatabase();
+                await db.KeyDeleteAsync(keys);
+                _logger.LogDebug("Deleted {Count} Redis keys with prefix {Prefix}", keys.Length, prefix);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting Redis keys by prefix {Prefix}", prefix);
         }
     }
 

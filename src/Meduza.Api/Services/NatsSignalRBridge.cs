@@ -4,7 +4,6 @@ using Meduza.Core.DTOs;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.Caching.Memory;
 using NATS.Client.Core;
 
 namespace Meduza.Api.Services;
@@ -17,19 +16,19 @@ public class NatsSignalRBridge : BackgroundService
 {
     private readonly NatsConnection _natsConnection;
     private readonly IHubContext<AgentHub> _hubContext;
-    private readonly IMemoryCache _memoryCache;
+    private readonly IRedisService _redisService;
     private readonly ILogger<NatsSignalRBridge> _logger;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public NatsSignalRBridge(
         NatsConnection natsConnection,
         IHubContext<AgentHub> hubContext,
-        IMemoryCache memoryCache,
+        IRedisService redisService,
         ILogger<NatsSignalRBridge> logger)
     {
         _natsConnection = natsConnection;
         _hubContext = hubContext;
-        _memoryCache = memoryCache;
+        _redisService = redisService;
         _logger = logger;
     }
 
@@ -56,7 +55,7 @@ public class NatsSignalRBridge : BackgroundService
                         if (eventData is not null)
                         {
                             _logger.LogDebug("Dashboard event received: {EventType}", eventData.EventType);
-                            InvalidateDashboardCache(eventData.ClientId, eventData.SiteId);
+                            await InvalidateDashboardCacheAsync(eventData.ClientId, eventData.SiteId);
 
                             await _hubContext.Clients.Group(DashboardGroupNames.Global)
                                 .SendAsync("DashboardEvent", eventData.EventType, eventData.Data, eventData.TimestampUtc, cancellationToken: stoppingToken);
@@ -106,20 +105,20 @@ public class NatsSignalRBridge : BackgroundService
         _logger.LogInformation("NATS-SignalR Bridge stopped.");
     }
 
-    private void InvalidateDashboardCache(Guid? clientId, Guid? siteId)
+    private async Task InvalidateDashboardCacheAsync(Guid? clientId, Guid? siteId)
     {
         foreach (var windowHours in DashboardCacheKeys.SupportedWindowHours)
         {
-            _memoryCache.Remove(DashboardCacheKeys.GlobalSummary(windowHours));
+            await _redisService.DeleteAsync(DashboardCacheKeys.GlobalSummary(windowHours));
 
             if (clientId.HasValue)
             {
-                _memoryCache.Remove(DashboardCacheKeys.ClientSummary(clientId.Value, windowHours));
+                await _redisService.DeleteAsync(DashboardCacheKeys.ClientSummary(clientId.Value, windowHours));
             }
 
             if (clientId.HasValue && siteId.HasValue)
             {
-                _memoryCache.Remove(DashboardCacheKeys.SiteSummary(clientId.Value, siteId.Value, windowHours));
+                await _redisService.DeleteAsync(DashboardCacheKeys.SiteSummary(clientId.Value, siteId.Value, windowHours));
             }
         }
     }

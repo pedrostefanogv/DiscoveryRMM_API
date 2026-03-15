@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.Extensions.Caching.Memory;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
@@ -11,30 +10,33 @@ namespace Meduza.Infrastructure.Services;
 /// <summary>
 /// Resolve configurações com herança hierárquica: Server → Client → Site.
 /// Valores null em Client/Site são preenchidos pelo nível superior.
-/// Usa IMemoryCache com TTL curto para performance no hot path dos agents.
+/// Usa Redis com TTL curto para performance no hot path dos agents.
 /// </summary>
 public class ConfigurationResolver : IConfigurationResolver
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const string ResolvedSiteCachePrefix = "config:resolved:site:";
+
     private readonly IServerConfigurationRepository _serverRepo;
     private readonly IClientConfigurationRepository _clientRepo;
     private readonly ISiteConfigurationRepository _siteRepo;
     private readonly ISiteRepository _siteRepository;
-    private readonly IMemoryCache _cache;
+    private readonly IRedisService _redisService;
 
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
     public ConfigurationResolver(
         IServerConfigurationRepository serverRepo,
         IClientConfigurationRepository clientRepo,
         ISiteConfigurationRepository siteRepo,
         ISiteRepository siteRepository,
-        IMemoryCache cache)
+        IRedisService redisService)
     {
         _serverRepo = serverRepo;
         _clientRepo = clientRepo;
         _siteRepo = siteRepo;
         _siteRepository = siteRepository;
-        _cache = cache;
+        _redisService = redisService;
     }
 
     public async Task<ServerConfiguration> GetServerAsync()
@@ -160,12 +162,13 @@ public class ConfigurationResolver : IConfigurationResolver
 
     /// <summary>
     /// Resolve configuração completa para um site/agent, sem nenhum null.
-    /// Cacheada por 60 segundos para performance no hot path.
+    /// Cacheada por 5 minutos para performance no hot path.
     /// </summary>
     public async Task<ResolvedConfiguration> ResolveForSiteAsync(Guid siteId)
     {
-        var cacheKey = $"resolved_config_site_{siteId}";
-        if (_cache.TryGetValue(cacheKey, out ResolvedConfiguration? cached) && cached is not null)
+        var cacheKey = GetResolvedSiteCacheKey(siteId);
+        var cached = await TryGetCachedResolvedConfigurationAsync(cacheKey);
+        if (cached is not null)
             return cached;
 
         var server = await _serverRepo.GetOrCreateDefaultAsync();
@@ -241,7 +244,8 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["AutoUpdate"] = (int)autoUpdateSource;
         resolved.Inheritance["AIIntegration"] = (int)aiSource;
 
-        _cache.Set(cacheKey, resolved, CacheTtl);
+        var payload = JsonSerializer.Serialize(resolved, JsonOptions);
+        await _redisService.SetAsync(cacheKey, payload, (int)CacheTtl.TotalSeconds);
         return resolved;
     }
 
@@ -254,12 +258,7 @@ public class ConfigurationResolver : IConfigurationResolver
 
     public void ClearCache()
     {
-        // IMemoryCache não tem ClearAll nativo; para invalidação seletiva, remover chaves conhecidas
-        // Em produção, considerar IDistributedCache com Redis
-        if (_cache is MemoryCache mc)
-        {
-            mc.Compact(1.0);
-        }
+        _redisService.DeleteByPrefixAsync(ResolvedSiteCachePrefix).GetAwaiter().GetResult();
     }
 
     private static AutoUpdateSettings ResolveAutoUpdate(string? siteJson, string? clientJson, string serverJson)
@@ -333,4 +332,23 @@ public class ConfigurationResolver : IConfigurationResolver
         if (!string.IsNullOrWhiteSpace(clientJson)) return ConfigurationPriorityType.Client;
         return ConfigurationPriorityType.Global;
     }
+
+    private async Task<ResolvedConfiguration?> TryGetCachedResolvedConfigurationAsync(string cacheKey)
+    {
+        var cached = await _redisService.GetAsync(cacheKey);
+        if (string.IsNullOrWhiteSpace(cached))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<ResolvedConfiguration>(cached, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            await _redisService.DeleteAsync(cacheKey);
+            return null;
+        }
+    }
+
+    private static string GetResolvedSiteCacheKey(Guid siteId) => $"{ResolvedSiteCachePrefix}{siteId:N}";
 }

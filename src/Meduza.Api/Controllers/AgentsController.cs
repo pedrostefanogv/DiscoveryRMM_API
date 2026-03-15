@@ -30,6 +30,8 @@ public class AgentsController : ControllerBase
     private readonly IAutomationScriptService _automationScriptService;
     private readonly IAutomationExecutionReportRepository _automationExecutionReportRepository;
     private readonly IAgentMessaging _messaging;
+    private readonly ISiteRepository _siteRepository;
+    private readonly IRedisService _redisService;
     private readonly IHubContext<AgentHub> _hubContext;
     private readonly int _agentOnlineGraceSeconds;
 
@@ -43,6 +45,8 @@ public class AgentsController : ControllerBase
         IAutomationScriptService automationScriptService,
         IAutomationExecutionReportRepository automationExecutionReportRepository,
         IAgentMessaging messaging,
+        ISiteRepository siteRepository,
+        IRedisService redisService,
         IHubContext<AgentHub> hubContext,
         IConfiguration configuration)
     {
@@ -55,6 +59,8 @@ public class AgentsController : ControllerBase
         _automationScriptService = automationScriptService;
         _automationExecutionReportRepository = automationExecutionReportRepository;
         _messaging = messaging;
+        _siteRepository = siteRepository;
+        _redisService = redisService;
         _hubContext = hubContext;
         _agentOnlineGraceSeconds = configuration.GetValue<int?>("Realtime:AgentOnlineGraceSeconds") ?? 120;
     }
@@ -109,6 +115,7 @@ public class AgentsController : ControllerBase
             AgentVersion = request.AgentVersion
         };
         var created = await _agentRepo.CreateAsync(agent);
+        await InvalidateAgentScopeCachesAsync(created.SiteId, null);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
@@ -118,18 +125,26 @@ public class AgentsController : ControllerBase
         var agent = await _agentRepo.GetByIdAsync(id);
         if (agent is null) return NotFound();
 
+        var previousSiteId = agent.SiteId;
+
         agent.SiteId = request.SiteId;
         agent.Hostname = request.Hostname;
         agent.DisplayName = request.DisplayName;
 
         await _agentRepo.UpdateAsync(agent);
+        await InvalidateAgentScopeCachesAsync(agent.SiteId, previousSiteId);
         return Ok(agent);
     }
 
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id)
     {
+        var agent = await _agentRepo.GetByIdAsync(id);
         await _agentRepo.DeleteAsync(id);
+
+        if (agent is not null)
+            await InvalidateAgentScopeCachesAsync(agent.SiteId, null, id);
+
         return NoContent();
     }
 
@@ -319,6 +334,27 @@ public class AgentsController : ControllerBase
             command = created,
             sync = normalized
         });
+    }
+
+    private async Task InvalidateAgentScopeCachesAsync(Guid currentSiteId, Guid? previousSiteId = null, Guid? agentId = null)
+    {
+        await _redisService.DeleteAsync("agents:all-ids");
+
+        var siteIds = new HashSet<Guid> { currentSiteId };
+        if (previousSiteId.HasValue)
+            siteIds.Add(previousSiteId.Value);
+
+        foreach (var siteId in siteIds)
+        {
+            await _redisService.DeleteAsync($"agents:by-site:{siteId:N}");
+
+            var site = await _siteRepository.GetByIdAsync(siteId);
+            if (site is not null)
+                await _redisService.DeleteAsync($"agents:by-client:{site.ClientId:N}");
+        }
+
+        if (agentId.HasValue)
+            await _redisService.DeleteAsync($"agents:single:{agentId.Value:N}");
     }
 
     private async Task<AgentCommand> BuildAgentCommandFromTaskAsync(Guid agentId, AutomationTaskDetailDto task, CancellationToken cancellationToken)

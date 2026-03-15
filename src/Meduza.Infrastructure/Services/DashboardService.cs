@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
@@ -5,21 +6,23 @@ using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 
 namespace Meduza.Infrastructure.Services;
 
 public class DashboardService : IDashboardService
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const int AbsoluteCacheTtlSeconds = 45;
+
     private readonly MeduzaDbContext _db;
-    private readonly IMemoryCache _memoryCache;
+    private readonly IRedisService _redisService;
     private readonly int _agentOnlineGraceSeconds;
 
-    public DashboardService(MeduzaDbContext db, IMemoryCache memoryCache, IConfiguration configuration)
+    public DashboardService(MeduzaDbContext db, IRedisService redisService, IConfiguration configuration)
     {
         _db = db;
-        _memoryCache = memoryCache;
+        _redisService = redisService;
         _agentOnlineGraceSeconds = int.TryParse(configuration["Realtime:AgentOnlineGraceSeconds"], out var parsed)
             ? parsed
             : 120;
@@ -162,18 +165,33 @@ public class DashboardService : IDashboardService
         Func<Task<DashboardSummaryDto>> factory,
         CancellationToken cancellationToken)
     {
-        if (_memoryCache.TryGetValue(cacheKey, out DashboardSummaryDto? cached) && cached is not null)
+        _ = cancellationToken;
+
+        var cached = await TryGetCachedSummaryAsync(cacheKey);
+        if (cached is not null)
             return cached;
 
         var summary = await factory();
-        var options = new MemoryCacheEntryOptions
-        {
-            AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(45),
-            SlidingExpiration = TimeSpan.FromSeconds(15)
-        };
-
-        _memoryCache.Set(cacheKey, summary, options);
+        var payload = JsonSerializer.Serialize(summary, JsonOptions);
+        await _redisService.SetAsync(cacheKey, payload, AbsoluteCacheTtlSeconds);
         return summary;
+    }
+
+    private async Task<DashboardSummaryDto?> TryGetCachedSummaryAsync(string cacheKey)
+    {
+        var cached = await _redisService.GetAsync(cacheKey);
+        if (string.IsNullOrWhiteSpace(cached))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<DashboardSummaryDto>(cached, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            await _redisService.DeleteAsync(cacheKey);
+            return null;
+        }
     }
 
     private IQueryable<Agent> BuildScopedAgentsQuery(DashboardScopeLevel level, Guid? clientId, Guid? siteId)

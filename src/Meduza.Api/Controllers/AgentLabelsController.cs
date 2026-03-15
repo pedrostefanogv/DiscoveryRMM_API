@@ -19,15 +19,18 @@ public class AgentLabelsController : ControllerBase
     private readonly IAgentLabelRepository _labelRepository;
     private readonly IAgentLabelRuleRepository _ruleRepository;
     private readonly IAgentAutoLabelingService _autoLabelingService;
+    private readonly IRedisService _redisService;
 
     public AgentLabelsController(
         IAgentLabelRepository labelRepository,
         IAgentLabelRuleRepository ruleRepository,
-        IAgentAutoLabelingService autoLabelingService)
+        IAgentAutoLabelingService autoLabelingService,
+        IRedisService redisService)
     {
         _labelRepository = labelRepository;
         _ruleRepository = ruleRepository;
         _autoLabelingService = autoLabelingService;
+        _redisService = redisService;
     }
 
     [HttpGet("agents/{agentId:guid}")]
@@ -85,6 +88,7 @@ public class AgentLabelsController : ControllerBase
             UpdatedBy = createdBy
         });
 
+        await InvalidateRuleCachesAsync();
         await _autoLabelingService.ReprocessAllAgentsAsync($"rule-created:{rule.Id}", cancellationToken: cancellationToken);
         return Ok(MapRule(rule));
     }
@@ -109,6 +113,7 @@ public class AgentLabelsController : ControllerBase
         existing.UpdatedBy = HttpContext.Items["Username"] as string ?? "api";
 
         await _ruleRepository.UpdateAsync(existing);
+        await InvalidateRuleCachesAsync();
         await _autoLabelingService.ReprocessAllAgentsAsync($"rule-updated:{id}", cancellationToken: cancellationToken);
 
         var updated = await _ruleRepository.GetByIdAsync(id);
@@ -119,6 +124,7 @@ public class AgentLabelsController : ControllerBase
     public async Task<IActionResult> DeleteRule(Guid id, CancellationToken cancellationToken)
     {
         await _ruleRepository.DeleteAsync(id);
+        await InvalidateRuleCachesAsync();
         await _autoLabelingService.ReprocessAllAgentsAsync($"rule-deleted:{id}", cancellationToken: cancellationToken);
         return NoContent();
     }
@@ -201,4 +207,7 @@ public class AgentLabelsController : ControllerBase
         errors.AddRange(AgentLabelExpressionValidator.Validate(expression));
         return errors;
     }
+
+    private Task InvalidateRuleCachesAsync()
+        => _redisService.DeleteAsync("label-rules:enabled");
 }
