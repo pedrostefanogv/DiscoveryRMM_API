@@ -746,6 +746,12 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.ContactEmail)
                 .HasColumnName("contact_email")
                 .HasMaxLength(256);
+            entity.Property(config => config.MeshCentralGroupName)
+                .HasColumnName("meshcentral_group_name")
+                .HasMaxLength(200);
+            entity.Property(config => config.MeshCentralMeshId)
+                .HasColumnName("meshcentral_mesh_id")
+                .HasMaxLength(200);
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
             entity.Property(config => config.CreatedAt)
                 .HasColumnName("created_at")

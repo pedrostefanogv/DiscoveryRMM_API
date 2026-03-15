@@ -59,6 +59,8 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
         existingConfig.Location = config.Location;
         existingConfig.ContactPerson = config.ContactPerson;
         existingConfig.ContactEmail = config.ContactEmail;
+        existingConfig.MeshCentralGroupName = config.MeshCentralGroupName;
+        existingConfig.MeshCentralMeshId = config.MeshCentralMeshId;
         existingConfig.LockedFieldsJson = config.LockedFieldsJson;
         existingConfig.UpdatedAt = config.UpdatedAt;
         existingConfig.UpdatedBy = config.UpdatedBy;

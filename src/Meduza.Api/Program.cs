@@ -145,6 +145,7 @@ builder.Services.Configure<MeshCentralOptions>(
     builder.Configuration.GetSection("MeshCentral"));
 builder.Services.AddScoped<IMeshCentralEmbeddingService, MeshCentralEmbeddingService>();
 builder.Services.AddScoped<IMeshCentralProvisioningService, MeshCentralProvisioningService>();
+builder.Services.AddScoped<IMeshCentralApiService, MeshCentralApiService>();
 
 // IMemoryCache (para ConfigurationResolver)
 builder.Services.AddMemoryCache();

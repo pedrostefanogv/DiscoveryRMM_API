@@ -96,6 +96,12 @@ public class SiteConfiguration
     /// <summary>Email de contato do site</summary>
     public string? ContactEmail { get; set; }
 
+    /// <summary>Nome do grupo/dispositivo no MeshCentral para este site.</summary>
+    public string? MeshCentralGroupName { get; set; }
+
+    /// <summary>Mesh ID persistido para reconciliacao/sync com o MeshCentral.</summary>
+    public string? MeshCentralMeshId { get; set; }
+
     /// <summary>
     /// Lista de campos bloqueados no nível de site (JSON array de nomes de propriedade).
     /// Bloqueia sobrescrita nos agents deste site (futuro).

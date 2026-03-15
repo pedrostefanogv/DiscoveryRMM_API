@@ -14,6 +14,7 @@ public class DeployTokensController : ControllerBase
     private readonly IAgentPackageService _agentPackageService;
     private readonly IConfigurationResolver _configurationResolver;
     private readonly IMeshCentralProvisioningService _meshCentralProvisioningService;
+    private readonly IMeshCentralApiService _meshCentralApiService;
 
     public DeployTokensController(
         IDeployTokenService deployTokenService,
@@ -22,7 +23,8 @@ public class DeployTokensController : ControllerBase
         IClientRepository clientRepository,
         IAgentPackageService agentPackageService,
         IConfigurationResolver configurationResolver,
-        IMeshCentralProvisioningService meshCentralProvisioningService)
+        IMeshCentralProvisioningService meshCentralProvisioningService,
+        IMeshCentralApiService meshCentralApiService)
     {
         _deployTokenService = deployTokenService;
         _deployTokenRepository = deployTokenRepository;
@@ -31,6 +33,7 @@ public class DeployTokensController : ControllerBase
         _agentPackageService = agentPackageService;
         _configurationResolver = configurationResolver;
         _meshCentralProvisioningService = meshCentralProvisioningService;
+        _meshCentralApiService = meshCentralApiService;
     }
 
     [HttpGet]
@@ -105,11 +108,18 @@ public class DeployTokensController : ControllerBase
             {
                 try
                 {
-                    meshCentralInstall = _meshCentralProvisioningService.BuildInstallInstructions(client, site, rawToken);
+                    meshCentralInstall = await _meshCentralApiService.ProvisionInstallAsync(client, site, rawToken, HttpContext.RequestAborted);
                 }
                 catch (InvalidOperationException)
                 {
-                    // Se a configuracao MeshCentral nao estiver pronta, nao bloqueia o fluxo de deploy token.
+                    try
+                    {
+                        meshCentralInstall = _meshCentralProvisioningService.BuildInstallInstructions(client, site, rawToken);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Nao bloqueia deploy token quando provisao MeshCentral estiver indisponivel.
+                    }
                 }
             }
         }
@@ -190,12 +200,20 @@ public class DeployTokensController : ControllerBase
 
         try
         {
-            var instructions = _meshCentralProvisioningService.BuildInstallInstructions(client, site, request.RawToken);
+            var instructions = await _meshCentralApiService.ProvisionInstallAsync(client, site, request.RawToken, HttpContext.RequestAborted);
             return Ok(instructions);
         }
         catch (InvalidOperationException ex)
         {
-            return StatusCode(503, new { error = ex.Message });
+            try
+            {
+                var fallback = _meshCentralProvisioningService.BuildInstallInstructions(client, site, request.RawToken);
+                return Ok(fallback);
+            }
+            catch (InvalidOperationException)
+            {
+                return StatusCode(503, new { error = ex.Message });
+            }
         }
     }
 

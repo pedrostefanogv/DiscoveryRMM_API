@@ -77,4 +77,9 @@ public class MeshCentralOptions
     /// Horas de validade do link de instalacao gerado pelo MeshCentral.
     /// </summary>
     public int InviteExpireHours { get; set; } = 24;
+
+    /// <summary>
+    /// Modo padrao de instalacao do agent: background ou interactive.
+    /// </summary>
+    public string InstallExecutionMode { get; set; } = "background";
 }

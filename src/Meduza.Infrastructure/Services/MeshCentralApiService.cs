@@ -15,10 +15,12 @@ public class MeshCentralApiService : IMeshCentralApiService
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly MeshCentralOptions _options;
+    private readonly ISiteConfigurationRepository _siteConfigurationRepository;
 
-    public MeshCentralApiService(IOptions<MeshCentralOptions> options)
+    public MeshCentralApiService(IOptions<MeshCentralOptions> options, ISiteConfigurationRepository siteConfigurationRepository)
     {
         _options = options.Value;
+        _siteConfigurationRepository = siteConfigurationRepository;
     }
 
     public async Task<MeshCentralInstallInstructions> ProvisionInstallAsync(
@@ -57,16 +59,77 @@ public class MeshCentralApiService : IMeshCentralApiService
         if (string.IsNullOrWhiteSpace(inviteUrl))
             throw new InvalidOperationException("MeshCentral did not return an invite link.");
 
-        var windowsCommand = $"powershell -ExecutionPolicy Bypass -Command \"iwr -UseBasicParsing '{inviteUrl}' -OutFile meshcentral-agent.exe; .\\meshcentral-agent.exe\"";
-        var linuxCommand = $"curl -fsSL '{inviteUrl}' | sh";
+        var installMode = ResolveInstallMode(_options.InstallExecutionMode);
+        var windowsBackground = BuildWindowsCommandBackground(inviteUrl);
+        var windowsInteractive = BuildWindowsCommandInteractive(inviteUrl);
+        var linuxBackground = BuildLinuxCommandBackground(inviteUrl);
+        var linuxInteractive = BuildLinuxCommandInteractive(inviteUrl);
+
+        await PersistSiteMeshBindingAsync(site, groupName, meshId);
 
         return new MeshCentralInstallInstructions
         {
             GroupName = groupName,
+            MeshId = meshId,
             InstallUrl = inviteUrl,
-            WindowsCommand = windowsCommand,
-            LinuxCommand = linuxCommand
+            InstallMode = installMode,
+            WindowsCommandBackground = windowsBackground,
+            WindowsCommandInteractive = windowsInteractive,
+            LinuxCommandBackground = linuxBackground,
+            LinuxCommandInteractive = linuxInteractive,
+            WindowsCommand = installMode == "interactive" ? windowsInteractive : windowsBackground,
+            LinuxCommand = installMode == "interactive" ? linuxInteractive : linuxBackground
         };
+    }
+
+    private async Task PersistSiteMeshBindingAsync(Site site, string groupName, string meshId)
+    {
+        var existing = await _siteConfigurationRepository.GetBySiteIdAsync(site.Id);
+        if (existing is null)
+        {
+            await _siteConfigurationRepository.CreateAsync(new SiteConfiguration
+            {
+                SiteId = site.Id,
+                ClientId = site.ClientId,
+                MeshCentralGroupName = groupName,
+                MeshCentralMeshId = meshId,
+                CreatedBy = "meshcentral-sync",
+                UpdatedBy = "meshcentral-sync"
+            });
+            return;
+        }
+
+        existing.MeshCentralGroupName = groupName;
+        existing.MeshCentralMeshId = meshId;
+        existing.UpdatedBy = "meshcentral-sync";
+        await _siteConfigurationRepository.UpdateAsync(existing);
+    }
+
+    private static string ResolveInstallMode(string? raw)
+    {
+        return string.Equals(raw, "interactive", StringComparison.OrdinalIgnoreCase)
+            ? "interactive"
+            : "background";
+    }
+
+    private static string BuildWindowsCommandInteractive(string installUrl)
+    {
+        return $"powershell -ExecutionPolicy Bypass -Command \"iwr -UseBasicParsing '{installUrl}' -OutFile meshcentral-agent.exe; .\\meshcentral-agent.exe\"";
+    }
+
+    private static string BuildWindowsCommandBackground(string installUrl)
+    {
+        return $"powershell -ExecutionPolicy Bypass -Command \"iwr -UseBasicParsing '{installUrl}' -OutFile meshcentral-agent.exe; Start-Process -FilePath .\\meshcentral-agent.exe -WindowStyle Hidden\"";
+    }
+
+    private static string BuildLinuxCommandInteractive(string installUrl)
+    {
+        return $"curl -fsSL '{installUrl}' | sh";
+    }
+
+    private static string BuildLinuxCommandBackground(string installUrl)
+    {
+        return $"nohup sh -c \"curl -fsSL '{installUrl}' | sh\" >/tmp/meshcentral-agent-install.log 2>&1 &";
     }
 
     private async Task<string> EnsureMeshGroupAsync(ClientWebSocket ws, string groupName, CancellationToken ct)
