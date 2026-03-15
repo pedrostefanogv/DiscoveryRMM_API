@@ -55,6 +55,24 @@ public class UserAuthService : IUserAuthService
 
         await _users.SetLastLoginAsync(user.Id, DateTime.UtcNow);
 
+        var firstAccessRequired = user.MustChangePassword || user.MustChangeProfile;
+
+        // Se onboarding inicial estiver pendente, sempre retorna token de setup.
+        // Isso garante troca de credenciais/perfil + setup de MFA antes da sessão completa.
+        if (firstAccessRequired)
+        {
+            var setupToken = _jwtService.GenerateMfaSetupToken(user.Id);
+            return new LoginResponseDto
+            {
+                MfaToken = setupToken,
+                MfaRequired = true,
+                MfaConfigured = user.MfaConfigured,
+                FirstAccessRequired = true,
+                MustChangePassword = user.MustChangePassword,
+                MustChangeProfile = user.MustChangeProfile
+            };
+        }
+
         // Se MFA não está ainda configurado, emite setup token (fluxo de primeiro acesso)
         if (user.MfaRequired && !user.MfaConfigured)
         {
@@ -63,7 +81,10 @@ public class UserAuthService : IUserAuthService
             {
                 MfaToken = setupToken,
                 MfaRequired = true,
-                MfaConfigured = false
+                MfaConfigured = false,
+                FirstAccessRequired = false,
+                MustChangePassword = false,
+                MustChangeProfile = false
             };
         }
 
@@ -72,6 +93,62 @@ public class UserAuthService : IUserAuthService
         return new LoginResponseDto
         {
             MfaToken = mfaToken,
+            MfaRequired = user.MfaRequired,
+            MfaConfigured = user.MfaConfigured,
+            FirstAccessRequired = false,
+            MustChangePassword = false,
+            MustChangeProfile = false
+        };
+    }
+
+    public async Task CompleteFirstAccessAsync(Guid userId, CompleteFirstAccessRequestDto dto)
+    {
+        var user = await _users.GetByIdAsync(userId)
+            ?? throw new UnauthorizedAccessException("Usuário não encontrado.");
+
+        if (!(user.MustChangePassword || user.MustChangeProfile))
+            return;
+
+        if (!_passwordService.VerifyPassword(dto.CurrentPassword, user.PasswordSalt, user.PasswordHash))
+            throw new UnauthorizedAccessException("Senha atual inválida.");
+
+        if (!string.Equals(user.Login, dto.NewLogin, StringComparison.OrdinalIgnoreCase) &&
+            await _users.ExistsByLoginAsync(dto.NewLogin))
+            throw new InvalidOperationException("Login já em uso.");
+
+        if (!string.Equals(user.Email, dto.NewEmail, StringComparison.OrdinalIgnoreCase) &&
+            await _users.ExistsByEmailAsync(dto.NewEmail))
+            throw new InvalidOperationException("E-mail já em uso.");
+
+        var (isValid, reason) = _passwordService.ValidatePolicy(dto.NewPassword);
+        if (!isValid)
+            throw new InvalidOperationException(reason ?? "Nova senha inválida.");
+
+        var salt = _passwordService.GenerateSalt();
+        var hash = _passwordService.HashPassword(dto.NewPassword, salt);
+
+        user.Login = dto.NewLogin.Trim();
+        user.Email = dto.NewEmail.Trim();
+        user.FullName = dto.NewFullName.Trim();
+        user.PasswordSalt = salt;
+        user.PasswordHash = hash;
+        user.MustChangePassword = false;
+        user.MustChangeProfile = false;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _users.UpdateAsync(user);
+    }
+
+    public async Task<FirstAccessStatusDto> GetFirstAccessStatusAsync(Guid userId)
+    {
+        var user = await _users.GetByIdAsync(userId)
+            ?? throw new UnauthorizedAccessException("Usuário não encontrado.");
+
+        return new FirstAccessStatusDto
+        {
+            FirstAccessRequired = user.MustChangePassword || user.MustChangeProfile,
+            MustChangePassword = user.MustChangePassword,
+            MustChangeProfile = user.MustChangeProfile,
             MfaRequired = user.MfaRequired,
             MfaConfigured = user.MfaConfigured
         };

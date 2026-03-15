@@ -22,6 +22,33 @@ public class LoginResponseDto
     /// Neste caso, MfaToken tem claim mfa_setup=true e deve ser usado para registrar a primeira chave.
     /// </summary>
     public bool MfaConfigured { get; set; }
+
+    /// <summary>
+    /// Indica se o usuário ainda precisa concluir onboarding de primeiro acesso
+    /// (troca de login/perfil/senha e setup de MFA).
+    /// </summary>
+    public bool FirstAccessRequired { get; set; }
+
+    public bool MustChangePassword { get; set; }
+    public bool MustChangeProfile { get; set; }
+}
+
+public class CompleteFirstAccessRequestDto
+{
+    public string NewLogin { get; set; } = string.Empty;
+    public string NewEmail { get; set; } = string.Empty;
+    public string NewFullName { get; set; } = string.Empty;
+    public string CurrentPassword { get; set; } = string.Empty;
+    public string NewPassword { get; set; } = string.Empty;
+}
+
+public class FirstAccessStatusDto
+{
+    public bool FirstAccessRequired { get; set; }
+    public bool MustChangePassword { get; set; }
+    public bool MustChangeProfile { get; set; }
+    public bool MfaRequired { get; set; }
+    public bool MfaConfigured { get; set; }
 }
 
 public class TokenPairDto

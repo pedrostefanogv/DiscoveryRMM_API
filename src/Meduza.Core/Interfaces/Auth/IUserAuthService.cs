@@ -24,4 +24,15 @@ public interface IUserAuthService
     /// Chamado pelos serviços de MFA após verificação bem-sucedida.
     /// </summary>
     Task<TokenPairDto> IssueFullSessionAsync(Guid userId, bool mfaVerified, string? ipAddress, string? userAgent);
+
+    /// <summary>
+    /// Conclui o onboarding de primeiro acesso (troca de login/perfil/senha).
+    /// Mantém MFA como etapa obrigatória separada.
+    /// </summary>
+    Task CompleteFirstAccessAsync(Guid userId, CompleteFirstAccessRequestDto dto);
+
+    /// <summary>
+    /// Retorna o status atual de onboarding de primeiro acesso para o frontend.
+    /// </summary>
+    Task<FirstAccessStatusDto> GetFirstAccessStatusAsync(Guid userId);
 }

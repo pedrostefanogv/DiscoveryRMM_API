@@ -2222,6 +2222,8 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             e.Property(u => u.IsActive).HasColumnName("is_active");
             e.Property(u => u.MfaRequired).HasColumnName("mfa_required");
             e.Property(u => u.MfaConfigured).HasColumnName("mfa_configured");
+            e.Property(u => u.MustChangePassword).HasColumnName("must_change_password");
+            e.Property(u => u.MustChangeProfile).HasColumnName("must_change_profile");
             e.Property(u => u.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(u => u.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             e.Property(u => u.LastLoginAt).HasColumnName("last_login_at").HasColumnType("timestamptz");

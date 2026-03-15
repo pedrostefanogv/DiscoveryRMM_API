@@ -92,6 +92,44 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
+    /// Conclui o onboarding de primeiro acesso (troca de login/perfil/senha).
+    /// Requer token mfa_setup ou sessão completa.
+    /// </summary>
+    [HttpPost("first-access/complete")]
+    [RequireMfaSetupOrFullSession]
+    public async Task<IActionResult> CompleteFirstAccess([FromBody] CompleteFirstAccessRequestDto dto)
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+        try
+        {
+            await _authService.CompleteFirstAccessAsync(userId, dto);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+
+        return Ok(new { message = "Primeiro acesso concluído. Finalize o cadastro do MFA para liberar o login completo." });
+    }
+
+    /// <summary>
+    /// Retorna status de onboarding para o frontend decidir próxima tela/etapa.
+    /// Requer token mfa_setup ou sessão completa.
+    /// </summary>
+    [HttpGet("first-access/status")]
+    [RequireMfaSetupOrFullSession]
+    public async Task<IActionResult> GetFirstAccessStatus()
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+        var status = await _authService.GetFirstAccessStatusAsync(userId);
+        return Ok(status);
+    }
+
+    /// <summary>
     /// Encerra a sessão atual, revogando o refresh token.
     /// </summary>
     [HttpPost("logout")]

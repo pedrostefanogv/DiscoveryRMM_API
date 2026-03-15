@@ -89,6 +89,8 @@ public class UsersController : ControllerBase
             IsActive = true,
             MfaRequired = true,
             MfaConfigured = false,
+            MustChangePassword = true,
+            MustChangeProfile = true,
             CreatedAt = now,
             UpdatedAt = now
         };

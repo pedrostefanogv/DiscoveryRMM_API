@@ -19,6 +19,12 @@ public class User
     /// <summary>Indica se o usuário já registrou pelo menos uma chave MFA.</summary>
     public bool MfaConfigured { get; set; } = false;
 
+    /// <summary>Força troca de senha no primeiro acesso.</summary>
+    public bool MustChangePassword { get; set; } = false;
+
+    /// <summary>Força atualização de perfil (login/email/nome) no primeiro acesso.</summary>
+    public bool MustChangeProfile { get; set; } = false;
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
