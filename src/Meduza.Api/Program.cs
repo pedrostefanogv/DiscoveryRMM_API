@@ -115,6 +115,7 @@ builder.Services.AddScoped<ILoggingService, LoggingService>();
 // New services for tickets enhancement (SLA, ActivityLog)
 builder.Services.AddScoped<ISlaService, SlaService>();
 builder.Services.AddScoped<IActivityLogService, ActivityLogService>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<IAppStoreService, AppStoreService>();
 builder.Services.AddScoped<IAppApprovalAuditService, AppApprovalAuditService>();
 builder.Services.AddScoped<IAutomationScriptService, AutomationScriptService>();

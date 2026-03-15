@@ -22,6 +22,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private readonly NatsConnection _connection;
     private readonly IAgentRepository _agentRepo;
     private readonly ICommandRepository _commandRepo;
+    private readonly ISiteRepository _siteRepo;
     private readonly ILogger<NatsAgentMessaging> _logger;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -33,11 +34,13 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         NatsConnection connection,
         IAgentRepository agentRepo,
         ICommandRepository commandRepo,
+        ISiteRepository siteRepo,
         ILogger<NatsAgentMessaging> logger)
     {
         _connection = connection;
         _agentRepo = agentRepo;
         _commandRepo = commandRepo;
+        _siteRepo = siteRepo;
         _logger = logger;
     }
 
@@ -57,19 +60,15 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         _logger.LogDebug("Command {CommandId} sent to agent {AgentId} via NATS", commandId, agentId);
     }
 
-    public async Task PublishDashboardEventAsync(string eventType, object data)
+    public async Task PublishDashboardEventAsync(DashboardEventMessage message, CancellationToken cancellationToken = default)
     {
-        var message = JsonSerializer.Serialize(new
-        {
-            EventType = eventType,
-            Data = data,
-            Timestamp = DateTime.UtcNow
-        }, JsonOptions);
+        _ = cancellationToken;
+        var payload = JsonSerializer.Serialize(message, JsonOptions);
 
-        await _connection.PublishAsync("dashboard.events", message);
+        await _connection.PublishAsync("dashboard.events", payload);
     }
 
-    public async Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingDto ping, CancellationToken cancellationToken = default)
+    public async Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
 
@@ -133,7 +132,12 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                         {
                             var status = result.ExitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
                             await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
-                            await PublishDashboardEventAsync("CommandCompleted", result);
+                            var agentId = ExtractAgentId(msg.Subject);
+                            await PublishDashboardEventForAgentAsync(
+                                agentId,
+                                "CommandCompleted",
+                                result,
+                                cancellationToken);
                             _logger.LogDebug("Command result processed: {CommandId} - Exit Code: {ExitCode}", result.CommandId, result.ExitCode);
                         }
                     }
@@ -203,6 +207,30 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     {
         // NatsConnection é singleton no DI e não deve ser descartada por este serviço scoped.
         await ValueTask.CompletedTask;
+    }
+
+    private async Task PublishDashboardEventForAgentAsync(
+        Guid? agentId,
+        string eventType,
+        object data,
+        CancellationToken cancellationToken)
+    {
+        Guid? clientId = null;
+        Guid? siteId = null;
+
+        if (agentId.HasValue)
+        {
+            var agent = await _agentRepo.GetByIdAsync(agentId.Value);
+            if (agent is not null)
+            {
+                siteId = agent.SiteId;
+                var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+                clientId = site?.ClientId;
+            }
+        }
+
+        var message = DashboardEventMessage.Create(eventType, data, clientId, siteId);
+        await PublishDashboardEventAsync(message, cancellationToken);
     }
 
     private record HeartbeatMessage(string? IpAddress, string? AgentVersion);

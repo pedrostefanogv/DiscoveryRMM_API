@@ -103,6 +103,7 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
         await using var scope = _serviceProvider.CreateAsyncScope();
         var messaging = scope.ServiceProvider.GetRequiredService<IAgentMessaging>();
         var deliveryRepo = scope.ServiceProvider.GetRequiredService<ISyncPingDeliveryRepository>();
+        var outboundPing = SyncInvalidationPingMessage.FromDto(ping);
         var natsPublished = false;
 
         try
@@ -122,7 +123,7 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
         {
             try
             {
-                await messaging.PublishSyncPingAsync(ping.AgentId, ping, cancellationToken);
+                await messaging.PublishSyncPingAsync(ping.AgentId, outboundPing, cancellationToken);
                 natsPublished = true;
             }
             catch (Exception ex)
@@ -164,7 +165,7 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
         try
         {
             await _agentHub.Clients.Client(connectionId)
-                .SendAsync("SyncPing", ping, cancellationToken);
+                .SendAsync("SyncPing", outboundPing, cancellationToken);
         }
         catch (Exception ex)
         {

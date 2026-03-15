@@ -12,10 +12,10 @@ public interface IAgentMessaging
     Task SendCommandAsync(Guid agentId, Guid commandId, string commandType, string payload);
 
     /// <summary>Publica evento para o dashboard (broadcast).</summary>
-    Task PublishDashboardEventAsync(string eventType, object data);
+    Task PublishDashboardEventAsync(DashboardEventMessage message, CancellationToken cancellationToken = default);
 
     /// <summary>Envia um ping leve de invalidacao de sync para um agent especifico.</summary>
-    Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingDto ping, CancellationToken cancellationToken = default);
+    Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, CancellationToken cancellationToken = default);
 
     /// <summary>Registra handler para mensagens de agents (heartbeat, command result, hardware report).</summary>
     Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken);

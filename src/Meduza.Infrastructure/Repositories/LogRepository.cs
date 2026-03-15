@@ -1,4 +1,5 @@
 using Meduza.Core.Entities;
+using Meduza.Core.DTOs;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
@@ -9,8 +10,13 @@ namespace Meduza.Infrastructure.Repositories;
 public class LogRepository : ILogRepository
 {
     private readonly MeduzaDbContext _db;
+    private readonly IAgentMessaging _messaging;
 
-    public LogRepository(MeduzaDbContext db) => _db = db;
+    public LogRepository(MeduzaDbContext db, IAgentMessaging messaging)
+    {
+        _db = db;
+        _messaging = messaging;
+    }
 
     public async Task<LogEntry> CreateAsync(LogEntry entry)
     {
@@ -19,6 +25,20 @@ public class LogRepository : ILogRepository
 
         _db.Logs.Add(entry);
         await _db.SaveChangesAsync();
+        await _messaging.PublishDashboardEventAsync(
+            DashboardEventMessage.Create(
+                "LogCreated",
+                new
+                {
+                    logId = entry.Id,
+                    entry.ClientId,
+                    entry.SiteId,
+                    entry.AgentId,
+                    level = entry.Level.ToString(),
+                    type = entry.Type.ToString()
+                },
+                entry.ClientId,
+                entry.SiteId));
 
         return entry;
     }

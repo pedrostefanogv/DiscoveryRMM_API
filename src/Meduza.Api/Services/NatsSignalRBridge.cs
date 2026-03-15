@@ -1,7 +1,10 @@
 using System.Text.Json;
 using Meduza.Api.Hubs;
+using Meduza.Core.DTOs;
+using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Caching.Memory;
 using NATS.Client.Core;
 
 namespace Meduza.Api.Services;
@@ -12,21 +15,21 @@ namespace Meduza.Api.Services;
 /// </summary>
 public class NatsSignalRBridge : BackgroundService
 {
-    private readonly IServiceProvider _services;
     private readonly NatsConnection _natsConnection;
     private readonly IHubContext<AgentHub> _hubContext;
+    private readonly IMemoryCache _memoryCache;
     private readonly ILogger<NatsSignalRBridge> _logger;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public NatsSignalRBridge(
-        IServiceProvider services,
         NatsConnection natsConnection,
         IHubContext<AgentHub> hubContext,
+        IMemoryCache memoryCache,
         ILogger<NatsSignalRBridge> logger)
     {
-        _services = services;
         _natsConnection = natsConnection;
         _hubContext = hubContext;
+        _memoryCache = memoryCache;
         _logger = logger;
     }
 
@@ -49,14 +52,26 @@ public class NatsSignalRBridge : BackgroundService
                 {
                     try
                     {
-                        var eventData = JsonSerializer.Deserialize<DashboardEvent>(msg.Data ?? "", JsonOptions);
+                        var eventData = JsonSerializer.Deserialize<DashboardEventMessage>(msg.Data ?? "", JsonOptions);
                         if (eventData is not null)
                         {
                             _logger.LogDebug("Dashboard event received: {EventType}", eventData.EventType);
+                            InvalidateDashboardCache(eventData.ClientId, eventData.SiteId);
 
-                            // Repassar para todos os clientes do grupo dashboard
-                            await _hubContext.Clients.Group("dashboard")
-                                .SendAsync("DashboardEvent", eventData.EventType, eventData.Data, eventData.Timestamp, cancellationToken: stoppingToken);
+                            await _hubContext.Clients.Group(DashboardGroupNames.Global)
+                                .SendAsync("DashboardEvent", eventData.EventType, eventData.Data, eventData.TimestampUtc, cancellationToken: stoppingToken);
+
+                            if (eventData.ClientId.HasValue)
+                            {
+                                await _hubContext.Clients.Group(DashboardGroupNames.ForClient(eventData.ClientId.Value))
+                                    .SendAsync("DashboardEvent", eventData.EventType, eventData.Data, eventData.TimestampUtc, cancellationToken: stoppingToken);
+                            }
+
+                            if (eventData.SiteId.HasValue)
+                            {
+                                await _hubContext.Clients.Group(DashboardGroupNames.ForSite(eventData.SiteId.Value))
+                                    .SendAsync("DashboardEvent", eventData.EventType, eventData.Data, eventData.TimestampUtc, cancellationToken: stoppingToken);
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -91,5 +106,21 @@ public class NatsSignalRBridge : BackgroundService
         _logger.LogInformation("NATS-SignalR Bridge stopped.");
     }
 
-    private record DashboardEvent(string EventType, object Data, DateTime Timestamp);
+    private void InvalidateDashboardCache(Guid? clientId, Guid? siteId)
+    {
+        foreach (var windowHours in DashboardCacheKeys.SupportedWindowHours)
+        {
+            _memoryCache.Remove(DashboardCacheKeys.GlobalSummary(windowHours));
+
+            if (clientId.HasValue)
+            {
+                _memoryCache.Remove(DashboardCacheKeys.ClientSummary(clientId.Value, windowHours));
+            }
+
+            if (clientId.HasValue && siteId.HasValue)
+            {
+                _memoryCache.Remove(DashboardCacheKeys.SiteSummary(clientId.Value, siteId.Value, windowHours));
+            }
+        }
+    }
 }

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using Meduza.Core.DTOs;
+using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
 using Microsoft.AspNetCore.SignalR;
@@ -13,13 +15,25 @@ public class AgentHub : Hub
     private static readonly TimeSpan HeartbeatWriteInterval = TimeSpan.FromSeconds(15);
 
     private readonly IAgentRepository _agentRepo;
+    private readonly ISiteRepository _siteRepo;
+    private readonly IClientRepository _clientRepo;
     private readonly ICommandRepository _commandRepo;
+    private readonly IAgentMessaging _messaging;
     private readonly ILogger<AgentHub> _logger;
 
-    public AgentHub(IAgentRepository agentRepo, ICommandRepository commandRepo, ILogger<AgentHub> logger)
+    public AgentHub(
+        IAgentRepository agentRepo,
+        ISiteRepository siteRepo,
+        IClientRepository clientRepo,
+        ICommandRepository commandRepo,
+        IAgentMessaging messaging,
+        ILogger<AgentHub> logger)
     {
         _agentRepo = agentRepo;
+        _siteRepo = siteRepo;
+        _clientRepo = clientRepo;
         _commandRepo = commandRepo;
+        _messaging = messaging;
         _logger = logger;
     }
 
@@ -32,9 +46,10 @@ public class AgentHub : Hub
     {
         if (ConnectedAgents.TryRemove(Context.ConnectionId, out var agentId))
         {
+            var agent = await _agentRepo.GetByIdAsync(agentId);
             await _agentRepo.UpdateStatusAsync(agentId, AgentStatus.Offline, null);
             LastPersistedHeartbeat.TryRemove(agentId, out _);
-            await Clients.Group("dashboard").SendAsync("AgentStatusChanged", agentId, AgentStatus.Offline);
+            await PublishAgentStatusChangedAsync(agent ?? new() { Id = agentId }, AgentStatus.Offline);
         }
         await base.OnDisconnectedAsync(exception);
     }
@@ -47,7 +62,8 @@ public class AgentHub : Hub
         await EnsureConnectionMappedAsync(agentId);
         await _agentRepo.UpdateStatusAsync(agentId, AgentStatus.Online, ipAddress);
         LastPersistedHeartbeat[agentId] = new HeartbeatState(DateTime.UtcNow, ipAddress);
-        await Clients.Group("dashboard").SendAsync("AgentStatusChanged", agentId, AgentStatus.Online);
+        var agent = await _agentRepo.GetByIdAsync(agentId) ?? new Agent { Id = agentId };
+        await PublishAgentStatusChangedAsync(agent, AgentStatus.Online);
 
         // Envia comandos pendentes
         var pendingCommands = await _commandRepo.GetPendingByAgentIdAsync(agentId);
@@ -65,7 +81,27 @@ public class AgentHub : Hub
     {
         var status = exitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
         await _commandRepo.UpdateStatusAsync(commandId, status, output, exitCode, errorMessage);
-        await Clients.Group("dashboard").SendAsync("CommandCompleted", commandId, exitCode, output, errorMessage);
+        var command = await _commandRepo.GetByIdAsync(commandId);
+        Guid? clientId = null;
+        Guid? siteId = null;
+
+        if (command is not null)
+        {
+            var agent = await _agentRepo.GetByIdAsync(command.AgentId);
+            siteId = agent?.SiteId;
+            if (siteId.HasValue)
+            {
+                var site = await _siteRepo.GetByIdAsync(siteId.Value);
+                clientId = site?.ClientId;
+            }
+        }
+
+        await _messaging.PublishDashboardEventAsync(
+            DashboardEventMessage.Create(
+                "CommandCompleted",
+                new { commandId, exitCode, output, errorMessage },
+                clientId,
+                siteId));
     }
 
     /// <summary>
@@ -100,7 +136,25 @@ public class AgentHub : Hub
     /// </summary>
     public async Task JoinDashboard()
     {
-        await Groups.AddToGroupAsync(Context.ConnectionId, "dashboard");
+        await Groups.AddToGroupAsync(Context.ConnectionId, DashboardGroupNames.Global);
+    }
+
+    public async Task JoinClientDashboard(Guid clientId)
+    {
+        var client = await _clientRepo.GetByIdAsync(clientId);
+        if (client is null)
+            throw new HubException("Client not found.");
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, DashboardGroupNames.ForClient(clientId));
+    }
+
+    public async Task JoinSiteDashboard(Guid clientId, Guid siteId)
+    {
+        var site = await _siteRepo.GetByIdAsync(siteId);
+        if (site is null || site.ClientId != clientId)
+            throw new HubException("Site not found for this client.");
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, DashboardGroupNames.ForSite(siteId));
     }
 
     /// <summary>
@@ -133,6 +187,25 @@ public class AgentHub : Hub
 
         ConnectedAgents[Context.ConnectionId] = agentId;
         await Groups.AddToGroupAsync(Context.ConnectionId, $"agent-{agentId}");
+    }
+
+    private async Task PublishAgentStatusChangedAsync(Agent agent, AgentStatus status)
+    {
+        Guid? clientId = null;
+        Guid? siteId = agent.SiteId == Guid.Empty ? null : agent.SiteId;
+
+        if (siteId.HasValue)
+        {
+            var site = await _siteRepo.GetByIdAsync(siteId.Value);
+            clientId = site?.ClientId;
+        }
+
+        await _messaging.PublishDashboardEventAsync(
+            DashboardEventMessage.Create(
+                "AgentStatusChanged",
+                new { agentId = agent.Id, status = status.ToString() },
+                clientId,
+                siteId));
     }
 
     private readonly record struct HeartbeatState(DateTime LastPersistedAt, string? LastIpAddress);

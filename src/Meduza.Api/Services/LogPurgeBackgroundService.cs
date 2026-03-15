@@ -38,7 +38,7 @@ public class LogPurgeBackgroundService : BackgroundService
 
         try
         {
-            using var scope = _scopeFactory.CreateScope();
+            await using var scope = _scopeFactory.CreateAsyncScope();
             var logRepo = scope.ServiceProvider.GetRequiredService<ILogRepository>();
             var deleted = await logRepo.PurgeAsync(cutoff);
             _logger.LogInformation("Log purge completed. Deleted {Count} entries older than {Days} days.", deleted, retentionDays);
