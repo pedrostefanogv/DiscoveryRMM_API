@@ -102,13 +102,28 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
     {
         await using var scope = _serviceProvider.CreateAsyncScope();
         var messaging = scope.ServiceProvider.GetRequiredService<IAgentMessaging>();
+        var deliveryRepo = scope.ServiceProvider.GetRequiredService<ISyncPingDeliveryRepository>();
+        var natsPublished = false;
+
+        try
+        {
+            await deliveryRepo.CreateSentAsync(ping.EventId, ping.AgentId, ping.Resource, ping.Revision);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to persist sync ping delivery as Sent. AgentId={AgentId}, Resource={Resource}, Revision={Revision}",
+                ping.AgentId,
+                ping.Resource,
+                ping.Revision);
+        }
 
         if (messaging.IsConnected)
         {
             try
             {
                 await messaging.PublishSyncPingAsync(ping.AgentId, ping, cancellationToken);
-                return;
+                natsPublished = true;
             }
             catch (Exception ex)
             {
@@ -120,11 +135,35 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
         }
 
         if (!AgentHub.IsAgentConnected(ping.AgentId))
+        {
+            if (natsPublished)
+            {
+                _logger.LogDebug(
+                    "Sync ping delivered via NATS only (agent without SignalR session). AgentId={AgentId}, Resource={Resource}",
+                    ping.AgentId,
+                    ping.Resource);
+            }
+
+            _logger.LogDebug(
+                "Skipping SignalR sync ping: agent not connected. AgentId={AgentId}, Resource={Resource}",
+                ping.AgentId,
+                ping.Resource);
             return;
+        }
+
+        var connectionId = AgentHub.GetConnectionId(ping.AgentId);
+        if (string.IsNullOrWhiteSpace(connectionId))
+        {
+            _logger.LogDebug(
+                "Skipping SignalR sync ping: connection id not found. AgentId={AgentId}, Resource={Resource}",
+                ping.AgentId,
+                ping.Resource);
+            return;
+        }
 
         try
         {
-            await _agentHub.Clients.Group($"agent-{ping.AgentId}")
+            await _agentHub.Clients.Client(connectionId)
                 .SendAsync("SyncPing", ping, cancellationToken);
         }
         catch (Exception ex)

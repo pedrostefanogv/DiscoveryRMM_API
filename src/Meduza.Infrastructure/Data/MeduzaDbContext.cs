@@ -47,6 +47,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<AutomationTaskDefinition> AutomationTaskDefinitions => Set<AutomationTaskDefinition>();
     public DbSet<AutomationTaskAudit> AutomationTaskAudits => Set<AutomationTaskAudit>();
     public DbSet<AutomationExecutionReport> AutomationExecutionReports => Set<AutomationExecutionReport>();
+    public DbSet<SyncPingDelivery> SyncPingDeliveries => Set<SyncPingDelivery>();
     public DbSet<AppPackage> AppPackages => Set<AppPackage>();
     public DbSet<ChocolateyPackage> ChocolateyPackages => Set<ChocolateyPackage>();
     public DbSet<WingetPackage> WingetPackages => Set<WingetPackage>();
@@ -1885,6 +1886,35 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.HasOne<AgentCommand>().WithMany().HasForeignKey(report => report.CommandId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<AutomationTaskDefinition>().WithMany().HasForeignKey(report => report.TaskId).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne<AutomationScriptDefinition>().WithMany().HasForeignKey(report => report.ScriptId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<SyncPingDelivery>(entity =>
+        {
+            entity.ToTable("sync_ping_deliveries");
+            entity.HasKey(delivery => delivery.Id);
+            entity.HasIndex(delivery => new { delivery.EventId, delivery.AgentId, delivery.Revision })
+                .HasDatabaseName("ux_sync_ping_deliveries_event_agent_revision")
+                .IsUnique();
+            entity.HasIndex(delivery => new { delivery.Status, delivery.SentAt })
+                .HasDatabaseName("ix_sync_ping_deliveries_status_sent");
+            entity.HasIndex(delivery => new { delivery.AgentId, delivery.CreatedAt })
+                .HasDatabaseName("ix_sync_ping_deliveries_agent_created");
+
+            entity.Property(delivery => delivery.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(delivery => delivery.EventId).HasColumnName("event_id");
+            entity.Property(delivery => delivery.AgentId).HasColumnName("agent_id");
+            entity.Property(delivery => delivery.Resource).HasColumnName("resource").HasConversion<int>();
+            entity.Property(delivery => delivery.Revision).HasColumnName("revision").HasMaxLength(255);
+            entity.Property(delivery => delivery.Status).HasColumnName("status").HasConversion<int>();
+            entity.Property(delivery => delivery.SentAt).HasColumnName("sent_at").HasColumnType("timestamptz");
+            entity.Property(delivery => delivery.AcknowledgedAt).HasColumnName("acknowledged_at").HasColumnType("timestamptz");
+            entity.Property(delivery => delivery.AckMetadataJson).HasColumnName("ack_metadata_json").HasColumnType("jsonb");
+            entity.Property(delivery => delivery.ErrorCode).HasColumnName("error_code").HasMaxLength(100);
+            entity.Property(delivery => delivery.ErrorMessage).HasColumnName("error_message").HasMaxLength(1000);
+            entity.Property(delivery => delivery.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(delivery => delivery.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+
+            entity.HasOne<Agent>().WithMany().HasForeignKey(delivery => delivery.AgentId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<AppPackage>(entity =>

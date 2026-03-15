@@ -44,8 +44,7 @@ public class AgentHub : Hub
     /// </summary>
     public async Task RegisterAgent(Guid agentId, string? ipAddress)
     {
-        ConnectedAgents[Context.ConnectionId] = agentId;
-        await Groups.AddToGroupAsync(Context.ConnectionId, $"agent-{agentId}");
+        await EnsureConnectionMappedAsync(agentId);
         await _agentRepo.UpdateStatusAsync(agentId, AgentStatus.Online, ipAddress);
         LastPersistedHeartbeat[agentId] = new HeartbeatState(DateTime.UtcNow, ipAddress);
         await Clients.Group("dashboard").SendAsync("AgentStatusChanged", agentId, AgentStatus.Online);
@@ -74,6 +73,8 @@ public class AgentHub : Hub
     /// </summary>
     public async Task Heartbeat(Guid agentId, string? ipAddress)
     {
+        await EnsureConnectionMappedAsync(agentId);
+
         var now = DateTime.UtcNow;
 
         if (LastPersistedHeartbeat.TryGetValue(agentId, out var state)
@@ -118,6 +119,20 @@ public class AgentHub : Hub
     public static string? GetConnectionId(Guid agentId)
     {
         return ConnectedAgents.FirstOrDefault(x => x.Value == agentId).Key;
+    }
+
+    private async Task EnsureConnectionMappedAsync(Guid agentId)
+    {
+        if (ConnectedAgents.TryGetValue(Context.ConnectionId, out var existingAgentId))
+        {
+            if (existingAgentId == agentId)
+                return;
+
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"agent-{existingAgentId}");
+        }
+
+        ConnectedAgents[Context.ConnectionId] = agentId;
+        await Groups.AddToGroupAsync(Context.ConnectionId, $"agent-{agentId}");
     }
 
     private readonly record struct HeartbeatState(DateTime LastPersistedAt, string? LastIpAddress);

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Meduza.Core.DTOs;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
@@ -22,7 +23,11 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private readonly IAgentRepository _agentRepo;
     private readonly ICommandRepository _commandRepo;
     private readonly ILogger<NatsAgentMessaging> _logger;
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter() }
+    };
 
     public NatsAgentMessaging(
         NatsConnection connection,

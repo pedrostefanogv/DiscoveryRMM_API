@@ -86,6 +86,7 @@ builder.Services.AddScoped<IAutomationScriptAuditRepository, AutomationScriptAud
 builder.Services.AddScoped<IAutomationTaskRepository, AutomationTaskRepository>();
 builder.Services.AddScoped<IAutomationTaskAuditRepository, AutomationTaskAuditRepository>();
 builder.Services.AddScoped<IAutomationExecutionReportRepository, AutomationExecutionReportRepository>();
+builder.Services.AddScoped<ISyncPingDeliveryRepository, SyncPingDeliveryRepository>();
 builder.Services.AddScoped<IAppPackageRepository, AppPackageRepository>();
 builder.Services.AddScoped<IChocolateyPackageRepository, ChocolateyPackageRepository>();
 builder.Services.AddScoped<IWingetPackageRepository, WingetPackageRepository>();

@@ -32,6 +32,7 @@ public class AgentAuthController : ControllerBase
     private readonly IAgentAutoLabelingService _agentAutoLabelingService;
     private readonly IAutomationTaskService _automationTaskService;
     private readonly IAutomationExecutionReportRepository _automationExecutionReportRepository;
+    private readonly ISyncPingDeliveryRepository _syncPingDeliveryRepository;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
@@ -51,7 +52,8 @@ public class AgentAuthController : ControllerBase
         IKnowledgeArticleRepository knowledgeRepo,
         IAgentAutoLabelingService agentAutoLabelingService,
         IAutomationTaskService automationTaskService,
-        IAutomationExecutionReportRepository automationExecutionReportRepository)
+        IAutomationExecutionReportRepository automationExecutionReportRepository,
+        ISyncPingDeliveryRepository syncPingDeliveryRepository)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -71,6 +73,7 @@ public class AgentAuthController : ControllerBase
         _agentAutoLabelingService = agentAutoLabelingService;
         _automationTaskService = automationTaskService;
         _automationExecutionReportRepository = automationExecutionReportRepository;
+        _syncPingDeliveryRepository = syncPingDeliveryRepository;
     }
 
     [HttpGet("me")]
@@ -243,6 +246,28 @@ public class AgentAuthController : ControllerBase
         };
 
         return Ok(manifest);
+    }
+
+    [HttpPost("me/sync/ping/{eventId:guid}/ack")]
+    public async Task<IActionResult> AckSyncPing(
+        Guid eventId,
+        [FromBody] SyncPingAckRequest request)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        if (string.IsNullOrWhiteSpace(request.Revision))
+            return BadRequest(new { error = "Revision is required." });
+
+        var acknowledgedAt = request.ProcessedAt ?? DateTime.UtcNow;
+        var delivery = await _syncPingDeliveryRepository.UpsertAckAsync(eventId, agentId, request, acknowledgedAt);
+
+        return Ok(new SyncPingAckResponse
+        {
+            Acknowledged = true,
+            EventId = eventId,
+            DeliveryId = delivery.Id
+        });
     }
 
     [HttpPost("me/automation/policy-sync")]
