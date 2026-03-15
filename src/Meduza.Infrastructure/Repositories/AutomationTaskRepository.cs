@@ -27,19 +27,53 @@ public class AutomationTaskRepository : IAutomationTaskRepository
 
     public async Task<AutomationTaskDefinition?> GetByIdAsync(Guid id, bool includeInactive = false)
     {
-        var query = _db.AutomationTaskDefinitions.AsNoTracking().Where(t => t.Id == id);
+        var query = _db.AutomationTaskDefinitions
+            .AsNoTracking()
+            .Where(t => t.Id == id && t.DeletedAt == null);
         if (!includeInactive)
             query = query.Where(t => t.IsActive);
 
         return await query.SingleOrDefaultAsync();
     }
 
-    public async Task<IReadOnlyList<AutomationTaskDefinition>> GetListAsync(AppApprovalScopeType? scopeType, Guid? scopeId, bool activeOnly, int limit, int offset)
+    public async Task<AutomationTaskDefinition?> GetByIdIncludingDeletedAsync(Guid id, bool includeInactive = false)
+    {
+        // includeInactive is intentionally ignored here: deleted tasks always have IsActive=false,
+        // so filtering by IsActive would prevent fetching soft-deleted records.
+        return await _db.AutomationTaskDefinitions
+            .AsNoTracking()
+            .Where(t => t.Id == id)
+            .SingleOrDefaultAsync();
+    }
+
+    public async Task<IReadOnlyList<AutomationTaskDefinition>> GetListAsync(
+        AppApprovalScopeType? scopeType,
+        Guid? scopeId,
+        bool activeOnly,
+        bool deletedOnly,
+        bool includeDeleted,
+        string? search,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        int limit,
+        int offset)
     {
         var safeLimit = Math.Clamp(limit, 1, 500);
         var safeOffset = Math.Max(0, offset);
 
         var query = _db.AutomationTaskDefinitions.AsNoTracking().AsQueryable();
+
+        if (deletedOnly)
+        {
+            query = query.Where(t => t.DeletedAt != null);
+        }
+        else if (!includeDeleted)
+        {
+            query = query.Where(t => t.DeletedAt == null);
+        }
 
         if (scopeType.HasValue)
         {
@@ -58,6 +92,8 @@ public class AutomationTaskRepository : IAutomationTaskRepository
 
         if (activeOnly)
             query = query.Where(t => t.IsActive);
+
+        query = ApplyAdvancedFilters(query, search, clientId, siteId, agentId, scopeTypes, actionTypes);
 
         return await query
             .OrderByDescending(t => t.UpdatedAt)
@@ -66,9 +102,29 @@ public class AutomationTaskRepository : IAutomationTaskRepository
             .ToListAsync();
     }
 
-    public async Task<int> CountAsync(AppApprovalScopeType? scopeType, Guid? scopeId, bool activeOnly)
+    public async Task<int> CountAsync(
+        AppApprovalScopeType? scopeType,
+        Guid? scopeId,
+        bool activeOnly,
+        bool deletedOnly,
+        bool includeDeleted,
+        string? search,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
+        IReadOnlyList<AutomationTaskActionType>? actionTypes)
     {
         var query = _db.AutomationTaskDefinitions.AsNoTracking().AsQueryable();
+
+        if (deletedOnly)
+        {
+            query = query.Where(t => t.DeletedAt != null);
+        }
+        else if (!includeDeleted)
+        {
+            query = query.Where(t => t.DeletedAt == null);
+        }
 
         if (scopeType.HasValue)
         {
@@ -88,7 +144,46 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         if (activeOnly)
             query = query.Where(t => t.IsActive);
 
+        query = ApplyAdvancedFilters(query, search, clientId, siteId, agentId, scopeTypes, actionTypes);
+
         return await query.CountAsync();
+    }
+
+    private static IQueryable<AutomationTaskDefinition> ApplyAdvancedFilters(
+        IQueryable<AutomationTaskDefinition> query,
+        string? search,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
+        IReadOnlyList<AutomationTaskActionType>? actionTypes)
+    {
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var pattern = $"%{search.Trim()}%";
+            query = query.Where(t =>
+                EF.Functions.ILike(t.Name, pattern)
+                || (t.Description != null && EF.Functions.ILike(t.Description, pattern))
+                || (t.PackageId != null && EF.Functions.ILike(t.PackageId, pattern))
+                || (t.CommandPayload != null && EF.Functions.ILike(t.CommandPayload, pattern)));
+        }
+
+        if (clientId.HasValue)
+            query = query.Where(t => t.ClientId == clientId.Value);
+
+        if (siteId.HasValue)
+            query = query.Where(t => t.SiteId == siteId.Value);
+
+        if (agentId.HasValue)
+            query = query.Where(t => t.AgentId == agentId.Value);
+
+        if (scopeTypes is { Count: > 0 })
+            query = query.Where(t => scopeTypes.Contains(t.ScopeType));
+
+        if (actionTypes is { Count: > 0 })
+            query = query.Where(t => actionTypes.Contains(t.ActionType));
+
+        return query;
     }
 
     public async Task UpdateAsync(AutomationTaskDefinition task)
@@ -125,8 +220,32 @@ public class AutomationTaskRepository : IAutomationTaskRepository
 
     public async Task DeleteAsync(Guid id)
     {
-        await _db.AutomationTaskDefinitions
-            .Where(t => t.Id == id)
-            .ExecuteDeleteAsync();
+        var existing = await _db.AutomationTaskDefinitions.SingleOrDefaultAsync(t => t.Id == id && t.DeletedAt == null);
+        if (existing is null)
+            return;
+
+        var now = DateTime.UtcNow;
+        existing.IsActive = false;
+        existing.DeletedAt = now;
+        existing.LastUpdatedAt = now;
+        existing.UpdatedAt = now;
+
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task<AutomationTaskDefinition?> RestoreAsync(Guid id)
+    {
+        var existing = await _db.AutomationTaskDefinitions.SingleOrDefaultAsync(t => t.Id == id && t.DeletedAt != null);
+        if (existing is null)
+            return null;
+
+        var now = DateTime.UtcNow;
+        existing.DeletedAt = null;
+        existing.IsActive = true;
+        existing.LastUpdatedAt = now;
+        existing.UpdatedAt = now;
+
+        await _db.SaveChangesAsync();
+        return existing;
     }
 }

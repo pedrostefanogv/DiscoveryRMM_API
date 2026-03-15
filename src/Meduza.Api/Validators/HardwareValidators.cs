@@ -27,6 +27,9 @@ public class HardwareReportRequestValidator : AbstractValidator<HardwareReportRe
         RuleForEach(x => x.Components!.MemoryModules)
             .SetValidator(new MemoryModuleInfoValidator())
             .When(x => x.Components?.MemoryModules is not null);
+        RuleForEach(x => x.Components!.Printers)
+            .SetValidator(new PrinterInfoValidator())
+            .When(x => x.Components?.Printers is not null);
     }
 }
 
@@ -65,5 +68,18 @@ public class MemoryModuleInfoValidator : AbstractValidator<MemoryModuleInfo>
         RuleFor(x => x.Manufacturer).MaximumLength(200);
         RuleFor(x => x.PartNumber).MaximumLength(100);
         RuleFor(x => x.SerialNumber).MaximumLength(100);
+    }
+}
+
+public class PrinterInfoValidator : AbstractValidator<PrinterInfo>
+{
+    public PrinterInfoValidator()
+    {
+        RuleFor(x => x.Name).NotEmpty().MaximumLength(200);
+        RuleFor(x => x.DriverName).MaximumLength(200);
+        RuleFor(x => x.PortName).MaximumLength(100);
+        RuleFor(x => x.PrinterStatus).MaximumLength(100);
+        RuleFor(x => x.ShareName).MaximumLength(200);
+        RuleFor(x => x.Location).MaximumLength(200);
     }
 }

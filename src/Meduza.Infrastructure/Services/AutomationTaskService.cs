@@ -10,6 +10,8 @@ namespace Meduza.Infrastructure.Services;
 
 public class AutomationTaskService : IAutomationTaskService
 {
+    private const int LabelFilterMaxScan = 5000;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -45,6 +47,15 @@ public class AutomationTaskService : IAutomationTaskService
         AppApprovalScopeType? scopeType,
         Guid? scopeId,
         bool activeOnly,
+        bool deletedOnly,
+        bool includeDeleted,
+        string? search,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        IReadOnlyList<string>? labels,
         int limit,
         int offset,
         CancellationToken cancellationToken = default)
@@ -53,8 +64,73 @@ public class AutomationTaskService : IAutomationTaskService
         var safeLimit = Math.Clamp(limit, 1, 200);
         var safeOffset = Math.Max(0, offset);
 
-        var items = await _taskRepository.GetListAsync(scopeType, scopeId, activeOnly, safeLimit, safeOffset);
-        var total = await _taskRepository.CountAsync(scopeType, scopeId, activeOnly);
+        var normalizedLabels = labels?
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Select(label => label.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        List<AutomationTaskDefinition> items;
+        int total;
+
+        if (normalizedLabels is { Count: > 0 })
+        {
+            // Evita filtros de string em colunas jsonb no SQL; aplica labels em memória.
+            var candidates = await _taskRepository.GetListAsync(
+                scopeType,
+                scopeId,
+                activeOnly,
+                deletedOnly,
+                includeDeleted,
+                search,
+                clientId,
+                siteId,
+                agentId,
+                scopeTypes,
+                actionTypes,
+                limit: LabelFilterMaxScan,
+                offset: 0);
+
+            var filtered = candidates
+                .Where(task => MatchesTaskLabels(task, normalizedLabels))
+                .ToList();
+
+            total = filtered.Count;
+            items = filtered
+                .Skip(safeOffset)
+                .Take(safeLimit)
+                .ToList();
+        }
+        else
+        {
+            items = (await _taskRepository.GetListAsync(
+                scopeType,
+                scopeId,
+                activeOnly,
+                deletedOnly,
+                includeDeleted,
+                search,
+                clientId,
+                siteId,
+                agentId,
+                scopeTypes,
+                actionTypes,
+                safeLimit,
+                safeOffset)).ToList();
+
+            total = await _taskRepository.CountAsync(
+                scopeType,
+                scopeId,
+                activeOnly,
+                deletedOnly,
+                includeDeleted,
+                search,
+                clientId,
+                siteId,
+                agentId,
+                scopeTypes,
+                actionTypes);
+        }
 
         return new AutomationTaskPageDto
         {
@@ -69,7 +145,7 @@ public class AutomationTaskService : IAutomationTaskService
     public async Task<AutomationTaskDetailDto?> GetByIdAsync(Guid id, bool includeInactive = false, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
-        var task = await _taskRepository.GetByIdAsync(id, includeInactive);
+        var task = await _taskRepository.GetByIdIncludingDeletedAsync(id, includeInactive);
         return task is null ? null : ToDetailDto(task);
     }
 
@@ -262,6 +338,51 @@ public class AutomationTaskService : IAutomationTaskService
         return true;
     }
 
+    public async Task<AutomationTaskDetailDto?> RestoreAsync(
+        Guid id,
+        string? changedBy,
+        string? ipAddress,
+        string correlationId,
+        string? reason,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+
+        var existing = await _taskRepository.GetByIdIncludingDeletedAsync(id, includeInactive: true);
+        if (existing is null || existing.DeletedAt is null)
+            return null;
+
+        var oldSnapshot = BuildAuditSnapshot(existing);
+        var restored = await _taskRepository.RestoreAsync(id);
+        if (restored is null)
+            return null;
+
+        var newSnapshot = BuildAuditSnapshot(restored);
+
+        await _auditRepository.CreateAsync(new AutomationTaskAudit
+        {
+            TaskId = restored.Id,
+            ChangeType = AutomationTaskChangeType.Activated,
+            OldValueJson = JsonSerializer.Serialize(oldSnapshot, JsonOptions),
+            NewValueJson = JsonSerializer.Serialize(newSnapshot, JsonOptions),
+            ChangedBy = changedBy,
+            IpAddress = ipAddress,
+            CorrelationId = correlationId,
+            Reason = reason ?? "restored"
+        });
+
+        await _loggingService.LogInfoAsync(
+            LogType.Automation,
+            LogSource.Api,
+            "Automation task restored.",
+            new { correlationId, taskId = restored.Id, taskName = restored.Name, reason },
+            clientId: restored.ClientId?.ToString(),
+            siteId: restored.SiteId?.ToString(),
+            agentId: restored.AgentId?.ToString());
+
+        return ToDetailDto(restored);
+    }
+
     public async Task<IReadOnlyList<AutomationTaskAuditDto>> GetAuditAsync(Guid id, int limit = 100, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
@@ -290,7 +411,7 @@ public class AutomationTaskService : IAutomationTaskService
     {
         _ = cancellationToken;
 
-        var task = await _taskRepository.GetByIdAsync(taskId, includeInactive: true);
+        var task = await _taskRepository.GetByIdIncludingDeletedAsync(taskId, includeInactive: true);
         if (task is null)
             return null;
 
@@ -373,10 +494,10 @@ public class AutomationTaskService : IAutomationTaskService
             .Select(label => label.Label)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var globalTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Global, null, activeOnly: true, limit: 1000, offset: 0);
-        var clientTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Client, site.ClientId, activeOnly: true, limit: 1000, offset: 0);
-        var siteTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Site, site.Id, activeOnly: true, limit: 1000, offset: 0);
-        var agentTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Agent, agentId, activeOnly: true, limit: 1000, offset: 0);
+        var globalTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Global, null, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
+        var clientTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Client, site.ClientId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
+        var siteTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Site, site.Id, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
+        var agentTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Agent, agentId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
 
         var applicable = globalTasks
             .Concat(clientTasks)
@@ -621,6 +742,18 @@ public class AutomationTaskService : IAutomationTaskService
         return true;
     }
 
+    private static bool MatchesTaskLabels(AutomationTaskDefinition task, IReadOnlyList<string> labels)
+    {
+        var requested = labels.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (requested.Count == 0)
+            return true;
+
+        var include = ParseTags(task.IncludeTagsJson);
+        var exclude = ParseTags(task.ExcludeTagsJson);
+
+        return include.Any(requested.Contains) || exclude.Any(requested.Contains);
+    }
+
     private static string BuildPolicyKey(IReadOnlyList<AutomationTaskDefinition> tasks)
     {
         var builder = new StringBuilder();
@@ -666,7 +799,9 @@ public class AutomationTaskService : IAutomationTaskService
             ScopeId = ResolveScopeId(task),
             IsActive = task.IsActive,
             RequiresApproval = task.RequiresApproval,
-            LastUpdatedAt = task.LastUpdatedAt
+            LastUpdatedAt = task.LastUpdatedAt,
+            IsDeleted = task.DeletedAt.HasValue,
+            DeletedAt = task.DeletedAt
         };
     }
 
@@ -683,6 +818,8 @@ public class AutomationTaskService : IAutomationTaskService
             IsActive = task.IsActive,
             RequiresApproval = task.RequiresApproval,
             LastUpdatedAt = task.LastUpdatedAt,
+            IsDeleted = task.DeletedAt.HasValue,
+            DeletedAt = task.DeletedAt,
             InstallationType = task.InstallationType,
             PackageId = task.PackageId,
             ScriptId = task.ScriptId,
@@ -724,6 +861,7 @@ public class AutomationTaskService : IAutomationTaskService
             task.ScheduleCron,
             task.RequiresApproval,
             task.IsActive,
+            task.DeletedAt,
             task.LastUpdatedAt,
             task.CreatedAt,
             task.UpdatedAt

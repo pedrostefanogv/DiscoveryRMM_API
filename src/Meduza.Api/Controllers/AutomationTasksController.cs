@@ -21,11 +21,35 @@ public class AutomationTasksController : ControllerBase
         [FromQuery] AppApprovalScopeType? scopeType = null,
         [FromQuery] Guid? scopeId = null,
         [FromQuery] bool activeOnly = true,
+        [FromQuery] bool deletedOnly = false,
+        [FromQuery] bool includeDeleted = false,
+        [FromQuery] string? search = null,
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] Guid? agentId = null,
+        [FromQuery] List<AppApprovalScopeType>? scopeTypes = null,
+        [FromQuery] List<AutomationTaskActionType>? actionTypes = null,
+        [FromQuery] List<string>? labels = null,
         [FromQuery] int limit = 50,
         [FromQuery] int offset = 0,
         CancellationToken cancellationToken = default)
     {
-        var page = await _service.GetListAsync(scopeType, scopeId, activeOnly, limit, offset, cancellationToken);
+        var page = await _service.GetListAsync(
+            scopeType,
+            scopeId,
+            activeOnly,
+            deletedOnly,
+            includeDeleted,
+            search,
+            clientId,
+            siteId,
+            agentId,
+            scopeTypes,
+            actionTypes,
+            labels,
+            limit,
+            offset,
+            cancellationToken);
         return Ok(page);
     }
 
@@ -115,6 +139,28 @@ public class AutomationTasksController : ControllerBase
 
         Response.Headers["X-Correlation-Id"] = correlationId;
         return NoContent();
+    }
+
+    [HttpPost("{id:guid}/restore")]
+    public async Task<IActionResult> Restore(
+        Guid id,
+        [FromQuery] string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        var correlationId = GetOrCreateCorrelationId();
+        var restored = await _service.RestoreAsync(
+            id,
+            HttpContext.Items["Username"] as string ?? "api",
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            correlationId,
+            reason,
+            cancellationToken);
+
+        if (restored is null)
+            return NotFound();
+
+        Response.Headers["X-Correlation-Id"] = correlationId;
+        return Ok(restored);
     }
 
     [HttpGet("{id:guid}/audit")]

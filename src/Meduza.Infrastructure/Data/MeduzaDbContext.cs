@@ -1779,6 +1779,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .HasColumnName("requires_approval");
             entity.Property(task => task.IsActive)
                 .HasColumnName("is_active");
+            entity.Property(task => task.DeletedAt)
+                .HasColumnName("deleted_at")
+                .HasColumnType("timestamptz");
             entity.Property(task => task.LastUpdatedAt)
                 .HasColumnName("last_updated_at")
                 .HasColumnType("timestamptz");

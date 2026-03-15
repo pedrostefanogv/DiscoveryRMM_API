@@ -145,7 +145,8 @@ public class AgentsController : ControllerBase
             Hardware = hardware,
             Disks = components.Disks,
             NetworkAdapters = components.NetworkAdapters,
-            MemoryModules = components.MemoryModules
+            MemoryModules = components.MemoryModules,
+            Printers = components.Printers
         });
     }
 
@@ -533,7 +534,8 @@ public record HardwareReportRequest(
 public record HardwareComponentsPayload(
     List<DiskInfo>? Disks,
     List<NetworkAdapterInfo>? NetworkAdapters,
-    List<MemoryModuleInfo>? MemoryModules);
+    List<MemoryModuleInfo>? MemoryModules,
+    List<PrinterInfo>? Printers);
 public record CreateTokenRequest(string? Description, int? ExpirationDays);
 public record ForceAutomationSyncRequest(
     bool Policies = true,

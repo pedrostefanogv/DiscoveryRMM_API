@@ -188,7 +188,8 @@ public class AgentAuthController : ControllerBase
             Hardware = hardware,
             Disks = components.Disks,
             NetworkAdapters = components.NetworkAdapters,
-            MemoryModules = components.MemoryModules
+            MemoryModules = components.MemoryModules,
+            Printers = components.Printers
         });
     }
 
@@ -300,11 +301,18 @@ public class AgentAuthController : ControllerBase
             if (memoryModules is null || memoryModules.Count == 0)
                 memoryModules = existingComponents.MemoryModules;
 
+            var printers = components?.Printers;
+            if ((printers is null || printers.Count == 0) && componentsFromInventory is not null && componentsFromInventory.Printers.Count > 0)
+                printers = componentsFromInventory.Printers;
+            if (printers is null || printers.Count == 0)
+                printers = existingComponents.Printers;
+
             var consolidated = new AgentHardwareComponents
             {
                 Disks = disks,
                 NetworkAdapters = networkAdapters,
-                MemoryModules = memoryModules
+                MemoryModules = memoryModules,
+                Printers = printers
             };
 
             hardware.HardwareComponentsJson = JsonSerializer.Serialize(consolidated);
@@ -330,10 +338,14 @@ public class AgentAuthController : ControllerBase
         {
             Disks = ParseDisks(root, agentId, collectedAt),
             NetworkAdapters = ParseNetworkAdapters(root, agentId, collectedAt),
-            MemoryModules = ParseMemoryModules(root, agentId, collectedAt)
+            MemoryModules = ParseMemoryModules(root, agentId, collectedAt),
+            Printers = ParsePrinters(root, agentId, collectedAt)
         };
 
-        return result.Disks.Count == 0 && result.NetworkAdapters.Count == 0 && result.MemoryModules.Count == 0
+        return result.Disks.Count == 0
+            && result.NetworkAdapters.Count == 0
+            && result.MemoryModules.Count == 0
+            && result.Printers.Count == 0
             ? null
             : result;
     }
@@ -454,6 +466,38 @@ public class AgentAuthController : ControllerBase
                 Manufacturer = GetString(item, "manufacturer"),
                 PartNumber = GetString(item, "partNumber"),
                 SerialNumber = GetString(item, "serialNumber"),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    private static List<PrinterInfo> ParsePrinters(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<PrinterInfo>();
+        if (!root.TryGetProperty("printers", out var printersElement) || printersElement.ValueKind != JsonValueKind.Array)
+            return result;
+
+        foreach (var item in printersElement.EnumerateArray())
+        {
+            var name = GetString(item, "name")?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            result.Add(new PrinterInfo
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                Name = name,
+                DriverName = GetString(item, "driverName"),
+                PortName = GetString(item, "portName"),
+                PrinterStatus = GetString(item, "printerStatus"),
+                IsDefault = GetBool(item, "isDefault"),
+                IsNetworkPrinter = GetBool(item, "isNetworkPrinter"),
+                Shared = GetBool(item, "shared"),
+                ShareName = GetString(item, "shareName"),
+                Location = GetString(item, "location"),
                 CollectedAt = collectedAt
             });
         }
