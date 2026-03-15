@@ -33,6 +33,7 @@ public class AgentAuthController : ControllerBase
     private readonly IAutomationTaskService _automationTaskService;
     private readonly IAutomationExecutionReportRepository _automationExecutionReportRepository;
     private readonly ISyncPingDeliveryRepository _syncPingDeliveryRepository;
+    private readonly IMeshCentralEmbeddingService _meshCentralEmbeddingService;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
@@ -53,7 +54,8 @@ public class AgentAuthController : ControllerBase
         IAgentAutoLabelingService agentAutoLabelingService,
         IAutomationTaskService automationTaskService,
         IAutomationExecutionReportRepository automationExecutionReportRepository,
-        ISyncPingDeliveryRepository syncPingDeliveryRepository)
+        ISyncPingDeliveryRepository syncPingDeliveryRepository,
+        IMeshCentralEmbeddingService meshCentralEmbeddingService)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -74,6 +76,7 @@ public class AgentAuthController : ControllerBase
         _automationTaskService = automationTaskService;
         _automationExecutionReportRepository = automationExecutionReportRepository;
         _syncPingDeliveryRepository = syncPingDeliveryRepository;
+        _meshCentralEmbeddingService = meshCentralEmbeddingService;
     }
 
     [HttpGet("me")]
@@ -126,6 +129,58 @@ public class AgentAuthController : ControllerBase
         if (resolved.AIIntegration is not null)
             resolved.AIIntegration.ApiKey = null;
         return Ok(resolved);
+    }
+
+    /// <summary>
+    /// Gera URL de embedding do MeshCentral para o agent autenticado.
+    /// O token de auth e gerado no backend para evitar exposicao de segredos no front/agent.
+    /// </summary>
+    [HttpPost("me/support/meshcentral/embed-url")]
+    public async Task<IActionResult> CreateMeshCentralEmbedUrl([FromBody] AgentMeshCentralEmbedRequest? request)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null)
+            return NotFound(new { error = "Agent not found." });
+
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null)
+            return NotFound(new { error = "Site not found." });
+
+        var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
+        if (!resolved.RemoteSupportMeshCentralEnabled)
+            return StatusCode(403, new { error = "MeshCentral support is disabled for this scope." });
+
+        var desiredViewMode = request?.ViewMode ?? 11;
+
+        try
+        {
+            var embed = await _meshCentralEmbeddingService.GenerateAgentEmbedUrlAsync(
+                agent,
+                site.ClientId,
+                desiredViewMode,
+                request?.HideMask,
+                request?.MeshNodeId,
+                request?.GotoDeviceName,
+                HttpContext.RequestAborted);
+
+            return Ok(new
+            {
+                url = embed.Url,
+                expiresAtUtc = embed.ExpiresAtUtc,
+                viewMode = embed.ViewMode,
+                hideMask = embed.HideMask,
+                agentId = agent.Id,
+                clientId = site.ClientId,
+                siteId = site.Id
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { error = ex.Message });
+        }
     }
 
     [HttpGet("me/app-store")]
@@ -1498,6 +1553,12 @@ public record AgentCreateTicketRequest(
     Guid? WorkflowProfileId = null,
     TicketPriority? Priority = null,
     string? Category = null);
+
+public record AgentMeshCentralEmbedRequest(
+    int? ViewMode = null,
+    int? HideMask = null,
+    string? MeshNodeId = null,
+    string? GotoDeviceName = null);
 
 /// <summary>
 /// Request para o agente adicionar um comentário a um ticket.

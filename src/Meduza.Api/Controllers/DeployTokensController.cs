@@ -10,18 +10,27 @@ public class DeployTokensController : ControllerBase
     private readonly IDeployTokenService _deployTokenService;
     private readonly IDeployTokenRepository _deployTokenRepository;
     private readonly ISiteRepository _siteRepository;
+    private readonly IClientRepository _clientRepository;
     private readonly IAgentPackageService _agentPackageService;
+    private readonly IConfigurationResolver _configurationResolver;
+    private readonly IMeshCentralProvisioningService _meshCentralProvisioningService;
 
     public DeployTokensController(
         IDeployTokenService deployTokenService,
         IDeployTokenRepository deployTokenRepository,
         ISiteRepository siteRepository,
-        IAgentPackageService agentPackageService)
+        IClientRepository clientRepository,
+        IAgentPackageService agentPackageService,
+        IConfigurationResolver configurationResolver,
+        IMeshCentralProvisioningService meshCentralProvisioningService)
     {
         _deployTokenService = deployTokenService;
         _deployTokenRepository = deployTokenRepository;
         _siteRepository = siteRepository;
+        _clientRepository = clientRepository;
         _agentPackageService = agentPackageService;
+        _configurationResolver = configurationResolver;
+        _meshCentralProvisioningService = meshCentralProvisioningService;
     }
 
     [HttpGet]
@@ -87,6 +96,24 @@ public class DeployTokensController : ControllerBase
             }
         }
 
+        object? meshCentralInstall = null;
+        var resolved = await _configurationResolver.ResolveForSiteAsync(site.Id);
+        if (resolved.RemoteSupportMeshCentralEnabled)
+        {
+            var client = await _clientRepository.GetByIdAsync(site.ClientId);
+            if (client is not null)
+            {
+                try
+                {
+                    meshCentralInstall = _meshCentralProvisioningService.BuildInstallInstructions(client, site, rawToken);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Se a configuracao MeshCentral nao estiver pronta, nao bloqueia o fluxo de deploy token.
+                }
+            }
+        }
+
         return Ok(new
         {
             Token = rawToken,
@@ -94,7 +121,8 @@ public class DeployTokensController : ControllerBase
             ClientId = token.ClientId,
             SiteId = token.SiteId,
             ExpiresAt = token.ExpiresAt,
-            MaxUses = token.MaxUses
+            MaxUses = token.MaxUses,
+            MeshCentral = meshCentralInstall
         });
     }
 
@@ -131,6 +159,43 @@ public class DeployTokensController : ControllerBase
         catch (InvalidOperationException ex)
         {
             return StatusCode(503, new { error = "Agent package configuration is incomplete.", detail = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Retorna instrucoes de instalacao MeshCentral para o token informado.
+    /// Nao consome o token de deploy.
+    /// </summary>
+    [HttpPost("{id:guid}/meshcentral-install")]
+    public async Task<IActionResult> GetMeshCentralInstall(Guid id, [FromBody] DownloadPackageRequest request)
+    {
+        var token = await _deployTokenService.GetValidatedByIdAsync(id, request.RawToken);
+        if (token is null)
+            return BadRequest(new { error = "Invalid rawToken or token ID mismatch." });
+
+        if (!token.SiteId.HasValue || !token.ClientId.HasValue)
+            return BadRequest(new { error = "Deploy token is not scoped to a valid client/site." });
+
+        var site = await _siteRepository.GetByIdAsync(token.SiteId.Value);
+        if (site is null)
+            return NotFound(new { error = "Site not found." });
+
+        var resolved = await _configurationResolver.ResolveForSiteAsync(site.Id);
+        if (!resolved.RemoteSupportMeshCentralEnabled)
+            return StatusCode(403, new { error = "MeshCentral support is disabled for this scope." });
+
+        var client = await _clientRepository.GetByIdAsync(token.ClientId.Value);
+        if (client is null)
+            return NotFound(new { error = "Client not found." });
+
+        try
+        {
+            var instructions = _meshCentralProvisioningService.BuildInstallInstructions(client, site, request.RawToken);
+            return Ok(instructions);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { error = ex.Message });
         }
     }
 

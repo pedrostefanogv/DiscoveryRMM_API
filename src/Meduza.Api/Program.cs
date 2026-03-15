@@ -141,6 +141,10 @@ builder.Services.AddScoped<IEmbeddingProvider, OpenAiEmbeddingProvider>();
 builder.Services.AddScoped<IKnowledgeChunkingService, KnowledgeChunkingService>();
 builder.Services.AddScoped<IKnowledgeMcpTool, KnowledgeMcpTool>();
 builder.Services.AddHostedService<KnowledgeEmbeddingBackgroundService>();
+builder.Services.Configure<MeshCentralOptions>(
+    builder.Configuration.GetSection("MeshCentral"));
+builder.Services.AddScoped<IMeshCentralEmbeddingService, MeshCentralEmbeddingService>();
+builder.Services.AddScoped<IMeshCentralProvisioningService, MeshCentralProvisioningService>();
 
 // IMemoryCache (para ConfigurationResolver)
 builder.Services.AddMemoryCache();
