@@ -1,10 +1,12 @@
 using Meduza.Core.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Meduza.Api.Controllers;
 
 [ApiController]
 [Route("api/agent-install")]
+[AllowAnonymous]
 public class AgentInstallController : ControllerBase
 {
     private readonly IAgentRepository _agentRepo;

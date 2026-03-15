@@ -3,12 +3,14 @@ using Meduza.Core.DTOs.Mfa;
 using Meduza.Core.Interfaces.Auth;
 using Meduza.Core.Interfaces.Security;
 using Meduza.Api.Filters;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Meduza.Api.Controllers;
 
 [ApiController]
 [Route("api/auth")]
+[AllowAnonymous]
 public class AuthController : ControllerBase
 {
     private readonly IUserAuthService _authService;

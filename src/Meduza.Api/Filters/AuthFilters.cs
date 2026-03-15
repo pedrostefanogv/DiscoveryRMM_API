@@ -1,5 +1,6 @@
 using Meduza.Core.Enums.Identity;
 using Meduza.Core.Interfaces.Auth;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 
@@ -23,6 +24,13 @@ internal class RequireUserAuthFilter : IAsyncActionFilter
 {
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
+        // Permite opt-out explícito para rotas públicas/fluxos com autenticação própria.
+        if (context.ActionDescriptor.EndpointMetadata.OfType<IAllowAnonymous>().Any())
+        {
+            await next();
+            return;
+        }
+
         var items = context.HttpContext.Items;
 
         if (items["UserId"] is not Guid)

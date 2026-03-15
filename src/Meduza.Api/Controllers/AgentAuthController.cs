@@ -6,12 +6,14 @@ using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
 using Meduza.Core.ValueObjects;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Meduza.Api.Controllers;
 
 [ApiController]
 [Route("api/agent-auth")]
+[AllowAnonymous]
 public class AgentAuthController : ControllerBase
 {
     private readonly IAgentRepository _agentRepo;

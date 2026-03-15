@@ -220,6 +220,9 @@ builder.Services.AddControllers(options =>
 {
     // Registra LoggingActionFilter globalmente
     options.Filters.Add<LoggingActionFilter>();
+    // Proteção global: por padrão toda action exige autenticação de usuário/API token.
+    // Endpoints públicos devem declarar [AllowAnonymous].
+    options.Filters.Add<RequireUserAuthAttribute>();
 })
     .AddJsonOptions(opts =>
     {
