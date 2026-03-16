@@ -149,6 +149,7 @@ builder.Services.Configure<MeshCentralOptions>(
 builder.Services.AddScoped<IMeshCentralEmbeddingService, MeshCentralEmbeddingService>();
 builder.Services.AddScoped<IMeshCentralProvisioningService, MeshCentralProvisioningService>();
 builder.Services.AddScoped<IMeshCentralApiService, MeshCentralApiService>();
+builder.Services.AddScoped<IMeshCentralPolicyResolver, MeshCentralPolicyResolver>();
 builder.Services.AddScoped<IMeshCentralIdentitySyncService, MeshCentralIdentitySyncService>();
 builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 

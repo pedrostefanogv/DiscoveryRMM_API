@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Meduza.Core.Configuration;
 using Meduza.Core.Entities;
@@ -214,8 +215,13 @@ public class MeshCentralEmbeddingService : IMeshCentralEmbeddingService
 
     private sealed class MeshCentralAuthPayload
     {
+        [JsonPropertyName("userid")]
         public string UserId { get; set; } = string.Empty;
+
+        [JsonPropertyName("domainid")]
         public string DomainId { get; set; } = string.Empty;
+
+        [JsonPropertyName("time")]
         public long Time { get; set; }
     }
 }

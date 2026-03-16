@@ -39,10 +39,24 @@ public class UserRepository : IUserRepository
 
     public async Task<User> UpdateAsync(User user)
     {
-        user.UpdatedAt = DateTime.UtcNow;
-        _db.Users.Update(user);
+        var now = DateTime.UtcNow;
+        user.UpdatedAt = now;
+
+        var tracked = _db.Users.Local.FirstOrDefault(u => u.Id == user.Id);
+        if (tracked is not null)
+        {
+            _db.Entry(tracked).CurrentValues.SetValues(user);
+            tracked.UpdatedAt = now;
+        }
+        else
+        {
+            _db.Users.Attach(user);
+            _db.Entry(user).State = EntityState.Modified;
+            _db.Entry(user).Property(u => u.CreatedAt).IsModified = false;
+        }
+
         await _db.SaveChangesAsync();
-        return user;
+        return tracked ?? user;
     }
 
     public async Task<bool> SetMfaConfiguredAsync(Guid userId, bool configured)

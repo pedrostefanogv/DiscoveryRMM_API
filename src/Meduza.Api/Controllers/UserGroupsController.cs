@@ -165,12 +165,33 @@ public class UserGroupsController : ControllerBase
             RoleId = dto.RoleId,
             ScopeLevel = dto.ScopeLevel,
             ScopeId = dto.ScopeId,
+            MeshRightsOverride = dto.MeshRightsOverride,
             AssignedAt = DateTime.UtcNow
         });
 
         var memberIds = await _groupRepo.GetMemberIdsAsync(id);
         await _meshCentralSyncTrigger.OnUsersScopesChangedBestEffortAsync(memberIds, HttpContext.RequestAborted);
 
+        return NoContent();
+    }
+
+    [HttpPut("{id:guid}/roles/{assignmentId:guid}/mesh-rights")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> UpdateRoleAssignmentMeshRights(
+        Guid id,
+        Guid assignmentId,
+        [FromBody] UpdateGroupRoleMeshRightsDto dto)
+    {
+        var roles = await _groupRepo.GetRolesForGroupAsync(id);
+        if (!roles.Any(role => role.Id == assignmentId))
+            return NotFound();
+
+        var updated = await _groupRepo.UpdateRoleAssignmentMeshRightsAsync(assignmentId, dto.MeshRightsOverride);
+        if (!updated)
+            return NotFound();
+
+        var memberIds = await _groupRepo.GetMemberIdsAsync(id);
+        await _meshCentralSyncTrigger.OnUsersScopesChangedBestEffortAsync(memberIds, HttpContext.RequestAborted);
         return NoContent();
     }
 

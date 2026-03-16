@@ -22,5 +22,11 @@ public class UserGroupRole
     /// </summary>
     public Guid? ScopeId { get; set; }
 
+    /// <summary>
+    /// Override manual de direitos Mesh para esta atribuicao.
+    /// Quando null, usa a politica derivada automaticamente.
+    /// </summary>
+    public int? MeshRightsOverride { get; set; }
+
     public DateTime AssignedAt { get; set; }
 }

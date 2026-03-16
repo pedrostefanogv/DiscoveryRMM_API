@@ -44,4 +44,7 @@ public sealed class MeshCentralMembershipSyncResult
     public required string UserId { get; init; }
     public required string MeshId { get; init; }
     public required bool Added { get; init; }
+    public bool RightsUpdated { get; init; }
+    public int? PreviousRights { get; init; }
+    public int? AppliedRights { get; init; }
 }

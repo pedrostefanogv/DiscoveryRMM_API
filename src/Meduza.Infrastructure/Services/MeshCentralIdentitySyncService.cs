@@ -18,6 +18,7 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
     private readonly ISiteRepository _siteRepository;
     private readonly ISiteConfigurationRepository _siteConfigurationRepository;
     private readonly IMeshCentralApiService _meshCentralApiService;
+    private readonly IMeshCentralPolicyResolver _meshCentralPolicyResolver;
     private readonly ILogger<MeshCentralIdentitySyncService> _logger;
 
     public MeshCentralIdentitySyncService(
@@ -28,6 +29,7 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
         ISiteRepository siteRepository,
         ISiteConfigurationRepository siteConfigurationRepository,
         IMeshCentralApiService meshCentralApiService,
+        IMeshCentralPolicyResolver meshCentralPolicyResolver,
         ILogger<MeshCentralIdentitySyncService> logger)
     {
         _options = options.Value;
@@ -37,6 +39,7 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
         _siteRepository = siteRepository;
         _siteConfigurationRepository = siteConfigurationRepository;
         _meshCentralApiService = meshCentralApiService;
+        _meshCentralPolicyResolver = meshCentralPolicyResolver;
         _logger = logger;
     }
 
@@ -162,7 +165,8 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
                 Synced = true,
                 MeshUsername = user.MeshCentralUsername ?? string.Empty,
                 MeshUserId = user.MeshCentralUserId,
-                SiteBindingsApplied = 0
+                SiteBindingsApplied = 0,
+                RightsUpdatesApplied = 0
             };
         }
         catch (Exception ex)
@@ -180,6 +184,7 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
                 MeshUsername = user.MeshCentralUsername ?? string.Empty,
                 MeshUserId = user.MeshCentralUserId,
                 SiteBindingsApplied = 0,
+                RightsUpdatesApplied = 0,
                 Error = ex.Message
             };
         }
@@ -209,7 +214,8 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var siteIds = await ResolveUserSiteScopesAsync(user.Id, cancellationToken);
+            var policy = await _meshCentralPolicyResolver.ResolveForUserAsync(user.Id, cancellationToken);
+            var siteIds = policy.Sites.Select(s => s.SiteId).ToHashSet();
             if (siteId.HasValue && !siteIds.Contains(siteId.Value))
                 continue;
 
@@ -241,7 +247,9 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
                     Login = user.Login,
                     MeshUsername = previewUsername,
                     Applied = false,
-                    Success = true
+                    Success = true,
+                    SiteBindingsApplied = siteIds.Count,
+                    RightsUpdatesApplied = 0
                 });
                 continue;
             }
@@ -256,6 +264,8 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
                     MeshUsername = result.MeshUsername,
                     Applied = true,
                     Success = result.Synced,
+                    SiteBindingsApplied = result.SiteBindingsApplied,
+                    RightsUpdatesApplied = result.RightsUpdatesApplied,
                     Error = result.Error
                 });
 
@@ -274,6 +284,8 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
                     MeshUsername = previewUsername,
                     Applied = true,
                     Success = false,
+                    SiteBindingsApplied = siteIds.Count,
+                    RightsUpdatesApplied = 0,
                     Error = ex.Message
                 });
             }
@@ -294,23 +306,53 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
 
     private async Task<MeshCentralIdentitySyncResult> SyncUserInternalAsync(User user, CancellationToken cancellationToken)
     {
-        var siteIds = await ResolveUserSiteScopesAsync(user.Id, cancellationToken);
+        var policy = await _meshCentralPolicyResolver.ResolveForUserAsync(user.Id, cancellationToken);
+        var siteIds = policy.Sites.Select(s => s.SiteId).ToHashSet();
         var primaryClientId = await ResolvePrimaryClientIdAsync(siteIds, cancellationToken);
         var meshUsername = BuildMeshUsername(user.Login, primaryClientId);
 
         try
         {
             var upsert = await _meshCentralApiService.EnsureUserAsync(user, meshUsername, cancellationToken);
-            var desiredMeshIds = await ResolveDesiredMeshIdsAsync(siteIds, cancellationToken);
-            var allMeshIds = await ResolveAllConfiguredMeshIdsAsync(cancellationToken);
-
-            foreach (var meshId in desiredMeshIds)
-            {
-                await _meshCentralApiService.EnsureUserInMeshAsync(
-                    upsert.UserId,
-                    meshId,
-                    _options.IdentitySyncDefaultMeshRights,
+            var desiredMeshRights = _options.IdentitySyncPolicyEnabled
+                ? await ResolveDesiredMeshRightsAsync(policy.Sites, cancellationToken)
+                : await ResolveDesiredMeshRightsAsync(
+                    siteIds.Select(siteId => new MeshCentralSitePolicyResolution
+                    {
+                        SiteId = siteId,
+                        MeshRights = _options.IdentitySyncDefaultMeshRights,
+                        Sources = ["default"]
+                    }).ToArray(),
                     cancellationToken);
+
+            var desiredMeshIds = desiredMeshRights.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var allMeshIds = await ResolveAllConfiguredMeshIdsAsync(cancellationToken);
+            var rightsUpdatesApplied = 0;
+
+            foreach (var target in desiredMeshRights)
+            {
+                var rightsToApply = target.Value;
+                if (_options.IdentitySyncPolicyEnabled && _options.IdentitySyncPolicyDryRun)
+                {
+                    _logger.LogInformation(
+                        "MeshCentral policy dry-run user={UserId} mesh={MeshId} desiredRights={DesiredRights} fallbackRights={FallbackRights}",
+                        user.Id,
+                        target.Key,
+                        rightsToApply,
+                        _options.IdentitySyncDefaultMeshRights);
+                    rightsToApply = _options.IdentitySyncDefaultMeshRights;
+                }
+
+                var membershipResult = await _meshCentralApiService.EnsureUserInMeshAsync(
+                    upsert.UserId,
+                    target.Key,
+                    rightsToApply,
+                    cancellationToken);
+
+                if (membershipResult.RightsUpdated)
+                {
+                    rightsUpdatesApplied++;
+                }
             }
 
             foreach (var meshId in allMeshIds.Except(desiredMeshIds, StringComparer.OrdinalIgnoreCase))
@@ -332,7 +374,8 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
                 Synced = true,
                 MeshUsername = upsert.Username,
                 MeshUserId = upsert.UserId,
-                SiteBindingsApplied = desiredMeshIds.Count
+                SiteBindingsApplied = desiredMeshIds.Count,
+                RightsUpdatesApplied = rightsUpdatesApplied
             };
         }
         catch (Exception ex)
@@ -349,6 +392,7 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
                 Synced = false,
                 MeshUsername = meshUsername,
                 SiteBindingsApplied = 0,
+                RightsUpdatesApplied = 0,
                 Error = ex.Message
             };
         }
@@ -406,6 +450,32 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
             {
                 desired.Add(config.MeshCentralMeshId);
             }
+        }
+
+        return desired;
+    }
+
+    private async Task<Dictionary<string, int>> ResolveDesiredMeshRightsAsync(
+        IReadOnlyCollection<MeshCentralSitePolicyResolution> sitePolicies,
+        CancellationToken cancellationToken)
+    {
+        var desired = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sitePolicy in sitePolicies)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var config = await _siteConfigurationRepository.GetBySiteIdAsync(sitePolicy.SiteId);
+            if (string.IsNullOrWhiteSpace(config?.MeshCentralMeshId))
+            {
+                continue;
+            }
+
+            if (desired.TryGetValue(config.MeshCentralMeshId, out var existingRights))
+            {
+                desired[config.MeshCentralMeshId] = existingRights | sitePolicy.MeshRights;
+                continue;
+            }
+
+            desired[config.MeshCentralMeshId] = sitePolicy.MeshRights;
         }
 
         return desired;

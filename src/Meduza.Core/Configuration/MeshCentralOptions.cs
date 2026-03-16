@@ -79,6 +79,11 @@ public class MeshCentralOptions
     public int InviteExpireHours { get; set; } = 24;
 
     /// <summary>
+    /// Timeout em segundos para operacoes WebSocket no control.ashx.
+    /// </summary>
+    public int ApiTimeoutSeconds { get; set; } = 60;
+
+    /// <summary>
     /// Modo padrao de instalacao do agent: background ou interactive.
     /// </summary>
     public string InstallExecutionMode { get; set; } = "background";
@@ -92,6 +97,46 @@ public class MeshCentralOptions
     /// Direitos padrao ao vincular usuario em grupo de dispositivo (0 = minimo).
     /// </summary>
     public int IdentitySyncDefaultMeshRights { get; set; } = 0;
+
+    /// <summary>
+    /// Habilita o calculo de direitos Mesh a partir das politicas da aplicacao.
+    /// </summary>
+    public bool IdentitySyncPolicyEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Quando true, calcula a policy efetiva e registra logs, mas nao aplica rights no Mesh.
+    /// </summary>
+    public bool IdentitySyncPolicyDryRun { get; set; } = true;
+
+    /// <summary>
+    /// Perfil fallback quando nao houver mapeamento explicito de role.
+    /// </summary>
+    public string IdentitySyncPolicyDefaultProfile { get; set; } = "viewer";
+
+    /// <summary>
+    /// Quando true, remove bits criticos se a role da aplicacao nao tiver permissao equivalente.
+    /// </summary>
+    public bool IdentitySyncPolicyStrictMode { get; set; } = true;
+
+    /// <summary>
+    /// Perfis de rights por nome. Ex: viewer=8448, operator=29688, admin=-1.
+    /// </summary>
+    public Dictionary<string, int> IdentitySyncPolicyProfiles { get; set; } = new()
+    {
+        ["viewer"] = 256 + 8192,
+        ["operator"] = 8 + 16 + 32 + 64 + 128 + 256 + 4096 + 8192 + 16384 + 32768,
+        ["admin"] = -1
+    };
+
+    /// <summary>
+    /// Mapeia role da aplicacao para perfil Mesh. Ex: Operator -> operator.
+    /// </summary>
+    public Dictionary<string, string> IdentitySyncRoleProfiles { get; set; } = new();
+
+    /// <summary>
+    /// Overrides de rights por nome da role da aplicacao.
+    /// </summary>
+    public Dictionary<string, int> IdentitySyncRoleRightsOverrides { get; set; } = new();
 
     /// <summary>
     /// Habilita reconciliacao periodica automatica do sync de identidades.

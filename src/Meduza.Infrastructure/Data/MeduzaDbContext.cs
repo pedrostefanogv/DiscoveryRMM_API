@@ -2300,6 +2300,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             e.Property(r => r.RoleId).HasColumnName("role_id");
             e.Property(r => r.ScopeLevel).HasColumnName("scope_level").HasConversion<string>();
             e.Property(r => r.ScopeId).HasColumnName("scope_id");
+            e.Property(r => r.MeshRightsOverride).HasColumnName("mesh_rights_override");
             e.Property(r => r.AssignedAt).HasColumnName("assigned_at").HasColumnType("timestamptz");
         });
 

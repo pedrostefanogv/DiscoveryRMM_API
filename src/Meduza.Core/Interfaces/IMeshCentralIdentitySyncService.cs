@@ -41,6 +41,7 @@ public sealed class MeshCentralIdentitySyncResult
     public required string MeshUsername { get; init; }
     public string? MeshUserId { get; init; }
     public int SiteBindingsApplied { get; init; }
+    public int RightsUpdatesApplied { get; init; }
     public string? Error { get; init; }
 }
 
@@ -62,5 +63,7 @@ public sealed class MeshCentralIdentityBackfillItem
     public required string MeshUsername { get; init; }
     public required bool Applied { get; init; }
     public required bool Success { get; init; }
+    public int SiteBindingsApplied { get; init; }
+    public int RightsUpdatesApplied { get; init; }
     public string? Error { get; init; }
 }

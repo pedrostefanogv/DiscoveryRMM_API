@@ -1,6 +1,8 @@
 using System.Net.WebSockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Meduza.Core.Configuration;
 using Meduza.Core.Entities;
@@ -37,26 +39,18 @@ public class MeshCentralApiService : IMeshCentralApiService
         if (string.IsNullOrWhiteSpace(_options.BaseUrl))
             throw new InvalidOperationException("MeshCentral BaseUrl is not configured.");
 
-        if (string.IsNullOrWhiteSpace(_options.ApiUsername) || string.IsNullOrWhiteSpace(_options.ApiPassword))
-            throw new InvalidOperationException("MeshCentral API credentials are not configured.");
+        ValidateLoginKeySettings();
 
         var groupName = BuildGroupName(client, site);
-        using var ws = new ClientWebSocket();
-        if (_options.IgnoreTlsErrors)
-            ws.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+        var provisionResult = await ExecuteWithSocketAsync(async (ws, ct) =>
+        {
+            var meshId = await EnsureMeshGroupAsync(ws, groupName, ct);
+            var inviteUrl = await CreateInviteLinkAsync(ws, meshId, ct);
+            return (meshId, inviteUrl);
+        }, cancellationToken);
 
-        var xmeshauth = Convert.ToBase64String(Encoding.UTF8.GetBytes(_options.ApiUsername)) + "," +
-                        Convert.ToBase64String(Encoding.UTF8.GetBytes(_options.ApiPassword));
-        ws.Options.SetRequestHeader("x-meshauth", xmeshauth);
-
-        var wsUri = BuildControlUri(_options.BaseUrl);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
-
-        await ws.ConnectAsync(wsUri, linked.Token);
-
-        var meshId = await EnsureMeshGroupAsync(ws, groupName, linked.Token);
-        var inviteUrl = await CreateInviteLinkAsync(ws, meshId, linked.Token);
+        var meshId = provisionResult.meshId;
+        var inviteUrl = provisionResult.inviteUrl;
 
         if (string.IsNullOrWhiteSpace(inviteUrl))
             throw new InvalidOperationException("MeshCentral did not return an invite link.");
@@ -139,16 +133,17 @@ public class MeshCentralApiService : IMeshCentralApiService
         return await ExecuteWithSocketAsync(async (ws, ct) =>
         {
             var mesh = await GetMeshByIdAsync(ws, meshId, ct);
-            var alreadyBound = mesh.UserLinks.Any(link =>
-                string.Equals(link, meshUserId, StringComparison.OrdinalIgnoreCase));
-
-            if (alreadyBound)
+            var alreadyBound = mesh.UserLinks.TryGetValue(meshUserId, out var currentRights);
+            if (alreadyBound && currentRights == meshAdminRights)
             {
                 return new MeshCentralMembershipSyncResult
                 {
                     UserId = meshUserId,
                     MeshId = meshId,
-                    Added = false
+                    Added = false,
+                    RightsUpdated = false,
+                    PreviousRights = currentRights,
+                    AppliedRights = meshAdminRights
                 };
             }
 
@@ -176,7 +171,10 @@ public class MeshCentralApiService : IMeshCentralApiService
             {
                 UserId = meshUserId,
                 MeshId = meshId,
-                Added = true
+                Added = !alreadyBound,
+                RightsUpdated = alreadyBound,
+                PreviousRights = currentRights,
+                AppliedRights = meshAdminRights
             };
         }, cancellationToken);
     }
@@ -191,8 +189,7 @@ public class MeshCentralApiService : IMeshCentralApiService
         return await ExecuteWithSocketAsync(async (ws, ct) =>
         {
             var mesh = await GetMeshByIdAsync(ws, meshId, ct);
-            var alreadyRemoved = !mesh.UserLinks.Any(link =>
-                string.Equals(link, meshUserId, StringComparison.OrdinalIgnoreCase));
+            var alreadyRemoved = !mesh.UserLinks.ContainsKey(meshUserId);
 
             if (alreadyRemoved)
             {
@@ -268,8 +265,17 @@ public class MeshCentralApiService : IMeshCentralApiService
         if (string.IsNullOrWhiteSpace(_options.BaseUrl))
             throw new InvalidOperationException("MeshCentral BaseUrl is not configured.");
 
-        if (string.IsNullOrWhiteSpace(_options.ApiUsername) || string.IsNullOrWhiteSpace(_options.ApiPassword))
-            throw new InvalidOperationException("MeshCentral API credentials are not configured.");
+        ValidateLoginKeySettings();
+    }
+
+    private void ValidateLoginKeySettings()
+    {
+        if (string.IsNullOrWhiteSpace(_options.LoginKeyHex))
+            throw new InvalidOperationException("MeshCentral LoginKeyHex is not configured.");
+
+        var loginKey = ParseHex(_options.LoginKeyHex);
+        if (loginKey.Length < 32)
+            throw new InvalidOperationException("MeshCentral LoginKeyHex is invalid.");
     }
 
     private async Task<T> ExecuteWithSocketAsync<T>(Func<ClientWebSocket, CancellationToken, Task<T>> callback, CancellationToken cancellationToken)
@@ -278,12 +284,9 @@ public class MeshCentralApiService : IMeshCentralApiService
         if (_options.IgnoreTlsErrors)
             ws.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
 
-        var xmeshauth = Convert.ToBase64String(Encoding.UTF8.GetBytes(_options.ApiUsername)) + "," +
-                        Convert.ToBase64String(Encoding.UTF8.GetBytes(_options.ApiPassword));
-        ws.Options.SetRequestHeader("x-meshauth", xmeshauth);
-
-        var wsUri = BuildControlUri(_options.BaseUrl);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        var wsUri = BuildControlUriWithLoginKey(_options);
+        var timeoutSeconds = Math.Clamp(_options.ApiTimeoutSeconds, 10, 300);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
 
         await ws.ConnectAsync(wsUri, linked.Token);
@@ -411,16 +414,20 @@ public class MeshCentralApiService : IMeshCentralApiService
                 continue;
 
             var links = new List<string>();
+            var userLinks = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             if (mesh.TryGetProperty("links", out var linksNode) && linksNode.ValueKind == JsonValueKind.Object)
             {
                 foreach (var link in linksNode.EnumerateObject())
                 {
                     if (link.Name.StartsWith("user/", StringComparison.OrdinalIgnoreCase))
+                    {
                         links.Add(link.Name);
+                        userLinks[link.Name] = ParseLinkRights(link.Value);
+                    }
                 }
             }
 
-            return new MeshCentralMeshRef(id!, links);
+            return new MeshCentralMeshRef(id!, userLinks);
         }
 
         throw new InvalidOperationException($"MeshCentral mesh '{meshId}' was not found.");
@@ -654,15 +661,103 @@ public class MeshCentralApiService : IMeshCentralApiService
         return null;
     }
 
-    private static Uri BuildControlUri(string baseUrl)
+    private static int ParseLinkRights(JsonElement linkNode)
     {
-        var uri = new Uri(baseUrl, UriKind.Absolute);
+        if (linkNode.ValueKind == JsonValueKind.Number && linkNode.TryGetInt32(out var numericRights))
+        {
+            return numericRights;
+        }
+
+        if (linkNode.ValueKind != JsonValueKind.Object)
+        {
+            return 0;
+        }
+
+        if (linkNode.TryGetProperty("rights", out var rightsNode) && rightsNode.TryGetInt32(out var rights))
+        {
+            return rights;
+        }
+
+        if (linkNode.TryGetProperty("meshadmin", out var meshAdminNode) && meshAdminNode.TryGetInt32(out var meshAdmin))
+        {
+            return meshAdmin;
+        }
+
+        return 0;
+    }
+
+    private static Uri BuildControlUriWithLoginKey(MeshCentralOptions options)
+    {
+        var loginKey = ParseHex(options.LoginKeyHex);
+        var uri = new Uri(options.BaseUrl, UriKind.Absolute);
         var builder = new UriBuilder(uri)
         {
             Scheme = uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ? "ws" : "wss",
             Path = "/control.ashx"
         };
+
+        var authToken = GenerateAuthToken(loginKey, options.DomainId, ResolveApiUsername(options));
+        var keyParam = Uri.EscapeDataString(NormalizeHex(options.LoginKeyHex));
+        var authParam = Uri.EscapeDataString(authToken);
+        builder.Query = $"key={keyParam}&auth={authParam}";
+
         return builder.Uri;
+    }
+
+    private static string ResolveApiUsername(MeshCentralOptions options)
+    {
+        var username = string.IsNullOrWhiteSpace(options.EmbedUsername)
+            ? "admin"
+            : options.EmbedUsername.Trim();
+
+        var normalized = NormalizeUsername(username);
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new InvalidOperationException("MeshCentral username for LoginKey auth is invalid.");
+
+        return normalized;
+    }
+
+    private static string NormalizeHex(string hex)
+    {
+        return hex.Replace(" ", string.Empty, StringComparison.Ordinal)
+                  .Replace("-", string.Empty, StringComparison.Ordinal)
+                  .Trim();
+    }
+
+    private static byte[] ParseHex(string hex)
+    {
+        var normalized = NormalizeHex(hex);
+        if ((normalized.Length % 2) != 0)
+            throw new InvalidOperationException("MeshCentral LoginKeyHex has invalid length.");
+
+        return Convert.FromHexString(normalized);
+    }
+
+    private static string GenerateAuthToken(byte[] loginKey, string domainId, string username)
+    {
+        var payload = new MeshCentralAuthPayload
+        {
+            UserId = $"user/{domainId}/{username}",
+            DomainId = domainId,
+            Time = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        };
+
+        var payloadBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload, JsonOptions));
+        var iv = RandomNumberGenerator.GetBytes(12);
+        var cipher = new byte[payloadBytes.Length];
+        var tag = new byte[16];
+
+        using var aes = new AesGcm(loginKey.AsSpan(0, 32), 16);
+        aes.Encrypt(iv, payloadBytes, cipher, tag);
+
+        var packed = new byte[iv.Length + tag.Length + cipher.Length];
+        Buffer.BlockCopy(iv, 0, packed, 0, iv.Length);
+        Buffer.BlockCopy(tag, 0, packed, iv.Length, tag.Length);
+        Buffer.BlockCopy(cipher, 0, packed, iv.Length + tag.Length, cipher.Length);
+
+        return Convert.ToBase64String(packed)
+            .Replace('+', '@')
+            .Replace('/', '$');
     }
 
     private static string BuildGroupName(Client client, Site site)
@@ -684,7 +779,19 @@ public class MeshCentralApiService : IMeshCentralApiService
 }
 
 internal sealed record MeshCentralUserRef(string UserId, string Username);
-internal sealed record MeshCentralMeshRef(string MeshId, IReadOnlyCollection<string> UserLinks);
+internal sealed record MeshCentralMeshRef(string MeshId, IReadOnlyDictionary<string, int> UserLinks);
+
+internal sealed class MeshCentralAuthPayload
+{
+    [JsonPropertyName("userid")]
+    public string UserId { get; set; } = string.Empty;
+
+    [JsonPropertyName("domainid")]
+    public string DomainId { get; set; } = string.Empty;
+
+    [JsonPropertyName("time")]
+    public long Time { get; set; }
+}
 
 internal static class MeshCentralJsonExtensions
 {
