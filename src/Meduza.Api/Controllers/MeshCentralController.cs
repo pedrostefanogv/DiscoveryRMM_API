@@ -7,6 +7,7 @@ namespace Meduza.Api.Controllers;
 
 [ApiController]
 [Route("api/meshcentral")]
+[RequireUserAuth]
 public class MeshCentralController : ControllerBase
 {
     private readonly IClientRepository _clientRepository;
