@@ -157,4 +157,24 @@ public class MeshCentralOptions
     /// Atraso inicial, em segundos, antes da primeira execucao da reconciliacao.
     /// </summary>
     public int IdentitySyncReconciliationStartupDelaySeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Habilita reconciliacao periodica de policy de grupos por site.
+    /// </summary>
+    public bool GroupPolicyReconciliationEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Executa reconciliacao de policy de grupos com aplicacao remota. Se false, apenas dry-run.
+    /// </summary>
+    public bool GroupPolicyReconciliationApplyChanges { get; set; } = false;
+
+    /// <summary>
+    /// Intervalo, em minutos, da reconciliacao periodica de policy de grupos.
+    /// </summary>
+    public int GroupPolicyReconciliationIntervalMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// Atraso inicial, em segundos, antes da primeira reconciliacao de policy de grupos.
+    /// </summary>
+    public int GroupPolicyReconciliationStartupDelaySeconds { get; set; } = 30;
 }

@@ -79,6 +79,7 @@ builder.Services.AddScoped<ITicketActivityLogRepository, TicketActivityLogReposi
 
 // Configuration repositories
 builder.Services.AddScoped<IServerConfigurationRepository, ServerConfigurationRepository>();
+builder.Services.AddScoped<IMeshCentralRightsProfileRepository, MeshCentralRightsProfileRepository>();
 builder.Services.AddScoped<IClientConfigurationRepository, ClientConfigurationRepository>();
 builder.Services.AddScoped<ISiteConfigurationRepository, SiteConfigurationRepository>();
 builder.Services.AddScoped<IConfigurationAuditRepository, ConfigurationAuditRepository>();
@@ -151,6 +152,7 @@ builder.Services.AddScoped<IMeshCentralProvisioningService, MeshCentralProvision
 builder.Services.AddScoped<IMeshCentralApiService, MeshCentralApiService>();
 builder.Services.AddScoped<IMeshCentralPolicyResolver, MeshCentralPolicyResolver>();
 builder.Services.AddScoped<IMeshCentralIdentitySyncService, MeshCentralIdentitySyncService>();
+builder.Services.AddScoped<IMeshCentralGroupPolicySyncService, MeshCentralGroupPolicySyncService>();
 builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 
 // IMemoryCache (para ConfigurationResolver)
@@ -200,6 +202,7 @@ builder.Services.AddHostedService<ReportRetentionBackgroundService>();
 builder.Services.AddHostedService<AiChatRetentionBackgroundService>();
 builder.Services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
 builder.Services.AddHostedService<MeshCentralIdentityReconciliationBackgroundService>();
+builder.Services.AddHostedService<MeshCentralGroupPolicyReconciliationBackgroundService>();
 builder.Services.AddHostedService<AgentPackagePrebuildHostedService>();
 
 // ── Identity & Auth ───────────────────────────────────────────────────────

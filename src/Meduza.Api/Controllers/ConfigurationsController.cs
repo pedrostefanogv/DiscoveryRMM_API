@@ -565,6 +565,9 @@ public class ConfigurationsController : ControllerBase
             AgentNetworkDiscoveryEnabled = client?.AgentNetworkDiscoveryEnabled ?? server.AgentNetworkDiscoveryEnabled,
             P2PTransferEnabled = client?.P2PTransferEnabled ?? server.P2PTransferEnabled,
             RemoteSupportMeshCentralEnabled = client?.RemoteSupportMeshCentralEnabled ?? server.RemoteSupportMeshCentralEnabled,
+            MeshCentralGroupPolicyProfile = string.IsNullOrWhiteSpace(client?.MeshCentralGroupPolicyProfile)
+                ? server.MeshCentralGroupPolicyProfile
+                : client.MeshCentralGroupPolicyProfile,
             ChatAIEnabled = client?.ChatAIEnabled ?? server.ChatAIEnabled,
             KnowledgeBaseEnabled = client?.KnowledgeBaseEnabled ?? server.KnowledgeBaseEnabled,
             AppStorePolicy = client?.AppStorePolicy ?? server.AppStorePolicy,
@@ -583,6 +586,9 @@ public class ConfigurationsController : ControllerBase
                 ["AgentNetworkDiscoveryEnabled"] = client?.AgentNetworkDiscoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["P2PTransferEnabled"] = client?.P2PTransferEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["RemoteSupportMeshCentralEnabled"] = client?.RemoteSupportMeshCentralEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["MeshCentralGroupPolicyProfile"] = !string.IsNullOrWhiteSpace(client?.MeshCentralGroupPolicyProfile)
+                    ? (int)ConfigurationPriorityType.Client
+                    : (int)ConfigurationPriorityType.Global,
                 ["ChatAIEnabled"] = client?.ChatAIEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["KnowledgeBaseEnabled"] = client?.KnowledgeBaseEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["AppStorePolicy"] = client?.AppStorePolicy is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,

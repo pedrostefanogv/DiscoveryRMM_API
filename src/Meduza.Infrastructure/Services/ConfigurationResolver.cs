@@ -189,6 +189,12 @@ public class ConfigurationResolver : IConfigurationResolver
         var discovery = ResolveValue("AgentNetworkDiscoveryEnabled", blocked, site?.AgentNetworkDiscoveryEnabled, client?.AgentNetworkDiscoveryEnabled, server.AgentNetworkDiscoveryEnabled);
         var p2p = ResolveValue("P2PTransferEnabled", blocked, site?.P2PTransferEnabled, client?.P2PTransferEnabled, server.P2PTransferEnabled);
         var support = ResolveValue("RemoteSupportMeshCentralEnabled", blocked, site?.RemoteSupportMeshCentralEnabled, client?.RemoteSupportMeshCentralEnabled, server.RemoteSupportMeshCentralEnabled);
+        var meshPolicyProfile = ResolveStringValue(
+            "MeshCentralGroupPolicyProfile",
+            blocked,
+            site?.MeshCentralGroupPolicyProfile,
+            client?.MeshCentralGroupPolicyProfile,
+            server.MeshCentralGroupPolicyProfile);
         var chatAi = ResolveValue("ChatAIEnabled", blocked, site?.ChatAIEnabled, client?.ChatAIEnabled, server.ChatAIEnabled);
         var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, site?.KnowledgeBaseEnabled, client?.KnowledgeBaseEnabled, server.KnowledgeBaseEnabled);
         var appStore = ResolveValue("AppStorePolicy", blocked, site?.AppStorePolicy, client?.AppStorePolicy, server.AppStorePolicy);
@@ -212,6 +218,7 @@ public class ConfigurationResolver : IConfigurationResolver
             DiscoveryEnabled = discovery.Value,
             P2PFilesEnabled = p2p.Value,
             SupportEnabled = support.Value,
+            MeshCentralGroupPolicyProfile = meshPolicyProfile.Value,
             ChatAIEnabled = chatAi.Value,
             KnowledgeBaseEnabled = knowledge.Value,
             AppStorePolicy = appStore.Value,
@@ -233,6 +240,7 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["P2PTransferEnabled"] = (int)p2p.Source;
         resolved.Inheritance["SupportEnabled"] = (int)support.Source;
         resolved.Inheritance["RemoteSupportMeshCentralEnabled"] = (int)support.Source;
+        resolved.Inheritance["MeshCentralGroupPolicyProfile"] = (int)meshPolicyProfile.Source;
         resolved.Inheritance["ChatAIEnabled"] = (int)chatAi.Source;
         resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;
         resolved.Inheritance["AppStorePolicy"] = (int)appStore.Source;
@@ -317,6 +325,24 @@ public class ConfigurationResolver : IConfigurationResolver
 
         if (clientValue.HasValue)
             return (clientValue.Value, isBlocked ? ConfigurationPriorityType.Block : ConfigurationPriorityType.Client);
+
+        return (serverValue, isBlocked ? ConfigurationPriorityType.Block : ConfigurationPriorityType.Global);
+    }
+
+    private static (string Value, ConfigurationPriorityType Source) ResolveStringValue(
+        string fieldName,
+        HashSet<string> blockedFields,
+        string? siteValue,
+        string? clientValue,
+        string serverValue)
+    {
+        var isBlocked = blockedFields.Contains(fieldName);
+
+        if (!string.IsNullOrWhiteSpace(siteValue))
+            return (siteValue, isBlocked ? ConfigurationPriorityType.Block : ConfigurationPriorityType.Site);
+
+        if (!string.IsNullOrWhiteSpace(clientValue))
+            return (clientValue, isBlocked ? ConfigurationPriorityType.Block : ConfigurationPriorityType.Client);
 
         return (serverValue, isBlocked ? ConfigurationPriorityType.Block : ConfigurationPriorityType.Global);
     }

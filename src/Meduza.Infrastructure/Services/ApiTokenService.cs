@@ -24,6 +24,8 @@ public class ApiTokenService : IApiTokenService
 
     public async Task<CreateApiTokenResponseDto> CreateTokenAsync(Guid userId, string name, DateTime? expiresAt)
     {
+        var effectiveExpiresAt = expiresAt ?? DateTime.UtcNow.AddYears(1);
+
         // Token público identifier: mzt_ + UUID sem hífens
         var tokenIdPublic = "mzt_" + IdGenerator.NewId().ToString("N");
 
@@ -46,7 +48,7 @@ public class ApiTokenService : IApiTokenService
             AccessKeyHash = accessKeyHash,
             IsActive = true,
             CreatedAt = DateTime.UtcNow,
-            ExpiresAt = expiresAt
+            ExpiresAt = effectiveExpiresAt
         };
 
         await _repo.CreateAsync(token);

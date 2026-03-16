@@ -95,19 +95,6 @@ public class UserGroupRepository : IUserGroupRepository
         await _db.SaveChangesAsync();
     }
 
-    public async Task<bool> UpdateRoleAssignmentMeshRightsAsync(Guid assignmentId, int? meshRightsOverride)
-    {
-        var assignment = await _db.UserGroupRoles.SingleOrDefaultAsync(r => r.Id == assignmentId);
-        if (assignment is null)
-        {
-            return false;
-        }
-
-        assignment.MeshRightsOverride = meshRightsOverride;
-        await _db.SaveChangesAsync();
-        return true;
-    }
-
     public async Task RemoveRoleAssignmentAsync(Guid assignmentId)
     {
         await _db.UserGroupRoles.Where(r => r.Id == assignmentId).ExecuteDeleteAsync();

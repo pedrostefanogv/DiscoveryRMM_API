@@ -39,6 +39,8 @@ public class ResolvedConfiguration
         set => SupportEnabled = value;
     }
 
+    public string MeshCentralGroupPolicyProfile { get; set; } = "viewer";
+
     public bool ChatAIEnabled { get; set; }
     public bool KnowledgeBaseEnabled { get; set; }
 

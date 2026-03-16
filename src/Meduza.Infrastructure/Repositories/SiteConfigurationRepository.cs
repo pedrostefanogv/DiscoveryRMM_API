@@ -49,6 +49,7 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
         existingConfig.DiscoveryEnabled = config.DiscoveryEnabled;
         existingConfig.P2PFilesEnabled = config.P2PFilesEnabled;
         existingConfig.SupportEnabled = config.SupportEnabled;
+        existingConfig.MeshCentralGroupPolicyProfile = config.MeshCentralGroupPolicyProfile;
         existingConfig.ChatAIEnabled = config.ChatAIEnabled;
         existingConfig.KnowledgeBaseEnabled = config.KnowledgeBaseEnabled;
         existingConfig.AppStorePolicy = config.AppStorePolicy;
@@ -61,6 +62,8 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
         existingConfig.ContactEmail = config.ContactEmail;
         existingConfig.MeshCentralGroupName = config.MeshCentralGroupName;
         existingConfig.MeshCentralMeshId = config.MeshCentralMeshId;
+        existingConfig.MeshCentralAppliedGroupPolicyProfile = config.MeshCentralAppliedGroupPolicyProfile;
+        existingConfig.MeshCentralAppliedGroupPolicyAt = config.MeshCentralAppliedGroupPolicyAt;
         existingConfig.LockedFieldsJson = config.LockedFieldsJson;
         existingConfig.UpdatedAt = config.UpdatedAt;
         existingConfig.UpdatedBy = config.UpdatedBy;

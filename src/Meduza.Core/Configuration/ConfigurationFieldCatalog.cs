@@ -7,7 +7,8 @@ public static class ConfigurationFieldCatalog
         ["RecoveryEnabled"] = "DeviceRecoveryEnabled",
         ["DiscoveryEnabled"] = "AgentNetworkDiscoveryEnabled",
         ["P2PFilesEnabled"] = "P2PTransferEnabled",
-        ["SupportEnabled"] = "RemoteSupportMeshCentralEnabled"
+        ["SupportEnabled"] = "RemoteSupportMeshCentralEnabled",
+        ["MeshGroupPolicyProfile"] = "MeshCentralGroupPolicyProfile"
     };
 
     public static readonly string[] ManagedFields =
@@ -16,6 +17,7 @@ public static class ConfigurationFieldCatalog
         "AgentNetworkDiscoveryEnabled",
         "P2PTransferEnabled",
         "RemoteSupportMeshCentralEnabled",
+        "MeshCentralGroupPolicyProfile",
         "ChatAIEnabled",
         "KnowledgeBaseEnabled",
         "AppStorePolicy",

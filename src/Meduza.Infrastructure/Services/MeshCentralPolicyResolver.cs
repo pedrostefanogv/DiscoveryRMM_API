@@ -30,6 +30,7 @@ public class MeshCentralPolicyResolver : IMeshCentralPolicyResolver
     private readonly MeshCentralOptions _options;
     private readonly IUserGroupRepository _userGroupRepository;
     private readonly IRoleRepository _roleRepository;
+    private readonly IMeshCentralRightsProfileRepository _meshCentralRightsProfileRepository;
     private readonly IClientRepository _clientRepository;
     private readonly ISiteRepository _siteRepository;
     private readonly ILogger<MeshCentralPolicyResolver> _logger;
@@ -38,6 +39,7 @@ public class MeshCentralPolicyResolver : IMeshCentralPolicyResolver
         IOptions<MeshCentralOptions> options,
         IUserGroupRepository userGroupRepository,
         IRoleRepository roleRepository,
+        IMeshCentralRightsProfileRepository meshCentralRightsProfileRepository,
         IClientRepository clientRepository,
         ISiteRepository siteRepository,
         ILogger<MeshCentralPolicyResolver> logger)
@@ -45,6 +47,7 @@ public class MeshCentralPolicyResolver : IMeshCentralPolicyResolver
         _options = options.Value;
         _userGroupRepository = userGroupRepository;
         _roleRepository = roleRepository;
+        _meshCentralRightsProfileRepository = meshCentralRightsProfileRepository;
         _clientRepository = clientRepository;
         _siteRepository = siteRepository;
         _logger = logger;
@@ -62,10 +65,7 @@ public class MeshCentralPolicyResolver : IMeshCentralPolicyResolver
             };
         }
 
-        var profiles = new Dictionary<string, int>(_options.IdentitySyncPolicyProfiles, StringComparer.OrdinalIgnoreCase);
-        var roleProfiles = new Dictionary<string, string>(_options.IdentitySyncRoleProfiles, StringComparer.OrdinalIgnoreCase);
-        var roleOverrides = new Dictionary<string, int>(_options.IdentitySyncRoleRightsOverrides, StringComparer.OrdinalIgnoreCase);
-
+        var profiles = await LoadProfilesAsync();
         var roleCache = new Dictionary<Guid, RoleResolutionContext>();
         var rightsBySite = new Dictionary<Guid, int>();
         var sourcesBySite = new Dictionary<Guid, HashSet<string>>();
@@ -79,8 +79,7 @@ public class MeshCentralPolicyResolver : IMeshCentralPolicyResolver
             if (roleContext is null)
                 continue;
 
-            var roleRights = assignment.MeshRightsOverride
-                ?? ResolveRoleRights(roleContext, profiles, roleProfiles, roleOverrides);
+            var roleRights = ResolveRoleRights(roleContext, profiles);
             roleRights = ApplyStrictGuardrails(roleRights, roleContext.Permissions);
 
             var siteIds = await ResolveAssignmentSiteIdsAsync(assignment, globalSites, cancellationToken);
@@ -126,6 +125,30 @@ public class MeshCentralPolicyResolver : IMeshCentralPolicyResolver
         };
     }
 
+    private async Task<Dictionary<string, int>> LoadProfilesAsync()
+    {
+        var profiles = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        var dbProfiles = await _meshCentralRightsProfileRepository.GetAllAsync();
+        foreach (var profile in dbProfiles)
+        {
+            if (string.IsNullOrWhiteSpace(profile.Name))
+                continue;
+
+            profiles[profile.Name] = profile.RightsMask;
+        }
+
+        foreach (var configuredProfile in _options.IdentitySyncPolicyProfiles)
+        {
+            if (string.IsNullOrWhiteSpace(configuredProfile.Key))
+                continue;
+
+            profiles.TryAdd(configuredProfile.Key, configuredProfile.Value);
+        }
+
+        return profiles;
+    }
+
     private async Task<RoleResolutionContext?> GetRoleContextAsync(
         Guid roleId,
         IDictionary<Guid, RoleResolutionContext> roleCache,
@@ -147,7 +170,11 @@ public class MeshCentralPolicyResolver : IMeshCentralPolicyResolver
             .Select(p => (p.ResourceType, p.ActionType))
             .ToHashSet();
 
-        var context = new RoleResolutionContext(role.Name, permissions);
+        var context = new RoleResolutionContext(
+            role.Name,
+            permissions,
+            role.MeshRightsMask,
+            role.MeshRightsProfile);
         roleCache[roleId] = context;
         return context;
     }
@@ -197,19 +224,17 @@ public class MeshCentralPolicyResolver : IMeshCentralPolicyResolver
 
     private int ResolveRoleRights(
         RoleResolutionContext roleContext,
-        IReadOnlyDictionary<string, int> profiles,
-        IReadOnlyDictionary<string, string> roleProfiles,
-        IReadOnlyDictionary<string, int> roleOverrides)
+        IReadOnlyDictionary<string, int> profiles)
     {
-        if (roleOverrides.TryGetValue(roleContext.RoleName, out var overrideRights))
+        if (roleContext.MeshRightsMask.HasValue)
         {
-            return overrideRights;
+            return roleContext.MeshRightsMask.Value;
         }
 
-        if (roleProfiles.TryGetValue(roleContext.RoleName, out var configuredProfile)
-            && profiles.TryGetValue(configuredProfile, out var configuredRights))
+        if (!string.IsNullOrWhiteSpace(roleContext.MeshRightsProfile)
+            && profiles.TryGetValue(roleContext.MeshRightsProfile, out var roleProfileRights))
         {
-            return configuredRights;
+            return roleProfileRights;
         }
 
         if (profiles.TryGetValue(roleContext.RoleName, out var profileByRoleName))
@@ -355,5 +380,7 @@ public class MeshCentralPolicyResolver : IMeshCentralPolicyResolver
 
     private sealed record RoleResolutionContext(
         string RoleName,
-        IReadOnlySet<(ResourceType Resource, ActionType Action)> Permissions);
+        IReadOnlySet<(ResourceType Resource, ActionType Action)> Permissions,
+        int? MeshRightsMask,
+        string? MeshRightsProfile);
 }

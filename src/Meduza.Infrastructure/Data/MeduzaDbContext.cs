@@ -20,6 +20,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<EntityNote> EntityNotes => Set<EntityNote>();
     public DbSet<LogEntry> Logs => Set<LogEntry>();
     public DbSet<ServerConfiguration> ServerConfigurations => Set<ServerConfiguration>();
+    public DbSet<MeshCentralRightsProfile> MeshCentralRightsProfiles => Set<MeshCentralRightsProfile>();
     public DbSet<SiteConfiguration> SiteConfigurations => Set<SiteConfiguration>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<TicketComment> TicketComments => Set<TicketComment>();
@@ -637,6 +638,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
+            entity.Property(config => config.MeshCentralGroupPolicyProfile)
+                .HasColumnName("meshcentral_group_policy_profile")
+                .HasMaxLength(64);
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy)
@@ -676,6 +680,35 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.Version).HasColumnName("version");
         });
 
+        modelBuilder.Entity<MeshCentralRightsProfile>(entity =>
+        {
+            entity.ToTable("meshcentral_rights_profiles");
+            entity.HasKey(profile => profile.Id);
+            entity.HasIndex(profile => profile.Name)
+                .IsUnique()
+                .HasDatabaseName("ix_meshcentral_rights_profiles_name");
+
+            entity.Property(profile => profile.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(profile => profile.Name)
+                .HasColumnName("name")
+                .HasMaxLength(64);
+            entity.Property(profile => profile.Description)
+                .HasColumnName("description")
+                .HasMaxLength(500);
+            entity.Property(profile => profile.RightsMask)
+                .HasColumnName("rights_mask");
+            entity.Property(profile => profile.IsSystem)
+                .HasColumnName("is_system");
+            entity.Property(profile => profile.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(profile => profile.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+        });
+
         modelBuilder.Entity<ClientConfiguration>(entity =>
         {
             entity.ToTable("client_configurations");
@@ -691,6 +724,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
+            entity.Property(config => config.MeshCentralGroupPolicyProfile)
+                .HasColumnName("meshcentral_group_policy_profile")
+                .HasMaxLength(64);
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy)
@@ -740,6 +776,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
+            entity.Property(config => config.MeshCentralGroupPolicyProfile)
+                .HasColumnName("meshcentral_group_policy_profile")
+                .HasMaxLength(64);
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy)
@@ -766,6 +805,12 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.MeshCentralMeshId)
                 .HasColumnName("meshcentral_mesh_id")
                 .HasMaxLength(200);
+            entity.Property(config => config.MeshCentralAppliedGroupPolicyProfile)
+                .HasColumnName("meshcentral_applied_group_policy_profile")
+                .HasMaxLength(64);
+            entity.Property(config => config.MeshCentralAppliedGroupPolicyAt)
+                .HasColumnName("meshcentral_applied_group_policy_at")
+                .HasColumnType("timestamptz");
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
             entity.Property(config => config.CreatedAt)
                 .HasColumnName("created_at")
@@ -2268,6 +2313,8 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             e.Property(r => r.Type).HasColumnName("type").HasConversion<string>();
             e.Property(r => r.IsSystem).HasColumnName("is_system");
             e.Property(r => r.MfaRequirement).HasColumnName("mfa_requirement").HasConversion<string>();
+            e.Property(r => r.MeshRightsMask).HasColumnName("mesh_rights_mask");
+            e.Property(r => r.MeshRightsProfile).HasColumnName("mesh_rights_profile").HasMaxLength(64);
             e.Property(r => r.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(r => r.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });
@@ -2300,7 +2347,6 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             e.Property(r => r.RoleId).HasColumnName("role_id");
             e.Property(r => r.ScopeLevel).HasColumnName("scope_level").HasConversion<string>();
             e.Property(r => r.ScopeId).HasColumnName("scope_id");
-            e.Property(r => r.MeshRightsOverride).HasColumnName("mesh_rights_override");
             e.Property(r => r.AssignedAt).HasColumnName("assigned_at").HasColumnType("timestamptz");
         });
 

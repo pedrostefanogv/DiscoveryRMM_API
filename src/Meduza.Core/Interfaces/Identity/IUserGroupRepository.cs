@@ -20,6 +20,5 @@ public interface IUserGroupRepository
     Task<IEnumerable<UserGroupRole>> GetRolesForGroupAsync(Guid groupId);
     Task<IEnumerable<UserGroupRole>> GetRolesForUserAsync(Guid userId);
     Task AssignRoleAsync(UserGroupRole assignment);
-    Task<bool> UpdateRoleAssignmentMeshRightsAsync(Guid assignmentId, int? meshRightsOverride);
     Task RemoveRoleAssignmentAsync(Guid assignmentId);
 }

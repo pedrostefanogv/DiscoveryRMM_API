@@ -33,7 +33,6 @@ public class GroupRoleAssignmentDto
     public string RoleName { get; set; } = string.Empty;
     public ScopeLevel ScopeLevel { get; set; }
     public Guid? ScopeId { get; set; }
-    public int? MeshRightsOverride { get; set; }
     /// <summary>Nome do Client ou Site referenciado (para exibição).</summary>
     public string? ScopeName { get; set; }
 }
@@ -43,12 +42,6 @@ public class AssignRoleToGroupDto
     public Guid RoleId { get; set; }
     public ScopeLevel ScopeLevel { get; set; } = ScopeLevel.Global;
     public Guid? ScopeId { get; set; }
-    public int? MeshRightsOverride { get; set; }
-}
-
-public class UpdateGroupRoleMeshRightsDto
-{
-    public int? MeshRightsOverride { get; set; }
 }
 
 public class AddGroupMemberDto

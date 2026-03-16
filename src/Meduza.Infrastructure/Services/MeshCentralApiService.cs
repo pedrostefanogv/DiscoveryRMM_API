@@ -20,11 +20,16 @@ public class MeshCentralApiService : IMeshCentralApiService
 
     private readonly MeshCentralOptions _options;
     private readonly ISiteConfigurationRepository _siteConfigurationRepository;
+    private readonly IConfigurationResolver _configurationResolver;
 
-    public MeshCentralApiService(IOptions<MeshCentralOptions> options, ISiteConfigurationRepository siteConfigurationRepository)
+    public MeshCentralApiService(
+        IOptions<MeshCentralOptions> options,
+        ISiteConfigurationRepository siteConfigurationRepository,
+        IConfigurationResolver configurationResolver)
     {
         _options = options.Value;
         _siteConfigurationRepository = siteConfigurationRepository;
+        _configurationResolver = configurationResolver;
     }
 
     public async Task<MeshCentralInstallInstructions> ProvisionInstallAsync(
@@ -41,16 +46,16 @@ public class MeshCentralApiService : IMeshCentralApiService
 
         ValidateLoginKeySettings();
 
-        var groupName = BuildGroupName(client, site);
-        var provisionResult = await ExecuteWithSocketAsync(async (ws, ct) =>
-        {
-            var meshId = await EnsureMeshGroupAsync(ws, groupName, ct);
-            var inviteUrl = await CreateInviteLinkAsync(ws, meshId, ct);
-            return (meshId, inviteUrl);
-        }, cancellationToken);
+        var resolvedConfig = await _configurationResolver.ResolveForSiteAsync(site.Id);
+        var groupSync = await EnsureSiteGroupBindingAsync(
+            client,
+            site,
+            resolvedConfig.MeshCentralGroupPolicyProfile,
+            cancellationToken);
 
-        var meshId = provisionResult.meshId;
-        var inviteUrl = provisionResult.inviteUrl;
+        var inviteUrl = await ExecuteWithSocketAsync(
+            (ws, ct) => CreateInviteLinkAsync(ws, groupSync.MeshId, ct),
+            cancellationToken);
 
         if (string.IsNullOrWhiteSpace(inviteUrl))
             throw new InvalidOperationException("MeshCentral did not return an invite link.");
@@ -61,12 +66,10 @@ public class MeshCentralApiService : IMeshCentralApiService
         var linuxBackground = BuildLinuxCommandBackground(inviteUrl);
         var linuxInteractive = BuildLinuxCommandInteractive(inviteUrl);
 
-        await PersistSiteMeshBindingAsync(site, groupName, meshId);
-
         return new MeshCentralInstallInstructions
         {
-            GroupName = groupName,
-            MeshId = meshId,
+            GroupName = groupSync.GroupName,
+            MeshId = groupSync.MeshId,
             InstallUrl = inviteUrl,
             InstallMode = installMode,
             WindowsCommandBackground = windowsBackground,
@@ -75,6 +78,45 @@ public class MeshCentralApiService : IMeshCentralApiService
             LinuxCommandInteractive = linuxInteractive,
             WindowsCommand = installMode == "interactive" ? windowsInteractive : windowsBackground,
             LinuxCommand = installMode == "interactive" ? linuxInteractive : linuxBackground
+        };
+    }
+
+    public async Task<MeshCentralGroupBindingSyncResult> EnsureSiteGroupBindingAsync(
+        Client client,
+        Site site,
+        string desiredGroupPolicyProfile,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateConnectionSettings();
+
+        var existing = await _siteConfigurationRepository.GetBySiteIdAsync(site.Id);
+        var groupName = string.IsNullOrWhiteSpace(existing?.MeshCentralGroupName)
+            ? BuildGroupName(client, site)
+            : existing.MeshCentralGroupName!;
+
+        var meshId = await ExecuteWithSocketAsync(
+            (ws, ct) => EnsureMeshGroupAsync(ws, groupName, ct),
+            cancellationToken);
+
+        var previousMeshId = existing?.MeshCentralMeshId;
+        var previousGroupName = existing?.MeshCentralGroupName;
+        var previousProfile = existing?.MeshCentralAppliedGroupPolicyProfile;
+
+        await PersistSiteMeshBindingAsync(site, groupName, meshId, desiredGroupPolicyProfile);
+
+        return new MeshCentralGroupBindingSyncResult
+        {
+            SiteId = site.Id,
+            ClientId = site.ClientId,
+            GroupName = groupName,
+            MeshId = meshId,
+            AppliedProfile = desiredGroupPolicyProfile,
+            PreviousGroupName = previousGroupName,
+            PreviousMeshId = previousMeshId,
+            PreviousAppliedProfile = previousProfile,
+            GroupBindingChanged = !string.Equals(previousMeshId, meshId, StringComparison.OrdinalIgnoreCase)
+                                  || !string.Equals(previousGroupName, groupName, StringComparison.OrdinalIgnoreCase),
+            ProfileChanged = !string.Equals(previousProfile, desiredGroupPolicyProfile, StringComparison.OrdinalIgnoreCase)
         };
     }
 
@@ -476,7 +518,7 @@ public class MeshCentralApiService : IMeshCentralApiService
         return Convert.ToBase64String(Guid.NewGuid().ToByteArray()) + "!A1";
     }
 
-    private async Task PersistSiteMeshBindingAsync(Site site, string groupName, string meshId)
+    private async Task PersistSiteMeshBindingAsync(Site site, string groupName, string meshId, string appliedGroupPolicyProfile)
     {
         var existing = await _siteConfigurationRepository.GetBySiteIdAsync(site.Id);
         if (existing is null)
@@ -487,6 +529,8 @@ public class MeshCentralApiService : IMeshCentralApiService
                 ClientId = site.ClientId,
                 MeshCentralGroupName = groupName,
                 MeshCentralMeshId = meshId,
+                MeshCentralAppliedGroupPolicyProfile = appliedGroupPolicyProfile,
+                MeshCentralAppliedGroupPolicyAt = DateTime.UtcNow,
                 CreatedBy = "meshcentral-sync",
                 UpdatedBy = "meshcentral-sync"
             });
@@ -495,6 +539,8 @@ public class MeshCentralApiService : IMeshCentralApiService
 
         existing.MeshCentralGroupName = groupName;
         existing.MeshCentralMeshId = meshId;
+        existing.MeshCentralAppliedGroupPolicyProfile = appliedGroupPolicyProfile;
+        existing.MeshCentralAppliedGroupPolicyAt = DateTime.UtcNow;
         existing.UpdatedBy = "meshcentral-sync";
         await _siteConfigurationRepository.UpdateAsync(existing);
     }

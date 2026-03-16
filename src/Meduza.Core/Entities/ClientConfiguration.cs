@@ -57,6 +57,9 @@ public class ClientConfiguration
         set => SupportEnabled = value;
     }
 
+    /// <summary>Perfil de permissao para grupos MeshCentral (null = herda servidor).</summary>
+    public string? MeshCentralGroupPolicyProfile { get; set; }
+
     /// <summary>Chat de IA para suporte (null = herda servidor)</summary>
     public bool? ChatAIEnabled { get; set; }
 

@@ -3,6 +3,7 @@ using Meduza.Core.Entities.Identity;
 using Meduza.Core.Enums.Identity;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces.Identity;
+using Meduza.Core.Interfaces;
 using Meduza.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,10 +15,14 @@ namespace Meduza.Api.Controllers;
 public class RolesController : ControllerBase
 {
     private readonly IRoleRepository _roleRepo;
+    private readonly IMeshCentralRightsProfileRepository _meshCentralRightsProfileRepository;
 
-    public RolesController(IRoleRepository roleRepo)
+    public RolesController(
+        IRoleRepository roleRepo,
+        IMeshCentralRightsProfileRepository meshCentralRightsProfileRepository)
     {
         _roleRepo = roleRepo;
+        _meshCentralRightsProfileRepository = meshCentralRightsProfileRepository;
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────────
@@ -35,6 +40,8 @@ public class RolesController : ControllerBase
             Type = r.Type,
             IsSystem = r.IsSystem,
             MfaRequirement = r.MfaRequirement,
+            MeshRightsMask = r.MeshRightsMask,
+            MeshRightsProfile = r.MeshRightsProfile,
             CreatedAt = r.CreatedAt
         }));
     }
@@ -53,6 +60,8 @@ public class RolesController : ControllerBase
             Type = role.Type,
             IsSystem = role.IsSystem,
             MfaRequirement = role.MfaRequirement,
+            MeshRightsMask = role.MeshRightsMask,
+            MeshRightsProfile = role.MeshRightsProfile,
             CreatedAt = role.CreatedAt
         });
     }
@@ -61,6 +70,17 @@ public class RolesController : ControllerBase
     [RequirePermission(ResourceType.Users, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateRoleDto dto)
     {
+        var normalizedProfile = string.IsNullOrWhiteSpace(dto.MeshRightsProfile)
+            ? null
+            : dto.MeshRightsProfile.Trim().ToLowerInvariant();
+
+        if (!string.IsNullOrWhiteSpace(normalizedProfile))
+        {
+            var profileExists = await _meshCentralRightsProfileRepository.GetByNameAsync(normalizedProfile) is not null;
+            if (!profileExists)
+                return BadRequest(new { message = $"Perfil MeshCentral '{normalizedProfile}' não existe." });
+        }
+
         var now = DateTime.UtcNow;
         var role = new Role
         {
@@ -70,6 +90,8 @@ public class RolesController : ControllerBase
             Type = RoleType.Custom,
             IsSystem = false,
             MfaRequirement = dto.MfaRequirement,
+            MeshRightsMask = dto.MeshRightsMask,
+            MeshRightsProfile = normalizedProfile,
             CreatedAt = now,
             UpdatedAt = now
         };
@@ -90,6 +112,22 @@ public class RolesController : ControllerBase
         role.Name = string.IsNullOrWhiteSpace(dto.Name) ? role.Name : dto.Name;
         role.Description = dto.Description ?? role.Description;
         role.MfaRequirement = dto.MfaRequirement ?? role.MfaRequirement;
+        role.MeshRightsMask = dto.MeshRightsMask ?? role.MeshRightsMask;
+        if (dto.MeshRightsProfile is not null)
+        {
+            var normalizedProfile = string.IsNullOrWhiteSpace(dto.MeshRightsProfile)
+                ? null
+                : dto.MeshRightsProfile.Trim().ToLowerInvariant();
+
+            if (!string.IsNullOrWhiteSpace(normalizedProfile))
+            {
+                var profileExists = await _meshCentralRightsProfileRepository.GetByNameAsync(normalizedProfile) is not null;
+                if (!profileExists)
+                    return BadRequest(new { message = $"Perfil MeshCentral '{normalizedProfile}' não existe." });
+            }
+
+            role.MeshRightsProfile = normalizedProfile;
+        }
         role.UpdatedAt = DateTime.UtcNow;
         await _roleRepo.UpdateAsync(role);
         return NoContent();

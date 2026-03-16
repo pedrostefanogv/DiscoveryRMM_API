@@ -57,6 +57,9 @@ public class ServerConfiguration
         set => SupportEnabled = value;
     }
 
+    /// <summary>Perfil de permissao padrao para grupos de dispositivo no MeshCentral.</summary>
+    public string MeshCentralGroupPolicyProfile { get; set; } = "viewer";
+
     /// <summary>Chat de IA para suporte operacional</summary>
     public bool ChatAIEnabled { get; set; } = false;
 

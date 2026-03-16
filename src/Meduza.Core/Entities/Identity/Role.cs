@@ -15,6 +15,18 @@ public class Role
     /// <summary>Política de 2FA exigida para usuários vinculados à role.</summary>
     public RoleMfaRequirement MfaRequirement { get; set; } = RoleMfaRequirement.None;
 
+    /// <summary>
+    /// Mascara de direitos MeshCentral definida na role.
+    /// Quando preenchida, possui precedencia sobre perfil inferido.
+    /// </summary>
+    public int? MeshRightsMask { get; set; }
+
+    /// <summary>
+    /// Perfil de rights MeshCentral vinculado diretamente na role (ex.: viewer/operator/admin).
+    /// Usado quando MeshRightsMask nao estiver definido.
+    /// </summary>
+    public string? MeshRightsProfile { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

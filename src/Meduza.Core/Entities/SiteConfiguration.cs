@@ -58,6 +58,9 @@ public class SiteConfiguration
         set => SupportEnabled = value;
     }
 
+    /// <summary>Perfil de permissao para grupos MeshCentral (null = herda cliente/servidor).</summary>
+    public string? MeshCentralGroupPolicyProfile { get; set; }
+
     /// <summary>Chat de IA para suporte (null = herda cliente/servidor)</summary>
     public bool? ChatAIEnabled { get; set; }
 
@@ -101,6 +104,12 @@ public class SiteConfiguration
 
     /// <summary>Mesh ID persistido para reconciliacao/sync com o MeshCentral.</summary>
     public string? MeshCentralMeshId { get; set; }
+
+    /// <summary>Snapshot do perfil aplicado no grupo MeshCentral durante o provisionamento.</summary>
+    public string? MeshCentralAppliedGroupPolicyProfile { get; set; }
+
+    /// <summary>Timestamp UTC do ultimo snapshot de policy aplicado no grupo MeshCentral.</summary>
+    public DateTime? MeshCentralAppliedGroupPolicyAt { get; set; }
 
     /// <summary>
     /// Lista de campos bloqueados no nível de site (JSON array de nomes de propriedade).
