@@ -91,8 +91,8 @@ public class UserGroupsController : ControllerBase
         var group = await _groupRepo.GetByIdAsync(id);
         if (group is null) return NotFound();
 
-        group.Name = dto.Name;
-        group.Description = dto.Description;
+        group.Name = string.IsNullOrWhiteSpace(dto.Name) ? group.Name : dto.Name;
+        group.Description = dto.Description ?? group.Description;
         group.IsActive = dto.IsActive ?? group.IsActive;
         group.UpdatedAt = DateTime.UtcNow;
         await _groupRepo.UpdateAsync(group);

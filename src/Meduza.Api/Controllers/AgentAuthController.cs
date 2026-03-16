@@ -1304,7 +1304,7 @@ public class AgentAuthController : ControllerBase
         {
             return StatusCode(408, new { error = "Request timeout" });
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return StatusCode(500, new { error = "Internal error processing chat request" });
         }
@@ -1336,7 +1336,7 @@ public class AgentAuthController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return StatusCode(500, new { error = "Internal error creating async chat job" });
         }
@@ -1359,7 +1359,7 @@ public class AgentAuthController : ControllerBase
             
             return Ok(status);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return StatusCode(500, new { error = "Internal error retrieving job status" });
         }

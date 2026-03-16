@@ -12,7 +12,7 @@ namespace Meduza.Api.Controllers;
 
 [ApiController]
 [Route("api/mfa")]
-[RequireUserAuth]
+[Microsoft.AspNetCore.Authorization.AllowAnonymous]
 public class MfaController : ControllerBase
 {
     private readonly IFido2Service _fido2Service;
@@ -32,6 +32,7 @@ public class MfaController : ControllerBase
     // ── Listagem ─────────────────────────────────────────────────────────────
 
     [HttpGet("keys")]
+    [RequireUserAuth]
     public async Task<IActionResult> ListKeys()
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
@@ -105,6 +106,7 @@ public class MfaController : ControllerBase
     // ── Remoção ───────────────────────────────────────────────────────────────
 
     [HttpDelete("keys/{keyId:guid}")]
+    [RequireUserAuth]
     public async Task<IActionResult> RemoveKey(Guid keyId)
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
@@ -119,6 +121,7 @@ public class MfaController : ControllerBase
     // ── Renomear ──────────────────────────────────────────────────────────────
 
     [HttpPatch("keys/{keyId:guid}/name")]
+    [RequireUserAuth]
     public async Task<IActionResult> RenameKey(Guid keyId, [FromBody] RegisterMfaKeyNameDto dto)
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;

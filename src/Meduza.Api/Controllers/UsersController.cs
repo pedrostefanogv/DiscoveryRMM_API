@@ -124,12 +124,13 @@ public class UsersController : ControllerBase
         var user = await _userRepo.GetByIdAsync(id);
         if (user is null) return NotFound();
 
-        if (!string.Equals(user.Email, dto.Email, StringComparison.OrdinalIgnoreCase) &&
+        if (!string.IsNullOrWhiteSpace(dto.Email) &&
+            !string.Equals(user.Email, dto.Email, StringComparison.OrdinalIgnoreCase) &&
             await _userRepo.ExistsByEmailAsync(dto.Email))
             return Conflict(new { message = "E-mail já em uso." });
 
-        user.FullName = dto.FullName;
-        user.Email = dto.Email;
+        user.FullName = string.IsNullOrWhiteSpace(dto.FullName) ? user.FullName : dto.FullName;
+        user.Email = string.IsNullOrWhiteSpace(dto.Email) ? user.Email : dto.Email;
         user.IsActive = dto.IsActive ?? user.IsActive;
         user.MfaRequired = dto.MfaRequired ?? user.MfaRequired;
         user.UpdatedAt = DateTime.UtcNow;

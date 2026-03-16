@@ -51,7 +51,7 @@ public class SlaMonitoringBackgroundService : BackgroundService
 
     private async Task CheckSlaBreachesAsync(CancellationToken cancellationToken)
     {
-        using var scope = _serviceProvider.CreateScope();
+        await using var scope = _serviceProvider.CreateAsyncScope();
         
         var ticketRepo = scope.ServiceProvider.GetRequiredService<ITicketRepository>();
         var slaService = scope.ServiceProvider.GetRequiredService<ISlaService>();

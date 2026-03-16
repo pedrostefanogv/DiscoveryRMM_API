@@ -83,8 +83,8 @@ public class RolesController : ControllerBase
         if (role.IsSystem)
             return BadRequest(new { message = "Roles de sistema não podem ser editadas." });
 
-        role.Name = dto.Name;
-        role.Description = dto.Description;
+        role.Name = string.IsNullOrWhiteSpace(dto.Name) ? role.Name : dto.Name;
+        role.Description = dto.Description ?? role.Description;
         role.UpdatedAt = DateTime.UtcNow;
         await _roleRepo.UpdateAsync(role);
         return NoContent();
