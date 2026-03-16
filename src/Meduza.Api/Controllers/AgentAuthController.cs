@@ -81,39 +81,6 @@ public class AgentAuthController : ControllerBase
         _meshCentralEmbeddingService = meshCentralEmbeddingService;
     }
 
-    [HttpGet("me")]
-    public async Task<IActionResult> GetMe()
-    {
-        if (!TryGetAuthenticatedAgentId(out var agentId))
-            return Unauthorized(new { error = "Agent not authenticated." });
-
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null) return NotFound();
-
-        // Buscar o Site para obter o ClientId
-        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
-        if (site is null) return NotFound(new { error = "Site not found for this agent." });
-
-        // Retornar os dados do agent + clientId
-        return Ok(new
-        {
-            agent.Id,
-            agent.SiteId,
-            ClientId = site.ClientId,
-            agent.Hostname,
-            agent.DisplayName,
-            agent.Status,
-            agent.OperatingSystem,
-            agent.OsVersion,
-            agent.AgentVersion,
-            agent.LastIpAddress,
-            agent.MacAddress,
-            agent.LastSeenAt,
-            agent.CreatedAt,
-            agent.UpdatedAt
-        });
-    }
-
     /// <summary>
     /// Retorna a configuração efetiva do agent (hierarquia resolvida: Server → Client → Site).
     /// Usada pelo agent para saber seu intervalo de inventário, features habilitadas, etc.

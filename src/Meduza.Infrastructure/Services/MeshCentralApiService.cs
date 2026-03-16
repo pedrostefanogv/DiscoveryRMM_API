@@ -752,9 +752,9 @@ public class MeshCentralApiService : IMeshCentralApiService
 
     private static string ResolveApiUsername(MeshCentralOptions options)
     {
-        var username = string.IsNullOrWhiteSpace(options.EmbedUsername)
+        var username = string.IsNullOrWhiteSpace(options.ApiUsername)
             ? "admin"
-            : options.EmbedUsername.Trim();
+            : options.ApiUsername.Trim();
 
         var normalized = NormalizeUsername(username);
         if (string.IsNullOrWhiteSpace(normalized))

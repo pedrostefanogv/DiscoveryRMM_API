@@ -23,16 +23,6 @@ public class MeshCentralOptions
     public string DomainId { get; set; } = string.Empty;
 
     /// <summary>
-    /// Usuario do MeshCentral utilizado para abrir a sessao de embedding.
-    /// </summary>
-    public string EmbedUsername { get; set; } = "admin";
-
-    /// <summary>
-    /// Permite gerar URL de embedding com usuario MeshCentral informado em runtime.
-    /// </summary>
-    public bool AllowRuntimeUsernameOverride { get; set; } = true;
-
-    /// <summary>
     /// Tempo de sessao sugerido (minutos), apenas informativo para o caller.
     /// </summary>
     public int SuggestedSessionMinutes { get; set; } = 10;
@@ -61,7 +51,7 @@ public class MeshCentralOptions
     /// <summary>
     /// Usuario para autenticacao no WebSocket API (control.ashx).
     /// </summary>
-    public string ApiUsername { get; set; } = string.Empty;
+    public string ApiUsername { get; set; } = "admin";
 
     /// <summary>
     /// Senha para autenticacao no WebSocket API (control.ashx).

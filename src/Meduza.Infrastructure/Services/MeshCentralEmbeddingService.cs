@@ -47,7 +47,10 @@ public class MeshCentralEmbeddingService : IMeshCentralEmbeddingService
         if (loginKeyBytes.Length < 32)
             throw new InvalidOperationException("MeshCentral LoginKeyHex is invalid.");
 
-        var authToken = GenerateAuthToken(loginKeyBytes, _options.DomainId, _options.EmbedUsername);
+        if (string.IsNullOrWhiteSpace(_options.ApiUsername))
+            throw new InvalidOperationException("MeshCentral ApiUsername is not configured.");
+
+        var authToken = GenerateAuthToken(loginKeyBytes, _options.DomainId, _options.ApiUsername.Trim());
         var baseUri = NormalizeBaseUri(_options.BaseUrl);
 
         var query = new Dictionary<string, string>
@@ -99,9 +102,6 @@ public class MeshCentralEmbeddingService : IMeshCentralEmbeddingService
     {
         if (!_options.Enabled)
             throw new InvalidOperationException("MeshCentral integration is disabled.");
-
-        if (!_options.AllowRuntimeUsernameOverride)
-            throw new InvalidOperationException("Runtime username override is disabled.");
 
         if (string.IsNullOrWhiteSpace(meshUsername) || !ValidUsername.IsMatch(meshUsername))
             throw new InvalidOperationException("Mesh username is invalid.");

@@ -13,6 +13,7 @@ namespace Meduza.Api.Controllers;
 [RequireUserAuth]
 public class MeshCentralController : ControllerBase
 {
+    private readonly IUserRepository _userRepository;
     private readonly IClientRepository _clientRepository;
     private readonly ISiteRepository _siteRepository;
     private readonly IAgentRepository _agentRepository;
@@ -24,6 +25,7 @@ public class MeshCentralController : ControllerBase
     private readonly IRoleRepository _roleRepository;
 
     public MeshCentralController(
+        IUserRepository userRepository,
         IClientRepository clientRepository,
         ISiteRepository siteRepository,
         IAgentRepository agentRepository,
@@ -34,6 +36,7 @@ public class MeshCentralController : ControllerBase
         IMeshCentralRightsProfileRepository meshCentralRightsProfileRepository,
         IRoleRepository roleRepository)
     {
+        _userRepository = userRepository;
         _clientRepository = clientRepository;
         _siteRepository = siteRepository;
         _agentRepository = agentRepository;
@@ -170,11 +173,24 @@ public class MeshCentralController : ControllerBase
     }
 
     /// <summary>
-    /// Endpoint de preparacao para autenticacao unificada: gera URL de embedding para usuario MeshCentral informado.
+    /// Gera URL de embedding para o usuario autenticado da sessao.
+    /// O username usado no token SEMPRE vem do vinculo MeshCentral do usuario logado.
     /// </summary>
     [HttpPost("embed-url")]
     public async Task<IActionResult> CreateUserEmbedUrl([FromBody] MeshCentralUserEmbedRequest request)
     {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var authenticatedUser = await _userRepository.GetByIdAsync(userId);
+        if (authenticatedUser is null)
+            return Unauthorized(new { error = "Authenticated user not found." });
+
+        if (string.IsNullOrWhiteSpace(authenticatedUser.MeshCentralUsername))
+            return BadRequest(new { error = "Authenticated user is not linked to a MeshCentral username." });
+
+        var meshUsername = authenticatedUser.MeshCentralUsername.Trim();
+
         var client = await _clientRepository.GetByIdAsync(request.ClientId);
         if (client is null)
             return NotFound(new { error = "Client not found." });
@@ -207,7 +223,7 @@ public class MeshCentralController : ControllerBase
         try
         {
             var embed = await _meshCentralEmbeddingService.GenerateUserEmbedUrlAsync(
-                request.MeshUsername,
+                meshUsername,
                 request.ClientId,
                 request.SiteId,
                 validatedAgentId,
@@ -226,7 +242,7 @@ public class MeshCentralController : ControllerBase
                 clientId = request.ClientId,
                 siteId = request.SiteId,
                 agentId = validatedAgentId,
-                meshUsername = request.MeshUsername
+                meshUsername
             });
         }
         catch (InvalidOperationException ex)
@@ -294,7 +310,6 @@ public class MeshCentralController : ControllerBase
 public record MeshCentralUserEmbedRequest(
     Guid ClientId,
     Guid SiteId,
-    string MeshUsername,
     Guid? AgentId = null,
     int? ViewMode = null,
     int? HideMask = null,
