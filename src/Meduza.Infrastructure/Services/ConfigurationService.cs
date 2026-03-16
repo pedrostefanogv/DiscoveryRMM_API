@@ -2,6 +2,7 @@ using System.Text.Json;
 using Meduza.Core.Configuration;
 using Meduza.Core.Entities;
 using Meduza.Core.Interfaces;
+using Meduza.Core.Interfaces.Security;
 using Meduza.Core.ValueObjects;
 
 namespace Meduza.Infrastructure.Services;
@@ -14,6 +15,7 @@ public class ConfigurationService : IConfigurationService
     private readonly ISiteRepository _siteRepository;
     private readonly IConfigurationAuditService _audit;
     private readonly IConfigurationResolver _resolver;
+    private readonly ISecretProtector _secretProtector;
 
     public ConfigurationService(
         IServerConfigurationRepository serverRepo,
@@ -21,7 +23,8 @@ public class ConfigurationService : IConfigurationService
         ISiteConfigurationRepository siteRepo,
         ISiteRepository siteRepository,
         IConfigurationAuditService audit,
-        IConfigurationResolver resolver)
+        IConfigurationResolver resolver,
+        ISecretProtector secretProtector)
     {
         _serverRepo = serverRepo;
         _clientRepo = clientRepo;
@@ -29,6 +32,7 @@ public class ConfigurationService : IConfigurationService
         _siteRepository = siteRepository;
         _audit = audit;
         _resolver = resolver;
+        _secretProtector = secretProtector;
     }
 
     // ============ Server ============
@@ -46,6 +50,7 @@ public class ConfigurationService : IConfigurationService
         config.CreatedBy = existing.CreatedBy;
         config.Version = existing.Version + 1;
         config.UpdatedBy = updatedBy;
+        ProtectSensitiveData(config);
         await _serverRepo.UpdateAsync(config);
 
         var addedLocks = GetAddedLocks(previousLocks, ParseLockedFields(config.LockedFieldsJson));
@@ -69,8 +74,9 @@ public class ConfigurationService : IConfigurationService
             if (prop is null || !prop.CanWrite) continue;
             var oldValue = prop.GetValue(config)?.ToString();
             var converted = ConvertToPropertyValue(value, prop.PropertyType);
+            converted = ProtectPatchValue(key, converted);
             prop.SetValue(config, converted);
-            await _audit.LogChangeAsync("Server", config.Id, key, oldValue, converted?.ToString(), null, updatedBy);
+            await _audit.LogChangeAsync("Server", config.Id, key, MaskForAudit(key, oldValue), MaskForAudit(key, converted?.ToString()), null, updatedBy);
         }
         config.Version++;
         config.UpdatedBy = updatedBy;
@@ -141,6 +147,7 @@ public class ConfigurationService : IConfigurationService
         config.CreatedBy = existing.CreatedBy;
         config.Version = existing.Version + 1;
         config.UpdatedBy = updatedBy;
+        ProtectSensitiveData(config);
         await _clientRepo.UpdateAsync(config);
 
         var addedLocks = GetAddedLocks(previousLocks, ParseLockedFields(config.LockedFieldsJson));
@@ -171,12 +178,14 @@ public class ConfigurationService : IConfigurationService
             if (prop is null || !prop.CanWrite) continue;
             var oldValue = prop.GetValue(config)?.ToString();
             var converted = ConvertToPropertyValue(value, prop.PropertyType);
+            converted = ProtectPatchValue(key, converted);
             EnsureAllowedPatchValue("Client", key, converted, blockedFields);
             prop.SetValue(config, converted);
-            await _audit.LogChangeAsync("Client", config.Id, key, oldValue, converted?.ToString(), null, updatedBy);
+            await _audit.LogChangeAsync("Client", config.Id, key, MaskForAudit(key, oldValue), MaskForAudit(key, converted?.ToString()), null, updatedBy);
         }
 
         NormalizeNullableBooleanDefaults(config);
+        ProtectSensitiveData(config);
 
         config.Version++;
         config.UpdatedBy = updatedBy;
@@ -268,6 +277,7 @@ public class ConfigurationService : IConfigurationService
         config.CreatedBy = existing.CreatedBy;
         config.Version = existing.Version + 1;
         config.UpdatedBy = updatedBy;
+        ProtectSensitiveData(config);
         await _siteRepo.UpdateAsync(config);
         _resolver.ClearCache();
         await _audit.LogChangeAsync("Site", config.Id, "*", null, null, "Full update", updatedBy);
@@ -308,12 +318,14 @@ public class ConfigurationService : IConfigurationService
             if (prop is null || !prop.CanWrite) continue;
             var oldValue = prop.GetValue(config)?.ToString();
             var converted = ConvertToPropertyValue(value, prop.PropertyType);
+            converted = ProtectPatchValue(key, converted);
             EnsureAllowedPatchValue("Site", key, converted, blockedFields);
             prop.SetValue(config, converted);
-            await _audit.LogChangeAsync("Site", config.Id, key, oldValue, converted?.ToString(), null, updatedBy);
+            await _audit.LogChangeAsync("Site", config.Id, key, MaskForAudit(key, oldValue), MaskForAudit(key, converted?.ToString()), null, updatedBy);
         }
 
         NormalizeNullableBooleanDefaults(config);
+        ProtectSensitiveData(config);
 
         config.Version++;
         config.UpdatedBy = updatedBy;
@@ -618,5 +630,125 @@ public class ConfigurationService : IConfigurationService
 
         prop.SetValue(target, null);
         return true;
+    }
+
+    private void ProtectSensitiveData(ServerConfiguration config)
+    {
+        if (!string.IsNullOrWhiteSpace(config.ObjectStorageSecretKey))
+            config.ObjectStorageSecretKey = _secretProtector.Protect(config.ObjectStorageSecretKey);
+
+        config.AIIntegrationSettingsJson = ProtectAiJson(config.AIIntegrationSettingsJson);
+    }
+
+    private void ProtectSensitiveData(ClientConfiguration config)
+    {
+        // Client/Site armazenam apenas campos sobrescritíveis (AIIntegrationSettingsOverride).
+        // ApiKey e campos globais são removidos na sanitização — sempre herdados do servidor.
+        config.AIIntegrationSettingsJson = SanitizeAiOverrideJson(config.AIIntegrationSettingsJson);
+    }
+
+    private void ProtectSensitiveData(SiteConfiguration config)
+    {
+        config.AIIntegrationSettingsJson = SanitizeAiOverrideJson(config.AIIntegrationSettingsJson);
+    }
+
+    private object? ProtectPatchValue(string key, object? converted)
+    {
+        if (converted is null)
+            return null;
+
+        if (key.Equals(nameof(ServerConfiguration.ObjectStorageSecretKey), StringComparison.OrdinalIgnoreCase) &&
+            converted is string secret &&
+            !string.IsNullOrWhiteSpace(secret))
+        {
+            return _secretProtector.Protect(secret);
+        }
+
+        if (key.Equals(nameof(ServerConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase) ||
+            key.Equals(nameof(ClientConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase) ||
+            key.Equals(nameof(SiteConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase))
+        {
+            return converted is string json ? ProtectAiJson(json) : converted;
+        }
+
+        return converted;
+    }
+
+    private string ProtectAiJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return string.Empty;
+
+        try
+        {
+            var ai = JsonSerializer.Deserialize<AIIntegrationSettings>(json, JsonSerializerOptions.Web);
+            if (ai is null)
+                return json;
+
+            if (!string.IsNullOrWhiteSpace(ai.ApiKey))
+                ai.ApiKey = _secretProtector.Protect(ai.ApiKey);
+
+            return JsonSerializer.Serialize(ai, JsonSerializerOptions.Web);
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    private static string? SanitizeAiOverrideJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            var full = JsonSerializer.Deserialize<AIIntegrationSettings>(json, JsonSerializerOptions.Web);
+            if (full is null)
+                return null;
+
+            var ov = new AIIntegrationSettingsOverride
+            {
+                Enabled              = full.Enabled,
+                ChatAIEnabled        = full.ChatAIEnabled,
+                KnowledgeBaseEnabled = full.KnowledgeBaseEnabled,
+                ChatModel            = full.ChatModel,
+                PromptTemplate       = full.PromptTemplate,
+                Temperature          = full.Temperature,
+                MaxTokensPerRequest  = full.MaxTokensPerRequest,
+                MaxHistoryMessages   = full.MaxHistoryMessages,
+                MaxKbContextTokens   = full.MaxKbContextTokens,
+                MaxKbChunks          = full.MaxKbChunks,
+                MinSimilarityScore   = full.MinSimilarityScore,
+            };
+
+            return JsonSerializer.Serialize(ov, JsonSerializerOptions.Web);
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    private static string? MaskForAudit(string key, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return value;
+
+        if (!IsSensitiveField(key))
+            return value;
+
+        return "***redacted***";
+    }
+
+    private static bool IsSensitiveField(string key)
+    {
+        return key.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+               key.Contains("apikey", StringComparison.OrdinalIgnoreCase) ||
+               key.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+               key.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+               key.Equals(nameof(ServerConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase) ||
+               key.Equals(nameof(ClientConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase) ||
+               key.Equals(nameof(SiteConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase);
     }
 }

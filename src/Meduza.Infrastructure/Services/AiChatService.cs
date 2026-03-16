@@ -159,7 +159,7 @@ public class AiChatService : IAiChatService
                 : 1;
             
             // 6. Build system prompt com contexto do agent + RAG da KB
-            var systemPrompt = await BuildSystemPromptAsync(agent, session, message, aiSettings, ct);
+            var (systemPrompt, injectedArticleIds) = await BuildSystemPromptAsync(agent, session, message, aiSettings, ct);
             
             // 7. Converter histórico para formato LLM
             var llmMessages = historyMessages
@@ -229,10 +229,14 @@ public class AiChatService : IAiChatService
                             ? mProp.GetInt32()
                             : 3;
 
-                        toolResult = await _knowledgeMcpTool.ExecuteAsync(
+                        // Passa aiSettings já resolvidas (evita GetAISettingsAsync redundante) +
+                        // IDs já injetados no system prompt (evita duplicar chunks)
+                        toolResult = await _knowledgeMcpTool.ExecuteWithSettingsAsync(
                             scopeClientId,
                             scopeSiteId,
                             query,
+                            aiSettings,
+                            excludeArticleIds: injectedArticleIds,
                             maxRes,
                             ct);
 
@@ -580,7 +584,7 @@ public class AiChatService : IAiChatService
 
             nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
 
-            systemPrompt = await BuildSystemPromptAsync(agent, session, message, aiSettings, ct);
+            (systemPrompt, _) = await BuildSystemPromptAsync(agent, session, message, aiSettings, ct);
 
             llmMessages = history
                 .OrderBy(m => m.SequenceNumber)
@@ -757,20 +761,24 @@ Responda de forma profissional e prestativa.";
     }
     
     /// <summary>
-    /// Versão assíncrona do BuildSystemPrompt com injeção de contexto RAG da KB
+    /// Versão assíncrona do BuildSystemPrompt com injeção de contexto RAG da KB.
+    /// Retorna o prompt final e os IDs dos artigos injetados (para deduplicação em tool calls).
     /// </summary>
-    private async Task<string> BuildSystemPromptAsync(
+    private async Task<(string Prompt, List<Guid> InjectedArticleIds)> BuildSystemPromptAsync(
         Agent agent, AiChatSession session, string userMessage, AIIntegrationSettings aiSettings, CancellationToken ct)
     {
         var basePrompt = BuildSystemPrompt(agent, aiSettings);
+        var injected = new List<Guid>();
 
         if (!aiSettings.KnowledgeBaseEnabled || !aiSettings.EmbeddingEnabled || !aiSettings.EmbeddingArticlesEnabled)
-            return basePrompt;
+            return (basePrompt, injected);
 
         try
         {
             // RAG: buscar chunks relevantes da KB no escopo do session
             var clientId = session.ClientId != Guid.Empty ? (Guid?)session.ClientId : null;
+            var maxChunks = aiSettings.MaxKbChunks is >= 1 and <= 10 ? aiSettings.MaxKbChunks : 3;
+
             var embedding = await _embeddingProvider.GenerateEmbeddingAsync(
                 userMessage,
                 aiSettings.EmbeddingModel,
@@ -780,11 +788,12 @@ Responda de forma profissional e prestativa.";
                 new Pgvector.Vector(embedding),
                 clientId,
                 session.SiteId,
-                limit: 3,
-                ct);
+                limit: maxChunks,
+                minSimilarity: aiSettings.MinSimilarityScore,
+                ct: ct);
 
             if (kbChunks.Count == 0)
-                return basePrompt;
+                return (basePrompt, injected);
 
             var kbSection = new System.Text.StringBuilder();
             kbSection.AppendLine();
@@ -810,17 +819,18 @@ Responda de forma profissional e prestativa.";
                 kbSection.AppendLine(chunkText);
                 kbSection.AppendLine("---");
                 totalTokens += estimatedTokens;
+                injected.Add(chunk.ArticleId);
             }
 
             kbSection.AppendLine();
             kbSection.AppendLine("*Use a tool `knowledge_search` se precisar buscar mais informações específicas na base de conhecimento.*");
 
-            return basePrompt + kbSection.ToString();
+            return (basePrompt + kbSection.ToString(), injected);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Falha ao injetar contexto RAG da KB. Continuando sem KB.");
-            return basePrompt;
+            return (basePrompt, injected);
         }
     }
     

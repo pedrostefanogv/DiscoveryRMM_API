@@ -14,6 +14,8 @@ public interface IKnowledgeChunkRepository
         Guid? clientId,
         Guid? siteId,
         int limit = 5,
+        double minSimilarity = 0.0,
+        IReadOnlyCollection<Guid>? excludeArticleIds = null,
         CancellationToken ct = default);
 
     /// <summary>

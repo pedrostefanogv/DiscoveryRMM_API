@@ -73,7 +73,13 @@ public class ClientConfiguration
 
     // ============ IA ============
 
-    /// <summary>Configurações de IA específicas do cliente (null = herda servidor)</summary>
+    /// <summary>
+    /// Override de configurações de IA para este cliente (null = herda servidor integralmente).
+    /// Armazena apenas campos sobrescritíveis (AIIntegrationSettingsOverride): ChatModel,
+    /// Temperature, PromptTemplate, MaxHistoryMessages, etc.
+    /// Campos globais (ApiKey, EmbeddingModel, Provider) são sempre herdados do servidor
+    /// e removidos automaticamente ao salvar.
+    /// </summary>
     public string? AIIntegrationSettingsJson { get; set; }
 
     // ============ Configuração de Inventário e Updates ============

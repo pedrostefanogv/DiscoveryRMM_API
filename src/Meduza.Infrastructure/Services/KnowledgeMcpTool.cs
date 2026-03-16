@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Meduza.Core.Interfaces;
+using Meduza.Core.ValueObjects;
 using Microsoft.Extensions.Logging;
 using Pgvector;
 
@@ -17,31 +18,55 @@ public class KnowledgeMcpTool(
     IConfigurationResolver configurationResolver,
     ILogger<KnowledgeMcpTool> logger) : IKnowledgeMcpTool
 {
-    public async Task<string> ExecuteAsync(
+    public Task<string> ExecuteAsync(
         Guid? clientId,
         Guid? siteId,
         string query,
         int maxResults = 3,
         CancellationToken ct = default)
+        => ExecuteInternalAsync(clientId, siteId, query, aiSettings: null, excludeArticleIds: null, maxResults, ct);
+
+    public Task<string> ExecuteWithSettingsAsync(
+        Guid? clientId,
+        Guid? siteId,
+        string query,
+        AIIntegrationSettings aiSettings,
+        IReadOnlyCollection<Guid>? excludeArticleIds = null,
+        int maxResults = 3,
+        CancellationToken ct = default)
+        => ExecuteInternalAsync(clientId, siteId, query, aiSettings, excludeArticleIds, maxResults, ct);
+
+    private async Task<string> ExecuteInternalAsync(
+        Guid? clientId,
+        Guid? siteId,
+        string query,
+        AIIntegrationSettings? aiSettings,
+        IReadOnlyCollection<Guid>? excludeArticleIds,
+        int maxResults,
+        CancellationToken ct)
     {
         logger.LogDebug(
-            "KnowledgeMcpTool.ExecuteAsync: query={Query}, clientId={ClientId}, siteId={SiteId}, max={Max}",
+            "KnowledgeMcpTool.ExecuteInternalAsync: query={Query}, clientId={ClientId}, siteId={SiteId}, max={Max}",
             query, clientId, siteId, maxResults);
 
         try
         {
-            var aiSettings = await configurationResolver.GetAISettingsAsync();
+            // Usa settings passadas pelo caller (evita GetAISettingsAsync redundante por tool call)
+            var settings = aiSettings ?? await configurationResolver.GetAISettingsAsync();
 
             // Busca semântica via embedding
             var embedding = await embeddingProvider.GenerateEmbeddingAsync(
                 query,
-                aiSettings.EmbeddingModel,
-                aiSettings.ApiKey,
+                settings.EmbeddingModel,
+                settings.ApiKey,
                 ct);
             var vector = new Vector(embedding);
 
             var semanticResults = await chunkRepository.SearchSemanticAsync(
-                vector, clientId, siteId, maxResults, ct);
+                vector, clientId, siteId, maxResults,
+                minSimilarity: settings.MinSimilarityScore,
+                excludeArticleIds: excludeArticleIds,
+                ct);
 
             if (semanticResults.Count == 0)
             {

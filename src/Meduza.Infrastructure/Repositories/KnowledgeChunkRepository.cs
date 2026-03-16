@@ -13,12 +13,15 @@ public class KnowledgeChunkRepository(MeduzaDbContext db) : IKnowledgeChunkRepos
     /// <summary>
     /// Busca semântica por cosine distance com herança de escopo.
     /// Usa operador pgvector <=> para distância cosine.
+    /// A distância é calculada UMA única vez via projeção SELECT antes do ORDER BY.
     /// </summary>
     public async Task<List<KnowledgeChunkSearchResult>> SearchSemanticAsync(
         Vector queryEmbedding,
         Guid? clientId,
         Guid? siteId,
         int limit = 5,
+        double minSimilarity = 0.0,
+        IReadOnlyCollection<Guid>? excludeArticleIds = null,
         CancellationToken ct = default)
     {
         var chunksQuery = db.KnowledgeArticleChunks
@@ -43,20 +46,45 @@ public class KnowledgeChunkRepository(MeduzaDbContext db) : IKnowledgeChunkRepos
             _ => chunksQuery.Where(c => c.Article.ClientId == null && c.Article.SiteId == null)
         };
 
-        var results = await chunksQuery
-            .OrderBy(c => c.Embedding!.CosineDistance(queryEmbedding))
-            .Take(limit)
-            .Select(c => new KnowledgeChunkSearchResult(
+        // Excluir artigos já injetados no system prompt (evita duplicação no RAG + tool call)
+        if (excludeArticleIds != null && excludeArticleIds.Count > 0)
+            chunksQuery = chunksQuery.Where(c => !excludeArticleIds.Contains(c.ArticleId));
+
+        // Projetar a distância UMA VEZ (evita double CosineDistance no SQL):
+        // EF Core envolve em subquery → ORDER BY referencia o alias calculado
+        // Take extra (limit*2) para compensar o filtro de minSimilarity aplicado em memória
+        var fetchLimit = minSimilarity > 0.0 ? Math.Min(limit * 2, limit + 10) : limit;
+
+        var rows = await chunksQuery
+            .Select(c => new
+            {
                 c.ArticleId,
-                c.Article.Title,
-                c.Article.ClientId,
-                c.Article.SiteId,
+                ArticleTitle = c.Article.Title,
+                ArticleClientId = c.Article.ClientId,
+                ArticleSiteId = c.Article.SiteId,
                 c.SectionTitle,
-                c.Content,
-                (double)c.Embedding!.CosineDistance(queryEmbedding)))
+                Content = c.Content,
+                Distance = (double)c.Embedding!.CosineDistance(queryEmbedding)
+            })
+            .OrderBy(x => x.Distance)
+            .Take(fetchLimit)
             .ToListAsync(ct);
 
-        return results;
+        // Filtrar por similaridade mínima em memória (1 - distance = similarity)
+        var filtered = minSimilarity > 0.0
+            ? rows.Where(x => 1.0 - x.Distance >= minSimilarity).Take(limit).ToList()
+            : rows;
+
+        return filtered
+            .Select(x => new KnowledgeChunkSearchResult(
+                x.ArticleId,
+                x.ArticleTitle,
+                x.ArticleClientId,
+                x.ArticleSiteId,
+                x.SectionTitle,
+                x.Content,
+                x.Distance))
+            .ToList();
     }
 
     public async Task<List<KnowledgeArticleChunk>> GetChunksWithoutEmbeddingAsync(

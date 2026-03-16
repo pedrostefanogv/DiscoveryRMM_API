@@ -19,17 +19,20 @@ public class MfaController : ControllerBase
     private readonly IOtpService _otpService;
     private readonly IUserMfaKeyRepository _mfaKeyRepo;
     private readonly IUserRepository _userRepo;
+    private readonly ISecretProtector _secretProtector;
 
     public MfaController(
         IFido2Service fido2Service,
         IOtpService otpService,
         IUserMfaKeyRepository mfaKeyRepo,
-        IUserRepository userRepo)
+        IUserRepository userRepo,
+        ISecretProtector secretProtector)
     {
         _fido2Service = fido2Service;
         _otpService = otpService;
         _mfaKeyRepo = mfaKeyRepo;
         _userRepo = userRepo;
+        _secretProtector = secretProtector;
     }
 
     // ── Listagem ─────────────────────────────────────────────────────────────
@@ -155,7 +158,7 @@ public class MfaController : ControllerBase
             KeyType = MfaKeyType.Totp,
             Name = string.IsNullOrWhiteSpace(dto.KeyName) ? "Authenticator OTP" : dto.KeyName.Trim(),
             IsActive = true,
-            OtpSecretEncrypted = dto.SecretBase32.Trim(),
+            OtpSecretEncrypted = _secretProtector.Protect(dto.SecretBase32.Trim()),
             BackupCodeHashes = backupHashes.ToArray(),
             CreatedAt = DateTime.UtcNow
         };

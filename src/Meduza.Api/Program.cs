@@ -147,6 +147,8 @@ builder.Services.AddScoped<IKnowledgeMcpTool, KnowledgeMcpTool>();
 builder.Services.AddHostedService<KnowledgeEmbeddingBackgroundService>();
 builder.Services.Configure<MeshCentralOptions>(
     builder.Configuration.GetSection("MeshCentral"));
+builder.Services.Configure<SecretEncryptionOptions>(
+    builder.Configuration.GetSection(SecretEncryptionOptions.SectionName));
 builder.Services.AddScoped<IMeshCentralEmbeddingService, MeshCentralEmbeddingService>();
 builder.Services.AddScoped<IMeshCentralProvisioningService, MeshCentralProvisioningService>();
 builder.Services.AddScoped<IMeshCentralApiService, MeshCentralApiService>();
@@ -218,6 +220,7 @@ builder.Services.AddScoped<IPasswordService, UserPasswordService>();
 builder.Services.AddSingleton<IJwtService, JwtService>();
 builder.Services.AddScoped<IFido2Service, Fido2AuthService>();
 builder.Services.AddScoped<IOtpService, OtpAuthService>();
+builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
 builder.Services.AddScoped<IUserAuthService, UserAuthService>();
 builder.Services.AddScoped<IApiTokenService, ApiTokenService>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();

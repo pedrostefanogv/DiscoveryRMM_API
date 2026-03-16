@@ -2,6 +2,7 @@ using System.Text.Json;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
+using Meduza.Core.Interfaces.Security;
 using Meduza.Core.ValueObjects;
 using Meduza.Core.Configuration;
 
@@ -22,6 +23,7 @@ public class ConfigurationResolver : IConfigurationResolver
     private readonly ISiteConfigurationRepository _siteRepo;
     private readonly ISiteRepository _siteRepository;
     private readonly IRedisService _redisService;
+    private readonly ISecretProtector _secretProtector;
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
@@ -30,13 +32,15 @@ public class ConfigurationResolver : IConfigurationResolver
         IClientConfigurationRepository clientRepo,
         ISiteConfigurationRepository siteRepo,
         ISiteRepository siteRepository,
-        IRedisService redisService)
+        IRedisService redisService,
+        ISecretProtector secretProtector)
     {
         _serverRepo = serverRepo;
         _clientRepo = clientRepo;
         _siteRepo = siteRepo;
         _siteRepository = siteRepository;
         _redisService = redisService;
+        _secretProtector = secretProtector;
     }
 
     public async Task<ServerConfiguration> GetServerAsync()
@@ -105,7 +109,8 @@ public class ConfigurationResolver : IConfigurationResolver
     public async Task<T?> GetConfigurationObjectAsync<T>(string objectType) where T : class
     {
         var server = await GetServerAsync();
-        var json = objectType.ToLowerInvariant() switch
+        var normalizedType = objectType.ToLowerInvariant();
+        var json = normalizedType switch
         {
             "branding" or "brandingsettings" => server.BrandingSettingsJson,
             "ai" or "aiintegration" or "aiintegrationsettings" => server.AIIntegrationSettingsJson,
@@ -114,7 +119,14 @@ public class ConfigurationResolver : IConfigurationResolver
         };
 
         if (string.IsNullOrWhiteSpace(json)) return Activator.CreateInstance<T>();
-        try { return JsonSerializer.Deserialize<T>(json, JsonSerializerOptions.Web); }
+        try
+        {
+            var value = JsonSerializer.Deserialize<T>(json, JsonSerializerOptions.Web);
+            if (value is AIIntegrationSettings ai)
+                ai.ApiKey = _secretProtector.UnprotectOrSelf(ai.ApiKey);
+
+            return value;
+        }
         catch { return Activator.CreateInstance<T>(); }
     }
 
@@ -157,7 +169,9 @@ public class ConfigurationResolver : IConfigurationResolver
     public async Task<AIIntegrationSettings> GetAISettingsAsync()
     {
         var server = await GetServerAsync();
-        return DeserializeOrDefault<AIIntegrationSettings>(server.AIIntegrationSettingsJson);
+        var settings = DeserializeOrDefault<AIIntegrationSettings>(server.AIIntegrationSettingsJson);
+        settings.ApiKey = _secretProtector.UnprotectOrSelf(settings.ApiKey);
+        return settings;
     }
 
     /// <summary>
@@ -278,13 +292,42 @@ public class ConfigurationResolver : IConfigurationResolver
         return DeserializeOrDefault<AutoUpdateSettings>(serverJson);
     }
 
-    private static AIIntegrationSettings ResolveAI(string? siteJson, string? clientJson, string serverJson)
+    private AIIntegrationSettings ResolveAI(string? siteJson, string? clientJson, string serverJson)
     {
-        if (!string.IsNullOrWhiteSpace(siteJson))
-            return DeserializeOrDefault<AIIntegrationSettings>(siteJson);
+        // Sempre começa com a base global (servidor) — fonte de verdade para campos globais
+        // (ApiKey, EmbeddingModel, Provider, EmbeddingEnabled, etc.)
+        var result = DeserializeOrDefault<AIIntegrationSettings>(serverJson);
+        result.ApiKey = _secretProtector.UnprotectOrSelf(result.ApiKey);
+
+        // Aplica override de client: só campos presentes em AIIntegrationSettingsOverride
+        // são sobrescritos; campos globais (ApiKey, EmbeddingModel, etc.) são ignorados por design.
         if (!string.IsNullOrWhiteSpace(clientJson))
-            return DeserializeOrDefault<AIIntegrationSettings>(clientJson);
-        return DeserializeOrDefault<AIIntegrationSettings>(serverJson);
+            ApplyAiOverride(result, DeserializeOrDefault<AIIntegrationSettingsOverride>(clientJson));
+
+        // Aplica override de site: tem precedência sobre client e servidor
+        if (!string.IsNullOrWhiteSpace(siteJson))
+            ApplyAiOverride(result, DeserializeOrDefault<AIIntegrationSettingsOverride>(siteJson));
+
+        return result;
+    }
+
+    /// <summary>
+    /// Aplica campos não-null de um AIIntegrationSettingsOverride sobre o objeto base do servidor.
+    /// Campos ausentes (null) significam "herdar do nível superior".
+    /// </summary>
+    private static void ApplyAiOverride(AIIntegrationSettings target, AIIntegrationSettingsOverride ov)
+    {
+        if (ov.Enabled.HasValue) target.Enabled = ov.Enabled.Value;
+        if (ov.ChatAIEnabled.HasValue) target.ChatAIEnabled = ov.ChatAIEnabled.Value;
+        if (ov.KnowledgeBaseEnabled.HasValue) target.KnowledgeBaseEnabled = ov.KnowledgeBaseEnabled.Value;
+        if (!string.IsNullOrWhiteSpace(ov.ChatModel)) target.ChatModel = ov.ChatModel;
+        if (!string.IsNullOrWhiteSpace(ov.PromptTemplate)) target.PromptTemplate = ov.PromptTemplate;
+        if (ov.Temperature.HasValue) target.Temperature = ov.Temperature.Value;
+        if (ov.MaxTokensPerRequest.HasValue) target.MaxTokensPerRequest = ov.MaxTokensPerRequest.Value;
+        if (ov.MaxHistoryMessages.HasValue) target.MaxHistoryMessages = ov.MaxHistoryMessages.Value;
+        if (ov.MaxKbContextTokens.HasValue) target.MaxKbContextTokens = ov.MaxKbContextTokens.Value;
+        if (ov.MaxKbChunks.HasValue) target.MaxKbChunks = ov.MaxKbChunks.Value;
+        if (ov.MinSimilarityScore.HasValue) target.MinSimilarityScore = ov.MinSimilarityScore.Value;
     }
 
     private static T DeserializeOrDefault<T>(string? json) where T : new()

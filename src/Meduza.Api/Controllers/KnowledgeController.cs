@@ -156,7 +156,7 @@ public class KnowledgeController(
                 aiSettings.ApiKey,
                 ct);
             var semanticResults = await chunkRepository.SearchSemanticAsync(
-                new Vector(embedding), clientId, siteId, maxResults, ct);
+                new Vector(embedding), clientId, siteId, maxResults, ct: ct);
 
             results.AddRange(semanticResults.Select(r => new KbSearchResult(
                 r.ArticleId,
@@ -273,7 +273,7 @@ public class KnowledgeController(
             settings.ApiKey,
             ct);
         var semanticResults = await chunkRepository.SearchSemanticAsync(
-            new Vector(embedding), clientId, siteId, maxResults, ct);
+            new Vector(embedding), clientId, siteId, maxResults, ct: ct);
 
         var response = semanticResults.Select(r => new KbSearchResult(
             r.ArticleId,

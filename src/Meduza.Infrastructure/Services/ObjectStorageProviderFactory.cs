@@ -1,5 +1,6 @@
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
+using Meduza.Core.Interfaces.Security;
 using Meduza.Core.ValueObjects;
 using Microsoft.Extensions.Logging;
 
@@ -16,15 +17,18 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     private readonly IServerConfigurationRepository _serverConfigRepository;
     private readonly ILogger<ObjectStorageProviderFactory> _logger;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ISecretProtector _secretProtector;
 
     public ObjectStorageProviderFactory(
         IServerConfigurationRepository serverConfigRepository,
         ILogger<ObjectStorageProviderFactory> logger,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        ISecretProtector secretProtector)
     {
         _serverConfigRepository = serverConfigRepository ?? throw new ArgumentNullException(nameof(serverConfigRepository));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _secretProtector = secretProtector ?? throw new ArgumentNullException(nameof(secretProtector));
     }
 
     /// <summary>
@@ -109,17 +113,14 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
         Meduza.Core.Entities.ServerConfiguration serverConfig)
     {
 
-        // SecretKey já vem descriptografado da camada de persistência
-        // (descriptografia feita em DatabaseSeeder ou via IDataProtectionProvider)
-        // Se implementar criptografia em repouso, descriptografar aqui:
-        // var decryptedSecret = _dataProtectionProvider.Decrypt(serverConfig.ObjectStorageSecretKey);
+        var decryptedSecret = _secretProtector.UnprotectOrSelf(serverConfig.ObjectStorageSecretKey);
         return new ObjectStorageSettings
         {
             BucketName = serverConfig.ObjectStorageBucketName,
             Endpoint = serverConfig.ObjectStorageEndpoint,
             Region = serverConfig.ObjectStorageRegion,
             AccessKey = serverConfig.ObjectStorageAccessKey,
-            SecretKey = serverConfig.ObjectStorageSecretKey,
+            SecretKey = decryptedSecret,
             UrlTtlHours = serverConfig.ObjectStorageUrlTtlHours,
             UsePathStyle = serverConfig.ObjectStorageUsePathStyle,
             SslVerify = serverConfig.ObjectStorageSslVerify

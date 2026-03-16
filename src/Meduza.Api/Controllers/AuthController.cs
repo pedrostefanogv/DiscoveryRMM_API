@@ -1,5 +1,6 @@
 using Meduza.Core.DTOs.Auth;
 using Meduza.Core.DTOs.Mfa;
+using Meduza.Core.Entities.Security;
 using Meduza.Core.Enums.Identity;
 using Meduza.Core.Enums.Security;
 using Meduza.Core.Interfaces.Auth;
@@ -19,17 +20,20 @@ public class AuthController : ControllerBase
     private readonly IFido2Service _fido2Service;
     private readonly IOtpService _otpService;
     private readonly IUserMfaKeyRepository _mfaKeyRepo;
+    private readonly ISecretProtector _secretProtector;
 
     public AuthController(
         IUserAuthService authService,
         IFido2Service fido2Service,
         IOtpService otpService,
-        IUserMfaKeyRepository mfaKeyRepo)
+        IUserMfaKeyRepository mfaKeyRepo,
+        ISecretProtector secretProtector)
     {
         _authService = authService;
         _fido2Service = fido2Service;
         _otpService = otpService;
         _mfaKeyRepo = mfaKeyRepo;
+        _secretProtector = secretProtector;
     }
 
     /// <summary>
@@ -115,11 +119,21 @@ public class AuthController : ControllerBase
             return Unauthorized(new { message = "Nenhuma credencial OTP ativa encontrada para o usuário." });
 
         var normalizedCode = dto.Code.Trim();
-        var matchedKey = otpKeys.FirstOrDefault(k => _otpService.ValidateTotp(k.OtpSecretEncrypted!, normalizedCode));
+        UserMfaKey? matchedKey = null;
+        foreach (var key in otpKeys)
+        {
+            var secret = _secretProtector.UnprotectOrSelf(key.OtpSecretEncrypted);
+            if (_otpService.ValidateTotp(secret, normalizedCode))
+            {
+                matchedKey = key;
+                break;
+            }
+        }
+
         if (matchedKey is null)
             return Unauthorized(new { message = "OTP inválido." });
 
-        await _mfaKeyRepo.UpdateLastUsedAsync(matchedKey.Id);
+        await _mfaKeyRepo.UpdateLastUsedAsync(matchedKey!.Id);
 
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var ua = HttpContext.Request.Headers.UserAgent.ToString();

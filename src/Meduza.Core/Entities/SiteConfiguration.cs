@@ -74,7 +74,13 @@ public class SiteConfiguration
 
     // ============ IA ============
 
-    /// <summary>Configurações de IA específicas do site (null = herda cliente/servidor)</summary>
+    /// <summary>
+    /// Override de configurações de IA para este site (null = herda cliente/servidor).
+    /// Armazena apenas campos sobrescritíveis (AIIntegrationSettingsOverride): ChatModel,
+    /// Temperature, PromptTemplate, MaxHistoryMessages, etc.
+    /// Campos globais (ApiKey, EmbeddingModel, Provider) são sempre herdados do servidor
+    /// e removidos automaticamente ao salvar.
+    /// </summary>
     public string? AIIntegrationSettingsJson { get; set; }
 
     // ============ Configuração de Inventário ============
