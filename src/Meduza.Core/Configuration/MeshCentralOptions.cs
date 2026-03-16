@@ -92,4 +92,24 @@ public class MeshCentralOptions
     /// Direitos padrao ao vincular usuario em grupo de dispositivo (0 = minimo).
     /// </summary>
     public int IdentitySyncDefaultMeshRights { get; set; } = 0;
+
+    /// <summary>
+    /// Habilita reconciliacao periodica automatica do sync de identidades.
+    /// </summary>
+    public bool IdentitySyncReconciliationEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Executa reconciliacao com aplicacao de alteracoes remotas. Se false, executa apenas dry-run.
+    /// </summary>
+    public bool IdentitySyncReconciliationApplyChanges { get; set; } = false;
+
+    /// <summary>
+    /// Intervalo da reconciliacao automatica em minutos.
+    /// </summary>
+    public int IdentitySyncReconciliationIntervalMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// Atraso inicial, em segundos, antes da primeira execucao da reconciliacao.
+    /// </summary>
+    public int IdentitySyncReconciliationStartupDelaySeconds { get; set; } = 30;
 }

@@ -150,6 +150,7 @@ builder.Services.AddScoped<IMeshCentralEmbeddingService, MeshCentralEmbeddingSer
 builder.Services.AddScoped<IMeshCentralProvisioningService, MeshCentralProvisioningService>();
 builder.Services.AddScoped<IMeshCentralApiService, MeshCentralApiService>();
 builder.Services.AddScoped<IMeshCentralIdentitySyncService, MeshCentralIdentitySyncService>();
+builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 
 // IMemoryCache (para ConfigurationResolver)
 builder.Services.AddMemoryCache();
@@ -197,6 +198,7 @@ builder.Services.AddHostedService<ReportGenerationBackgroundService>();
 builder.Services.AddHostedService<ReportRetentionBackgroundService>();
 builder.Services.AddHostedService<AiChatRetentionBackgroundService>();
 builder.Services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
+builder.Services.AddHostedService<MeshCentralIdentityReconciliationBackgroundService>();
 builder.Services.AddHostedService<AgentPackagePrebuildHostedService>();
 
 // ── Identity & Auth ───────────────────────────────────────────────────────

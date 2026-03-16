@@ -1,4 +1,5 @@
 using Meduza.Core.Enums.Identity;
+using Meduza.Core.Enums.Security;
 
 namespace Meduza.Core.DTOs.Users;
 
@@ -17,6 +18,30 @@ public class UpdateUserDto
     public string? FullName { get; set; }
     public bool? IsActive { get; set; }
     public bool? MfaRequired { get; set; }
+}
+
+public class UpdateMyProfileDto
+{
+    public string? Email { get; set; }
+    public string? FullName { get; set; }
+}
+
+public class MySecurityProfileDto
+{
+    public bool MfaRequired { get; set; }
+    public bool MfaConfigured { get; set; }
+    public RoleMfaRequirement RoleMfaRequirement { get; set; } = RoleMfaRequirement.None;
+    public IReadOnlyList<MyMfaKeySummaryDto> Keys { get; set; } = [];
+}
+
+public class MyMfaKeySummaryDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public MfaKeyType KeyType { get; set; }
+    public bool IsActive { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? LastUsedAt { get; set; }
 }
 
 public class ChangePasswordDto

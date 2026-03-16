@@ -5,6 +5,7 @@ using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces.Identity;
 using Meduza.Api.Filters;
 using Meduza.Core.Interfaces;
+using Meduza.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Meduza.Api.Controllers;
@@ -16,16 +17,16 @@ public class UserGroupsController : ControllerBase
 {
     private readonly IUserGroupRepository _groupRepo;
     private readonly IRoleRepository _roleRepo;
-    private readonly IMeshCentralIdentitySyncService _meshCentralIdentitySyncService;
+    private readonly MeshCentralIdentitySyncTriggerService _meshCentralSyncTrigger;
 
     public UserGroupsController(
         IUserGroupRepository groupRepo,
         IRoleRepository roleRepo,
-        IMeshCentralIdentitySyncService meshCentralIdentitySyncService)
+        MeshCentralIdentitySyncTriggerService meshCentralSyncTrigger)
     {
         _groupRepo = groupRepo;
         _roleRepo = roleRepo;
-        _meshCentralIdentitySyncService = meshCentralIdentitySyncService;
+        _meshCentralSyncTrigger = meshCentralSyncTrigger;
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ public class UserGroupsController : ControllerBase
     public async Task<IActionResult> AddMember(Guid id, [FromBody] AddGroupMemberDto dto)
     {
         await _groupRepo.AddMemberAsync(id, dto.UserId);
-        await _meshCentralIdentitySyncService.SyncUserScopesAsync(dto.UserId, HttpContext.RequestAborted);
+        await _meshCentralSyncTrigger.OnUserScopesChangedBestEffortAsync(dto.UserId, HttpContext.RequestAborted);
         return NoContent();
     }
 
@@ -137,7 +138,7 @@ public class UserGroupsController : ControllerBase
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
     {
         await _groupRepo.RemoveMemberAsync(id, userId);
-        await _meshCentralIdentitySyncService.SyncUserScopesAsync(userId, HttpContext.RequestAborted);
+        await _meshCentralSyncTrigger.OnUserScopesChangedBestEffortAsync(userId, HttpContext.RequestAborted);
         return NoContent();
     }
 
@@ -168,10 +169,7 @@ public class UserGroupsController : ControllerBase
         });
 
         var memberIds = await _groupRepo.GetMemberIdsAsync(id);
-        foreach (var memberId in memberIds)
-        {
-            await _meshCentralIdentitySyncService.SyncUserScopesAsync(memberId, HttpContext.RequestAborted);
-        }
+        await _meshCentralSyncTrigger.OnUsersScopesChangedBestEffortAsync(memberIds, HttpContext.RequestAborted);
 
         return NoContent();
     }
@@ -188,10 +186,7 @@ public class UserGroupsController : ControllerBase
         await _groupRepo.RemoveRoleAssignmentAsync(assignmentId);
 
         var memberIds = await _groupRepo.GetMemberIdsAsync(id);
-        foreach (var memberId in memberIds)
-        {
-            await _meshCentralIdentitySyncService.SyncUserScopesAsync(memberId, HttpContext.RequestAborted);
-        }
+        await _meshCentralSyncTrigger.OnUsersScopesChangedBestEffortAsync(memberIds, HttpContext.RequestAborted);
 
         return NoContent();
     }

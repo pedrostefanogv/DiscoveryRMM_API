@@ -60,18 +60,20 @@ Consolidar o status real da integracao MeshCentral no projeto Meduza, incluindo 
   - delete logico/desativacao,
   - add/remove member em user group,
   - add/remove role assignment em user group.
+- Integrado orquestrador de gatilhos best-effort para evitar quebra do fluxo principal quando o sync remoto falhar (com logging centralizado por operacao).
+- Implementado hosted service de reconciliacao periodica com configuracao por feature flags:
+  - IdentitySyncReconciliationEnabled,
+  - IdentitySyncReconciliationApplyChanges,
+  - IdentitySyncReconciliationIntervalMinutes,
+  - IdentitySyncReconciliationStartupDelaySeconds.
 
 ## O Que Falta
 
 ### Prioridade Alta (proxima entrega)
-1. Job de reconciliacao periodica
-- Reconciliar usuarios, grupos e vinculacoes.
-- Corrigir drift causado por alteracoes manuais fora do Meduza.
-
-2. Remocao opcional da conta remota
+1. Remocao opcional da conta remota
 - Hoje o deprovisionamento revoga memberships; falta politica operacional para deleteuser definitivo.
 
-3. Gatilhos adicionais de ciclo de vida
+2. Gatilhos adicionais de ciclo de vida
 - Hook de sync para reset de escopo em outros fluxos administrativos que alterem acesso sem passar por user_groups.
 
 ### Prioridade Media
@@ -102,8 +104,7 @@ Consolidar o status real da integracao MeshCentral no projeto Meduza, incluindo 
 - Operacoes remotas exigem guardrails de seguranca e auditoria antes de exposicao ampla.
 
 ## Proximos Passos Sugeridos
-1. Criar hosted service de reconciliacao periodica com janela configuravel e relatorio resumido.
-2. Incluir deleteuser opcional por policy/feature flag quando usuario for excluido definitivamente.
-3. Incluir testes de integracao cobrindo create/update/deactivate e reconciliacao de membership.
-4. Adicionar ingestao de eventos MeshCentral para auditoria e timeline de acesso remoto.
-5. Evoluir embedding para sessao transparente por usuario sincronizado, preparando federacao futura.
+1. Incluir deleteuser opcional por policy/feature flag quando usuario for excluido definitivamente.
+2. Incluir testes de integracao cobrindo create/update/deactivate e reconciliacao de membership.
+3. Adicionar ingestao de eventos MeshCentral para auditoria e timeline de acesso remoto.
+4. Evoluir embedding para sessao transparente por usuario sincronizado, preparando federacao futura.

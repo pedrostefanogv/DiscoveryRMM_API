@@ -5,7 +5,9 @@ using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Core.Interfaces.Auth;
 using Meduza.Core.Interfaces.Identity;
+using Meduza.Core.Interfaces.Security;
 using Meduza.Api.Filters;
+using Meduza.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Meduza.Api.Controllers;
@@ -17,16 +19,22 @@ public class UsersController : ControllerBase
 {
     private readonly IUserRepository _userRepo;
     private readonly IPasswordService _passwordService;
-    private readonly IMeshCentralIdentitySyncService _meshCentralIdentitySyncService;
+    private readonly IUserAuthService _userAuthService;
+    private readonly IUserMfaKeyRepository _userMfaKeyRepository;
+    private readonly MeshCentralIdentitySyncTriggerService _meshCentralSyncTrigger;
 
     public UsersController(
         IUserRepository userRepo,
         IPasswordService passwordService,
-        IMeshCentralIdentitySyncService meshCentralIdentitySyncService)
+        IUserAuthService userAuthService,
+        IUserMfaKeyRepository userMfaKeyRepository,
+        MeshCentralIdentitySyncTriggerService meshCentralSyncTrigger)
     {
         _userRepo = userRepo;
         _passwordService = passwordService;
-        _meshCentralIdentitySyncService = meshCentralIdentitySyncService;
+        _userAuthService = userAuthService;
+        _userMfaKeyRepository = userMfaKeyRepository;
+        _meshCentralSyncTrigger = meshCentralSyncTrigger;
     }
 
     [HttpGet]
@@ -67,6 +75,99 @@ public class UsersController : ControllerBase
         });
     }
 
+    [HttpGet("me")]
+    public async Task<IActionResult> GetMyProfile()
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+        var user = await _userRepo.GetByIdAsync(userId);
+        if (user is null) return NotFound();
+
+        return Ok(new UserDto
+        {
+            Id = user.Id,
+            Login = user.Login,
+            Email = user.Email,
+            FullName = user.FullName,
+            IsActive = user.IsActive,
+            MfaRequired = user.MfaRequired,
+            MfaConfigured = user.MfaConfigured,
+            CreatedAt = user.CreatedAt,
+            LastLoginAt = user.LastLoginAt
+        });
+    }
+
+    [HttpPut("me")]
+    public async Task<IActionResult> UpdateMyProfile([FromBody] UpdateMyProfileDto dto)
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+        var user = await _userRepo.GetByIdAsync(userId);
+        if (user is null) return NotFound();
+
+        if (!string.IsNullOrWhiteSpace(dto.Email) &&
+            !string.Equals(user.Email, dto.Email, StringComparison.OrdinalIgnoreCase) &&
+            await _userRepo.ExistsByEmailAsync(dto.Email))
+            return Conflict(new { message = "E-mail já em uso." });
+
+        user.FullName = string.IsNullOrWhiteSpace(dto.FullName) ? user.FullName : dto.FullName;
+        user.Email = string.IsNullOrWhiteSpace(dto.Email) ? user.Email : dto.Email;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _userRepo.UpdateAsync(user);
+        await _meshCentralSyncTrigger.OnUserUpdatedBestEffortAsync(user.Id, HttpContext.RequestAborted);
+        return NoContent();
+    }
+
+    [HttpGet("me/security")]
+    public async Task<IActionResult> GetMySecurityProfile()
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+        var user = await _userRepo.GetByIdAsync(userId);
+        if (user is null) return NotFound();
+
+        var roleMfaRequirement = await _userAuthService.GetEffectiveMfaRequirementAsync(userId);
+        var keys = await _userMfaKeyRepository.GetActiveByUserIdAsync(userId);
+
+        return Ok(new MySecurityProfileDto
+        {
+            MfaRequired = user.MfaRequired,
+            MfaConfigured = user.MfaConfigured,
+            RoleMfaRequirement = roleMfaRequirement,
+            Keys = keys.Select(k => new MyMfaKeySummaryDto
+            {
+                Id = k.Id,
+                Name = k.Name,
+                KeyType = k.KeyType,
+                IsActive = k.IsActive,
+                CreatedAt = k.CreatedAt,
+                LastUsedAt = k.LastUsedAt
+            }).ToList()
+        });
+    }
+
+    [HttpPost("me/change-password")]
+    public async Task<IActionResult> ChangeMyPassword([FromBody] ChangePasswordDto dto)
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+        var user = await _userRepo.GetByIdAsync(userId);
+        if (user is null) return NotFound();
+
+        if (!_passwordService.VerifyPassword(dto.CurrentPassword, user.PasswordSalt, user.PasswordHash))
+            return BadRequest(new { message = "Senha atual incorreta." });
+
+        var (policyValid, policyReason) = _passwordService.ValidatePolicy(dto.NewPassword);
+        if (!policyValid)
+            return BadRequest(new { message = policyReason });
+
+        var salt = _passwordService.GenerateSalt();
+        var hash = _passwordService.HashPassword(dto.NewPassword, salt);
+
+        user.PasswordHash = hash;
+        user.PasswordSalt = salt;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _userRepo.UpdateAsync(user);
+        return NoContent();
+    }
+
     [HttpPost]
     [RequirePermission(ResourceType.Users, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateUserDto dto)
@@ -103,7 +204,7 @@ public class UsersController : ControllerBase
 
         await _userRepo.CreateAsync(user);
 
-        var meshSync = await _meshCentralIdentitySyncService.SyncUserOnCreateAsync(user.Id, HttpContext.RequestAborted);
+        var meshSync = await _meshCentralSyncTrigger.OnUserCreatedAsync(user.Id, HttpContext.RequestAborted);
         return CreatedAtAction(nameof(GetById), new { id = user.Id }, new
         {
             id = user.Id,
@@ -136,7 +237,7 @@ public class UsersController : ControllerBase
         user.UpdatedAt = DateTime.UtcNow;
 
         await _userRepo.UpdateAsync(user);
-        await _meshCentralIdentitySyncService.SyncUserOnUpdatedAsync(user.Id, HttpContext.RequestAborted);
+        await _meshCentralSyncTrigger.OnUserUpdatedBestEffortAsync(user.Id, HttpContext.RequestAborted);
         return NoContent();
     }
 
@@ -187,7 +288,7 @@ public class UsersController : ControllerBase
         user.IsActive = false;
         user.UpdatedAt = DateTime.UtcNow;
         await _userRepo.UpdateAsync(user);
-        await _meshCentralIdentitySyncService.DeprovisionUserAsync(user.Id, deleteRemoteUser: false, HttpContext.RequestAborted);
+        await _meshCentralSyncTrigger.OnUserDeprovisionBestEffortAsync(user.Id, deleteRemoteUser: false, HttpContext.RequestAborted);
         return NoContent();
     }
 }
