@@ -34,6 +34,7 @@ public class RolesController : ControllerBase
             Description = r.Description,
             Type = r.Type,
             IsSystem = r.IsSystem,
+            MfaRequirement = r.MfaRequirement,
             CreatedAt = r.CreatedAt
         }));
     }
@@ -51,6 +52,7 @@ public class RolesController : ControllerBase
             Description = role.Description,
             Type = role.Type,
             IsSystem = role.IsSystem,
+            MfaRequirement = role.MfaRequirement,
             CreatedAt = role.CreatedAt
         });
     }
@@ -67,6 +69,7 @@ public class RolesController : ControllerBase
             Description = dto.Description,
             Type = RoleType.Custom,
             IsSystem = false,
+            MfaRequirement = dto.MfaRequirement,
             CreatedAt = now,
             UpdatedAt = now
         };
@@ -80,11 +83,13 @@ public class RolesController : ControllerBase
     {
         var role = await _roleRepo.GetByIdAsync(id);
         if (role is null) return NotFound();
-        if (role.IsSystem)
-            return BadRequest(new { message = "Roles de sistema não podem ser editadas." });
+
+        if (role.IsSystem && (!string.IsNullOrWhiteSpace(dto.Name) || dto.Description is not null))
+            return BadRequest(new { message = "Roles de sistema não podem ter nome/descrição alterados." });
 
         role.Name = string.IsNullOrWhiteSpace(dto.Name) ? role.Name : dto.Name;
         role.Description = dto.Description ?? role.Description;
+        role.MfaRequirement = dto.MfaRequirement ?? role.MfaRequirement;
         role.UpdatedAt = DateTime.UtcNow;
         await _roleRepo.UpdateAsync(role);
         return NoContent();

@@ -2267,6 +2267,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             e.Property(r => r.Description).HasColumnName("description").HasMaxLength(1000);
             e.Property(r => r.Type).HasColumnName("type").HasConversion<string>();
             e.Property(r => r.IsSystem).HasColumnName("is_system");
+            e.Property(r => r.MfaRequirement).HasColumnName("mfa_requirement").HasConversion<string>();
             e.Property(r => r.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(r => r.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });

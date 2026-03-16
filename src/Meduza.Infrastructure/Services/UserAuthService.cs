@@ -1,8 +1,10 @@
 using Meduza.Core.DTOs.Auth;
+using Meduza.Core.Entities.Security;
+using Meduza.Core.Enums.Identity;
+using Meduza.Core.Enums.Security;
 using Meduza.Core.Interfaces.Auth;
 using Meduza.Core.Interfaces.Identity;
 using Meduza.Core.Interfaces.Security;
-using Meduza.Core.Entities.Security;
 using Meduza.Core.Helpers;
 
 namespace Meduza.Infrastructure.Services;
@@ -17,17 +19,26 @@ public class UserAuthService : IUserAuthService
     private readonly IUserSessionRepository _sessions;
     private readonly IPasswordService _passwordService;
     private readonly IJwtService _jwtService;
+    private readonly IUserGroupRepository _userGroups;
+    private readonly IRoleRepository _roles;
+    private readonly IUserMfaKeyRepository _mfaKeys;
 
     public UserAuthService(
         IUserRepository users,
         IUserSessionRepository sessions,
         IPasswordService passwordService,
-        IJwtService jwtService)
+        IJwtService jwtService,
+        IUserGroupRepository userGroups,
+        IRoleRepository roles,
+        IUserMfaKeyRepository mfaKeys)
     {
         _users = users;
         _sessions = sessions;
         _passwordService = passwordService;
         _jwtService = jwtService;
+        _userGroups = userGroups;
+        _roles = roles;
+        _mfaKeys = mfaKeys;
     }
 
     public async Task<LoginResponseDto> LoginAsync(
@@ -55,6 +66,20 @@ public class UserAuthService : IUserAuthService
 
         await _users.SetLastLoginAsync(user.Id, DateTime.UtcNow);
 
+        var roleMfaRequirement = await GetEffectiveMfaRequirementAsync(user.Id);
+        var mfaKeys = (await _mfaKeys.GetActiveByUserIdAsync(user.Id)).ToList();
+
+        var roleRequirementConfigured = roleMfaRequirement switch
+        {
+            RoleMfaRequirement.Totp => HasKeyType(mfaKeys, MfaKeyType.Totp),
+            RoleMfaRequirement.Fido2 => HasKeyType(mfaKeys, MfaKeyType.Fido2),
+            _ => true
+        };
+
+        var effectiveMfaRequired = user.MfaRequired || roleMfaRequirement != RoleMfaRequirement.None;
+        var effectiveMfaConfigured = effectiveMfaRequired &&
+            (roleMfaRequirement == RoleMfaRequirement.None ? user.MfaConfigured : roleRequirementConfigured);
+
         var firstAccessRequired = user.MustChangePassword || user.MustChangeProfile;
 
         // Se onboarding inicial estiver pendente, sempre retorna token de setup.
@@ -65,26 +90,49 @@ public class UserAuthService : IUserAuthService
             return new LoginResponseDto
             {
                 MfaToken = setupToken,
-                MfaRequired = true,
-                MfaConfigured = user.MfaConfigured,
+                MfaRequired = effectiveMfaRequired,
+                RoleMfaRequirement = roleMfaRequirement,
+                MfaConfigured = effectiveMfaConfigured,
                 FirstAccessRequired = true,
                 MustChangePassword = user.MustChangePassword,
-                MustChangeProfile = user.MustChangeProfile
+                MustChangeProfile = user.MustChangeProfile,
+                SessionEstablished = false
             };
         }
 
-        // Se MFA não está ainda configurado, emite setup token (fluxo de primeiro acesso)
-        if (user.MfaRequired && !user.MfaConfigured)
+        // Sem exigência de MFA: emite sessão completa no próprio login.
+        if (!effectiveMfaRequired)
+        {
+            var session = await IssueFullSessionAsync(user.Id, mfaVerified: false, ipAddress, userAgent);
+            return new LoginResponseDto
+            {
+                MfaRequired = false,
+                RoleMfaRequirement = RoleMfaRequirement.None,
+                MfaConfigured = user.MfaConfigured,
+                FirstAccessRequired = false,
+                MustChangePassword = false,
+                MustChangeProfile = false,
+                SessionEstablished = true,
+                AccessToken = session.AccessToken,
+                RefreshToken = session.RefreshToken,
+                ExpiresInSeconds = session.ExpiresInSeconds
+            };
+        }
+
+        // MFA exigido, mas método obrigatório não está configurado.
+        if (!effectiveMfaConfigured)
         {
             var setupToken = _jwtService.GenerateMfaSetupToken(user.Id);
             return new LoginResponseDto
             {
                 MfaToken = setupToken,
                 MfaRequired = true,
+                RoleMfaRequirement = roleMfaRequirement,
                 MfaConfigured = false,
                 FirstAccessRequired = false,
                 MustChangePassword = false,
-                MustChangeProfile = false
+                MustChangeProfile = false,
+                SessionEstablished = false
             };
         }
 
@@ -93,12 +141,38 @@ public class UserAuthService : IUserAuthService
         return new LoginResponseDto
         {
             MfaToken = mfaToken,
-            MfaRequired = user.MfaRequired,
-            MfaConfigured = user.MfaConfigured,
+            MfaRequired = true,
+            RoleMfaRequirement = roleMfaRequirement,
+            MfaConfigured = true,
             FirstAccessRequired = false,
             MustChangePassword = false,
-            MustChangeProfile = false
+            MustChangeProfile = false,
+            SessionEstablished = false
         };
+    }
+
+    public async Task<RoleMfaRequirement> GetEffectiveMfaRequirementAsync(Guid userId)
+    {
+        var assignments = await _userGroups.GetRolesForUserAsync(userId);
+        var roleIds = assignments.Select(a => a.RoleId).Distinct().ToList();
+
+        var requirements = new List<RoleMfaRequirement>();
+        foreach (var roleId in roleIds)
+        {
+            var role = await _roles.GetByIdAsync(roleId);
+            if (role is null)
+                continue;
+
+            requirements.Add(role.MfaRequirement);
+        }
+
+        if (requirements.Contains(RoleMfaRequirement.Fido2))
+            return RoleMfaRequirement.Fido2;
+
+        if (requirements.Contains(RoleMfaRequirement.Totp))
+            return RoleMfaRequirement.Totp;
+
+        return RoleMfaRequirement.None;
     }
 
     public async Task CompleteFirstAccessAsync(Guid userId, CompleteFirstAccessRequestDto dto)
@@ -209,4 +283,7 @@ public class UserAuthService : IUserAuthService
             ExpiresInSeconds = 900 // 15 min
         };
     }
+
+    private static bool HasKeyType(IEnumerable<UserMfaKey> keys, MfaKeyType type)
+        => keys.Any(k => k.IsActive && k.KeyType == type);
 }

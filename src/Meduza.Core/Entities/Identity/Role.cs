@@ -12,6 +12,9 @@ public class Role
     /// <summary>Roles de sistema (seeds) não podem ser editadas ou removidas.</summary>
     public bool IsSystem { get; set; } = false;
 
+    /// <summary>Política de 2FA exigida para usuários vinculados à role.</summary>
+    public RoleMfaRequirement MfaRequirement { get; set; } = RoleMfaRequirement.None;
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

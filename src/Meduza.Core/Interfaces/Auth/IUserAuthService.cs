@@ -1,4 +1,5 @@
 using Meduza.Core.DTOs.Auth;
+using Meduza.Core.Enums.Identity;
 
 namespace Meduza.Core.Interfaces.Auth;
 
@@ -35,4 +36,9 @@ public interface IUserAuthService
     /// Retorna o status atual de onboarding de primeiro acesso para o frontend.
     /// </summary>
     Task<FirstAccessStatusDto> GetFirstAccessStatusAsync(Guid userId);
+
+    /// <summary>
+    /// Retorna a política efetiva de MFA para o usuário com base nas roles vinculadas.
+    /// </summary>
+    Task<RoleMfaRequirement> GetEffectiveMfaRequirementAsync(Guid userId);
 }

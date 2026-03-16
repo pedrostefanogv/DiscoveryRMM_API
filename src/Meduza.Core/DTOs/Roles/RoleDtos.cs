@@ -6,12 +6,14 @@ public class CreateRoleDto
 {
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
+    public RoleMfaRequirement MfaRequirement { get; set; } = RoleMfaRequirement.None;
 }
 
 public class UpdateRoleDto
 {
     public string? Name { get; set; }
     public string? Description { get; set; }
+    public RoleMfaRequirement? MfaRequirement { get; set; }
 }
 
 public class RoleDto
@@ -21,6 +23,7 @@ public class RoleDto
     public string? Description { get; set; }
     public RoleType Type { get; set; }
     public bool IsSystem { get; set; }
+    public RoleMfaRequirement MfaRequirement { get; set; }
     public DateTime CreatedAt { get; set; }
     public IEnumerable<PermissionDto> Permissions { get; set; } = [];
 }

@@ -16,15 +16,18 @@ namespace Meduza.Api.Controllers;
 public class MfaController : ControllerBase
 {
     private readonly IFido2Service _fido2Service;
+    private readonly IOtpService _otpService;
     private readonly IUserMfaKeyRepository _mfaKeyRepo;
     private readonly IUserRepository _userRepo;
 
     public MfaController(
         IFido2Service fido2Service,
+        IOtpService otpService,
         IUserMfaKeyRepository mfaKeyRepo,
         IUserRepository userRepo)
     {
         _fido2Service = fido2Service;
+        _otpService = otpService;
         _mfaKeyRepo = mfaKeyRepo;
         _userRepo = userRepo;
     }
@@ -101,6 +104,71 @@ public class MfaController : ControllerBase
         await _userRepo.SetMfaConfiguredAsync(userId, true);
 
         return Ok(new { keyId = newKey.Id, message = "Chave registrada com sucesso." });
+    }
+
+    // ── Registro TOTP ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Inicia o registro de um autenticador OTP/TOTP.
+    /// </summary>
+    [HttpPost("totp/register/begin")]
+    [RequireMfaSetupOrFullSession]
+    public async Task<IActionResult> BeginTotpRegistration()
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+        var user = await _userRepo.GetByIdAsync(userId);
+        if (user is null) return Unauthorized();
+
+        var accountName = string.IsNullOrWhiteSpace(user.Login) ? user.Email : user.Login;
+        var (secretBase32, qrCodeUri) = _otpService.GenerateSecret("Meduza", accountName);
+
+        return Ok(new
+        {
+            secretBase32,
+            qrCodeUri,
+            message = "Use o QR Code em um app autenticador e confirme com um código OTP."
+        });
+    }
+
+    /// <summary>
+    /// Conclui o registro de um autenticador OTP/TOTP.
+    /// </summary>
+    [HttpPost("totp/register/complete")]
+    [RequireMfaSetupOrFullSession]
+    public async Task<IActionResult> CompleteTotpRegistration([FromBody] CompleteTotpRegistrationDto dto)
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+
+        if (string.IsNullOrWhiteSpace(dto.SecretBase32) || string.IsNullOrWhiteSpace(dto.VerificationCode))
+            return BadRequest(new { message = "SecretBase32 e VerificationCode são obrigatórios." });
+
+        var valid = _otpService.ValidateTotp(dto.SecretBase32.Trim(), dto.VerificationCode.Trim());
+        if (!valid)
+            return BadRequest(new { message = "Código OTP inválido para o segredo informado." });
+
+        var (backupCodes, backupHashes) = _otpService.GenerateBackupCodes();
+
+        var newKey = new UserMfaKey
+        {
+            Id = IdGenerator.NewId(),
+            UserId = userId,
+            KeyType = MfaKeyType.Totp,
+            Name = string.IsNullOrWhiteSpace(dto.KeyName) ? "Authenticator OTP" : dto.KeyName.Trim(),
+            IsActive = true,
+            OtpSecretEncrypted = dto.SecretBase32.Trim(),
+            BackupCodeHashes = backupHashes.ToArray(),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _mfaKeyRepo.CreateAsync(newKey);
+        await _userRepo.SetMfaConfiguredAsync(userId, true);
+
+        return Ok(new
+        {
+            keyId = newKey.Id,
+            message = "Autenticador OTP registrado com sucesso.",
+            backupCodes
+        });
     }
 
     // ── Remoção ───────────────────────────────────────────────────────────────

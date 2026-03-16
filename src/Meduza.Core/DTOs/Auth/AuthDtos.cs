@@ -1,3 +1,5 @@
+using Meduza.Core.Enums.Identity;
+
 namespace Meduza.Core.DTOs.Auth;
 
 public class LoginRequestDto
@@ -18,6 +20,11 @@ public class LoginResponseDto
     public bool MfaRequired { get; set; }
 
     /// <summary>
+    /// Política de MFA derivada das roles do usuário.
+    /// </summary>
+    public RoleMfaRequirement RoleMfaRequirement { get; set; } = RoleMfaRequirement.None;
+
+    /// <summary>
     /// false = primeiro login, usuário ainda não cadastrou chave FIDO2.
     /// Neste caso, MfaToken tem claim mfa_setup=true e deve ser usado para registrar a primeira chave.
     /// </summary>
@@ -31,6 +38,15 @@ public class LoginResponseDto
 
     public bool MustChangePassword { get; set; }
     public bool MustChangeProfile { get; set; }
+
+    /// <summary>
+    /// true quando o login já retornou a sessão completa sem exigir etapa MFA.
+    /// </summary>
+    public bool SessionEstablished { get; set; }
+
+    public string? AccessToken { get; set; }
+    public string? RefreshToken { get; set; }
+    public int? ExpiresInSeconds { get; set; }
 }
 
 public class CompleteFirstAccessRequestDto

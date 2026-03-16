@@ -1,5 +1,7 @@
 using Meduza.Core.DTOs.Auth;
 using Meduza.Core.DTOs.Mfa;
+using Meduza.Core.Enums.Identity;
+using Meduza.Core.Enums.Security;
 using Meduza.Core.Interfaces.Auth;
 using Meduza.Core.Interfaces.Security;
 using Meduza.Api.Filters;
@@ -15,15 +17,18 @@ public class AuthController : ControllerBase
 {
     private readonly IUserAuthService _authService;
     private readonly IFido2Service _fido2Service;
+    private readonly IOtpService _otpService;
     private readonly IUserMfaKeyRepository _mfaKeyRepo;
 
     public AuthController(
         IUserAuthService authService,
         IFido2Service fido2Service,
+        IOtpService otpService,
         IUserMfaKeyRepository mfaKeyRepo)
     {
         _authService = authService;
         _fido2Service = fido2Service;
+        _otpService = otpService;
         _mfaKeyRepo = mfaKeyRepo;
     }
 
@@ -50,6 +55,10 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> BeginFido2Assertion()
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
+        var requirement = await _authService.GetEffectiveMfaRequirementAsync(userId);
+        if (requirement == RoleMfaRequirement.Totp)
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = "Esta conta exige MFA via OTP para login." });
+
         var activeKeys = await _mfaKeyRepo.GetActiveByUserIdAsync(userId);
         var optionsJson = await _fido2Service.BeginAssertionAsync(userId, activeKeys);
         return Ok(new { options = optionsJson });
@@ -63,6 +72,10 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> CompleteFido2Assertion([FromBody] CompleteFido2AssertionDto dto)
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
+        var requirement = await _authService.GetEffectiveMfaRequirementAsync(userId);
+        if (requirement == RoleMfaRequirement.Totp)
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = "Esta conta exige MFA via OTP para login." });
+
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var ua = HttpContext.Request.Headers.UserAgent.ToString();
 
@@ -74,6 +87,42 @@ public class AuthController : ControllerBase
         await _mfaKeyRepo.UpdateSignCountAsync(result.KeyId, result.NewSignCount);
         await _mfaKeyRepo.UpdateLastUsedAsync(result.KeyId);
 
+        var session = await _authService.IssueFullSessionAsync(userId, true, ip, ua);
+        return Ok(session);
+    }
+
+    /// <summary>
+    /// Etapa 2b — MFA via OTP/TOTP: valida o código e emite a sessão completa.
+    /// </summary>
+    [HttpPost("mfa/otp/complete")]
+    [RequireMfaPending]
+    public async Task<IActionResult> CompleteOtpAssertion([FromBody] CompleteOtpAssertionDto dto)
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+        var requirement = await _authService.GetEffectiveMfaRequirementAsync(userId);
+        if (requirement == RoleMfaRequirement.Fido2)
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = "Esta conta exige MFA via chave de segurança (FIDO2)." });
+
+        if (string.IsNullOrWhiteSpace(dto.Code))
+            return BadRequest(new { message = "Código OTP é obrigatório." });
+
+        var activeKeys = await _mfaKeyRepo.GetActiveByUserIdAsync(userId);
+        var otpKeys = activeKeys
+            .Where(k => k.KeyType == MfaKeyType.Totp && !string.IsNullOrWhiteSpace(k.OtpSecretEncrypted))
+            .ToList();
+
+        if (otpKeys.Count == 0)
+            return Unauthorized(new { message = "Nenhuma credencial OTP ativa encontrada para o usuário." });
+
+        var normalizedCode = dto.Code.Trim();
+        var matchedKey = otpKeys.FirstOrDefault(k => _otpService.ValidateTotp(k.OtpSecretEncrypted!, normalizedCode));
+        if (matchedKey is null)
+            return Unauthorized(new { message = "OTP inválido." });
+
+        await _mfaKeyRepo.UpdateLastUsedAsync(matchedKey.Id);
+
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var ua = HttpContext.Request.Headers.UserAgent.ToString();
         var session = await _authService.IssueFullSessionAsync(userId, true, ip, ua);
         return Ok(session);
     }

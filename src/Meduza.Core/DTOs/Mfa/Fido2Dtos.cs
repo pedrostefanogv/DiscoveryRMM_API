@@ -44,3 +44,23 @@ public class CompleteFido2AssertionDto
     /// <summary>JSON serializado do AuthenticatorAssertionRawResponse.</summary>
     public string AssertionResponseJson { get; set; } = string.Empty;
 }
+
+/// <summary>Corpo enviado pelo cliente ao concluir cadastro de TOTP.</summary>
+public class CompleteTotpRegistrationDto
+{
+    /// <summary>Segredo TOTP Base32 retornado no endpoint de begin.</summary>
+    public string SecretBase32 { get; set; } = string.Empty;
+
+    /// <summary>Código atual do app autenticador para validação do setup.</summary>
+    public string VerificationCode { get; set; } = string.Empty;
+
+    /// <summary>Nome amigável para a credencial OTP.</summary>
+    public string KeyName { get; set; } = string.Empty;
+}
+
+/// <summary>Corpo enviado para concluir MFA via OTP durante login.</summary>
+public class CompleteOtpAssertionDto
+{
+    /// <summary>Código TOTP de 6 dígitos.</summary>
+    public string Code { get; set; } = string.Empty;
+}
