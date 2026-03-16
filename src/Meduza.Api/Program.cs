@@ -149,6 +149,7 @@ builder.Services.Configure<MeshCentralOptions>(
 builder.Services.AddScoped<IMeshCentralEmbeddingService, MeshCentralEmbeddingService>();
 builder.Services.AddScoped<IMeshCentralProvisioningService, MeshCentralProvisioningService>();
 builder.Services.AddScoped<IMeshCentralApiService, MeshCentralApiService>();
+builder.Services.AddScoped<IMeshCentralIdentitySyncService, MeshCentralIdentitySyncService>();
 
 // IMemoryCache (para ConfigurationResolver)
 builder.Services.AddMemoryCache();

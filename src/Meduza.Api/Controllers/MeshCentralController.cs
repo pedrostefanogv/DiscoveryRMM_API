@@ -1,4 +1,6 @@
 using Meduza.Core.Interfaces;
+using Meduza.Core.Enums.Identity;
+using Meduza.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Meduza.Api.Controllers;
@@ -12,19 +14,22 @@ public class MeshCentralController : ControllerBase
     private readonly IAgentRepository _agentRepository;
     private readonly IConfigurationResolver _configurationResolver;
     private readonly IMeshCentralEmbeddingService _meshCentralEmbeddingService;
+    private readonly IMeshCentralIdentitySyncService _meshCentralIdentitySyncService;
 
     public MeshCentralController(
         IClientRepository clientRepository,
         ISiteRepository siteRepository,
         IAgentRepository agentRepository,
         IConfigurationResolver configurationResolver,
-        IMeshCentralEmbeddingService meshCentralEmbeddingService)
+        IMeshCentralEmbeddingService meshCentralEmbeddingService,
+        IMeshCentralIdentitySyncService meshCentralIdentitySyncService)
     {
         _clientRepository = clientRepository;
         _siteRepository = siteRepository;
         _agentRepository = agentRepository;
         _configurationResolver = configurationResolver;
         _meshCentralEmbeddingService = meshCentralEmbeddingService;
+        _meshCentralIdentitySyncService = meshCentralIdentitySyncService;
     }
 
     /// <summary>
@@ -92,6 +97,23 @@ public class MeshCentralController : ControllerBase
             return StatusCode(503, new { error = ex.Message });
         }
     }
+
+    /// <summary>
+    /// Executa backfill/reconciliação de usuários Meduza para MeshCentral.
+    /// applyChanges=false executa dry-run sem persistir alterações remotas.
+    /// </summary>
+    [HttpPost("identity-sync/backfill")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> RunIdentitySyncBackfill([FromBody] MeshCentralIdentityBackfillRequest request)
+    {
+        var report = await _meshCentralIdentitySyncService.RunBackfillAsync(
+            request.ClientId,
+            request.SiteId,
+            request.ApplyChanges,
+            HttpContext.RequestAborted);
+
+        return Ok(report);
+    }
 }
 
 public record MeshCentralUserEmbedRequest(
@@ -103,3 +125,8 @@ public record MeshCentralUserEmbedRequest(
     int? HideMask = null,
     string? MeshNodeId = null,
     string? GotoDeviceName = null);
+
+public record MeshCentralIdentityBackfillRequest(
+    bool ApplyChanges = false,
+    Guid? ClientId = null,
+    Guid? SiteId = null);

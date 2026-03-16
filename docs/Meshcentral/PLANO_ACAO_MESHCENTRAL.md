@@ -38,21 +38,41 @@ Consolidar o status real da integracao MeshCentral no projeto Meduza, incluindo 
 - Testes reais de conectividade e autenticacao WebSocket no MeshCentral (ambiente com certificado autoassinado) realizados.
 - Criacao real de grupo cliente/site validada no servidor MeshCentral e meshid obtido.
 
+### 6) Sync inicial de identidade (entrega atual)
+- Implementado sync de usuario Meduza -> MeshCentral no create de usuario.
+- Implementado update remoto de nome/email com reaproveitamento de conta existente no MeshCentral.
+- Implementada reconciliacao de memberships por escopo Cliente/Site com:
+  - addmeshuser para escopos atuais,
+  - removemeshuser para escopos revogados.
+- Implementado fluxo de deprovisionamento para usuario desativado (revoga acesso aos grupos MeshCentral).
+- Implementado endpoint administrativo de backfill/reconcile:
+  - POST /api/meshcentral/identity-sync/backfill
+  - dry-run ou apply.
+- Persistencia adicionada em users:
+  - meshcentral_user_id,
+  - meshcentral_username,
+  - meshcentral_last_synced_at,
+  - meshcentral_sync_status,
+  - meshcentral_sync_error.
+- Gatilhos atuais de reconciliacao:
+  - create de usuario,
+  - update de usuario,
+  - delete logico/desativacao,
+  - add/remove member em user group,
+  - add/remove role assignment em user group.
+
 ## O Que Falta
 
 ### Prioridade Alta (proxima entrega)
-1. Sync de usuarios Meduza -> MeshCentral
-- Criar usuario no MeshCentral quando usuario elegivel for provisionado no Meduza.
-- Atualizar/desativar/remover usuario no MeshCentral conforme ciclo de vida local.
-- Persistir identificador remoto do usuario para reconciliacao.
-
-2. Vinculo de permissoes usuario x grupo cliente/site
-- Automatizar addmeshuser/removemeshuser por escopo de cliente/site.
-- Garantir principio de menor privilegio por tenant.
-
-3. Job de reconciliacao periodica
+1. Job de reconciliacao periodica
 - Reconciliar usuarios, grupos e vinculacoes.
 - Corrigir drift causado por alteracoes manuais fora do Meduza.
+
+2. Remocao opcional da conta remota
+- Hoje o deprovisionamento revoga memberships; falta politica operacional para deleteuser definitivo.
+
+3. Gatilhos adicionais de ciclo de vida
+- Hook de sync para reset de escopo em outros fluxos administrativos que alterem acesso sem passar por user_groups.
 
 ### Prioridade Media
 4. Ingestao de eventos MeshCentral
@@ -82,8 +102,8 @@ Consolidar o status real da integracao MeshCentral no projeto Meduza, incluindo 
 - Operacoes remotas exigem guardrails de seguranca e auditoria antes de exposicao ampla.
 
 ## Proximos Passos Sugeridos
-1. Implementar MeshCentralUserSyncService com persistencia de identificador remoto por usuario.
-2. Implementar sincronizacao de membership de grupos por client/site.
-3. Criar job de reconciliacao periodica com relatorio de divergencias.
-4. Adicionar endpoint administrativo para reconciliacao manual on-demand.
-5. Incluir testes de integracao cobrindo create/update/delete de usuario e membership.
+1. Criar hosted service de reconciliacao periodica com janela configuravel e relatorio resumido.
+2. Incluir deleteuser opcional por policy/feature flag quando usuario for excluido definitivamente.
+3. Incluir testes de integracao cobrindo create/update/deactivate e reconciliacao de membership.
+4. Adicionar ingestao de eventos MeshCentral para auditoria e timeline de acesso remoto.
+5. Evoluir embedding para sessao transparente por usuario sincronizado, preparando federacao futura.

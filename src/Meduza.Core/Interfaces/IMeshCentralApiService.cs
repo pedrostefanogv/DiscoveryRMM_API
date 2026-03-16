@@ -1,4 +1,5 @@
 using Meduza.Core.Entities;
+using Meduza.Core.Entities.Identity;
 
 namespace Meduza.Core.Interfaces;
 
@@ -9,4 +10,38 @@ public interface IMeshCentralApiService
         Site site,
         string meduzaDeployToken,
         CancellationToken cancellationToken = default);
+
+    Task<MeshCentralUserUpsertResult> EnsureUserAsync(
+        User user,
+        string preferredUsername,
+        CancellationToken cancellationToken = default);
+
+    Task<MeshCentralMembershipSyncResult> EnsureUserInMeshAsync(
+        string meshUserId,
+        string meshId,
+        int meshAdminRights = 0,
+        CancellationToken cancellationToken = default);
+
+    Task<MeshCentralMembershipSyncResult> RemoveUserFromMeshAsync(
+        string meshUserId,
+        string meshId,
+        CancellationToken cancellationToken = default);
+
+    Task DeleteUserAsync(
+        string meshUserId,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class MeshCentralUserUpsertResult
+{
+    public required string UserId { get; init; }
+    public required string Username { get; init; }
+    public required bool Created { get; init; }
+}
+
+public sealed class MeshCentralMembershipSyncResult
+{
+    public required string UserId { get; init; }
+    public required string MeshId { get; init; }
+    public required bool Added { get; init; }
 }

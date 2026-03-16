@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Meduza.Core.Configuration;
 using Meduza.Core.Entities;
+using Meduza.Core.Entities.Identity;
 using Meduza.Core.Interfaces;
 using Microsoft.Extensions.Options;
 
@@ -12,6 +13,7 @@ namespace Meduza.Infrastructure.Services;
 public class MeshCentralApiService : IMeshCentralApiService
 {
     private static readonly Regex InvalidGroupChars = new("[^a-zA-Z0-9._ -]", RegexOptions.Compiled);
+    private static readonly Regex InvalidUsernameChars = new("[^a-zA-Z0-9._-]", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly MeshCentralOptions _options;
@@ -80,6 +82,391 @@ public class MeshCentralApiService : IMeshCentralApiService
             WindowsCommand = installMode == "interactive" ? windowsInteractive : windowsBackground,
             LinuxCommand = installMode == "interactive" ? linuxInteractive : linuxBackground
         };
+    }
+
+    public async Task<MeshCentralUserUpsertResult> EnsureUserAsync(
+        User user,
+        string preferredUsername,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateConnectionSettings();
+        var username = NormalizeUsername(preferredUsername);
+
+        return await ExecuteWithSocketAsync(async (ws, ct) =>
+        {
+            var users = await ListUsersAsync(ws, ct);
+            var existing = users.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
+
+            if (existing is not null)
+            {
+                await EditUserAsync(ws, existing.UserId, user.Email, user.FullName, ct);
+                return new MeshCentralUserUpsertResult
+                {
+                    UserId = existing.UserId,
+                    Username = existing.Username,
+                    Created = false
+                };
+            }
+
+            var createResult = await AddUserAsync(ws, username, user.Email, user.FullName, ct);
+            if (!string.IsNullOrWhiteSpace(createResult.UserId))
+            {
+                return createResult;
+            }
+
+            var afterCreate = await ListUsersAsync(ws, ct);
+            var created = afterCreate.FirstOrDefault(u => string.Equals(u.Username, username, StringComparison.OrdinalIgnoreCase));
+            if (created is null)
+                throw new InvalidOperationException($"MeshCentral could not confirm user creation for '{username}'.");
+
+            return new MeshCentralUserUpsertResult
+            {
+                UserId = created.UserId,
+                Username = created.Username,
+                Created = true
+            };
+        }, cancellationToken);
+    }
+
+    public async Task<MeshCentralMembershipSyncResult> EnsureUserInMeshAsync(
+        string meshUserId,
+        string meshId,
+        int meshAdminRights = 0,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateConnectionSettings();
+
+        return await ExecuteWithSocketAsync(async (ws, ct) =>
+        {
+            var mesh = await GetMeshByIdAsync(ws, meshId, ct);
+            var alreadyBound = mesh.UserLinks.Any(link =>
+                string.Equals(link, meshUserId, StringComparison.OrdinalIgnoreCase));
+
+            if (alreadyBound)
+            {
+                return new MeshCentralMembershipSyncResult
+                {
+                    UserId = meshUserId,
+                    MeshId = meshId,
+                    Added = false
+                };
+            }
+
+            var responseId = "meduza.addmeshuser." + Guid.NewGuid().ToString("N");
+            await SendAsync(ws, new
+            {
+                action = "addmeshuser",
+                meshid = meshId,
+                userid = meshUserId,
+                meshadmin = meshAdminRights,
+                responseid = responseId
+            }, ct);
+
+            var reply = await ReadUntilAsync(ws, data =>
+            {
+                var incoming = data.GetPropertyOrDefault("responseid");
+                return string.Equals(incoming, responseId, StringComparison.Ordinal);
+            }, ct);
+
+            var result = reply.GetPropertyOrDefault("result");
+            if (!IsOperationOk(result))
+                throw new InvalidOperationException("MeshCentral addmeshuser failed: " + result);
+
+            return new MeshCentralMembershipSyncResult
+            {
+                UserId = meshUserId,
+                MeshId = meshId,
+                Added = true
+            };
+        }, cancellationToken);
+    }
+
+    public async Task<MeshCentralMembershipSyncResult> RemoveUserFromMeshAsync(
+        string meshUserId,
+        string meshId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateConnectionSettings();
+
+        return await ExecuteWithSocketAsync(async (ws, ct) =>
+        {
+            var mesh = await GetMeshByIdAsync(ws, meshId, ct);
+            var alreadyRemoved = !mesh.UserLinks.Any(link =>
+                string.Equals(link, meshUserId, StringComparison.OrdinalIgnoreCase));
+
+            if (alreadyRemoved)
+            {
+                return new MeshCentralMembershipSyncResult
+                {
+                    UserId = meshUserId,
+                    MeshId = meshId,
+                    Added = false
+                };
+            }
+
+            var responseId = "meduza.removemeshuser." + Guid.NewGuid().ToString("N");
+            await SendAsync(ws, new
+            {
+                action = "removemeshuser",
+                meshid = meshId,
+                userid = meshUserId,
+                responseid = responseId
+            }, ct);
+
+            var reply = await ReadUntilAsync(ws, data =>
+            {
+                var incoming = data.GetPropertyOrDefault("responseid");
+                return string.Equals(incoming, responseId, StringComparison.Ordinal);
+            }, ct);
+
+            var result = reply.GetPropertyOrDefault("result");
+            if (!IsOperationOk(result))
+                throw new InvalidOperationException("MeshCentral removemeshuser failed: " + result);
+
+            return new MeshCentralMembershipSyncResult
+            {
+                UserId = meshUserId,
+                MeshId = meshId,
+                Added = false
+            };
+        }, cancellationToken);
+    }
+
+    public async Task DeleteUserAsync(string meshUserId, CancellationToken cancellationToken = default)
+    {
+        ValidateConnectionSettings();
+
+        await ExecuteWithSocketAsync(async (ws, ct) =>
+        {
+            var responseId = "meduza.deleteuser." + Guid.NewGuid().ToString("N");
+            await SendAsync(ws, new
+            {
+                action = "deleteuser",
+                userid = meshUserId,
+                responseid = responseId
+            }, ct);
+
+            var reply = await ReadUntilAsync(ws, data =>
+            {
+                var incoming = data.GetPropertyOrDefault("responseid");
+                return string.Equals(incoming, responseId, StringComparison.Ordinal);
+            }, ct);
+
+            var result = reply.GetPropertyOrDefault("result");
+            if (!IsOperationOk(result))
+                throw new InvalidOperationException("MeshCentral deleteuser failed: " + result);
+
+            return true;
+        }, cancellationToken);
+    }
+
+    private void ValidateConnectionSettings()
+    {
+        if (!_options.Enabled)
+            throw new InvalidOperationException("MeshCentral integration is disabled.");
+
+        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+            throw new InvalidOperationException("MeshCentral BaseUrl is not configured.");
+
+        if (string.IsNullOrWhiteSpace(_options.ApiUsername) || string.IsNullOrWhiteSpace(_options.ApiPassword))
+            throw new InvalidOperationException("MeshCentral API credentials are not configured.");
+    }
+
+    private async Task<T> ExecuteWithSocketAsync<T>(Func<ClientWebSocket, CancellationToken, Task<T>> callback, CancellationToken cancellationToken)
+    {
+        using var ws = new ClientWebSocket();
+        if (_options.IgnoreTlsErrors)
+            ws.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+
+        var xmeshauth = Convert.ToBase64String(Encoding.UTF8.GetBytes(_options.ApiUsername)) + "," +
+                        Convert.ToBase64String(Encoding.UTF8.GetBytes(_options.ApiPassword));
+        ws.Options.SetRequestHeader("x-meshauth", xmeshauth);
+
+        var wsUri = BuildControlUri(_options.BaseUrl);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
+
+        await ws.ConnectAsync(wsUri, linked.Token);
+        return await callback(ws, linked.Token);
+    }
+
+    private async Task<IReadOnlyCollection<MeshCentralUserRef>> ListUsersAsync(ClientWebSocket ws, CancellationToken ct)
+    {
+        var responseId = "meduza.users." + Guid.NewGuid().ToString("N");
+        await SendAsync(ws, new { action = "users", responseid = responseId }, ct);
+
+        var reply = await ReadUntilAsync(ws, data =>
+        {
+            var incoming = data.GetPropertyOrDefault("responseid");
+            return string.Equals(incoming, responseId, StringComparison.Ordinal);
+        }, ct);
+
+        if (!reply.TryGetProperty("users", out var usersNode))
+            return [];
+
+        var users = new List<MeshCentralUserRef>();
+
+        if (usersNode.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in usersNode.EnumerateArray())
+            {
+                var mapped = ParseUser(item);
+                if (mapped is not null)
+                    users.Add(mapped);
+            }
+
+            return users;
+        }
+
+        if (usersNode.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in usersNode.EnumerateObject())
+            {
+                var mapped = ParseUser(property.Value, property.Name);
+                if (mapped is not null)
+                    users.Add(mapped);
+            }
+        }
+
+        return users;
+    }
+
+    private async Task<MeshCentralUserUpsertResult> AddUserAsync(ClientWebSocket ws, string username, string email, string fullName, CancellationToken ct)
+    {
+        var responseId = "meduza.adduser." + Guid.NewGuid().ToString("N");
+        await SendAsync(ws, new
+        {
+            action = "adduser",
+            username,
+            pass = GenerateProvisionPassword(),
+            email,
+            realname = fullName,
+            responseid = responseId
+        }, ct);
+
+        var reply = await ReadUntilAsync(ws, data =>
+        {
+            var incoming = data.GetPropertyOrDefault("responseid");
+            return string.Equals(incoming, responseId, StringComparison.Ordinal);
+        }, ct);
+
+        var result = reply.GetPropertyOrDefault("result");
+        if (!IsOperationOk(result))
+            throw new InvalidOperationException("MeshCentral adduser failed: " + result);
+
+        var userId = reply.GetPropertyOrDefault("userid")
+                     ?? reply.GetPropertyOrDefault("id")
+                     ?? reply.GetPropertyOrDefault("_id")
+                     ?? string.Empty;
+
+        return new MeshCentralUserUpsertResult
+        {
+            UserId = userId,
+            Username = username,
+            Created = true
+        };
+    }
+
+    private async Task EditUserAsync(ClientWebSocket ws, string userId, string email, string fullName, CancellationToken ct)
+    {
+        var responseId = "meduza.edituser." + Guid.NewGuid().ToString("N");
+        await SendAsync(ws, new
+        {
+            action = "edituser",
+            userid = userId,
+            email,
+            realname = fullName,
+            responseid = responseId
+        }, ct);
+
+        var reply = await ReadUntilAsync(ws, data =>
+        {
+            var incoming = data.GetPropertyOrDefault("responseid");
+            return string.Equals(incoming, responseId, StringComparison.Ordinal);
+        }, ct);
+
+        var result = reply.GetPropertyOrDefault("result");
+        if (!IsOperationOk(result))
+            throw new InvalidOperationException("MeshCentral edituser failed: " + result);
+    }
+
+    private async Task<MeshCentralMeshRef> GetMeshByIdAsync(ClientWebSocket ws, string meshId, CancellationToken ct)
+    {
+        var responseId = "meduza.meshes." + Guid.NewGuid().ToString("N");
+        await SendAsync(ws, new { action = "meshes", responseid = responseId }, ct);
+
+        var reply = await ReadUntilAsync(ws, data =>
+        {
+            var incoming = data.GetPropertyOrDefault("responseid");
+            return string.Equals(incoming, responseId, StringComparison.Ordinal);
+        }, ct);
+
+        if (!reply.TryGetProperty("meshes", out var meshesNode) || meshesNode.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("MeshCentral did not return meshes payload.");
+
+        foreach (var mesh in meshesNode.EnumerateArray())
+        {
+            var id = mesh.GetPropertyOrDefault("_id") ?? mesh.GetPropertyOrDefault("id");
+            if (!string.Equals(id, meshId, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var links = new List<string>();
+            if (mesh.TryGetProperty("links", out var linksNode) && linksNode.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var link in linksNode.EnumerateObject())
+                {
+                    if (link.Name.StartsWith("user/", StringComparison.OrdinalIgnoreCase))
+                        links.Add(link.Name);
+                }
+            }
+
+            return new MeshCentralMeshRef(id!, links);
+        }
+
+        throw new InvalidOperationException($"MeshCentral mesh '{meshId}' was not found.");
+    }
+
+    private static MeshCentralUserRef? ParseUser(JsonElement element, string? fallbackUserId = null)
+    {
+        var userId = element.GetPropertyOrDefault("_id")
+                     ?? element.GetPropertyOrDefault("id")
+                     ?? element.GetPropertyOrDefault("userid")
+                     ?? fallbackUserId;
+
+        var username = element.GetPropertyOrDefault("name")
+                       ?? element.GetPropertyOrDefault("username")
+                       ?? userId?.Split('/').LastOrDefault();
+
+        if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(username))
+            return null;
+
+        return new MeshCentralUserRef(userId, username);
+    }
+
+    private static string NormalizeUsername(string username)
+    {
+        var trimmed = username.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            throw new InvalidOperationException("MeshCentral username cannot be empty.");
+
+        var sanitized = InvalidUsernameChars.Replace(trimmed, "-");
+        sanitized = Regex.Replace(sanitized, "-+", "-").Trim('-');
+        if (string.IsNullOrWhiteSpace(sanitized))
+            throw new InvalidOperationException("MeshCentral username is invalid after normalization.");
+
+        return sanitized;
+    }
+
+    private static bool IsOperationOk(string? result)
+    {
+        return string.IsNullOrWhiteSpace(result)
+               || string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(result, "OK", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GenerateProvisionPassword()
+    {
+        return Convert.ToBase64String(Guid.NewGuid().ToByteArray()) + "!A1";
     }
 
     private async Task PersistSiteMeshBindingAsync(Site site, string groupName, string meshId)
@@ -295,6 +682,9 @@ public class MeshCentralApiService : IMeshCentralApiService
         return Regex.Replace(sanitized, "\\s+", "-").ToLowerInvariant();
     }
 }
+
+internal sealed record MeshCentralUserRef(string UserId, string Username);
+internal sealed record MeshCentralMeshRef(string MeshId, IReadOnlyCollection<string> UserLinks);
 
 internal static class MeshCentralJsonExtensions
 {

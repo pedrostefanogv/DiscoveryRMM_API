@@ -4,6 +4,7 @@ using Meduza.Core.Enums.Identity;
 using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces.Identity;
 using Meduza.Api.Filters;
+using Meduza.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Meduza.Api.Controllers;
@@ -15,11 +16,16 @@ public class UserGroupsController : ControllerBase
 {
     private readonly IUserGroupRepository _groupRepo;
     private readonly IRoleRepository _roleRepo;
+    private readonly IMeshCentralIdentitySyncService _meshCentralIdentitySyncService;
 
-    public UserGroupsController(IUserGroupRepository groupRepo, IRoleRepository roleRepo)
+    public UserGroupsController(
+        IUserGroupRepository groupRepo,
+        IRoleRepository roleRepo,
+        IMeshCentralIdentitySyncService meshCentralIdentitySyncService)
     {
         _groupRepo = groupRepo;
         _roleRepo = roleRepo;
+        _meshCentralIdentitySyncService = meshCentralIdentitySyncService;
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────────
@@ -121,6 +127,7 @@ public class UserGroupsController : ControllerBase
     public async Task<IActionResult> AddMember(Guid id, [FromBody] AddGroupMemberDto dto)
     {
         await _groupRepo.AddMemberAsync(id, dto.UserId);
+        await _meshCentralIdentitySyncService.SyncUserScopesAsync(dto.UserId, HttpContext.RequestAborted);
         return NoContent();
     }
 
@@ -130,6 +137,7 @@ public class UserGroupsController : ControllerBase
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
     {
         await _groupRepo.RemoveMemberAsync(id, userId);
+        await _meshCentralIdentitySyncService.SyncUserScopesAsync(userId, HttpContext.RequestAborted);
         return NoContent();
     }
 
@@ -158,6 +166,13 @@ public class UserGroupsController : ControllerBase
             ScopeId = dto.ScopeId,
             AssignedAt = DateTime.UtcNow
         });
+
+        var memberIds = await _groupRepo.GetMemberIdsAsync(id);
+        foreach (var memberId in memberIds)
+        {
+            await _meshCentralIdentitySyncService.SyncUserScopesAsync(memberId, HttpContext.RequestAborted);
+        }
+
         return NoContent();
     }
 
@@ -166,7 +181,18 @@ public class UserGroupsController : ControllerBase
     [RequirePermission(ResourceType.Users, ActionType.Edit)]
     public async Task<IActionResult> RemoveRoleAssignment(Guid id, Guid assignmentId)
     {
+        var roles = await _groupRepo.GetRolesForGroupAsync(id);
+        if (!roles.Any(role => role.Id == assignmentId))
+            return NotFound();
+
         await _groupRepo.RemoveRoleAssignmentAsync(assignmentId);
+
+        var memberIds = await _groupRepo.GetMemberIdsAsync(id);
+        foreach (var memberId in memberIds)
+        {
+            await _meshCentralIdentitySyncService.SyncUserScopesAsync(memberId, HttpContext.RequestAborted);
+        }
+
         return NoContent();
     }
 }

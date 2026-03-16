@@ -82,4 +82,14 @@ public class MeshCentralOptions
     /// Modo padrao de instalacao do agent: background ou interactive.
     /// </summary>
     public string InstallExecutionMode { get; set; } = "background";
+
+    /// <summary>
+    /// Habilita sincronizacao de identidades de usuarios com MeshCentral.
+    /// </summary>
+    public bool IdentitySyncEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Direitos padrao ao vincular usuario em grupo de dispositivo (0 = minimo).
+    /// </summary>
+    public int IdentitySyncDefaultMeshRights { get; set; } = 0;
 }

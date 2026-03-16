@@ -2227,8 +2227,14 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             e.Property(u => u.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(u => u.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             e.Property(u => u.LastLoginAt).HasColumnName("last_login_at").HasColumnType("timestamptz");
+            e.Property(u => u.MeshCentralUserId).HasColumnName("meshcentral_user_id").HasMaxLength(256);
+            e.Property(u => u.MeshCentralUsername).HasColumnName("meshcentral_username").HasMaxLength(100);
+            e.Property(u => u.MeshCentralLastSyncedAt).HasColumnName("meshcentral_last_synced_at").HasColumnType("timestamptz");
+            e.Property(u => u.MeshCentralSyncStatus).HasColumnName("meshcentral_sync_status").HasMaxLength(32);
+            e.Property(u => u.MeshCentralSyncError).HasColumnName("meshcentral_sync_error").HasMaxLength(1024);
             e.HasIndex(u => u.Login).IsUnique().HasDatabaseName("ix_users_login");
             e.HasIndex(u => u.Email).IsUnique().HasDatabaseName("ix_users_email");
+            e.HasIndex(u => u.MeshCentralUserId).HasDatabaseName("ix_users_meshcentral_user_id");
         });
 
         modelBuilder.Entity<UserGroup>(e =>

@@ -2,6 +2,7 @@ using Meduza.Core.DTOs.Users;
 using Meduza.Core.Entities.Identity;
 using Meduza.Core.Enums.Identity;
 using Meduza.Core.Helpers;
+using Meduza.Core.Interfaces;
 using Meduza.Core.Interfaces.Auth;
 using Meduza.Core.Interfaces.Identity;
 using Meduza.Api.Filters;
@@ -16,11 +17,16 @@ public class UsersController : ControllerBase
 {
     private readonly IUserRepository _userRepo;
     private readonly IPasswordService _passwordService;
+    private readonly IMeshCentralIdentitySyncService _meshCentralIdentitySyncService;
 
-    public UsersController(IUserRepository userRepo, IPasswordService passwordService)
+    public UsersController(
+        IUserRepository userRepo,
+        IPasswordService passwordService,
+        IMeshCentralIdentitySyncService meshCentralIdentitySyncService)
     {
         _userRepo = userRepo;
         _passwordService = passwordService;
+        _meshCentralIdentitySyncService = meshCentralIdentitySyncService;
     }
 
     [HttpGet]
@@ -96,7 +102,19 @@ public class UsersController : ControllerBase
         };
 
         await _userRepo.CreateAsync(user);
-        return CreatedAtAction(nameof(GetById), new { id = user.Id }, new { id = user.Id });
+
+        var meshSync = await _meshCentralIdentitySyncService.SyncUserOnCreateAsync(user.Id, HttpContext.RequestAborted);
+        return CreatedAtAction(nameof(GetById), new { id = user.Id }, new
+        {
+            id = user.Id,
+            meshCentralSync = new
+            {
+                synced = meshSync.Synced,
+                meshUsername = meshSync.MeshUsername,
+                siteBindingsApplied = meshSync.SiteBindingsApplied,
+                error = meshSync.Error
+            }
+        });
     }
 
     [HttpPut("{id:guid}")]
@@ -117,6 +135,7 @@ public class UsersController : ControllerBase
         user.UpdatedAt = DateTime.UtcNow;
 
         await _userRepo.UpdateAsync(user);
+        await _meshCentralIdentitySyncService.SyncUserOnUpdatedAsync(user.Id, HttpContext.RequestAborted);
         return NoContent();
     }
 
@@ -167,6 +186,7 @@ public class UsersController : ControllerBase
         user.IsActive = false;
         user.UpdatedAt = DateTime.UtcNow;
         await _userRepo.UpdateAsync(user);
+        await _meshCentralIdentitySyncService.DeprovisionUserAsync(user.Id, deleteRemoteUser: false, HttpContext.RequestAborted);
         return NoContent();
     }
 }
