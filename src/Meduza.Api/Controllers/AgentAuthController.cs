@@ -36,6 +36,7 @@ public class AgentAuthController : ControllerBase
     private readonly IAutomationExecutionReportRepository _automationExecutionReportRepository;
     private readonly ISyncPingDeliveryRepository _syncPingDeliveryRepository;
     private readonly IMeshCentralEmbeddingService _meshCentralEmbeddingService;
+    private readonly IRedisService _redisService;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
@@ -57,7 +58,8 @@ public class AgentAuthController : ControllerBase
         IAutomationTaskService automationTaskService,
         IAutomationExecutionReportRepository automationExecutionReportRepository,
         ISyncPingDeliveryRepository syncPingDeliveryRepository,
-        IMeshCentralEmbeddingService meshCentralEmbeddingService)
+        IMeshCentralEmbeddingService meshCentralEmbeddingService,
+        IRedisService redisService)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -79,6 +81,7 @@ public class AgentAuthController : ControllerBase
         _automationExecutionReportRepository = automationExecutionReportRepository;
         _syncPingDeliveryRepository = syncPingDeliveryRepository;
         _meshCentralEmbeddingService = meshCentralEmbeddingService;
+        _redisService = redisService;
     }
 
     /// <summary>
@@ -464,6 +467,7 @@ public class AgentAuthController : ControllerBase
             hardware.TotalDisksCount = consolidated.Disks.Count;
 
             await _hardwareRepo.UpsertAsync(hardware, consolidated);
+            await InvalidateAgentInventoryCachesAsync(agentId);
             await _agentAutoLabelingService.EvaluateAgentAsync(agentId, "hardware-updated");
         }
 
@@ -851,8 +855,17 @@ public class AgentAuthController : ControllerBase
             });
 
         await _softwareRepo.ReplaceInventoryAsync(agentId, collectedAt, software);
+        await InvalidateAgentInventoryCachesAsync(agentId);
         await _agentAutoLabelingService.EvaluateAgentAsync(agentId, "software-inventory-updated");
         return Ok(new { Message = "Software inventory updated." });
+    }
+
+    private async Task InvalidateAgentInventoryCachesAsync(Guid agentId)
+    {
+        await _redisService.DeleteAsync($"agents:hardware:{agentId:N}");
+        await _redisService.DeleteAsync($"agents:software:snapshot:{agentId:N}");
+        await _redisService.DeleteAsync($"agents:single:{agentId:N}");
+        await _redisService.DeleteByPrefixAsync("software-inventory:");
     }
 
     // === TICKETS ===

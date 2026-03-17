@@ -13,6 +13,9 @@ namespace Meduza.Api.Controllers;
 [Route("api/[controller]")]
 public class AgentsController : ControllerBase
 {
+    private static readonly JsonSerializerOptions CacheJsonOptions = new(JsonSerializerDefaults.Web);
+    private const int AgentCacheTtlSeconds = 30;
+
     private enum PackageCommandOperation
     {
         Install,
@@ -68,7 +71,8 @@ public class AgentsController : ControllerBase
     [HttpGet("by-site/{siteId:guid}")]
     public async Task<IActionResult> GetBySite(Guid siteId)
     {
-        var agents = (await _agentRepo.GetBySiteIdAsync(siteId)).ToList();
+        var cacheKey = $"agents:by-site:{siteId:N}";
+        var agents = await GetOrSetCacheAsync(cacheKey, async () => (await _agentRepo.GetBySiteIdAsync(siteId)).ToList()) ?? [];
         foreach (var agent in agents)
             ApplyEffectiveStatus(agent);
         return Ok(agents);
@@ -77,7 +81,8 @@ public class AgentsController : ControllerBase
     [HttpGet("by-client/{clientId:guid}")]
     public async Task<IActionResult> GetByClient(Guid clientId)
     {
-        var agents = (await _agentRepo.GetByClientIdAsync(clientId)).ToList();
+        var cacheKey = $"agents:by-client:{clientId:N}";
+        var agents = await GetOrSetCacheAsync(cacheKey, async () => (await _agentRepo.GetByClientIdAsync(clientId)).ToList()) ?? [];
         foreach (var agent in agents)
             ApplyEffectiveStatus(agent);
         return Ok(agents);
@@ -86,7 +91,8 @@ public class AgentsController : ControllerBase
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var agent = await _agentRepo.GetByIdAsync(id);
+        var cacheKey = $"agents:single:{id:N}";
+        var agent = await GetOrSetCacheAsync(cacheKey, () => _agentRepo.GetByIdAsync(id));
         if (agent is not null)
             ApplyEffectiveStatus(agent);
         return agent is null ? NotFound() : Ok(agent);
@@ -153,15 +159,26 @@ public class AgentsController : ControllerBase
     [HttpGet("{id:guid}/hardware")]
     public async Task<IActionResult> GetHardware(Guid id)
     {
-        var hardware = await _hardwareRepo.GetByAgentIdAsync(id);
-        var components = await _hardwareRepo.GetComponentsAsync(id);
+        var cacheKey = $"agents:hardware:{id:N}";
+        var payload = await GetOrSetCacheAsync(cacheKey, async () =>
+        {
+            var hardware = await _hardwareRepo.GetByAgentIdAsync(id);
+            var components = await _hardwareRepo.GetComponentsAsync(id);
+            return new AgentHardwareCachePayload(
+                hardware,
+                components.Disks,
+                components.NetworkAdapters,
+                components.MemoryModules,
+                components.Printers);
+        }) ?? new AgentHardwareCachePayload(null, [], [], [], []);
+
         return Ok(new
         {
-            Hardware = hardware,
-            Disks = components.Disks,
-            NetworkAdapters = components.NetworkAdapters,
-            MemoryModules = components.MemoryModules,
-            Printers = components.Printers
+            Hardware = payload.Hardware,
+            Disks = payload.Disks,
+            NetworkAdapters = payload.NetworkAdapters,
+            MemoryModules = payload.MemoryModules,
+            Printers = payload.Printers
         });
     }
 
@@ -213,8 +230,35 @@ public class AgentsController : ControllerBase
         var agent = await _agentRepo.GetByIdAsync(id);
         if (agent is null) return NotFound();
 
-        var snapshot = await _softwareRepo.GetSnapshotByAgentIdAsync(id);
+        var cacheKey = $"agents:software:snapshot:{id:N}";
+        var snapshot = await GetOrSetCacheAsync(cacheKey, async () => await _softwareRepo.GetSnapshotByAgentIdAsync(id));
         return Ok(snapshot);
+    }
+
+    private async Task<T?> GetOrSetCacheAsync<T>(string cacheKey, Func<Task<T?>> factory)
+    {
+        var cached = await _redisService.GetAsync(cacheKey);
+        if (!string.IsNullOrWhiteSpace(cached))
+        {
+            try
+            {
+                var deserialized = JsonSerializer.Deserialize<T>(cached, CacheJsonOptions);
+                if (deserialized is not null)
+                    return deserialized;
+            }
+            catch (JsonException)
+            {
+                await _redisService.DeleteAsync(cacheKey);
+            }
+        }
+
+        var value = await factory();
+        if (value is null)
+            return value;
+
+        var payload = JsonSerializer.Serialize(value, CacheJsonOptions);
+        await _redisService.SetAsync(cacheKey, payload, AgentCacheTtlSeconds);
+        return value;
     }
 
     // --- Commands ---
@@ -339,6 +383,7 @@ public class AgentsController : ControllerBase
     private async Task InvalidateAgentScopeCachesAsync(Guid currentSiteId, Guid? previousSiteId = null, Guid? agentId = null)
     {
         await _redisService.DeleteAsync("agents:all-ids");
+        await _redisService.DeleteByPrefixAsync("software-inventory:");
 
         var siteIds = new HashSet<Guid> { currentSiteId };
         if (previousSiteId.HasValue)
@@ -354,8 +399,19 @@ public class AgentsController : ControllerBase
         }
 
         if (agentId.HasValue)
+        {
             await _redisService.DeleteAsync($"agents:single:{agentId.Value:N}");
+            await _redisService.DeleteAsync($"agents:hardware:{agentId.Value:N}");
+            await _redisService.DeleteAsync($"agents:software:snapshot:{agentId.Value:N}");
+        }
     }
+
+    private sealed record AgentHardwareCachePayload(
+        AgentHardwareInfo? Hardware,
+        IReadOnlyList<DiskInfo> Disks,
+        IReadOnlyList<NetworkAdapterInfo> NetworkAdapters,
+        IReadOnlyList<MemoryModuleInfo> MemoryModules,
+        IReadOnlyList<PrinterInfo> Printers);
 
     private async Task<AgentCommand> BuildAgentCommandFromTaskAsync(Guid agentId, AutomationTaskDetailDto task, CancellationToken cancellationToken)
     {

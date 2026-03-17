@@ -1,4 +1,5 @@
 using Meduza.Core.Interfaces;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -14,20 +15,33 @@ namespace Meduza.Api.Services;
 /// </summary>
 public class KnowledgeEmbeddingBackgroundService(
     IServiceScopeFactory scopeFactory,
+    IConfiguration configuration,
     ILogger<KnowledgeEmbeddingBackgroundService> logger) : BackgroundService
 {
-    private static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
-    private const int BatchSize = 20;
+    private readonly TimeSpan _activeInterval = TimeSpan.FromSeconds(Math.Max(10,
+        configuration.GetValue<int?>("BackgroundJobs:KnowledgeEmbedding:ActiveIntervalSeconds") ?? 30));
+    private readonly TimeSpan _idleInterval = TimeSpan.FromSeconds(Math.Max(30,
+        configuration.GetValue<int?>("BackgroundJobs:KnowledgeEmbedding:IdleIntervalSeconds") ?? 600));
+    private readonly TimeSpan _disabledInterval = TimeSpan.FromSeconds(Math.Max(60,
+        configuration.GetValue<int?>("BackgroundJobs:KnowledgeEmbedding:DisabledIntervalSeconds") ?? 1800));
+    private readonly TimeSpan _startupDelay = TimeSpan.FromSeconds(Math.Max(0,
+        configuration.GetValue<int?>("BackgroundJobs:KnowledgeEmbedding:StartupDelaySeconds") ?? 10));
+    private readonly int _batchSize = Math.Max(1,
+        configuration.GetValue<int?>("BackgroundJobs:KnowledgeEmbedding:BatchSize") ?? 20);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("KnowledgeEmbeddingBackgroundService iniciado.");
 
+        await Task.Delay(_startupDelay, stoppingToken);
+
+        var nextDelay = _activeInterval;
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await ProcessCycleAsync(stoppingToken);
+                nextDelay = await ProcessCycleAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -35,18 +49,19 @@ public class KnowledgeEmbeddingBackgroundService(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Erro no ciclo de embedding da KB. Próxima tentativa em {Interval}s", Interval.TotalSeconds);
+                nextDelay = _activeInterval;
+                logger.LogError(ex, "Erro no ciclo de embedding da KB. Próxima tentativa em {Interval}s", nextDelay.TotalSeconds);
             }
 
-            await Task.Delay(Interval, stoppingToken);
+            await Task.Delay(nextDelay, stoppingToken);
         }
 
         logger.LogInformation("KnowledgeEmbeddingBackgroundService encerrado.");
     }
 
-    private async Task ProcessCycleAsync(CancellationToken ct)
+    private async Task<TimeSpan> ProcessCycleAsync(CancellationToken ct)
     {
-        using var scope = scopeFactory.CreateScope();
+        await using var scope = scopeFactory.CreateAsyncScope();
         var articleRepository = scope.ServiceProvider.GetRequiredService<IKnowledgeArticleRepository>();
         var chunkRepository = scope.ServiceProvider.GetRequiredService<IKnowledgeChunkRepository>();
         var chunkingService = scope.ServiceProvider.GetRequiredService<IKnowledgeChunkingService>();
@@ -58,14 +73,17 @@ public class KnowledgeEmbeddingBackgroundService(
         if (!enabledByAiSettings)
         {
             logger.LogDebug("Knowledge embedding desativado para este ciclo (aiEnabled={AiEnabled}).", enabledByAiSettings);
-            return;
+            return _disabledInterval;
         }
 
+        var processedAnyItem = false;
+
         // ── Passo 1: Re-chunking ────────────────────────────────────────
-        var articlesNeedingChunking = await articleRepository.GetArticlesNeedingChunkingAsync(BatchSize, ct);
+        var articlesNeedingChunking = await articleRepository.GetArticlesNeedingChunkingAsync(_batchSize, ct);
 
         if (articlesNeedingChunking.Count > 0)
         {
+            processedAnyItem = true;
             logger.LogInformation("Re-chunking {Count} artigos...", articlesNeedingChunking.Count);
 
             foreach (var article in articlesNeedingChunking)
@@ -88,10 +106,11 @@ public class KnowledgeEmbeddingBackgroundService(
         }
 
         // ── Passo 2: Geração de Embeddings ─────────────────────────────
-        var chunksWithoutEmbedding = await chunkRepository.GetChunksWithoutEmbeddingAsync(BatchSize, ct);
+        var chunksWithoutEmbedding = await chunkRepository.GetChunksWithoutEmbeddingAsync(_batchSize, ct);
 
         if (chunksWithoutEmbedding.Count > 0)
         {
+            processedAnyItem = true;
             logger.LogInformation("Gerando embeddings para {Count} chunks...", chunksWithoutEmbedding.Count);
 
             foreach (var chunk in chunksWithoutEmbedding)
@@ -114,5 +133,7 @@ public class KnowledgeEmbeddingBackgroundService(
                 }
             }
         }
+
+        return processedAnyItem ? _activeInterval : _idleInterval;
     }
 }

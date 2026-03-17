@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Meduza.Core.Enums;
 using Meduza.Core.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,9 +13,13 @@ namespace Meduza.Api.Services;
 /// </summary>
 public class SlaMonitoringBackgroundService : BackgroundService
 {
+    private static readonly TimeSpan ActiveInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan IdleInterval = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan WarningCooldown = TimeSpan.FromMinutes(30);
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<SlaMonitoringBackgroundService> _logger;
-    private readonly TimeSpan _checkInterval = TimeSpan.FromMinutes(5);
+    private readonly ConcurrentDictionary<Guid, DateTime> _warningLoggedAtUtc = new();
 
     public SlaMonitoringBackgroundService(
         IServiceProvider serviceProvider,
@@ -31,25 +36,27 @@ public class SlaMonitoringBackgroundService : BackgroundService
         // Aguardar um pouco para que a aplicação inicialize
         await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
 
+        var nextDelay = ActiveInterval;
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await CheckSlaBreachesAsync(stoppingToken);
+                nextDelay = await CheckSlaBreachesAsync(stoppingToken);
             }
             catch (Exception ex)
             {
+                nextDelay = ActiveInterval;
                 _logger.LogError(ex, "Error occurred during SLA breach check");
             }
 
-            // Aguardar próximo ciclo
-            await Task.Delay(_checkInterval, stoppingToken);
+            await Task.Delay(nextDelay, stoppingToken);
         }
 
         _logger.LogInformation("SLA Monitoring Background Service stopped");
     }
 
-    private async Task CheckSlaBreachesAsync(CancellationToken cancellationToken)
+    private async Task<TimeSpan> CheckSlaBreachesAsync(CancellationToken cancellationToken)
     {
         await using var scope = _serviceProvider.CreateAsyncScope();
         
@@ -65,7 +72,7 @@ public class SlaMonitoringBackgroundService : BackgroundService
             if (openTickets == null || !openTickets.Any())
             {
                 _logger.LogDebug("No open tickets with SLA to check");
-                return;
+                return IdleInterval;
             }
 
             _logger.LogInformation("Checking SLA for {Count} open tickets", openTickets.Count);
@@ -88,26 +95,44 @@ public class SlaMonitoringBackgroundService : BackgroundService
                     
                     if (percentUsed >= 80 && percentUsed < 85)
                     {
-                        // Registrar aviso de SLA
-                        await activityLogService.LogActivityAsync(
-                            ticket.Id,
-                            TicketActivityType.SlaWarning,
-                            null,
-                            percentUsed.ToString("F2"),
-                            "80",
-                            "SLA warning: 20% time remaining"
-                        );
+                        if (ShouldLogWarning(ticket.Id))
+                        {
+                            await activityLogService.LogActivityAsync(
+                                ticket.Id,
+                                TicketActivityType.SlaWarning,
+                                null,
+                                percentUsed.ToString("F2"),
+                                "80",
+                                "SLA warning: 20% time remaining"
+                            );
 
-                        _logger.LogWarning("SLA Warning: Ticket {TicketId} - Only {Percent}% time remaining", 
-                            ticket.Id, (100 - percentUsed).ToString("F2"));
+                            _logger.LogWarning("SLA Warning: Ticket {TicketId} - Only {Percent}% time remaining", 
+                                ticket.Id, (100 - percentUsed).ToString("F2"));
+                        }
+                    }
+                    else
+                    {
+                        _warningLoggedAtUtc.TryRemove(ticket.Id, out _);
                     }
                 }
             }
+
+            return ActiveInterval;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error in CheckSlaBreachesAsync");
             throw;
         }
+    }
+
+    private bool ShouldLogWarning(Guid ticketId)
+    {
+        var now = DateTime.UtcNow;
+        if (_warningLoggedAtUtc.TryGetValue(ticketId, out var lastLoggedAtUtc) && now - lastLoggedAtUtc < WarningCooldown)
+            return false;
+
+        _warningLoggedAtUtc[ticketId] = now;
+        return true;
     }
 }

@@ -61,6 +61,13 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         await EvaluateAgentWithRulesAsync(agentId, reason, rules, cancellationToken);
     }
 
+    public async Task<bool> HasEnabledRulesAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        var rules = await GetCachedEnabledRulesAsync();
+        return rules.Count > 0;
+    }
+
     public async Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, CancellationToken cancellationToken = default)
     {
         var safeBatchSize = Math.Clamp(batchSize, 25, 1000);

@@ -33,15 +33,43 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
-
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                DrainQueue();
+                if (_pending.IsEmpty)
+                {
+                    var ping = await _queue.Reader.ReadAsync(stoppingToken);
+                    EnqueuePending(ping);
+                    DrainQueue();
+                    continue;
+                }
+
+                var nextDueAtUtc = GetNextDueAtUtc();
+                if (nextDueAtUtc is null)
+                {
+                    await WaitForIncomingPingAsync(stoppingToken);
+                    continue;
+                }
+
+                var delay = nextDueAtUtc.Value - DateTime.UtcNow;
+                if (delay <= TimeSpan.Zero)
+                {
+                    await FlushDuePingsAsync(stoppingToken);
+                    continue;
+                }
+
+                var queueReadyTask = _queue.Reader.WaitToReadAsync(stoppingToken).AsTask();
+                var delayTask = Task.Delay(delay, stoppingToken);
+                var completedTask = await Task.WhenAny(queueReadyTask, delayTask);
+
+                if (completedTask == queueReadyTask && await queueReadyTask)
+                {
+                    DrainQueue();
+                    continue;
+                }
+
                 await FlushDuePingsAsync(stoppingToken);
-                await timer.WaitForNextTickAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -61,12 +89,17 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
     {
         while (_queue.Reader.TryRead(out var ping))
         {
-            var key = BuildCoalesceKey(ping);
-            _pending.AddOrUpdate(
-                key,
-                _ => new PendingPing(ping, DateTime.UtcNow.Add(DebounceWindow)),
-                (_, __) => new PendingPing(ping, DateTime.UtcNow.Add(DebounceWindow)));
+            EnqueuePending(ping);
         }
+    }
+
+    private void EnqueuePending(SyncInvalidationPingDto ping)
+    {
+        var key = BuildCoalesceKey(ping);
+        _pending.AddOrUpdate(
+            key,
+            _ => new PendingPing(ping, DateTime.UtcNow.Add(DebounceWindow)),
+            (_, __) => new PendingPing(ping, DateTime.UtcNow.Add(DebounceWindow)));
     }
 
     private async Task FlushDuePingsAsync(CancellationToken cancellationToken)
@@ -96,6 +129,22 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
 
             await DispatchPingAsync(pending.Ping, cancellationToken);
         }
+    }
+
+    private async Task WaitForIncomingPingAsync(CancellationToken cancellationToken)
+    {
+        if (await _queue.Reader.WaitToReadAsync(cancellationToken))
+        {
+            DrainQueue();
+        }
+    }
+
+    private DateTime? GetNextDueAtUtc()
+    {
+        if (_pending.IsEmpty)
+            return null;
+
+        return _pending.MinBy(entry => entry.Value.DueAtUtc).Value.DueAtUtc;
     }
 
     private async Task DispatchPingAsync(SyncInvalidationPingDto ping, CancellationToken cancellationToken)

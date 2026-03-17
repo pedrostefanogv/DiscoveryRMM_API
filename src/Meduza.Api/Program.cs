@@ -131,6 +131,13 @@ builder.Services.AddSingleton<ChocolateyApiClient>();
 builder.Services.AddSingleton<WingetFeedClient>();
 builder.Services.AddHttpClient();
 
+var enableKnowledgeEmbeddingBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:KnowledgeEmbeddingEnabled") ?? true;
+var enableSlaMonitoringBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:SlaMonitoringEnabled") ?? true;
+var enableReportGenerationBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:ReportGenerationEnabled") ?? true;
+var enableAgentLabelingReconciliationBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:AgentLabelingReconciliationEnabled") ?? true;
+var enableMeshCentralIdentityReconciliationBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:MeshCentralIdentityReconciliationEnabled") ?? true;
+var enableMeshCentralGroupPolicyReconciliationBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:MeshCentralGroupPolicyReconciliationEnabled") ?? true;
+
 // AI Chat & MCP
 builder.Services.AddSingleton<ILlmProvider, OpenAiProvider>();
 builder.Services.AddScoped<IAiChatService, AiChatService>();
@@ -144,7 +151,10 @@ builder.Services.AddScoped<IKnowledgeChunkRepository, KnowledgeChunkRepository>(
 builder.Services.AddScoped<IEmbeddingProvider, OpenAiEmbeddingProvider>();
 builder.Services.AddScoped<IKnowledgeChunkingService, KnowledgeChunkingService>();
 builder.Services.AddScoped<IKnowledgeMcpTool, KnowledgeMcpTool>();
-builder.Services.AddHostedService<KnowledgeEmbeddingBackgroundService>();
+if (enableKnowledgeEmbeddingBackgroundService)
+{
+    builder.Services.AddHostedService<KnowledgeEmbeddingBackgroundService>();
+}
 builder.Services.Configure<MeshCentralOptions>(
     builder.Configuration.GetSection("MeshCentral"));
 builder.Services.Configure<SecretEncryptionOptions>(
@@ -198,13 +208,33 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
 });
 builder.Services.AddSingleton<IRedisService, RedisService>();
 builder.Services.AddHostedService<LogPurgeBackgroundService>();
-builder.Services.AddHostedService<SlaMonitoringBackgroundService>();
-builder.Services.AddHostedService<ReportGenerationBackgroundService>();
+if (enableSlaMonitoringBackgroundService)
+{
+    builder.Services.AddHostedService<SlaMonitoringBackgroundService>();
+}
+
+if (enableReportGenerationBackgroundService)
+{
+    builder.Services.AddHostedService<ReportGenerationBackgroundService>();
+}
+
 builder.Services.AddHostedService<ReportRetentionBackgroundService>();
 builder.Services.AddHostedService<AiChatRetentionBackgroundService>();
-builder.Services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
-builder.Services.AddHostedService<MeshCentralIdentityReconciliationBackgroundService>();
-builder.Services.AddHostedService<MeshCentralGroupPolicyReconciliationBackgroundService>();
+if (enableAgentLabelingReconciliationBackgroundService)
+{
+    builder.Services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
+}
+
+if (enableMeshCentralIdentityReconciliationBackgroundService)
+{
+    builder.Services.AddHostedService<MeshCentralIdentityReconciliationBackgroundService>();
+}
+
+if (enableMeshCentralGroupPolicyReconciliationBackgroundService)
+{
+    builder.Services.AddHostedService<MeshCentralGroupPolicyReconciliationBackgroundService>();
+}
+
 builder.Services.AddHostedService<AgentPackagePrebuildHostedService>();
 
 // ── Identity & Auth ───────────────────────────────────────────────────────
