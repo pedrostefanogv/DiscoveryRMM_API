@@ -2,7 +2,7 @@ using FluentMigrator;
 
 namespace Meduza.Migrations.Migrations;
 
-[Migration(80)]
+[Migration(20260316_080)]
 public class M080_RemoveMeshRightsOverrideFromUserGroupRoles : Migration
 {
     public override void Up()

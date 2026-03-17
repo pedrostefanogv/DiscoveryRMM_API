@@ -2,7 +2,7 @@ using FluentMigrator;
 
 namespace Meduza.Migrations.Migrations;
 
-[Migration(81)]
+[Migration(20260316_081)]
 public class M081_CreateMeshCentralRightsProfiles : Migration
 {
     public override void Up()

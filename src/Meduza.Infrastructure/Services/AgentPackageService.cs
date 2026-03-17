@@ -131,12 +131,17 @@ public class AgentPackageService : IAgentPackageService
         var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
         var defaultMinimal = (_config["AgentPackage:InstallerDefaults:MinimalDefault"] ?? "1") == "0" ? "0" : "1";
 
+        // Usa separador de caminho compatível com o sistema operacional de build.
+        var binaryRelPath = OperatingSystem.IsWindows()
+            ? @"..\..\bin\meduza-discovery.exe"
+            : "../../bin/meduza-discovery.exe";
+
         await RunProcessAsync(
             fileName: makensisPath,
             workingDirectory: installerDir,
             arguments:
             [
-                "-DARG_WAILS_AMD64_BINARY=..\\..\\bin\\meduza-discovery.exe",
+                $"-DARG_WAILS_AMD64_BINARY={binaryRelPath}",
                 $"-DARG_DEFAULT_URL={publicApiServer}",
                 $"-DARG_DEFAULT_KEY={rawDeployToken}",
                 $"-DARG_DEFAULT_DISCOVERY={defaultDiscovery}",
@@ -169,17 +174,28 @@ public class AgentPackageService : IAgentPackageService
     private string ResolveWailsPath()
     {
         var configured = _config["AgentPackage:WailsPath"];
+
+        // Se a configuração aponta para um arquivo existente, use diretamente.
+        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+            return configured;
+
+        // Caminhos comuns de instalação (Windows e Linux).
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var candidates = new[]
         {
-            configured,
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "go", "bin", "wails.exe")
+            Path.Combine(userProfile, "go", "bin", "wails.exe"),
+            Path.Combine(userProfile, "go", "bin", "wails"),
+            "/root/go/bin/wails",
+            "/usr/local/bin/wails",
+            "/usr/bin/wails",
         };
 
-        var existing = candidates.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path));
+        var existing = candidates.FirstOrDefault(File.Exists);
         if (existing is not null)
             return existing;
 
-        throw new FileNotFoundException("Wails executable was not found. Configure AgentPackage:WailsPath.");
+        // Fallback: resolução via PATH do sistema (funciona em Windows e Linux).
+        return configured ?? (OperatingSystem.IsWindows() ? "wails.exe" : "wails");
     }
 
     private string ResolveMakensisPath()
@@ -189,18 +205,21 @@ public class AgentPackageService : IAgentPackageService
         if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
             return configured;
 
+        // Caminhos comuns de instalação (Windows e Linux).
         var commonPaths = new[]
         {
-            configured,
             @"C:\Program Files (x86)\NSIS\makensis.exe",
-            @"C:\Program Files\NSIS\makensis.exe"
+            @"C:\Program Files\NSIS\makensis.exe",
+            "/usr/bin/makensis",
+            "/usr/local/bin/makensis",
         };
 
-        var existing = commonPaths.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path));
+        var existing = commonPaths.FirstOrDefault(File.Exists);
         if (existing is not null)
             return existing;
 
-        throw new FileNotFoundException("NSIS makensis executable was not found. Configure AgentPackage:MakensisPath or install NSIS.");
+        // Fallback: resolução via PATH do sistema (funciona em Windows e Linux).
+        return configured ?? "makensis";
     }
 
     private static async Task RunProcessAsync(string fileName, string workingDirectory, string[] arguments, CancellationToken cancellationToken = default)

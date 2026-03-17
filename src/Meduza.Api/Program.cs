@@ -287,7 +287,8 @@ using (var scope = app.Services.CreateScope())
 await DatabaseSeeder.SeedAsync(app.Services);
 
 // Configure the HTTP request pipeline
-if (app.Environment.IsDevelopment())
+var openApiEnabled = builder.Configuration.GetValue("OpenApi:Enabled", true);
+if (app.Environment.IsDevelopment() || openApiEnabled)
 {
     app.MapOpenApi();
     app.MapScalarApiReference();

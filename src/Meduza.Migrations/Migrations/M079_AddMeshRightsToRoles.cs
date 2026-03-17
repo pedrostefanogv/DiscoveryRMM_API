@@ -2,7 +2,7 @@ using FluentMigrator;
 
 namespace Meduza.Migrations.Migrations;
 
-[Migration(79)]
+[Migration(20260316_079)]
 public class M079_AddMeshRightsToRoles : Migration
 {
     public override void Up()

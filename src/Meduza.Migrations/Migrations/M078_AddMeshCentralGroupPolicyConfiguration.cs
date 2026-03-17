@@ -2,7 +2,7 @@ using FluentMigrator;
 
 namespace Meduza.Migrations.Migrations;
 
-[Migration(78)]
+[Migration(20260316_078)]
 public class M078_AddMeshCentralGroupPolicyConfiguration : Migration
 {
     public override void Up()
