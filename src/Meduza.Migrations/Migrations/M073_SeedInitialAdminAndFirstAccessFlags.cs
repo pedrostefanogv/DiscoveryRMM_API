@@ -5,13 +5,13 @@ namespace Meduza.Migrations.Migrations;
 [Migration(20260316_073)]
 public class M073_SeedInitialAdminAndFirstAccessFlags : Migration
 {
-    private const string AdminUserId = "00000000-0000-7001-0000-00000000a001";
-    private const string AdminGroupId = "00000000-0000-7001-0000-00000000a101";
-    private const string AdminGroupRoleId = "00000000-0000-7001-0000-00000000a201";
-    private const string AdminRoleId = "00000000-0000-7001-0000-000000000001";
-
     // Senha inicial: Mudar@123
     // Hash Argon2id gerado com os mesmos parametros de UserPasswordService.
+    private const string AdminLogin = "admin";
+    private const string AdminEmail = "admin@local.meduza";
+    private const string AdminFullName = "Administrador Inicial";
+    private const string AdminGroupName = "Administradores";
+    private const string AdminRoleName = "Admin";
     private const string AdminPasswordSalt = "UbXXzHv/t1zmKcig2y6tVw==";
     private const string AdminPasswordHash = "h9Qf+17u20UinQP42gG8UXt6G2jlepfRYsj2YK0095g=";
 
@@ -30,11 +30,11 @@ public class M073_SeedInitialAdminAndFirstAccessFlags : Migration
                 must_change_password, must_change_profile,
                 created_at, updated_at
             )
-            VALUES (
-                '{AdminUserId}',
-                'admin',
-                'admin@local.meduza',
-                'Administrador Inicial',
+            SELECT
+                gen_random_uuid(),
+                '{AdminLogin}',
+                '{AdminEmail}',
+                '{AdminFullName}',
                 '{AdminPasswordHash}',
                 '{AdminPasswordSalt}',
                 true,
@@ -44,42 +44,97 @@ public class M073_SeedInitialAdminAndFirstAccessFlags : Migration
                 true,
                 NOW(),
                 NOW()
-            )
-            ON CONFLICT (login) DO NOTHING;
+            WHERE NOT EXISTS (
+                SELECT 1 FROM users WHERE login = '{AdminLogin}'
+            );
         """);
 
         Execute.Sql($"""
             INSERT INTO user_groups (id, name, description, is_active, created_at, updated_at)
-            VALUES (
-                '{AdminGroupId}',
-                'Administradores',
+            SELECT
+                gen_random_uuid(),
+                '{AdminGroupName}',
                 'Grupo administrativo inicial do sistema',
                 true,
                 NOW(),
                 NOW()
-            )
-            ON CONFLICT (id) DO NOTHING;
+            WHERE NOT EXISTS (
+                SELECT 1 FROM user_groups WHERE name = '{AdminGroupName}'
+            );
         """);
 
         Execute.Sql($"""
             INSERT INTO user_group_memberships (user_id, group_id, joined_at)
-            VALUES ('{AdminUserId}', '{AdminGroupId}', NOW())
-            ON CONFLICT (user_id, group_id) DO NOTHING;
+            SELECT u.id, g.id, NOW()
+            FROM users u
+            CROSS JOIN LATERAL (
+                SELECT id
+                FROM user_groups
+                WHERE name = '{AdminGroupName}'
+                ORDER BY created_at, id
+                LIMIT 1
+            ) g
+            WHERE u.login = '{AdminLogin}'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM user_group_memberships ugm
+                  WHERE ugm.user_id = u.id
+                    AND ugm.group_id = g.id
+              );
         """);
 
         Execute.Sql($"""
             INSERT INTO user_group_roles (id, group_id, role_id, scope_level, scope_id, assigned_at)
-            VALUES ('{AdminGroupRoleId}', '{AdminGroupId}', '{AdminRoleId}', 'Global', NULL, NOW())
-            ON CONFLICT (id) DO NOTHING;
+            SELECT gen_random_uuid(), g.id, r.id, 'Global', NULL, NOW()
+            FROM (
+                SELECT id
+                FROM user_groups
+                WHERE name = '{AdminGroupName}'
+                ORDER BY created_at, id
+                LIMIT 1
+            ) g
+            CROSS JOIN (
+                SELECT id
+                FROM roles
+                WHERE name = '{AdminRoleName}'
+                ORDER BY is_system DESC, created_at, id
+                LIMIT 1
+            ) r
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM user_group_roles ugr
+                WHERE ugr.group_id = g.id
+                  AND ugr.role_id = r.id
+                  AND ugr.scope_level = 'Global'
+                  AND ugr.scope_id IS NULL
+            );
         """);
     }
 
     public override void Down()
     {
-        Execute.Sql($"DELETE FROM user_group_roles WHERE id = '{AdminGroupRoleId}';");
-        Execute.Sql($"DELETE FROM user_group_memberships WHERE user_id = '{AdminUserId}' AND group_id = '{AdminGroupId}';");
-        Execute.Sql($"DELETE FROM user_groups WHERE id = '{AdminGroupId}';");
-        Execute.Sql($"DELETE FROM users WHERE id = '{AdminUserId}';");
+        Execute.Sql($"""
+            DELETE FROM user_group_roles ugr
+            USING user_groups g, roles r
+            WHERE g.name = '{AdminGroupName}'
+              AND r.name = '{AdminRoleName}'
+              AND ugr.group_id = g.id
+              AND ugr.role_id = r.id
+              AND ugr.scope_level = 'Global'
+              AND ugr.scope_id IS NULL;
+        """);
+
+        Execute.Sql($"""
+            DELETE FROM user_group_memberships ugm
+            USING users u, user_groups g
+            WHERE u.login = '{AdminLogin}'
+              AND g.name = '{AdminGroupName}'
+              AND ugm.user_id = u.id
+              AND ugm.group_id = g.id;
+        """);
+
+        Execute.Sql($"DELETE FROM user_groups WHERE name = '{AdminGroupName}';");
+        Execute.Sql($"DELETE FROM users WHERE login = '{AdminLogin}';");
 
         Delete.Column("must_change_profile").FromTable("users");
         Delete.Column("must_change_password").FromTable("users");

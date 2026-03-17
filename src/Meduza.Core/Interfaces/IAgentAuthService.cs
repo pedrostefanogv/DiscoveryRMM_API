@@ -8,7 +8,7 @@ namespace Meduza.Core.Interfaces;
 /// </summary>
 public interface IAgentAuthService
 {
-    Task<(AgentToken Token, string RawToken)> CreateTokenAsync(Guid agentId, string? description, int? expirationDays = null);
+    Task<(AgentToken Token, string RawToken)> CreateTokenAsync(Guid agentId, string? description);
     Task<AgentToken?> ValidateTokenAsync(string rawToken);
     Task RevokeTokenAsync(Guid tokenId);
     Task RevokeAllTokensAsync(Guid agentId);

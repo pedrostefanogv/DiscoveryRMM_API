@@ -587,7 +587,7 @@ public class AgentsController : ControllerBase
         var agent = await _agentRepo.GetByIdAsync(id);
         if (agent is null) return NotFound();
 
-        var (token, rawToken) = await _authService.CreateTokenAsync(id, request.Description, request.ExpirationDays);
+        var (token, rawToken) = await _authService.CreateTokenAsync(id, request.Description);
         return Ok(new { Token = rawToken, Id = token.Id, ExpiresAt = token.ExpiresAt });
     }
 
@@ -628,7 +628,7 @@ public record HardwareComponentsPayload(
     List<NetworkAdapterInfo>? NetworkAdapters,
     List<MemoryModuleInfo>? MemoryModules,
     List<PrinterInfo>? Printers);
-public record CreateTokenRequest(string? Description, int? ExpirationDays);
+public record CreateTokenRequest(string? Description);
 public record ForceAutomationSyncRequest(
     bool Policies = true,
     bool Inventory = false,

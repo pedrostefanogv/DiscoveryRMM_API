@@ -41,9 +41,6 @@ public class CreateTokenRequestValidator : AbstractValidator<CreateTokenRequest>
     public CreateTokenRequestValidator()
     {
         RuleFor(x => x.Description).MaximumLength(200);
-        RuleFor(x => x.ExpirationDays)
-            .Must(d => !d.HasValue || d.Value is >= 1 and <= 3650)
-            .WithMessage("ExpirationDays must be between 1 and 3650.");
     }
 }
 

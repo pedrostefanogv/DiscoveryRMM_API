@@ -285,6 +285,8 @@ public class ExceptionHandlingMiddleware
         {
             ArgumentException or ArgumentNullException or InvalidOperationException 
                 => StatusCodes.Status400BadRequest,
+            UnauthorizedAccessException
+                => StatusCodes.Status401Unauthorized,
             TimeoutException 
                 => StatusCodes.Status503ServiceUnavailable,
             OperationCanceledException 

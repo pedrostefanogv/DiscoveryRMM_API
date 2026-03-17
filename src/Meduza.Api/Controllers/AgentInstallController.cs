@@ -58,7 +58,7 @@ public class AgentInstallController : ControllerBase
             MacAddress = request.MacAddress
         });
 
-        var (token, rawToken) = await _authService.CreateTokenAsync(agent.Id, "Install token", null);
+        var (token, rawToken) = await _authService.CreateTokenAsync(agent.Id, "Install token");
 
         return Ok(new
         {
@@ -97,7 +97,7 @@ public class AgentInstallController : ControllerBase
         if (site is null || site.Id != deployToken.SiteId.Value || site.ClientId != deployToken.ClientId.Value)
             return Unauthorized(new { error = "Deploy token scope does not allow this agent." });
 
-        var (token, rawToken) = await _authService.CreateTokenAsync(agentId, "Install token", null);
+        var (token, rawToken) = await _authService.CreateTokenAsync(agentId, "Install token");
         return Ok(new { Token = rawToken, Id = token.Id, ExpiresAt = token.ExpiresAt });
     }
 }

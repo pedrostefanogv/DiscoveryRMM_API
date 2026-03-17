@@ -62,10 +62,7 @@ public class ResolvedConfiguration
 
     // ============ Token / Heartbeat ============
 
-    public int TokenExpirationDays { get; set; }
-    public int MaxTokensPerAgent { get; set; }
     public int AgentHeartbeatIntervalSeconds { get; set; }
-    public int AgentOfflineThresholdSeconds { get; set; }
 
     // ============ Metadados da resolução ============
 

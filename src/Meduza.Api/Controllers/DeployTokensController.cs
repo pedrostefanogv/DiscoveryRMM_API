@@ -1,5 +1,7 @@
 using Meduza.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using Meduza.Core.Configuration;
 
 namespace Meduza.Api.Controllers;
 
@@ -15,6 +17,7 @@ public class DeployTokensController : ControllerBase
     private readonly IConfigurationResolver _configurationResolver;
     private readonly IMeshCentralProvisioningService _meshCentralProvisioningService;
     private readonly IMeshCentralApiService _meshCentralApiService;
+    private readonly MeshCentralOptions _meshCentralOptions;
 
     public DeployTokensController(
         IDeployTokenService deployTokenService,
@@ -24,7 +27,8 @@ public class DeployTokensController : ControllerBase
         IAgentPackageService agentPackageService,
         IConfigurationResolver configurationResolver,
         IMeshCentralProvisioningService meshCentralProvisioningService,
-        IMeshCentralApiService meshCentralApiService)
+        IMeshCentralApiService meshCentralApiService,
+        IOptions<MeshCentralOptions> meshCentralOptions)
     {
         _deployTokenService = deployTokenService;
         _deployTokenRepository = deployTokenRepository;
@@ -34,6 +38,7 @@ public class DeployTokensController : ControllerBase
         _configurationResolver = configurationResolver;
         _meshCentralProvisioningService = meshCentralProvisioningService;
         _meshCentralApiService = meshCentralApiService;
+        _meshCentralOptions = meshCentralOptions.Value;
     }
 
     [HttpGet]
@@ -101,7 +106,8 @@ public class DeployTokensController : ControllerBase
 
         object? meshCentralInstall = null;
         var resolved = await _configurationResolver.ResolveForSiteAsync(site.Id);
-        if (resolved.RemoteSupportMeshCentralEnabled)
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
+        if (meshCentralEnabledEffective)
         {
             var client = await _clientRepository.GetByIdAsync(site.ClientId);
             if (client is not null)
@@ -114,7 +120,11 @@ public class DeployTokensController : ControllerBase
                 {
                     try
                     {
-                        meshCentralInstall = _meshCentralProvisioningService.BuildInstallInstructions(client, site, rawToken);
+                        meshCentralInstall = _meshCentralProvisioningService.BuildInstallInstructions(
+                            client,
+                            site,
+                            rawToken,
+                            meshCentralEnabledEffective);
                     }
                     catch (InvalidOperationException)
                     {
@@ -191,7 +201,8 @@ public class DeployTokensController : ControllerBase
             return NotFound(new { error = "Site not found." });
 
         var resolved = await _configurationResolver.ResolveForSiteAsync(site.Id);
-        if (!resolved.RemoteSupportMeshCentralEnabled)
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
+        if (!meshCentralEnabledEffective)
             return StatusCode(403, new { error = "MeshCentral support is disabled for this scope." });
 
         var client = await _clientRepository.GetByIdAsync(token.ClientId.Value);
@@ -207,7 +218,11 @@ public class DeployTokensController : ControllerBase
         {
             try
             {
-                var fallback = _meshCentralProvisioningService.BuildInstallInstructions(client, site, request.RawToken);
+                var fallback = _meshCentralProvisioningService.BuildInstallInstructions(
+                    client,
+                    site,
+                    request.RawToken,
+                    meshCentralEnabledEffective);
                 return Ok(fallback);
             }
             catch (InvalidOperationException)

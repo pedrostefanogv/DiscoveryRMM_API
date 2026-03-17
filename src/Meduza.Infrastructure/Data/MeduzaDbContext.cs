@@ -648,10 +648,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .HasConversion<int>();
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AutoUpdateSettingsJson).HasColumnName("auto_update_settings_json");
-            entity.Property(config => config.TokenExpirationDays).HasColumnName("token_expiration_days");
-            entity.Property(config => config.MaxTokensPerAgent).HasColumnName("max_tokens_per_agent");
             entity.Property(config => config.AgentHeartbeatIntervalSeconds).HasColumnName("agent_heartbeat_interval_seconds");
-            entity.Property(config => config.AgentOfflineThresholdSeconds).HasColumnName("agent_offline_threshold_seconds");
             entity.Property(config => config.BrandingSettingsJson).HasColumnName("branding_settings_json");
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json");
@@ -735,10 +732,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AutoUpdateSettingsJson).HasColumnName("auto_update_settings_json");
-            entity.Property(config => config.TokenExpirationDays).HasColumnName("token_expiration_days");
-            entity.Property(config => config.MaxTokensPerAgent).HasColumnName("max_tokens_per_agent");
             entity.Property(config => config.AgentHeartbeatIntervalSeconds).HasColumnName("agent_heartbeat_interval_seconds");
-            entity.Property(config => config.AgentOfflineThresholdSeconds).HasColumnName("agent_offline_threshold_seconds");
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
             entity.Property(config => config.CreatedAt)
                 .HasColumnName("created_at")

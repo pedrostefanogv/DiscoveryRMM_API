@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
+using Meduza.Core.Configuration;
 using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
@@ -8,6 +9,7 @@ using Meduza.Core.Interfaces;
 using Meduza.Core.ValueObjects;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Meduza.Api.Controllers;
 
@@ -37,6 +39,7 @@ public class AgentAuthController : ControllerBase
     private readonly ISyncPingDeliveryRepository _syncPingDeliveryRepository;
     private readonly IMeshCentralEmbeddingService _meshCentralEmbeddingService;
     private readonly IRedisService _redisService;
+    private readonly MeshCentralOptions _meshCentralOptions;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
@@ -59,7 +62,8 @@ public class AgentAuthController : ControllerBase
         IAutomationExecutionReportRepository automationExecutionReportRepository,
         ISyncPingDeliveryRepository syncPingDeliveryRepository,
         IMeshCentralEmbeddingService meshCentralEmbeddingService,
-        IRedisService redisService)
+        IRedisService redisService,
+        IOptions<MeshCentralOptions> meshCentralOptions)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -82,6 +86,7 @@ public class AgentAuthController : ControllerBase
         _syncPingDeliveryRepository = syncPingDeliveryRepository;
         _meshCentralEmbeddingService = meshCentralEmbeddingService;
         _redisService = redisService;
+        _meshCentralOptions = meshCentralOptions.Value;
     }
 
     /// <summary>
@@ -98,9 +103,34 @@ public class AgentAuthController : ControllerBase
         if (agent is null) return NotFound();
 
         var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
         if (resolved.AIIntegration is not null)
             resolved.AIIntegration.ApiKey = null;
-        return Ok(resolved);
+
+        // Payload enxuto para agent: sem metadados de heranca/bloqueio e com flag booleana de App Store.
+        return Ok(new
+        {
+            resolved.RecoveryEnabled,
+            resolved.DeviceRecoveryEnabled,
+            resolved.DiscoveryEnabled,
+            resolved.AgentNetworkDiscoveryEnabled,
+            resolved.P2PFilesEnabled,
+            resolved.P2PTransferEnabled,
+            resolved.SupportEnabled,
+            resolved.RemoteSupportMeshCentralEnabled,
+            MeshCentralEnabledEffective = meshCentralEnabledEffective,
+            resolved.MeshCentralGroupPolicyProfile,
+            resolved.ChatAIEnabled,
+            resolved.KnowledgeBaseEnabled,
+            AppStoreEnabled = resolved.AppStorePolicy != AppStorePolicyType.Disabled,
+            resolved.InventoryIntervalHours,
+            resolved.AutoUpdate,
+            resolved.AIIntegration,
+            resolved.AgentHeartbeatIntervalSeconds,
+            resolved.SiteId,
+            resolved.ClientId,
+            resolved.ResolvedAt
+        });
     }
 
     /// <summary>
@@ -122,7 +152,8 @@ public class AgentAuthController : ControllerBase
             return NotFound(new { error = "Site not found." });
 
         var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
-        if (!resolved.RemoteSupportMeshCentralEnabled)
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
+        if (!meshCentralEnabledEffective)
             return StatusCode(403, new { error = "MeshCentral support is disabled for this scope." });
 
         var desiredViewMode = request?.ViewMode ?? 11;

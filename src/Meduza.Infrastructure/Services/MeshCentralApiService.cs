@@ -38,6 +38,8 @@ public class MeshCentralApiService : IMeshCentralApiService
         string meduzaDeployToken,
         CancellationToken cancellationToken = default)
     {
+        await EnsureMeshCentralEnabledForSiteAsync(site.Id, cancellationToken);
+
         if (!_options.Enabled)
             throw new InvalidOperationException("MeshCentral integration is disabled.");
 
@@ -87,6 +89,7 @@ public class MeshCentralApiService : IMeshCentralApiService
         string desiredGroupPolicyProfile,
         CancellationToken cancellationToken = default)
     {
+        await EnsureMeshCentralEnabledForSiteAsync(site.Id, cancellationToken);
         ValidateConnectionSettings();
 
         var existing = await _siteConfigurationRepository.GetBySiteIdAsync(site.Id);
@@ -318,6 +321,15 @@ public class MeshCentralApiService : IMeshCentralApiService
         var loginKey = ParseHex(_options.LoginKeyHex);
         if (loginKey.Length < 32)
             throw new InvalidOperationException("MeshCentral LoginKeyHex is invalid.");
+    }
+
+    private async Task EnsureMeshCentralEnabledForSiteAsync(Guid siteId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var resolved = await _configurationResolver.ResolveForSiteAsync(siteId);
+        if (!resolved.RemoteSupportMeshCentralEnabled)
+            throw new InvalidOperationException("MeshCentral support is disabled for this scope.");
     }
 
     private async Task<T> ExecuteWithSocketAsync<T>(Func<ClientWebSocket, CancellationToken, Task<T>> callback, CancellationToken cancellationToken)

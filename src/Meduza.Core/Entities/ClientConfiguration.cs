@@ -90,19 +90,10 @@ public class ClientConfiguration
     /// <summary>Configurações de atualização automática de software</summary>
     public string? AutoUpdateSettingsJson { get; set; }
     
-    // ============ Configurações de Token (herdadas de TenantSettings) ============
-    
-    /// <summary>Dias de expiração de token de agent</summary>
-    public int? TokenExpirationDays { get; set; }
-    
-    /// <summary>Máximo de tokens simultaneamente válidos por agent</summary>
-    public int? MaxTokensPerAgent { get; set; }
-    
+    // ============ Configurações de conexão de agent ============
+
     /// <summary>Intervalo esperado de heartbeat do agent (segundos)</summary>
     public int? AgentHeartbeatIntervalSeconds { get; set; }
-    
-    /// <summary>Threshold para considerar agent offline (segundos)</summary>
-    public int? AgentOfflineThresholdSeconds { get; set; }
 
     /// <summary>
     /// Lista de campos bloqueados no nível de cliente (JSON array de nomes de propriedade).

@@ -81,17 +81,8 @@ public class ServerConfiguration
 
     // ============ Configurações de token e agent ============
 
-    /// <summary>Dias de expiração de token de agent</summary>
-    public int TokenExpirationDays { get; set; } = 365;
-
-    /// <summary>Máximo de tokens simultaneamente válidos por agent</summary>
-    public int MaxTokensPerAgent { get; set; } = 3;
-
     /// <summary>Intervalo esperado de heartbeat do agent (segundos)</summary>
     public int AgentHeartbeatIntervalSeconds { get; set; } = 60;
-
-    /// <summary>Threshold para considerar agent offline (segundos)</summary>
-    public int AgentOfflineThresholdSeconds { get; set; } = 300;
 
     // ============ Branding e IA ============
 

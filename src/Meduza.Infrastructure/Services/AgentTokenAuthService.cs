@@ -18,32 +18,37 @@ public class AgentTokenAuthService : IAgentAuthService
     private const int MaxTokenCacheTtlSeconds = 600;
 
     private readonly IAgentTokenRepository _tokenRepo;
-    private readonly IConfigurationResolver _configResolver;
     private readonly IAgentRepository _agentRepo;
     private readonly IRedisService _redisService;
 
     public AgentTokenAuthService(
         IAgentTokenRepository tokenRepo,
-        IConfigurationResolver configResolver,
         IAgentRepository agentRepo,
         IRedisService redisService)
     {
         _tokenRepo = tokenRepo;
-        _configResolver = configResolver;
         _agentRepo = agentRepo;
         _redisService = redisService;
     }
 
-    public async Task<(AgentToken Token, string RawToken)> CreateTokenAsync(Guid agentId, string? description, int? expirationDays = null)
+    public async Task<(AgentToken Token, string RawToken)> CreateTokenAsync(Guid agentId, string? description)
     {
         var agent = await _agentRepo.GetByIdAsync(agentId)
             ?? throw new InvalidOperationException("Agent not found");
 
-        // Se não passou expirationDays, resolver via hierarquia de configuração
-        if (expirationDays is null)
+        // Regra de negocio: manter um unico token ativo por agent.
+        var activeTokens = (await _tokenRepo.GetByAgentIdAsync(agent.Id))
+            .Where(token => token.RevokedAt is null)
+            .ToList();
+
+        if (activeTokens.Count > 0)
         {
-            var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
-            expirationDays = resolved.TokenExpirationDays;
+            await _tokenRepo.RevokeAllByAgentIdAsync(agent.Id);
+            foreach (var activeToken in activeTokens)
+            {
+                if (!string.IsNullOrWhiteSpace(activeToken.TokenHash))
+                    await _redisService.DeleteAsync(GetTokenCacheKey(activeToken.TokenHash));
+            }
         }
 
         var rawToken = GenerateRawToken();
@@ -57,7 +62,7 @@ public class AgentTokenAuthService : IAgentAuthService
             TokenHash = tokenHash,
             TokenPrefix = prefix,
             Description = description,
-            ExpiresAt = DateTime.UtcNow.AddDays(expirationDays.Value),
+            ExpiresAt = null,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -152,14 +157,7 @@ public class AgentTokenAuthService : IAgentAuthService
         if (string.IsNullOrWhiteSpace(token.TokenHash))
             return;
 
-        var ttl = token.ExpiresAt - DateTime.UtcNow;
-        if (ttl <= TimeSpan.Zero)
-        {
-            await _redisService.DeleteAsync(GetTokenCacheKey(token.TokenHash));
-            return;
-        }
-
-        var effectiveTtl = (int)Math.Max(1, Math.Min(MaxTokenCacheTtlSeconds, Math.Floor(ttl.TotalSeconds)));
+        var effectiveTtl = MaxTokenCacheTtlSeconds;
         var payload = JsonSerializer.Serialize(token, JsonOptions);
         await _redisService.SetAsync(GetTokenCacheKey(token.TokenHash), payload, effectiveTtl);
     }

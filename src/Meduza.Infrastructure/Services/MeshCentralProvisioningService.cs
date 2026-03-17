@@ -17,8 +17,15 @@ public class MeshCentralProvisioningService : IMeshCentralProvisioningService
         _options = options.Value;
     }
 
-    public MeshCentralInstallInstructions BuildInstallInstructions(Client client, Site site, string meduzaDeployToken)
+    public MeshCentralInstallInstructions BuildInstallInstructions(
+        Client client,
+        Site site,
+        string meduzaDeployToken,
+        bool meshCentralEnabledForScope = true)
     {
+        if (!meshCentralEnabledForScope)
+            throw new InvalidOperationException("MeshCentral support is disabled for this scope.");
+
         if (!_options.Enabled || !_options.EnableProvisioningHints)
             throw new InvalidOperationException("MeshCentral provisioning hints are disabled.");
 

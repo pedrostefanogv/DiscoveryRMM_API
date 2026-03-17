@@ -378,9 +378,6 @@ public class ConfigurationService : IConfigurationService
 
         CheckRange(type, config, "InventoryIntervalHours", 1, 168, errors);
         CheckRange(type, config, "AgentHeartbeatIntervalSeconds", 10, 3600, errors);
-        CheckRange(type, config, "AgentOfflineThresholdSeconds", 30, 86400, errors);
-        CheckRange(type, config, "TokenExpirationDays", 1, 3650, errors);
-        CheckRange(type, config, "MaxTokensPerAgent", 1, 100, errors);
 
         if (config is ServerConfiguration serverConfiguration)
         {

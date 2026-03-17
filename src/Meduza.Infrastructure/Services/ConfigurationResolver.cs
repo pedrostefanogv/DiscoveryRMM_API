@@ -213,10 +213,7 @@ public class ConfigurationResolver : IConfigurationResolver
         var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, site?.KnowledgeBaseEnabled, client?.KnowledgeBaseEnabled, server.KnowledgeBaseEnabled);
         var appStore = ResolveValue("AppStorePolicy", blocked, site?.AppStorePolicy, client?.AppStorePolicy, server.AppStorePolicy);
         var inventory = ResolveValue("InventoryIntervalHours", blocked, site?.InventoryIntervalHours, client?.InventoryIntervalHours, server.InventoryIntervalHours);
-        var tokenExp = ResolveValue("TokenExpirationDays", blocked, (int?)null, client?.TokenExpirationDays, server.TokenExpirationDays);
-        var maxTokens = ResolveValue("MaxTokensPerAgent", blocked, (int?)null, client?.MaxTokensPerAgent, server.MaxTokensPerAgent);
         var heartbeat = ResolveValue("AgentHeartbeatIntervalSeconds", blocked, (int?)null, client?.AgentHeartbeatIntervalSeconds, server.AgentHeartbeatIntervalSeconds);
-        var offline = ResolveValue("AgentOfflineThresholdSeconds", blocked, (int?)null, client?.AgentOfflineThresholdSeconds, server.AgentOfflineThresholdSeconds);
 
         var autoUpdate = ResolveAutoUpdate(site?.AutoUpdateSettingsJson, client?.AutoUpdateSettingsJson, server.AutoUpdateSettingsJson);
         var autoUpdateSource = ResolveObjectSource("AutoUpdateSettingsJson", blocked, site?.AutoUpdateSettingsJson, client?.AutoUpdateSettingsJson);
@@ -237,10 +234,7 @@ public class ConfigurationResolver : IConfigurationResolver
             KnowledgeBaseEnabled = knowledge.Value,
             AppStorePolicy = appStore.Value,
             InventoryIntervalHours = inventory.Value,
-            TokenExpirationDays = tokenExp.Value,
-            MaxTokensPerAgent = maxTokens.Value,
             AgentHeartbeatIntervalSeconds = heartbeat.Value,
-            AgentOfflineThresholdSeconds = offline.Value,
             AutoUpdate = autoUpdate,
             AIIntegration = ai,
             BlockedFields = blocked.OrderBy(x => x).ToArray(),
@@ -259,10 +253,7 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;
         resolved.Inheritance["AppStorePolicy"] = (int)appStore.Source;
         resolved.Inheritance["InventoryIntervalHours"] = (int)inventory.Source;
-        resolved.Inheritance["TokenExpirationDays"] = (int)tokenExp.Source;
-        resolved.Inheritance["MaxTokensPerAgent"] = (int)maxTokens.Source;
         resolved.Inheritance["AgentHeartbeatIntervalSeconds"] = (int)heartbeat.Source;
-        resolved.Inheritance["AgentOfflineThresholdSeconds"] = (int)offline.Source;
         resolved.Inheritance["AutoUpdate"] = (int)autoUpdateSource;
         resolved.Inheritance["AIIntegration"] = (int)aiSource;
 

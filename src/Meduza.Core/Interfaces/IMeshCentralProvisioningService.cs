@@ -4,7 +4,11 @@ namespace Meduza.Core.Interfaces;
 
 public interface IMeshCentralProvisioningService
 {
-    MeshCentralInstallInstructions BuildInstallInstructions(Client client, Site site, string meduzaDeployToken);
+    MeshCentralInstallInstructions BuildInstallInstructions(
+        Client client,
+        Site site,
+        string meduzaDeployToken,
+        bool meshCentralEnabledForScope = true);
 }
 
 public sealed class MeshCentralInstallInstructions

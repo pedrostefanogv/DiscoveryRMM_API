@@ -45,9 +45,15 @@ public class AuthController : ControllerBase
     {
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var ua = HttpContext.Request.Headers.UserAgent.ToString();
-        var result = await _authService.LoginAsync(dto.LoginOrEmail, dto.Password, ip, ua);
-
-        return Ok(result);
+        try
+        {
+            var result = await _authService.LoginAsync(dto.LoginOrEmail, dto.Password, ip, ua);
+            return Ok(result);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { message = ex.Message });
+        }
     }
 
     /// <summary>

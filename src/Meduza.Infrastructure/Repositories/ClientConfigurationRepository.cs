@@ -46,10 +46,7 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
         existingConfig.AIIntegrationSettingsJson = config.AIIntegrationSettingsJson;
         existingConfig.InventoryIntervalHours = config.InventoryIntervalHours;
         existingConfig.AutoUpdateSettingsJson = config.AutoUpdateSettingsJson;
-        existingConfig.TokenExpirationDays = config.TokenExpirationDays;
-        existingConfig.MaxTokensPerAgent = config.MaxTokensPerAgent;
         existingConfig.AgentHeartbeatIntervalSeconds = config.AgentHeartbeatIntervalSeconds;
-        existingConfig.AgentOfflineThresholdSeconds = config.AgentOfflineThresholdSeconds;
         existingConfig.LockedFieldsJson = config.LockedFieldsJson;
         existingConfig.UpdatedAt = config.UpdatedAt;
         existingConfig.UpdatedBy = config.UpdatedBy;

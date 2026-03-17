@@ -131,10 +131,11 @@ public class AgentPackageService : IAgentPackageService
         var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
         var defaultMinimal = (_config["AgentPackage:InstallerDefaults:MinimalDefault"] ?? "1") == "0" ? "0" : "1";
 
-        // Usa separador de caminho compatível com o sistema operacional de build.
-        var binaryRelPath = OperatingSystem.IsWindows()
-            ? @"..\..\bin\meduza-discovery.exe"
-            : "../../bin/meduza-discovery.exe";
+        // Deriva o caminho relativo do binário a partir do BinaryPath configurado,
+        // garantindo que o nome do arquivo coincida com o que o Wails gerou.
+        var binaryRelPath = Path.GetRelativePath(installerDir, GetBinaryPath());
+        if (!OperatingSystem.IsWindows())
+            binaryRelPath = binaryRelPath.Replace('\\', '/');
 
         await RunProcessAsync(
             fileName: makensisPath,
@@ -153,7 +154,7 @@ public class AgentPackageService : IAgentPackageService
         if (!Directory.Exists(binDir))
             throw new InvalidOperationException("Installer output directory not found after build.");
 
-        var installerPath = Directory.GetFiles(binDir, "meduza-discovery-*-installer.exe")
+        var installerPath = Directory.GetFiles(binDir, "*-installer.exe")
             .Select(path => new FileInfo(path))
             .OrderByDescending(file => file.LastWriteTimeUtc)
             .FirstOrDefault()?.FullName;

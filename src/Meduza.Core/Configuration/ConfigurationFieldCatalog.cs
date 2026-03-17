@@ -25,10 +25,7 @@ public static class ConfigurationFieldCatalog
         "AutoUpdateSettingsJson",
         "AIIntegrationSettingsJson",
         "TicketAttachmentSettingsJson",
-        "TokenExpirationDays",
-        "MaxTokensPerAgent",
-        "AgentHeartbeatIntervalSeconds",
-        "AgentOfflineThresholdSeconds"
+        "AgentHeartbeatIntervalSeconds"
     ];
 
     /// <summary>

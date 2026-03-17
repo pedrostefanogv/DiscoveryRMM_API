@@ -3,8 +3,10 @@ using Meduza.Core.Helpers;
 using Meduza.Core.Entities;
 using Meduza.Core.Interfaces.Identity;
 using Meduza.Core.Enums.Identity;
+using Meduza.Core.Configuration;
 using Meduza.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Meduza.Api.Controllers;
 
@@ -23,6 +25,7 @@ public class MeshCentralController : ControllerBase
     private readonly IMeshCentralGroupPolicySyncService _meshCentralGroupPolicySyncService;
     private readonly IMeshCentralRightsProfileRepository _meshCentralRightsProfileRepository;
     private readonly IRoleRepository _roleRepository;
+    private readonly MeshCentralOptions _meshCentralOptions;
 
     public MeshCentralController(
         IUserRepository userRepository,
@@ -34,7 +37,8 @@ public class MeshCentralController : ControllerBase
         IMeshCentralIdentitySyncService meshCentralIdentitySyncService,
         IMeshCentralGroupPolicySyncService meshCentralGroupPolicySyncService,
         IMeshCentralRightsProfileRepository meshCentralRightsProfileRepository,
-        IRoleRepository roleRepository)
+        IRoleRepository roleRepository,
+        IOptions<MeshCentralOptions> meshCentralOptions)
     {
         _userRepository = userRepository;
         _clientRepository = clientRepository;
@@ -46,6 +50,7 @@ public class MeshCentralController : ControllerBase
         _meshCentralGroupPolicySyncService = meshCentralGroupPolicySyncService;
         _meshCentralRightsProfileRepository = meshCentralRightsProfileRepository;
         _roleRepository = roleRepository;
+        _meshCentralOptions = meshCentralOptions.Value;
     }
 
     [HttpGet("rights-profiles")]
@@ -216,7 +221,8 @@ public class MeshCentralController : ControllerBase
         }
 
         var resolved = await _configurationResolver.ResolveForSiteAsync(request.SiteId);
-        if (!resolved.RemoteSupportMeshCentralEnabled)
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
+        if (!meshCentralEnabledEffective)
             return StatusCode(403, new { error = "MeshCentral support is disabled for this scope." });
 
         var viewMode = request.ViewMode ?? 11;
