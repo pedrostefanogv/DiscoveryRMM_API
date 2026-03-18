@@ -9,6 +9,7 @@ namespace Meduza.Api.Controllers;
 [Route("api/deploy-tokens")]
 public class DeployTokensController : ControllerBase
 {
+    private readonly IConfiguration _configuration;
     private readonly IDeployTokenService _deployTokenService;
     private readonly IDeployTokenRepository _deployTokenRepository;
     private readonly ISiteRepository _siteRepository;
@@ -20,6 +21,7 @@ public class DeployTokensController : ControllerBase
     private readonly MeshCentralOptions _meshCentralOptions;
 
     public DeployTokensController(
+        IConfiguration configuration,
         IDeployTokenService deployTokenService,
         IDeployTokenRepository deployTokenRepository,
         ISiteRepository siteRepository,
@@ -30,6 +32,7 @@ public class DeployTokensController : ControllerBase
         IMeshCentralApiService meshCentralApiService,
         IOptions<MeshCentralOptions> meshCentralOptions)
     {
+        _configuration = configuration;
         _deployTokenService = deployTokenService;
         _deployTokenRepository = deployTokenRepository;
         _siteRepository = siteRepository;
@@ -92,7 +95,7 @@ public class DeployTokensController : ControllerBase
             try
             {
                 var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(rawToken);
-                return File(installerBytes, "application/x-msdownload", fileName);
+                return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
             catch (FileNotFoundException ex)
             {
@@ -166,7 +169,7 @@ public class DeployTokensController : ControllerBase
             if (artifact == "installer")
             {
                 var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(request.RawToken);
-                return File(installerBytes, "application/x-msdownload", fileName);
+                return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
 
             var package = await _agentPackageService.BuildPortablePackageAsync(request.RawToken);
@@ -256,6 +259,25 @@ public class DeployTokensController : ControllerBase
     {
         await _deployTokenService.RevokeTokenAsync(id);
         return NoContent();
+    }
+
+    private string ResolveInstallerContentType()
+    {
+        var profile = ResolveActiveProfile();
+        var profileValue = _configuration[$"AgentPackage:Profiles:{profile}:InstallerContentType"];
+        if (!string.IsNullOrWhiteSpace(profileValue))
+            return profileValue;
+
+        return _configuration["AgentPackage:InstallerContentType"] ?? "application/x-msdownload";
+    }
+
+    private string ResolveActiveProfile()
+    {
+        var configured = _configuration["AgentPackage:ActiveProfile"];
+        if (string.IsNullOrWhiteSpace(configured) || string.Equals(configured, "auto", StringComparison.OrdinalIgnoreCase))
+            return OperatingSystem.IsWindows() ? "windows" : "linux";
+
+        return configured.Trim().ToLowerInvariant();
     }
 }
 

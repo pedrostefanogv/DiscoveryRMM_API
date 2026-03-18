@@ -3,22 +3,26 @@ using System.IO.Compression;
 using System.Text.Json;
 using Meduza.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace Meduza.Infrastructure.Services;
 
 public class AgentPackageService : IAgentPackageService
 {
     private readonly IConfiguration _config;
+    private readonly ILogger<AgentPackageService> _logger;
     private static readonly SemaphoreSlim BuildLock = new(1, 1);
 
-    public AgentPackageService(IConfiguration config)
+    public AgentPackageService(IConfiguration config, ILogger<AgentPackageService> logger)
     {
         _config = config;
+        _logger = logger;
     }
 
     public async Task PrebuildBaseBinaryAsync(bool forceRebuild = false, CancellationToken cancellationToken = default)
     {
-        var projectPath = _config["AgentPackage:DiscoveryProjectPath"] ?? @"C:\Projetos\Discovery";
+        var activeProfile = GetActiveProfileName();
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath") ?? @"C:\Projetos\Discovery";
         if (!Directory.Exists(projectPath))
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
@@ -27,6 +31,13 @@ public class AgentPackageService : IAgentPackageService
             return;
 
         var wailsPath = ResolveWailsPath();
+        var targetPlatform = GetAgentPackageSetting("InstallerTargetPlatform") ?? "windows/amd64";
+
+        _logger.LogInformation(
+            "Agent prebuild starting with profile={Profile}, host={Host}, target={Target}",
+            activeProfile,
+            OperatingSystem.IsWindows() ? "windows" : "linux",
+            targetPlatform);
 
         await BuildLock.WaitAsync(cancellationToken);
         try
@@ -42,7 +53,7 @@ public class AgentPackageService : IAgentPackageService
             await RunProcessAsync(
                 fileName: wailsPath,
                 workingDirectory: projectPath,
-                arguments: ["build", "-s", "-nopackage", "-platform", "windows/amd64"],
+                arguments: ["build", "-s", "-nopackage", "-platform", targetPlatform],
                 cancellationToken: cancellationToken);
 
             if (!File.Exists(binaryPath))
@@ -112,11 +123,14 @@ public class AgentPackageService : IAgentPackageService
 
     public async Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken)
     {
-        var projectPath = _config["AgentPackage:DiscoveryProjectPath"] ?? @"C:\Projetos\Discovery";
+        var activeProfile = GetActiveProfileName();
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath") ?? @"C:\Projetos\Discovery";
         if (!Directory.Exists(projectPath))
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
-        var installerDir = Path.Combine(projectPath, "build", "windows", "installer");
+        var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
+            ?? Path.Combine("build", "windows", "installer");
+        var installerDir = Path.Combine(projectPath, installerDirectory);
         var projectNsi = Path.Combine(installerDir, "project.nsi");
         if (!File.Exists(projectNsi))
             throw new FileNotFoundException("NSIS project file not found.", projectNsi);
@@ -130,6 +144,11 @@ public class AgentPackageService : IAgentPackageService
 
         var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
         var defaultMinimal = (_config["AgentPackage:InstallerDefaults:MinimalDefault"] ?? "1") == "0" ? "0" : "1";
+
+        _logger.LogInformation(
+            "Agent installer build with profile={Profile}, installerDir={InstallerDir}",
+            activeProfile,
+            installerDir);
 
         // Deriva o caminho relativo do binário a partir do BinaryPath configurado,
         // garantindo que o nome do arquivo coincida com o que o Wails gerou.
@@ -154,7 +173,8 @@ public class AgentPackageService : IAgentPackageService
         if (!Directory.Exists(binDir))
             throw new InvalidOperationException("Installer output directory not found after build.");
 
-        var installerPath = Directory.GetFiles(binDir, "*-installer.exe")
+        var installerPattern = GetAgentPackageSetting("InstallerPattern") ?? "*-installer.exe";
+        var installerPath = Directory.GetFiles(binDir, installerPattern)
             .Select(path => new FileInfo(path))
             .OrderByDescending(file => file.LastWriteTimeUtc)
             .FirstOrDefault()?.FullName;
@@ -168,13 +188,13 @@ public class AgentPackageService : IAgentPackageService
 
     private string GetBinaryPath()
     {
-        return _config["AgentPackage:BinaryPath"]
+        return GetAgentPackageSetting("BinaryPath")
             ?? throw new InvalidOperationException("AgentPackage:BinaryPath is not configured.");
     }
 
     private string ResolveWailsPath()
     {
-        var configured = _config["AgentPackage:WailsPath"];
+        var configured = GetAgentPackageSetting("WailsPath");
 
         // Se a configuração aponta para um arquivo existente, use diretamente.
         if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
@@ -201,7 +221,7 @@ public class AgentPackageService : IAgentPackageService
 
     private string ResolveMakensisPath()
     {
-        var configured = _config["AgentPackage:MakensisPath"];
+        var configured = GetAgentPackageSetting("MakensisPath");
 
         if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
             return configured;
@@ -221,6 +241,25 @@ public class AgentPackageService : IAgentPackageService
 
         // Fallback: resolução via PATH do sistema (funciona em Windows e Linux).
         return configured ?? "makensis";
+    }
+
+    private string GetActiveProfileName()
+    {
+        var configured = _config["AgentPackage:ActiveProfile"];
+        if (string.IsNullOrWhiteSpace(configured) || string.Equals(configured, "auto", StringComparison.OrdinalIgnoreCase))
+            return OperatingSystem.IsWindows() ? "windows" : "linux";
+
+        return configured.Trim().ToLowerInvariant();
+    }
+
+    private string? GetAgentPackageSetting(string key)
+    {
+        var activeProfile = GetActiveProfileName();
+        var profileValue = _config[$"AgentPackage:Profiles:{activeProfile}:{key}"];
+        if (!string.IsNullOrWhiteSpace(profileValue))
+            return profileValue;
+
+        return _config[$"AgentPackage:{key}"];
     }
 
     private static async Task RunProcessAsync(string fileName, string workingDirectory, string[] arguments, CancellationToken cancellationToken = default)

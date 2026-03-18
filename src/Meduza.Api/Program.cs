@@ -23,6 +23,17 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var agentHostProfile = ResolveActiveAgentProfile(builder.Configuration);
+var agentInstallerTarget = ResolveAgentPackageSetting(builder.Configuration, agentHostProfile, "InstallerTargetPlatform") ?? "windows/amd64";
+if (!string.Equals(agentInstallerTarget, "windows/amd64", StringComparison.OrdinalIgnoreCase))
+{
+    throw new InvalidOperationException($"AgentPackage installer target must be windows/amd64. Resolved value: {agentInstallerTarget}");
+}
+
+ValidateRequiredAgentPackageSetting(builder.Configuration, agentHostProfile, "DiscoveryProjectPath");
+ValidateRequiredAgentPackageSetting(builder.Configuration, agentHostProfile, "BinaryPath");
+ValidateRequiredAgentPackageSetting(builder.Configuration, agentHostProfile, "PublicApiServer");
+
 var databaseProvider = builder.Configuration.GetValue<string>("Database:Provider") ?? "Postgres";
 var isSqlite = databaseProvider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase);
 
@@ -310,6 +321,12 @@ builder.Services.AddFluentMigratorCore()
 
 var app = builder.Build();
 
+app.Logger.LogInformation(
+    "AgentPackage startup config: hostProfile={Profile}, host={Host}, installerTarget={Target}",
+    agentHostProfile,
+    OperatingSystem.IsWindows() ? "windows" : "linux",
+    agentInstallerTarget);
+
 // Run migrations on startup
 using (var scope = app.Services.CreateScope())
 {
@@ -354,3 +371,28 @@ app.MapHub<NotificationHub>("/hubs/notifications", options =>
 }).RequireCors("SignalR");
 
 app.Run();
+
+static string ResolveActiveAgentProfile(IConfiguration configuration)
+{
+    var configured = configuration["AgentPackage:ActiveProfile"];
+    if (string.IsNullOrWhiteSpace(configured) || string.Equals(configured, "auto", StringComparison.OrdinalIgnoreCase))
+        return OperatingSystem.IsWindows() ? "windows" : "linux";
+
+    return configured.Trim().ToLowerInvariant();
+}
+
+static string? ResolveAgentPackageSetting(IConfiguration configuration, string profile, string key)
+{
+    var profileValue = configuration[$"AgentPackage:Profiles:{profile}:{key}"];
+    if (!string.IsNullOrWhiteSpace(profileValue))
+        return profileValue;
+
+    return configuration[$"AgentPackage:{key}"];
+}
+
+static void ValidateRequiredAgentPackageSetting(IConfiguration configuration, string profile, string key)
+{
+    var value = ResolveAgentPackageSetting(configuration, profile, key);
+    if (string.IsNullOrWhiteSpace(value))
+        throw new InvalidOperationException($"Missing AgentPackage setting: {key} (profile: {profile}).");
+}

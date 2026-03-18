@@ -31,6 +31,14 @@ public sealed class AgentPackagePrebuildHostedService : IHostedService
             return;
         }
 
+        var activeProfile = ResolveActiveProfile();
+        var targetPlatform = ResolveConfigForProfile(activeProfile, "InstallerTargetPlatform") ?? "windows/amd64";
+        _logger.LogInformation(
+            "Agent prebuild startup with profile={Profile}, host={Host}, target={Target}",
+            activeProfile,
+            OperatingSystem.IsWindows() ? "windows" : "linux",
+            targetPlatform);
+
         try
         {
             using var scope = _serviceProvider.CreateScope();
@@ -47,4 +55,22 @@ public sealed class AgentPackagePrebuildHostedService : IHostedService
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private string ResolveActiveProfile()
+    {
+        var configured = _configuration["AgentPackage:ActiveProfile"];
+        if (string.IsNullOrWhiteSpace(configured) || string.Equals(configured, "auto", StringComparison.OrdinalIgnoreCase))
+            return OperatingSystem.IsWindows() ? "windows" : "linux";
+
+        return configured.Trim().ToLowerInvariant();
+    }
+
+    private string? ResolveConfigForProfile(string profile, string key)
+    {
+        var profileValue = _configuration[$"AgentPackage:Profiles:{profile}:{key}"];
+        if (!string.IsNullOrWhiteSpace(profileValue))
+            return profileValue;
+
+        return _configuration[$"AgentPackage:{key}"];
+    }
 }
