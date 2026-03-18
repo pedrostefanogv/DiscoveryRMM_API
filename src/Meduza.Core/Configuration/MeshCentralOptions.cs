@@ -49,16 +49,6 @@ public class MeshCentralOptions
     public string AgentInstallUrlTemplate { get; set; } = string.Empty;
 
     /// <summary>
-    /// Usuario para autenticacao no WebSocket API (control.ashx).
-    /// </summary>
-    public string ApiUsername { get; set; } = "admin";
-
-    /// <summary>
-    /// Senha para autenticacao no WebSocket API (control.ashx).
-    /// </summary>
-    public string ApiPassword { get; set; } = string.Empty;
-
-    /// <summary>
     /// Ignora erros de certificado TLS (ambiente com certificado autoassinado).
     /// </summary>
     public bool IgnoreTlsErrors { get; set; } = true;

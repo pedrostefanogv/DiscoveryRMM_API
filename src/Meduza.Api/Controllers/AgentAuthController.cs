@@ -38,6 +38,9 @@ public class AgentAuthController : ControllerBase
     private readonly IAutomationExecutionReportRepository _automationExecutionReportRepository;
     private readonly ISyncPingDeliveryRepository _syncPingDeliveryRepository;
     private readonly IMeshCentralEmbeddingService _meshCentralEmbeddingService;
+    private readonly IMeshCentralApiService _meshCentralApiService;
+    private readonly IMeshCentralProvisioningService _meshCentralProvisioningService;
+    private readonly IClientRepository _clientRepo;
     private readonly IRedisService _redisService;
     private readonly MeshCentralOptions _meshCentralOptions;
 
@@ -62,6 +65,9 @@ public class AgentAuthController : ControllerBase
         IAutomationExecutionReportRepository automationExecutionReportRepository,
         ISyncPingDeliveryRepository syncPingDeliveryRepository,
         IMeshCentralEmbeddingService meshCentralEmbeddingService,
+        IMeshCentralApiService meshCentralApiService,
+        IMeshCentralProvisioningService meshCentralProvisioningService,
+        IClientRepository clientRepo,
         IRedisService redisService,
         IOptions<MeshCentralOptions> meshCentralOptions)
     {
@@ -85,6 +91,9 @@ public class AgentAuthController : ControllerBase
         _automationExecutionReportRepository = automationExecutionReportRepository;
         _syncPingDeliveryRepository = syncPingDeliveryRepository;
         _meshCentralEmbeddingService = meshCentralEmbeddingService;
+        _meshCentralApiService = meshCentralApiService;
+        _meshCentralProvisioningService = meshCentralProvisioningService;
+        _clientRepo = clientRepo;
         _redisService = redisService;
         _meshCentralOptions = meshCentralOptions.Value;
     }
@@ -103,7 +112,7 @@ public class AgentAuthController : ControllerBase
         if (agent is null) return NotFound();
 
         var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
-        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.SupportEnabled;
         if (resolved.AIIntegration is not null)
             resolved.AIIntegration.ApiKey = null;
 
@@ -111,21 +120,15 @@ public class AgentAuthController : ControllerBase
         return Ok(new
         {
             resolved.RecoveryEnabled,
-            resolved.DeviceRecoveryEnabled,
             resolved.DiscoveryEnabled,
-            resolved.AgentNetworkDiscoveryEnabled,
             resolved.P2PFilesEnabled,
-            resolved.P2PTransferEnabled,
             resolved.SupportEnabled,
-            resolved.RemoteSupportMeshCentralEnabled,
             MeshCentralEnabledEffective = meshCentralEnabledEffective,
-            resolved.MeshCentralGroupPolicyProfile,
             resolved.ChatAIEnabled,
             resolved.KnowledgeBaseEnabled,
             AppStoreEnabled = resolved.AppStorePolicy != AppStorePolicyType.Disabled,
             resolved.InventoryIntervalHours,
             resolved.AutoUpdate,
-            resolved.AIIntegration,
             resolved.AgentHeartbeatIntervalSeconds,
             resolved.SiteId,
             resolved.ClientId,
@@ -152,7 +155,7 @@ public class AgentAuthController : ControllerBase
             return NotFound(new { error = "Site not found." });
 
         var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
-        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.SupportEnabled;
         if (!meshCentralEnabledEffective)
             return StatusCode(403, new { error = "MeshCentral support is disabled for this scope." });
 
@@ -183,6 +186,56 @@ public class AgentAuthController : ControllerBase
         catch (InvalidOperationException ex)
         {
             return StatusCode(503, new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Retorna as instruções de instalação do agente MeshCentral para o agent autenticado.
+    /// Não requer deploy token — o agent usa seu próprio Bearer token para autenticação.
+    /// </summary>
+    [HttpGet("me/support/meshcentral/install")]
+    public async Task<IActionResult> GetMeshCentralInstall()
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null)
+            return NotFound(new { error = "Agent not found." });
+
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null)
+            return NotFound(new { error = "Site not found." });
+
+        var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.SupportEnabled;
+        if (!meshCentralEnabledEffective)
+            return StatusCode(403, new { error = "MeshCentral support is disabled for this scope." });
+
+        var client = await _clientRepo.GetByIdAsync(site.ClientId);
+        if (client is null)
+            return NotFound(new { error = "Client not found." });
+
+        try
+        {
+            var instructions = await _meshCentralApiService.ProvisionInstallAsync(client, site, string.Empty, HttpContext.RequestAborted);
+            return Ok(instructions);
+        }
+        catch (InvalidOperationException)
+        {
+            try
+            {
+                var fallback = _meshCentralProvisioningService.BuildInstallInstructions(
+                    client,
+                    site,
+                    string.Empty,
+                    meshCentralEnabledEffective);
+                return Ok(fallback);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return StatusCode(503, new { error = ex.Message });
+            }
         }
     }
 

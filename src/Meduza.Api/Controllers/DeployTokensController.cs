@@ -106,7 +106,7 @@ public class DeployTokensController : ControllerBase
 
         object? meshCentralInstall = null;
         var resolved = await _configurationResolver.ResolveForSiteAsync(site.Id);
-        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.SupportEnabled;
         if (meshCentralEnabledEffective)
         {
             var client = await _clientRepository.GetByIdAsync(site.ClientId);
@@ -201,7 +201,7 @@ public class DeployTokensController : ControllerBase
             return NotFound(new { error = "Site not found." });
 
         var resolved = await _configurationResolver.ResolveForSiteAsync(site.Id);
-        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.SupportEnabled;
         if (!meshCentralEnabledEffective)
             return StatusCode(403, new { error = "MeshCentral support is disabled for this scope." });
 

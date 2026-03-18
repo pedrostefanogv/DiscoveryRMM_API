@@ -62,6 +62,8 @@ public class MeshCentralApiService : IMeshCentralApiService
         if (string.IsNullOrWhiteSpace(inviteUrl))
             throw new InvalidOperationException("MeshCentral did not return an invite link.");
 
+        inviteUrl = NormalizeInviteDownloadUrl(inviteUrl);
+
         var installMode = ResolveInstallMode(_options.InstallExecutionMode);
         var windowsBackground = BuildWindowsCommandBackground(inviteUrl);
         var windowsInteractive = BuildWindowsCommandInteractive(inviteUrl);
@@ -328,7 +330,7 @@ public class MeshCentralApiService : IMeshCentralApiService
         cancellationToken.ThrowIfCancellationRequested();
 
         var resolved = await _configurationResolver.ResolveForSiteAsync(siteId);
-        if (!resolved.RemoteSupportMeshCentralEnabled)
+        if (!resolved.SupportEnabled)
             throw new InvalidOperationException("MeshCentral support is disabled for this scope.");
     }
 
@@ -584,6 +586,48 @@ public class MeshCentralApiService : IMeshCentralApiService
         return $"nohup sh -c \"curl -fsSL '{installUrl}' | sh\" >/tmp/meshcentral-agent-install.log 2>&1 &";
     }
 
+    private static string NormalizeInviteDownloadUrl(string inviteUrl)
+    {
+        if (!Uri.TryCreate(inviteUrl, UriKind.Absolute, out var uri))
+            return inviteUrl;
+
+        var builder = new UriBuilder(uri);
+
+        if (builder.Path.Contains("/meshcentral/meshagents", StringComparison.OrdinalIgnoreCase))
+        {
+            builder.Path = builder.Path.Replace("/meshcentral/meshagents", "/meshagents", StringComparison.OrdinalIgnoreCase);
+        }
+
+        builder.Query = NormalizeQueryString(builder.Query);
+        return builder.Uri.ToString();
+    }
+
+    private static string NormalizeQueryString(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return string.Empty;
+
+        var raw = query.StartsWith('?') ? query[1..] : query;
+        if (string.IsNullOrWhiteSpace(raw))
+            return string.Empty;
+
+        var parts = raw.Split('&', StringSplitOptions.RemoveEmptyEntries);
+        var encoded = new List<string>(parts.Length);
+
+        foreach (var part in parts)
+        {
+            var index = part.IndexOf('=');
+            var keyRaw = index >= 0 ? part[..index] : part;
+            var valueRaw = index >= 0 ? part[(index + 1)..] : string.Empty;
+
+            var key = Uri.EscapeDataString(Uri.UnescapeDataString(keyRaw));
+            var value = Uri.EscapeDataString(Uri.UnescapeDataString(valueRaw));
+            encoded.Add($"{key}={value}");
+        }
+
+        return string.Join('&', encoded);
+    }
+
     private async Task<string> EnsureMeshGroupAsync(ClientWebSocket ws, string groupName, CancellationToken ct)
     {
         var listResponseId = "meduza.meshes." + Guid.NewGuid().ToString("N");
@@ -754,25 +798,12 @@ public class MeshCentralApiService : IMeshCentralApiService
             Path = "/control.ashx"
         };
 
-        var authToken = GenerateAuthToken(loginKey, options.DomainId, ResolveApiUsername(options));
+        var authToken = GenerateAuthToken(loginKey, options.DomainId, "admin");
         var keyParam = Uri.EscapeDataString(NormalizeHex(options.LoginKeyHex));
         var authParam = Uri.EscapeDataString(authToken);
         builder.Query = $"key={keyParam}&auth={authParam}";
 
         return builder.Uri;
-    }
-
-    private static string ResolveApiUsername(MeshCentralOptions options)
-    {
-        var username = string.IsNullOrWhiteSpace(options.ApiUsername)
-            ? "admin"
-            : options.ApiUsername.Trim();
-
-        var normalized = NormalizeUsername(username);
-        if (string.IsNullOrWhiteSpace(normalized))
-            throw new InvalidOperationException("MeshCentral username for LoginKey auth is invalid.");
-
-        return normalized;
     }
 
     private static string NormalizeHex(string hex)

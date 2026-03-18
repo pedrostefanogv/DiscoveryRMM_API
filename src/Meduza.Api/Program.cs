@@ -137,6 +137,7 @@ var enableReportGenerationBackgroundService = builder.Configuration.GetValue<boo
 var enableAgentLabelingReconciliationBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:AgentLabelingReconciliationEnabled") ?? true;
 var enableMeshCentralIdentityReconciliationBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:MeshCentralIdentityReconciliationEnabled") ?? true;
 var enableMeshCentralGroupPolicyReconciliationBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:MeshCentralGroupPolicyReconciliationEnabled") ?? true;
+var isDevelopment = builder.Environment.IsDevelopment();
 
 // AI Chat & MCP
 builder.Services.AddSingleton<ILlmProvider, OpenAiProvider>();
@@ -218,21 +219,24 @@ if (enableReportGenerationBackgroundService)
     builder.Services.AddHostedService<ReportGenerationBackgroundService>();
 }
 
-builder.Services.AddHostedService<ReportRetentionBackgroundService>();
-builder.Services.AddHostedService<AiChatRetentionBackgroundService>();
-if (enableAgentLabelingReconciliationBackgroundService)
+if (!isDevelopment)
 {
-    builder.Services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
-}
+    builder.Services.AddHostedService<ReportRetentionBackgroundService>();
+    builder.Services.AddHostedService<AiChatRetentionBackgroundService>();
+    if (enableAgentLabelingReconciliationBackgroundService)
+    {
+        builder.Services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
+    }
 
-if (enableMeshCentralIdentityReconciliationBackgroundService)
-{
-    builder.Services.AddHostedService<MeshCentralIdentityReconciliationBackgroundService>();
-}
+    if (enableMeshCentralIdentityReconciliationBackgroundService)
+    {
+        builder.Services.AddHostedService<MeshCentralIdentityReconciliationBackgroundService>();
+    }
 
-if (enableMeshCentralGroupPolicyReconciliationBackgroundService)
-{
-    builder.Services.AddHostedService<MeshCentralGroupPolicyReconciliationBackgroundService>();
+    if (enableMeshCentralGroupPolicyReconciliationBackgroundService)
+    {
+        builder.Services.AddHostedService<MeshCentralGroupPolicyReconciliationBackgroundService>();
+    }
 }
 
 builder.Services.AddHostedService<AgentPackagePrebuildHostedService>();

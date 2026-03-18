@@ -561,10 +561,10 @@ public class ConfigurationsController : ControllerBase
         return new
         {
             ClientId = clientId,
-            DeviceRecoveryEnabled = client?.DeviceRecoveryEnabled ?? server.DeviceRecoveryEnabled,
-            AgentNetworkDiscoveryEnabled = client?.AgentNetworkDiscoveryEnabled ?? server.AgentNetworkDiscoveryEnabled,
-            P2PTransferEnabled = client?.P2PTransferEnabled ?? server.P2PTransferEnabled,
-            RemoteSupportMeshCentralEnabled = client?.RemoteSupportMeshCentralEnabled ?? server.RemoteSupportMeshCentralEnabled,
+            RecoveryEnabled = client?.RecoveryEnabled ?? server.RecoveryEnabled,
+            DiscoveryEnabled = client?.DiscoveryEnabled ?? server.DiscoveryEnabled,
+            P2PFilesEnabled = client?.P2PFilesEnabled ?? server.P2PFilesEnabled,
+            SupportEnabled = client?.SupportEnabled ?? server.SupportEnabled,
             MeshCentralGroupPolicyProfile = string.IsNullOrWhiteSpace(client?.MeshCentralGroupPolicyProfile)
                 ? server.MeshCentralGroupPolicyProfile
                 : client.MeshCentralGroupPolicyProfile,
@@ -579,10 +579,10 @@ public class ConfigurationsController : ControllerBase
             BlockedFields = blocked.OrderBy(x => x).ToArray(),
             Inheritance = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
             {
-                ["DeviceRecoveryEnabled"] = client?.DeviceRecoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
-                ["AgentNetworkDiscoveryEnabled"] = client?.AgentNetworkDiscoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
-                ["P2PTransferEnabled"] = client?.P2PTransferEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
-                ["RemoteSupportMeshCentralEnabled"] = client?.RemoteSupportMeshCentralEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["RecoveryEnabled"] = client?.RecoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["DiscoveryEnabled"] = client?.DiscoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["P2PFilesEnabled"] = client?.P2PFilesEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["SupportEnabled"] = client?.SupportEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["MeshCentralGroupPolicyProfile"] = !string.IsNullOrWhiteSpace(client?.MeshCentralGroupPolicyProfile)
                     ? (int)ConfigurationPriorityType.Client
                     : (int)ConfigurationPriorityType.Global,

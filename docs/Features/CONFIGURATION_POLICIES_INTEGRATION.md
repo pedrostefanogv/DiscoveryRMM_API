@@ -4,12 +4,12 @@
 
 Documentar a integracao do painel de gerenciamento com o modulo de configuracoes hierarquicas (Server -> Client -> Site), incluindo os novos recursos:
 
-- DeviceRecoveryEnabled
-- AgentNetworkDiscoveryEnabled
-- P2PTransferEnabled
+- RecoveryEnabled
+- DiscoveryEnabled
+- P2PFilesEnabled
 - ChatAIEnabled
 - KnowledgeBaseEnabled
-- RemoteSupportMeshCentralEnabled
+- SupportEnabled
 - AppStorePolicy
 
 ---
@@ -48,12 +48,12 @@ Campos bloqueados:
 
 Use estes nomes no painel:
 
-- `DeviceRecoveryEnabled`: recuperacao de dispositivo (reuso de identidade do agent)
-- `AgentNetworkDiscoveryEnabled`: descoberta de agents via rede
-- `P2PTransferEnabled`: transferencia P2P entre agents da mesma rede
+- `RecoveryEnabled`: recuperacao de dispositivo (reuso de identidade do agent)
+- `DiscoveryEnabled`: descoberta de agents via rede
+- `P2PFilesEnabled`: transferencia P2P entre agents da mesma rede
 - `ChatAIEnabled`: chat IA para suporte
 - `KnowledgeBaseEnabled`: base de conhecimento
-- `RemoteSupportMeshCentralEnabled`: suporte remoto via MeshCentral
+- `SupportEnabled`: suporte remoto via MeshCentral
 - `AppStorePolicy`: politica da loja de aplicativos
   - `0 = Disabled`
   - `1 = PreApproved`
@@ -131,19 +131,19 @@ Resposta (resumo):
 ```json
 {
   "clientId": "...",
-  "deviceRecoveryEnabled": true,
-  "agentNetworkDiscoveryEnabled": false,
-  "p2pTransferEnabled": true,
-  "remoteSupportMeshCentralEnabled": false,
+  "recoveryEnabled": true,
+  "discoveryEnabled": false,
+  "p2pFilesEnabled": true,
+  "supportEnabled": false,
   "chatAIEnabled": true,
   "knowledgeBaseEnabled": true,
   "appStorePolicy": 1,
   "blockedFields": ["AppStorePolicy"],
   "inheritance": {
-    "DeviceRecoveryEnabled": 3,
-    "AgentNetworkDiscoveryEnabled": 2,
-    "P2PTransferEnabled": 3,
-    "RemoteSupportMeshCentralEnabled": 2,
+    "RecoveryEnabled": 3,
+    "DiscoveryEnabled": 2,
+    "P2PFilesEnabled": 3,
+    "SupportEnabled": 2,
     "ChatAIEnabled": 3,
     "KnowledgeBaseEnabled": 2,
     "AppStorePolicy": 2
@@ -186,10 +186,10 @@ curl -X PATCH "http://localhost:5001/api/configurations/clients/{clientId}" \
     "ChatAIEnabled": true,
     "KnowledgeBaseEnabled": true,
     "AppStorePolicy": 1,
-    "AgentNetworkDiscoveryEnabled": true,
-    "P2PTransferEnabled": false,
-    "RemoteSupportMeshCentralEnabled": true,
-    "DeviceRecoveryEnabled": true
+    "DiscoveryEnabled": true,
+    "P2PFilesEnabled": false,
+    "SupportEnabled": true,
+    "RecoveryEnabled": true
   }'
 ```
 
@@ -205,8 +205,8 @@ curl -X POST "http://localhost:5001/api/configurations/clients/{clientId}/reset/
 curl -X PATCH "http://localhost:5001/api/configurations/sites/{siteId}" \
   -H "Content-Type: application/json" \
   -d '{
-    "RemoteSupportMeshCentralEnabled": true,
-    "P2PTransferEnabled": true
+    "SupportEnabled": true,
+    "P2PFilesEnabled": true
   }'
 ```
 
@@ -226,12 +226,12 @@ curl -X PATCH "http://localhost:5001/api/configurations/sites/{siteId}" \
 
 ## Compatibilidade de nomes
 
-A API aceita e resolve aliases legados internamente, mas o painel deve padronizar nos nomes oficiais abaixo:
+A API usa apenas nomes canônicos e nao aceita aliases legados.
 
-- DeviceRecoveryEnabled
-- AgentNetworkDiscoveryEnabled
-- P2PTransferEnabled
-- RemoteSupportMeshCentralEnabled
+- RecoveryEnabled
+- DiscoveryEnabled
+- P2PFilesEnabled
+- SupportEnabled
 - ChatAIEnabled
 - KnowledgeBaseEnabled
 

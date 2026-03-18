@@ -199,10 +199,10 @@ public class ConfigurationResolver : IConfigurationResolver
         blocked.UnionWith(clientLocks);
         blocked.UnionWith(siteLocks);
 
-        var recovery = ResolveValue("DeviceRecoveryEnabled", blocked, site?.DeviceRecoveryEnabled, client?.DeviceRecoveryEnabled, server.DeviceRecoveryEnabled);
-        var discovery = ResolveValue("AgentNetworkDiscoveryEnabled", blocked, site?.AgentNetworkDiscoveryEnabled, client?.AgentNetworkDiscoveryEnabled, server.AgentNetworkDiscoveryEnabled);
-        var p2p = ResolveValue("P2PTransferEnabled", blocked, site?.P2PTransferEnabled, client?.P2PTransferEnabled, server.P2PTransferEnabled);
-        var support = ResolveValue("RemoteSupportMeshCentralEnabled", blocked, site?.RemoteSupportMeshCentralEnabled, client?.RemoteSupportMeshCentralEnabled, server.RemoteSupportMeshCentralEnabled);
+        var recovery = ResolveValue("RecoveryEnabled", blocked, site?.RecoveryEnabled, client?.RecoveryEnabled, server.RecoveryEnabled);
+        var discovery = ResolveValue("DiscoveryEnabled", blocked, site?.DiscoveryEnabled, client?.DiscoveryEnabled, server.DiscoveryEnabled);
+        var p2p = ResolveValue("P2PFilesEnabled", blocked, site?.P2PFilesEnabled, client?.P2PFilesEnabled, server.P2PFilesEnabled);
+        var support = ResolveValue("SupportEnabled", blocked, site?.SupportEnabled, client?.SupportEnabled, server.SupportEnabled);
         var meshPolicyProfile = ResolveStringValue(
             "MeshCentralGroupPolicyProfile",
             blocked,
@@ -241,13 +241,9 @@ public class ConfigurationResolver : IConfigurationResolver
         };
 
         resolved.Inheritance["RecoveryEnabled"] = (int)recovery.Source;
-        resolved.Inheritance["DeviceRecoveryEnabled"] = (int)recovery.Source;
         resolved.Inheritance["DiscoveryEnabled"] = (int)discovery.Source;
-        resolved.Inheritance["AgentNetworkDiscoveryEnabled"] = (int)discovery.Source;
         resolved.Inheritance["P2PFilesEnabled"] = (int)p2p.Source;
-        resolved.Inheritance["P2PTransferEnabled"] = (int)p2p.Source;
         resolved.Inheritance["SupportEnabled"] = (int)support.Source;
-        resolved.Inheritance["RemoteSupportMeshCentralEnabled"] = (int)support.Source;
         resolved.Inheritance["MeshCentralGroupPolicyProfile"] = (int)meshPolicyProfile.Source;
         resolved.Inheritance["ChatAIEnabled"] = (int)chatAi.Source;
         resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;

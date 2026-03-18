@@ -2,21 +2,12 @@ namespace Meduza.Core.Configuration;
 
 public static class ConfigurationFieldCatalog
 {
-    private static readonly Dictionary<string, string> FieldAliases = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["RecoveryEnabled"] = "DeviceRecoveryEnabled",
-        ["DiscoveryEnabled"] = "AgentNetworkDiscoveryEnabled",
-        ["P2PFilesEnabled"] = "P2PTransferEnabled",
-        ["SupportEnabled"] = "RemoteSupportMeshCentralEnabled",
-        ["MeshGroupPolicyProfile"] = "MeshCentralGroupPolicyProfile"
-    };
-
     public static readonly string[] ManagedFields =
     [
-        "DeviceRecoveryEnabled",
-        "AgentNetworkDiscoveryEnabled",
-        "P2PTransferEnabled",
-        "RemoteSupportMeshCentralEnabled",
+        "RecoveryEnabled",
+        "DiscoveryEnabled",
+        "P2PFilesEnabled",
+        "SupportEnabled",
         "MeshCentralGroupPolicyProfile",
         "ChatAIEnabled",
         "KnowledgeBaseEnabled",
@@ -54,9 +45,6 @@ public static class ConfigurationFieldCatalog
     {
         if (string.IsNullOrWhiteSpace(fieldName))
             return string.Empty;
-
-        if (FieldAliases.TryGetValue(fieldName, out var mapped))
-            return mapped;
 
         return fieldName;
     }

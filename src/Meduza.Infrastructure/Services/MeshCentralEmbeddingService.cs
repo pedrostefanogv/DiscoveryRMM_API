@@ -47,10 +47,7 @@ public class MeshCentralEmbeddingService : IMeshCentralEmbeddingService
         if (loginKeyBytes.Length < 32)
             throw new InvalidOperationException("MeshCentral LoginKeyHex is invalid.");
 
-        if (string.IsNullOrWhiteSpace(_options.ApiUsername))
-            throw new InvalidOperationException("MeshCentral ApiUsername is not configured.");
-
-        var authToken = GenerateAuthToken(loginKeyBytes, _options.DomainId, _options.ApiUsername.Trim());
+        var authToken = GenerateAuthToken(loginKeyBytes, _options.DomainId, "admin");
         var baseUri = NormalizeBaseUri(_options.BaseUrl);
 
         var query = new Dictionary<string, string>

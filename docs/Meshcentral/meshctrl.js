@@ -1785,7 +1785,7 @@ function serverConnect() {
                 // Download an agent
                 var u = settings.xxurl.replace('wss://', 'https://').replace('/control.ashx', '/meshagents');
                 if (u.indexOf('?') > 0) { u += '&'; } else { u += '?'; }
-                u += 'id=' + args.type + '&meshid=' + args.id;
+                u += 'id=' + encodeURIComponent(args.type) + '&meshid=' + encodeURIComponent(args.id);
                 if (args.installflags) {
                     if ((typeof parseInt(args.installflags) != 'number') || isNaN(parseInt(args.installflags)) || (parseInt(args.installflags) < 0) || (parseInt(args.installflags) > 2)) { console.log("Invalid Installflags."); process.exit(1); return; }
                     u += '&installflags=' + args.installflags;

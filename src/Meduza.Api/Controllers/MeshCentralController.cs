@@ -221,7 +221,7 @@ public class MeshCentralController : ControllerBase
         }
 
         var resolved = await _configurationResolver.ResolveForSiteAsync(request.SiteId);
-        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.RemoteSupportMeshCentralEnabled;
+        var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.SupportEnabled;
         if (!meshCentralEnabledEffective)
             return StatusCode(403, new { error = "MeshCentral support is disabled for this scope." });
 

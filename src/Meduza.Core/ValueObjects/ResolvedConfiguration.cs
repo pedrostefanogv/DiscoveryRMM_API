@@ -12,32 +12,12 @@ public class ResolvedConfiguration
     // ============ Funcionalidades ============
 
     public bool RecoveryEnabled { get; set; }
-    public bool DeviceRecoveryEnabled
-    {
-        get => RecoveryEnabled;
-        set => RecoveryEnabled = value;
-    }
 
     public bool DiscoveryEnabled { get; set; }
-    public bool AgentNetworkDiscoveryEnabled
-    {
-        get => DiscoveryEnabled;
-        set => DiscoveryEnabled = value;
-    }
 
     public bool P2PFilesEnabled { get; set; }
-    public bool P2PTransferEnabled
-    {
-        get => P2PFilesEnabled;
-        set => P2PFilesEnabled = value;
-    }
 
     public bool SupportEnabled { get; set; }
-    public bool RemoteSupportMeshCentralEnabled
-    {
-        get => SupportEnabled;
-        set => SupportEnabled = value;
-    }
 
     public string MeshCentralGroupPolicyProfile { get; set; } = "viewer";
 
