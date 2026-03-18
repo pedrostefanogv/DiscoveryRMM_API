@@ -120,7 +120,7 @@ public class DeployTokensController : ControllerBase
                 {
                     try
                     {
-                        meshCentralInstall = _meshCentralProvisioningService.BuildInstallInstructions(
+                        meshCentralInstall = await _meshCentralProvisioningService.BuildInstallInstructionsAsync(
                             client,
                             site,
                             rawToken,
@@ -218,7 +218,7 @@ public class DeployTokensController : ControllerBase
         {
             try
             {
-                var fallback = _meshCentralProvisioningService.BuildInstallInstructions(
+                var fallback = await _meshCentralProvisioningService.BuildInstallInstructionsAsync(
                     client,
                     site,
                     request.RawToken,

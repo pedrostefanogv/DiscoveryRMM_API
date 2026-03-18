@@ -1,4 +1,9 @@
 {
+    "chat.tools.terminal.autoApprove": {
+        "Test-NetConnection": true,
+        "New-Object": true,
+        "Test-Connection": true
+    },
     "workbench.colorCustomizations": {
         "activityBar.background": "#053241",
         "titleBar.activeBackground": "#07465B",
@@ -12,9 +17,5 @@
         "statusBar.noFolderBackground": "#053241",
         "statusBar.noFolderForeground": "#F3FBFE"
     },
-    "chat.tools.terminal.autoApprove": {
-        "Test-NetConnection": true,
-        "New-Object": true,
-        "Test-Connection": true
-    }
+    "windowColors.baseColor": "#0c7ba0"
 }

@@ -225,7 +225,7 @@ public class AgentAuthController : ControllerBase
         {
             try
             {
-                var fallback = _meshCentralProvisioningService.BuildInstallInstructions(
+                var fallback = await _meshCentralProvisioningService.BuildInstallInstructionsAsync(
                     client,
                     site,
                     string.Empty,

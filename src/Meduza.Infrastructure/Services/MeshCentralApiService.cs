@@ -38,6 +38,8 @@ public class MeshCentralApiService : IMeshCentralApiService
         string meduzaDeployToken,
         CancellationToken cancellationToken = default)
     {
+        _ = meduzaDeployToken;
+
         await EnsureMeshCentralEnabledForSiteAsync(site.Id, cancellationToken);
 
         if (!_options.Enabled)
@@ -55,26 +57,19 @@ public class MeshCentralApiService : IMeshCentralApiService
             resolvedConfig.MeshCentralGroupPolicyProfile,
             cancellationToken);
 
-        var inviteUrl = await ExecuteWithSocketAsync(
-            (ws, ct) => CreateInviteLinkAsync(ws, groupSync.MeshId, ct),
-            cancellationToken);
-
-        if (string.IsNullOrWhiteSpace(inviteUrl))
-            throw new InvalidOperationException("MeshCentral did not return an invite link.");
-
-        inviteUrl = NormalizeInviteDownloadUrl(inviteUrl);
+        var installUrl = MeshCentralInstallUrlBuilder.BuildDirectInstallUrl(_options, groupSync.MeshId);
 
         var installMode = ResolveInstallMode(_options.InstallExecutionMode);
-        var windowsBackground = BuildWindowsCommandBackground(inviteUrl);
-        var windowsInteractive = BuildWindowsCommandInteractive(inviteUrl);
-        var linuxBackground = BuildLinuxCommandBackground(inviteUrl);
-        var linuxInteractive = BuildLinuxCommandInteractive(inviteUrl);
+        var windowsBackground = BuildWindowsCommandBackground(installUrl);
+        var windowsInteractive = BuildWindowsCommandInteractive(installUrl);
+        var linuxBackground = BuildLinuxCommandBackground(installUrl);
+        var linuxInteractive = BuildLinuxCommandInteractive(installUrl);
 
         return new MeshCentralInstallInstructions
         {
             GroupName = groupSync.GroupName,
             MeshId = groupSync.MeshId,
-            InstallUrl = inviteUrl,
+            InstallUrl = installUrl,
             InstallMode = installMode,
             WindowsCommandBackground = windowsBackground,
             WindowsCommandInteractive = windowsInteractive,
@@ -586,48 +581,6 @@ public class MeshCentralApiService : IMeshCentralApiService
         return $"nohup sh -c \"curl -fsSL '{installUrl}' | sh\" >/tmp/meshcentral-agent-install.log 2>&1 &";
     }
 
-    private static string NormalizeInviteDownloadUrl(string inviteUrl)
-    {
-        if (!Uri.TryCreate(inviteUrl, UriKind.Absolute, out var uri))
-            return inviteUrl;
-
-        var builder = new UriBuilder(uri);
-
-        if (builder.Path.Contains("/meshcentral/meshagents", StringComparison.OrdinalIgnoreCase))
-        {
-            builder.Path = builder.Path.Replace("/meshcentral/meshagents", "/meshagents", StringComparison.OrdinalIgnoreCase);
-        }
-
-        builder.Query = NormalizeQueryString(builder.Query);
-        return builder.Uri.ToString();
-    }
-
-    private static string NormalizeQueryString(string query)
-    {
-        if (string.IsNullOrWhiteSpace(query))
-            return string.Empty;
-
-        var raw = query.StartsWith('?') ? query[1..] : query;
-        if (string.IsNullOrWhiteSpace(raw))
-            return string.Empty;
-
-        var parts = raw.Split('&', StringSplitOptions.RemoveEmptyEntries);
-        var encoded = new List<string>(parts.Length);
-
-        foreach (var part in parts)
-        {
-            var index = part.IndexOf('=');
-            var keyRaw = index >= 0 ? part[..index] : part;
-            var valueRaw = index >= 0 ? part[(index + 1)..] : string.Empty;
-
-            var key = Uri.EscapeDataString(Uri.UnescapeDataString(keyRaw));
-            var value = Uri.EscapeDataString(Uri.UnescapeDataString(valueRaw));
-            encoded.Add($"{key}={value}");
-        }
-
-        return string.Join('&', encoded);
-    }
-
     private async Task<string> EnsureMeshGroupAsync(ClientWebSocket ws, string groupName, CancellationToken ct)
     {
         var listResponseId = "meduza.meshes." + Guid.NewGuid().ToString("N");
@@ -679,31 +632,6 @@ public class MeshCentralApiService : IMeshCentralApiService
             throw new InvalidOperationException("MeshCentral group provisioning did not return a mesh id.");
 
         return meshId;
-    }
-
-    private async Task<string> CreateInviteLinkAsync(ClientWebSocket ws, string meshId, CancellationToken ct)
-    {
-        var inviteResponseId = "meduza.invite." + Guid.NewGuid().ToString("N");
-        await SendAsync(ws, new
-        {
-            action = "createInviteLink",
-            meshid = meshId,
-            expire = Math.Max(1, _options.InviteExpireHours),
-            flags = 0,
-            responseid = inviteResponseId
-        }, ct);
-
-        var inviteReply = await ReadUntilAsync(ws, data =>
-        {
-            var responseId = data.GetPropertyOrDefault("responseid");
-            return string.Equals(responseId, inviteResponseId, StringComparison.Ordinal);
-        }, ct);
-
-        var result = inviteReply.GetPropertyOrDefault("result");
-        if (!string.IsNullOrWhiteSpace(result) && !string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("MeshCentral invite creation failed: " + result);
-
-        return inviteReply.GetPropertyOrDefault("url") ?? string.Empty;
     }
 
     private static async Task SendAsync(ClientWebSocket ws, object payload, CancellationToken ct)
@@ -795,7 +723,7 @@ public class MeshCentralApiService : IMeshCentralApiService
         var builder = new UriBuilder(uri)
         {
             Scheme = uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ? "ws" : "wss",
-            Path = "/control.ashx"
+            Path = AppendPathSegment(uri.AbsolutePath, "control.ashx")
         };
 
         var authToken = GenerateAuthToken(loginKey, options.DomainId, "admin");
@@ -804,6 +732,18 @@ public class MeshCentralApiService : IMeshCentralApiService
         builder.Query = $"key={keyParam}&auth={authParam}";
 
         return builder.Uri;
+    }
+
+    private static string AppendPathSegment(string basePath, string segment)
+    {
+        var normalizedBase = string.IsNullOrWhiteSpace(basePath) ? "/" : basePath;
+        if (!normalizedBase.StartsWith("/", StringComparison.Ordinal))
+            normalizedBase = "/" + normalizedBase;
+
+        if (!normalizedBase.EndsWith("/", StringComparison.Ordinal))
+            normalizedBase += "/";
+
+        return normalizedBase + segment;
     }
 
     private static string NormalizeHex(string hex)

@@ -13,6 +13,12 @@ public class MeshCentralOptions
     public string BaseUrl { get; set; } = string.Empty;
 
     /// <summary>
+    /// URL publica usada para compor InstallUrl (download direto do agent).
+    /// Quando vazia, reutiliza BaseUrl.
+    /// </summary>
+    public string PublicBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>
     /// Login token key em HEX (160 chars / 80 bytes), gerada no MeshCentral.
     /// </summary>
     public string LoginKeyHex { get; set; } = string.Empty;
@@ -43,10 +49,22 @@ public class MeshCentralOptions
     public bool EnableProvisioningHints { get; set; } = false;
 
     /// <summary>
-    /// Template da URL de instalacao do MeshCentral.
-    /// Placeholders suportados: {CLIENT_ID}, {SITE_ID}, {CLIENT_NAME}, {SITE_NAME}, {GROUP_NAME}, {MEDUZA_DEPLOY_TOKEN}
+    /// Template legado de URL de instalacao.
+    /// Mantido por compatibilidade; novos fluxos devem usar InstallUrl direto (/meshagents).
     /// </summary>
     public string AgentInstallUrlTemplate { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Id de arquitetura do MeshAgent para gerar InstallUrl direto.
+    /// Default: 4 (Windows x64).
+    /// </summary>
+    public int AgentDownloadArchitectureId { get; set; } = 4;
+
+    /// <summary>
+    /// Install flags enviados para /meshagents.
+    /// 0 = default, 1 = interactive only, 2 = background only.
+    /// </summary>
+    public int AgentDownloadInstallFlags { get; set; } = 0;
 
     /// <summary>
     /// Ignora erros de certificado TLS (ambiente com certificado autoassinado).

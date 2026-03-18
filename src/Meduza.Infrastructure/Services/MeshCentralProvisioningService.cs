@@ -11,13 +11,17 @@ public class MeshCentralProvisioningService : IMeshCentralProvisioningService
     private static readonly Regex InvalidGroupChars = new("[^a-zA-Z0-9._ -]", RegexOptions.Compiled);
 
     private readonly MeshCentralOptions _options;
+    private readonly ISiteConfigurationRepository _siteConfigurationRepository;
 
-    public MeshCentralProvisioningService(IOptions<MeshCentralOptions> options)
+    public MeshCentralProvisioningService(
+        IOptions<MeshCentralOptions> options,
+        ISiteConfigurationRepository siteConfigurationRepository)
     {
         _options = options.Value;
+        _siteConfigurationRepository = siteConfigurationRepository;
     }
 
-    public MeshCentralInstallInstructions BuildInstallInstructions(
+    public async Task<MeshCentralInstallInstructions> BuildInstallInstructionsAsync(
         Client client,
         Site site,
         string meduzaDeployToken,
@@ -29,17 +33,16 @@ public class MeshCentralProvisioningService : IMeshCentralProvisioningService
         if (!_options.Enabled || !_options.EnableProvisioningHints)
             throw new InvalidOperationException("MeshCentral provisioning hints are disabled.");
 
-        if (string.IsNullOrWhiteSpace(_options.AgentInstallUrlTemplate))
-            throw new InvalidOperationException("MeshCentral AgentInstallUrlTemplate is not configured.");
+        _ = meduzaDeployToken;
 
-        var groupName = BuildGroupName(client, site);
-        var installUrl = _options.AgentInstallUrlTemplate
-            .Replace("{CLIENT_ID}", client.Id.ToString("D"), StringComparison.Ordinal)
-            .Replace("{SITE_ID}", site.Id.ToString("D"), StringComparison.Ordinal)
-            .Replace("{CLIENT_NAME}", Uri.EscapeDataString(client.Name), StringComparison.Ordinal)
-            .Replace("{SITE_NAME}", Uri.EscapeDataString(site.Name), StringComparison.Ordinal)
-            .Replace("{GROUP_NAME}", Uri.EscapeDataString(groupName), StringComparison.Ordinal)
-            .Replace("{MEDUZA_DEPLOY_TOKEN}", Uri.EscapeDataString(meduzaDeployToken), StringComparison.Ordinal);
+        var siteConfig = await _siteConfigurationRepository.GetBySiteIdAsync(site.Id);
+        if (string.IsNullOrWhiteSpace(siteConfig?.MeshCentralMeshId))
+            throw new InvalidOperationException("MeshCentral mesh binding is not available for this site.");
+
+        var groupName = string.IsNullOrWhiteSpace(siteConfig.MeshCentralGroupName)
+            ? BuildGroupName(client, site)
+            : siteConfig.MeshCentralGroupName!;
+        var installUrl = MeshCentralInstallUrlBuilder.BuildDirectInstallUrl(_options, siteConfig.MeshCentralMeshId!);
 
         var installMode = ResolveInstallMode(_options.InstallExecutionMode);
         var windowsBackground = BuildWindowsCommandBackground(installUrl);
@@ -50,7 +53,7 @@ public class MeshCentralProvisioningService : IMeshCentralProvisioningService
         return new MeshCentralInstallInstructions
         {
             GroupName = groupName,
-            MeshId = null,
+            MeshId = siteConfig.MeshCentralMeshId,
             InstallUrl = installUrl,
             InstallMode = installMode,
             WindowsCommandBackground = windowsBackground,

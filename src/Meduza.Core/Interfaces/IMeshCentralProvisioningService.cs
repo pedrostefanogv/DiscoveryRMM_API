@@ -4,7 +4,7 @@ namespace Meduza.Core.Interfaces;
 
 public interface IMeshCentralProvisioningService
 {
-    MeshCentralInstallInstructions BuildInstallInstructions(
+    Task<MeshCentralInstallInstructions> BuildInstallInstructionsAsync(
         Client client,
         Site site,
         string meduzaDeployToken,
