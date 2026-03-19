@@ -652,7 +652,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.BrandingSettingsJson).HasColumnName("branding_settings_json");
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json");
-            entity.Property(config => config.TicketAttachmentSettingsJson).HasColumnName("ticket_attachment_settings_json");
+            entity.Property(config => config.TicketAttachmentSettingsJson)
+                .HasColumnName("ticket_attachment_settings_json")
+                .HasColumnType("jsonb");
             entity.Property(config => config.ObjectStorageBucketName).HasColumnName("object_storage_bucket_name");
             entity.Property(config => config.ObjectStorageEndpoint).HasColumnName("object_storage_endpoint");
             entity.Property(config => config.ObjectStorageRegion).HasColumnName("object_storage_region");

@@ -2,250 +2,344 @@
 
 ## Objetivo
 
-Documentar a integracao do painel de gerenciamento com o modulo de configuracoes hierarquicas (Server -> Client -> Site), incluindo os novos recursos:
+Documentar a integracao do painel de gerenciamento com o modulo de configuracoes hierarquicas, refletindo o estado atual do codigo:
 
-- RecoveryEnabled
-- DiscoveryEnabled
-- P2PFilesEnabled
-- ChatAIEnabled
-- KnowledgeBaseEnabled
-- SupportEnabled
-- AppStorePolicy
+- Server (Global)
+- Client
+- Site
+
+Inclui:
+
+- endpoints reais disponiveis
+- campos existentes por escopo
+- campos exclusivos do servidor
+- campos herdaveis
+- validacoes e formatos de resposta
 
 ---
 
 ## Base URL
 
-```
 /api/configurations
-```
 
 ---
 
 ## Modelo de Heranca
 
-A API segue heranca por escopo:
+Hierarquia:
 
-1. Server (Global)
+1. Server
 2. Client
 3. Site
 
-Regra de resolucao:
+Regra de resolucao efetiva:
 
-- Se Site tiver valor local, usa Site.
-- Senao, se Client tiver valor local, usa Client.
-- Senao, usa Server.
+1. Se Site tiver valor local, usa Site.
+2. Senao, se Client tiver valor local, usa Client.
+3. Senao, usa Server.
 
-Campos bloqueados:
+Bloqueios:
 
-- Lock no pai impede override no filho.
-- Locks sao definidos em `locked_fields_json`.
-- A API de metadata informa se pode editar em cada nivel.
+- Locks sao armazenados em LockedFieldsJson (array JSON de nomes de campos).
+- Lock no pai bloqueia sobrescrita no filho.
+- Metadata informa, por campo, sourceType e flags canEditAtClient/canEditAtSite/canEditAtAgent.
 
----
+Mapeamento de origem (ConfigurationPriorityType):
 
-## Campos de Politica (nomes oficiais para UI)
-
-Use estes nomes no painel:
-
-- `RecoveryEnabled`: recuperacao de dispositivo (reuso de identidade do agent)
-- `DiscoveryEnabled`: descoberta de agents via rede
-- `P2PFilesEnabled`: transferencia P2P entre agents da mesma rede
-- `ChatAIEnabled`: chat IA para suporte
-- `KnowledgeBaseEnabled`: base de conhecimento
-- `SupportEnabled`: suporte remoto via MeshCentral
-- `AppStorePolicy`: politica da loja de aplicativos
-  - `0 = Disabled`
-  - `1 = PreApproved`
-  - `2 = All`
-
-Campos relacionados no mesmo fluxo:
-
-- `AppStorePolicy`
-- `InventoryIntervalHours`
-- `TokenExpirationDays`
-- `MaxTokensPerAgent`
-- `AgentHeartbeatIntervalSeconds`
-- `AgentOfflineThresholdSeconds`
-- `AutoUpdateSettingsJson`
-- `AIIntegrationSettingsJson`
+- 0 = Block
+- 2 = Global
+- 3 = Client
+- 4 = Site
+- 5 = Agent (reservado para uso futuro)
 
 ---
 
-## Endpoints para o Painel
+## Endpoints Atuais
 
-### 1) Server
+### Server
 
-- `GET /api/configurations/server`
-- `PUT /api/configurations/server`
-- `PATCH /api/configurations/server`
-- `POST /api/configurations/server/reset`
-- `GET /api/configurations/server/metadata`
+- GET /api/configurations/server
+- PUT /api/configurations/server
+- PATCH /api/configurations/server
+- POST /api/configurations/server/reset
+- GET /api/configurations/server/metadata
+- GET /api/configurations/server/reporting
+- PUT /api/configurations/server/reporting
+- GET /api/configurations/server/ticket-attachments
+- PUT /api/configurations/server/ticket-attachments
+- POST /api/configurations/server/object-storage/test
 
-### 2) Client
+### Client
 
-- `GET /api/configurations/clients/{clientId}`
-- `GET /api/configurations/clients/{clientId}/effective`
-- `GET /api/configurations/clients/{clientId}/metadata`
-- `PUT /api/configurations/clients/{clientId}`
-- `PATCH /api/configurations/clients/{clientId}`
-- `DELETE /api/configurations/clients/{clientId}`
-- `POST /api/configurations/clients/{clientId}/reset/{propertyName}`
+- GET /api/configurations/clients/{clientId}
+- GET /api/configurations/clients/{clientId}/effective
+- GET /api/configurations/clients/{clientId}/metadata
+- PUT /api/configurations/clients/{clientId}
+- PATCH /api/configurations/clients/{clientId}
+- DELETE /api/configurations/clients/{clientId}
+- POST /api/configurations/clients/{clientId}/reset/{propertyName}
 
-### 3) Site
+### Site
 
-- `GET /api/configurations/sites/{siteId}`
-- `GET /api/configurations/sites/{siteId}/effective`
-- `GET /api/configurations/sites/{siteId}/metadata`
-- `PUT /api/configurations/sites/{siteId}`
-- `PATCH /api/configurations/sites/{siteId}`
-- `DELETE /api/configurations/sites/{siteId}`
-- `POST /api/configurations/sites/{siteId}/reset/{propertyName}`
+- GET /api/configurations/sites/{siteId}
+- GET /api/configurations/sites/{siteId}/effective
+- GET /api/configurations/sites/{siteId}/metadata
+- PUT /api/configurations/sites/{siteId}
+- PATCH /api/configurations/sites/{siteId}
+- DELETE /api/configurations/sites/{siteId}
+- POST /api/configurations/sites/{siteId}/reset/{propertyName}
 
----
+### Auditoria de Configuracao
 
-## Fluxo recomendado no Frontend
+Base URL: /api/configuration-audit
 
-1. Carregar metadata do nivel antes de renderizar formulario.
-2. Desabilitar controles onde `CanEditAtX = false`.
-3. Exibir badge de origem pelo `SourceType`:
-   - `2` = Global
-   - `3` = Client
-   - `4` = Site
-   - `0` = Bloqueado
-4. Em Patch, enviar apenas campos alterados.
-5. Para "voltar a herdar", usar endpoint `reset/{propertyName}`.
-
----
-
-## Exemplos de Integracao
-
-### A) Ler configuracao efetiva de um Client
-
-```bash
-curl -X GET "http://localhost:5001/api/configurations/clients/{clientId}/effective"
-```
-
-Resposta (resumo):
-
-```json
-{
-  "clientId": "...",
-  "recoveryEnabled": true,
-  "discoveryEnabled": false,
-  "p2pFilesEnabled": true,
-  "supportEnabled": false,
-  "chatAIEnabled": true,
-  "knowledgeBaseEnabled": true,
-  "appStorePolicy": 1,
-  "blockedFields": ["AppStorePolicy"],
-  "inheritance": {
-    "RecoveryEnabled": 3,
-    "DiscoveryEnabled": 2,
-    "P2PFilesEnabled": 3,
-    "SupportEnabled": 2,
-    "ChatAIEnabled": 3,
-    "KnowledgeBaseEnabled": 2,
-    "AppStorePolicy": 2
-  }
-}
-```
-
-### B) Metadata para montar permissao de edicao (Client)
-
-```bash
-curl -X GET "http://localhost:5001/api/configurations/clients/{clientId}/metadata"
-```
-
-Resposta (resumo):
-
-```json
-{
-  "level": "Client",
-  "globalLockedFields": ["AppStorePolicy"],
-  "clientLockedFields": ["ChatAIEnabled"],
-  "fields": {
-    "ChatAIEnabled": {
-      "field": "ChatAIEnabled",
-      "sourceType": 3,
-      "isLockedByGlobal": false,
-      "isLockedByClient": true,
-      "canEditAtClient": true,
-      "canEditAtSite": false
-    }
-  }
-}
-```
-
-### C) Atualizar parcialmente Client (PATCH)
-
-```bash
-curl -X PATCH "http://localhost:5001/api/configurations/clients/{clientId}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ChatAIEnabled": true,
-    "KnowledgeBaseEnabled": true,
-    "AppStorePolicy": 1,
-    "DiscoveryEnabled": true,
-    "P2PFilesEnabled": false,
-    "SupportEnabled": true,
-    "RecoveryEnabled": true
-  }'
-```
-
-### D) Voltar campo para heranca
-
-```bash
-curl -X POST "http://localhost:5001/api/configurations/clients/{clientId}/reset/ChatAIEnabled"
-```
-
-### E) Atualizar Site com override local
-
-```bash
-curl -X PATCH "http://localhost:5001/api/configurations/sites/{siteId}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "SupportEnabled": true,
-    "P2PFilesEnabled": true
-  }'
-```
+- GET /api/configuration-audit
+- GET /api/configuration-audit/{entityType}/{entityId}
+- GET /api/configuration-audit/{entityType}/{entityId}/field/{fieldName}
+- GET /api/configuration-audit/by-user/{username}
+- GET /api/configuration-audit/report
 
 ---
 
-## Regras de UX recomendadas
+## Configuracoes Herdaveis (Catalogo Oficial)
 
-- Mostrar 3 estados por campo:
-  - Herdado
-  - Configurado localmente
-  - Bloqueado por nivel superior
-- Mostrar origem efetiva ao lado do toggle/select.
-- Exibir acao "Resetar para heranca" quando campo estiver local.
-- Em erro 400 por campo bloqueado, mostrar mensagem direta no controle.
-
----
-
-## Compatibilidade de nomes
-
-A API usa apenas nomes canônicos e nao aceita aliases legados.
+Campos gerenciados oficialmente para heranca e metadata:
 
 - RecoveryEnabled
 - DiscoveryEnabled
 - P2PFilesEnabled
 - SupportEnabled
+- MeshCentralGroupPolicyProfile
 - ChatAIEnabled
 - KnowledgeBaseEnabled
+- AppStorePolicy
+- InventoryIntervalHours
+- AutoUpdateSettingsJson
+- AIIntegrationSettingsJson
+- TicketAttachmentSettingsJson
+- AgentHeartbeatIntervalSeconds
+
+Observacao:
+
+- Esses campos aparecem na metadata por escopo e participam da cadeia de locks/heranca.
 
 ---
 
-## Checklist de integracao
+## Configuracoes Exclusivas do Servidor
 
-1. Implementar tela de metadata por nivel.
-2. Renderizar formulario com base em `fields` e `canEdit...`.
-3. Consumir `/effective` para visualizacao consolidada.
-4. Usar `PATCH` para alteracoes incrementais.
-5. Usar `reset/{propertyName}` para heranca.
-6. Tratar erro de bloqueio (400) no frontend.
+Campos existentes no ServerConfiguration que nao sao sobrescritos por Client/Site:
+
+- BrandingSettingsJson
+- ReportingSettingsJson
+- ObjectStorageBucketName
+- ObjectStorageEndpoint
+- ObjectStorageRegion
+- ObjectStorageAccessKey
+- ObjectStorageSecretKey
+- ObjectStorageUrlTtlHours
+- ObjectStorageUsePathStyle
+- ObjectStorageSslVerify
+
+Tambem exclusivos no nivel global dentro de AIIntegrationSettings:
+
+- ApiKey
+- BaseUrl
+- Provider
+- EmbeddingModel
+- EmbeddingEnabled
+- EmbeddingArticlesEnabled
+- MSPServers
+- TimeoutMs
+- RateLimitPerMinute
+- TokenBudgetDaily
+- CostControlEnabled
 
 ---
 
-**Ultima atualizacao:** 11 de marco de 2026
+## Configuracoes de Client e Site
+
+### ClientConfiguration
+
+Campos de override (nullable; semantica de heranca):
+
+- RecoveryEnabled
+- DiscoveryEnabled
+- P2PFilesEnabled
+- SupportEnabled
+- MeshCentralGroupPolicyProfile
+- ChatAIEnabled
+- KnowledgeBaseEnabled
+- AppStorePolicy
+- AIIntegrationSettingsJson
+- InventoryIntervalHours
+- AutoUpdateSettingsJson
+- AgentHeartbeatIntervalSeconds
+- LockedFieldsJson
+
+### SiteConfiguration
+
+Mesmo conjunto de override do Client, mais campos especificos de site:
+
+- Timezone
+- Location
+- ContactPerson
+- ContactEmail
+- MeshCentralGroupName
+- MeshCentralMeshId
+- MeshCentralAppliedGroupPolicyProfile
+- MeshCentralAppliedGroupPolicyAt
+
+---
+
+## Tipos de Dados Relevantes para o Frontend
+
+### Enum AppStorePolicyType
+
+- 0 = Disabled
+- 1 = PreApproved
+- 2 = All
+
+### AutoUpdateSettings (armazenado em AutoUpdateSettingsJson)
+
+- Enabled: bool
+- CheckEveryHours: int
+- AllowUserDelay: bool
+- MaxDelayHours: int
+- ForceRestartDelay: bool
+- RestartDelayHours: int
+- UpdateOnLogon: bool
+- MaintenanceWindows: array
+- SilentInstall: bool
+- AutoRollbackOnFailure: bool
+
+### AIIntegrationSettings (Server)
+
+Principais campos:
+
+- Enabled: bool
+- ChatAIEnabled: bool
+- KnowledgeBaseEnabled: bool
+- MSPServers: string[]
+- TimeoutMs: int
+- MaxTokensPerRequest: int
+- Provider: string
+- ApiKey: string? (nunca retornada em claro)
+- BaseUrl: string?
+- ChatModel: string?
+- EmbeddingModel: string?
+- PromptTemplate: string?
+- Temperature: double
+- EmbeddingEnabled: bool
+- EmbeddingArticlesEnabled: bool
+- MaxHistoryMessages: int
+- MaxKbContextTokens: int
+- RateLimitPerMinute: int
+- TokenBudgetDaily: int
+- CostControlEnabled: bool
+- MinSimilarityScore: double
+- MaxKbChunks: int
+
+### AIIntegrationSettingsOverride (Client/Site)
+
+Sobrescritas permitidas em Client/Site:
+
+- Enabled
+- ChatAIEnabled
+- KnowledgeBaseEnabled
+- ChatModel
+- PromptTemplate
+- Temperature
+- MaxTokensPerRequest
+- MaxHistoryMessages
+- MaxKbContextTokens
+- MaxKbChunks
+- MinSimilarityScore
+
+### TicketAttachmentSettings (Server)
+
+- Enabled: bool
+- MaxFileSizeBytes: long
+- AllowedContentTypes: string[]
+- PresignedUploadUrlTtlMinutes: int
+
+---
+
+## Validacoes Atuais no Backend
+
+- InventoryIntervalHours: 1 a 168
+- AgentHeartbeatIntervalSeconds: 10 a 3600
+- TicketAttachmentSettings:
+  - MaxFileSizeBytes > 0
+  - MaxFileSizeBytes <= 1GB
+  - PresignedUploadUrlTtlMinutes entre 1 e 120
+  - AllowedContentTypes nao vazio e sem valores invalidos
+- Reporting (PUT /server/reporting): DatabaseRetentionDays e FileRetentionDays precisam estar contidos em AllowedRetentionDays
+
+---
+
+## Padrao de Resposta e Erros
+
+Sucesso:
+
+- GET/PUT/PATCH: 200 com objeto
+- DELETE e reset de propriedade: 204 sem body
+
+Erros comuns:
+
+- 400 com payload contendo error ou errors
+- 404 quando client/site nao encontrado
+
+Comportamentos relevantes:
+
+- AIIntegrationSettingsJson e respostas efetivas sao sanitizadas para nao expor ApiKey.
+- ObjectStorageSecretKey e dados sensiveis sao protegidos no backend.
+
+---
+
+## Observacoes Importantes para o Frontend
+
+1. Parse de campos JSON
+
+- AutoUpdateSettingsJson, AIIntegrationSettingsJson e TicketAttachmentSettingsJson precisam ser tratados como objetos tipados no frontend.
+
+2. Metadata e UX de heranca
+
+- Sempre carregar metadata do escopo antes de renderizar formulario.
+- Usar sourceType para badge de origem.
+- Desabilitar edicao com base em canEditAtClient/canEditAtSite/canEditAtAgent.
+
+3. Locks
+
+- Exibir claramente quando campo estiver bloqueado por nivel superior.
+- Em erro 400 de bloqueio, mostrar mensagem no campo correspondente.
+
+4. Diferenca entre documentacao conceitual e comportamento atual
+
+- Conceito: null em Client/Site representa heranca.
+- Comportamento atual de implementacao: bool? pode ser normalizado para false em alguns fluxos de update/reset.
+- Recomendacao: tratar esse ponto como comportamento atual da API ate ajuste de regra no backend.
+
+---
+
+## Fluxo Recomendado de Integracao no Site
+
+1. Ler metadata do nivel desejado.
+2. Renderizar controles com estado herdado/local/bloqueado.
+3. Enviar PATCH apenas com campos alterados.
+4. Usar endpoint reset/{propertyName} para retornar para heranca.
+5. Recarregar configuracao efetiva apos salvar para atualizar badges e locks.
+
+---
+
+## Checklist de Integracao
+
+1. Implementar consumo de metadata por escopo.
+2. Implementar mapeamento fixo de enums (AppStorePolicyType e sourceType).
+3. Implementar parse/serialize seguro dos campos JSON.
+4. Tratar 400 e 404 com mensagens por campo e contexto.
+5. Exibir estado de lock e origem efetiva em todos os campos gerenciados.
+6. Validar UI com os endpoints /effective de Client e Site.
+
+---
+
+Ultima atualizacao: 19 de marco de 2026

@@ -7,6 +7,7 @@ using FluentMigrator.Runner;
 using Meduza.Api.Hubs;
 using Meduza.Api.Middleware;
 using Meduza.Api.Services;
+using Meduza.Api.DependencyInjection;
 using Meduza.Core.Configuration;
 using Meduza.Core.Interfaces;
 using Meduza.Core.Interfaces.Auth;
@@ -55,30 +56,22 @@ builder.Services.AddDbContext<MeduzaDbContext>(options =>
         npgsqlOptions.UseVector();
     }));
 
-// Repositories
-builder.Services.AddScoped<IClientRepository, ClientRepository>();
-builder.Services.AddScoped<ISiteRepository, SiteRepository>();
-builder.Services.AddScoped<IAgentRepository, AgentRepository>();
-builder.Services.AddScoped<IAgentLabelRepository, AgentLabelRepository>();
-builder.Services.AddScoped<IAgentLabelRuleRepository, AgentLabelRuleRepository>();
-builder.Services.AddScoped<IAgentHardwareRepository, AgentHardwareRepository>();
-builder.Services.AddScoped<IAgentSoftwareRepository, AgentSoftwareRepository>();
-builder.Services.AddScoped<ICommandRepository, CommandRepository>();
-builder.Services.AddScoped<ITicketRepository, TicketRepository>();
-builder.Services.AddScoped<IAgentTokenRepository, AgentTokenRepository>();
-builder.Services.AddScoped<IDeployTokenRepository, DeployTokenRepository>();
-builder.Services.AddScoped<IWorkflowRepository, WorkflowRepository>();
-builder.Services.AddScoped<ILogRepository, LogRepository>();
-builder.Services.AddScoped<IEntityNoteRepository, EntityNoteRepository>();
-builder.Services.AddScoped<IReportTemplateRepository, ReportTemplateRepository>();
-builder.Services.AddScoped<IReportExecutionRepository, ReportExecutionRepository>();
-builder.Services.AddScoped<IReportDatasetQueryService, ReportDatasetQueryService>();
-builder.Services.AddScoped<IReportHtmlComposer, ReportHtmlComposer>();
-builder.Services.AddScoped<IReportService, ReportService>();
-builder.Services.AddScoped<INotificationRepository, NotificationRepository>();
-builder.Services.AddScoped<INotificationService, NotificationService>();
+// Auto-registered DI services (repositories + domain services)
+// Most services in Meduza follow a 1:1 interface-to-implementation pattern.
+// The helper below scans Meduza.Infrastructure and registers any interface that has exactly one concrete implementation.
+var autoRegisteredServices = builder.Services.AddMeduzaAutoRegisteredServices();
+
+// Special registrations (singleton/hosted services, multi-implementation patterns)
+builder.Services.AddSingleton<ISyncPingDispatchQueue, SyncPingDispatchBackgroundService>();
+builder.Services.AddHostedService(sp => (SyncPingDispatchBackgroundService)sp.GetRequiredService<ISyncPingDispatchQueue>());
+
+// Multi-implementation services (explicitly registered)
 builder.Services.AddScoped<IReportRenderer, XlsxReportRenderer>();
 builder.Services.AddScoped<IReportRenderer, CsvReportRenderer>();
+
+// Implemented in Meduza.Api (outside Meduza.Infrastructure auto-scan)
+builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<ISyncInvalidationPublisher, SyncInvalidationPublisher>();
 
 // PDF rendering using Playwright.NET (embedded, no external service required, zero vulnerabilities)
 if (builder.Configuration.GetValue<bool>("Reporting:EnablePdf"))
@@ -86,63 +79,14 @@ if (builder.Configuration.GetValue<bool>("Reporting:EnablePdf"))
     builder.Services.AddScoped<IReportRenderer, PlaywrightPdfReportRenderer>();
 }
 
-// New repositories for tickets enhancement (Departments, WorkflowProfiles, ActivityLogs)
-builder.Services.AddScoped<IDepartmentRepository, DepartmentRepository>();
-builder.Services.AddScoped<IWorkflowProfileRepository, WorkflowProfileRepository>();
-builder.Services.AddScoped<ITicketActivityLogRepository, TicketActivityLogRepository>();
-
-// Configuration repositories
-builder.Services.AddScoped<IServerConfigurationRepository, ServerConfigurationRepository>();
-builder.Services.AddScoped<IMeshCentralRightsProfileRepository, MeshCentralRightsProfileRepository>();
-builder.Services.AddScoped<IClientConfigurationRepository, ClientConfigurationRepository>();
-builder.Services.AddScoped<ISiteConfigurationRepository, SiteConfigurationRepository>();
-builder.Services.AddScoped<IConfigurationAuditRepository, ConfigurationAuditRepository>();
-builder.Services.AddScoped<IAppApprovalRuleRepository, AppApprovalRuleRepository>();
-builder.Services.AddScoped<IAppApprovalAuditRepository, AppApprovalAuditRepository>();
-builder.Services.AddScoped<IAutomationScriptRepository, AutomationScriptRepository>();
-builder.Services.AddScoped<IAutomationScriptAuditRepository, AutomationScriptAuditRepository>();
-builder.Services.AddScoped<IAutomationTaskRepository, AutomationTaskRepository>();
-builder.Services.AddScoped<IAutomationTaskAuditRepository, AutomationTaskAuditRepository>();
-builder.Services.AddScoped<IAutomationExecutionReportRepository, AutomationExecutionReportRepository>();
-builder.Services.AddScoped<ISyncPingDeliveryRepository, SyncPingDeliveryRepository>();
-builder.Services.AddScoped<IAppPackageRepository, AppPackageRepository>();
-builder.Services.AddScoped<IChocolateyPackageRepository, ChocolateyPackageRepository>();
-builder.Services.AddScoped<IWingetPackageRepository, WingetPackageRepository>();
-
-// Object Storage & Attachments (genérico para qualquer escopo)
-builder.Services.AddScoped<IAttachmentRepository, AttachmentRepository>();
-builder.Services.AddScoped<IObjectStorageProviderFactory, ObjectStorageProviderFactory>();
-builder.Services.AddScoped<IAttachmentService, AttachmentService>();
-// Factory resolve IObjectStorageService dinamicamente baseado em ServerConfiguration
+// Factory resolve IObjectStorageService dynamically based on ServerConfiguration
 builder.Services.AddScoped<IObjectStorageService>(sp =>
     sp.GetRequiredService<IObjectStorageProviderFactory>().CreateObjectStorageService());
 
-// Services
-builder.Services.AddScoped<IConfigurationAuditService, ConfigurationAuditService>();
-builder.Services.AddScoped<IConfigurationService, ConfigurationService>();
-builder.Services.AddScoped<IConfigurationResolver, ConfigurationResolver>();
-builder.Services.AddSingleton<ISyncPingDispatchQueue, SyncPingDispatchBackgroundService>();
-builder.Services.AddHostedService(sp => (SyncPingDispatchBackgroundService)sp.GetRequiredService<ISyncPingDispatchQueue>());
-builder.Services.AddScoped<ISyncInvalidationPublisher, SyncInvalidationPublisher>();
-builder.Services.AddScoped<IAgentAuthService, AgentTokenAuthService>();
-builder.Services.AddScoped<IAgentAutoLabelingService, AgentAutoLabelingService>();
-builder.Services.AddScoped<IDeployTokenService, DeployTokenService>();
-builder.Services.AddScoped<IAgentPackageService, AgentPackageService>();
-builder.Services.AddScoped<ILoggingService, LoggingService>();
-
-// New services for tickets enhancement (SLA, ActivityLog)
-builder.Services.AddScoped<ISlaService, SlaService>();
-builder.Services.AddScoped<IActivityLogService, ActivityLogService>();
-builder.Services.AddScoped<IDashboardService, DashboardService>();
-builder.Services.AddScoped<IAppStoreService, AppStoreService>();
-builder.Services.AddScoped<IAppApprovalAuditService, AppApprovalAuditService>();
-builder.Services.AddScoped<IAutomationScriptService, AutomationScriptService>();
-builder.Services.AddScoped<IAutomationTaskService, AutomationTaskService>();
-builder.Services.AddScoped<IAppCatalogSyncService, AppCatalogSyncService>();
-builder.Services.AddScoped<IChocolateyPackageSyncService, ChocolateyPackageSyncService>();
-builder.Services.AddScoped<IWingetPackageSyncService, WingetPackageSyncService>();
+// Special singletons
 builder.Services.AddSingleton<ChocolateyApiClient>();
 builder.Services.AddSingleton<WingetFeedClient>();
+
 builder.Services.AddHttpClient();
 
 var enableKnowledgeEmbeddingBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:KnowledgeEmbeddingEnabled") ?? true;
@@ -172,34 +116,20 @@ var agentRateLimitPermit = Math.Max(1, builder.Configuration.GetValue<int?>("Sec
 var agentRateLimitWindowSeconds = Math.Max(1, builder.Configuration.GetValue<int?>("Security:RateLimiting:Agent:WindowSeconds") ?? 60);
 var agentRateLimitQueueLimit = Math.Max(0, builder.Configuration.GetValue<int?>("Security:RateLimiting:Agent:QueueLimit") ?? 0);
 
-// AI Chat & MCP
+// AI Chat & MCP (auto-registered via AddMeduzaAutoRegisteredServices)
+// Only the LLM provider is explicitly registered as singleton.
 builder.Services.AddSingleton<ILlmProvider, OpenAiProvider>();
-builder.Services.AddScoped<IAiChatService, AiChatService>();
-builder.Services.AddScoped<IAiChatSessionRepository, AiChatSessionRepository>();
-builder.Services.AddScoped<IAiChatMessageRepository, AiChatMessageRepository>();
-builder.Services.AddScoped<IAiChatJobRepository, AiChatJobRepository>();
 
-// Knowledge Base
-builder.Services.AddScoped<IKnowledgeArticleRepository, KnowledgeArticleRepository>();
-builder.Services.AddScoped<IKnowledgeChunkRepository, KnowledgeChunkRepository>();
-builder.Services.AddScoped<IEmbeddingProvider, OpenAiEmbeddingProvider>();
-builder.Services.AddScoped<IKnowledgeChunkingService, KnowledgeChunkingService>();
-builder.Services.AddScoped<IKnowledgeMcpTool, KnowledgeMcpTool>();
+// Knowledge Base (auto-registered via AddMeduzaAutoRegisteredServices)
 if (enableKnowledgeEmbeddingBackgroundService)
 {
     builder.Services.AddHostedService<KnowledgeEmbeddingBackgroundService>();
 }
+
 builder.Services.Configure<MeshCentralOptions>(
     builder.Configuration.GetSection("MeshCentral"));
 builder.Services.Configure<SecretEncryptionOptions>(
     builder.Configuration.GetSection(SecretEncryptionOptions.SectionName));
-builder.Services.AddScoped<IMeshCentralEmbeddingService, MeshCentralEmbeddingService>();
-builder.Services.AddScoped<IMeshCentralProvisioningService, MeshCentralProvisioningService>();
-builder.Services.AddScoped<IMeshCentralApiService, MeshCentralApiService>();
-builder.Services.AddScoped<IMeshCentralPolicyResolver, MeshCentralPolicyResolver>();
-builder.Services.AddScoped<IMeshCentralIdentitySyncService, MeshCentralIdentitySyncService>();
-builder.Services.AddScoped<IMeshCentralGroupPolicySyncService, MeshCentralGroupPolicySyncService>();
-builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 
 // IMemoryCache (para ConfigurationResolver)
 builder.Services.AddMemoryCache();
@@ -215,7 +145,6 @@ builder.Services.Configure<ReportingOptions>(
 // NATS
 var natsUrl = builder.Configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222";
 builder.Services.AddSingleton(_ => new NatsConnection(new NatsOpts { Url = natsUrl }));
-builder.Services.AddScoped<IAgentMessaging, NatsAgentMessaging>();
 builder.Services.AddHostedService<NatsBackgroundService>();
 builder.Services.AddHostedService<NatsSignalRBridge>();
 
@@ -275,22 +204,10 @@ if (!isDevelopment)
 builder.Services.AddHostedService<AgentPackagePrebuildHostedService>();
 
 // ── Identity & Auth ───────────────────────────────────────────────────────
-// Repos
-builder.Services.AddScoped<IUserRepository, UserRepository>();
-builder.Services.AddScoped<IUserGroupRepository, UserGroupRepository>();
-builder.Services.AddScoped<IRoleRepository, RoleRepository>();
-builder.Services.AddScoped<IUserSessionRepository, UserSessionRepository>();
-builder.Services.AddScoped<IApiTokenRepository, ApiTokenRepository>();
-builder.Services.AddScoped<IUserMfaKeyRepository, UserMfaKeyRepository>();
-// Services
-builder.Services.AddScoped<IPasswordService, UserPasswordService>();
+// Scoped repos/services above are auto-registered via AddMeduzaAutoRegisteredServices.
+// Explicit registrations below preserve non-default lifetimes.
 builder.Services.AddSingleton<IJwtService, JwtService>();
-builder.Services.AddScoped<IFido2Service, Fido2AuthService>();
-builder.Services.AddScoped<IOtpService, OtpAuthService>();
 builder.Services.AddSingleton<ISecretProtector, SecretProtector>();
-builder.Services.AddScoped<IUserAuthService, UserAuthService>();
-builder.Services.AddScoped<IApiTokenService, ApiTokenService>();
-builder.Services.AddScoped<IPermissionService, PermissionService>();
 
 //  Controllers + JSON config
 builder.Services.AddControllers(options =>
@@ -412,6 +329,18 @@ builder.Services.AddFluentMigratorCore()
     .AddLogging(lb => lb.AddFluentMigratorConsole());
 
 var app = builder.Build();
+
+if (autoRegisteredServices.Count > 0)
+{
+    app.Logger.LogInformation("DI auto-registration completed with {Count} services.", autoRegisteredServices.Count);
+    foreach (var registration in autoRegisteredServices)
+    {
+        app.Logger.LogDebug(
+            "DI auto-registration: {Interface} -> {Implementation}",
+            registration.InterfaceType.FullName,
+            registration.ImplementationType.FullName);
+    }
+}
 
 app.Logger.LogInformation(
     "AgentPackage startup config: hostProfile={Profile}, host={Host}, installerTarget={Target}",
