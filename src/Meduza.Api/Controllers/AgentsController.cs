@@ -36,7 +36,7 @@ public class AgentsController : ControllerBase
     private readonly ISiteRepository _siteRepository;
     private readonly IRedisService _redisService;
     private readonly IHubContext<AgentHub> _hubContext;
-    private readonly int _agentOnlineGraceSeconds;
+    private readonly IConfigurationResolver _configurationResolver;
 
     public AgentsController(
         IAgentRepository agentRepo,
@@ -51,7 +51,7 @@ public class AgentsController : ControllerBase
         ISiteRepository siteRepository,
         IRedisService redisService,
         IHubContext<AgentHub> hubContext,
-        IConfiguration configuration)
+        IConfigurationResolver configurationResolver)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -65,7 +65,7 @@ public class AgentsController : ControllerBase
         _siteRepository = siteRepository;
         _redisService = redisService;
         _hubContext = hubContext;
-        _agentOnlineGraceSeconds = configuration.GetValue<int?>("Realtime:AgentOnlineGraceSeconds") ?? 120;
+        _configurationResolver = configurationResolver;
     }
 
     [HttpGet("by-site/{siteId:guid}")]
@@ -73,8 +73,9 @@ public class AgentsController : ControllerBase
     {
         var cacheKey = $"agents:by-site:{siteId:N}";
         var agents = await GetOrSetCacheAsync(cacheKey, async () => (await _agentRepo.GetBySiteIdAsync(siteId)).ToList()) ?? [];
+        var onlineGraceSeconds = await GetOnlineGraceSecondsForSiteAsync(siteId);
         foreach (var agent in agents)
-            ApplyEffectiveStatus(agent);
+            ApplyEffectiveStatus(agent, onlineGraceSeconds);
         return Ok(agents);
     }
 
@@ -83,8 +84,9 @@ public class AgentsController : ControllerBase
     {
         var cacheKey = $"agents:by-client:{clientId:N}";
         var agents = await GetOrSetCacheAsync(cacheKey, async () => (await _agentRepo.GetByClientIdAsync(clientId)).ToList()) ?? [];
+        var graceBySite = await GetOnlineGraceSecondsBySiteAsync(agents.Select(agent => agent.SiteId).Distinct());
         foreach (var agent in agents)
-            ApplyEffectiveStatus(agent);
+            ApplyEffectiveStatus(agent, graceBySite.GetValueOrDefault(agent.SiteId, 120));
         return Ok(agents);
     }
 
@@ -94,18 +96,54 @@ public class AgentsController : ControllerBase
         var cacheKey = $"agents:single:{id:N}";
         var agent = await GetOrSetCacheAsync(cacheKey, () => _agentRepo.GetByIdAsync(id));
         if (agent is not null)
-            ApplyEffectiveStatus(agent);
+        {
+            var onlineGraceSeconds = await GetOnlineGraceSecondsForSiteAsync(agent.SiteId);
+            ApplyEffectiveStatus(agent, onlineGraceSeconds);
+        }
         return agent is null ? NotFound() : Ok(agent);
     }
 
-    private void ApplyEffectiveStatus(Agent agent)
+    private static void ApplyEffectiveStatus(Agent agent, int onlineGraceSeconds)
     {
         if (agent.Status != AgentStatus.Online)
             return;
 
-        var cutoffUtc = DateTime.UtcNow.AddSeconds(-_agentOnlineGraceSeconds);
+        var cutoffUtc = DateTime.UtcNow.AddSeconds(-onlineGraceSeconds);
         if (!agent.LastSeenAt.HasValue || agent.LastSeenAt.Value < cutoffUtc)
             agent.Status = AgentStatus.Offline;
+    }
+
+    private async Task<int> GetOnlineGraceSecondsForSiteAsync(Guid siteId)
+    {
+        try
+        {
+            var resolved = await _configurationResolver.ResolveForSiteAsync(siteId);
+            return resolved.AgentOnlineGraceSeconds;
+        }
+        catch
+        {
+            return 120;
+        }
+    }
+
+    private async Task<Dictionary<Guid, int>> GetOnlineGraceSecondsBySiteAsync(IEnumerable<Guid> siteIds)
+    {
+        var ids = siteIds.Distinct().ToList();
+        var tasks = ids.Select(async siteId =>
+        {
+            try
+            {
+                var resolved = await _configurationResolver.ResolveForSiteAsync(siteId);
+                return (siteId, grace: resolved.AgentOnlineGraceSeconds);
+            }
+            catch
+            {
+                return (siteId, grace: 120);
+            }
+        });
+
+        var entries = await Task.WhenAll(tasks);
+        return entries.ToDictionary(entry => entry.siteId, entry => entry.grace);
     }
 
     [HttpPost]

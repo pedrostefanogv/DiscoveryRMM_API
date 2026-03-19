@@ -52,6 +52,9 @@ public class ServerConfiguration
     /// <summary>Intervalo esperado de heartbeat do agent (segundos)</summary>
     public int AgentHeartbeatIntervalSeconds { get; set; } = 60;
 
+    /// <summary>Janela de tolerancia para considerar o agent online apos ultimo heartbeat (segundos)</summary>
+    public int AgentOnlineGraceSeconds { get; set; } = 120;
+
     // ============ Branding e IA ============
 
     /// <summary>Configurações de branding da aplicação</summary>

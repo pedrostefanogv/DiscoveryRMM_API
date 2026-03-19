@@ -649,6 +649,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AutoUpdateSettingsJson).HasColumnName("auto_update_settings_json");
             entity.Property(config => config.AgentHeartbeatIntervalSeconds).HasColumnName("agent_heartbeat_interval_seconds");
+            entity.Property(config => config.AgentOnlineGraceSeconds).HasColumnName("agent_online_grace_seconds");
             entity.Property(config => config.BrandingSettingsJson).HasColumnName("branding_settings_json");
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json");
@@ -735,6 +736,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AutoUpdateSettingsJson).HasColumnName("auto_update_settings_json");
             entity.Property(config => config.AgentHeartbeatIntervalSeconds).HasColumnName("agent_heartbeat_interval_seconds");
+            entity.Property(config => config.AgentOnlineGraceSeconds).HasColumnName("agent_online_grace_seconds");
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
             entity.Property(config => config.CreatedAt)
                 .HasColumnName("created_at")
@@ -783,6 +785,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AutoUpdateSettingsJson).HasColumnName("auto_update_settings_json");
+            entity.Property(config => config.AgentOnlineGraceSeconds).HasColumnName("agent_online_grace_seconds");
             entity.Property(config => config.Timezone)
                 .HasColumnName("timezone")
                 .HasMaxLength(100);

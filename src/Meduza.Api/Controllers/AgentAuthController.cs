@@ -130,6 +130,7 @@ public class AgentAuthController : ControllerBase
             resolved.InventoryIntervalHours,
             resolved.AutoUpdate,
             resolved.AgentHeartbeatIntervalSeconds,
+            resolved.AgentOnlineGraceSeconds,
             resolved.SiteId,
             resolved.ClientId,
             resolved.ResolvedAt

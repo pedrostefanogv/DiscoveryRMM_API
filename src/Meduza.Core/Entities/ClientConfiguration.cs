@@ -63,6 +63,9 @@ public class ClientConfiguration
     /// <summary>Intervalo esperado de heartbeat do agent (segundos)</summary>
     public int? AgentHeartbeatIntervalSeconds { get; set; }
 
+    /// <summary>Janela de tolerancia para considerar o agent online (segundos)</summary>
+    public int? AgentOnlineGraceSeconds { get; set; }
+
     /// <summary>
     /// Lista de campos bloqueados no nível de cliente (JSON array de nomes de propriedade).
     /// Bloqueia sobrescrita nos sites e agents deste cliente.

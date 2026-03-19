@@ -6,7 +6,6 @@ using Meduza.Core.Helpers;
 using Meduza.Core.Interfaces;
 using Meduza.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 
 namespace Meduza.Infrastructure.Services;
 
@@ -14,18 +13,20 @@ public class DashboardService : IDashboardService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const int AbsoluteCacheTtlSeconds = 45;
+    private const int DefaultOnlineGraceSeconds = 120;
 
     private readonly MeduzaDbContext _db;
     private readonly IRedisService _redisService;
-    private readonly int _agentOnlineGraceSeconds;
+    private readonly IConfigurationResolver _configurationResolver;
 
-    public DashboardService(MeduzaDbContext db, IRedisService redisService, IConfiguration configuration)
+    public DashboardService(
+        MeduzaDbContext db,
+        IRedisService redisService,
+        IConfigurationResolver configurationResolver)
     {
         _db = db;
         _redisService = redisService;
-        _agentOnlineGraceSeconds = int.TryParse(configuration["Realtime:AgentOnlineGraceSeconds"], out var parsed)
-            ? parsed
-            : 120;
+        _configurationResolver = configurationResolver;
     }
 
     public Task<DashboardSummaryDto> GetGlobalSummaryAsync(TimeSpan window, CancellationToken cancellationToken = default)
@@ -55,24 +56,52 @@ public class DashboardService : IDashboardService
     {
         var now = DateTime.UtcNow;
         var windowStartUtc = now.Subtract(window);
-        var onlineCutoffUtc = now.AddSeconds(-_agentOnlineGraceSeconds);
 
         var scopedAgents = BuildScopedAgentsQuery(level, clientId, siteId);
         var scopedTickets = BuildScopedTicketsQuery(level, clientId, siteId);
         var scopedLogsWindow = BuildScopedLogsWindowQuery(level, clientId, siteId, windowStartUtc);
 
-        var agentsTotal = await scopedAgents.CountAsync(cancellationToken);
-        var agentsOnline = await scopedAgents
-            .CountAsync(a => a.Status == AgentStatus.Online && a.LastSeenAt >= onlineCutoffUtc, cancellationToken);
-        var agentsStale = await scopedAgents
-            .CountAsync(a => a.Status == AgentStatus.Online && (a.LastSeenAt == null || a.LastSeenAt < onlineCutoffUtc), cancellationToken);
-        var agentsMaintenance = await scopedAgents
-            .CountAsync(a => a.Status == AgentStatus.Maintenance, cancellationToken);
-        var agentsError = await scopedAgents
-            .CountAsync(a => a.Status == AgentStatus.Error, cancellationToken);
-        var agentsOfflinePersisted = await scopedAgents
-            .CountAsync(a => a.Status == AgentStatus.Offline, cancellationToken);
+        var agentSummaries = await scopedAgents
+            .Select(a => new AgentStatusProjection(a.SiteId, a.Status, a.LastSeenAt))
+            .ToListAsync(cancellationToken);
+
+        var graceBySite = await ResolveGraceBySiteAsync(agentSummaries.Select(agent => agent.SiteId));
+
+        var agentsTotal = agentSummaries.Count;
+        var agentsOnline = 0;
+        var agentsStale = 0;
+        var agentsMaintenance = 0;
+        var agentsError = 0;
+        var agentsOfflinePersisted = 0;
+
+        foreach (var agent in agentSummaries)
+        {
+            switch (agent.Status)
+            {
+                case AgentStatus.Online:
+                {
+                    var graceSeconds = graceBySite.GetValueOrDefault(agent.SiteId, DefaultOnlineGraceSeconds);
+                    var cutoffUtc = now.AddSeconds(-graceSeconds);
+                    if (agent.LastSeenAt.HasValue && agent.LastSeenAt.Value >= cutoffUtc)
+                        agentsOnline++;
+                    else
+                        agentsStale++;
+                    break;
+                }
+                case AgentStatus.Offline:
+                    agentsOfflinePersisted++;
+                    break;
+                case AgentStatus.Maintenance:
+                    agentsMaintenance++;
+                    break;
+                case AgentStatus.Error:
+                    agentsError++;
+                    break;
+            }
+        }
+
         var agentsOffline = agentsOfflinePersisted + agentsStale;
+        var onlineGraceSeconds = await ResolveReportedGraceSecondsAsync(level, clientId, siteId, graceBySite);
 
         var scopedCommands = BuildScopedCommandsQuery(level, clientId, siteId).Where(c => c.CreatedAt >= windowStartUtc);
         var commandCounts = await scopedCommands
@@ -131,7 +160,7 @@ public class DashboardService : IDashboardService
                 Stale: agentsStale,
                 Maintenance: agentsMaintenance,
                 Error: agentsError,
-                OnlineGraceSeconds: _agentOnlineGraceSeconds),
+                OnlineGraceSeconds: onlineGraceSeconds),
             Commands: new DashboardCommandsSummaryDto(
                 Total: commandsTotal,
                 Pending: commandsPending,
@@ -158,6 +187,56 @@ public class DashboardService : IDashboardService
                 Failed: automationFailed,
                 SuccessRate: automationSuccessRate),
             GeneratedAtUtc: now);
+    }
+
+    private async Task<Dictionary<Guid, int>> ResolveGraceBySiteAsync(IEnumerable<Guid> siteIds)
+    {
+        var distinctIds = siteIds.Distinct().ToList();
+        if (distinctIds.Count == 0)
+            return new Dictionary<Guid, int>();
+
+        var tasks = distinctIds.Select(async siteId =>
+        {
+            try
+            {
+                var resolved = await _configurationResolver.ResolveForSiteAsync(siteId);
+                return (siteId, grace: resolved.AgentOnlineGraceSeconds);
+            }
+            catch
+            {
+                return (siteId, grace: DefaultOnlineGraceSeconds);
+            }
+        });
+
+        var values = await Task.WhenAll(tasks);
+        return values.ToDictionary(item => item.siteId, item => item.grace);
+    }
+
+    private async Task<int> ResolveReportedGraceSecondsAsync(
+        DashboardScopeLevel level,
+        Guid? clientId,
+        Guid? siteId,
+        IReadOnlyDictionary<Guid, int> graceBySite)
+    {
+        if (level == DashboardScopeLevel.Site && siteId.HasValue)
+            return graceBySite.GetValueOrDefault(siteId.Value, DefaultOnlineGraceSeconds);
+
+        if (graceBySite.Count > 0)
+        {
+            var distinct = graceBySite.Values.Distinct().ToArray();
+            if (distinct.Length == 1)
+                return distinct[0];
+        }
+
+        if (level == DashboardScopeLevel.Client && clientId.HasValue)
+        {
+            var effective = await _configurationResolver.GetEffectiveValueAsync<int>("Client", "AgentOnlineGraceSeconds", clientId.Value);
+            if (effective > 0)
+                return effective;
+        }
+
+        var server = await _configurationResolver.GetServerAsync();
+        return server.AgentOnlineGraceSeconds;
     }
 
     private async Task<DashboardSummaryDto> GetOrCreateSummaryAsync(
@@ -306,7 +385,9 @@ public class DashboardService : IDashboardService
     }
 
     private static int ToWindowHours(TimeSpan window)
-        => (int)Math.Round(window.TotalHours);
+        => (int)Math.Clamp(Math.Round(window.TotalHours), 1, 168);
+
+    private readonly record struct AgentStatusProjection(Guid SiteId, AgentStatus Status, DateTime? LastSeenAt);
 
     private enum DashboardScopeLevel
     {

@@ -16,7 +16,8 @@ public static class ConfigurationFieldCatalog
         "AutoUpdateSettingsJson",
         "AIIntegrationSettingsJson",
         "TicketAttachmentSettingsJson",
-        "AgentHeartbeatIntervalSeconds"
+        "AgentHeartbeatIntervalSeconds",
+        "AgentOnlineGraceSeconds"
     ];
 
     /// <summary>

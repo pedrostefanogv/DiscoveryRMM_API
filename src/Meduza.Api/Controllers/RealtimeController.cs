@@ -22,6 +22,7 @@ public class RealtimeController : ControllerBase
     private readonly NatsConnection _natsConnection;
     private readonly IConnectionMultiplexer _redisConnection;
     private readonly MeduzaDbContext _dbContext;
+    private readonly IConfigurationResolver _configurationResolver;
     private readonly IConfiguration _configuration;
 
     public RealtimeController(
@@ -30,6 +31,7 @@ public class RealtimeController : ControllerBase
         NatsConnection natsConnection,
         IConnectionMultiplexer redisConnection,
         MeduzaDbContext dbContext,
+        IConfigurationResolver configurationResolver,
         IConfiguration configuration)
     {
         _messaging = messaging;
@@ -37,6 +39,7 @@ public class RealtimeController : ControllerBase
         _natsConnection = natsConnection;
         _redisConnection = redisConnection;
         _dbContext = dbContext;
+        _configurationResolver = configurationResolver;
         _configuration = configuration;
     }
 
@@ -159,23 +162,51 @@ public class RealtimeController : ControllerBase
     {
         try
         {
-            var onlineGraceSeconds = _configuration.GetValue<int?>("Realtime:AgentOnlineGraceSeconds") ?? 120;
-            var onlineCutoffUtc = DateTime.UtcNow.AddSeconds(-onlineGraceSeconds);
+            var serverConfig = await _configurationResolver.GetServerAsync();
+            var onlineGraceSeconds = serverConfig.AgentOnlineGraceSeconds;
+            var agents = await _dbContext.Agents.AsNoTracking()
+                .Select(agent => new AgentStatusProjection(agent.SiteId, agent.Status, agent.LastSeenAt))
+                .ToListAsync(cancellationToken);
+
+            var graceBySite = await ResolveGraceBySiteAsync(agents.Select(agent => agent.SiteId));
 
             var totalClients = await _dbContext.Clients.AsNoTracking().CountAsync(cancellationToken);
             var totalSites = await _dbContext.Sites.AsNoTracking().CountAsync(cancellationToken);
-            var totalAgents = await _dbContext.Agents.AsNoTracking().CountAsync(cancellationToken);
-            var agentsOnline = await _dbContext.Agents.AsNoTracking()
-                .CountAsync(agent => agent.Status == AgentStatus.Online && agent.LastSeenAt >= onlineCutoffUtc, cancellationToken);
-            var agentsOffline = await _dbContext.Agents.AsNoTracking()
-                .CountAsync(agent => agent.Status == AgentStatus.Offline ||
-                    (agent.Status == AgentStatus.Online && (agent.LastSeenAt == null || agent.LastSeenAt < onlineCutoffUtc)), cancellationToken);
-            var agentsStale = await _dbContext.Agents.AsNoTracking()
-                .CountAsync(agent => agent.Status == AgentStatus.Online && (agent.LastSeenAt == null || agent.LastSeenAt < onlineCutoffUtc), cancellationToken);
-            var agentsMaintenance = await _dbContext.Agents.AsNoTracking()
-                .CountAsync(agent => agent.Status == AgentStatus.Maintenance, cancellationToken);
-            var agentsError = await _dbContext.Agents.AsNoTracking()
-                .CountAsync(agent => agent.Status == AgentStatus.Error, cancellationToken);
+            var totalAgents = agents.Count;
+            var agentsOnline = 0;
+            var agentsStale = 0;
+            var agentsMaintenance = 0;
+            var agentsError = 0;
+            var agentsOfflinePersisted = 0;
+
+            var now = DateTime.UtcNow;
+            foreach (var agent in agents)
+            {
+                switch (agent.Status)
+                {
+                    case AgentStatus.Online:
+                    {
+                        var graceSeconds = graceBySite.GetValueOrDefault(agent.SiteId, 120);
+                        var cutoffUtc = now.AddSeconds(-graceSeconds);
+                        if (agent.LastSeenAt.HasValue && agent.LastSeenAt.Value >= cutoffUtc)
+                            agentsOnline++;
+                        else
+                            agentsStale++;
+                        break;
+                    }
+                    case AgentStatus.Offline:
+                        agentsOfflinePersisted++;
+                        break;
+                    case AgentStatus.Maintenance:
+                        agentsMaintenance++;
+                        break;
+                    case AgentStatus.Error:
+                        agentsError++;
+                        break;
+                }
+            }
+
+            var agentsOffline = agentsOfflinePersisted + agentsStale;
 
             var totalCommands = await _dbContext.AgentCommands.AsNoTracking().CountAsync(cancellationToken);
             var commandsPending = await _dbContext.AgentCommands.AsNoTracking()
@@ -241,6 +272,31 @@ public class RealtimeController : ControllerBase
             };
         }
     }
+
+    private async Task<Dictionary<Guid, int>> ResolveGraceBySiteAsync(IEnumerable<Guid> siteIds)
+    {
+        var distinctIds = siteIds.Distinct().ToList();
+        if (distinctIds.Count == 0)
+            return new Dictionary<Guid, int>();
+
+        var tasks = distinctIds.Select(async siteId =>
+        {
+            try
+            {
+                var resolved = await _configurationResolver.ResolveForSiteAsync(siteId);
+                return (siteId, grace: resolved.AgentOnlineGraceSeconds);
+            }
+            catch
+            {
+                return (siteId, grace: 120);
+            }
+        });
+
+        var values = await Task.WhenAll(tasks);
+        return values.ToDictionary(item => item.siteId, item => item.grace);
+    }
+
+    private readonly record struct AgentStatusProjection(Guid SiteId, AgentStatus Status, DateTime? LastSeenAt);
 
     private static int GetAvailableWorkers()
     {

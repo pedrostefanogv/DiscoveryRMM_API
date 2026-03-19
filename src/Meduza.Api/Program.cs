@@ -72,6 +72,7 @@ builder.Services.AddScoped<IReportRenderer, CsvReportRenderer>();
 // Implemented in Meduza.Api (outside Meduza.Infrastructure auto-scan)
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<ISyncInvalidationPublisher, SyncInvalidationPublisher>();
+builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 
 // PDF rendering using Playwright.NET (embedded, no external service required, zero vulnerabilities)
 if (builder.Configuration.GetValue<bool>("Reporting:EnablePdf"))

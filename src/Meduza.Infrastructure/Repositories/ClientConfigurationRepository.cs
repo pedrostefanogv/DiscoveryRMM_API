@@ -47,6 +47,7 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
         existingConfig.InventoryIntervalHours = config.InventoryIntervalHours;
         existingConfig.AutoUpdateSettingsJson = config.AutoUpdateSettingsJson;
         existingConfig.AgentHeartbeatIntervalSeconds = config.AgentHeartbeatIntervalSeconds;
+        existingConfig.AgentOnlineGraceSeconds = config.AgentOnlineGraceSeconds;
         existingConfig.LockedFieldsJson = config.LockedFieldsJson;
         existingConfig.UpdatedAt = config.UpdatedAt;
         existingConfig.UpdatedBy = config.UpdatedBy;

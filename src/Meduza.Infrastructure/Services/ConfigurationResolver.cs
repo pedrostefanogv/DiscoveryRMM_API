@@ -214,6 +214,7 @@ public class ConfigurationResolver : IConfigurationResolver
         var appStore = ResolveValue("AppStorePolicy", blocked, site?.AppStorePolicy, client?.AppStorePolicy, server.AppStorePolicy);
         var inventory = ResolveValue("InventoryIntervalHours", blocked, site?.InventoryIntervalHours, client?.InventoryIntervalHours, server.InventoryIntervalHours);
         var heartbeat = ResolveValue("AgentHeartbeatIntervalSeconds", blocked, (int?)null, client?.AgentHeartbeatIntervalSeconds, server.AgentHeartbeatIntervalSeconds);
+        var onlineGrace = ResolveValue("AgentOnlineGraceSeconds", blocked, site?.AgentOnlineGraceSeconds, client?.AgentOnlineGraceSeconds, server.AgentOnlineGraceSeconds);
 
         var autoUpdate = ResolveAutoUpdate(site?.AutoUpdateSettingsJson, client?.AutoUpdateSettingsJson, server.AutoUpdateSettingsJson);
         var autoUpdateSource = ResolveObjectSource("AutoUpdateSettingsJson", blocked, site?.AutoUpdateSettingsJson, client?.AutoUpdateSettingsJson);
@@ -235,6 +236,7 @@ public class ConfigurationResolver : IConfigurationResolver
             AppStorePolicy = appStore.Value,
             InventoryIntervalHours = inventory.Value,
             AgentHeartbeatIntervalSeconds = heartbeat.Value,
+            AgentOnlineGraceSeconds = onlineGrace.Value,
             AutoUpdate = autoUpdate,
             AIIntegration = ai,
             BlockedFields = blocked.OrderBy(x => x).ToArray(),
@@ -250,6 +252,7 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["AppStorePolicy"] = (int)appStore.Source;
         resolved.Inheritance["InventoryIntervalHours"] = (int)inventory.Source;
         resolved.Inheritance["AgentHeartbeatIntervalSeconds"] = (int)heartbeat.Source;
+        resolved.Inheritance["AgentOnlineGraceSeconds"] = (int)onlineGrace.Source;
         resolved.Inheritance["AutoUpdate"] = (int)autoUpdateSource;
         resolved.Inheritance["AIIntegration"] = (int)aiSource;
 

@@ -43,6 +43,7 @@ public class ResolvedConfiguration
     // ============ Token / Heartbeat ============
 
     public int AgentHeartbeatIntervalSeconds { get; set; }
+    public int AgentOnlineGraceSeconds { get; set; }
 
     // ============ Metadados da resolução ============
 

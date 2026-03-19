@@ -58,6 +58,9 @@ public class SiteConfiguration
 
     /// <summary>Configurações de atualização automática específicas do site</summary>
     public string? AutoUpdateSettingsJson { get; set; }
+
+    /// <summary>Janela de tolerancia para considerar o agent online (segundos)</summary>
+    public int? AgentOnlineGraceSeconds { get; set; }
     
     // ============ Informações do Site ============
     

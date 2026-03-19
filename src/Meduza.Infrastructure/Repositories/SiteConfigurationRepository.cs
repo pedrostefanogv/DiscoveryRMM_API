@@ -56,6 +56,7 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
         existingConfig.AIIntegrationSettingsJson = config.AIIntegrationSettingsJson;
         existingConfig.InventoryIntervalHours = config.InventoryIntervalHours;
         existingConfig.AutoUpdateSettingsJson = config.AutoUpdateSettingsJson;
+        existingConfig.AgentOnlineGraceSeconds = config.AgentOnlineGraceSeconds;
         existingConfig.Timezone = config.Timezone;
         existingConfig.Location = config.Location;
         existingConfig.ContactPerson = config.ContactPerson;

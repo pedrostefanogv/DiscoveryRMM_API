@@ -573,6 +573,7 @@ public class ConfigurationsController : ControllerBase
             AppStorePolicy = client?.AppStorePolicy ?? server.AppStorePolicy,
             InventoryIntervalHours = client?.InventoryIntervalHours ?? server.InventoryIntervalHours,
             AgentHeartbeatIntervalSeconds = client?.AgentHeartbeatIntervalSeconds ?? server.AgentHeartbeatIntervalSeconds,
+            AgentOnlineGraceSeconds = client?.AgentOnlineGraceSeconds ?? server.AgentOnlineGraceSeconds,
             AutoUpdate = autoUpdate,
             AIIntegration = ai,
             HasLocalConfiguration = client is not null,
@@ -591,6 +592,7 @@ public class ConfigurationsController : ControllerBase
                 ["AppStorePolicy"] = client?.AppStorePolicy is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["InventoryIntervalHours"] = client?.InventoryIntervalHours is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["AgentHeartbeatIntervalSeconds"] = client?.AgentHeartbeatIntervalSeconds is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["AgentOnlineGraceSeconds"] = client?.AgentOnlineGraceSeconds is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["AutoUpdate"] = !string.IsNullOrWhiteSpace(client?.AutoUpdateSettingsJson) ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["AIIntegration"] = !string.IsNullOrWhiteSpace(client?.AIIntegrationSettingsJson) ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
             }
