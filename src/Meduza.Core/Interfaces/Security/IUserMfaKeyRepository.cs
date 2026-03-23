@@ -11,6 +11,7 @@ public interface IUserMfaKeyRepository
     Task<bool> UpdateSignCountAsync(Guid keyId, uint newSignCount);
     Task<bool> UpdateLastUsedAsync(Guid keyId);
     Task<bool> DeactivateAsync(Guid keyId, Guid userId);
+    Task<int> DeactivateAllByUserIdAsync(Guid userId);
     Task<int> CountActiveByUserIdAsync(Guid userId);
     Task<bool> RenameAsync(Guid keyId, Guid userId, string newName);
 }

@@ -58,6 +58,11 @@ public class UserMfaKeyRepository : IUserMfaKeyRepository
         return rows > 0;
     }
 
+    public Task<int> DeactivateAllByUserIdAsync(Guid userId)
+        => _db.UserMfaKeys
+            .Where(k => k.UserId == userId && k.IsActive)
+            .ExecuteUpdateAsync(s => s.SetProperty(k => k.IsActive, false));
+
     public Task<int> CountActiveByUserIdAsync(Guid userId)
         => _db.UserMfaKeys.CountAsync(k => k.UserId == userId && k.IsActive);
 

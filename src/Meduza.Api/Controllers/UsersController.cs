@@ -1,3 +1,4 @@
+using Meduza.Core.DTOs.Mfa;
 using Meduza.Core.DTOs.Users;
 using Meduza.Core.Entities.Identity;
 using Meduza.Core.Enums.Identity;
@@ -272,6 +273,73 @@ public class UsersController : ControllerBase
         await _userRepo.UpdateAsync(user);
         return NoContent();
     }
+
+    // ── Admin MFA management ──────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/mfa/keys")]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
+    public async Task<IActionResult> GetUserMfaKeys(Guid id)
+    {
+        var user = await _userRepo.GetByIdAsync(id);
+        if (user is null) return NotFound();
+
+        var keys = await _userMfaKeyRepository.GetActiveByUserIdAsync(id);
+        var result = keys.Select(k => new AdminUserMfaKeyDto
+        {
+            Id = k.Id,
+            Name = k.Name,
+            KeyType = k.KeyType,
+            CreatedAt = k.CreatedAt,
+            LastUsedAt = k.LastUsedAt
+        });
+        return Ok(result);
+    }
+
+    [HttpDelete("{id:guid}/mfa")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> ResetUserMfa(Guid id)
+    {
+        var user = await _userRepo.GetByIdAsync(id);
+        if (user is null) return NotFound();
+
+        await _userMfaKeyRepository.DeactivateAllByUserIdAsync(id);
+        await _userRepo.SetMfaConfiguredAsync(id, false);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}/mfa/keys/{keyId:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> RemoveUserMfaKey(Guid id, Guid keyId)
+    {
+        var user = await _userRepo.GetByIdAsync(id);
+        if (user is null) return NotFound();
+
+        var key = await _userMfaKeyRepository.GetByIdAsync(keyId);
+        if (key is null || key.UserId != id || !key.IsActive) return NotFound();
+
+        await _userMfaKeyRepository.DeactivateAsync(keyId, id);
+
+        var remaining = await _userMfaKeyRepository.CountActiveByUserIdAsync(id);
+        if (remaining == 0)
+            await _userRepo.SetMfaConfiguredAsync(id, false);
+
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/force-password-reset")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> ForcePasswordReset(Guid id)
+    {
+        var user = await _userRepo.GetByIdAsync(id);
+        if (user is null) return NotFound();
+
+        user.MustChangePassword = true;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _userRepo.UpdateAsync(user);
+        return NoContent();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
 
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.Users, ActionType.Delete)]
