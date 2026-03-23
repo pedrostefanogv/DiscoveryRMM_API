@@ -78,6 +78,11 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
 
+    // P2P
+    public DbSet<P2pAgentTelemetry> P2pAgentTelemetries => Set<P2pAgentTelemetry>();
+    public DbSet<P2pArtifactPresence> P2pArtifactPresences => Set<P2pArtifactPresence>();
+    public DbSet<P2pSeedPlan> P2pSeedPlans => Set<P2pSeedPlan>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configure global DateTime converter to ensure UTC timestamps
@@ -85,6 +90,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
 
         // Habilita suporte pgvector
         modelBuilder.HasPostgresExtension("vector");
+
+        // P2P
+        ConfigureP2pEntities(modelBuilder);
 
         // Configurar Attachment (genérico para múltiplos escopos)
         modelBuilder.Entity<Attachment>(entity =>
@@ -2402,6 +2410,79 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             e.Property(t => t.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
             e.HasIndex(t => t.TokenIdPublic).IsUnique().HasDatabaseName("ix_api_tokens_token_id_public");
             e.HasIndex(t => t.UserId).HasDatabaseName("ix_api_tokens_user_id");
+        });
+    }
+
+    private static void ConfigureP2pEntities(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<P2pAgentTelemetry>(e =>
+        {
+            e.ToTable("p2p_agent_telemetry");
+            e.HasKey(t => t.Id);
+            e.Property(t => t.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            e.Property(t => t.AgentId).HasColumnName("agent_id");
+            e.Property(t => t.SiteId).HasColumnName("site_id");
+            e.Property(t => t.ClientId).HasColumnName("client_id");
+            e.Property(t => t.CollectedAt).HasColumnName("collected_at").HasColumnType("timestamptz");
+            e.Property(t => t.ReceivedAt).HasColumnName("received_at").HasColumnType("timestamptz");
+            e.Property(t => t.PublishedArtifacts).HasColumnName("published_artifacts");
+            e.Property(t => t.ReplicationsStarted).HasColumnName("replications_started");
+            e.Property(t => t.ReplicationsSucceeded).HasColumnName("replications_succeeded");
+            e.Property(t => t.ReplicationsFailed).HasColumnName("replications_failed");
+            e.Property(t => t.BytesServed).HasColumnName("bytes_served");
+            e.Property(t => t.BytesDownloaded).HasColumnName("bytes_downloaded");
+            e.Property(t => t.QueuedReplications).HasColumnName("queued_replications");
+            e.Property(t => t.ActiveReplications).HasColumnName("active_replications");
+            e.Property(t => t.AutoDistributionRuns).HasColumnName("auto_distribution_runs");
+            e.Property(t => t.CatalogRefreshRuns).HasColumnName("catalog_refresh_runs");
+            e.Property(t => t.ChunkedDownloads).HasColumnName("chunked_downloads");
+            e.Property(t => t.ChunksDownloaded).HasColumnName("chunks_downloaded");
+            e.Property(t => t.PlanTotalAgents).HasColumnName("plan_total_agents");
+            e.Property(t => t.PlanConfiguredPercent).HasColumnName("plan_configured_percent");
+            e.Property(t => t.PlanMinSeeds).HasColumnName("plan_min_seeds");
+            e.Property(t => t.PlanSelectedSeeds).HasColumnName("plan_selected_seeds");
+
+            e.HasIndex(t => new { t.AgentId, t.CollectedAt })
+                .HasDatabaseName("ix_p2p_telemetry_agent_time");
+            e.HasIndex(t => new { t.SiteId, t.CollectedAt })
+                .HasDatabaseName("ix_p2p_telemetry_site_time");
+            e.HasIndex(t => new { t.ClientId, t.CollectedAt })
+                .HasDatabaseName("ix_p2p_telemetry_client_time");
+        });
+
+        modelBuilder.Entity<P2pArtifactPresence>(e =>
+        {
+            e.ToTable("p2p_artifact_presence");
+            e.HasKey(p => new { p.ArtifactId, p.AgentId });
+            e.Property(p => p.ArtifactId).HasColumnName("artifact_id").HasMaxLength(512);
+            e.Property(p => p.AgentId).HasColumnName("agent_id");
+            e.Property(p => p.SiteId).HasColumnName("site_id");
+            e.Property(p => p.ClientId).HasColumnName("client_id");
+            e.Property(p => p.ArtifactName).HasColumnName("artifact_name").HasMaxLength(260);
+            e.Property(p => p.IdIsSynthetic).HasColumnName("id_is_synthetic");
+            e.Property(p => p.LastSeenAt).HasColumnName("last_seen_at").HasColumnType("timestamptz");
+
+            e.HasIndex(p => new { p.ArtifactId, p.LastSeenAt })
+                .HasDatabaseName("ix_p2p_presence_artifact_time");
+            e.HasIndex(p => new { p.SiteId, p.LastSeenAt })
+                .HasDatabaseName("ix_p2p_presence_site_time");
+            e.HasIndex(p => new { p.ClientId, p.LastSeenAt })
+                .HasDatabaseName("ix_p2p_presence_client_time");
+        });
+
+        modelBuilder.Entity<P2pSeedPlan>(e =>
+        {
+            e.ToTable("p2p_seed_plan");
+            e.HasKey(p => p.SiteId);
+            e.Property(p => p.SiteId).HasColumnName("site_id").ValueGeneratedNever();
+            e.Property(p => p.ClientId).HasColumnName("client_id");
+            e.Property(p => p.TotalAgents).HasColumnName("total_agents");
+            e.Property(p => p.ConfiguredPercent).HasColumnName("configured_percent");
+            e.Property(p => p.MinSeeds).HasColumnName("min_seeds");
+            e.Property(p => p.SelectedSeeds).HasColumnName("selected_seeds");
+            e.Property(p => p.GeneratedAt).HasColumnName("generated_at").HasColumnType("timestamptz");
+
+            e.HasIndex(p => p.ClientId).HasDatabaseName("ix_p2p_seed_plan_client");
         });
     }
 
