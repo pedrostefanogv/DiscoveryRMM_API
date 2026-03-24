@@ -14,7 +14,8 @@ public class KnowledgeController(
     IKnowledgeArticleRepository articleRepository,
     IKnowledgeChunkRepository chunkRepository,
     IEmbeddingProvider embeddingProvider,
-    IConfigurationResolver configurationResolver) : ControllerBase
+    IConfigurationResolver configurationResolver,
+    IKnowledgeEmbeddingQueueRepository embeddingQueueRepository) : ControllerBase
 {
     // ─── CRUD de Artigos ──────────────────────────────────────────────
 
@@ -68,6 +69,8 @@ public class KnowledgeController(
         };
 
         var created = await articleRepository.CreateAsync(article, ct);
+        if (created.IsPublished)
+            await embeddingQueueRepository.EnqueueAsync(created.Id, "create", ct);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, MapToResponse(created));
     }
 
@@ -89,6 +92,8 @@ public class KnowledgeController(
         article.LastChunkedAt = null;
 
         var updated = await articleRepository.UpdateAsync(article, ct);
+        if (updated.IsPublished)
+            await embeddingQueueRepository.EnqueueAsync(updated.Id, "update", ct);
         return Ok(MapToResponse(updated));
     }
 
@@ -115,6 +120,7 @@ public class KnowledgeController(
         article.LastChunkedAt = null;
 
         var updated = await articleRepository.UpdateAsync(article, ct);
+        await embeddingQueueRepository.EnqueueAsync(updated.Id, "publish", ct);
         return Ok(MapToResponse(updated));
     }
 

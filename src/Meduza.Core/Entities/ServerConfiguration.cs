@@ -63,6 +63,32 @@ public class ServerConfiguration
     /// <summary>Configurações de integração com IA</summary>
     public string AIIntegrationSettingsJson { get; set; } = string.Empty;
 
+    // ============ NATS Auth ============
+
+    /// <summary>Habilita autenticacao JWT no NATS para agentes/usuarios.</summary>
+    public bool NatsAuthEnabled { get; set; } = false;
+
+    /// <summary>Seed da conta NATS (nkey) para assinar JWTs de usuario.</summary>
+    public string NatsAccountSeed { get; set; } = string.Empty;
+
+    /// <summary>TTL em minutos para JWT de agentes.</summary>
+    public int NatsAgentJwtTtlMinutes { get; set; } = 15;
+
+    /// <summary>TTL em minutos para JWT de usuarios.</summary>
+    public int NatsUserJwtTtlMinutes { get; set; } = 15;
+
+    /// <summary>Usa subjects com tenant/client/site (novo formato).</summary>
+    public bool NatsUseScopedSubjects { get; set; } = false;
+
+    /// <summary>Inclui subjects legados (agent.{id}.*) durante migracao.</summary>
+    public bool NatsIncludeLegacySubjects { get; set; } = true;
+
+    /// <summary>
+    /// Seed da chave xkey (curve25519) para criptografar o payload do auth callout.
+    /// Opcional — quando configurado, o NATS server deve ter xkey habilitado com a chave publica correspondente.
+    /// </summary>
+    public string NatsXKeySeed { get; set; } = string.Empty;
+
     /// <summary>
     /// Configurações globais de reporting (JSON).
     /// Exemplo: {"enablePdf":true,"processingTimeoutSeconds":300,...}

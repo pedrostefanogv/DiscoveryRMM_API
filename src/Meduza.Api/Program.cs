@@ -91,6 +91,7 @@ builder.Services.AddSingleton<WingetFeedClient>();
 builder.Services.AddHttpClient();
 
 var enableKnowledgeEmbeddingBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:KnowledgeEmbeddingEnabled") ?? true;
+var enableKnowledgeEmbeddingQueueBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:KnowledgeEmbeddingQueueEnabled") ?? false;
 var enableSlaMonitoringBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:SlaMonitoringEnabled") ?? true;
 var enableReportGenerationBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:ReportGenerationEnabled") ?? true;
 var enableAgentLabelingReconciliationBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:AgentLabelingReconciliationEnabled") ?? true;
@@ -127,6 +128,11 @@ if (enableKnowledgeEmbeddingBackgroundService)
     builder.Services.AddHostedService<KnowledgeEmbeddingBackgroundService>();
 }
 
+if (enableKnowledgeEmbeddingQueueBackgroundService)
+{
+    builder.Services.AddHostedService<KnowledgeEmbeddingQueueBackgroundService>();
+}
+
 builder.Services.Configure<MeshCentralOptions>(
     builder.Configuration.GetSection("MeshCentral"));
 builder.Services.Configure<SecretEncryptionOptions>(
@@ -144,10 +150,24 @@ builder.Services.Configure<ReportingOptions>(
     builder.Configuration.GetSection("Reporting"));
 
 // NATS
+// Quando auth callout está habilitado no servidor NATS, a API precisa conectar
+// com o usuário configurado em auth_users (ex: "auth") para bypassar o próprio callout.
 var natsUrl = builder.Configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222";
-builder.Services.AddSingleton(_ => new NatsConnection(new NatsOpts { Url = natsUrl }));
+var natsAuthUser = builder.Configuration.GetValue<string>("Nats:AuthUser");
+var natsAuthPassword = builder.Configuration.GetValue<string>("Nats:AuthPassword");
+
+builder.Services.AddSingleton(_ =>
+{
+    var opts = new NatsOpts { Url = natsUrl };
+
+    if (!string.IsNullOrWhiteSpace(natsAuthUser) && !string.IsNullOrWhiteSpace(natsAuthPassword))
+        opts = opts with { AuthOpts = NatsAuthOpts.SetUserAndPassword(natsAuthUser, natsAuthPassword) };
+
+    return new NatsConnection(opts);
+});
 builder.Services.AddHostedService<NatsBackgroundService>();
 builder.Services.AddHostedService<NatsSignalRBridge>();
+builder.Services.AddHostedService<NatsAuthCalloutBackgroundService>();
 
 // Redis
 var redisConnString = builder.Configuration.GetValue<string>("Redis:Connection") ?? "127.0.0.1:6379";

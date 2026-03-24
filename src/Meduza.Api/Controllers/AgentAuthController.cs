@@ -37,6 +37,7 @@ public class AgentAuthController : ControllerBase
     private readonly IAutomationTaskService _automationTaskService;
     private readonly IAutomationExecutionReportRepository _automationExecutionReportRepository;
     private readonly ISyncPingDeliveryRepository _syncPingDeliveryRepository;
+    private readonly INatsCredentialsService _natsCredentialsService;
     private readonly IMeshCentralEmbeddingService _meshCentralEmbeddingService;
     private readonly IMeshCentralApiService _meshCentralApiService;
     private readonly IMeshCentralProvisioningService _meshCentralProvisioningService;
@@ -64,6 +65,7 @@ public class AgentAuthController : ControllerBase
         IAutomationTaskService automationTaskService,
         IAutomationExecutionReportRepository automationExecutionReportRepository,
         ISyncPingDeliveryRepository syncPingDeliveryRepository,
+        INatsCredentialsService natsCredentialsService,
         IMeshCentralEmbeddingService meshCentralEmbeddingService,
         IMeshCentralApiService meshCentralApiService,
         IMeshCentralProvisioningService meshCentralProvisioningService,
@@ -90,6 +92,7 @@ public class AgentAuthController : ControllerBase
         _automationTaskService = automationTaskService;
         _automationExecutionReportRepository = automationExecutionReportRepository;
         _syncPingDeliveryRepository = syncPingDeliveryRepository;
+        _natsCredentialsService = natsCredentialsService;
         _meshCentralEmbeddingService = meshCentralEmbeddingService;
         _meshCentralApiService = meshCentralApiService;
         _meshCentralProvisioningService = meshCentralProvisioningService;
@@ -405,6 +408,23 @@ public class AgentAuthController : ControllerBase
 
         Response.Headers["X-Correlation-Id"] = correlationId;
         return Ok(response);
+    }
+
+    [HttpPost("me/nats-credentials")]
+    public async Task<IActionResult> IssueNatsCredentials(CancellationToken ct)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        try
+        {
+            var credentials = await _natsCredentialsService.IssueForAgentAsync(agentId, ct);
+            return Ok(credentials);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { error = ex.Message });
+        }
     }
 
     [HttpGet("me/hardware")]

@@ -617,6 +617,8 @@ public class ConfigurationsController : ControllerBase
     private static ServerConfiguration SanitizeServerConfiguration(ServerConfiguration config)
     {
         config.AIIntegrationSettingsJson = SanitizeAiJson(config.AIIntegrationSettingsJson);
+        config.NatsAccountSeed = string.Empty;
+        config.NatsXKeySeed = string.Empty;
         return config;
     }
 

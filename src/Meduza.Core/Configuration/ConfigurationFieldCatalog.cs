@@ -17,7 +17,14 @@ public static class ConfigurationFieldCatalog
         "AIIntegrationSettingsJson",
         "TicketAttachmentSettingsJson",
         "AgentHeartbeatIntervalSeconds",
-        "AgentOnlineGraceSeconds"
+        "AgentOnlineGraceSeconds",
+        "NatsAuthEnabled",
+        "NatsAccountSeed",
+        "NatsAgentJwtTtlMinutes",
+        "NatsUserJwtTtlMinutes",
+        "NatsUseScopedSubjects",
+        "NatsIncludeLegacySubjects",
+        "NatsXKeySeed"
     ];
 
     /// <summary>

@@ -31,6 +31,16 @@ public class UserAuthMiddleware
         }
 
         var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
+
+        // Para SignalR WebSocket, o cliente pode não conseguir enviar header Authorization.
+        // O padrão é passar access_token na query string (apenas tokens JWT de usuário).
+        if (string.IsNullOrEmpty(authHeader))
+        {
+            var queryToken = context.Request.Query["access_token"].FirstOrDefault();
+            if (!string.IsNullOrEmpty(queryToken) && !queryToken.StartsWith("mdz_", StringComparison.OrdinalIgnoreCase))
+                authHeader = $"Bearer {queryToken}";
+        }
+
         if (!string.IsNullOrEmpty(authHeader) &&
             authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) &&
             !authHeader.StartsWith("ApiKey ", StringComparison.OrdinalIgnoreCase))

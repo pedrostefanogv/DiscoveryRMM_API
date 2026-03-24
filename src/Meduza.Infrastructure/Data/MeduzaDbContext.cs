@@ -62,6 +62,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<KnowledgeArticle> KnowledgeArticles => Set<KnowledgeArticle>();
     public DbSet<KnowledgeArticleChunk> KnowledgeArticleChunks => Set<KnowledgeArticleChunk>();
     public DbSet<TicketKnowledgeLink> TicketKnowledgeLinks => Set<TicketKnowledgeLink>();
+    public DbSet<KnowledgeEmbeddingQueueItem> KnowledgeEmbeddingQueueItems => Set<KnowledgeEmbeddingQueueItem>();
 
     // Object Storage & Attachments (genérico para qualquer escopo)
     public DbSet<Attachment> Attachments => Set<Attachment>();
@@ -660,6 +661,13 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.AgentOnlineGraceSeconds).HasColumnName("agent_online_grace_seconds");
             entity.Property(config => config.BrandingSettingsJson).HasColumnName("branding_settings_json");
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
+            entity.Property(config => config.NatsAuthEnabled).HasColumnName("nats_auth_enabled");
+            entity.Property(config => config.NatsAccountSeed).HasColumnName("nats_account_seed");
+            entity.Property(config => config.NatsAgentJwtTtlMinutes).HasColumnName("nats_agent_jwt_ttl_minutes");
+            entity.Property(config => config.NatsUserJwtTtlMinutes).HasColumnName("nats_user_jwt_ttl_minutes");
+            entity.Property(config => config.NatsUseScopedSubjects).HasColumnName("nats_use_scoped_subjects");
+            entity.Property(config => config.NatsIncludeLegacySubjects).HasColumnName("nats_include_legacy_subjects");
+            entity.Property(config => config.NatsXKeySeed).HasColumnName("nats_xkey_seed");
             entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json");
             entity.Property(config => config.TicketAttachmentSettingsJson)
                 .HasColumnName("ticket_attachment_settings_json")
@@ -2254,6 +2262,32 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.HasOne(l => l.Article)
                 .WithMany(a => a.TicketLinks)
                 .HasForeignKey(l => l.ArticleId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<KnowledgeEmbeddingQueueItem>(entity =>
+        {
+            entity.ToTable("knowledge_embedding_queue");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.ArticleId)
+                .IsUnique()
+                .HasDatabaseName("ux_knowledge_embedding_queue_article");
+            entity.HasIndex(e => new { e.Status, e.AvailableAt })
+                .HasDatabaseName("ix_knowledge_embedding_queue_status_available");
+
+            entity.Property(e => e.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(e => e.ArticleId).HasColumnName("article_id");
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(20);
+            entity.Property(e => e.Attempts).HasColumnName("attempts");
+            entity.Property(e => e.AvailableAt).HasColumnName("available_at").HasColumnType("timestamptz");
+            entity.Property(e => e.LastError).HasColumnName("last_error");
+            entity.Property(e => e.Reason).HasColumnName("reason").HasMaxLength(50);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+
+            entity.HasOne<KnowledgeArticle>()
+                .WithMany()
+                .HasForeignKey(e => e.ArticleId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     ConfigureIdentity(modelBuilder);
