@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Meduza.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -80,9 +81,7 @@ public class AgentPackageService : IAgentPackageService
         var natsHost = !string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
             ? serverConfig.NatsServerHostExternal
             : serverConfig.NatsServerHostInternal;
-        var natsUrl = !string.IsNullOrWhiteSpace(natsHost)
-            ? natsHost
-            : _config["AgentPackage:NatsHost"] ?? string.Empty;
+        var natsUrl = string.IsNullOrWhiteSpace(natsHost) ? null : natsHost;
 
         if (!File.Exists(binaryPath))
             throw new FileNotFoundException($"Agent binary not found at path: {binaryPath}", binaryPath);
@@ -103,7 +102,8 @@ public class AgentPackageService : IAgentPackageService
 
         var debugConfigJson = JsonSerializer.Serialize(debugConfig, new JsonSerializerOptions
         {
-            WriteIndented = true
+            WriteIndented = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         });
 
         using var ms = new MemoryStream();
