@@ -3,7 +3,8 @@ namespace Meduza.Core.Interfaces;
 public interface IEmbeddingProvider
 {
     /// <summary>
-    /// Gera embedding de texto via text-embedding-3-small (1536 dims)
+    /// Gera embedding de texto via API compatível com OpenAI.
+    /// baseUrlOverride permite redirecionar a chamada para outro endpoint (ex: OpenAI direto quando o chat usa OpenRouter).
     /// </summary>
-    Task<float[]> GenerateEmbeddingAsync(string text, string? modelOverride = null, string? apiKeyOverride = null, CancellationToken ct = default);
+    Task<float[]> GenerateEmbeddingAsync(string text, string? modelOverride = null, string? apiKeyOverride = null, string? baseUrlOverride = null, CancellationToken ct = default);
 }

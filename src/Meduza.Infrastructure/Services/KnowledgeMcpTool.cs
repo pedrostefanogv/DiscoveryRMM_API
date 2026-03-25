@@ -55,10 +55,13 @@ public class KnowledgeMcpTool(
             var settings = aiSettings ?? await configurationResolver.GetAISettingsAsync();
 
             // Busca semântica via embedding
+            var embBaseUrl = string.IsNullOrWhiteSpace(settings.EmbeddingBaseUrl) ? settings.BaseUrl : settings.EmbeddingBaseUrl;
+            var embApiKey = string.IsNullOrWhiteSpace(settings.EmbeddingApiKey) ? settings.ApiKey : settings.EmbeddingApiKey;
             var embedding = await embeddingProvider.GenerateEmbeddingAsync(
                 query,
                 settings.EmbeddingModel,
-                settings.ApiKey,
+                embApiKey,
+                embBaseUrl,
                 ct);
             var vector = new Vector(embedding);
 

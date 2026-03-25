@@ -28,6 +28,7 @@ public class ConfigurationsController : ControllerBase
     private readonly INatsConnectionValidator _natsConnectionValidator;
     private readonly IConfiguration _configuration;
     private readonly INatsAuthCalloutReloadSignal _natsReloadSignal;
+    private readonly IKnowledgeEmbeddingResetService _embeddingResetService;
 
     public ConfigurationsController(
         IConfigurationService configService,
@@ -38,7 +39,8 @@ public class ConfigurationsController : ControllerBase
         ISyncInvalidationPublisher syncInvalidationPublisher,
         INatsConnectionValidator natsConnectionValidator,
         IConfiguration configuration,
-        INatsAuthCalloutReloadSignal natsReloadSignal)
+        INatsAuthCalloutReloadSignal natsReloadSignal,
+        IKnowledgeEmbeddingResetService embeddingResetService)
     {
         _configService = configService;
         _resolver = resolver;
@@ -49,6 +51,7 @@ public class ConfigurationsController : ControllerBase
         _natsConnectionValidator = natsConnectionValidator;
         _configuration = configuration;
         _natsReloadSignal = natsReloadSignal;
+        _embeddingResetService = embeddingResetService;
     }
 
     // ============ Server ============
@@ -65,6 +68,16 @@ public class ConfigurationsController : ControllerBase
     {
         var (isValid, errors) = await _configService.ValidateAsync(config);
         if (!isValid) return BadRequest(new { errors });
+
+        // Detecta mudança de dimensão de embedding e aciona reset antes de salvar
+        var currentServer = await _configService.GetServerConfigAsync();
+        var newAiSettings = DeserializeOrDefault<AIIntegrationSettings>(config.AIIntegrationSettingsJson);
+        var newDimensions = newAiSettings?.EmbeddingDimensions ?? 1536;
+        if (newDimensions != currentServer.CurrentEmbeddingDimensions)
+        {
+            var actor = HttpContext.Items["Username"] as string ?? "api";
+            await _embeddingResetService.ResetAsync(newDimensions, actor);
+        }
 
         var updated = await _configService.UpdateServerAsync(config,
             HttpContext.Items["Username"] as string ?? "api");

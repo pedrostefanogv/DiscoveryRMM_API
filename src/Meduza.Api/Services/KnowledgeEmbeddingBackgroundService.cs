@@ -122,7 +122,10 @@ public class KnowledgeEmbeddingBackgroundService(
                         ? chunk.Content
                         : $"{chunk.SectionTitle}\n\n{chunk.Content}";
 
-                    var floats = await embeddingProvider.GenerateEmbeddingAsync(embeddingInput, aiSettings.EmbeddingModel, aiSettings.ApiKey, ct);
+                    // EmbeddingBaseUrl e EmbeddingApiKey permitem separar chat (ex: OpenRouter) de embeddings (ex: OpenAI direto)
+                    var embeddingBaseUrl = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
+                    var embeddingApiKey = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey;
+                    var floats = await embeddingProvider.GenerateEmbeddingAsync(embeddingInput, aiSettings.EmbeddingModel, embeddingApiKey, embeddingBaseUrl, ct);
                     await chunkRepository.UpdateEmbeddingAsync(chunk.Id, new Vector(floats), ct);
 
                     logger.LogDebug("Embedding gerado para chunk {Id} ({Tokens} tokens)", chunk.Id, chunk.TokenCount);

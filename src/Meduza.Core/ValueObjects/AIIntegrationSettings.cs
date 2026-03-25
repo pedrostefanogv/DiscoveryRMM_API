@@ -38,6 +38,15 @@ public class AIIntegrationSettings
     /// <summary>Modelo de embedding (ex: text-embedding-3-small)</summary>
     public string? EmbeddingModel { get; set; } = "text-embedding-3-small";
 
+    /// <summary>Número de dimensões do vetor de embedding. Deve corresponder ao modelo escolhido. Alterar invalida todos os embeddings armazenados.</summary>
+    public int EmbeddingDimensions { get; set; } = 1536;
+
+    /// <summary>URL base exclusiva para o endpoint de embeddings. Se nulo, usa BaseUrl. Útil quando chat e embeddings usam provedores diferentes (ex: OpenRouter para chat + OpenAI para embeddings).</summary>
+    public string? EmbeddingBaseUrl { get; set; }
+
+    /// <summary>API key exclusiva para o endpoint de embeddings. Se nulo, usa ApiKey.</summary>
+    public string? EmbeddingApiKey { get; set; }
+
     /// <summary>Prompt base configurável para o assistente</summary>
     public string? PromptTemplate { get; set; }
 

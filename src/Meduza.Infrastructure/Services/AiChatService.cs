@@ -779,10 +779,13 @@ Responda de forma profissional e prestativa.";
             var clientId = session.ClientId != Guid.Empty ? (Guid?)session.ClientId : null;
             var maxChunks = aiSettings.MaxKbChunks is >= 1 and <= 10 ? aiSettings.MaxKbChunks : 3;
 
+            var embBaseUrl = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
+            var embApiKey = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey;
             var embedding = await _embeddingProvider.GenerateEmbeddingAsync(
                 userMessage,
                 aiSettings.EmbeddingModel,
-                aiSettings.ApiKey,
+                embApiKey,
+                embBaseUrl,
                 ct);
             var kbChunks = await _chunkRepository.SearchSemanticAsync(
                 new Pgvector.Vector(embedding),

@@ -698,6 +698,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
                 .HasColumnName("updated_by")
                 .HasMaxLength(256);
             entity.Property(config => config.Version).HasColumnName("version");
+            entity.Property(config => config.CurrentEmbeddingDimensions).HasColumnName("current_embedding_dimensions");
         });
 
         modelBuilder.Entity<MeshCentralRightsProfile>(entity =>

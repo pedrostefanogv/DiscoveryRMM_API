@@ -30,7 +30,7 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
         };
     }
 
-    public async Task<float[]> GenerateEmbeddingAsync(string text, string? modelOverride = null, string? apiKeyOverride = null, CancellationToken ct = default)
+    public async Task<float[]> GenerateEmbeddingAsync(string text, string? modelOverride = null, string? apiKeyOverride = null, string? baseUrlOverride = null, CancellationToken ct = default)
     {
         var embeddingModel = string.IsNullOrWhiteSpace(modelOverride)
             ? DefaultEmbeddingModel
@@ -48,7 +48,8 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
             input
         });
 
-        var requestUri = new Uri(_httpClient.BaseAddress ?? new Uri(DefaultBaseUrl), "embeddings");
+        var resolvedBaseUrl = string.IsNullOrWhiteSpace(baseUrlOverride) ? DefaultBaseUrl : baseUrlOverride;
+        var requestUri = new Uri(new Uri(resolvedBaseUrl.TrimEnd('/') + '/'), "embeddings");
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
         {
             Content = new StringContent(requestBody, Encoding.UTF8, "application/json")

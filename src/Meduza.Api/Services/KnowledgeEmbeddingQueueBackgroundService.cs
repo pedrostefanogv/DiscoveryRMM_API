@@ -97,10 +97,13 @@ public class KnowledgeEmbeddingQueueBackgroundService(
                         ? chunk.Content
                         : $"{chunk.SectionTitle}\n\n{chunk.Content}";
 
+                    var embBaseUrl = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
+                    var embApiKey = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey;
                     var floats = await embeddingProvider.GenerateEmbeddingAsync(
                         embeddingInput,
                         aiSettings.EmbeddingModel,
-                        aiSettings.ApiKey,
+                        embApiKey,
+                        embBaseUrl,
                         ct);
 
                     chunk.Embedding = new Vector(floats);

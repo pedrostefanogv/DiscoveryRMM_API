@@ -156,10 +156,13 @@ public class KnowledgeController(
         if (mode is "semantic" or "hybrid")
         {
             var aiSettings = await configurationResolver.GetAISettingsAsync();
+            var embBaseUrl1 = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
+            var embApiKey1 = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey;
             var embedding = await embeddingProvider.GenerateEmbeddingAsync(
                 q,
                 aiSettings.EmbeddingModel,
-                aiSettings.ApiKey,
+                embApiKey1,
+                embBaseUrl1,
                 ct);
             var semanticResults = await chunkRepository.SearchSemanticAsync(
                 new Vector(embedding), clientId, siteId, maxResults, ct: ct);
@@ -273,10 +276,13 @@ public class KnowledgeController(
             return BadRequest("q (título ou descrição do ticket) é obrigatório.");
 
         var settings = await configurationResolver.GetAISettingsAsync();
+        var embBaseUrl2 = string.IsNullOrWhiteSpace(settings.EmbeddingBaseUrl) ? settings.BaseUrl : settings.EmbeddingBaseUrl;
+        var embApiKey2 = string.IsNullOrWhiteSpace(settings.EmbeddingApiKey) ? settings.ApiKey : settings.EmbeddingApiKey;
         var embedding = await embeddingProvider.GenerateEmbeddingAsync(
             q,
             settings.EmbeddingModel,
-            settings.ApiKey,
+            embApiKey2,
+            embBaseUrl2,
             ct);
         var semanticResults = await chunkRepository.SearchSemanticAsync(
             new Vector(embedding), clientId, siteId, maxResults, ct: ct);

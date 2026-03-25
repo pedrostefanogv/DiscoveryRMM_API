@@ -162,4 +162,13 @@ public class ServerConfiguration
 
     /// <summary>Versão para rastreamento de mudanças</summary>
     public int Version { get; set; } = 1;
+
+    // ============ Embedding ============
+
+    /// <summary>
+    /// Dimensão dos vetores de embedding atualmente persistidos no banco.
+    /// Quando AIIntegrationSettings.EmbeddingDimensions for diferente deste valor,
+    /// todos os embeddings são invalidados e reprocessados com o novo modelo.
+    /// </summary>
+    public int CurrentEmbeddingDimensions { get; set; } = 1536;
 }
