@@ -668,6 +668,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.NatsUseScopedSubjects).HasColumnName("nats_use_scoped_subjects");
             entity.Property(config => config.NatsIncludeLegacySubjects).HasColumnName("nats_include_legacy_subjects");
             entity.Property(config => config.NatsXKeySeed).HasColumnName("nats_xkey_seed");
+            entity.Property(config => config.NatsServerHostInternal).HasColumnName("nats_server_host_internal");
+            entity.Property(config => config.NatsServerHostExternal).HasColumnName("nats_server_host_external");
+            entity.Property(config => config.NatsUseWssExternal).HasColumnName("nats_use_wss_external");
             entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json");
             entity.Property(config => config.TicketAttachmentSettingsJson)
                 .HasColumnName("ticket_attachment_settings_json")

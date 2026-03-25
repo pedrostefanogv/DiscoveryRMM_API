@@ -161,7 +161,7 @@ builder.Services.AddSingleton(_ =>
     var opts = new NatsOpts { Url = natsUrl };
 
     if (!string.IsNullOrWhiteSpace(natsAuthUser) && !string.IsNullOrWhiteSpace(natsAuthPassword))
-        opts = opts with { AuthOpts = NatsAuthOpts.SetUserAndPassword(natsAuthUser, natsAuthPassword) };
+        opts = opts with { AuthOpts = new NatsAuthOpts { Username = natsAuthUser, Password = natsAuthPassword } };
 
     return new NatsConnection(opts);
 });

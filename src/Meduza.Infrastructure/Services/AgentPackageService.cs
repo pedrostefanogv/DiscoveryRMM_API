@@ -10,12 +10,14 @@ namespace Meduza.Infrastructure.Services;
 public class AgentPackageService : IAgentPackageService
 {
     private readonly IConfiguration _config;
+    private readonly IConfigurationService _configurationService;
     private readonly ILogger<AgentPackageService> _logger;
     private static readonly SemaphoreSlim BuildLock = new(1, 1);
 
-    public AgentPackageService(IConfiguration config, ILogger<AgentPackageService> logger)
+    public AgentPackageService(IConfiguration config, IConfigurationService configurationService, ILogger<AgentPackageService> logger)
     {
         _config = config;
+        _configurationService = configurationService;
         _logger = logger;
     }
 
@@ -65,7 +67,7 @@ public class AgentPackageService : IAgentPackageService
         }
     }
 
-    public Task<byte[]> BuildPortablePackageAsync(string rawDeployToken)
+    public async Task<byte[]> BuildPortablePackageAsync(string rawDeployToken)
     {
         var binaryPath = GetBinaryPath();
 
@@ -74,7 +76,13 @@ public class AgentPackageService : IAgentPackageService
         var apiServer = _config["AgentPackage:PublicApiServer"]
             ?? throw new InvalidOperationException("AgentPackage:PublicApiServer is not configured.");
 
-        var natsUrl = _config["AgentPackage:NatsUrl"] ?? string.Empty;
+        var serverConfig = await _configurationService.GetServerConfigAsync();
+        var natsHost = !string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
+            ? serverConfig.NatsServerHostExternal
+            : serverConfig.NatsServerHostInternal;
+        var natsUrl = !string.IsNullOrWhiteSpace(natsHost)
+            ? natsHost
+            : _config["AgentPackage:NatsHost"] ?? string.Empty;
 
         if (!File.Exists(binaryPath))
             throw new FileNotFoundException($"Agent binary not found at path: {binaryPath}", binaryPath);
@@ -118,7 +126,7 @@ public class AgentPackageService : IAgentPackageService
             }
         }
 
-        return Task.FromResult(ms.ToArray());
+        return ms.ToArray();
     }
 
     public async Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken)

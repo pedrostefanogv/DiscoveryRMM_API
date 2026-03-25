@@ -23,6 +23,7 @@ public class ConfigurationsController : ControllerBase
     private readonly IOptionsMonitor<ReportingOptions> _reportingOptions;
     private readonly IObjectStorageProviderFactory _storageFactory;
     private readonly ISyncInvalidationPublisher _syncInvalidationPublisher;
+    private readonly INatsConnectionValidator _natsConnectionValidator;
 
     public ConfigurationsController(
         IConfigurationService configService,
@@ -30,7 +31,8 @@ public class ConfigurationsController : ControllerBase
         IClientRepository clientRepository,
         IOptionsMonitor<ReportingOptions> reportingOptions,
         IObjectStorageProviderFactory storageFactory,
-        ISyncInvalidationPublisher syncInvalidationPublisher)
+        ISyncInvalidationPublisher syncInvalidationPublisher,
+        INatsConnectionValidator natsConnectionValidator)
     {
         _configService = configService;
         _resolver = resolver;
@@ -38,6 +40,7 @@ public class ConfigurationsController : ControllerBase
         _reportingOptions = reportingOptions;
         _storageFactory = storageFactory;
         _syncInvalidationPublisher = syncInvalidationPublisher;
+        _natsConnectionValidator = natsConnectionValidator;
     }
 
     // ============ Server ============
@@ -83,6 +86,23 @@ public class ConfigurationsController : ControllerBase
             SyncResourceType.Configuration,
             "server-configuration-reset");
         return Ok(SanitizeServerConfiguration(reset));
+    }
+
+    [HttpPost("server/nats/test")]
+    public async Task<IActionResult> TestNatsConnection([FromBody] NatsConnectionTestRequest? request, CancellationToken cancellationToken)
+    {
+        request ??= new NatsConnectionTestRequest();
+
+        var (isValid, errors) = await _natsConnectionValidator.ValidateConnectionAsync(
+            request.Url ?? string.Empty,
+            request.User,
+            request.Password,
+            cancellationToken);
+
+        if (!isValid)
+            return BadRequest(new { errors });
+
+        return Ok(new { ok = true });
     }
 
     [HttpGet("server/metadata")]
@@ -658,6 +678,13 @@ public class ConfigurationsController : ControllerBase
         {
             return json;
         }
+    }
+
+    public sealed record NatsConnectionTestRequest
+    {
+        public string? Url { get; init; }
+        public string? User { get; init; }
+        public string? Password { get; init; }
     }
 
     private static ReportingSettingsResponse BuildDefaultReporting(ReportingOptions options)

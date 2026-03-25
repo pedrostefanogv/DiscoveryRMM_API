@@ -24,7 +24,10 @@ public static class ConfigurationFieldCatalog
         "NatsUserJwtTtlMinutes",
         "NatsUseScopedSubjects",
         "NatsIncludeLegacySubjects",
-        "NatsXKeySeed"
+        "NatsXKeySeed",
+        "NatsServerHostInternal",
+        "NatsServerHostExternal",
+        "NatsUseWssExternal"
     ];
 
     /// <summary>

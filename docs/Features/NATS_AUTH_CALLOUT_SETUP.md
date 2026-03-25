@@ -55,6 +55,33 @@ Em producao, troque `auth`/`auth` por credenciais fortes.
 - API Meduza rodando com o servico NATS Auth Callout habilitado.
 - Seed da conta NATS configurado em ServerConfiguration (NatsAccountSeed).
 
+## Teste de Conexao do NATS (API)
+Para validar o host do NATS antes de salvar, use o endpoint de teste:
+
+```
+POST /api/configurations/server/nats/test
+{
+  "url": "nats.tngplacas.com.br",
+  "user": "auth",
+  "password": "senha"
+}
+```
+
+Respostas:
+- **200 OK**
+  ```
+  { "ok": true }
+  ```
+- **400 Bad Request**
+  ```
+  { "errors": ["mensagem de erro..."] }
+  ```
+
+Observacoes:
+- O teste nao persiste configuracoes.
+- O salvamento (PUT/PATCH do ServerConfiguration) valida `NatsServerHostInternal` e `NatsServerHostExternal`.
+- A porta e fixa em 4222, com fallback automatico para WSS (`wss://host:4222`).
+
 ## Configuracao do NATS Server (exemplo)
 
 ### Exemplo completo (nats-server.conf)

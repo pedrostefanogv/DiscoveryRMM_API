@@ -119,6 +119,8 @@ public class AgentAuthController : ControllerBase
         if (resolved.AIIntegration is not null)
             resolved.AIIntegration.ApiKey = null;
 
+        var serverConfig = await _configService.GetServerConfigAsync();
+
         // Payload enxuto para agent: sem metadados de heranca/bloqueio e com flag booleana de App Store.
         return Ok(new
         {
@@ -136,7 +138,11 @@ public class AgentAuthController : ControllerBase
             resolved.AgentOnlineGraceSeconds,
             resolved.SiteId,
             resolved.ClientId,
-            resolved.ResolvedAt
+            resolved.ResolvedAt,
+            NatsServerHost = string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
+                ? serverConfig.NatsServerHostInternal
+                : serverConfig.NatsServerHostExternal,
+            NatsUseWssExternal = serverConfig.NatsUseWssExternal
         });
     }
 

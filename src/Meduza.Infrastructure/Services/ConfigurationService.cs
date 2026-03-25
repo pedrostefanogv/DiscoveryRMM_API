@@ -9,6 +9,10 @@ namespace Meduza.Infrastructure.Services;
 
 public class ConfigurationService : IConfigurationService
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const string ServerConfigCacheKey = "config:server";
+    private static readonly int ServerConfigCacheTtlSeconds = (int)TimeSpan.FromMinutes(5).TotalSeconds;
+
     private readonly IServerConfigurationRepository _serverRepo;
     private readonly IClientConfigurationRepository _clientRepo;
     private readonly ISiteConfigurationRepository _siteRepo;
@@ -16,6 +20,8 @@ public class ConfigurationService : IConfigurationService
     private readonly IConfigurationAuditService _audit;
     private readonly IConfigurationResolver _resolver;
     private readonly ISecretProtector _secretProtector;
+    private readonly IRedisService _redisService;
+    private readonly INatsConnectionValidator _natsConnectionValidator;
 
     public ConfigurationService(
         IServerConfigurationRepository serverRepo,
@@ -24,7 +30,9 @@ public class ConfigurationService : IConfigurationService
         ISiteRepository siteRepository,
         IConfigurationAuditService audit,
         IConfigurationResolver resolver,
-        ISecretProtector secretProtector)
+        ISecretProtector secretProtector,
+        IRedisService redisService,
+        INatsConnectionValidator natsConnectionValidator)
     {
         _serverRepo = serverRepo;
         _clientRepo = clientRepo;
@@ -33,12 +41,26 @@ public class ConfigurationService : IConfigurationService
         _audit = audit;
         _resolver = resolver;
         _secretProtector = secretProtector;
+        _redisService = redisService;
+        _natsConnectionValidator = natsConnectionValidator;
     }
 
     // ============ Server ============
 
     public async Task<ServerConfiguration> GetServerConfigAsync()
-        => await _serverRepo.GetOrCreateDefaultAsync();
+    {
+        var cached = await _redisService.GetAsync(ServerConfigCacheKey);
+        if (cached is not null)
+        {
+            var deserialized = JsonSerializer.Deserialize<ServerConfiguration>(cached, JsonOptions);
+            if (deserialized is not null)
+                return deserialized;
+        }
+
+        var config = await _serverRepo.GetOrCreateDefaultAsync();
+        await _redisService.SetAsync(ServerConfigCacheKey, JsonSerializer.Serialize(config, JsonOptions), ServerConfigCacheTtlSeconds);
+        return config;
+    }
 
     public async Task<ServerConfiguration> UpdateServerAsync(ServerConfiguration config, string? updatedBy = null)
     {
@@ -58,6 +80,7 @@ public class ConfigurationService : IConfigurationService
             await ApplyServerLockCascadeAsync(addedLocks, updatedBy);
 
         _resolver.ClearCache();
+        await _redisService.DeleteAsync(ServerConfigCacheKey);
         await _audit.LogChangeAsync("Server", config.Id, "*", null, null, "Full update", updatedBy);
         return config;
     }
@@ -87,6 +110,7 @@ public class ConfigurationService : IConfigurationService
             await ApplyServerLockCascadeAsync(addedLocks, updatedBy);
 
         _resolver.ClearCache();
+        await _redisService.DeleteAsync(ServerConfigCacheKey);
         return config;
     }
 
@@ -103,6 +127,7 @@ public class ConfigurationService : IConfigurationService
         };
         await _serverRepo.UpdateAsync(reset);
         _resolver.ClearCache();
+        await _redisService.DeleteAsync(ServerConfigCacheKey);
         await _audit.LogChangeAsync("Server", existing.Id, "*", null, null, "Reset to defaults", resetBy);
         return reset;
     }
@@ -371,7 +396,7 @@ public class ConfigurationService : IConfigurationService
 
     // ============ Validação ============
 
-    public Task<(bool IsValid, string[] Errors)> ValidateAsync(object config)
+    public async Task<(bool IsValid, string[] Errors)> ValidateAsync(object config)
     {
         var errors = new List<string>();
         var type = config.GetType();
@@ -386,9 +411,38 @@ public class ConfigurationService : IConfigurationService
         {
             var settings = TicketAttachmentSettings.FromJson(serverConfiguration.TicketAttachmentSettingsJson);
             errors.AddRange(settings.Validate());
+
+            // Validate NATS server hosts
+            if (string.IsNullOrWhiteSpace(serverConfiguration.NatsServerHostInternal))
+                errors.Add("NatsServerHostInternal cannot be empty.");
+            else
+            {
+                var (isValid, natsErrors) = await _natsConnectionValidator.ValidateConnectionAsync(
+                    serverConfiguration.NatsServerHostInternal,
+                    null,
+                    null,
+                    CancellationToken.None);
+
+                if (!isValid)
+                    errors.AddRange(natsErrors);
+            }
+
+            if (string.IsNullOrWhiteSpace(serverConfiguration.NatsServerHostExternal))
+                errors.Add("NatsServerHostExternal cannot be empty.");
+            else
+            {
+                var (isValid, natsErrors) = await _natsConnectionValidator.ValidateConnectionAsync(
+                    serverConfiguration.NatsServerHostExternal,
+                    null,
+                    null,
+                    CancellationToken.None);
+
+                if (!isValid)
+                    errors.AddRange(natsErrors);
+            }
         }
 
-        return Task.FromResult((errors.Count == 0, errors.ToArray()));
+        return (errors.Count == 0, errors.ToArray());
     }
 
     public Task<(bool IsValid, string[] Errors)> ValidateJsonAsync(string objectType, string json)

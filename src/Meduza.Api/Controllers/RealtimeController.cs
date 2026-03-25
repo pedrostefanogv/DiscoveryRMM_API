@@ -24,6 +24,7 @@ public class RealtimeController : ControllerBase
     private readonly MeduzaDbContext _dbContext;
     private readonly IConfigurationResolver _configurationResolver;
     private readonly IConfiguration _configuration;
+    private readonly IConfigurationService _configurationService;
 
     public RealtimeController(
         IAgentMessaging messaging,
@@ -32,7 +33,8 @@ public class RealtimeController : ControllerBase
         IConnectionMultiplexer redisConnection,
         MeduzaDbContext dbContext,
         IConfigurationResolver configurationResolver,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IConfigurationService configurationService)
     {
         _messaging = messaging;
         _redisService = redisService;
@@ -41,6 +43,7 @@ public class RealtimeController : ControllerBase
         _dbContext = dbContext;
         _configurationResolver = configurationResolver;
         _configuration = configuration;
+        _configurationService = configurationService;
     }
 
     [HttpGet("status")]
@@ -66,7 +69,11 @@ public class RealtimeController : ControllerBase
         var redisPingMs = await TryGetRedisPingMsAsync();
         var databaseConnected = await TryOpenDatabaseConnectionAsync(cancellationToken);
         var businessStats = await TryGetBusinessStatsAsync(cancellationToken);
-        var natsUrl = _configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222";
+        var serverConfig = await _configurationService.GetServerConfigAsync();
+        var natsHost = !string.IsNullOrWhiteSpace(serverConfig.NatsServerHostInternal)
+            ? serverConfig.NatsServerHostInternal
+            : GetHostFromUrlOrDefault(_configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222");
+        var natsUrl = $"nats://{natsHost}:4222";
         var natsTcpReachable = await TryCheckTcpAsync(natsUrl);
 
         return Ok(new
@@ -136,6 +143,14 @@ public class RealtimeController : ControllerBase
         {
             return null;
         }
+    }
+
+    private static string GetHostFromUrlOrDefault(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && !string.IsNullOrWhiteSpace(uri.Host))
+            return uri.Host;
+
+        return "localhost";
     }
 
     private static async Task<bool> TryCheckTcpAsync(string natsUrl)

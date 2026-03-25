@@ -90,6 +90,23 @@ public class ServerConfiguration
     public string NatsXKeySeed { get; set; } = string.Empty;
 
     /// <summary>
+    /// Host ou hostname do servidor NATS usada internamente pelo backend da API (privada).
+    /// Exemplo: 192.168.1.20
+    /// </summary>
+    public string NatsServerHostInternal { get; set; } = "localhost";
+
+    /// <summary>
+    /// Host ou hostname do servidor NATS exposta para agentes externos.
+    /// Exemplo: nats.tngplacas.com.br
+    /// </summary>
+    public string NatsServerHostExternal { get; set; } = "localhost";
+
+    /// <summary>
+    /// Usa WSS externo para conexão dos agentes.
+    /// </summary>
+    public bool NatsUseWssExternal { get; set; } = false;
+
+    /// <summary>
     /// Configurações globais de reporting (JSON).
     /// Exemplo: {"enablePdf":true,"processingTimeoutSeconds":300,...}
     /// </summary>
