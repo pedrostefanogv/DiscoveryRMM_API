@@ -21,6 +21,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
     private readonly IConfiguration _configuration;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly Meduza.Core.Interfaces.Security.ISecretProtector _secretProtector;
+    private readonly INatsAuthCalloutReloadSignal _reloadSignal;
     private readonly ILogger<NatsAuthCalloutBackgroundService> _logger;
 
     public NatsAuthCalloutBackgroundService(
@@ -28,21 +29,68 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
         Meduza.Core.Interfaces.Security.ISecretProtector secretProtector,
+        INatsAuthCalloutReloadSignal reloadSignal,
         ILogger<NatsAuthCalloutBackgroundService> logger)
     {
         _natsConnection = natsConnection;
         _configuration = configuration;
         _scopeFactory = scopeFactory;
         _secretProtector = secretProtector;
+        _reloadSignal = reloadSignal;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var enabled = _configuration.GetValue<bool?>("Nats:AuthCallout:Enabled") ?? false;
-        if (!enabled)
+        var appsettingsEnabled = _configuration.GetValue<bool?>("Nats:AuthCallout:Enabled") ?? false;
+        if (!appsettingsEnabled)
         {
-            _logger.LogInformation("NATS auth callout service is disabled.");
+            _logger.LogInformation("NATS auth callout service is disabled (Nats:AuthCallout:Enabled = false).");
+            return;
+        }
+
+        // Loop de reload: reinicia a assinatura quando configurações mudam (sem reiniciar a API).
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, _reloadSignal.Token);
+            var loopToken = linkedCts.Token;
+
+            try
+            {
+                await RunSubscriptionAsync(loopToken);
+            }
+            catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("NATS auth callout service reloading due to configuration change.");
+                await Task.Delay(500, stoppingToken); // pequena pausa antes de reconectar
+            }
+        }
+    }
+
+    private async Task RunSubscriptionAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var configurationService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+        var serverConfig = await configurationService.GetServerConfigAsync();
+
+        if (!serverConfig.NatsEnabled)
+        {
+            _logger.LogInformation("NATS auth callout service aguardando — NatsEnabled = false.");
+            await Task.Delay(Timeout.Infinite, ct);
+            return;
+        }
+
+        if (!serverConfig.NatsAuthEnabled)
+        {
+            _logger.LogInformation("NATS auth callout service aguardando — NatsAuthEnabled = false.");
+            await Task.Delay(Timeout.Infinite, ct);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(serverConfig.NatsAccountSeed))
+        {
+            _logger.LogWarning("NATS auth callout service aguardando — NatsAccountSeed não configurado.");
+            await Task.Delay(Timeout.Infinite, ct);
             return;
         }
 
@@ -50,24 +98,24 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         _logger.LogInformation("NATS auth callout listening on {Subject}.", subject);
 
         // Sempre subscreve como byte[] para suportar xkey (payload encriptado) e modo texto.
-        await foreach (var msg in _natsConnection.SubscribeAsync<byte[]>(subject, cancellationToken: stoppingToken))
+        await foreach (var msg in _natsConnection.SubscribeAsync<byte[]>(subject, cancellationToken: ct))
         {
             try
             {
-                using var scope = _scopeFactory.CreateScope();
-                var agentAuthService = scope.ServiceProvider.GetRequiredService<IAgentAuthService>();
-                var jwtService = scope.ServiceProvider.GetRequiredService<IJwtService>();
-                var permissionService = scope.ServiceProvider.GetRequiredService<IPermissionService>();
-                var credentialsService = scope.ServiceProvider.GetRequiredService<INatsCredentialsService>();
-                var configurationService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+                using var msgScope = _scopeFactory.CreateScope();
+                var agentAuthService = msgScope.ServiceProvider.GetRequiredService<IAgentAuthService>();
+                var jwtService = msgScope.ServiceProvider.GetRequiredService<IJwtService>();
+                var permissionService = msgScope.ServiceProvider.GetRequiredService<IPermissionService>();
+                var credentialsService = msgScope.ServiceProvider.GetRequiredService<INatsCredentialsService>();
+                var msgConfigService = msgScope.ServiceProvider.GetRequiredService<IConfigurationService>();
 
                 var rawData = msg.Data ?? [];
 
                 // Resolve xkey seed (opcional). Quando configurado, o payload esta encriptado.
-                var serverConfig = await configurationService.GetServerConfigAsync();
-                var xKeySeedPlain = string.IsNullOrWhiteSpace(serverConfig.NatsXKeySeed)
+                var msgServerConfig = await msgConfigService.GetServerConfigAsync();
+                var xKeySeedPlain = string.IsNullOrWhiteSpace(msgServerConfig.NatsXKeySeed)
                     ? null
-                    : _secretProtector.UnprotectOrSelf(serverConfig.NatsXKeySeed);
+                    : _secretProtector.UnprotectOrSelf(msgServerConfig.NatsXKeySeed);
 
                 string requestJwt;
                 string? serverXKey = null;
@@ -100,8 +148,8 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
                 var responseJwt = await HandleAuthRequestAsync(
                     requestJwt,
-                    agentAuthService, jwtService, permissionService, credentialsService, configurationService,
-                    stoppingToken);
+                    agentAuthService, jwtService, permissionService, credentialsService, msgConfigService,
+                    ct);
 
                 if (string.IsNullOrWhiteSpace(msg.ReplyTo))
                     continue;
@@ -111,12 +159,16 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                     // Encripta resposta para o server usando a chave efemera dele
                     using var xKeyPair = KeyPair.FromSeed(xKeySeedPlain);
                     var encryptedResponse = xKeyPair.Seal(Encoding.UTF8.GetBytes(responseJwt), serverXKey);
-                    await _natsConnection.PublishAsync(msg.ReplyTo, encryptedResponse, cancellationToken: stoppingToken);
+                    await _natsConnection.PublishAsync(msg.ReplyTo, encryptedResponse, cancellationToken: ct);
                 }
                 else
                 {
-                    await _natsConnection.PublishAsync(msg.ReplyTo, responseJwt, cancellationToken: stoppingToken);
+                    await _natsConnection.PublishAsync(msg.ReplyTo, responseJwt, cancellationToken: ct);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // propaga para o loop de reload
             }
             catch (Exception ex)
             {

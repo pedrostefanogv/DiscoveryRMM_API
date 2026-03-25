@@ -412,34 +412,12 @@ public class ConfigurationService : IConfigurationService
             var settings = TicketAttachmentSettings.FromJson(serverConfiguration.TicketAttachmentSettingsJson);
             errors.AddRange(settings.Validate());
 
-            // Validate NATS server hosts
+            // Validate NATS server hosts (apenas formato — não testa conectividade pois o servidor pode exigir auth)
             if (string.IsNullOrWhiteSpace(serverConfiguration.NatsServerHostInternal))
                 errors.Add("NatsServerHostInternal cannot be empty.");
-            else
-            {
-                var (isValid, natsErrors) = await _natsConnectionValidator.ValidateConnectionAsync(
-                    serverConfiguration.NatsServerHostInternal,
-                    null,
-                    null,
-                    CancellationToken.None);
-
-                if (!isValid)
-                    errors.AddRange(natsErrors);
-            }
 
             if (string.IsNullOrWhiteSpace(serverConfiguration.NatsServerHostExternal))
                 errors.Add("NatsServerHostExternal cannot be empty.");
-            else
-            {
-                var (isValid, natsErrors) = await _natsConnectionValidator.ValidateConnectionAsync(
-                    serverConfiguration.NatsServerHostExternal,
-                    null,
-                    null,
-                    CancellationToken.None);
-
-                if (!isValid)
-                    errors.AddRange(natsErrors);
-            }
         }
 
         return (errors.Count == 0, errors.ToArray());

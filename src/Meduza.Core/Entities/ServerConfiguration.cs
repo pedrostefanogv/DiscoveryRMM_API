@@ -65,20 +65,23 @@ public class ServerConfiguration
 
     // ============ NATS Auth ============
 
+    /// <summary>Habilita a conexão com o servidor NATS (desabilitar para ambientes sem NATS).</summary>
+    public bool NatsEnabled { get; set; } = true;
+
     /// <summary>Habilita autenticacao JWT no NATS para agentes/usuarios.</summary>
-    public bool NatsAuthEnabled { get; set; } = false;
+    public bool NatsAuthEnabled { get; set; } = true;
 
     /// <summary>Seed da conta NATS (nkey) para assinar JWTs de usuario.</summary>
     public string NatsAccountSeed { get; set; } = string.Empty;
 
     /// <summary>TTL em minutos para JWT de agentes.</summary>
-    public int NatsAgentJwtTtlMinutes { get; set; } = 15;
+    public int NatsAgentJwtTtlMinutes { get; set; } = 1440; // 24h
 
     /// <summary>TTL em minutos para JWT de usuarios.</summary>
-    public int NatsUserJwtTtlMinutes { get; set; } = 15;
+    public int NatsUserJwtTtlMinutes { get; set; } = 1440; // 24h
 
     /// <summary>Usa subjects com tenant/client/site (novo formato).</summary>
-    public bool NatsUseScopedSubjects { get; set; } = false;
+    public bool NatsUseScopedSubjects { get; set; } = true;
 
     /// <summary>Inclui subjects legados (agent.{id}.*) durante migracao.</summary>
     public bool NatsIncludeLegacySubjects { get; set; } = true;

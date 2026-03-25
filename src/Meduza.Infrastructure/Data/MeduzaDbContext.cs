@@ -661,6 +661,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.AgentOnlineGraceSeconds).HasColumnName("agent_online_grace_seconds");
             entity.Property(config => config.BrandingSettingsJson).HasColumnName("branding_settings_json");
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
+            entity.Property(config => config.NatsEnabled).HasColumnName("nats_enabled");
             entity.Property(config => config.NatsAuthEnabled).HasColumnName("nats_auth_enabled");
             entity.Property(config => config.NatsAccountSeed).HasColumnName("nats_account_seed");
             entity.Property(config => config.NatsAgentJwtTtlMinutes).HasColumnName("nats_agent_jwt_ttl_minutes");

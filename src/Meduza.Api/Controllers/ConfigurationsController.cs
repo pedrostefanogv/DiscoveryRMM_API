@@ -6,6 +6,8 @@ using Meduza.Core.Interfaces;
 using Meduza.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using NATS.NKeys;
+using Meduza.Api.Services;
 
 namespace Meduza.Api.Controllers;
 
@@ -24,6 +26,8 @@ public class ConfigurationsController : ControllerBase
     private readonly IObjectStorageProviderFactory _storageFactory;
     private readonly ISyncInvalidationPublisher _syncInvalidationPublisher;
     private readonly INatsConnectionValidator _natsConnectionValidator;
+    private readonly IConfiguration _configuration;
+    private readonly INatsAuthCalloutReloadSignal _natsReloadSignal;
 
     public ConfigurationsController(
         IConfigurationService configService,
@@ -32,7 +36,9 @@ public class ConfigurationsController : ControllerBase
         IOptionsMonitor<ReportingOptions> reportingOptions,
         IObjectStorageProviderFactory storageFactory,
         ISyncInvalidationPublisher syncInvalidationPublisher,
-        INatsConnectionValidator natsConnectionValidator)
+        INatsConnectionValidator natsConnectionValidator,
+        IConfiguration configuration,
+        INatsAuthCalloutReloadSignal natsReloadSignal)
     {
         _configService = configService;
         _resolver = resolver;
@@ -41,6 +47,8 @@ public class ConfigurationsController : ControllerBase
         _storageFactory = storageFactory;
         _syncInvalidationPublisher = syncInvalidationPublisher;
         _natsConnectionValidator = natsConnectionValidator;
+        _configuration = configuration;
+        _natsReloadSignal = natsReloadSignal;
     }
 
     // ============ Server ============
@@ -63,6 +71,7 @@ public class ConfigurationsController : ControllerBase
         await _syncInvalidationPublisher.PublishGlobalAsync(
             SyncResourceType.Configuration,
             "server-configuration-updated");
+        _natsReloadSignal.Signal();
         return Ok(SanitizeServerConfiguration(updated));
     }
 
@@ -74,6 +83,7 @@ public class ConfigurationsController : ControllerBase
         await _syncInvalidationPublisher.PublishGlobalAsync(
             SyncResourceType.Configuration,
             "server-configuration-patched");
+        _natsReloadSignal.Signal();
         return Ok(SanitizeServerConfiguration(updated));
     }
 
@@ -88,21 +98,116 @@ public class ConfigurationsController : ControllerBase
         return Ok(SanitizeServerConfiguration(reset));
     }
 
+    [HttpPost("server/nats/generate-account-key")]
+    public async Task<IActionResult> GenerateNatsAccountKey()
+    {
+        var accountKeyPair = KeyPair.CreatePair(PrefixByte.Account);
+        var xKeyPair = KeyPair.CreatePair(PrefixByte.Curve);
+
+        var accountSeed = accountKeyPair.GetSeed();
+        var xKeySeed = xKeyPair.GetSeed();
+
+        await _configService.PatchServerAsync(
+            new Dictionary<string, object>
+            {
+                [nameof(ServerConfiguration.NatsAccountSeed)] = accountSeed,
+                [nameof(ServerConfiguration.NatsXKeySeed)] = xKeySeed
+            },
+            HttpContext.Items["Username"] as string ?? "api");
+
+        _natsReloadSignal.Signal();
+
+        return Ok(new
+        {
+            accountSeed,
+            accountPublicKey = accountKeyPair.GetPublicKey(),
+            xKeySeed,
+            xKeyPublicKey = xKeyPair.GetPublicKey()
+        });
+    }
+
     [HttpPost("server/nats/test")]
     public async Task<IActionResult> TestNatsConnection([FromBody] NatsConnectionTestRequest? request, CancellationToken cancellationToken)
     {
         request ??= new NatsConnectionTestRequest();
 
+        // Fallback para credenciais configuradas em appsettings.json quando não fornecidas no body
+        var user = request.User ?? _configuration.GetValue<string>("Nats:AuthUser");
+        var password = request.Password ?? _configuration.GetValue<string>("Nats:AuthPassword");
+
         var (isValid, errors) = await _natsConnectionValidator.ValidateConnectionAsync(
             request.Url ?? string.Empty,
-            request.User,
-            request.Password,
+            user,
+            password,
             cancellationToken);
 
         if (!isValid)
             return BadRequest(new { errors });
 
         return Ok(new { ok = true });
+    }
+
+    /// <summary>
+    /// Atualiza as configurações NATS do servidor.
+    /// TTL de JWT deve estar entre 15 minutos (mínimo) e 4320 minutos / 72h (máximo).
+    /// </summary>
+    [HttpPatch("server/nats")]
+    public async Task<IActionResult> PatchNatsSettings([FromBody] NatsSettingsRequest request)
+    {
+        const int minTtl = 15;
+        const int maxTtl = 4320; // 72h
+
+        var errors = new List<string>();
+
+        if (request.NatsAgentJwtTtlMinutes.HasValue)
+        {
+            if (request.NatsAgentJwtTtlMinutes.Value < minTtl || request.NatsAgentJwtTtlMinutes.Value > maxTtl)
+                errors.Add($"NatsAgentJwtTtlMinutes must be between {minTtl} and {maxTtl} minutes.");
+        }
+
+        if (request.NatsUserJwtTtlMinutes.HasValue)
+        {
+            if (request.NatsUserJwtTtlMinutes.Value < minTtl || request.NatsUserJwtTtlMinutes.Value > maxTtl)
+                errors.Add($"NatsUserJwtTtlMinutes must be between {minTtl} and {maxTtl} minutes.");
+        }
+
+        if (errors.Count > 0)
+            return BadRequest(new { errors });
+
+        var patches = new Dictionary<string, object>();
+
+        if (request.NatsEnabled.HasValue)
+            patches[nameof(ServerConfiguration.NatsEnabled)] = request.NatsEnabled.Value;
+        if (request.NatsAuthEnabled.HasValue)
+            patches[nameof(ServerConfiguration.NatsAuthEnabled)] = request.NatsAuthEnabled.Value;
+        if (request.NatsUseScopedSubjects.HasValue)
+            patches[nameof(ServerConfiguration.NatsUseScopedSubjects)] = request.NatsUseScopedSubjects.Value;
+        if (request.NatsIncludeLegacySubjects.HasValue)
+            patches[nameof(ServerConfiguration.NatsIncludeLegacySubjects)] = request.NatsIncludeLegacySubjects.Value;
+        if (request.NatsUseWssExternal.HasValue)
+            patches[nameof(ServerConfiguration.NatsUseWssExternal)] = request.NatsUseWssExternal.Value;
+        if (!string.IsNullOrWhiteSpace(request.NatsServerHostInternal))
+            patches[nameof(ServerConfiguration.NatsServerHostInternal)] = request.NatsServerHostInternal;
+        if (!string.IsNullOrWhiteSpace(request.NatsServerHostExternal))
+            patches[nameof(ServerConfiguration.NatsServerHostExternal)] = request.NatsServerHostExternal;
+        if (request.NatsAgentJwtTtlMinutes.HasValue)
+            patches[nameof(ServerConfiguration.NatsAgentJwtTtlMinutes)] = request.NatsAgentJwtTtlMinutes.Value;
+        if (request.NatsUserJwtTtlMinutes.HasValue)
+            patches[nameof(ServerConfiguration.NatsUserJwtTtlMinutes)] = request.NatsUserJwtTtlMinutes.Value;
+
+        if (patches.Count == 0)
+            return BadRequest(new { errors = new[] { "No fields provided to update." } });
+
+        var updated = await _configService.PatchServerAsync(patches,
+            HttpContext.Items["Username"] as string ?? "api");
+
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.Configuration,
+            "server-nats-settings-patched");
+
+        _natsReloadSignal.Signal();
+
+        return Ok(SanitizeServerConfiguration(updated));
     }
 
     [HttpGet("server/metadata")]
@@ -686,6 +791,22 @@ public class ConfigurationsController : ControllerBase
         public string? User { get; init; }
         public string? Password { get; init; }
     }
+
+    /// <summary>
+    /// Campos NATS configuráveis pelo usuário.
+    /// Todos opcionais — apenas campos informados são alterados.
+    /// TTL aceito: mínimo 15 minutos, máximo 4320 minutos (72h), padrão 1440 minutos (24h).
+    /// </summary>
+    public sealed record NatsSettingsRequest(
+        bool? NatsEnabled = null,
+        bool? NatsAuthEnabled = null,
+        bool? NatsUseScopedSubjects = null,
+        bool? NatsIncludeLegacySubjects = null,
+        bool? NatsUseWssExternal = null,
+        string? NatsServerHostInternal = null,
+        string? NatsServerHostExternal = null,
+        int? NatsAgentJwtTtlMinutes = null,
+        int? NatsUserJwtTtlMinutes = null);
 
     private static ReportingSettingsResponse BuildDefaultReporting(ReportingOptions options)
     {

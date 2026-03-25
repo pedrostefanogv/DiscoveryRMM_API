@@ -122,24 +122,47 @@ A API Meduza conecta com `user: auth, password: <SENHA_FORTE>` e assina `$SYS.RE
 
 ### Passo a passo rapido
 
-1) Gere a conta do NATS (issuer) via nsc:
-```
-nsc generate nkey --account
-```
-- O comando retorna duas chaves:
-  - ACCOUNT_SEED (privada, deve ficar na API Meduza)
-  - ACCOUNT_PUBLIC_KEY (publica, usada no nats-server.conf)
+1) Gere as chaves da conta NATS via a propria API Meduza (nenhuma ferramenta externa necessaria):
 
-2) Configure o `ACCOUNT_PUBLIC_KEY` no nats-server.conf no campo `issuer`.
+```
+POST /api/configurations/server/nats/generate-account-key
+Authorization: Bearer <token>
+```
 
-3) Salve o `ACCOUNT_SEED` no ServerConfiguration da API Meduza:
-- `NatsAuthEnabled = true`
-- `NatsAccountSeed = <ACCOUNT_SEED>`
-- `NatsUseScopedSubjects = true`
-- `NatsIncludeLegacySubjects = true` (temporario)
+Resposta:
+```json
+{
+  "accountSeed":      "SAAC...",   <- ACCOUNT_SEED    (privado, salvar na API)
+  "accountPublicKey": "AABC...",   <- ACCOUNT_PUBLIC_KEY (publico, vai no nats-server.conf)
+  "xKeySeed":         "SXXX...",   <- opcional: seed xkey (criptografia do callout)
+  "xKeyPublicKey":    "XYYY..."    <- opcional: chave publica xkey (vai no nats-server.conf)
+}
+```
+
+> Guarde o `accountSeed` em local seguro — e a chave privada da conta NATS.
+> As chaves xkey sao opcionais; use apenas se quiser criptografar o payload do callout.
+
+2) Configure o `accountPublicKey` no nats-server.conf no campo `issuer`.
+
+3) Salve o `accountSeed` no ServerConfiguration da API Meduza via PATCH:
+
+```http
+PATCH /api/configurations/server
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "NatsAuthEnabled": true,
+  "NatsAccountSeed": "<accountSeed>",
+  "NatsAgentJwtTtlMinutes": 1440,
+  "NatsUserJwtTtlMinutes": 60,
+  "NatsUseScopedSubjects": true,
+  "NatsIncludeLegacySubjects": true
+}
+```
 
 4) Configure as credenciais da API no appsettings.json:
-- `Nats:AuthUser = auth`
+- `Nats:AuthUser = meduza-api`
 - `Nats:AuthPassword = <SENHA_FORTE>`
 - `Nats:AuthCallout:Enabled = true`
 
@@ -167,11 +190,13 @@ Para evitar que o JWT do request/response trafegue em claro no NATS, habilite `x
 
 **Passo a passo:**
 
-1) Gere um par xkey (curve25519):
+1) As chaves xkey ja sao geradas pelo mesmo endpoint usado para a account key:
+
 ```
-nsc generate nkey --curve
+POST /api/configurations/server/nats/generate-account-key
 ```
-- Retorna `CURVE_SEED` (privado) e `CURVE_PUBLIC_KEY` (publico).
+
+Use os campos `xKeySeed` (privado) e `xKeyPublicKey` (publico) da resposta.
 
 2) Configure a chave publica no nats-server.conf:
 ```
@@ -180,13 +205,13 @@ authorization {
     issuer: <ACCOUNT_PUBLIC_KEY>
     auth_users: [ auth ]
     account: AUTH
-    xkey: <CURVE_PUBLIC_KEY>
+    xkey: <xKeyPublicKey>
   }
 }
 ```
 
-3) Salve o `CURVE_SEED` no ServerConfiguration da API Meduza:
-- `NatsXKeySeed = <CURVE_SEED>` (via API /api/configurations/server)
+3) Salve o `xKeySeed` no ServerConfiguration da API Meduza:
+- `NatsXKeySeed = <xKeySeed>` (via PATCH /api/configurations/server)
 - O seed e automaticamente encriptado em repouso.
 
 4) Reinicie o NATS Server e a API Meduza.

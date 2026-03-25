@@ -5,7 +5,7 @@ public class M086_DropLegacyNatsServerUrl : Migration
 {
     public override void Up()
     {
-        Delete.Column("nats_server_url").FromTable("server_configurations");
+        Execute.Sql("ALTER TABLE server_configurations DROP COLUMN IF EXISTS nats_server_url;");
     }
 
     public override void Down()

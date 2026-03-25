@@ -167,6 +167,7 @@ builder.Services.AddSingleton(_ =>
 });
 builder.Services.AddHostedService<NatsBackgroundService>();
 builder.Services.AddHostedService<NatsSignalRBridge>();
+builder.Services.AddSingleton<INatsAuthCalloutReloadSignal, NatsAuthCalloutReloadSignal>();
 builder.Services.AddHostedService<NatsAuthCalloutBackgroundService>();
 
 // Redis
