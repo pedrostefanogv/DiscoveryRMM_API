@@ -17,6 +17,8 @@ public class ResolvedConfiguration
 
     public bool P2PFilesEnabled { get; set; }
 
+    public bool CloudBootstrapEnabled { get; set; }
+
     public bool SupportEnabled { get; set; }
 
     public string MeshCentralGroupPolicyProfile { get; set; } = "viewer";

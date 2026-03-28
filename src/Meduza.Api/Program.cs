@@ -89,6 +89,7 @@ builder.Services.AddSingleton<ChocolateyApiClient>();
 builder.Services.AddSingleton<WingetFeedClient>();
 
 builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IAgentTlsCertificateProbe, AgentTlsCertificateProbe>();
 
 var enableKnowledgeEmbeddingBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:KnowledgeEmbeddingEnabled") ?? true;
 var enableKnowledgeEmbeddingQueueBackgroundService = builder.Configuration.GetValue<bool?>("BackgroundJobs:KnowledgeEmbeddingQueueEnabled") ?? false;

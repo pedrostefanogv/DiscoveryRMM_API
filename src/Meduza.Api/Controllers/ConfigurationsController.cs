@@ -702,6 +702,7 @@ public class ConfigurationsController : ControllerBase
             RecoveryEnabled = client?.RecoveryEnabled ?? server.RecoveryEnabled,
             DiscoveryEnabled = client?.DiscoveryEnabled ?? server.DiscoveryEnabled,
             P2PFilesEnabled = client?.P2PFilesEnabled ?? server.P2PFilesEnabled,
+            CloudBootstrapEnabled = client?.CloudBootstrapEnabled ?? server.CloudBootstrapEnabled,
             SupportEnabled = client?.SupportEnabled ?? server.SupportEnabled,
             MeshCentralGroupPolicyProfile = string.IsNullOrWhiteSpace(client?.MeshCentralGroupPolicyProfile)
                 ? server.MeshCentralGroupPolicyProfile
@@ -721,6 +722,7 @@ public class ConfigurationsController : ControllerBase
                 ["RecoveryEnabled"] = client?.RecoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["DiscoveryEnabled"] = client?.DiscoveryEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["P2PFilesEnabled"] = client?.P2PFilesEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
+                ["CloudBootstrapEnabled"] = client?.CloudBootstrapEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["SupportEnabled"] = client?.SupportEnabled is not null ? (int)ConfigurationPriorityType.Client : (int)ConfigurationPriorityType.Global,
                 ["MeshCentralGroupPolicyProfile"] = !string.IsNullOrWhiteSpace(client?.MeshCentralGroupPolicyProfile)
                     ? (int)ConfigurationPriorityType.Client

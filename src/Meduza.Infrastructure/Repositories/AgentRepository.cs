@@ -76,9 +76,20 @@ public class AgentRepository : IAgentRepository
         existingAgent.LastIpAddress = agent.LastIpAddress;
         existingAgent.MacAddress = agent.MacAddress;
         existingAgent.LastSeenAt = agent.LastSeenAt;
+        existingAgent.ZeroTouchPending = agent.ZeroTouchPending;
         existingAgent.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
+    }
+
+    public async Task ApproveZeroTouchAsync(Guid agentId)
+    {
+        var now = DateTime.UtcNow;
+        await _db.Agents
+            .Where(agent => agent.Id == agentId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(agent => agent.ZeroTouchPending, _ => false)
+                .SetProperty(agent => agent.UpdatedAt, _ => now));
     }
 
     public async Task UpdateStatusAsync(Guid id, AgentStatus status, string? ipAddress)

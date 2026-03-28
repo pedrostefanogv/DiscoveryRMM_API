@@ -73,11 +73,42 @@ public class DeployTokenService : IDeployTokenService
         return token;
     }
 
+    public async Task<(DeployToken Token, string RawToken)> CreateZeroTouchTokenAsync(Guid clientId, Guid siteId)
+    {
+        var rawToken = GenerateZeroTouchToken();
+        var tokenHash = HashToken(rawToken);
+        var prefix = rawToken[..12];
+
+        var token = new DeployToken
+        {
+            Id = IdGenerator.NewId(),
+            ClientId = clientId,
+            SiteId = siteId,
+            TokenHash = tokenHash,
+            TokenPrefix = prefix,
+            Description = "zero-touch",
+            ExpiresAt = DateTime.UtcNow.AddMinutes(1),
+            CreatedAt = DateTime.UtcNow,
+            UsedCount = 0,
+            MaxUses = 1
+        };
+
+        await _tokenRepo.CreateAsync(token);
+        return (token, rawToken);
+    }
+
     private static string GenerateRawToken()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);
         var tokenBody = Convert.ToBase64String(bytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
         return $"mdz_deploy_{tokenBody}";
+    }
+
+    private static string GenerateZeroTouchToken()
+    {
+        var bytes = RandomNumberGenerator.GetBytes(32);
+        var tokenBody = Convert.ToBase64String(bytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
+        return $"mdz_zt_{tokenBody}";
     }
 
     private static string HashToken(string rawToken)

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using Meduza.Api.Services;
 using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
@@ -16,12 +18,17 @@ public class AgentHub : Hub
     private static readonly ConcurrentDictionary<Guid, HeartbeatState> LastPersistedHeartbeat = new();
     private static readonly TimeSpan HeartbeatWriteInterval = TimeSpan.FromSeconds(15);
 
+    // Nonce de desafio por connectionId para o handshake secundário.
+    private static readonly ConcurrentDictionary<string, string> PendingChallenges = new();
+
     private readonly IAgentRepository _agentRepo;
     private readonly ISiteRepository _siteRepo;
     private readonly IClientRepository _clientRepo;
     private readonly ICommandRepository _commandRepo;
     private readonly IAgentMessaging _messaging;
     private readonly IPermissionService _permissionService;
+    private readonly IConfiguration _configuration;
+    private readonly IAgentTlsCertificateProbe _tlsCertProbe;
     private readonly ILogger<AgentHub> _logger;
 
     public AgentHub(
@@ -31,6 +38,8 @@ public class AgentHub : Hub
         ICommandRepository commandRepo,
         IAgentMessaging messaging,
         IPermissionService permissionService,
+        IConfiguration configuration,
+        IAgentTlsCertificateProbe tlsCertProbe,
         ILogger<AgentHub> logger)
     {
         _agentRepo = agentRepo;
@@ -39,6 +48,8 @@ public class AgentHub : Hub
         _commandRepo = commandRepo;
         _messaging = messaging;
         _permissionService = permissionService;
+        _configuration = configuration;
+        _tlsCertProbe = tlsCertProbe;
         _logger = logger;
     }
 
@@ -54,11 +65,35 @@ public class AgentHub : Hub
             return;
         }
 
+        // Handshake secundário anti-MITM: quando habilitado, o agent deve chamar
+        // SecureHandshakeAsync antes de qualquer outro método.
+        if (isAgent)
+        {
+            var handshakeEnabled = _configuration.GetValue<bool>("Security:AgentConnection:HandshakeEnabled");
+            if (handshakeEnabled)
+            {
+                // Gera nonce de desafio e envia ao agent junto com o hash TLS esperado.
+                var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+                PendingChallenges[Context.ConnectionId] = nonce;
+                Context.Items["HandshakeState"] = "PreAuth";
+
+                var expectedTlsHash = await _tlsCertProbe.GetExpectedTlsCertHashAsync();
+                await Clients.Caller.SendAsync("HandshakeChallenge", nonce, expectedTlsHash ?? string.Empty);
+            }
+            else
+            {
+                // Flag desligada: considera direto como autenticado.
+                Context.Items["HandshakeState"] = "Authenticated";
+            }
+        }
+
         await base.OnConnectedAsync();
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
+        PendingChallenges.TryRemove(Context.ConnectionId, out _);
+
         if (ConnectedAgents.TryRemove(Context.ConnectionId, out var agentId))
         {
             var agent = await _agentRepo.GetByIdAsync(agentId);
@@ -70,6 +105,84 @@ public class AgentHub : Hub
     }
 
     /// <summary>
+    /// Handshake secundário anti-MITM (estilo MeshCentral).
+    /// O agent informa o fingerprint TLS que ele observou na conexão com o edge.
+    /// O servidor compara com o hash esperado (obtido via probe na URL configurada).
+    /// Se divergir, a conexão é encerrada — indica MITM ativo.
+    /// Controlado por Security:AgentConnection:HandshakeEnabled.
+    /// </summary>
+    public async Task SecureHandshakeAsync(string agentObservedTlsHash)
+    {
+        if (Context.Items["AgentId"] is not Guid authenticatedId)
+            throw new HubException("Not authenticated as agent.");
+
+        var handshakeEnabled = _configuration.GetValue<bool>("Security:AgentConnection:HandshakeEnabled");
+        if (!handshakeEnabled)
+        {
+            // Flag desligada: ack imediato sem validação.
+            Context.Items["HandshakeState"] = "Authenticated";
+            await Clients.Caller.SendAsync("HandshakeAck", true, "Handshake disabled by server configuration.");
+            return;
+        }
+
+        // Verifica que existe um nonce pendente para esta conexão.
+        if (!PendingChallenges.TryGetValue(Context.ConnectionId, out _))
+        {
+            _logger.LogWarning("Agent {AgentId} called SecureHandshakeAsync but no pending challenge found.", authenticatedId);
+            throw new HubException("No pending challenge. Reconnect and try again.");
+        }
+
+        // Valida o fingerprint TLS reportado pelo agent contra o hash que o servidor esperava.
+        var expectedTlsHash = await _tlsCertProbe.GetExpectedTlsCertHashAsync();
+
+        if (string.IsNullOrWhiteSpace(expectedTlsHash))
+        {
+            // Não foi configurada uma URL de probe; aceita sem validação de hash e loga aviso.
+            _logger.LogWarning(
+                "Agent {AgentId} handshake: TlsCertificateProbeUrl not configured. " +
+                "Skipping TLS hash comparison (Security:AgentConnection:TlsCertificateProbeUrl is empty).",
+                authenticatedId);
+        }
+        else if (!string.Equals(expectedTlsHash, agentObservedTlsHash?.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogError(
+                "MITM DETECTED: Agent {AgentId} reported TLS hash {ObservedHash} but server expected {ExpectedHash}. " +
+                "Aborting connection.",
+                authenticatedId,
+                agentObservedTlsHash,
+                expectedTlsHash);
+
+            await Clients.Caller.SendAsync("HandshakeAck", false, "TLS certificate mismatch. Connection aborted.");
+            Context.Abort();
+            return;
+        }
+
+        // Handshake concluído com sucesso.
+        PendingChallenges.TryRemove(Context.ConnectionId, out _);
+        Context.Items["HandshakeState"] = "Authenticated";
+        Context.Items["ConfirmedTlsFingerprint"] = agentObservedTlsHash?.Trim() ?? string.Empty;
+
+        _logger.LogInformation(
+            "Agent {AgentId} handshake completed. TLS fingerprint confirmed: {Hash}",
+            authenticatedId,
+            agentObservedTlsHash);
+
+        await Clients.Caller.SendAsync("HandshakeAck", true, "Handshake completed successfully.");
+    }
+
+    // Garante que o handshake foi concluído antes de aceitar métodos críticos.
+    // Só bloqueia quando a flag HandshakeEnabled está ativa, mantendo compatibilidade.
+    private void RequireHandshake()
+    {
+        var handshakeEnabled = _configuration.GetValue<bool>("Security:AgentConnection:HandshakeEnabled");
+        if (!handshakeEnabled) return;
+
+        var state = Context.Items["HandshakeState"] as string;
+        if (state != "Authenticated")
+            throw new HubException("Secure handshake required before calling this method.");
+    }
+
+    /// <summary>
     /// Agent se registra ao conectar, informando seu ID.
     /// O agentId do parametro e ignorado — a identidade vem do token autenticado.
     /// </summary>
@@ -77,6 +190,8 @@ public class AgentHub : Hub
     {
         if (Context.Items["AgentId"] is not Guid authenticatedId)
             throw new HubException("Not authenticated as agent.");
+
+        RequireHandshake();
 
         // Usa o ID autenticado pelo middleware, ignora o parametro (nao confiavel)
         await EnsureConnectionMappedAsync(authenticatedId);
@@ -102,6 +217,8 @@ public class AgentHub : Hub
     {
         if (Context.Items["AgentId"] is not Guid authenticatedId)
             throw new HubException("Not authenticated as agent.");
+
+        RequireHandshake();
 
         // Verifica que o comando pertence ao agent autenticado
         var command = await _commandRepo.GetByIdAsync(commandId);
@@ -138,6 +255,8 @@ public class AgentHub : Hub
     {
         if (Context.Items["AgentId"] is not Guid authenticatedId)
             throw new HubException("Not authenticated as agent.");
+
+        RequireHandshake();
 
         await EnsureConnectionMappedAsync(authenticatedId);
 

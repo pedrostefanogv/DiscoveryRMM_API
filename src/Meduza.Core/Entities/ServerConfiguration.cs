@@ -22,6 +22,9 @@ public class ServerConfiguration
     /// <summary>Transferência de arquivos P2P entre agents</summary>
     public bool P2PFilesEnabled { get; set; } = false;
 
+    /// <summary>Habilita o bootstrap P2P via cloud (agent obtém lista de peers via servidor ao invés de apenas LAN)</summary>
+    public bool CloudBootstrapEnabled { get; set; } = false;
+
     /// <summary>Suporte habilitado (para todos os clientes)</summary>
     public bool SupportEnabled { get; set; } = false;
 

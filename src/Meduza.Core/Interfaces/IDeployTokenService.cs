@@ -12,4 +12,9 @@ public interface IDeployTokenService
     /// Returns the token if valid, null otherwise.
     /// </summary>
     Task<DeployToken?> GetValidatedByIdAsync(Guid tokenId, string rawToken);
+    /// <summary>
+    /// Cria um token de deploy zero-touch: uso único e TTL de 1 minuto.
+    /// Destinado a agents já autenticados que precisam provisionar peers na mesma rede (discovery).
+    /// </summary>
+    Task<(DeployToken Token, string RawToken)> CreateZeroTouchTokenAsync(Guid clientId, Guid siteId);
 }

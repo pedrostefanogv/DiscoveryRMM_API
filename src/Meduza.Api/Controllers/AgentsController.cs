@@ -68,6 +68,41 @@ public class AgentsController : ControllerBase
         _configurationResolver = configurationResolver;
     }
 
+    /// <summary>
+    /// Aprova um agent registrado via zero-touch (discovery) e notifica o agent para recarregar configuracoes.
+    /// </summary>
+    [HttpPost("{agentId:guid}/approve-zero-touch")]
+    public async Task<IActionResult> ApproveZeroTouch(Guid agentId, CancellationToken cancellationToken = default)
+    {
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null)
+            return NotFound(new { error = "Agent not found." });
+
+        if (!agent.ZeroTouchPending)
+            return Ok(new { message = "Agent is not pending zero-touch approval.", agentId });
+
+        await _agentRepo.ApproveZeroTouchAsync(agentId);
+
+        var ping = new SyncInvalidationPingDto
+        {
+            EventId = Guid.NewGuid(),
+            AgentId = agentId,
+            Resource = SyncResourceType.ZeroTouchApproved,
+            ScopeType = AppApprovalScopeType.Agent,
+            ScopeId = agentId,
+            Revision = $"zero-touch:{DateTime.UtcNow:O}",
+            Reason = "zero-touch-approved",
+            ChangedAtUtc = DateTime.UtcNow
+        };
+
+        await _messaging.PublishSyncPingAsync(
+            agentId,
+            SyncInvalidationPingMessage.FromDto(ping),
+            cancellationToken);
+
+        return Ok(new { message = "Agent approved.", agentId });
+    }
+
     [HttpGet("by-site/{siteId:guid}")]
     public async Task<IActionResult> GetBySite(Guid siteId)
     {

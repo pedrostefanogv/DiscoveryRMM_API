@@ -17,4 +17,6 @@ public class Agent
     public DateTime? LastSeenAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    /// <summary>Indica que o agent foi registrado via zero-touch (discovery) e aguarda aprovação manual.</summary>
+    public bool ZeroTouchPending { get; set; }
 }

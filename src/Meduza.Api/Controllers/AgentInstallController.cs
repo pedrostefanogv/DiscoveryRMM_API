@@ -47,6 +47,8 @@ public class AgentInstallController : ControllerBase
         if (site is null || site.ClientId != deployToken.ClientId.Value)
             return Unauthorized(new { error = "Deploy token scope is invalid for current site/client." });
 
+        var isZeroTouch = rawDeployToken.StartsWith("mdz_zt_", StringComparison.OrdinalIgnoreCase);
+
         var agent = await _agentRepo.CreateAsync(new Meduza.Core.Entities.Agent
         {
             SiteId = site.Id,
@@ -55,10 +57,20 @@ public class AgentInstallController : ControllerBase
             OperatingSystem = request.OperatingSystem,
             OsVersion = request.OsVersion,
             AgentVersion = request.AgentVersion,
-            MacAddress = request.MacAddress
+            MacAddress = request.MacAddress,
+            ZeroTouchPending = isZeroTouch
         });
 
         var (token, rawToken) = await _authService.CreateTokenAsync(agent.Id, "Install token");
+
+        if (isZeroTouch)
+        {
+            return Ok(new
+            {
+                AgentId = agent.Id,
+                Token = rawToken
+            });
+        }
 
         return Ok(new
         {

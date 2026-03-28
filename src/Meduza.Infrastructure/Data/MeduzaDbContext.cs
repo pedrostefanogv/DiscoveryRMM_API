@@ -83,6 +83,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
     public DbSet<P2pAgentTelemetry> P2pAgentTelemetries => Set<P2pAgentTelemetry>();
     public DbSet<P2pArtifactPresence> P2pArtifactPresences => Set<P2pArtifactPresence>();
     public DbSet<P2pSeedPlan> P2pSeedPlans => Set<P2pSeedPlan>();
+    public DbSet<AgentP2pBootstrap> AgentP2pBootstraps => Set<AgentP2pBootstrap>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -236,6 +237,9 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(agent => agent.UpdatedAt)
                 .HasColumnName("updated_at")
                 .HasColumnType("timestamptz");
+            entity.Property(agent => agent.ZeroTouchPending)
+                .HasColumnName("zero_touch_pending")
+                .HasDefaultValue(false);
 
             entity.HasOne<Site>()
                 .WithMany()
@@ -646,6 +650,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.RecoveryEnabled).HasColumnName("recovery_enabled");
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
+            entity.Property(config => config.CloudBootstrapEnabled).HasColumnName("cloud_bootstrap_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.MeshCentralGroupPolicyProfile)
                 .HasColumnName("meshcentral_group_policy_profile")
@@ -744,6 +749,7 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             entity.Property(config => config.RecoveryEnabled).HasColumnName("recovery_enabled");
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
+            entity.Property(config => config.CloudBootstrapEnabled).HasColumnName("cloud_bootstrap_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.MeshCentralGroupPolicyProfile)
                 .HasColumnName("meshcentral_group_policy_profile")
@@ -2522,6 +2528,20 @@ public class MeduzaDbContext(DbContextOptions<MeduzaDbContext> options) : DbCont
             e.Property(p => p.GeneratedAt).HasColumnName("generated_at").HasColumnType("timestamptz");
 
             e.HasIndex(p => p.ClientId).HasDatabaseName("ix_p2p_seed_plan_client");
+        });
+
+        modelBuilder.Entity<AgentP2pBootstrap>(e =>
+        {
+            e.ToTable("agent_p2p_bootstraps");
+            e.HasKey(b => b.AgentId);
+            e.Property(b => b.AgentId).HasColumnName("agent_id").ValueGeneratedNever();
+            e.Property(b => b.ClientId).HasColumnName("client_id");
+            e.Property(b => b.PeerId).HasColumnName("peer_id").HasMaxLength(128);
+            e.Property(b => b.AddrsJson).HasColumnName("addrs_json").HasMaxLength(1024);
+            e.Property(b => b.Port).HasColumnName("port");
+            e.Property(b => b.LastHeartbeatAt).HasColumnName("last_heartbeat_at").HasColumnType("timestamptz");
+
+            e.HasIndex(b => b.ClientId).HasDatabaseName("ix_agent_p2p_bootstraps_client_id");
         });
     }
 

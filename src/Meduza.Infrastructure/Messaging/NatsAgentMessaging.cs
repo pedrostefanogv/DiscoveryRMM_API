@@ -23,6 +23,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private readonly IAgentRepository _agentRepo;
     private readonly ICommandRepository _commandRepo;
     private readonly ISiteRepository _siteRepo;
+    private readonly IAgentAuthService _agentAuthService;
     private readonly ILogger<NatsAgentMessaging> _logger;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -35,13 +36,25 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         IAgentRepository agentRepo,
         ICommandRepository commandRepo,
         ISiteRepository siteRepo,
+        IAgentAuthService agentAuthService,
         ILogger<NatsAgentMessaging> logger)
     {
         _connection = connection;
         _agentRepo = agentRepo;
         _commandRepo = commandRepo;
         _siteRepo = siteRepo;
+        _agentAuthService = agentAuthService;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Verifica que o agent possui ao menos um token ativo.
+    /// Defesa contra spoofing via NATS: mensagens de AgentIds sem token válido são descartadas.
+    /// </summary>
+    private async Task<bool> IsAgentAuthorizedAsync(Guid agentId)
+    {
+        var tokens = await _agentAuthService.GetTokensByAgentIdAsync(agentId);
+        return tokens.Any(t => t.IsValid);
     }
 
     public bool IsConnected => _connection.ConnectionState == NatsConnectionState.Open;
@@ -97,6 +110,11 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                         var agentId = ExtractAgentId(msg.Subject);
                         if (agentId.HasValue)
                         {
+                            if (!await IsAgentAuthorizedAsync(agentId.Value))
+                            {
+                                _logger.LogWarning("NATS: heartbeat rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
+                                continue;
+                            }
                             var heartbeat = JsonSerializer.Deserialize<HeartbeatMessage>(msg.Data ?? "", JsonOptions);
                             await _agentRepo.UpdateStatusAsync(agentId.Value, AgentStatus.Online, heartbeat?.IpAddress);
                             _logger.LogDebug("Heartbeat processed from agent {AgentId} (IP: {IpAddress})", agentId.Value, heartbeat?.IpAddress);
@@ -127,12 +145,17 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                 {
                     try
                     {
+                        var agentId = ExtractAgentId(msg.Subject);
+                        if (agentId.HasValue && !await IsAgentAuthorizedAsync(agentId.Value))
+                        {
+                            _logger.LogWarning("NATS: command result rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
+                            continue;
+                        }
                         var result = JsonSerializer.Deserialize<CommandResultMessage>(msg.Data ?? "", JsonOptions);
                         if (result is not null)
                         {
                             var status = result.ExitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
                             await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
-                            var agentId = ExtractAgentId(msg.Subject);
                             await PublishDashboardEventForAgentAsync(
                                 agentId,
                                 "CommandCompleted",
@@ -169,6 +192,11 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                         var agentId = ExtractAgentId(msg.Subject);
                         if (agentId.HasValue)
                         {
+                            if (!await IsAgentAuthorizedAsync(agentId.Value))
+                            {
+                                _logger.LogWarning("NATS: hardware report rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
+                                continue;
+                            }
                             _logger.LogDebug("Hardware report received from agent {AgentId}", agentId.Value);
                         }
                     }

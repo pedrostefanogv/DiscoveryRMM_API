@@ -42,7 +42,9 @@ public class AgentAuthController : ControllerBase
     private readonly IMeshCentralApiService _meshCentralApiService;
     private readonly IMeshCentralProvisioningService _meshCentralProvisioningService;
     private readonly IClientRepository _clientRepo;
+    private readonly IDeployTokenService _deployTokenService;
     private readonly IRedisService _redisService;
+    private readonly IP2pBootstrapRepository _p2pBootstrapRepo;
     private readonly MeshCentralOptions _meshCentralOptions;
 
     public AgentAuthController(
@@ -70,7 +72,9 @@ public class AgentAuthController : ControllerBase
         IMeshCentralApiService meshCentralApiService,
         IMeshCentralProvisioningService meshCentralProvisioningService,
         IClientRepository clientRepo,
+        IDeployTokenService deployTokenService,
         IRedisService redisService,
+        IP2pBootstrapRepository p2pBootstrapRepo,
         IOptions<MeshCentralOptions> meshCentralOptions)
     {
         _agentRepo = agentRepo;
@@ -97,7 +101,9 @@ public class AgentAuthController : ControllerBase
         _meshCentralApiService = meshCentralApiService;
         _meshCentralProvisioningService = meshCentralProvisioningService;
         _clientRepo = clientRepo;
+        _deployTokenService = deployTokenService;
         _redisService = redisService;
+        _p2pBootstrapRepo = p2pBootstrapRepo;
         _meshCentralOptions = meshCentralOptions.Value;
     }
 
@@ -111,8 +117,12 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null) return NotFound();
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: true);
+        if (blocked is not null)
+            return blocked;
+
+        if (agent!.ZeroTouchPending)
+            return Ok(new { zeroTouchPending = true });
 
         var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
         var meshCentralEnabledEffective = _meshCentralOptions.Enabled && resolved.SupportEnabled;
@@ -156,9 +166,9 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null)
-            return NotFound(new { error = "Agent not found." });
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var site = await _siteRepo.GetByIdAsync(agent.SiteId);
         if (site is null)
@@ -209,9 +219,9 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null)
-            return NotFound(new { error = "Agent not found." });
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var site = await _siteRepo.GetByIdAsync(agent.SiteId);
         if (site is null)
@@ -257,8 +267,9 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null) return NotFound();
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var site = await _siteRepo.GetByIdAsync(agent.SiteId);
         if (site is null) return NotFound(new { error = "Site not found for this agent." });
@@ -284,8 +295,9 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null) return NotFound();
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var site = await _siteRepo.GetByIdAsync(agent.SiteId);
         if (site is null) return NotFound(new { error = "Site not found for this agent." });
@@ -377,6 +389,10 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
+
         if (string.IsNullOrWhiteSpace(request.Revision))
             return BadRequest(new { error = "Revision is required." });
 
@@ -398,6 +414,10 @@ public class AgentAuthController : ControllerBase
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var correlationId = Request.Headers.TryGetValue("X-Correlation-Id", out var values)
             && !string.IsNullOrWhiteSpace(values.ToString())
@@ -422,6 +442,10 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: true);
+        if (blocked is not null)
+            return blocked;
+
         try
         {
             var credentials = await _natsCredentialsService.IssueForAgentAsync(agentId, ct);
@@ -433,11 +457,49 @@ public class AgentAuthController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Gera um token de deploy zero-touch: uso único, TTL de 1 minuto.
+    /// Usado pelo agent (já autenticado) para provisionar peers sem configuração na mesma rede (discovery).
+    /// Requer que DiscoveryEnabled esteja ativo na configuração efetiva do site do agent.
+    /// </summary>
+    [HttpPost("me/zero-touch/deploy-token")]
+    public async Task<IActionResult> IssueZeroTouchDeployToken()
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
+
+        var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
+        if (!resolved.DiscoveryEnabled)
+            return StatusCode(403, new { error = "Zero-touch provisioning (discovery) is disabled for this site." });
+
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null)
+            return NotFound(new { error = "Site not found." });
+
+        var (token, rawToken) = await _deployTokenService.CreateZeroTouchTokenAsync(site.ClientId, site.Id);
+
+        return Ok(new
+        {
+            token = rawToken,
+            tokenId = token.Id,
+            expiresAt = token.ExpiresAt,
+            maxUses = token.MaxUses
+        });
+    }
+
     [HttpGet("me/hardware")]
     public async Task<IActionResult> GetHardware()
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var hardware = await _hardwareRepo.GetByAgentIdAsync(agentId);
         var components = await _hardwareRepo.GetComponentsAsync(agentId);
@@ -465,9 +527,9 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null)
-            return NotFound();
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: true);
+        if (blocked is not null)
+            return blocked;
 
         var hasAgentUpdate = request.Hostname is not null
             || request.DisplayName is not null
@@ -816,6 +878,10 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
+
         var commands = await _commandRepo.GetByAgentIdAsync(agentId, limit);
         return Ok(commands);
     }
@@ -825,6 +891,10 @@ public class AgentAuthController : ControllerBase
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var command = await _commandRepo.GetByIdAsync(commandId);
         if (command is null || command.AgentId != agentId)
@@ -873,6 +943,10 @@ public class AgentAuthController : ControllerBase
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var command = await _commandRepo.GetByIdAsync(commandId);
         if (command is null || command.AgentId != agentId)
@@ -931,6 +1005,10 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
+
         var software = await _softwareRepo.GetCurrentByAgentIdAsync(agentId);
         return Ok(software);
     }
@@ -948,9 +1026,9 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null)
-            return NotFound();
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: true);
+        if (blocked is not null)
+            return blocked;
 
         var collectedAt = request.CollectedAt ?? DateTime.UtcNow;
         var software = (request.Software ?? new List<SoftwareInventoryItemRequest>())
@@ -989,6 +1067,10 @@ public class AgentAuthController : ControllerBase
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var tickets = await _ticketRepo.GetByAgentIdAsync(agentId, workflowStateId);
         
@@ -1043,6 +1125,10 @@ public class AgentAuthController : ControllerBase
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
         if (ticket is null)
@@ -1099,9 +1185,9 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null)
-            return NotFound(new { error = "Agent not found." });
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         // Buscar o site para obter o ClientId
         var site = await _siteRepo.GetByIdAsync(agent.SiteId);
@@ -1173,6 +1259,10 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
+
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
         if (ticket is null)
             return NotFound(new { error = "Ticket not found." });
@@ -1202,6 +1292,10 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
+
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
         if (ticket is null)
             return NotFound(new { error = "Ticket not found." });
@@ -1222,6 +1316,10 @@ public class AgentAuthController : ControllerBase
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
         if (ticket is null)
@@ -1271,6 +1369,10 @@ public class AgentAuthController : ControllerBase
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
         if (ticket is null)
@@ -1378,6 +1480,10 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
+
         try
         {
             var response = await _aiChatService.ProcessSyncAsync(
@@ -1409,6 +1515,10 @@ public class AgentAuthController : ControllerBase
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         try
         {
@@ -1442,6 +1552,10 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
+
         try
         {
             var status = await _aiChatService.GetJobStatusAsync(jobId, agentId, ct);
@@ -1472,6 +1586,18 @@ public class AgentAuthController : ControllerBase
         {
             HttpContext.Response.StatusCode = 401;
             await HttpContext.Response.WriteAsJsonAsync(new { error = "Agent not authenticated." }, ct);
+            return;
+        }
+
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+        {
+            HttpContext.Response.StatusCode = 423;
+            await HttpContext.Response.WriteAsJsonAsync(new
+            {
+                error = "Agent is pending zero-touch approval.",
+                zeroTouchPending = true
+            }, ct);
             return;
         }
 
@@ -1509,6 +1635,63 @@ public class AgentAuthController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Registra o agent no sistema de bootstrap P2P via cloud e retorna peers online do mesmo cliente.
+    /// O agent envia seu peer ID libp2p, IPs e porta; o servidor faz upsert e devolve
+    /// até 3 peers aleatórios ativos (critério: Agent.LastSeenAt >= AgentOnlineGraceSeconds).
+    /// Retorna 403 se CloudBootstrapEnabled estiver desabilitado para o cliente.
+    /// </summary>
+    [HttpPost("me/p2p/bootstrap")]
+    public async Task<IActionResult> P2pBootstrap([FromBody] P2pBootstrapRequest? request)
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
+
+        if (request is null
+            || string.IsNullOrWhiteSpace(request.PeerId)
+            || string.IsNullOrWhiteSpace(request.AgentId)
+            || request.Addrs is null
+            || request.Port <= 0)
+            return BadRequest(new { error = "Missing or invalid required fields: agentId, peerId, addrs, port." });
+
+        var resolved = await _configResolver.ResolveForSiteAsync(agent.SiteId);
+
+        if (!resolved.CloudBootstrapEnabled)
+            return StatusCode(403, new { error = "P2P cloud bootstrap is disabled for this client." });
+
+        var addrsJson = System.Text.Json.JsonSerializer.Serialize(request.Addrs);
+        await _p2pBootstrapRepo.UpsertAsync(new Core.Entities.AgentP2pBootstrap
+        {
+            AgentId = agentId,
+            ClientId = resolved.ClientId ?? Guid.Empty,
+            PeerId = request.PeerId,
+            AddrsJson = addrsJson,
+            Port = request.Port,
+            LastHeartbeatAt = DateTime.UtcNow
+        });
+
+        var onlineCutoff = DateTime.UtcNow.AddSeconds(-resolved.AgentOnlineGraceSeconds);
+        var peers = await _p2pBootstrapRepo.GetRandomPeersAsync(
+            resolved.ClientId ?? Guid.Empty,
+            agentId,
+            count: 3,
+            onlineCutoff);
+
+        var peerDtos = peers.Select(p =>
+        {
+            string[] addrs;
+            try { addrs = System.Text.Json.JsonSerializer.Deserialize<string[]>(p.AddrsJson) ?? []; }
+            catch { addrs = []; }
+            return new Core.DTOs.P2pBootstrapPeerDto(p.PeerId, addrs, p.Port);
+        }).ToList();
+
+        return Ok(new Core.DTOs.P2pBootstrapResponse(peerDtos));
+    }
+
     private bool TryGetAuthenticatedAgentId(out Guid agentId)
     {
         agentId = Guid.Empty;
@@ -1518,6 +1701,24 @@ public class AgentAuthController : ControllerBase
 
         agentId = parsed;
         return true;
+    }
+
+    private async Task<(Agent? Agent, IActionResult? Blocked)> GetAgentOrBlockPendingAsync(Guid agentId, bool allowPending)
+    {
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null)
+            return (null, NotFound(new { error = "Agent not found." }));
+
+        if (agent.ZeroTouchPending && !allowPending)
+        {
+            return (agent, StatusCode(423, new
+            {
+                error = "Agent is pending zero-touch approval.",
+                zeroTouchPending = true
+            }));
+        }
+
+        return (agent, null);
     }
 
     private static string ComputeAppStoreRevision(IReadOnlyList<EffectiveApprovedAppDto> items)
@@ -1553,8 +1754,9 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null) return NotFound(new { error = "Agent not found." });
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var site = await _siteRepo.GetByIdAsync(agent.SiteId);
         if (site is null) return NotFound(new { error = "Site not found." });
@@ -1590,8 +1792,9 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null) return NotFound(new { error = "Agent not found." });
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        if (blocked is not null)
+            return blocked;
 
         var site = await _siteRepo.GetByIdAsync(agent.SiteId);
         if (site is null) return NotFound(new { error = "Site not found." });

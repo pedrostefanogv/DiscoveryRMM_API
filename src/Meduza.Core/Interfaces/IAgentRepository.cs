@@ -11,5 +11,6 @@ public interface IAgentRepository
     Task<Agent> CreateAsync(Agent agent);
     Task UpdateAsync(Agent agent);
     Task UpdateStatusAsync(Guid id, Enums.AgentStatus status, string? ipAddress);
+    Task ApproveZeroTouchAsync(Guid agentId);
     Task DeleteAsync(Guid id);
 }

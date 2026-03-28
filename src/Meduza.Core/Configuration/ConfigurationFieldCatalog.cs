@@ -7,6 +7,7 @@ public static class ConfigurationFieldCatalog
         "RecoveryEnabled",
         "DiscoveryEnabled",
         "P2PFilesEnabled",
+        "CloudBootstrapEnabled",
         "SupportEnabled",
         "MeshCentralGroupPolicyProfile",
         "ChatAIEnabled",
