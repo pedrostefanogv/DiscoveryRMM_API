@@ -9,5 +9,6 @@ public enum CommandType
     SystemInfo = 4,
     Restart = 5,
     Shutdown = 6,
-    Update = 7
+    Update = 7,
+    RemoteDebug = 8
 }

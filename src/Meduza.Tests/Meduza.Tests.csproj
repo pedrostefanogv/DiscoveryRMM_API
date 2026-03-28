@@ -29,6 +29,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Meduza.Core\Meduza.Core.csproj" />
     <ProjectReference Include="..\Meduza.Infrastructure\Meduza.Infrastructure.csproj" />
+    <ProjectReference Include="..\Meduza.Api\Meduza.Api.csproj" />
   </ItemGroup>
 
 </Project>

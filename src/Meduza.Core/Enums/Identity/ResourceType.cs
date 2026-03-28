@@ -17,5 +17,6 @@ public enum ResourceType
     AiChat,
     AppStore,
     Logs,
-    Dashboard
+    Dashboard,
+    RemoteDebug
 }

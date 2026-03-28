@@ -1,9 +1,12 @@
 using System.Text.Json;
 using Meduza.Api.Hubs;
+using Meduza.Api.Services;
 using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
 using Meduza.Core.Enums;
+using Meduza.Core.Enums.Identity;
 using Meduza.Core.Interfaces;
+using Meduza.Core.Interfaces.Auth;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 
@@ -37,6 +40,8 @@ public class AgentsController : ControllerBase
     private readonly IRedisService _redisService;
     private readonly IHubContext<AgentHub> _hubContext;
     private readonly IConfigurationResolver _configurationResolver;
+    private readonly IPermissionService _permissionService;
+    private readonly IRemoteDebugSessionManager _remoteDebugSessionManager;
 
     public AgentsController(
         IAgentRepository agentRepo,
@@ -51,7 +56,9 @@ public class AgentsController : ControllerBase
         ISiteRepository siteRepository,
         IRedisService redisService,
         IHubContext<AgentHub> hubContext,
-        IConfigurationResolver configurationResolver)
+        IConfigurationResolver configurationResolver,
+        IPermissionService permissionService,
+        IRemoteDebugSessionManager remoteDebugSessionManager)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -66,6 +73,8 @@ public class AgentsController : ControllerBase
         _redisService = redisService;
         _hubContext = hubContext;
         _configurationResolver = configurationResolver;
+        _permissionService = permissionService;
+        _remoteDebugSessionManager = remoteDebugSessionManager;
     }
 
     /// <summary>
@@ -358,6 +367,139 @@ public class AgentsController : ControllerBase
         var created = await DispatchCommandAsync(command);
 
         return CreatedAtAction(nameof(GetCommands), new { id }, created);
+    }
+
+    [HttpPost("{id:guid}/remote-debug/start")]
+    public async Task<IActionResult> StartRemoteDebug(Guid id, [FromBody] StartRemoteDebugRequest? request)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var agent = await _agentRepo.GetByIdAsync(id);
+        if (agent is null)
+            return NotFound(new { error = "Agent not found." });
+
+        var site = await _siteRepository.GetByIdAsync(agent.SiteId);
+        if (site is null)
+            return NotFound(new { error = "Site not found for agent." });
+
+        var hasPermission = await _permissionService.HasPermissionAsync(
+            userId,
+            ResourceType.RemoteDebug,
+            ActionType.Execute,
+            ScopeLevel.Site,
+            agent.SiteId,
+            site.ClientId);
+
+        if (!hasPermission)
+            return Forbid();
+
+        var session = _remoteDebugSessionManager.StartSession(
+            id,
+            userId,
+            site.ClientId,
+            agent.SiteId,
+            request?.LogLevel,
+            request?.PreferredTransport,
+            request?.TtlMinutes);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            action = "start",
+            sessionId = session.SessionId,
+            logLevel = session.LogLevel,
+            startedAtUtc = session.StartedAtUtc,
+            expiresAtUtc = session.ExpiresAtUtc,
+            stream = new
+            {
+                signalRHub = "/hubs/remote-debug",
+                natsLegacySubject = session.NatsLegacySubject,
+                natsTenantSubject = session.NatsTenantSubject,
+                natsWssUrl = HttpContext.RequestServices
+                    .GetRequiredService<IConfiguration>()
+                    .GetValue<string>("Nats:WssUrl")
+            }
+        });
+
+        var command = new AgentCommand
+        {
+            AgentId = id,
+            CommandType = CommandType.RemoteDebug,
+            Payload = payload
+        };
+
+        var created = await DispatchCommandAsync(command);
+
+        return Ok(new RemoteDebugStartResponse(
+            session.SessionId,
+            created.Id,
+            session.AgentId,
+            session.LogLevel,
+            session.PreferredTransport,
+            session.StartedAtUtc,
+            session.ExpiresAtUtc,
+            "/hubs/remote-debug",
+            session.NatsLegacySubject,
+            session.NatsTenantSubject,
+            HttpContext.RequestServices
+                .GetRequiredService<IConfiguration>()
+                .GetValue<string>("Nats:WssUrl")));
+    }
+
+    [HttpPost("{id:guid}/remote-debug/{sessionId:guid}/stop")]
+    public async Task<IActionResult> StopRemoteDebug(Guid id, Guid sessionId)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var agent = await _agentRepo.GetByIdAsync(id);
+        if (agent is null)
+            return NotFound(new { error = "Agent not found." });
+
+        var site = await _siteRepository.GetByIdAsync(agent.SiteId);
+        if (site is null)
+            return NotFound(new { error = "Site not found for agent." });
+
+        var hasPermission = await _permissionService.HasPermissionAsync(
+            userId,
+            ResourceType.RemoteDebug,
+            ActionType.Execute,
+            ScopeLevel.Site,
+            agent.SiteId,
+            site.ClientId);
+
+        if (!hasPermission)
+            return Forbid();
+
+        if (!_remoteDebugSessionManager.TryGetSessionForUser(sessionId, userId, out var session) || session is null)
+            return NotFound(new { error = "Remote debug session not found." });
+
+        if (session.AgentId != id)
+            return BadRequest(new { error = "Session does not belong to this agent." });
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            action = "stop",
+            sessionId,
+            stoppedAtUtc = DateTime.UtcNow
+        });
+
+        var command = new AgentCommand
+        {
+            AgentId = id,
+            CommandType = CommandType.RemoteDebug,
+            Payload = payload
+        };
+
+        var created = await DispatchCommandAsync(command);
+        _remoteDebugSessionManager.CloseSession(sessionId, "stopped-by-user", userId);
+
+        return Ok(new
+        {
+            sessionId,
+            commandId = created.Id,
+            stoppedAtUtc = DateTime.UtcNow
+        });
     }
 
     [HttpPost("{id:guid}/automation/tasks/{taskId:guid}/run-now")]
@@ -682,6 +824,19 @@ public class AgentsController : ControllerBase
 public record CreateAgentRequest(Guid SiteId, string Hostname, string? DisplayName, string? OperatingSystem, string? OsVersion, string? AgentVersion);
 public record UpdateAgentRequest(Guid SiteId, string Hostname, string? DisplayName);
 public record SendCommandRequest(CommandType CommandType, string Payload);
+public record StartRemoteDebugRequest(string? LogLevel = "info", string? PreferredTransport = "signalr", int? TtlMinutes = 20);
+public record RemoteDebugStartResponse(
+    Guid SessionId,
+    Guid CommandId,
+    Guid AgentId,
+    string LogLevel,
+    string PreferredTransport,
+    DateTime StartedAtUtc,
+    DateTime ExpiresAtUtc,
+    string SignalRHub,
+    string NatsLegacySubject,
+    string NatsTenantSubject,
+    string? NatsWssUrl);
 public record HardwareReportRequest(
     string? Hostname,
     string? DisplayName,

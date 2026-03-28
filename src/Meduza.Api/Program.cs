@@ -73,6 +73,7 @@ builder.Services.AddScoped<IReportRenderer, CsvReportRenderer>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<ISyncInvalidationPublisher, SyncInvalidationPublisher>();
 builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
+builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
 
 // PDF rendering using Playwright.NET (embedded, no external service required, zero vulnerabilities)
 if (builder.Configuration.GetValue<bool>("Reporting:EnablePdf"))
@@ -168,6 +169,8 @@ builder.Services.AddSingleton(_ =>
 });
 builder.Services.AddHostedService<NatsBackgroundService>();
 builder.Services.AddHostedService<NatsSignalRBridge>();
+builder.Services.AddHostedService<RemoteDebugNatsBridgeService>();
+builder.Services.AddHostedService<RemoteDebugSessionCleanupService>();
 builder.Services.AddSingleton<INatsAuthCalloutReloadSignal, NatsAuthCalloutReloadSignal>();
 builder.Services.AddHostedService<NatsAuthCalloutBackgroundService>();
 
@@ -423,6 +426,12 @@ app.MapHub<AgentHub>("/hubs/agent", options =>
 }).RequireCors("SignalR");
 
 app.MapHub<NotificationHub>("/hubs/notifications", options =>
+{
+    options.AllowStatefulReconnects = true;
+    options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;
+}).RequireCors("SignalR");
+
+app.MapHub<RemoteDebugHub>("/hubs/remote-debug", options =>
 {
     options.AllowStatefulReconnects = true;
     options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;

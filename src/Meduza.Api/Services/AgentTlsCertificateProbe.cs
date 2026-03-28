@@ -8,11 +8,13 @@ namespace Meduza.Api.Services;
 public interface IAgentTlsCertificateProbe
 {
     Task<string?> GetExpectedTlsCertHashAsync(CancellationToken cancellationToken = default);
+    Task<string?> GetExpectedTlsCertHashAsync(string probeUrl, string cacheKey, CancellationToken cancellationToken = default);
+    void InvalidateCache(string cacheKey);
 }
 
 public sealed class AgentTlsCertificateProbe : IAgentTlsCertificateProbe
 {
-    private const string CacheKey = "AgentTlsCertHash";
+    public const string ApiCacheKey = "AgentTlsCertHash:Api";
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
 
     private readonly IConfiguration _configuration;
@@ -31,12 +33,20 @@ public sealed class AgentTlsCertificateProbe : IAgentTlsCertificateProbe
 
     public async Task<string?> GetExpectedTlsCertHashAsync(CancellationToken cancellationToken = default)
     {
-        if (_cache.TryGetValue(CacheKey, out string? cached) && !string.IsNullOrWhiteSpace(cached))
-            return cached;
-
         var probeUrl = _configuration.GetValue<string>("Security:AgentConnection:TlsCertificateProbeUrl");
         if (string.IsNullOrWhiteSpace(probeUrl))
             return null;
+
+        return await GetExpectedTlsCertHashAsync(probeUrl, ApiCacheKey, cancellationToken);
+    }
+
+    public async Task<string?> GetExpectedTlsCertHashAsync(string probeUrl, string cacheKey, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(probeUrl))
+            return null;
+
+        if (_cache.TryGetValue(cacheKey, out string? cached) && !string.IsNullOrWhiteSpace(cached))
+            return cached;
 
         X509Certificate2? capturedCert = null;
         var handler = new HttpClientHandler
@@ -73,7 +83,7 @@ public sealed class AgentTlsCertificateProbe : IAgentTlsCertificateProbe
             var hashBytes = SHA256.HashData(capturedCert.RawData);
             var hash = Convert.ToHexString(hashBytes).ToLowerInvariant();
 
-            _cache.Set(CacheKey, hash, CacheDuration);
+            _cache.Set(cacheKey, hash, CacheDuration);
             return hash;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
@@ -85,5 +95,12 @@ public sealed class AgentTlsCertificateProbe : IAgentTlsCertificateProbe
         {
             capturedCert?.Dispose();
         }
+    }
+
+    public void InvalidateCache(string cacheKey)
+    {
+        if (string.IsNullOrWhiteSpace(cacheKey))
+            return;
+        _cache.Remove(cacheKey);
     }
 }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
+using Meduza.Api.Services;
 using Meduza.Core.Configuration;
 using Meduza.Core.DTOs;
 using Meduza.Core.Entities;
@@ -46,6 +47,8 @@ public class AgentAuthController : ControllerBase
     private readonly IRedisService _redisService;
     private readonly IP2pBootstrapRepository _p2pBootstrapRepo;
     private readonly MeshCentralOptions _meshCentralOptions;
+    private readonly IAgentTlsCertificateProbe _tlsCertProbe;
+    private readonly IConfiguration _configuration;
 
     public AgentAuthController(
         IAgentRepository agentRepo,
@@ -75,7 +78,9 @@ public class AgentAuthController : ControllerBase
         IDeployTokenService deployTokenService,
         IRedisService redisService,
         IP2pBootstrapRepository p2pBootstrapRepo,
-        IOptions<MeshCentralOptions> meshCentralOptions)
+        IOptions<MeshCentralOptions> meshCentralOptions,
+        IAgentTlsCertificateProbe tlsCertProbe,
+        IConfiguration configuration)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -105,6 +110,8 @@ public class AgentAuthController : ControllerBase
         _redisService = redisService;
         _p2pBootstrapRepo = p2pBootstrapRepo;
         _meshCentralOptions = meshCentralOptions.Value;
+        _tlsCertProbe = tlsCertProbe;
+        _configuration = configuration;
     }
 
     /// <summary>
@@ -131,6 +138,25 @@ public class AgentAuthController : ControllerBase
 
         var serverConfig = await _configService.GetServerConfigAsync();
 
+        // Flags anti-MITM: informam o agent o que o servidor espera na conexão.
+        var enforceTls = _configuration.GetValue<bool>("Security:AgentConnection:EnforceTlsHashValidation");
+        var handshakeEnabled = _configuration.GetValue<bool>("Security:AgentConnection:HandshakeEnabled");
+
+        // Hash TLS do endpoint da API (SignalR) — agent usa para validar a conexão WebSocket.
+        string? apiTlsCertHash = null;
+        if (enforceTls || handshakeEnabled)
+            apiTlsCertHash = await _tlsCertProbe.GetExpectedTlsCertHashAsync(HttpContext.RequestAborted);
+
+        // Hash TLS do broker NATS WSS (quando configurado) — agent usa para TLS pinning no NATS.
+        string? natsTlsCertHash = null;
+        var natsHost = string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
+            ? serverConfig.NatsServerHostInternal
+            : serverConfig.NatsServerHostExternal;
+        var natsProbeUrl = BuildNatsProbeUrl(natsHost);
+        var natsCacheKey = BuildNatsCacheKey(natsHost);
+        if (serverConfig.NatsUseWssExternal && !string.IsNullOrWhiteSpace(natsProbeUrl) && !string.IsNullOrWhiteSpace(natsCacheKey))
+            natsTlsCertHash = await _tlsCertProbe.GetExpectedTlsCertHashAsync(natsProbeUrl, natsCacheKey, HttpContext.RequestAborted);
+
         // Payload enxuto para agent: sem metadados de heranca/bloqueio e com flag booleana de App Store.
         return Ok(new
         {
@@ -149,11 +175,54 @@ public class AgentAuthController : ControllerBase
             resolved.SiteId,
             resolved.ClientId,
             resolved.ResolvedAt,
-            NatsServerHost = string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
-                ? serverConfig.NatsServerHostInternal
-                : serverConfig.NatsServerHostExternal,
-            NatsUseWssExternal = serverConfig.NatsUseWssExternal
+            NatsServerHost = natsHost,
+            NatsUseWssExternal = serverConfig.NatsUseWssExternal,
+            // Campos anti-MITM: flags e hashes TLS para que o agent saiba o que validar.
+            EnforceTlsHashValidation = enforceTls,
+            HandshakeEnabled = handshakeEnabled,
+            ApiTlsCertHash = apiTlsCertHash,
+            NatsTlsCertHash = natsTlsCertHash
         });
+    }
+
+    /// <summary>
+    /// Reporta mismatch de hash TLS observado pelo agent.
+    /// Serve para invalidar cache e forçar novo probe no servidor.
+    /// </summary>
+    [HttpPost("me/tls-mismatch")]
+    public async Task<IActionResult> ReportTlsMismatch([FromBody] AgentTlsMismatchReport? report, CancellationToken ct)
+    {
+        if (!TryGetAuthenticatedAgentId(out _))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        if (report is null || string.IsNullOrWhiteSpace(report.Target))
+            return BadRequest(new { error = "Target is required." });
+
+        var target = report.Target.Trim().ToLowerInvariant();
+        if (target != "api" && target != "nats")
+            return BadRequest(new { error = "Target must be 'api' or 'nats'." });
+
+        string? newHash = null;
+        if (target == "api")
+        {
+            _tlsCertProbe.InvalidateCache(AgentTlsCertificateProbe.ApiCacheKey);
+            newHash = await _tlsCertProbe.GetExpectedTlsCertHashAsync(ct);
+        }
+        else
+        {
+            var serverConfig = await _configService.GetServerConfigAsync();
+            var natsHost = string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
+                ? serverConfig.NatsServerHostInternal
+                : serverConfig.NatsServerHostExternal;
+            var natsProbeUrl = BuildNatsProbeUrl(natsHost);
+            var natsCacheKey = BuildNatsCacheKey(natsHost);
+            if (!string.IsNullOrWhiteSpace(natsCacheKey))
+                _tlsCertProbe.InvalidateCache(natsCacheKey);
+            if (!string.IsNullOrWhiteSpace(natsProbeUrl) && !string.IsNullOrWhiteSpace(natsCacheKey))
+                newHash = await _tlsCertProbe.GetExpectedTlsCertHashAsync(natsProbeUrl, natsCacheKey, ct);
+        }
+
+        return Ok(new { expectedHash = newHash });
     }
 
     /// <summary>
@@ -1834,6 +1903,52 @@ public class AgentAuthController : ControllerBase
             (not null, null) => "Client",
             _ => "Site"
         };
+
+    private static string? BuildNatsProbeUrl(string? natsHost)
+    {
+        if (string.IsNullOrWhiteSpace(natsHost))
+            return null;
+
+        var cleaned = natsHost.Trim()
+            .Replace("wss://", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("ws://", "", StringComparison.OrdinalIgnoreCase);
+
+        var candidate = cleaned.Contains("://", StringComparison.Ordinal)
+            ? cleaned
+            : "https://" + cleaned;
+
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri))
+            return null;
+
+        var builder = new UriBuilder(uri)
+        {
+            Scheme = "https",
+            Port = uri.Port > 0 ? uri.Port : 443
+        };
+
+        return builder.Uri.GetLeftPart(UriPartial.Authority) + "/";
+    }
+
+    private static string? BuildNatsCacheKey(string? natsHost)
+    {
+        if (string.IsNullOrWhiteSpace(natsHost))
+            return null;
+
+        var cleaned = natsHost.Trim()
+            .Replace("wss://", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("ws://", "", StringComparison.OrdinalIgnoreCase);
+
+        var candidate = cleaned.Contains("://", StringComparison.Ordinal)
+            ? cleaned
+            : "https://" + cleaned;
+
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri))
+            return null;
+
+        var host = uri.Host.ToLowerInvariant();
+        var port = uri.Port > 0 ? uri.Port : 443;
+        return $"AgentTlsCertHash:Nats:{host}:{port}";
+    }
 }
 
 // === Agent-specific request DTOs ===
@@ -1855,6 +1970,10 @@ public record AgentMeshCentralEmbedRequest(
     int? HideMask = null,
     string? MeshNodeId = null,
     string? GotoDeviceName = null);
+
+public record AgentTlsMismatchReport(
+    string Target,
+    string? ObservedHash = null);
 
 /// <summary>
 /// Request para o agente adicionar um comentário a um ticket.
