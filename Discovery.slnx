@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Discovery.Api/Discovery.Api.csproj" />
+    <Project Path="src/Discovery.Core/Discovery.Core.csproj" />
+    <Project Path="src/Discovery.Infrastructure/Discovery.Infrastructure.csproj" />
+    <Project Path="src/Discovery.Migrations/Discovery.Migrations.csproj" />
+  </Folder>
+</Solution>

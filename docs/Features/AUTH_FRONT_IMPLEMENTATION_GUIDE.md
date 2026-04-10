@@ -39,7 +39,7 @@ O backend ainda nao expoe:
 
 ### Base path
 
-Todos os endpoints abaixo usam a API principal do Meduza.
+Todos os endpoints abaixo usam a API principal do Discovery.
 
 ### Formato JSON
 

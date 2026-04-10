@@ -1,7 +1,7 @@
 # NATS Auth Callout - Configuracao e Integracao
 
 ## Objetivo
-Habilitar autenticacao centralizada no NATS via Auth Callout, delegando a autorizacao para a API Meduza. Isso garante isolamento entre agents, clientes e sites no mesmo broker.
+Habilitar autenticacao centralizada no NATS via Auth Callout, delegando a autorizacao para a API Discovery. Isso garante isolamento entre agents, clientes e sites no mesmo broker.
 
 ## Como Funciona (Arquitetura)
 
@@ -17,7 +17,7 @@ NATS Server
     |
     | publica request JWT no subject $SYS.REQ.USER.AUTH
     v
-API Meduza (esta conectada ao NATS como subscriber)
+API Discovery (esta conectada ao NATS como subscriber)
     |
     | valida token, gera User JWT com permissoes restritas
     | responde no msg.ReplyTo (via NATS)
@@ -52,7 +52,7 @@ Em producao, troque `auth`/`auth` por credenciais fortes.
 
 ## Requisitos
 - NATS Server v2.10+ com auth_callout habilitado.
-- API Meduza rodando com o servico NATS Auth Callout habilitado.
+- API Discovery rodando com o servico NATS Auth Callout habilitado.
 - Seed da conta NATS configurado em ServerConfiguration (NatsAccountSeed).
 
 ## Teste de Conexao do NATS (API)
@@ -88,7 +88,7 @@ Observacoes:
 
 Use este modelo como base e ajuste os valores entre <>. Este exemplo cria tres contas:
 - AUTH: usada apenas para o servico de auth callout.
-- APP: conta da aplicacao (Meduza).
+- APP: conta da aplicacao (Discovery).
 - SYS: conta do sistema do NATS.
 
 ```
@@ -118,11 +118,11 @@ authorization {
 # http: 8222
 ```
 
-A API Meduza conecta com `user: auth, password: <SENHA_FORTE>` e assina `$SYS.REQ.USER.AUTH` a partir da conta AUTH. Como `auth` esta em `auth_users`, a conexao da API bypassa o callout.
+A API Discovery conecta com `user: auth, password: <SENHA_FORTE>` e assina `$SYS.REQ.USER.AUTH` a partir da conta AUTH. Como `auth` esta em `auth_users`, a conexao da API bypassa o callout.
 
 ### Passo a passo rapido
 
-1) Gere as chaves da conta NATS via a propria API Meduza (nenhuma ferramenta externa necessaria):
+1) Gere as chaves da conta NATS via a propria API Discovery (nenhuma ferramenta externa necessaria):
 
 ```
 POST /api/configurations/server/nats/generate-account-key
@@ -144,7 +144,7 @@ Resposta:
 
 2) Configure o `accountPublicKey` no nats-server.conf no campo `issuer`.
 
-3) Salve o `accountSeed` no ServerConfiguration da API Meduza via PATCH:
+3) Salve o `accountSeed` no ServerConfiguration da API Discovery via PATCH:
 
 ```http
 PATCH /api/configurations/server
@@ -162,13 +162,13 @@ Content-Type: application/json
 ```
 
 4) Configure as credenciais da API no appsettings.json:
-- `Nats:AuthUser = meduza-api`
+- `Nats:AuthUser = Discovery-api`
 - `Nats:AuthPassword = <SENHA_FORTE>`
 - `Nats:AuthCallout:Enabled = true`
 
 5) Configure a mesma senha no nats-server.conf dentro de `accounts.AUTH.users`.
 
-6) Reinicie o NATS Server e a API Meduza.
+6) Reinicie o NATS Server e a API Discovery.
 
 7) Valide a autenticacao:
 - Agent conecta no NATS usando `auth_token` com `mdz_...`
@@ -210,18 +210,18 @@ authorization {
 }
 ```
 
-3) Salve o `xKeySeed` no ServerConfiguration da API Meduza:
+3) Salve o `xKeySeed` no ServerConfiguration da API Discovery:
 - `NatsXKeySeed = <xKeySeed>` (via PATCH /api/configurations/server)
 - O seed e automaticamente encriptado em repouso.
 
-4) Reinicie o NATS Server e a API Meduza.
+4) Reinicie o NATS Server e a API Discovery.
 
 Notas:
 - Sem `NatsXKeySeed` configurado, o callout funciona normalmente em texto claro.
 - Com `NatsXKeySeed`, a API automaticamente detecta o header `Nats-Server-Xkey` e ativa o modo encriptado.
 - `NatsXKeySeed` e redacted nas respostas da API de configuracao (nunca exposto).
 
-## Configuracao da API Meduza
+## Configuracao da API Discovery
 
 `appsettings.json`:
 ```json
