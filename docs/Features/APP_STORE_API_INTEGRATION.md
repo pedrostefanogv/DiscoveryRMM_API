@@ -176,7 +176,7 @@ curl -X GET "http://localhost:5001/api/app-store/catalog/Microsoft.VisualStudio.
   "installCommand": "msiexec /i app.msi",
   "metadataJson": "{\"department\": \"Finance\", \"internal\": true}",
   "fileObjectKey": "s3://bucket/custom-app.msi",
-  "fileBucket": "meduza-apps",
+  "fileBucket": "discovery-apps",
   "filePublicUrl": "https://s3.bucket.com/custom-app.msi",
   "fileContentType": "application/x-msi",
   "fileSizeBytes": 104857600,

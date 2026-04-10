@@ -34,21 +34,21 @@ Implementar uma camada de armazenamento de objetos desacoplada de provedor (S3 A
 29. Documentar matriz de compatibilidade e limitações conhecidas por vendor.
 
 **Relevant files**
-- src/Meduza.Api/Program.cs - registrar options, provider factory, serviços de storage e fallback local para dev.
-- src/Meduza.Api/appsettings.json - seção ObjectStorage com bucket global, endpoint S3 compatível e TTL default de 24h.
-- src/Meduza.Api/appsettings.Development.json - configuração local/dev e credenciais de exemplo.
-- src/Meduza.Api/Controllers/ReportsController.cs - trocar download direto por emissão/redirect 302 para URL pré-assinada.
-- src/Meduza.Api/Controllers/TicketsController.cs - integrar upload/download de anexos ao storage abstrato.
-- src/Meduza.Api/Controllers/NotesController.cs - integrar upload/download de anexos ao storage abstrato.
-- src/Meduza.Api/Services/ReportRetentionBackgroundService.cs - retenção por object key/prefixo.
-- src/Meduza.Infrastructure/Services/ReportService.cs - substituir gravação/leitura local por object storage e metadados.
-- src/Meduza.Core/Entities/ReportExecution.cs - novos campos de storage (provider, bucket, key etc.) e compatibilidade transitória.
-- src/Meduza.Core/Interfaces/IConfigurationResolver.cs - referência para reaproveitar escopo client/site ao compor object key.
-- src/Meduza.Infrastructure/Services/ConfigurationResolver.cs - referência para resolução de escopo efetivo quando necessário.
-- src/Meduza.Migrations/Migrations/ - nova migration para campos de object storage e índices por key/client.
+- src/Discovery.Api/Program.cs - registrar options, provider factory, serviços de storage e fallback local para dev.
+- src/Discovery.Api/appsettings.json - seção ObjectStorage com bucket global, endpoint S3 compatível e TTL default de 24h.
+- src/Discovery.Api/appsettings.Development.json - configuração local/dev e credenciais de exemplo.
+- src/Discovery.Api/Controllers/ReportsController.cs - trocar download direto por emissão/redirect 302 para URL pré-assinada.
+- src/Discovery.Api/Controllers/TicketsController.cs - integrar upload/download de anexos ao storage abstrato.
+- src/Discovery.Api/Controllers/NotesController.cs - integrar upload/download de anexos ao storage abstrato.
+- src/Discovery.Api/Services/ReportRetentionBackgroundService.cs - retenção por object key/prefixo.
+- src/Discovery.Infrastructure/Services/ReportService.cs - substituir gravação/leitura local por object storage e metadados.
+- src/Discovery.Core/Entities/ReportExecution.cs - novos campos de storage (provider, bucket, key etc.) e compatibilidade transitória.
+- src/Discovery.Core/Interfaces/IConfigurationResolver.cs - referência para reaproveitar escopo client/site ao compor object key.
+- src/Discovery.Infrastructure/Services/ConfigurationResolver.cs - referência para resolução de escopo efetivo quando necessário.
+- src/Discovery.Migrations/Migrations/ - nova migration para campos de object storage e índices por key/client.
 
 **Verification**
-1. Build completo: executar dotnet build Meduza.slnx.
+1. Build completo: executar dotnet build Discovery.slnx.
 2. Teste funcional relatórios: gerar relatório, validar metadados persistidos (bucket/objectKey) e confirmar download via endpoint com redirect 302 para URL assinada.
 3. Teste funcional anexos tickets/notas: upload, persistência de metadados, download por redirect 302 e expiração após 24h.
 4. Teste de segurança: confirmar que URL direta sem assinatura não acessa objeto; confirmar bucket privado sem listagem pública.

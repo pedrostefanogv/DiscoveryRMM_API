@@ -55,14 +55,14 @@ Implementar um sistema completo de autenticação de usuários com controle de a
 └──────────────┬──────────────────────────────┘
                │
 ┌──────────────┴──────────────────────────────┐
-│     Meduza.Core (Entities + Interfaces)     │
+│     Discovery.Core (Entities + Interfaces)     │
 │  - User, UserRole, Permission, ...          │
 │  - IUserRepository, IRoleRepository, ...    │
 │  - IFido2Service, IOtpService, ...          │
 └──────────────┬──────────────────────────────┘
                │
 ┌──────────────┴──────────────────────────────┐
-│  Meduza.Infrastructure (Data + Services)    │
+│  Discovery.Infrastructure (Data + Services)    │
 │  - Repos (Dapper pattern)                   │
 │  - TokenService (JWT generation)            │
 │  - Fido2Service, OtpService                 │
@@ -493,10 +493,10 @@ User → POST /api/auth/logout
 
 ---
 
-## 8. ESTRUTURA DE PASTAS (Meduza.Core)
+## 8. ESTRUTURA DE PASTAS (Discovery.Core)
 
 ```
-src/Meduza.Core/
+src/Discovery.Core/
 ├── Entities/
 │   ├── Identity/
 │   │   ├── User.cs
@@ -540,7 +540,7 @@ src/Meduza.Core/
 
 ---
 
-## 9. ENDPOINTS PRINCIPAIS (Meduza.Api)
+## 9. ENDPOINTS PRINCIPAIS (Discovery.Api)
 
 ### Authentication
 ```

@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-Este documento descreve a integracao do agent com a API de automacao do Meduza.
+Este documento descreve a integracao do agent com a API de automacao do Discovery.
 
 Escopo deste documento:
 

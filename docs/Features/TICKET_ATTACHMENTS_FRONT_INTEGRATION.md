@@ -24,7 +24,7 @@ Campos relevantes no payload de server:
 Exemplo de atualização (PUT /api/configurations/server):
 
 {
-  "objectStorageBucketName": "meduza-files",
+  "objectStorageBucketName": "discovery-files",
   "objectStorageEndpoint": "https://s3.us-east-1.amazonaws.com",
   "objectStorageRegion": "us-east-1",
   "objectStorageAccessKey": "YOUR_ACCESS_KEY",

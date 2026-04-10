@@ -1,7 +1,7 @@
-# Plano de Acao MeshCentral - Meduza
+# Plano de Acao MeshCentral - Discovery
 
 ## Objetivo
-Consolidar o status real da integracao MeshCentral no projeto Meduza, incluindo entregas concluidas, validacoes realizadas e o que falta implementar para fechar as fases de sync, governanca e autenticacao unificada.
+Consolidar o status real da integracao MeshCentral no projeto Discovery, incluindo entregas concluidas, validacoes realizadas e o que falta implementar para fechar as fases de sync, governanca e autenticacao unificada.
 
 ## O Que Foi Feito
 
@@ -39,7 +39,7 @@ Consolidar o status real da integracao MeshCentral no projeto Meduza, incluindo 
 - Criacao real de grupo cliente/site validada no servidor MeshCentral e meshid obtido.
 
 ### 6) Sync inicial de identidade (entrega atual)
-- Implementado sync de usuario Meduza -> MeshCentral no create de usuario.
+- Implementado sync de usuario Discovery -> MeshCentral no create de usuario.
 - Implementado update remoto de nome/email com reaproveitamento de conta existente no MeshCentral.
 - Implementada reconciliacao de memberships por escopo Cliente/Site com:
   - addmeshuser para escopos atuais,
@@ -79,7 +79,7 @@ Consolidar o status real da integracao MeshCentral no projeto Meduza, incluindo 
 ### Prioridade Media
 4. Ingestao de eventos MeshCentral
 - Consumir eventos relevantes para auditoria e timeline de seguranca.
-- Registrar eventos criticos no stack de logging do Meduza.
+- Registrar eventos criticos no stack de logging do Discovery.
 
 5. Enriquecimento de inventario
 - Consultar nodes/deviceinfo para complementar visao operacional no painel.

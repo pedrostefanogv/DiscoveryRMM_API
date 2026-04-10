@@ -92,7 +92,7 @@ Observacao:
 ## Estrategia de Usuario/Senha Padrao (Temporaria)
 Aplicar apenas para componentes internos do servidor que ainda nao estiverem migrados para JWT/NKey:
 - Exemplo de usuario: meduza_internal
-- Exemplo de senha padrao inicial: Meduza@1234
+- Exemplo de senha padrao inicial: Discovery@1234
 
 Importante:
 - Trocar esse valor imediatamente em ambiente real por segredo seguro.
@@ -100,18 +100,18 @@ Importante:
 - Armazenar segredo em variavel de ambiente/secret manager.
 
 ## Arquivos Impactados (Referencia)
-- src/Meduza.Api/Program.cs
-- src/Meduza.Infrastructure/Messaging/NatsAgentMessaging.cs
-- src/Meduza.Api/Services/NatsBackgroundService.cs
-- src/Meduza.Api/Services/NatsSignalRBridge.cs
-- src/Meduza.Api/Controllers/AgentAuthController.cs
-- src/Meduza.Api/Middleware/AgentAuthMiddleware.cs
-- src/Meduza.Infrastructure/Services/AgentTokenAuthService.cs
-- src/Meduza.Api/Controllers/AgentInstallController.cs
-- src/Meduza.Infrastructure/Repositories/AgentRepository.cs
-- src/Meduza.Infrastructure/Repositories/CommandRepository.cs
-- src/Meduza.Api/appsettings.json
-- src/Meduza.Api/appsettings.Development.json
+- src/Discovery.Api/Program.cs
+- src/Discovery.Infrastructure/Messaging/NatsAgentMessaging.cs
+- src/Discovery.Api/Services/NatsBackgroundService.cs
+- src/Discovery.Api/Services/NatsSignalRBridge.cs
+- src/Discovery.Api/Controllers/AgentAuthController.cs
+- src/Discovery.Api/Middleware/AgentAuthMiddleware.cs
+- src/Discovery.Infrastructure/Services/AgentTokenAuthService.cs
+- src/Discovery.Api/Controllers/AgentInstallController.cs
+- src/Discovery.Infrastructure/Repositories/AgentRepository.cs
+- src/Discovery.Infrastructure/Repositories/CommandRepository.cs
+- src/Discovery.Api/appsettings.json
+- src/Discovery.Api/appsettings.Development.json
 
 ## Criterios de Aceite
 1. Agent A nao consegue assinar/publicar subject de Agent B.

@@ -33,7 +33,7 @@ Exemplo de create:
 	"defaultFormat": "Pdf",
 	"layoutJson": "{\"title\":\"Inventario consolidado\",\"columns\":[{\"field\":\"agentHostname\",\"header\":\"Agente\"}]}",
 	"filtersJson": "{\"clientId\":null}",
-	"createdBy": "frontend-user@meduza.local"
+	"createdBy": "frontend-user@Discovery.local"
 }
 ```
 
@@ -467,7 +467,7 @@ Payload tipico:
 {
 	"templateId": "00000000-0000-0000-0000-000000000000",
 	"filtersJson": "{\"clientId\":\"11111111-1111-1111-1111-111111111111\"}",
-	"requestedBy": "frontend-user@meduza.local"
+	"requestedBy": "frontend-user@Discovery.local"
 }
 ```
 
