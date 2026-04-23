@@ -643,7 +643,7 @@ public class CustomFieldService : ICustomFieldService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Background label re-evaluation failed after custom field value upsert (scope={Scope}, entityId={EntityId}).", scopeType, entityId);
+            _logger.LogWarning(ex, "Background label re-evaluation failed after custom field value upsert (scope={Scope}, entityId={EntityId}).", LogSanitizer.Sanitize(scopeType.ToString()), entityId);
         }
     }
 
