@@ -425,7 +425,7 @@ public class AgentUpdateService(
             "Agent update event recorded. AgentId={AgentId}, EventType={EventType}, TargetVersion={TargetVersion}",
             agentId,
             request.EventType,
-            normalizedTargetVersion);
+            LogSanitizer.Sanitize(normalizedTargetVersion));
 
         return created;
     }
