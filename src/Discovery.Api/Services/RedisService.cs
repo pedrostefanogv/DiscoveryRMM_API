@@ -1,3 +1,4 @@
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using StackExchange.Redis;
 using System.Collections.Concurrent;
@@ -28,7 +29,7 @@ public class RedisService : IRedisService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting key {Key} from Redis", key);
+            _logger.LogError(ex, "Error getting key {Key} from Redis", LogSanitizer.Sanitize(key));
             return null;
         }
     }
@@ -54,11 +55,11 @@ public class RedisService : IRedisService
             var db = _connection.GetDatabase();
             var expiry = TimeSpan.FromSeconds(expirySeconds);
             await db.StringSetAsync(key, value, expiry);
-            _logger.LogDebug("Set key {Key} in Redis with {Seconds}s expiry", key, expirySeconds);
+            _logger.LogDebug("Set key {Key} in Redis with {Seconds}s expiry", LogSanitizer.Sanitize(key), expirySeconds);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error setting key {Key} in Redis", key);
+            _logger.LogError(ex, "Error setting key {Key} in Redis", LogSanitizer.Sanitize(key));
         }
     }
 
@@ -144,11 +145,11 @@ public class RedisService : IRedisService
         {
             var subscriber = _connection.GetSubscriber();
             await subscriber.PublishAsync(RedisChannel.Literal(channel), message);
-            _logger.LogDebug("Published message to Redis channel {Channel}", channel);
+            _logger.LogDebug("Published message to Redis channel {Channel}", LogSanitizer.Sanitize(channel));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error publishing to Redis channel {Channel}", channel);
+            _logger.LogError(ex, "Error publishing to Redis channel {Channel}", LogSanitizer.Sanitize(channel));
         }
     }
 

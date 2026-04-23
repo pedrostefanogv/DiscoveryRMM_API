@@ -4,6 +4,7 @@ using System.Text;
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Data;
@@ -189,7 +190,7 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
                     "AutoTicket reused existing open ticket {TicketId} for monitoring event {MonitoringEventId} using dedupKey {DedupKey}.",
                     reusableOpenTicketId.Value,
                     monitoringEvent.Id,
-                    dedupKey);
+                    LogSanitizer.Sanitize(dedupKey));
 
                 return execution;
             }
@@ -238,7 +239,7 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
                             "AutoTicket reopened closed ticket {TicketId} for monitoring event {MonitoringEventId} using dedupKey {DedupKey}.",
                             reopenableTicket.Id,
                             monitoringEvent.Id,
-                            dedupKey);
+                            LogSanitizer.Sanitize(dedupKey));
 
                         return execution;
                     }
@@ -268,7 +269,7 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
                     _logger.LogWarning(
                         "AutoTicket rate limit reached for client {ClientId}, alertCode {AlertCode}. Limit={LimitPerHour}, monitoringEventId={MonitoringEventId}.",
                         monitoringEvent.ClientId,
-                        monitoringEvent.AlertCode,
+                        LogSanitizer.Sanitize(monitoringEvent.AlertCode),
                         _options.MaxCreatedTicketsPerHourPerAlertCode,
                         monitoringEvent.Id);
 
@@ -298,13 +299,13 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
                 ticket.Id,
                 monitoringEvent.Id,
                 decision.Rule.Id,
-                dedupKey);
+                LogSanitizer.Sanitize(dedupKey));
 
             return execution;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "AutoTicket failed for monitoring event {MonitoringEventId} ({AlertCode}).", monitoringEvent.Id, monitoringEvent.AlertCode);
+            _logger.LogError(ex, "AutoTicket failed for monitoring event {MonitoringEventId} ({AlertCode}).", monitoringEvent.Id, LogSanitizer.Sanitize(monitoringEvent.AlertCode));
             execution = await CreateExecutionAsync(
                 monitoringEvent,
                 matchedRule,

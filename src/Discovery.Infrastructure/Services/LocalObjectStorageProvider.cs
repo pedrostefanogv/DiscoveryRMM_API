@@ -1,3 +1,4 @@
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Logging;
@@ -66,7 +67,7 @@ public class LocalObjectStorageProvider : IObjectStorageService
             var checksum = ComputeChecksum(filePath);
 
             _logger.LogInformation("Uploaded object {ObjectKey} ({SizeBytes} bytes) to {FilePath}",
-                objectKey, fileInfo.Length, filePath);
+                LogSanitizer.Sanitize(objectKey), fileInfo.Length, filePath);
 
             return new StorageObject
             {
@@ -81,7 +82,7 @@ public class LocalObjectStorageProvider : IObjectStorageService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error uploading object {ObjectKey}", objectKey);
+            _logger.LogError(ex, "Error uploading object {ObjectKey}", LogSanitizer.Sanitize(objectKey));
             throw;
         }
     }
@@ -275,7 +276,7 @@ public class LocalObjectStorageProvider : IObjectStorageService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting metadata for {ObjectKey}", objectKey);
+            _logger.LogError(ex, "Error getting metadata for {ObjectKey}", LogSanitizer.Sanitize(objectKey));
             throw;
         }
     }

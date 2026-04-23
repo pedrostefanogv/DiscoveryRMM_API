@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Logging;
@@ -47,7 +48,7 @@ public class KnowledgeMcpTool(
     {
         logger.LogDebug(
             "KnowledgeMcpTool.ExecuteInternalAsync: query={Query}, clientId={ClientId}, siteId={SiteId}, max={Max}",
-            query, clientId, siteId, maxResults);
+            LogSanitizer.Sanitize(query), clientId, siteId, maxResults);
 
         try
         {
@@ -105,7 +106,7 @@ public class KnowledgeMcpTool(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Erro ao executar KnowledgeMcpTool para query={Query}", query);
+            logger.LogError(ex, "Erro ao executar KnowledgeMcpTool para query={Query}", LogSanitizer.Sanitize(query));
             return JsonSerializer.Serialize(new { found = false, error = "Erro ao consultar base de conhecimento." });
         }
     }

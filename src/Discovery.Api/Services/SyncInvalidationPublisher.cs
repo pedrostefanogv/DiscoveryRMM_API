@@ -2,6 +2,7 @@ using System.Text.Json;
 using Discovery.Api.Hubs;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Api.Services;
