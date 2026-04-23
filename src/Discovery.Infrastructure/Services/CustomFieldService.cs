@@ -695,7 +695,16 @@ public class CustomFieldService : ICustomFieldService
             throw new InvalidOperationException("Custom field options cannot contain empty values.");
 
         if (!string.IsNullOrWhiteSpace(input.ValidationRegex))
-            _ = new Regex(input.ValidationRegex.Trim(), RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        {
+            try
+            {
+                _ = new Regex(input.ValidationRegex.Trim(), RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                throw new InvalidOperationException("ValidationRegex is too complex and timed out during validation.");
+            }
+        }
     }
 
     private static string NormalizeFieldName(string name)
@@ -802,10 +811,17 @@ public class CustomFieldService : ICustomFieldService
         if (definition.MaxLength.HasValue && stringValue.Length > definition.MaxLength.Value)
             throw new InvalidOperationException("Custom field value is longer than maxLength.");
 
-        if (!string.IsNullOrWhiteSpace(definition.ValidationRegex)
-            && !Regex.IsMatch(stringValue, definition.ValidationRegex, RegexOptions.CultureInvariant))
+        if (!string.IsNullOrWhiteSpace(definition.ValidationRegex))
         {
-            throw new InvalidOperationException("Custom field value does not match validation regex.");
+            try
+            {
+                if (!Regex.IsMatch(stringValue, definition.ValidationRegex, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
+                    throw new InvalidOperationException("Custom field value does not match validation regex.");
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                throw new InvalidOperationException("Custom field validation regex timed out. The value could not be validated.");
+            }
         }
     }
 
