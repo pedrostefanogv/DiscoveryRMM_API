@@ -50,7 +50,7 @@ public class ActivityLogService : IActivityLogService
 
         var result = await _logRepo.LogAsync(log);
         _logger.LogInformation("Ticket {TicketId} assigned from {OldUser} to {NewUser} by {AssignedBy}",
-            ticketId, oldUserId, newUserId, changedByUserId);
+            LogSanitizer.Sanitize(ticketId.ToString()), LogSanitizer.Sanitize(oldUserId?.ToString()), LogSanitizer.Sanitize(newUserId?.ToString()), LogSanitizer.Sanitize(changedByUserId?.ToString()));
         
         return result;
     }

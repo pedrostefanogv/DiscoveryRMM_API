@@ -68,8 +68,8 @@ public class SyncInvalidationPublisher : ISyncInvalidationPublisher
         {
             _logger.LogError(ex,
                 "Failed to resolve agents for sync invalidation. Resource={Resource}, ScopeType={ScopeType}, ScopeId={ScopeId}",
-                resource,
-                scopeType,
+                LogSanitizer.Sanitize(resource.ToString()),
+                LogSanitizer.Sanitize(scopeType.ToString()),
                 scopeId);
             return;
         }
@@ -78,8 +78,8 @@ public class SyncInvalidationPublisher : ISyncInvalidationPublisher
         {
             _logger.LogDebug(
                 "No agents resolved for sync invalidation. Resource={Resource}, ScopeType={ScopeType}, ScopeId={ScopeId}",
-                resource,
-                scopeType,
+                LogSanitizer.Sanitize(resource.ToString()),
+                LogSanitizer.Sanitize(scopeType.ToString()),
                 scopeId);
             return;
         }
@@ -105,11 +105,11 @@ public class SyncInvalidationPublisher : ISyncInvalidationPublisher
 
         _logger.LogInformation(
             "Sync invalidation published. Resource={Resource}, ScopeType={ScopeType}, ScopeId={ScopeId}, AgentCount={AgentCount}, Revision={Revision}",
-            resource,
-            scopeType,
+            LogSanitizer.Sanitize(resource.ToString()),
+            LogSanitizer.Sanitize(scopeType.ToString()),
             scopeId,
             agentIds.Count,
-            revision);
+            LogSanitizer.Sanitize(revision));
     }
 
     private async Task<List<Guid>> ResolveAgentIdsAsync(AppApprovalScopeType scopeType, Guid? scopeId)
