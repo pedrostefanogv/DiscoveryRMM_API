@@ -1,6 +1,7 @@
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using LogLevelEnum = Discovery.Core.Enums.LogLevel;
 using Microsoft.Extensions.Logging;
@@ -82,7 +83,7 @@ public class LoggingService : ILoggingService
                 "[{Source}] [{Type}] {Message}",
                 source,
                 type,
-                message);
+                LogSanitizer.Sanitize(message));
         }
         catch (Exception ex)
         {

@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Logging;
@@ -87,7 +88,7 @@ public class AiChatService : IAiChatService
         {
             _logger.LogInformation(
                 "[{TraceId}] ProcessSyncAsync iniciado para AgentId={AgentId}, SessionId={SessionId}",
-                traceId, agentId, sessionId);
+                LogSanitizer.Sanitize(traceId), agentId, sessionId);
             
             // 1. Validar input
             ValidateUserInput(message);
@@ -372,7 +373,7 @@ public class AiChatService : IAiChatService
         {
             _logger.LogInformation(
                 "[{TraceId}] ProcessAsyncAsync iniciado para AgentId={AgentId}, SessionId={SessionId}",
-                traceId, agentId, sessionId);
+                LogSanitizer.Sanitize(traceId), agentId, sessionId);
             
             // 1. Validar input
             ValidateUserInput(message);
