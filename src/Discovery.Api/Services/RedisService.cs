@@ -43,7 +43,7 @@ public class RedisService : IRedisService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error incrementing key {Key} in Redis", key);
+            _logger.LogError(ex, "Error incrementing key {Key} in Redis", LogSanitizer.Sanitize(key));
             return 0;
         }
     }
@@ -72,7 +72,7 @@ public class RedisService : IRedisService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error setting expiry for key {Key} in Redis", key);
+            _logger.LogError(ex, "Error setting expiry for key {Key} in Redis", LogSanitizer.Sanitize(key));
             return false;
         }
     }
@@ -91,7 +91,7 @@ public class RedisService : IRedisService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting TTL for key {Key} in Redis", key);
+            _logger.LogError(ex, "Error getting TTL for key {Key} in Redis", LogSanitizer.Sanitize(key));
             return 0;
         }
     }
@@ -102,11 +102,11 @@ public class RedisService : IRedisService
         {
             var db = _connection.GetDatabase();
             await db.KeyDeleteAsync(key);
-            _logger.LogDebug("Deleted key {Key} from Redis", key);
+            _logger.LogDebug("Deleted key {Key} from Redis", LogSanitizer.Sanitize(key));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error deleting key {Key} from Redis", key);
+            _logger.LogError(ex, "Error deleting key {Key} from Redis", LogSanitizer.Sanitize(key));
         }
     }
 
@@ -130,12 +130,12 @@ public class RedisService : IRedisService
 
                 var db = _connection.GetDatabase();
                 await db.KeyDeleteAsync(keys);
-                _logger.LogDebug("Deleted {Count} Redis keys with prefix {Prefix}", keys.Length, prefix);
+                _logger.LogDebug("Deleted {Count} Redis keys with prefix {Prefix}", keys.Length, LogSanitizer.Sanitize(prefix));
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error deleting Redis keys by prefix {Prefix}", prefix);
+            _logger.LogError(ex, "Error deleting Redis keys by prefix {Prefix}", LogSanitizer.Sanitize(prefix));
         }
     }
 
@@ -159,7 +159,7 @@ public class RedisService : IRedisService
         {
             if (!_subscriptions.TryAdd(channel, handler))
             {
-                _logger.LogWarning("Already subscribed to channel {Channel}", channel);
+                _logger.LogWarning("Already subscribed to channel {Channel}", LogSanitizer.Sanitize(channel));
                 return;
             }
 
@@ -170,11 +170,11 @@ public class RedisService : IRedisService
                 handler(chan.ToString(), message.ToString());
             });
 
-            _logger.LogInformation("Subscribed to Redis channel {Channel}", channel);
+            _logger.LogInformation("Subscribed to Redis channel {Channel}", LogSanitizer.Sanitize(channel));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error subscribing to Redis channel {Channel}", channel);
+            _logger.LogError(ex, "Error subscribing to Redis channel {Channel}", LogSanitizer.Sanitize(channel));
         }
     }
 }
