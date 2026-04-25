@@ -14,8 +14,8 @@
 **Plataforma de gerenciamento remoto de endpoints (RMM) open-source**  
 construída com .NET 10, NATS e PostgreSQL.
 
-[![CI](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/ci.yml/badge.svg?branch=release)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/ci.yml)
-[![Release](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/release.yml/badge.svg)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/release.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/ci.yml?branch=release&label=CI&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/release.yml?branch=release&label=Release&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
@@ -23,6 +23,9 @@ construída com .NET 10, NATS e PostgreSQL.
 [![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)](CHANGELOG.md)
 
 </div>
+
+> [!IMPORTANT]
+> Este projeto usa IA generativa e práticas de vibe coding como parte do processo de desenvolvimento, revisão e documentação. Se você não concorda com esse tipo de processo assistido por IA, não utilize este projeto.
 
 ---
 
@@ -81,20 +84,22 @@ O agent é distribuído como **executável `.exe` para Windows** e realiza:
 
 ## ✨ Funcionalidades
 
+Os módulos abaixo estão em fase **testável / pré-estável**: disponíveis para validação, mas ainda sujeitos a ajustes antes de uma classificação estável.
+
 | Módulo | Descrição | Status |
 |--------|-----------|--------|
-| 🔐 **Autenticação** | JWT + API Keys + MFA (TOTP/FIDO2) | ✅ Estável |
-| 📦 **Inventário** | Hardware, software, rede por endpoint | ✅ Estável |
-| 💬 **Chat com IA** | OpenAI/Ollama para análise de tickets | ✅ Estável |
-| 🎫 **Auto-Tickets** | Motor automático de geração de chamados | ✅ Estável |
-| 🔧 **Campos Custom** | Campos configuráveis por entidade | ✅ Estável |
-| 🖥️ **Acesso Remoto** | MeshCentral embed + debug remoto | ✅ Estável |
-| 📊 **Relatórios** | Templates personalizáveis com exportação | ✅ Estável |
-| 🗄️ **Object Storage** | Local, MinIO e S3-compatible | ✅ Estável |
-| 🚀 **App Store** | Catálogo de apps com deploy automatizado | ✅ Estável |
-| 📡 **NATS Messaging** | Broker com auth callout e credenciais | ✅ Estável |
-| 🔭 **OpenTelemetry** | Rastreamento distribuído e métricas | ✅ Estável |
-| 🔄 **Auto-Update** | Self-update do servidor via script | ✅ Estável |
+| 🔐 **Autenticação** | JWT + API Keys + MFA (TOTP/FIDO2) | 🧪 Pré-estável |
+| 📦 **Inventário** | Hardware, software, rede por endpoint | 🧪 Pré-estável |
+| 💬 **Chat com IA** | OpenAI/Ollama para análise de tickets | 🧪 Pré-estável |
+| 🎫 **Auto-Tickets** | Motor automático de geração de chamados | 🧪 Pré-estável |
+| 🔧 **Campos Custom** | Campos configuráveis por entidade | 🧪 Pré-estável |
+| 🖥️ **Acesso Remoto** | MeshCentral embed + debug remoto | 🧪 Pré-estável |
+| 📊 **Relatórios** | Templates personalizáveis com exportação | 🧪 Pré-estável |
+| 🗄️ **Object Storage** | Local, MinIO e S3-compatible | 🧪 Pré-estável |
+| 🚀 **App Store** | Catálogo de apps com deploy automatizado | 🧪 Pré-estável |
+| 📡 **NATS Messaging** | Broker com auth callout e credenciais | 🧪 Pré-estável |
+| 🔭 **OpenTelemetry** | Rastreamento distribuído e métricas | 🧪 Pré-estável |
+| 🔄 **Auto-Update** | Self-update do servidor via script | 🧪 Pré-estável |
 
 ---
 
@@ -193,7 +198,22 @@ dotnet run --project src/Discovery.Api
 ### Instalação Linux (Produção)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/install_discovery_server.sh | bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/bootstrap_install_discovery.sh)"
+```
+
+O bootstrap clona o repositório localmente e executa todo o processo de instalação.
+
+Exemplos de canal/branch:
+
+```bash
+# Interativo: pergunta lts/release/beta/dev
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/bootstrap_install_discovery.sh)"
+
+# Direto em um canal
+DISCOVERY_RELEASE_CHANNEL=dev bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/bootstrap_install_discovery.sh)"
+
+# Com argumento explicito de branch
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/bootstrap_install_discovery.sh)" -- --branch beta
 ```
 
 > Consulte [DEPLOYMENT_OFFLINE_INSTALL.md](docs/DEPLOYMENT_OFFLINE_INSTALL.md) para instalação offline.
@@ -293,13 +313,18 @@ Distribuído sob a licença MIT. Veja [LICENSE](LICENSE) para mais informações
 **Open-source Remote Monitoring & Management (RMM) platform**  
 built with .NET 10, NATS and PostgreSQL.
 
-[![CI](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/ci.yml/badge.svg?branch=release)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/ci.yml)
-[![Release](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/release.yml/badge.svg)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/release.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/ci.yml?branch=release&label=CI&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/release.yml?branch=release&label=Release&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![NATS](https://img.shields.io/badge/NATS-2.x-27AAE1?logo=natsdotio&logoColor=white)](https://nats.io)
 [![Version](https://img.shields.io/badge/version-1.0.0-brightgreen)](CHANGELOG.md)
 
 </div>
+
+> [!IMPORTANT]
+> This project uses generative AI and vibe coding practices as part of its development, review and documentation process. If you do not agree with this AI-assisted process, do not use this project.
 
 ## About
 
@@ -324,19 +349,21 @@ The agent is distributed as a **Windows `.exe`** and handles:
 
 ## ✨ Features
 
+The modules below are **testable / pre-stable**: available for validation, but still subject to changes before a stable classification.
+
 | Module | Description | Status |
 |--------|-------------|--------|
-| 🔐 **Authentication** | JWT + API Keys + MFA (TOTP/FIDO2) | ✅ Stable |
-| 📦 **Inventory** | Hardware, software, network per endpoint | ✅ Stable |
-| 💬 **AI Chat** | OpenAI/Ollama for ticket analysis | ✅ Stable |
-| 🎫 **Auto-Tickets** | Automatic ticket generation engine | ✅ Stable |
-| 🔧 **Custom Fields** | Configurable fields per entity | ✅ Stable |
-| 🖥️ **Remote Access** | MeshCentral embed + remote debug | ✅ Stable |
-| 📊 **Reports** | Customizable templates with export | ✅ Stable |
-| 🗄️ **Object Storage** | Local, MinIO and S3-compatible | ✅ Stable |
-| 🚀 **App Store** | App catalog with automated deployment | ✅ Stable |
-| 📡 **NATS Messaging** | Broker with auth callout and credentials | ✅ Stable |
-| 🔭 **OpenTelemetry** | Distributed tracing and metrics | ✅ Stable |
+| 🔐 **Authentication** | JWT + API Keys + MFA (TOTP/FIDO2) | 🧪 Pre-stable |
+| 📦 **Inventory** | Hardware, software, network per endpoint | 🧪 Pre-stable |
+| 💬 **AI Chat** | OpenAI/Ollama for ticket analysis | 🧪 Pre-stable |
+| 🎫 **Auto-Tickets** | Automatic ticket generation engine | 🧪 Pre-stable |
+| 🔧 **Custom Fields** | Configurable fields per entity | 🧪 Pre-stable |
+| 🖥️ **Remote Access** | MeshCentral embed + remote debug | 🧪 Pre-stable |
+| 📊 **Reports** | Customizable templates with export | 🧪 Pre-stable |
+| 🗄️ **Object Storage** | Local, MinIO and S3-compatible | 🧪 Pre-stable |
+| 🚀 **App Store** | App catalog with automated deployment | 🧪 Pre-stable |
+| 📡 **NATS Messaging** | Broker with auth callout and credentials | 🧪 Pre-stable |
+| 🔭 **OpenTelemetry** | Distributed tracing and metrics | 🧪 Pre-stable |
 
 ## 🚀 Quick Start
 
@@ -352,7 +379,22 @@ dotnet run --project src/Discovery.Api
 ### Linux Install (Production)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/install_discovery_server.sh | bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/bootstrap_install_discovery.sh)"
+```
+
+The bootstrap clones the repository locally and executes the full install process.
+
+Branch/channel examples:
+
+```bash
+# Interactive: asks for lts/release/beta/dev
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/bootstrap_install_discovery.sh)"
+
+# Direct channel selection
+DISCOVERY_RELEASE_CHANNEL=dev bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/bootstrap_install_discovery.sh)"
+
+# Explicit branch argument
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/bootstrap_install_discovery.sh)" -- --branch beta
 ```
 
 ## 🤝 Contributing

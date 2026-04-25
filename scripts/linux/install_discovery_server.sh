@@ -2,11 +2,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+ORIGINAL_ARGS=("$@")
 
 NON_INTERACTIVE=0
 CONFIG_FILE=""
 UPDATE_NATS_CONFIG_ONLY=0
 INSTALL_MODE=""
+SUDO_KEEPALIVE_PID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,12 +62,164 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
 }
 
-if [[ "${EUID}" -eq 0 ]]; then
-  fail "Nao execute este instalador como root. Rode com usuario comum e sudo habilitado."
+prompt_required_value() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local secret="${3:-0}"
+  local current_value="${!var_name:-}"
+
+  if [[ -n "$current_value" ]]; then
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    fail "Variavel obrigatoria ausente para modo nao interativo: $var_name"
+  fi
+
+  local input=""
+  if [[ "$secret" -eq 1 ]]; then
+    read -r -s -p "$prompt_text: " input
+    printf '\n'
+  else
+    read -r -p "$prompt_text: " input
+  fi
+
+  [[ -n "$input" ]] || fail "Valor obrigatorio nao informado para $var_name"
+  printf -v "$var_name" '%s' "$input"
+}
+
+confirm_root_bootstrap_password() {
+  local password_already_configured="${1:-0}"
+
+  if [[ "$password_already_configured" -eq 1 || "$NON_INTERACTIVE" -eq 1 ]]; then
+    [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]] || fail "Variavel obrigatoria ausente para modo nao interativo: DISCOVERY_INSTALL_USER_PASSWORD"
+    return
+  fi
+
+  local password_confirm=""
+  read -r -s -p "Confirme a senha do usuario instalador: " password_confirm
+  printf '\n'
+
+  [[ "${DISCOVERY_INSTALL_USER_PASSWORD}" == "$password_confirm" ]] || fail "As senhas do usuario instalador nao conferem."
+}
+
+validate_installer_user_name() {
+  local user_name="$1"
+  [[ "$user_name" =~ ^[a-z_][a-z0-9_-]*\$?$ ]] || fail "Nome de usuario invalido: $user_name"
+  [[ "$user_name" != "root" ]] || fail "O usuario instalador nao pode ser root."
+}
+
+ensure_installer_user_from_root() {
+  local user_name="$1"
+  local user_password="$2"
+
+  require_cmd useradd
+  require_cmd usermod
+  require_cmd chpasswd
+  require_cmd sudo
+
+  if ! getent group sudo >/dev/null 2>&1; then
+    fail "Grupo sudo nao encontrado neste sistema. Este instalador espera uma base Debian/Ubuntu com sudo."
+  fi
+
+  if id -u "$user_name" >/dev/null 2>&1; then
+    log "Usuario instalador $user_name ja existe; ajustando senha e grupo sudo"
+  else
+    log "Criando usuario instalador $user_name"
+    useradd --create-home --shell /bin/bash "$user_name"
+  fi
+
+  printf '%s:%s\n' "$user_name" "$user_password" | chpasswd
+  usermod -aG sudo "$user_name"
+}
+
+bootstrap_root_execution() {
+  echo
+  echo "[install][aviso] O instalador foi executado como root."
+  echo "[install][aviso] Para evitar uma instalacao presa ao root, sera criado ou usado um usuario comum com sudo para continuar."
+  echo
+
+  DISCOVERY_INSTALL_USER="${DISCOVERY_INSTALL_USER:-discovery-installer}"
+  if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
+    local input_user=""
+    read -r -p "Nome do usuario instalador [$DISCOVERY_INSTALL_USER]: " input_user
+    DISCOVERY_INSTALL_USER="${input_user:-$DISCOVERY_INSTALL_USER}"
+  fi
+
+  validate_installer_user_name "$DISCOVERY_INSTALL_USER"
+  local installer_password_already_configured=0
+  [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]] && installer_password_already_configured=1
+  prompt_required_value DISCOVERY_INSTALL_USER_PASSWORD "Senha do usuario instalador" 1
+  confirm_root_bootstrap_password "$installer_password_already_configured"
+  ensure_installer_user_from_root "$DISCOVERY_INSTALL_USER" "$DISCOVERY_INSTALL_USER_PASSWORD"
+
+  local askpass_file
+  askpass_file="$(mktemp /tmp/discovery-install-sudo-askpass.XXXXXX)"
+  cat > "$askpass_file" <<'EOF'
+#!/usr/bin/env sh
+printf '%s\n' "$DISCOVERY_SUDO_ASKPASS_PASSWORD"
+EOF
+  chown "$DISCOVERY_INSTALL_USER:$DISCOVERY_INSTALL_USER" "$askpass_file"
+  chmod 700 "$askpass_file"
+
+  log "Reexecutando instalador como $DISCOVERY_INSTALL_USER"
+  set +e
+  sudo -u "$DISCOVERY_INSTALL_USER" -H \
+    env \
+      DISCOVERY_ROOT_BOOTSTRAPPED=1 \
+      DISCOVERY_INSTALL_USER="$DISCOVERY_INSTALL_USER" \
+      DISCOVERY_INSTALL_USER_PASSWORD="$DISCOVERY_INSTALL_USER_PASSWORD" \
+      DISCOVERY_SUDO_ASKPASS_PASSWORD="$DISCOVERY_INSTALL_USER_PASSWORD" \
+      SUDO_ASKPASS="$askpass_file" \
+      bash "$SCRIPT_PATH" "${ORIGINAL_ARGS[@]}"
+  local exit_code=$?
+  set -e
+
+  rm -f "$askpass_file"
+  exit "$exit_code"
+}
+
+refresh_sudo_credentials() {
+  if [[ -n "${SUDO_ASKPASS:-}" ]]; then
+    sudo -A -v >/dev/null 2>&1 || fail "sudo nao aceitou a senha do usuario instalador."
+  else
+    sudo -n -v >/dev/null 2>&1 || fail "sudo sem credencial ativa. Execute: sudo -v"
+  fi
+}
+
+start_sudo_keepalive() {
+  refresh_sudo_credentials
+  (
+    while true; do
+      sleep 60
+      if [[ -n "${SUDO_ASKPASS:-}" ]]; then
+        sudo -A -v >/dev/null 2>&1 || exit 1
+      else
+        sudo -n -v >/dev/null 2>&1 || exit 1
+      fi
+    done
+  ) &
+  SUDO_KEEPALIVE_PID="$!"
+}
+
+cleanup_sudo_keepalive() {
+  if [[ -n "${SUDO_KEEPALIVE_PID:-}" ]]; then
+    kill "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+  fi
+}
+
+cleanup_on_exit() {
+  cleanup_git_askpass
+  cleanup_sudo_keepalive
+}
+
+if [[ "${EUID}" -eq 0 && "${DISCOVERY_ROOT_BOOTSTRAPPED:-0}" != "1" ]]; then
+  bootstrap_root_execution
 fi
 
 require_cmd sudo
-sudo -n true >/dev/null 2>&1 || fail "sudo sem credencial ativa. Execute: sudo -v"
+start_sudo_keepalive
+trap cleanup_sudo_keepalive EXIT
 
 prompt_if_empty() {
   local var_name="$1"
@@ -148,6 +303,75 @@ select_operation_mode() {
       ;;
     2)
       UPDATE_NATS_CONFIG_ONLY=1
+      ;;
+    *)
+      fail "Opcao invalida: $selected_option"
+      ;;
+  esac
+}
+
+normalize_install_branch_input() {
+  local raw_branch="$1"
+  local normalized_branch
+  normalized_branch="$(printf '%s' "$raw_branch" | tr '[:upper:]' '[:lower:]')"
+
+  case "$normalized_branch" in
+    lts|release|beta|dev)
+      printf '%s' "$normalized_branch"
+      return
+      ;;
+  esac
+
+  [[ "$raw_branch" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Branch invalida: $raw_branch"
+  printf '%s' "$raw_branch"
+}
+
+select_install_branch() {
+  local requested_branch="${DISCOVERY_GIT_BRANCH:-}"
+  if [[ -z "$requested_branch" && -n "${DISCOVERY_RELEASE_CHANNEL:-}" ]]; then
+    requested_branch="$DISCOVERY_RELEASE_CHANNEL"
+  fi
+
+  if [[ -n "$requested_branch" ]]; then
+    DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$requested_branch")"
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    DISCOVERY_GIT_BRANCH="release"
+    return
+  fi
+
+  echo
+  echo "Escolha o canal/branch de instalacao:"
+  echo "1) lts"
+  echo "2) release"
+  echo "3) beta"
+  echo "4) dev"
+  echo "5) custom (digitar branch manualmente)"
+
+  local selected_option
+  read -r -p "Opcao [2]: " selected_option
+  selected_option="${selected_option:-2}"
+
+  case "$selected_option" in
+    1)
+      DISCOVERY_GIT_BRANCH="lts"
+      ;;
+    2)
+      DISCOVERY_GIT_BRANCH="release"
+      ;;
+    3)
+      DISCOVERY_GIT_BRANCH="beta"
+      ;;
+    4)
+      DISCOVERY_GIT_BRANCH="dev"
+      ;;
+    5)
+      local custom_branch
+      read -r -p "Informe a branch custom: " custom_branch
+      [[ -n "$custom_branch" ]] || fail "Branch custom nao informada"
+      DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$custom_branch")"
       ;;
     *)
       fail "Opcao invalida: $selected_option"
@@ -403,7 +627,7 @@ EOF
 
 cleanup_git_askpass() {
   if [[ -n "${ASKPASS_FILE:-}" && -f "$ASKPASS_FILE" ]]; then
-    rm -f "$ASKPASS_FILE"
+    sudo rm -f "$ASKPASS_FILE" || rm -f "$ASKPASS_FILE" || true
   fi
 }
 
@@ -722,7 +946,7 @@ main() {
   prompt_if_empty GITHUB_PAT "GitHub PAT (bootstrap, sera salvo localmente para self-update)" 1
   prompt_if_empty DISCOVERY_GIT_REPO "URL do repositorio da API"
   prompt_if_empty DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)"
-  prompt_if_empty DISCOVERY_GIT_BRANCH "Branch para instalacao/update" 0 "main"
+  select_install_branch
   prompt_if_empty ACCESS_MODE "Modo de acesso (internal/external/hybrid)" 0 "internal"
 
   normalize_access_mode
@@ -766,7 +990,7 @@ main() {
   setup_cloudflare_tunnel
   write_environment_file
 
-  trap cleanup_git_askpass EXIT
+  trap cleanup_on_exit EXIT
   setup_git_askpass
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
