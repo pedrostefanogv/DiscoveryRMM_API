@@ -83,6 +83,7 @@ choose_branch_interactive() {
 BOOTSTRAP_REPO_URL="${DISCOVERY_BOOTSTRAP_REPO_URL:-https://github.com/pedrostefanogv/DiscoveryRMM_API.git}"
 BOOTSTRAP_BRANCH="${DISCOVERY_BOOTSTRAP_BRANCH:-${DISCOVERY_RELEASE_CHANNEL:-${DISCOVERY_GIT_BRANCH:-release}}}"
 BOOTSTRAP_WORKDIR=""
+INSTALLER_RELATIVE_PATH="scripts/linux/install_discovery_server.sh"
 
 INSTALLER_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -140,11 +141,43 @@ if [[ -z "$BOOTSTRAP_WORKDIR" ]]; then
   BOOTSTRAP_WORKDIR="$(mktemp -d /tmp/discovery-bootstrap.XXXXXX)"
 fi
 
-log "Clonando repositorio em $BOOTSTRAP_WORKDIR (branch: $BOOTSTRAP_BRANCH)"
-git clone --depth 1 --branch "$BOOTSTRAP_BRANCH" "$BOOTSTRAP_REPO_URL" "$BOOTSTRAP_WORKDIR"
+clone_candidates=("$BOOTSTRAP_BRANCH")
+case "$BOOTSTRAP_BRANCH" in
+  lts|release|beta|dev)
+    for candidate in release dev beta lts; do
+      [[ "$candidate" == "$BOOTSTRAP_BRANCH" ]] && continue
+      clone_candidates+=("$candidate")
+    done
+    ;;
+esac
 
-INSTALLER_PATH="$BOOTSTRAP_WORKDIR/scripts/linux/install_discovery_server.sh"
-[[ -f "$INSTALLER_PATH" ]] || fail "Instalador nao encontrado em $INSTALLER_PATH"
+CLONED_BRANCH=""
+INSTALLER_PATH=""
+for candidate in "${clone_candidates[@]}"; do
+  rm -rf "$BOOTSTRAP_WORKDIR"
+  mkdir -p "$BOOTSTRAP_WORKDIR"
+
+  log "Tentando bootstrap do canal/branch '$candidate'"
+  if ! git clone --depth 1 --branch "$candidate" "$BOOTSTRAP_REPO_URL" "$BOOTSTRAP_WORKDIR" >/dev/null 2>&1; then
+    log "Canal/branch '$candidate' indisponivel para clone"
+    continue
+  fi
+
+  INSTALLER_PATH="$BOOTSTRAP_WORKDIR/$INSTALLER_RELATIVE_PATH"
+  if [[ ! -f "$INSTALLER_PATH" ]]; then
+    log "Instalador ausente em '$candidate' ($INSTALLER_RELATIVE_PATH)"
+    continue
+  fi
+
+  CLONED_BRANCH="$candidate"
+  break
+done
+
+[[ -n "$CLONED_BRANCH" ]] || fail "Nenhum canal/branch valido encontrado. Tentativas: ${clone_candidates[*]}"
+
+if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
+  log "Fallback aplicado: solicitado '$BOOTSTRAP_BRANCH', usando '$CLONED_BRANCH'"
+fi
 
 log "Executando instalador"
 exec bash "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"
