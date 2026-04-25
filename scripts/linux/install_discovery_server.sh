@@ -137,19 +137,20 @@ bootstrap_root_execution() {
   echo
   echo "[install][aviso] O instalador foi executado como root."
   echo "[install][aviso] Para evitar uma instalacao presa ao root, sera criado ou usado um usuario comum com sudo para continuar."
+  echo "[install][aviso] Se o usuario ja existir, ele sera reutilizado e a senha sera atualizada."
   echo
 
   DISCOVERY_INSTALL_USER="${DISCOVERY_INSTALL_USER:-discovery-installer}"
   if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
     local input_user=""
-    read -r -p "Nome do usuario instalador [$DISCOVERY_INSTALL_USER]: " input_user
+    read -r -p "Nome do usuario instalador (com sudo) [$DISCOVERY_INSTALL_USER]: " input_user
     DISCOVERY_INSTALL_USER="${input_user:-$DISCOVERY_INSTALL_USER}"
   fi
 
   validate_installer_user_name "$DISCOVERY_INSTALL_USER"
   local installer_password_already_configured=0
   [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]] && installer_password_already_configured=1
-  prompt_required_value DISCOVERY_INSTALL_USER_PASSWORD "Senha do usuario instalador" 1
+  prompt_required_value DISCOVERY_INSTALL_USER_PASSWORD "Senha do usuario instalador (sera usada para sudo)" 1
   confirm_root_bootstrap_password "$installer_password_already_configured"
   ensure_installer_user_from_root "$DISCOVERY_INSTALL_USER" "$DISCOVERY_INSTALL_USER_PASSWORD"
 
@@ -257,40 +258,44 @@ prompt_if_empty() {
   printf -v "$var_name" '%s' "$input"
 }
 
-prompt_optional_value() {
+is_valid_repo_url() {
+  local url="$1"
+  if [[ "$url" =~ ^(https?|ssh):// ]]; then
+    return 0
+  fi
+  if [[ "$url" =~ ^git@[^:]+:.+\.git$ ]]; then
+    return 0
+  fi
+  return 1
+}
+
+prompt_repo_url() {
   local var_name="$1"
   local prompt_text="$2"
-  local secret="${3:-0}"
-  local default_value="${4:-}"
   local current_value="${!var_name:-}"
 
   if [[ -n "$current_value" ]]; then
+    is_valid_repo_url "$current_value" || fail "URL invalida para $var_name: $current_value"
     return
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-    if [[ -n "$default_value" ]]; then
-      printf -v "$var_name" '%s' "$default_value"
-    fi
-    return
+    fail "Variavel obrigatoria ausente para modo nao interativo: $var_name"
   fi
 
-  local input=""
-  if [[ "$secret" -eq 1 ]]; then
-    read -r -s -p "$prompt_text" input
-    printf '\n'
-  else
-    if [[ -n "$default_value" ]]; then
-      read -r -p "$prompt_text [$default_value]: " input
-      input="${input:-$default_value}"
-    else
-      read -r -p "$prompt_text" input
+  while true; do
+    local input=""
+    read -r -p "$prompt_text: " input
+    [[ -n "$input" ]] || {
+      echo "Valor obrigatorio nao informado para $var_name" >&2
+      continue
+    }
+    if is_valid_repo_url "$input"; then
+      printf -v "$var_name" '%s' "$input"
+      return
     fi
-  fi
-
-  if [[ -n "$input" ]]; then
-    printf -v "$var_name" '%s' "$input"
-  fi
+    echo "URL invalida. Use https://.../repo.git ou git@host:org/repo.git" >&2
+  done
 }
 
 select_operation_mode() {
@@ -325,9 +330,13 @@ select_operation_mode() {
   fi
 
   echo
-  echo "Escolha a operacao:" 
+  echo "========================================"
+  echo " Discovery RMM - Modo de Operacao"
+  echo "----------------------------------------"
+  echo "Escolha o que sera executado neste momento:"
   echo "1) Instalacao completa (API + Postgres + NATS + servicos)"
   echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
+  echo "----------------------------------------"
 
   local selected_option
   read -r -p "Opcao [1]: " selected_option
@@ -383,7 +392,8 @@ select_install_branch() {
     echo "========================================"
     echo " Discovery RMM - Wizard de Instalacao"
     echo "----------------------------------------"
-    echo "Selecione o canal/branch de instalacao:"
+    echo "Selecione o canal/branch que sera clonado."
+    echo "Isso define a versao da API instalada."
     echo " 1) lts     - suporte longo prazo"
     echo " 2) release - canal estavel"
     echo " 3) beta    - novidades em teste"
@@ -507,6 +517,13 @@ load_existing_nats_defaults() {
 
 prompt_nats_configuration() {
   load_existing_nats_defaults
+  echo
+  echo "========================================"
+  echo " Mensageria (NATS)"
+  echo "----------------------------------------"
+  echo "Configure as credenciais e hosts do NATS local."
+  echo "Esses dados sao usados pela API e agentes para mensagens."
+  echo "----------------------------------------"
 
   prompt_if_empty NATS_USER "Usuario NATS" 0 "discovery_nats"
   prompt_if_empty NATS_PASSWORD "Senha NATS" 1
@@ -1007,22 +1024,52 @@ main() {
     return
   fi
 
-  prompt_optional_value GITHUB_PAT "GitHub PAT (opcional para repo publico; Enter para pular): " 1
-  prompt_if_empty DISCOVERY_GIT_REPO "URL do repositorio da API"
-  prompt_if_empty DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)"
+  echo
+  echo "========================================"
+  echo " Repositorios"
+  echo "----------------------------------------"
+  echo "Informe os repositorios Git que serao clonados."
+  echo "API: backend principal (DiscoveryRMM_API)."
+  echo "Agent: codigo do agente para build." 
+  echo "Exemplos:"
+  echo "- https://github.com/OWNER/DiscoveryRMM_API.git"
+  echo "- git@github.com:OWNER/DiscoveryRMM_API.git"
+  echo "----------------------------------------"
+  prompt_repo_url DISCOVERY_GIT_REPO "URL do repositorio da API"
+  prompt_repo_url DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)"
   select_install_branch
+
+  echo
+  echo "========================================"
+  echo " Acesso da API"
+  echo "----------------------------------------"
+  echo "internal: acesso somente na rede interna."
+  echo "external: acesso somente via Cloudflare Tunnel."
+  echo "hybrid: interno e externo ao mesmo tempo."
+  echo "----------------------------------------"
   prompt_if_empty ACCESS_MODE "Modo de acesso (internal/external/hybrid)" 0 "internal"
 
   normalize_access_mode
 
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
+    echo
+    echo "Endereco interno usado por agentes/UI na rede local."
     prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API"
   fi
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
+    echo
+    echo "Endereco externo publicado via Cloudflare (ex: api.suaempresa.com)."
     prompt_if_empty EXTERNAL_API_HOST "Hostname externo da API (Cloudflare)"
+    echo "Token do Cloudflare Tunnel para publicar a API."
     prompt_if_empty CLOUDFLARE_TUNNEL_TOKEN "Cloudflare Tunnel token" 1
   fi
 
+  echo
+  echo "========================================"
+  echo " Banco de dados (PostgreSQL)"
+  echo "----------------------------------------"
+  echo "O instalador cria o usuario e o database se nao existirem."
+  echo "----------------------------------------"
   prompt_if_empty POSTGRES_DB "Nome do database PostgreSQL" 0 "discovery"
   prompt_if_empty POSTGRES_USER "Usuario PostgreSQL" 0 "discovery_app"
   prompt_if_empty POSTGRES_PASSWORD "Senha PostgreSQL" 1
