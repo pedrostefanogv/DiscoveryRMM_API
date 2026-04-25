@@ -1052,7 +1052,7 @@ EOF
 
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
-ASPNETCORE_URLS=http://0.0.0.0:8080;https://0.0.0.0:8443
+ASPNETCORE_URLS="http://0.0.0.0:8080;https://0.0.0.0:8443"
 ConnectionStrings__DefaultConnection=Host=127.0.0.1;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
 Nats__Url=nats://${NATS_AUTH_USER}:${NATS_AUTH_PASSWORD}@127.0.0.1:4222
 Nats__AuthUser=${NATS_AUTH_USER}
@@ -1128,7 +1128,12 @@ EOF
 
 run_db_migrations() {
   log "Aplicando migracoes"
-  sudo -u discovery-api bash -c "set -a; source /etc/discovery-api/discovery.env; set +a; dotnet '${DISCOVERY_API_CURRENT}/Discovery.Migrations.dll'" || true
+  local migrations_dll="$DISCOVERY_API_SOURCE/src/Discovery.Migrations/bin/Release/net10.0/Discovery.Migrations.dll"
+  if [[ ! -f "$migrations_dll" ]]; then
+    log "Arquivo de migracoes nao encontrado: $migrations_dll"
+    return
+  fi
+  sudo -u discovery-api bash -c "set -a; source /etc/discovery-api/discovery.env; set +a; dotnet '$migrations_dll'" || true
 }
 
 show_summary() {
