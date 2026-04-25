@@ -337,6 +337,50 @@ prompt_repo_url() {
   done
 }
 
+detect_internal_ipv4() {
+  local ip_candidate=""
+
+  if command -v ip >/dev/null 2>&1; then
+    ip_candidate="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  fi
+
+  if [[ -z "$ip_candidate" ]] && command -v hostname >/dev/null 2>&1; then
+    ip_candidate="$(hostname -I 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i !~ /^127\./) {print $i; exit}}')"
+  fi
+
+  if [[ "$ip_candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf '%s' "$ip_candidate"
+  fi
+}
+
+generate_random_password() {
+  local length="${1:-24}"
+  tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$length"
+}
+
+prompt_postgres_password() {
+  if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    POSTGRES_PASSWORD="$(generate_random_password 24)"
+    log "POSTGRES_PASSWORD nao informado; gerando senha aleatoria."
+    return
+  fi
+
+  local input=""
+  read -r -s -p "Senha PostgreSQL (Enter para gerar automaticamente): " input
+  printf '\n'
+  if [[ -z "$input" ]]; then
+    POSTGRES_PASSWORD="$(generate_random_password 24)"
+    log "Senha PostgreSQL nao informada; gerada automaticamente."
+    return
+  fi
+
+  POSTGRES_PASSWORD="$input"
+}
+
 select_operation_mode() {
   if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then
     return
@@ -1078,7 +1122,13 @@ main() {
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo
     echo "Endereco interno usado por agentes/UI na rede local."
-    prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API"
+    local internal_ip
+    internal_ip="$(detect_internal_ipv4)"
+    if [[ -n "$internal_ip" ]]; then
+      prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API" 0 "$internal_ip"
+    else
+      prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API"
+    fi
   fi
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo
@@ -1093,7 +1143,7 @@ main() {
   echo "----------------------------------------"
   prompt_if_empty POSTGRES_DB "Nome do database PostgreSQL" 0 "discovery"
   prompt_if_empty POSTGRES_USER "Usuario PostgreSQL" 0 "discovery_app"
-  prompt_if_empty POSTGRES_PASSWORD "Senha PostgreSQL" 1
+  prompt_postgres_password
 
   prompt_nats_configuration
 
