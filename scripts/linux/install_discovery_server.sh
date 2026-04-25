@@ -301,6 +301,7 @@ is_valid_repo_url() {
 prompt_repo_url() {
   local var_name="$1"
   local prompt_text="$2"
+  local default_value="${3:-}"
   local current_value="${!var_name:-}"
 
   if [[ -n "$current_value" ]]; then
@@ -309,12 +310,21 @@ prompt_repo_url() {
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "$default_value" ]]; then
+      printf -v "$var_name" '%s' "$default_value"
+      return
+    fi
     fail "Variavel obrigatoria ausente para modo nao interativo: $var_name"
   fi
 
   while true; do
     local input=""
-    read -r -p "$prompt_text: " input
+    if [[ -n "$default_value" ]]; then
+      read -r -p "$prompt_text [$default_value]: " input
+      input="${input:-$default_value}"
+    else
+      read -r -p "$prompt_text: " input
+    fi
     [[ -n "$input" ]] || {
       echo "Valor obrigatorio nao informado para $var_name" >&2
       continue
@@ -1052,8 +1062,8 @@ main() {
   echo "- https://github.com/OWNER/DiscoveryRMM_API.git"
   echo "- git@github.com:OWNER/DiscoveryRMM_API.git"
   echo "----------------------------------------"
-  prompt_repo_url DISCOVERY_GIT_REPO "URL do repositorio da API"
-  prompt_repo_url DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)"
+  prompt_repo_url DISCOVERY_GIT_REPO "URL do repositorio da API" "https://github.com/pedrostefanogv/DiscoveryRMM_API"
+  prompt_repo_url DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)" "https://github.com/pedrostefanogv/DiscoveryRMM_Agent"
   select_install_branch
 
   wizard_header "Acesso da API" "$(wizard_step_label "5/7" "4/6")"
