@@ -337,6 +337,73 @@ prompt_repo_url() {
   done
 }
 
+prompt_postgres_password() {
+  if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
+    POSTGRES_PASSWORD_AUTO=0
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    POSTGRES_PASSWORD="$(generate_random_password 24)"
+    POSTGRES_PASSWORD_AUTO=1
+    log "POSTGRES_PASSWORD nao informado; gerando senha aleatoria."
+    return
+  fi
+
+  local generated_password
+  generated_password="$(generate_random_password 24)"
+  echo "Entrada oculta. Pressione Enter para usar a senha gerada automaticamente."
+  local input=""
+  read -r -s -p "Senha PostgreSQL: " input
+  printf '\n'
+  if [[ -z "$input" ]]; then
+    POSTGRES_PASSWORD="$generated_password"
+    POSTGRES_PASSWORD_AUTO=1
+    log "Senha PostgreSQL nao informada; gerada automaticamente."
+    return
+  fi
+
+  POSTGRES_PASSWORD_AUTO=0
+  POSTGRES_PASSWORD="$input"
+}
+
+confirm_installation() {
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    return
+  fi
+
+  wizard_header "Confirmacao" "$(wizard_step_label "7/7" "6/6")"
+  echo "Resumo das configuracoes selecionadas:"
+  echo "- Branch: $DISCOVERY_GIT_BRANCH"
+  echo "- Repo API: $DISCOVERY_GIT_REPO"
+  echo "- Repo Agent: $DISCOVERY_AGENT_GIT_REPO"
+  echo "- Access mode: $ACCESS_MODE"
+  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
+    echo "- Host interno: $INTERNAL_API_HOST"
+  fi
+  if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
+    echo "- Host externo: $EXTERNAL_API_HOST"
+  fi
+  echo "- PostgreSQL DB: $POSTGRES_DB"
+  echo "- PostgreSQL user: $POSTGRES_USER"
+  if [[ "${POSTGRES_PASSWORD_AUTO:-0}" -eq 1 ]]; then
+    echo "- PostgreSQL senha: gerada automaticamente (veja /etc/discovery-api/discovery.env)"
+  else
+    echo "- PostgreSQL senha: informada"
+  fi
+  echo "- NATS user: $NATS_USER"
+  echo "- NATS auth user: $NATS_AUTH_USER"
+  echo
+
+  local confirm
+  read -r -p "Confirmar e iniciar instalacao? (s/N): " confirm
+  confirm="$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$confirm" in
+    s|sim|y|yes) ;;
+    *) fail "Instalacao cancelada pelo usuario." ;;
+  esac
+}
+
 detect_internal_ipv4() {
   local ip_candidate=""
 
@@ -356,29 +423,6 @@ detect_internal_ipv4() {
 generate_random_password() {
   local length="${1:-24}"
   tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$length"
-}
-
-prompt_postgres_password() {
-  if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
-    return
-  fi
-
-  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-    POSTGRES_PASSWORD="$(generate_random_password 24)"
-    log "POSTGRES_PASSWORD nao informado; gerando senha aleatoria."
-    return
-  fi
-
-  local input=""
-  read -r -s -p "Senha PostgreSQL (Enter para gerar automaticamente): " input
-  printf '\n'
-  if [[ -z "$input" ]]; then
-    POSTGRES_PASSWORD="$(generate_random_password 24)"
-    log "Senha PostgreSQL nao informada; gerada automaticamente."
-    return
-  fi
-
-  POSTGRES_PASSWORD="$input"
 }
 
 select_operation_mode() {
@@ -1170,6 +1214,8 @@ main() {
   DISCOVERY_API_SHARED="${DISCOVERY_API_BASE}/shared"
   DISCOVERY_API_SOURCE="${DISCOVERY_API_BASE}/source"
   DISCOVERY_API_CURRENT="${DISCOVERY_API_BASE}/current"
+
+  confirm_installation
 
   install_apt_dependencies
   ensure_dotnet_sdk
