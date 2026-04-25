@@ -161,7 +161,7 @@ ensure_installer_user_from_root() {
 }
 
 bootstrap_root_execution() {
-  wizard_header "Usuario instalador (com sudo)" "1/7"
+  wizard_header "Usuario instalador (com sudo)" "1/8"
   echo "Este usuario executa o instalador e operacoes via sudo."
   echo "Se ja existir, sera reutilizado."
   echo
@@ -384,7 +384,7 @@ confirm_installation() {
     return
   fi
 
-  wizard_header "Confirmacao" "$(wizard_step_label "7/7" "6/6")"
+  wizard_header "Confirmacao" "$(wizard_step_label "8/8" "7/7")"
   echo "Resumo das configuracoes selecionadas:"
   echo "- Branch: $DISCOVERY_GIT_BRANCH"
   echo "- Repo API: $DISCOVERY_GIT_REPO"
@@ -395,6 +395,16 @@ confirm_installation() {
   fi
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo "- Host externo: $EXTERNAL_API_HOST"
+  fi
+  if [[ "${OPENAPI_ENABLED:-0}" == "1" ]]; then
+    echo "- OpenAPI/Scalar: habilitado"
+  else
+    echo "- OpenAPI/Scalar: desativado"
+  fi
+  if [[ "${OPENAPI_ENABLED:-0}" == "1" ]]; then
+    echo "- OpenAPI/Scalar: habilitado"
+  else
+    echo "- OpenAPI/Scalar: desativado"
   fi
   echo "- PostgreSQL DB: $POSTGRES_DB"
   echo "- PostgreSQL user: $POSTGRES_USER"
@@ -475,7 +485,7 @@ select_operation_mode() {
     return
   fi
 
-  wizard_header "Modo de Operacao" "$(wizard_step_label "2/7" "1/6")"
+  wizard_header "Modo de Operacao" "$(wizard_step_label "2/8" "1/7")"
   echo "Escolha o que sera executado neste momento:"
   echo "1) Instalacao completa (API + Postgres + NATS + servicos)"
   echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
@@ -531,7 +541,7 @@ select_install_branch() {
   fi
 
   while true; do
-    wizard_header "Canal/branch de instalacao" "$(wizard_step_label "4/7" "3/6")"
+    wizard_header "Canal/branch de instalacao" "$(wizard_step_label "4/8" "3/7")"
     echo "Selecione o canal/branch que sera clonado."
     echo "Isso define a versao da API instalada."
     echo " 1) lts     - suporte longo prazo"
@@ -602,6 +612,23 @@ normalize_access_mode() {
   esac
 }
 
+normalize_openapi_enabled() {
+  local normalized
+  normalized="$(printf '%s' "${OPENAPI_ENABLED:-0}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  case "$normalized" in
+    1|true|yes|y|sim|s)
+      OPENAPI_ENABLED=1
+      ;;
+    0|false|no|n|nao|"" )
+      OPENAPI_ENABLED=0
+      ;;
+    *)
+      fail "OPENAPI_ENABLED invalido: ${OPENAPI_ENABLED}. Use 1/0 (ou sim/nao)."
+      ;;
+  esac
+}
+
 validate_security_inputs() {
   if [[ -n "${POSTGRES_PASSWORD:-}" ]] && (( ${#POSTGRES_PASSWORD} < 12 )); then
     fail "POSTGRES_PASSWORD precisa ter pelo menos 12 caracteres."
@@ -667,7 +694,7 @@ load_existing_nats_defaults() {
 
 prompt_nats_configuration() {
   load_existing_nats_defaults
-  wizard_header "Mensageria (NATS)" "$(wizard_step_label "7/7" "6/6")"
+  wizard_header "Mensageria (NATS)" "$(wizard_step_label "8/8" "7/7")"
   echo "Configure as credenciais e hosts do NATS local."
   echo "Esses dados sao usados pela API e agentes para mensagens."
   echo "----------------------------------------"
@@ -1079,6 +1106,7 @@ EOF
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
 ASPNETCORE_URLS="http://0.0.0.0:8080;https://0.0.0.0:8443"
+OPENAPI__ENABLED=$( [[ "${OPENAPI_ENABLED:-0}" == "1" ]] && echo true || echo false )
 ConnectionStrings__DefaultConnection=Host=127.0.0.1;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
 Nats__Url=nats://${NATS_AUTH_USER}:${NATS_AUTH_PASSWORD}@127.0.0.1:4222
 Nats__AuthUser=${NATS_AUTH_USER}
@@ -1112,12 +1140,137 @@ EOF
 }
 
 install_selfupdate_script() {
-  local source_script="$SCRIPT_DIR/selfupdate_discovery_api.sh"
   local target_script="$DISCOVERY_OPS_DIR/selfupdate-discovery-api.sh"
 
-  [[ -f "$source_script" ]] || fail "Script de self-update nao encontrado em $source_script"
+  log "Escrevendo script de self-update em $target_script"
 
-  sudo install -m 750 -o discovery-api -g discovery-api "$source_script" "$target_script"
+  sudo tee "$target_script" >/dev/null <<'SELFUPDATE_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+log() {
+  printf '[selfupdate] %s\n' "$*"
+}
+
+fail() {
+  printf '[selfupdate][erro] %s\n' "$*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
+}
+
+require_cmd git
+require_cmd dotnet
+require_cmd flock
+
+DISCOVERY_API_BASE="${DISCOVERY_API_BASE:-/opt/discovery-api}"
+DISCOVERY_API_SOURCE="${DISCOVERY_API_SOURCE:-$DISCOVERY_API_BASE/source}"
+DISCOVERY_API_RELEASES="${DISCOVERY_API_RELEASES:-$DISCOVERY_API_BASE/releases}"
+DISCOVERY_API_CURRENT="${DISCOVERY_API_CURRENT:-$DISCOVERY_API_BASE/current}"
+DISCOVERY_API_PROJECT="${DISCOVERY_API_PROJECT:-src/Discovery.Api/Discovery.Api.csproj}"
+DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-}"
+DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-release}"
+DISCOVERY_GIT_TOKEN_FILE="${DISCOVERY_GIT_TOKEN_FILE:-/etc/discovery-api/github.token}"
+DISCOVERY_KEEP_RELEASES="${DISCOVERY_KEEP_RELEASES:-5}"
+DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-linux-x64}"
+
+LOCK_FILE="/opt/discovery-ops/selfupdate.lock"
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  log "Outro processo de self-update ja esta em execucao."
+  exit 0
+fi
+
+[[ -n "$DISCOVERY_GIT_REPO" ]] || fail "DISCOVERY_GIT_REPO nao definido."
+
+mkdir -p "$DISCOVERY_API_RELEASES"
+
+GITHUB_PAT=""
+if [[ -f "$DISCOVERY_GIT_TOKEN_FILE" ]]; then
+  GITHUB_PAT="$(tr -d '\r\n' < "$DISCOVERY_GIT_TOKEN_FILE")"
+fi
+
+ASKPASS_FILE=""
+cleanup() {
+  if [[ -n "$ASKPASS_FILE" ]]; then
+    rm -f "$ASKPASS_FILE"
+  fi
+}
+trap cleanup EXIT
+
+if [[ -n "$GITHUB_PAT" ]]; then
+  ASKPASS_FILE="$(mktemp)"
+  cat > "$ASKPASS_FILE" <<'EOF'
+#!/usr/bin/env sh
+case "$1" in
+  *Username*) printf '%s\n' "x-access-token" ;;
+  *Password*) printf '%s\n' "$GITHUB_PAT" ;;
+  *) printf '\n' ;;
+esac
+EOF
+  chmod 700 "$ASKPASS_FILE"
+  export GIT_ASKPASS="$ASKPASS_FILE"
+  export GIT_TERMINAL_PROMPT=0
+  export GITHUB_PAT
+else
+  log "Token GitHub nao informado; seguindo sem autenticacao (repo publico)"
+  export GIT_TERMINAL_PROMPT=0
+fi
+
+if [[ ! -d "$DISCOVERY_API_SOURCE/.git" ]]; then
+  log "Repositorio da API nao encontrado. Clonando em $DISCOVERY_API_SOURCE"
+  mkdir -p "$(dirname "$DISCOVERY_API_SOURCE")"
+  git clone --branch "$DISCOVERY_GIT_BRANCH" "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
+else
+  log "Buscando atualizacoes do repositorio da API"
+  git -C "$DISCOVERY_API_SOURCE" fetch origin "$DISCOVERY_GIT_BRANCH"
+fi
+
+LOCAL_REV="$(git -C "$DISCOVERY_API_SOURCE" rev-parse HEAD 2>/dev/null || true)"
+REMOTE_REV="$(git -C "$DISCOVERY_API_SOURCE" rev-parse "origin/$DISCOVERY_GIT_BRANCH")"
+
+if [[ "$LOCAL_REV" == "$REMOTE_REV" ]]; then
+  log "Sem atualizacoes no branch $DISCOVERY_GIT_BRANCH"
+  exit 0
+fi
+
+log "Atualizacao detectada. Aplicando commit $REMOTE_REV"
+git -C "$DISCOVERY_API_SOURCE" checkout "$DISCOVERY_GIT_BRANCH"
+git -C "$DISCOVERY_API_SOURCE" reset --hard "origin/$DISCOVERY_GIT_BRANCH"
+
+RELEASE_ID="$(date +%Y%m%d%H%M%S)-${REMOTE_REV:0:8}"
+NEW_RELEASE="$DISCOVERY_API_RELEASES/$RELEASE_ID"
+mkdir -p "$NEW_RELEASE"
+
+dotnet publish "$DISCOVERY_API_SOURCE/$DISCOVERY_API_PROJECT" \
+  -c Release \
+  -r "$DISCOVERY_DOTNET_RUNTIME" \
+  --self-contained false \
+  -o "$NEW_RELEASE" \
+  /p:UseAppHost=true
+
+rm -f "$NEW_RELEASE"/appsettings*.json || true
+
+[[ -x "$NEW_RELEASE/Discovery.Api" ]] || fail "Binario Discovery.Api nao gerado na release $RELEASE_ID"
+
+ln -sfn "$NEW_RELEASE" "$DISCOVERY_API_CURRENT"
+log "Release ativa atualizada para $RELEASE_ID"
+
+mapfile -t RELEASE_DIRS < <(ls -1dt "$DISCOVERY_API_RELEASES"/* 2>/dev/null || true)
+if (( ${#RELEASE_DIRS[@]} > DISCOVERY_KEEP_RELEASES )); then
+  for old_release in "${RELEASE_DIRS[@]:DISCOVERY_KEEP_RELEASES}"; do
+    rm -rf "$old_release"
+  done
+fi
+
+log "Self-update concluido com sucesso"
+SELFUPDATE_EOF
+
+  sudo chmod 750 "$target_script"
+  sudo chown discovery-api:discovery-api "$target_script"
 }
 
 write_systemd_service() {
@@ -1187,7 +1340,7 @@ main() {
     return
   fi
 
-  wizard_header "Repositorios" "$(wizard_step_label "3/7" "2/6")"
+  wizard_header "Repositorios" "$(wizard_step_label "3/8" "2/7")"
   echo "Informe os repositorios Git que serao clonados."
   echo "API: backend principal (DiscoveryRMM_API)."
   echo "Agent: codigo do agente para build." 
@@ -1199,7 +1352,7 @@ main() {
   prompt_repo_url DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)" "https://github.com/pedrostefanogv/DiscoveryRMM_Agent"
   select_install_branch
 
-  wizard_header "Acesso da API" "$(wizard_step_label "5/7" "4/6")"
+  wizard_header "Acesso da API" "$(wizard_step_label "5/8" "4/7")"
   echo "1) internal - acesso somente na rede interna."
   echo "2) external - acesso somente via Cloudflare Tunnel."
   echo "3) hybrid   - interno e externo ao mesmo tempo."
@@ -1227,7 +1380,14 @@ main() {
     prompt_if_empty CLOUDFLARE_TUNNEL_TOKEN "Cloudflare Tunnel token" 1
   fi
 
-  wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "6/7" "5/6")"
+  wizard_header "Documentacao OpenAPI (Scalar)" "$(wizard_step_label "6/8" "5/7")"
+  echo "Habilite ou nao a documentacao OpenAPI (Scalar) na API."
+  echo "Se desativado, os endpoints /openapi e /scalar ficam indisponiveis."
+  echo "----------------------------------------"
+  prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI/Scalar? (1/0)" 0 "0"
+  normalize_openapi_enabled
+
+  wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "7/8" "6/7")"
   echo "O instalador cria o usuario e o database se nao existirem."
   echo "----------------------------------------"
   prompt_if_empty POSTGRES_DB "Nome do database PostgreSQL" 0 "discovery"
