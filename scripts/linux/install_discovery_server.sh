@@ -169,7 +169,7 @@ bootstrap_root_execution() {
   echo "[install][aviso] Se o usuario ja existir, ele sera reutilizado e a senha sera atualizada."
   echo
 
-  DISCOVERY_INSTALL_USER="${DISCOVERY_INSTALL_USER:-discovery-installer}"
+  DISCOVERY_INSTALL_USER="${DISCOVERY_INSTALL_USER:-discovery}"
   if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
     local input_user=""
     read -r -p "Nome do usuario instalador (com sudo) [$DISCOVERY_INSTALL_USER]: " input_user
