@@ -1,0 +1,211 @@
+name: Security Scanning
+
+on:
+  push:
+    branches:
+      - release
+      - beta
+      - lts
+      - dev
+      - security/**
+      - hotfix/**
+  pull_request:
+    branches:
+      - release
+      - beta
+      - lts
+      - dev
+  schedule:
+    # Roda toda segunda-feira às 08:00 UTC em todos os branches principais
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 1. CodeQL — análise estática de vulnerabilidades (.NET/C#)
+  # ─────────────────────────────────────────────────────────────────────────────
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: csharp
+          # Queries adicionais: security-and-quality inclui CWE-117, injection, etc.
+          queries: security-and-quality
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore Discovery.slnx
+
+      - name: Build for CodeQL
+        run: dotnet build Discovery.slnx --configuration Release --no-restore
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:csharp'
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 2. Dependency Review — detecta vulnerabilidades em dependências NuGet
+  #    Roda apenas em PRs para os branches principais
+  # ─────────────────────────────────────────────────────────────────────────────
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          # Bloqueia PRs que introduzem pacotes com CVEs de alta/crítica severidade
+          fail-on-severity: high
+          # Permite licenças permissivas
+          allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, 0BSD
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 3. Trivy — scan de dependências NuGet por CVEs (SBOM + relatório)
+  # ─────────────────────────────────────────────────────────────────────────────
+  trivy:
+    name: Trivy Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy (SARIF output)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 4. Secret scanning com Gitleaks — detecta chaves/tokens commitados
+  # ─────────────────────────────────────────────────────────────────────────────
+  gitleaks:
+    name: Secret Scanning (Gitleaks)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 5. Resumo de segurança — consolida resultados e comenta em PRs
+  # ─────────────────────────────────────────────────────────────────────────────
+  security-summary:
+    name: Security Summary
+    needs: [codeql, trivy, gitleaks]
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'pull_request'
+
+    steps:
+      - name: Summarize results
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const jobs = {
+              'CodeQL':    '${{ needs.codeql.result }}',
+              'Trivy':     '${{ needs.trivy.result }}',
+              'Gitleaks':  '${{ needs.gitleaks.result }}'
+            };
+
+            const icon = r => r === 'success' ? '✅' : r === 'skipped' ? '⏭️' : '❌';
+            const rows = Object.entries(jobs)
+              .map(([name, result]) => `| ${icon(result)} **${name}** | \`${result}\` |`)
+              .join('\n');
+
+            const allPassed = Object.values(jobs).every(r => r === 'success' || r === 'skipped');
+            const header = allPassed
+              ? '## ✅ Security Scan — All checks passed'
+              : '## ❌ Security Scan — Issues found';
+
+            const body = `${header}
+
+| Tool | Result |
+|------|--------|
+${rows}
+
+> Branch: \`${{ github.head_ref }}\` → \`${{ github.base_ref }}\`
+> Commit: \`${{ github.sha }}\`
+> [View full Security tab](https://github.com/${{ github.repository }}/security)
+`;
+
+            // Atualiza comentário existente ou cria um novo
+            const { data: comments } = await github.rest.issues.listComments({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            const existing = comments.find(c =>
+              c.user.login === 'github-actions[bot]' &&
+              c.body.includes('Security Scan')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                comment_id: existing.id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body,
+              });
+            }
