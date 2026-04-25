@@ -62,6 +62,32 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
 }
 
+wizard_step_label() {
+  local step_root="$1"
+  local step_nonroot="$2"
+  if [[ "${DISCOVERY_ROOT_BOOTSTRAPPED:-0}" == "1" ]]; then
+    printf '%s' "$step_root"
+    return
+  fi
+  printf '%s' "$step_nonroot"
+}
+
+wizard_header() {
+  local title="$1"
+  local step_label="${2:-}"
+
+  echo
+  echo "========================================"
+  if [[ -n "$step_label" ]]; then
+    echo " Discovery RMM - Etapa $step_label"
+  else
+    echo " Discovery RMM - Wizard"
+  fi
+  echo "----------------------------------------"
+  echo " $title"
+  echo "----------------------------------------"
+}
+
 prompt_required_value() {
   local var_name="$1"
   local prompt_text="$2"
@@ -134,6 +160,9 @@ ensure_installer_user_from_root() {
 }
 
 bootstrap_root_execution() {
+  wizard_header "Usuario instalador (com sudo)" "1/7"
+  echo "Este usuario executa o instalador e operacoes via sudo."
+  echo "Se ja existir, sera reutilizado."
   echo
   echo "[install][aviso] O instalador foi executado como root."
   echo "[install][aviso] Para evitar uma instalacao presa ao root, sera criado ou usado um usuario comum com sudo para continuar."
@@ -329,10 +358,7 @@ select_operation_mode() {
     return
   fi
 
-  echo
-  echo "========================================"
-  echo " Discovery RMM - Modo de Operacao"
-  echo "----------------------------------------"
+  wizard_header "Modo de Operacao" "$(wizard_step_label "2/7" "1/6")"
   echo "Escolha o que sera executado neste momento:"
   echo "1) Instalacao completa (API + Postgres + NATS + servicos)"
   echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
@@ -388,10 +414,7 @@ select_install_branch() {
   fi
 
   while true; do
-    echo
-    echo "========================================"
-    echo " Discovery RMM - Wizard de Instalacao"
-    echo "----------------------------------------"
+    wizard_header "Canal/branch de instalacao" "$(wizard_step_label "4/7" "3/6")"
     echo "Selecione o canal/branch que sera clonado."
     echo "Isso define a versao da API instalada."
     echo " 1) lts     - suporte longo prazo"
@@ -517,10 +540,7 @@ load_existing_nats_defaults() {
 
 prompt_nats_configuration() {
   load_existing_nats_defaults
-  echo
-  echo "========================================"
-  echo " Mensageria (NATS)"
-  echo "----------------------------------------"
+  wizard_header "Mensageria (NATS)" "$(wizard_step_label "7/7" "6/6")"
   echo "Configure as credenciais e hosts do NATS local."
   echo "Esses dados sao usados pela API e agentes para mensagens."
   echo "----------------------------------------"
@@ -1024,10 +1044,7 @@ main() {
     return
   fi
 
-  echo
-  echo "========================================"
-  echo " Repositorios"
-  echo "----------------------------------------"
+  wizard_header "Repositorios" "$(wizard_step_label "3/7" "2/6")"
   echo "Informe os repositorios Git que serao clonados."
   echo "API: backend principal (DiscoveryRMM_API)."
   echo "Agent: codigo do agente para build." 
@@ -1039,10 +1056,7 @@ main() {
   prompt_repo_url DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)"
   select_install_branch
 
-  echo
-  echo "========================================"
-  echo " Acesso da API"
-  echo "----------------------------------------"
+  wizard_header "Acesso da API" "$(wizard_step_label "5/7" "4/6")"
   echo "internal: acesso somente na rede interna."
   echo "external: acesso somente via Cloudflare Tunnel."
   echo "hybrid: interno e externo ao mesmo tempo."
@@ -1064,10 +1078,7 @@ main() {
     prompt_if_empty CLOUDFLARE_TUNNEL_TOKEN "Cloudflare Tunnel token" 1
   fi
 
-  echo
-  echo "========================================"
-  echo " Banco de dados (PostgreSQL)"
-  echo "----------------------------------------"
+  wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "6/7" "5/6")"
   echo "O instalador cria o usuario e o database se nao existirem."
   echo "----------------------------------------"
   prompt_if_empty POSTGRES_DB "Nome do database PostgreSQL" 0 "discovery"
