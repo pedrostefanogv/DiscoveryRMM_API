@@ -1024,7 +1024,9 @@ publish_api() {
   sudo -u discovery-api rm -f "$release_dir"/appsettings*.json || true
   sudo -u discovery-api ln -sfn "$release_dir" "$DISCOVERY_API_CURRENT"
 
-  [[ -x "$release_dir/Discovery.Api" ]] || fail "Binario Discovery.Api nao gerado"
+  if ! sudo -u discovery-api test -x "$release_dir/Discovery.Api"; then
+    fail "Binario Discovery.Api nao gerado"
+  fi
 }
 
 write_environment_file() {
