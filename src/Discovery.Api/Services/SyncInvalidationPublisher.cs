@@ -70,7 +70,7 @@ public class SyncInvalidationPublisher : ISyncInvalidationPublisher
                 "Failed to resolve agents for sync invalidation. Resource={Resource}, ScopeType={ScopeType}, ScopeId={ScopeId}",
                 LogSanitizer.Sanitize(resource.ToString()),
                 LogSanitizer.Sanitize(scopeType.ToString()),
-                scopeId);
+                LogSanitizer.Sanitize(scopeId?.ToString()));
             return;
         }
 
@@ -80,7 +80,7 @@ public class SyncInvalidationPublisher : ISyncInvalidationPublisher
                 "No agents resolved for sync invalidation. Resource={Resource}, ScopeType={ScopeType}, ScopeId={ScopeId}",
                 LogSanitizer.Sanitize(resource.ToString()),
                 LogSanitizer.Sanitize(scopeType.ToString()),
-                scopeId);
+                LogSanitizer.Sanitize(scopeId?.ToString()));
             return;
         }
 
@@ -107,7 +107,7 @@ public class SyncInvalidationPublisher : ISyncInvalidationPublisher
             "Sync invalidation published. Resource={Resource}, ScopeType={ScopeType}, ScopeId={ScopeId}, AgentCount={AgentCount}, Revision={Revision}",
             LogSanitizer.Sanitize(resource.ToString()),
             LogSanitizer.Sanitize(scopeType.ToString()),
-            scopeId,
+            LogSanitizer.Sanitize(scopeId?.ToString()),
             agentIds.Count,
             LogSanitizer.Sanitize(revision));
     }

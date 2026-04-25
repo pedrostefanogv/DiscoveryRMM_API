@@ -88,7 +88,7 @@ public class AiChatService : IAiChatService
         {
             _logger.LogInformation(
                 "[{TraceId}] ProcessSyncAsync iniciado para AgentId={AgentId}, SessionId={SessionId}",
-                LogSanitizer.Sanitize(traceId), agentId, sessionId);
+                LogSanitizer.Sanitize(traceId), agentId.ToString("D"), LogSanitizer.Sanitize(sessionId?.ToString()));
             
             // 1. Validar input
             ValidateUserInput(message);
@@ -373,7 +373,7 @@ public class AiChatService : IAiChatService
         {
             _logger.LogInformation(
                 "[{TraceId}] ProcessAsyncAsync iniciado para AgentId={AgentId}, SessionId={SessionId}",
-                LogSanitizer.Sanitize(traceId), agentId, sessionId);
+                LogSanitizer.Sanitize(traceId), agentId.ToString("D"), LogSanitizer.Sanitize(sessionId?.ToString()));
             
             // 1. Validar input
             ValidateUserInput(message);
