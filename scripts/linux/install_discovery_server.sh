@@ -342,41 +342,53 @@ select_install_branch() {
     return
   fi
 
-  echo
-  echo "Escolha o canal/branch de instalacao:"
-  echo "1) lts"
-  echo "2) release"
-  echo "3) beta"
-  echo "4) dev"
-  echo "5) custom (digitar branch manualmente)"
+  while true; do
+    echo
+    echo "Escolha o canal/branch de instalacao:"
+    echo "1) lts"
+    echo "2) release"
+    echo "3) beta"
+    echo "4) dev"
+    echo "5) custom (digitar branch manualmente)"
 
-  local selected_option
-  read -r -p "Opcao [2]: " selected_option
-  selected_option="${selected_option:-2}"
+    local selected_option
+    read -r -p "Opcao [2]: " selected_option
+    selected_option="${selected_option:-2}"
+    selected_option="$(printf '%s' "$selected_option" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
-  case "$selected_option" in
-    1)
-      DISCOVERY_GIT_BRANCH="lts"
-      ;;
-    2)
-      DISCOVERY_GIT_BRANCH="release"
-      ;;
-    3)
-      DISCOVERY_GIT_BRANCH="beta"
-      ;;
-    4)
-      DISCOVERY_GIT_BRANCH="dev"
-      ;;
-    5)
-      local custom_branch
-      read -r -p "Informe a branch custom: " custom_branch
-      [[ -n "$custom_branch" ]] || fail "Branch custom nao informada"
-      DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$custom_branch")"
-      ;;
-    *)
-      fail "Opcao invalida: $selected_option"
-      ;;
-  esac
+    case "$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]')" in
+      1|lts)
+        DISCOVERY_GIT_BRANCH="lts"
+        return
+        ;;
+      2|release)
+        DISCOVERY_GIT_BRANCH="release"
+        return
+        ;;
+      3|beta)
+        DISCOVERY_GIT_BRANCH="beta"
+        return
+        ;;
+      4|dev)
+        DISCOVERY_GIT_BRANCH="dev"
+        return
+        ;;
+      5|custom)
+        local custom_branch
+        read -r -p "Informe a branch custom: " custom_branch
+        custom_branch="$(printf '%s' "$custom_branch" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -n "$custom_branch" ]] || {
+          echo "Branch custom nao informada. Tente novamente." >&2
+          continue
+        }
+        DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$custom_branch")"
+        return
+        ;;
+      *)
+        echo "Opcao invalida: $selected_option. Use 1-5 ou o nome da branch (lts/release/beta/dev)." >&2
+        ;;
+    esac
+  done
 }
 
 normalize_access_mode() {

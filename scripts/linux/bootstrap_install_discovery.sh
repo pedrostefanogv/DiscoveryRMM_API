@@ -31,31 +31,53 @@ normalize_branch() {
 }
 
 choose_branch_interactive() {
-  echo
-  echo "Escolha o canal/branch para bootstrap:"
-  echo "1) lts"
-  echo "2) release"
-  echo "3) beta"
-  echo "4) dev"
-  echo "5) custom"
+  while true; do
+    echo >&2
+    echo "Escolha o canal/branch para bootstrap:" >&2
+    echo "1) lts" >&2
+    echo "2) release" >&2
+    echo "3) beta" >&2
+    echo "4) dev" >&2
+    echo "5) custom" >&2
 
-  local selected_option
-  read -r -p "Opcao [2]: " selected_option
-  selected_option="${selected_option:-2}"
+    local selected_option
+    read -r -p "Opcao [2]: " selected_option
+    selected_option="${selected_option:-2}"
+    selected_option="$(printf '%s' "$selected_option" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
-  case "$selected_option" in
-    1) printf 'lts' ;;
-    2) printf 'release' ;;
-    3) printf 'beta' ;;
-    4) printf 'dev' ;;
-    5)
-      local custom_branch
-      read -r -p "Informe a branch custom: " custom_branch
-      [[ -n "$custom_branch" ]] || fail "Branch custom nao informada"
-      normalize_branch "$custom_branch"
-      ;;
-    *) fail "Opcao invalida: $selected_option" ;;
-  esac
+    case "$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]')" in
+      1|lts)
+        printf 'lts'
+        return
+        ;;
+      2|release)
+        printf 'release'
+        return
+        ;;
+      3|beta)
+        printf 'beta'
+        return
+        ;;
+      4|dev)
+        printf 'dev'
+        return
+        ;;
+      5|custom)
+        local custom_branch
+        read -r -p "Informe a branch custom: " custom_branch
+        custom_branch="$(printf '%s' "$custom_branch" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -n "$custom_branch" ]] || {
+          echo "Branch custom nao informada. Tente novamente." >&2
+          continue
+        }
+        printf '%s' "$(normalize_branch "$custom_branch")"
+        return
+        ;;
+      *)
+        echo "Opcao invalida: $selected_option. Use 1-5 ou o nome da branch (lts/release/beta/dev)." >&2
+        ;;
+    esac
+  done
 }
 
 BOOTSTRAP_REPO_URL="${DISCOVERY_BOOTSTRAP_REPO_URL:-https://github.com/pedrostefanogv/DiscoveryRMM_API.git}"
