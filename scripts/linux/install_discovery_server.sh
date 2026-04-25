@@ -257,6 +257,42 @@ prompt_if_empty() {
   printf -v "$var_name" '%s' "$input"
 }
 
+prompt_optional_value() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local secret="${3:-0}"
+  local default_value="${4:-}"
+  local current_value="${!var_name:-}"
+
+  if [[ -n "$current_value" ]]; then
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "$default_value" ]]; then
+      printf -v "$var_name" '%s' "$default_value"
+    fi
+    return
+  fi
+
+  local input=""
+  if [[ "$secret" -eq 1 ]]; then
+    read -r -s -p "$prompt_text" input
+    printf '\n'
+  else
+    if [[ -n "$default_value" ]]; then
+      read -r -p "$prompt_text [$default_value]: " input
+      input="${input:-$default_value}"
+    else
+      read -r -p "$prompt_text" input
+    fi
+  fi
+
+  if [[ -n "$input" ]]; then
+    printf -v "$var_name" '%s' "$input"
+  fi
+}
+
 select_operation_mode() {
   if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then
     return
@@ -625,6 +661,11 @@ create_directories() {
 }
 
 setup_git_askpass() {
+  if [[ -z "${GITHUB_PAT:-}" ]]; then
+    log "GITHUB_PAT vazio; seguindo sem autenticacao GitHub (repo publico)"
+    return
+  fi
+
   local askpass_tmp
   askpass_tmp="$(mktemp)"
   cat > "$askpass_tmp" <<'EOF'
@@ -656,10 +697,12 @@ clone_or_update_repo() {
   local -a git_env
   git_env=(
     env
-    "GIT_ASKPASS=$GIT_ASKPASS"
     "GIT_TERMINAL_PROMPT=0"
-    "GITHUB_PAT=$GITHUB_PAT"
   )
+
+  if [[ -n "${GITHUB_PAT:-}" ]]; then
+    git_env+=("GIT_ASKPASS=$GIT_ASKPASS" "GITHUB_PAT=$GITHUB_PAT")
+  fi
 
   if [[ ! -d "$repo_dir/.git" ]]; then
     log "Clonando repositorio: $repo_url"
@@ -882,6 +925,9 @@ ${GITHUB_PAT}
 EOF
   sudo chmod 640 /etc/discovery-api/github.token
   sudo chown root:discovery-api /etc/discovery-api/github.token
+  if [[ -z "${GITHUB_PAT:-}" ]]; then
+    sudo rm -f /etc/discovery-api/github.token || true
+  fi
 }
 
 install_selfupdate_script() {
@@ -961,7 +1007,7 @@ main() {
     return
   fi
 
-  prompt_if_empty GITHUB_PAT "GitHub PAT (bootstrap, sera salvo localmente para self-update)" 1
+  prompt_optional_value GITHUB_PAT "GitHub PAT (opcional para repo publico; Enter para pular): " 1
   prompt_if_empty DISCOVERY_GIT_REPO "URL do repositorio da API"
   prompt_if_empty DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)"
   select_install_branch
