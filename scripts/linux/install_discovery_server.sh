@@ -1135,7 +1135,7 @@ EOF
 run_db_migrations() {
   log "Aplicando migracoes"
   local migrations_dll="$DISCOVERY_API_SOURCE/src/Discovery.Migrations/bin/Release/net10.0/Discovery.Migrations.dll"
-  if [[ ! -f "$migrations_dll" ]]; then
+  if ! sudo test -f "$migrations_dll"; then
     log "Arquivo de migracoes nao encontrado: $migrations_dll"
     return
   fi
