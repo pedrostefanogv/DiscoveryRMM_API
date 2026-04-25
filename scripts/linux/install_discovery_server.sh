@@ -750,7 +750,14 @@ install_apt_dependencies() {
     openssl \
     postgresql \
     postgresql-contrib \
+    redis-server \
     nats-server
+}
+
+setup_redis() {
+  log "Configurando Redis"
+  sudo systemctl enable redis-server
+  sudo systemctl restart redis-server
 }
 
 ensure_pgvector_package() {
@@ -1251,6 +1258,7 @@ main() {
   create_directories
 
   setup_postgres
+  setup_redis
   setup_nats
   setup_internal_certificate
   setup_cloudflare_tunnel
