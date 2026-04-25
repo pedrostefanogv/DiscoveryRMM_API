@@ -422,7 +422,14 @@ detect_internal_ipv4() {
 
 generate_random_password() {
   local length="${1:-24}"
-  tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$length"
+  local generated
+
+  set +o pipefail
+  generated="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$length")"
+  set -o pipefail
+
+  [[ -n "$generated" ]] || fail "Nao foi possivel gerar senha aleatoria."
+  printf '%s' "$generated"
 }
 
 select_operation_mode() {
