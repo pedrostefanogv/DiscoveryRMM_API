@@ -339,6 +339,17 @@ prompt_repo_url() {
 }
 
 prompt_postgres_password() {
+  if [[ -z "${POSTGRES_PASSWORD:-}" ]] && sudo test -f /etc/discovery-api/discovery.env; then
+    local existing_password
+    existing_password="$(sudo sed -n 's/^ConnectionStrings__DefaultConnection=.*Password=\([^;]*\).*/\1/p' /etc/discovery-api/discovery.env | head -n 1)"
+    if [[ -n "$existing_password" ]]; then
+      POSTGRES_PASSWORD="$existing_password"
+      POSTGRES_PASSWORD_AUTO=0
+      log "Senha PostgreSQL carregada do discovery.env existente."
+      return
+    fi
+  fi
+
   if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
     POSTGRES_PASSWORD_AUTO=0
     return
@@ -891,6 +902,8 @@ setup_postgres() {
 
   if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${escaped_db_user}'" | grep -q 1; then
     sudo -u postgres psql -c "CREATE USER \"${POSTGRES_USER}\" WITH PASSWORD '${escaped_db_password}';"
+  else
+    sudo -u postgres psql -c "ALTER USER \"${POSTGRES_USER}\" WITH PASSWORD '${escaped_db_password}';"
   fi
 
   if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${escaped_db_name}'" | grep -q 1; then
