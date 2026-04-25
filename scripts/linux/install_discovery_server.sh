@@ -857,8 +857,8 @@ clone_or_update_repo() {
     git_env+=("GIT_ASKPASS=$GIT_ASKPASS" "GITHUB_PAT=$GITHUB_PAT")
   fi
 
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    if [[ -d "$repo_dir" ]]; then
+  if ! sudo test -d "$repo_dir/.git"; then
+    if sudo test -d "$repo_dir"; then
       local backup_dir="${repo_dir}.bak-$(date +%Y%m%d%H%M%S)"
       log "Diretorio $repo_dir sem .git; movendo para $backup_dir"
       sudo mv "$repo_dir" "$backup_dir"
