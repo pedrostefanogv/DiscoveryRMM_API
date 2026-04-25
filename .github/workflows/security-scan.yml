@@ -106,15 +106,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Trivy
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
       - name: Run Trivy (SARIF output)
-        uses: aquasecurity/trivy-action@0.30.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH,MEDIUM
-          ignore-unfixed: true
+        shell: bash
+        run: |
+          trivy fs . \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH,MEDIUM \
+            --ignore-unfixed
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
@@ -168,19 +177,17 @@ jobs:
 
             const allPassed = Object.values(jobs).every(r => r === 'success' || r === 'skipped');
             const header = allPassed
-              ? '## ✅ Security Scan — All checks passed'
-              : '## ❌ Security Scan — Issues found';
+              ? '## \u2705 Security Scan \u2014 All checks passed'
+              : '## \u274C Security Scan \u2014 Issues found';
 
-            const body = `${header}
+            const table = '| Tool | Result |\n|------|--------|\n' + rows;
+            const meta = [
+              '> Branch: `${{ github.head_ref }}` \u2192 `${{ github.base_ref }}`',
+              '> Commit: `${{ github.sha }}`',
+              '> [View full Security tab](https://github.com/${{ github.repository }}/security)'
+            ].join('\n');
 
-| Tool | Result |
-|------|--------|
-${rows}
-
-> Branch: \`${{ github.head_ref }}\` → \`${{ github.base_ref }}\`
-> Commit: \`${{ github.sha }}\`
-> [View full Security tab](https://github.com/${{ github.repository }}/security)
-`;
+            const body = header + '\n\n' + table + '\n\n' + meta;
 
             // Atualiza comentário existente ou cria um novo
             const { data: comments } = await github.rest.issues.listComments({
