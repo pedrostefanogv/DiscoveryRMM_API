@@ -38,20 +38,25 @@ if ! flock -n 9; then
 fi
 
 [[ -n "$DISCOVERY_GIT_REPO" ]] || fail "DISCOVERY_GIT_REPO nao definido."
-[[ -f "$DISCOVERY_GIT_TOKEN_FILE" ]] || fail "Arquivo de token nao encontrado: $DISCOVERY_GIT_TOKEN_FILE"
 
 mkdir -p "$DISCOVERY_API_RELEASES"
 
-GITHUB_PAT="$(tr -d '\r\n' < "$DISCOVERY_GIT_TOKEN_FILE")"
-[[ -n "$GITHUB_PAT" ]] || fail "Token GitHub vazio em $DISCOVERY_GIT_TOKEN_FILE"
+GITHUB_PAT=""
+if [[ -f "$DISCOVERY_GIT_TOKEN_FILE" ]]; then
+  GITHUB_PAT="$(tr -d '\r\n' < "$DISCOVERY_GIT_TOKEN_FILE")"
+fi
 
-ASKPASS_FILE="$(mktemp)"
+ASKPASS_FILE=""
 cleanup() {
-  rm -f "$ASKPASS_FILE"
+  if [[ -n "$ASKPASS_FILE" ]]; then
+    rm -f "$ASKPASS_FILE"
+  fi
 }
 trap cleanup EXIT
 
-cat > "$ASKPASS_FILE" <<'EOF'
+if [[ -n "$GITHUB_PAT" ]]; then
+  ASKPASS_FILE="$(mktemp)"
+  cat > "$ASKPASS_FILE" <<'EOF'
 #!/usr/bin/env sh
 case "$1" in
   *Username*) printf '%s\n' "x-access-token" ;;
@@ -59,11 +64,15 @@ case "$1" in
   *) printf '\n' ;;
 esac
 EOF
-chmod 700 "$ASKPASS_FILE"
+  chmod 700 "$ASKPASS_FILE"
 
-export GIT_ASKPASS="$ASKPASS_FILE"
-export GIT_TERMINAL_PROMPT=0
-export GITHUB_PAT
+  export GIT_ASKPASS="$ASKPASS_FILE"
+  export GIT_TERMINAL_PROMPT=0
+  export GITHUB_PAT
+else
+  log "Token GitHub nao informado; seguindo sem autenticacao (repo publico)"
+  export GIT_TERMINAL_PROMPT=0
+fi
 
 if [[ ! -d "$DISCOVERY_API_SOURCE/.git" ]]; then
   log "Repositorio da API nao encontrado. Clonando em $DISCOVERY_API_SOURCE"
