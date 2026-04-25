@@ -33,12 +33,18 @@ normalize_branch() {
 choose_branch_interactive() {
   while true; do
     echo >&2
-    echo "Escolha o canal/branch para bootstrap:" >&2
-    echo "1) lts" >&2
-    echo "2) release" >&2
-    echo "3) beta" >&2
-    echo "4) dev" >&2
-    echo "5) custom" >&2
+    echo "========================================" >&2
+    echo " Discovery RMM - Bootstrap Wizard" >&2
+    echo "----------------------------------------" >&2
+    echo "Selecione o canal/branch:" >&2
+    echo " 1) lts     - suporte longo prazo" >&2
+    echo " 2) release - canal estavel" >&2
+    echo " 3) beta    - novidades em teste" >&2
+    echo " 4) dev     - desenvolvimento" >&2
+    echo " 5) custom  - informar branch manualmente" >&2
+    echo "----------------------------------------" >&2
+    echo "Dica: digite o numero ou o nome (ex: release)." >&2
+    echo "Padrao: [2] release (pressione Enter)." >&2
 
     local selected_option
     read -r -p "Opcao [2]: " selected_option

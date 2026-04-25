@@ -344,12 +344,18 @@ select_install_branch() {
 
   while true; do
     echo
-    echo "Escolha o canal/branch de instalacao:"
-    echo "1) lts"
-    echo "2) release"
-    echo "3) beta"
-    echo "4) dev"
-    echo "5) custom (digitar branch manualmente)"
+    echo "========================================"
+    echo " Discovery RMM - Wizard de Instalacao"
+    echo "----------------------------------------"
+    echo "Selecione o canal/branch de instalacao:"
+    echo " 1) lts     - suporte longo prazo"
+    echo " 2) release - canal estavel"
+    echo " 3) beta    - novidades em teste"
+    echo " 4) dev     - desenvolvimento"
+    echo " 5) custom  - informar branch manualmente"
+    echo "----------------------------------------"
+    echo "Dica: digite o numero ou o nome (ex: release)."
+    echo "Padrao: [2] release (pressione Enter)."
 
     local selected_option
     read -r -p "Opcao [2]: " selected_option
