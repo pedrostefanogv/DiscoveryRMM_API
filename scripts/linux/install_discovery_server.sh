@@ -522,10 +522,20 @@ select_install_branch() {
 
 normalize_access_mode() {
   ACCESS_MODE="${ACCESS_MODE:-internal}"
-  ACCESS_MODE="$(printf '%s' "$ACCESS_MODE" | tr '[:upper:]' '[:lower:]')"
+  ACCESS_MODE="$(printf '%s' "$ACCESS_MODE" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   case "$ACCESS_MODE" in
-    internal|external|hybrid) ;;
-    *) fail "ACCESS_MODE invalido: $ACCESS_MODE (use internal, external ou hybrid)" ;;
+    1|internal)
+      ACCESS_MODE="internal"
+      ;;
+    2|external)
+      ACCESS_MODE="external"
+      ;;
+    3|hybrid)
+      ACCESS_MODE="hybrid"
+      ;;
+    *)
+      fail "ACCESS_MODE invalido: $ACCESS_MODE (use 1/2/3 ou internal/external/hybrid)"
+      ;;
   esac
 }
 
@@ -1111,11 +1121,11 @@ main() {
   select_install_branch
 
   wizard_header "Acesso da API" "$(wizard_step_label "5/7" "4/6")"
-  echo "internal: acesso somente na rede interna."
-  echo "external: acesso somente via Cloudflare Tunnel."
-  echo "hybrid: interno e externo ao mesmo tempo."
+  echo "1) internal - acesso somente na rede interna."
+  echo "2) external - acesso somente via Cloudflare Tunnel."
+  echo "3) hybrid   - interno e externo ao mesmo tempo."
   echo "----------------------------------------"
-  prompt_if_empty ACCESS_MODE "Modo de acesso (internal/external/hybrid)" 0 "internal"
+  prompt_if_empty ACCESS_MODE "Modo de acesso (1/2/3 ou internal/external/hybrid)" 0 "internal"
 
   normalize_access_mode
 
