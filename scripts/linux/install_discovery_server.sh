@@ -48,6 +48,7 @@ fi
 if [[ -z "${GITHUB_PAT:-}" && -n "${GITHUB_TOKEN:-}" ]]; then
   GITHUB_PAT="$GITHUB_TOKEN"
 fi
+GITHUB_PAT="${GITHUB_PAT:-}"
 
 log() {
   printf '[install] %s\n' "$*"
@@ -1073,7 +1074,7 @@ EOF
   sudo chown root:discovery-api /etc/discovery-api/discovery.env
 
   sudo tee /etc/discovery-api/github.token >/dev/null <<EOF
-${GITHUB_PAT}
+${GITHUB_PAT:-}
 EOF
   sudo chmod 640 /etc/discovery-api/github.token
   sudo chown root:discovery-api /etc/discovery-api/github.token
