@@ -858,9 +858,9 @@ clone_or_update_repo() {
   fi
 
   if [[ ! -d "$repo_dir/.git" ]]; then
-    if [[ -d "$repo_dir" && -n "$(ls -A "$repo_dir" 2>/dev/null)" ]]; then
+    if [[ -d "$repo_dir" ]]; then
       local backup_dir="${repo_dir}.bak-$(date +%Y%m%d%H%M%S)"
-      log "Diretorio $repo_dir nao vazio e sem .git; movendo para $backup_dir"
+      log "Diretorio $repo_dir sem .git; movendo para $backup_dir"
       sudo mv "$repo_dir" "$backup_dir"
       sudo -u discovery-api mkdir -p "$repo_dir"
     fi
