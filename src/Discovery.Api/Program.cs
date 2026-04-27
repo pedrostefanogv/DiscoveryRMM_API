@@ -423,8 +423,8 @@ await DatabaseSeeder.SeedAsync(app.Services);
 var openApiEnabled = builder.Configuration.GetValue("OpenApi:Enabled", app.Environment.IsDevelopment());
 if (openApiEnabled)
 {
-    app.MapOpenApi();
-    app.MapScalarApiReference();
+    app.MapOpenApi().AllowAnonymous();
+    app.MapScalarApiReference().AllowAnonymous();
 }
 
 app.UseForwardedHeaders();
