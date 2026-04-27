@@ -5,6 +5,10 @@ log() {
   printf '[bootstrap] %s\n' "$*"
 }
 
+warn() {
+  printf '[bootstrap][aviso] %s\n' "$*" >&2
+}
+
 fail() {
   printf '[bootstrap][erro] %s\n' "$*" >&2
   exit 1
@@ -12,6 +16,38 @@ fail() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
+}
+
+detect_system_architecture() {
+  local arch=""
+
+  if command -v dpkg >/dev/null 2>&1; then
+    arch="$(dpkg --print-architecture 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$arch" ]]; then
+    arch="$(uname -m 2>/dev/null || true)"
+  fi
+
+  printf '%s' "$arch"
+}
+
+map_arch_to_dotnet_runtime() {
+  local arch_raw="${1:-}"
+  local arch
+  arch="$(printf '%s' "$arch_raw" | tr '[:upper:]' '[:lower:]')"
+
+  case "$arch" in
+    amd64|x86_64)
+      printf 'linux-x64'
+      ;;
+    arm64|aarch64)
+      printf 'linux-arm64'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 normalize_branch() {
@@ -143,6 +179,16 @@ fi
 
 BOOTSTRAP_BRANCH="$(normalize_branch "$BOOTSTRAP_BRANCH")"
 
+if [[ -z "${DISCOVERY_DOTNET_RUNTIME:-}" ]]; then
+  local_arch="$(detect_system_architecture)"
+  if DISCOVERY_DOTNET_RUNTIME="$(map_arch_to_dotnet_runtime "$local_arch")"; then
+    log "Runtime .NET detectado para o host: $DISCOVERY_DOTNET_RUNTIME ($local_arch)"
+  else
+    DISCOVERY_DOTNET_RUNTIME="linux-x64"
+    warn "Arquitetura nao mapeada (${local_arch:-desconhecida}); usando runtime padrao linux-x64"
+  fi
+fi
+
 if [[ -z "$BOOTSTRAP_WORKDIR" ]]; then
   BOOTSTRAP_WORKDIR="$(mktemp -d /tmp/discovery-bootstrap.XXXXXX)"
 fi
@@ -186,4 +232,4 @@ if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
 fi
 
 log "Executando instalador"
-exec bash "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"
+exec env DISCOVERY_DOTNET_RUNTIME="$DISCOVERY_DOTNET_RUNTIME" bash "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"

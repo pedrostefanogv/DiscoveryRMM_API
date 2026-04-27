@@ -5,6 +5,10 @@ log() {
   printf '[selfupdate] %s\n' "$*"
 }
 
+warn() {
+  printf '[selfupdate][aviso] %s\n' "$*" >&2
+}
+
 fail() {
   printf '[selfupdate][erro] %s\n' "$*" >&2
   exit 1
@@ -12,6 +16,50 @@ fail() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
+}
+
+detect_system_architecture() {
+  local arch=""
+
+  if command -v dpkg >/dev/null 2>&1; then
+    arch="$(dpkg --print-architecture 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$arch" ]]; then
+    arch="$(uname -m 2>/dev/null || true)"
+  fi
+
+  printf '%s' "$arch"
+}
+
+map_arch_to_dotnet_runtime() {
+  local arch_raw="${1:-}"
+  local arch
+  arch="$(printf '%s' "$arch_raw" | tr '[:upper:]' '[:lower:]')"
+
+  case "$arch" in
+    amd64|x86_64)
+      printf 'linux-x64'
+      ;;
+    arm64|aarch64)
+      printf 'linux-arm64'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+validate_dotnet_runtime() {
+  local runtime="$1"
+  case "$runtime" in
+    linux-x64|linux-arm64)
+      return
+      ;;
+    *)
+      fail "DISCOVERY_DOTNET_RUNTIME invalido: $runtime (use linux-x64 ou linux-arm64)"
+      ;;
+  esac
 }
 
 require_cmd git
@@ -27,7 +75,20 @@ DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-}"
 DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-main}"
 DISCOVERY_GIT_TOKEN_FILE="${DISCOVERY_GIT_TOKEN_FILE:-/etc/discovery-api/github.token}"
 DISCOVERY_KEEP_RELEASES="${DISCOVERY_KEEP_RELEASES:-5}"
-DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-linux-x64}"
+DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-}"
+
+DETECTED_ARCH="$(detect_system_architecture)"
+if DETECTED_DOTNET_RUNTIME="$(map_arch_to_dotnet_runtime "$DETECTED_ARCH")"; then
+  :
+else
+  DETECTED_DOTNET_RUNTIME="linux-x64"
+  warn "Arquitetura nao mapeada (${DETECTED_ARCH:-desconhecida}); usando runtime padrao linux-x64"
+fi
+
+if [[ -z "$DISCOVERY_DOTNET_RUNTIME" ]]; then
+  DISCOVERY_DOTNET_RUNTIME="$DETECTED_DOTNET_RUNTIME"
+fi
+validate_dotnet_runtime "$DISCOVERY_DOTNET_RUNTIME"
 
 LOCK_FILE="/opt/discovery-ops/selfupdate.lock"
 mkdir -p "$(dirname "$LOCK_FILE")"

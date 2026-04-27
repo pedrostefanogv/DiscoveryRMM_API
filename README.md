@@ -203,6 +203,10 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/Discovery
 
 O bootstrap clona o repositório localmente e executa todo o processo de instalação.
 
+Suporte de arquitetura do servidor (fase atual):
+- Linux x64 e Linux arm64 para API/portal.
+- O Agent continua distribuido como Windows .exe (x86/x64).
+
 Exemplos de canal/branch:
 
 ```bash

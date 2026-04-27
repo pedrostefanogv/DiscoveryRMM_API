@@ -54,6 +54,10 @@ log() {
   printf '[install] %s\n' "$*"
 }
 
+warn() {
+  printf '[install][aviso] %s\n' "$*" >&2
+}
+
 fail() {
   printf '[install][erro] %s\n' "$*" >&2
   exit 1
@@ -61,6 +65,50 @@ fail() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
+}
+
+detect_system_architecture() {
+  local arch=""
+
+  if command -v dpkg >/dev/null 2>&1; then
+    arch="$(dpkg --print-architecture 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$arch" ]]; then
+    arch="$(uname -m 2>/dev/null || true)"
+  fi
+
+  printf '%s' "$arch"
+}
+
+map_arch_to_dotnet_runtime() {
+  local arch_raw="${1:-}"
+  local arch
+  arch="$(printf '%s' "$arch_raw" | tr '[:upper:]' '[:lower:]')"
+
+  case "$arch" in
+    amd64|x86_64)
+      printf 'linux-x64'
+      ;;
+    arm64|aarch64)
+      printf 'linux-arm64'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+validate_dotnet_runtime() {
+  local runtime="$1"
+  case "$runtime" in
+    linux-x64|linux-arm64)
+      return
+      ;;
+    *)
+      fail "DISCOVERY_DOTNET_RUNTIME invalido: $runtime (use linux-x64 ou linux-arm64)"
+      ;;
+  esac
 }
 
 wizard_step_label() {
@@ -801,7 +849,10 @@ ensure_pgvector_package() {
   fi
 
   log "Instalando suporte a embeddings no PostgreSQL (${vector_pkg})"
-  sudo apt-get install -y "$vector_pkg"
+  if ! sudo apt-get install -y "$vector_pkg"; then
+    warn "Pacote ${vector_pkg} indisponivel neste host. O servidor continuara sem pgvector (embeddings)."
+    return
+  fi
 }
 
 ensure_dotnet_sdk() {
@@ -1212,15 +1263,36 @@ setup_cloudflare_tunnel() {
   log "Instalando e configurando cloudflared"
 
   if ! command -v cloudflared >/dev/null 2>&1; then
-    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-main.gpg
+    if ! curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-main.gpg; then
+      warn "Nao foi possivel configurar repositorio do cloudflared; seguindo sem tunnel automatico."
+      return
+    fi
+
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
     sudo apt-get update -y
-    sudo apt-get install -y cloudflared
+    if ! sudo apt-get install -y cloudflared; then
+      warn "cloudflared indisponivel para esta arquitetura/distribuicao; seguindo sem tunnel automatico."
+      return
+    fi
   fi
 
-  sudo cloudflared service install "$CLOUDFLARE_TUNNEL_TOKEN"
-  sudo systemctl enable cloudflared
-  sudo systemctl restart cloudflared
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    warn "cloudflared nao encontrado apos tentativa de instalacao; seguindo sem tunnel automatico."
+    return
+  fi
+
+  if ! sudo cloudflared service install "$CLOUDFLARE_TUNNEL_TOKEN"; then
+    warn "Falha ao configurar cloudflared service install; siga com configuracao manual do tunnel."
+    return
+  fi
+
+  if ! sudo systemctl enable cloudflared; then
+    warn "Nao foi possivel habilitar servico cloudflared automaticamente."
+  fi
+
+  if ! sudo systemctl restart cloudflared; then
+    warn "Nao foi possivel reiniciar cloudflared automaticamente."
+  fi
 }
 
 publish_api() {
@@ -1354,6 +1426,50 @@ require_cmd dotnet
 require_cmd flock
 require_cmd npm
 
+detect_system_architecture() {
+  local arch=""
+
+  if command -v dpkg >/dev/null 2>&1; then
+    arch="$(dpkg --print-architecture 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$arch" ]]; then
+    arch="$(uname -m 2>/dev/null || true)"
+  fi
+
+  printf '%s' "$arch"
+}
+
+map_arch_to_dotnet_runtime() {
+  local arch_raw="${1:-}"
+  local arch
+  arch="$(printf '%s' "$arch_raw" | tr '[:upper:]' '[:lower:]')"
+
+  case "$arch" in
+    amd64|x86_64)
+      printf 'linux-x64'
+      ;;
+    arm64|aarch64)
+      printf 'linux-arm64'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+validate_dotnet_runtime() {
+  local runtime="$1"
+  case "$runtime" in
+    linux-x64|linux-arm64)
+      return
+      ;;
+    *)
+      fail "DISCOVERY_DOTNET_RUNTIME invalido: $runtime (use linux-x64 ou linux-arm64)"
+      ;;
+  esac
+}
+
 DISCOVERY_API_BASE="${DISCOVERY_API_BASE:-/opt/discovery-api}"
 DISCOVERY_API_SOURCE="${DISCOVERY_API_SOURCE:-$DISCOVERY_API_BASE/source}"
 DISCOVERY_API_RELEASES="${DISCOVERY_API_RELEASES:-$DISCOVERY_API_BASE/releases}"
@@ -1372,7 +1488,20 @@ DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-signalr}"
 DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-false}"
 DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-}"
 DISCOVERY_KEEP_RELEASES="${DISCOVERY_KEEP_RELEASES:-5}"
-DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-linux-x64}"
+DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-}"
+
+DETECTED_ARCH="$(detect_system_architecture)"
+if DETECTED_DOTNET_RUNTIME="$(map_arch_to_dotnet_runtime "$DETECTED_ARCH")"; then
+  :
+else
+  DETECTED_DOTNET_RUNTIME="linux-x64"
+  log "Arquitetura nao mapeada (${DETECTED_ARCH:-desconhecida}); usando runtime padrao linux-x64"
+fi
+
+if [[ -z "$DISCOVERY_DOTNET_RUNTIME" ]]; then
+  DISCOVERY_DOTNET_RUNTIME="$DETECTED_DOTNET_RUNTIME"
+fi
+validate_dotnet_runtime "$DISCOVERY_DOTNET_RUNTIME"
 
 LOCK_FILE="/opt/discovery-ops/selfupdate.lock"
 mkdir -p "$(dirname "$LOCK_FILE")"
@@ -1677,7 +1806,27 @@ main() {
   DISCOVERY_AGENT_SRC="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}"
   DISCOVERY_AGENT_ARTIFACTS="${DISCOVERY_AGENT_ARTIFACTS:-/opt/discovery-agent-artifacts}"
   DISCOVERY_OPS_DIR="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"
-  DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-linux-x64}"
+  local detected_arch
+  local detected_dotnet_runtime
+  detected_arch="$(detect_system_architecture)"
+  if detected_dotnet_runtime="$(map_arch_to_dotnet_runtime "$detected_arch")"; then
+    :
+  else
+    detected_dotnet_runtime="linux-x64"
+    warn "Arquitetura nao mapeada (${detected_arch:-desconhecida}); usando runtime padrao linux-x64"
+  fi
+
+  DISCOVERY_DETECTED_ARCH="$detected_arch"
+  DISCOVERY_DETECTED_DOTNET_RUNTIME="$detected_dotnet_runtime"
+
+  if [[ -z "${DISCOVERY_DOTNET_RUNTIME:-}" ]]; then
+    DISCOVERY_DOTNET_RUNTIME="$detected_dotnet_runtime"
+  fi
+  validate_dotnet_runtime "$DISCOVERY_DOTNET_RUNTIME"
+
+  log "Arquitetura detectada: ${DISCOVERY_DETECTED_ARCH:-desconhecida}"
+  log "Runtime .NET da API: ${DISCOVERY_DOTNET_RUNTIME}"
+  log "Build do Agent permanece Windows x86/x64 nesta fase"
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
   DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-signalr}"
   DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-false}"

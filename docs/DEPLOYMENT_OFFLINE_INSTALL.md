@@ -2,6 +2,13 @@
 
 Este guia cobre a instalacao inicial do Discovery RMM em Linux (Ubuntu 22.04/24.04), incluindo API + portal web, com PostgreSQL + NATS no mesmo host, escolha de acesso interno/externo e self-update do servidor.
 
+## Suporte de arquitetura (fase atual)
+
+- Servidor/API + portal: Linux `x64` e Linux `arm64`.
+- O instalador detecta a arquitetura e define automaticamente `DISCOVERY_DOTNET_RUNTIME` (`linux-x64` ou `linux-arm64`).
+- Override manual continua disponivel via `DISCOVERY_DOTNET_RUNTIME`.
+- Build/distribuicao do Agent permanece Windows (`x86/x64`) nesta fase.
+
 ## Scripts adicionados
 
 - `scripts/linux/install_discovery_server.sh`
@@ -135,6 +142,8 @@ Fluxo de update:
 
 Variaveis de update ficam em `/etc/discovery-api/discovery.env`.
 O token GitHub fica em `/etc/discovery-api/github.token`.
+
+Quando `DISCOVERY_DOTNET_RUNTIME` nao e informado, o instalador/self-update detecta automaticamente `linux-x64` ou `linux-arm64` com base na arquitetura do host.
 
 ## Servicos esperados
 
