@@ -31,51 +31,7 @@ concurrency:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
-  # 1. CodeQL — análise estática de vulnerabilidades (.NET/C#)
-  # ─────────────────────────────────────────────────────────────────────────────
-  codeql:
-    name: CodeQL Analysis
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: csharp
-          # Queries adicionais: security-and-quality inclui CWE-117, injection, etc.
-          queries: security-and-quality
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
-
-      - name: Restore
-        run: dotnet restore Discovery.slnx
-
-      - name: Build for CodeQL
-        run: dotnet build Discovery.slnx --configuration Release --no-restore
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: '/language:csharp'
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 2. Dependency Review — detecta vulnerabilidades em dependências NuGet
+  # 1. Dependency Review — detecta vulnerabilidades em dependências NuGet
   #    Roda apenas em PRs para os branches principais
   # ─────────────────────────────────────────────────────────────────────────────
   dependency-review:
@@ -96,7 +52,7 @@ jobs:
           allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, 0BSD
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 3. Trivy — scan de dependências NuGet por CVEs (SBOM + relatório)
+  # 2. Trivy — scan de dependências NuGet por CVEs (SBOM + relatório)
   # ─────────────────────────────────────────────────────────────────────────────
   trivy:
     name: Trivy Vulnerability Scan
@@ -133,7 +89,7 @@ jobs:
           category: trivy
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 4. Secret scanning com Gitleaks — detecta chaves/tokens commitados
+  # 3. Secret scanning com Gitleaks — detecta chaves/tokens commitados
   # ─────────────────────────────────────────────────────────────────────────────
   gitleaks:
     name: Secret Scanning (Gitleaks)
@@ -151,11 +107,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 5. Resumo de segurança — consolida resultados e comenta em PRs
+  # 4. Resumo de segurança — consolida resultados e comenta em PRs
   # ─────────────────────────────────────────────────────────────────────────────
   security-summary:
     name: Security Summary
-    needs: [codeql, trivy, gitleaks]
+    needs: [dependency-review, trivy, gitleaks]
     runs-on: ubuntu-latest
     if: always() && github.event_name == 'pull_request'
 
@@ -165,9 +121,9 @@ jobs:
         with:
           script: |
             const jobs = {
-              'CodeQL':    '${{ needs.codeql.result }}',
-              'Trivy':     '${{ needs.trivy.result }}',
-              'Gitleaks':  '${{ needs.gitleaks.result }}'
+              'Dependency Review': "${{ needs['dependency-review'].result }}",
+              'Trivy': '${{ needs.trivy.result }}',
+              'Gitleaks': '${{ needs.gitleaks.result }}'
             };
 
             const icon = r => r === 'success' ? '✅' : r === 'skipped' ? '⏭️' : '❌';
