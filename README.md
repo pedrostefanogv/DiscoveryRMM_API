@@ -37,6 +37,7 @@ construída com .NET 10, NATS e PostgreSQL.
 - [Arquitetura](#-arquitetura)
 - [Stack](#-stack-tecnológica)
 - [Instalação Rápida](#-instalação-rápida)
+- [Recuperação de Senha/Admin](#recuperação-de-senhaadmin-shell-local)
 - [Configuração](#-configuração)
 - [Contribuição](#-contribuição)
 - [Licença](#-licença)
@@ -193,6 +194,43 @@ dotnet run --project src/Discovery.Api -- --migrate
 dotnet run --project src/Discovery.Api
 # API disponível em: https://localhost:7001
 # Docs Scalar: https://localhost:7001/scalar
+```
+
+### 5. Primeiro Login
+
+> [!IMPORTANT]
+> Credenciais iniciais após rodar as migrations:
+> - Login: `admin`
+> - Senha padrão: `Mudar@123`
+>
+> No primeiro acesso, o sistema exige troca de senha, atualização do perfil e conclusão do cadastro de MFA antes de liberar o uso completo.
+
+### Recuperação de Senha/Admin (Shell Local)
+
+Para cenários de recuperação (senha esquecida, perda de MFA, conta admin inativa), use o modo de manutenção local no servidor:
+
+```bash
+dotnet run --project src/Discovery.Api -- --recover-admin
+```
+
+Comportamento padrão do comando:
+- Redefine a senha do login `admin` (gera senha temporária forte se não for informada)
+- Força troca de senha no próximo login
+- Revoga sessões ativas do usuário
+- Reseta MFA (remove chaves ativas)
+- Reativa o usuário se estiver inativo
+- Recria o usuário admin se ele não existir e garante vínculo ao role `Admin`
+
+Uso mais seguro (evita senha no histórico do shell):
+
+```bash
+echo "NovaSenhaForte@2026" | dotnet run --project src/Discovery.Api -- --recover-admin --password-stdin
+```
+
+Ajuda completa do comando:
+
+```bash
+dotnet run --project src/Discovery.Api -- --recover-admin-help
 ```
 
 ### Instalação Linux (Produção)
@@ -378,6 +416,43 @@ dotnet restore Discovery.slnx
 dotnet run --project src/Discovery.Api
 # API available at: https://localhost:7001
 # Scalar docs: https://localhost:7001/scalar
+```
+
+### First Login
+
+> [!IMPORTANT]
+> Initial credentials after running the migrations:
+> - Login: `admin`
+> - Default password: `Mudar@123`
+>
+> On first access, the system forces password change, profile update and MFA onboarding before full access is granted.
+
+### Admin Access Recovery (Local Shell)
+
+For recovery scenarios (forgotten password, lost MFA, inactive admin account), use the local maintenance mode on the server:
+
+```bash
+dotnet run --project src/Discovery.Api -- --recover-admin
+```
+
+Default command behavior:
+- Resets password for `admin` login (generates a strong temporary password when not provided)
+- Forces password change on next login
+- Revokes active sessions for that user
+- Resets MFA (deactivates active keys)
+- Reactivates the user if inactive
+- Recreates the admin user if missing and ensures `Admin` role binding
+
+Safer usage (avoid password in shell history):
+
+```bash
+echo "YourStrongPassword@2026" | dotnet run --project src/Discovery.Api -- --recover-admin --password-stdin
+```
+
+Full command help:
+
+```bash
+dotnet run --project src/Discovery.Api -- --recover-admin-help
 ```
 
 ### Linux Install (Production)
