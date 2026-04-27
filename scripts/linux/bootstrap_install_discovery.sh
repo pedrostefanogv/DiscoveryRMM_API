@@ -31,36 +31,65 @@ normalize_branch() {
 }
 
 choose_branch_interactive() {
-  echo
-  echo "Escolha o canal/branch para bootstrap:"
-  echo "1) lts"
-  echo "2) release"
-  echo "3) beta"
-  echo "4) dev"
-  echo "5) custom"
+  while true; do
+    echo >&2
+    echo "========================================" >&2
+    echo " Discovery RMM - Bootstrap Wizard" >&2
+    echo "----------------------------------------" >&2
+    echo "Selecione o canal/branch:" >&2
+    echo " 1) lts     - suporte longo prazo" >&2
+    echo " 2) release - canal estavel" >&2
+    echo " 3) beta    - novidades em teste" >&2
+    echo " 4) dev     - desenvolvimento" >&2
+    echo " 5) custom  - informar branch manualmente" >&2
+    echo "----------------------------------------" >&2
+    echo "Dica: digite o numero ou o nome (ex: release)." >&2
+    echo "Padrao: [2] release (pressione Enter)." >&2
 
-  local selected_option
-  read -r -p "Opcao [2]: " selected_option
-  selected_option="${selected_option:-2}"
+    local selected_option
+    read -r -p "Opcao [2]: " selected_option
+    selected_option="${selected_option:-2}"
+    selected_option="$(printf '%s' "$selected_option" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
-  case "$selected_option" in
-    1) printf 'lts' ;;
-    2) printf 'release' ;;
-    3) printf 'beta' ;;
-    4) printf 'dev' ;;
-    5)
-      local custom_branch
-      read -r -p "Informe a branch custom: " custom_branch
-      [[ -n "$custom_branch" ]] || fail "Branch custom nao informada"
-      normalize_branch "$custom_branch"
-      ;;
-    *) fail "Opcao invalida: $selected_option" ;;
-  esac
+    case "$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]')" in
+      1|lts)
+        printf 'lts'
+        return
+        ;;
+      2|release)
+        printf 'release'
+        return
+        ;;
+      3|beta)
+        printf 'beta'
+        return
+        ;;
+      4|dev)
+        printf 'dev'
+        return
+        ;;
+      5|custom)
+        local custom_branch
+        read -r -p "Informe a branch custom: " custom_branch
+        custom_branch="$(printf '%s' "$custom_branch" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -n "$custom_branch" ]] || {
+          echo "Branch custom nao informada. Tente novamente." >&2
+          continue
+        }
+        printf '%s' "$(normalize_branch "$custom_branch")"
+        return
+        ;;
+      *)
+        echo "Opcao invalida: $selected_option. Use 1-5 ou o nome da branch (lts/release/beta/dev)." >&2
+        ;;
+    esac
+  done
 }
 
 BOOTSTRAP_REPO_URL="${DISCOVERY_BOOTSTRAP_REPO_URL:-https://github.com/pedrostefanogv/DiscoveryRMM_API.git}"
 BOOTSTRAP_BRANCH="${DISCOVERY_BOOTSTRAP_BRANCH:-${DISCOVERY_RELEASE_CHANNEL:-${DISCOVERY_GIT_BRANCH:-release}}}"
 BOOTSTRAP_WORKDIR=""
+INSTALLER_RELATIVE_PATH="scripts/linux/install_discovery_server.sh"
 
 INSTALLER_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -118,11 +147,43 @@ if [[ -z "$BOOTSTRAP_WORKDIR" ]]; then
   BOOTSTRAP_WORKDIR="$(mktemp -d /tmp/discovery-bootstrap.XXXXXX)"
 fi
 
-log "Clonando repositorio em $BOOTSTRAP_WORKDIR (branch: $BOOTSTRAP_BRANCH)"
-git clone --depth 1 --branch "$BOOTSTRAP_BRANCH" "$BOOTSTRAP_REPO_URL" "$BOOTSTRAP_WORKDIR"
+clone_candidates=("$BOOTSTRAP_BRANCH")
+case "$BOOTSTRAP_BRANCH" in
+  lts|release|beta|dev)
+    for candidate in release dev beta lts; do
+      [[ "$candidate" == "$BOOTSTRAP_BRANCH" ]] && continue
+      clone_candidates+=("$candidate")
+    done
+    ;;
+esac
 
-INSTALLER_PATH="$BOOTSTRAP_WORKDIR/scripts/linux/install_discovery_server.sh"
-[[ -f "$INSTALLER_PATH" ]] || fail "Instalador nao encontrado em $INSTALLER_PATH"
+CLONED_BRANCH=""
+INSTALLER_PATH=""
+for candidate in "${clone_candidates[@]}"; do
+  rm -rf "$BOOTSTRAP_WORKDIR"
+  mkdir -p "$BOOTSTRAP_WORKDIR"
+
+  log "Tentando bootstrap do canal/branch '$candidate'"
+  if ! git clone --depth 1 --branch "$candidate" "$BOOTSTRAP_REPO_URL" "$BOOTSTRAP_WORKDIR" >/dev/null 2>&1; then
+    log "Canal/branch '$candidate' indisponivel para clone"
+    continue
+  fi
+
+  INSTALLER_PATH="$BOOTSTRAP_WORKDIR/$INSTALLER_RELATIVE_PATH"
+  if [[ ! -f "$INSTALLER_PATH" ]]; then
+    log "Instalador ausente em '$candidate' ($INSTALLER_RELATIVE_PATH)"
+    continue
+  fi
+
+  CLONED_BRANCH="$candidate"
+  break
+done
+
+[[ -n "$CLONED_BRANCH" ]] || fail "Nenhum canal/branch valido encontrado. Tentativas: ${clone_candidates[*]}"
+
+if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
+  log "Fallback aplicado: solicitado '$BOOTSTRAP_BRANCH', usando '$CLONED_BRANCH'"
+fi
 
 log "Executando instalador"
 exec bash "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"

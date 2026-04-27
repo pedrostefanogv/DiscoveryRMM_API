@@ -48,6 +48,7 @@ fi
 if [[ -z "${GITHUB_PAT:-}" && -n "${GITHUB_TOKEN:-}" ]]; then
   GITHUB_PAT="$GITHUB_TOKEN"
 fi
+GITHUB_PAT="${GITHUB_PAT:-}"
 
 log() {
   printf '[install] %s\n' "$*"
@@ -60,6 +61,32 @@ fail() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
+}
+
+wizard_step_label() {
+  local step_root="$1"
+  local step_nonroot="$2"
+  if [[ "${DISCOVERY_ROOT_BOOTSTRAPPED:-0}" == "1" ]]; then
+    printf '%s' "$step_root"
+    return
+  fi
+  printf '%s' "$step_nonroot"
+}
+
+wizard_header() {
+  local title="$1"
+  local step_label="${2:-}"
+
+  echo
+  echo "========================================"
+  if [[ -n "$step_label" ]]; then
+    echo " Discovery RMM - Etapa $step_label"
+  else
+    echo " Discovery RMM - Wizard"
+  fi
+  echo "----------------------------------------"
+  echo " $title"
+  echo "----------------------------------------"
 }
 
 prompt_required_value() {
@@ -134,22 +161,26 @@ ensure_installer_user_from_root() {
 }
 
 bootstrap_root_execution() {
+  wizard_header "Usuario instalador (com sudo)" "1/8"
+  echo "Este usuario executa o instalador e operacoes via sudo."
+  echo "Se ja existir, sera reutilizado."
   echo
   echo "[install][aviso] O instalador foi executado como root."
   echo "[install][aviso] Para evitar uma instalacao presa ao root, sera criado ou usado um usuario comum com sudo para continuar."
+  echo "[install][aviso] Se o usuario ja existir, ele sera reutilizado e a senha sera atualizada."
   echo
 
-  DISCOVERY_INSTALL_USER="${DISCOVERY_INSTALL_USER:-discovery-installer}"
+  DISCOVERY_INSTALL_USER="${DISCOVERY_INSTALL_USER:-discovery}"
   if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
     local input_user=""
-    read -r -p "Nome do usuario instalador [$DISCOVERY_INSTALL_USER]: " input_user
+    read -r -p "Nome do usuario instalador (com sudo) [$DISCOVERY_INSTALL_USER]: " input_user
     DISCOVERY_INSTALL_USER="${input_user:-$DISCOVERY_INSTALL_USER}"
   fi
 
   validate_installer_user_name "$DISCOVERY_INSTALL_USER"
   local installer_password_already_configured=0
   [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]] && installer_password_already_configured=1
-  prompt_required_value DISCOVERY_INSTALL_USER_PASSWORD "Senha do usuario instalador" 1
+  prompt_required_value DISCOVERY_INSTALL_USER_PASSWORD "Senha do usuario instalador (sera usada para sudo)" 1
   confirm_root_bootstrap_password "$installer_password_already_configured"
   ensure_installer_user_from_root "$DISCOVERY_INSTALL_USER" "$DISCOVERY_INSTALL_USER_PASSWORD"
 
@@ -183,7 +214,11 @@ refresh_sudo_credentials() {
   if [[ -n "${SUDO_ASKPASS:-}" ]]; then
     sudo -A -v >/dev/null 2>&1 || fail "sudo nao aceitou a senha do usuario instalador."
   else
-    sudo -n -v >/dev/null 2>&1 || fail "sudo sem credencial ativa. Execute: sudo -v"
+    if sudo -n -v >/dev/null 2>&1; then
+      return
+    fi
+
+    sudo -n true >/dev/null 2>&1 || fail "sudo sem credencial ativa. Execute: sudo -v"
   fi
 }
 
@@ -257,6 +292,169 @@ prompt_if_empty() {
   printf -v "$var_name" '%s' "$input"
 }
 
+is_valid_repo_url() {
+  local url="$1"
+  if [[ "$url" =~ ^(https?|ssh):// ]]; then
+    return 0
+  fi
+  if [[ "$url" =~ ^git@[^:]+:.+\.git$ ]]; then
+    return 0
+  fi
+  return 1
+}
+
+prompt_repo_url() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_value="${3:-}"
+  local current_value="${!var_name:-}"
+
+  if [[ -n "$current_value" ]]; then
+    is_valid_repo_url "$current_value" || fail "URL invalida para $var_name: $current_value"
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "$default_value" ]]; then
+      printf -v "$var_name" '%s' "$default_value"
+      return
+    fi
+    fail "Variavel obrigatoria ausente para modo nao interativo: $var_name"
+  fi
+
+  while true; do
+    local input=""
+    if [[ -n "$default_value" ]]; then
+      read -r -p "$prompt_text [$default_value]: " input
+      input="${input:-$default_value}"
+    else
+      read -r -p "$prompt_text: " input
+    fi
+    [[ -n "$input" ]] || {
+      echo "Valor obrigatorio nao informado para $var_name" >&2
+      continue
+    }
+    if is_valid_repo_url "$input"; then
+      printf -v "$var_name" '%s' "$input"
+      return
+    fi
+    echo "URL invalida. Use https://.../repo.git ou git@host:org/repo.git" >&2
+  done
+}
+
+prompt_postgres_password() {
+  if [[ -z "${POSTGRES_PASSWORD:-}" ]] && sudo test -f /etc/discovery-api/discovery.env; then
+    local existing_password
+    existing_password="$(sudo sed -n 's/^ConnectionStrings__DefaultConnection=.*Password=\([^;]*\).*/\1/p' /etc/discovery-api/discovery.env | head -n 1)"
+    if [[ -n "$existing_password" ]]; then
+      POSTGRES_PASSWORD="$existing_password"
+      POSTGRES_PASSWORD_AUTO=0
+      log "Senha PostgreSQL carregada do discovery.env existente."
+      return
+    fi
+  fi
+
+  if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
+    POSTGRES_PASSWORD_AUTO=0
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    POSTGRES_PASSWORD="$(generate_random_password 24)"
+    POSTGRES_PASSWORD_AUTO=1
+    log "POSTGRES_PASSWORD nao informado; gerando senha aleatoria."
+    return
+  fi
+
+  local generated_password
+  generated_password="$(generate_random_password 24)"
+  echo "Entrada oculta. Pressione Enter para usar a senha gerada automaticamente."
+  local input=""
+  read -r -s -p "Senha PostgreSQL: " input
+  printf '\n'
+  if [[ -z "$input" ]]; then
+    POSTGRES_PASSWORD="$generated_password"
+    POSTGRES_PASSWORD_AUTO=1
+    log "Senha PostgreSQL nao informada; gerada automaticamente."
+    return
+  fi
+
+  POSTGRES_PASSWORD_AUTO=0
+  POSTGRES_PASSWORD="$input"
+}
+
+confirm_installation() {
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    return
+  fi
+
+  wizard_header "Confirmacao" "$(wizard_step_label "8/8" "7/7")"
+  echo "Resumo das configuracoes selecionadas:"
+  echo "- Branch: $DISCOVERY_GIT_BRANCH"
+  echo "- Repo API: $DISCOVERY_GIT_REPO"
+  echo "- Repo Agent: $DISCOVERY_AGENT_GIT_REPO"
+  echo "- Repo Site: $DISCOVERY_SITE_GIT_REPO"
+  echo "- Access mode: $ACCESS_MODE"
+  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
+    echo "- Host interno: $INTERNAL_API_HOST"
+  fi
+  if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
+    echo "- Host externo: $EXTERNAL_API_HOST"
+  fi
+  echo "- Portal web: publicado no mesmo host da API via Nginx"
+  if [[ "${OPENAPI_ENABLED:-0}" == "1" ]]; then
+    echo "- OpenAPI/Scalar: habilitado"
+  else
+    echo "- OpenAPI/Scalar: desativado"
+  fi
+  echo "- PostgreSQL DB: $POSTGRES_DB"
+  echo "- PostgreSQL user: $POSTGRES_USER"
+  if [[ "${POSTGRES_PASSWORD_AUTO:-0}" -eq 1 ]]; then
+    echo "- PostgreSQL senha: gerada automaticamente (veja /etc/discovery-api/discovery.env)"
+  else
+    echo "- PostgreSQL senha: informada"
+  fi
+  echo "- NATS user: $NATS_USER"
+  echo "- NATS auth user: $NATS_AUTH_USER"
+  echo
+
+  local confirm
+  read -r -p "Confirmar e iniciar instalacao? (s/N): " confirm
+  confirm="$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$confirm" in
+    s|sim|y|yes) ;;
+    *) fail "Instalacao cancelada pelo usuario." ;;
+  esac
+}
+
+detect_internal_ipv4() {
+  local ip_candidate=""
+
+  if command -v ip >/dev/null 2>&1; then
+    ip_candidate="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  fi
+
+  if [[ -z "$ip_candidate" ]] && command -v hostname >/dev/null 2>&1; then
+    ip_candidate="$(hostname -I 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i !~ /^127\./) {print $i; exit}}')"
+  fi
+
+  if [[ "$ip_candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf '%s' "$ip_candidate"
+  fi
+}
+
+generate_random_password() {
+  local length="${1:-24}"
+  local generated
+
+  set +o pipefail
+  generated="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$length")"
+  set -o pipefail
+
+  [[ -n "$generated" ]] || fail "Nao foi possivel gerar senha aleatoria."
+  printf '%s' "$generated"
+}
+
 select_operation_mode() {
   if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then
     return
@@ -288,10 +486,11 @@ select_operation_mode() {
     return
   fi
 
-  echo
-  echo "Escolha a operacao:" 
-  echo "1) Instalacao completa (API + Postgres + NATS + servicos)"
+  wizard_header "Modo de Operacao" "$(wizard_step_label "2/8" "1/7")"
+  echo "Escolha o que sera executado neste momento:"
+  echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)"
   echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
+  echo "----------------------------------------"
 
   local selected_option
   read -r -p "Opcao [1]: " selected_option
@@ -342,49 +541,92 @@ select_install_branch() {
     return
   fi
 
-  echo
-  echo "Escolha o canal/branch de instalacao:"
-  echo "1) lts"
-  echo "2) release"
-  echo "3) beta"
-  echo "4) dev"
-  echo "5) custom (digitar branch manualmente)"
+  while true; do
+    wizard_header "Canal/branch de instalacao" "$(wizard_step_label "4/8" "3/7")"
+    echo "Selecione o canal/branch que sera clonado."
+    echo "Isso define a versao da API instalada."
+    echo " 1) lts     - suporte longo prazo"
+    echo " 2) release - canal estavel"
+    echo " 3) beta    - novidades em teste"
+    echo " 4) dev     - desenvolvimento"
+    echo " 5) custom  - informar branch manualmente"
+    echo "----------------------------------------"
+    echo "Dica: digite o numero ou o nome (ex: release)."
+    echo "Padrao: [2] release (pressione Enter)."
 
-  local selected_option
-  read -r -p "Opcao [2]: " selected_option
-  selected_option="${selected_option:-2}"
+    local selected_option
+    read -r -p "Opcao [2]: " selected_option
+    selected_option="${selected_option:-2}"
+    selected_option="$(printf '%s' "$selected_option" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
-  case "$selected_option" in
-    1)
-      DISCOVERY_GIT_BRANCH="lts"
-      ;;
-    2)
-      DISCOVERY_GIT_BRANCH="release"
-      ;;
-    3)
-      DISCOVERY_GIT_BRANCH="beta"
-      ;;
-    4)
-      DISCOVERY_GIT_BRANCH="dev"
-      ;;
-    5)
-      local custom_branch
-      read -r -p "Informe a branch custom: " custom_branch
-      [[ -n "$custom_branch" ]] || fail "Branch custom nao informada"
-      DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$custom_branch")"
-      ;;
-    *)
-      fail "Opcao invalida: $selected_option"
-      ;;
-  esac
+    case "$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]')" in
+      1|lts)
+        DISCOVERY_GIT_BRANCH="lts"
+        return
+        ;;
+      2|release)
+        DISCOVERY_GIT_BRANCH="release"
+        return
+        ;;
+      3|beta)
+        DISCOVERY_GIT_BRANCH="beta"
+        return
+        ;;
+      4|dev)
+        DISCOVERY_GIT_BRANCH="dev"
+        return
+        ;;
+      5|custom)
+        local custom_branch
+        read -r -p "Informe a branch custom: " custom_branch
+        custom_branch="$(printf '%s' "$custom_branch" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -n "$custom_branch" ]] || {
+          echo "Branch custom nao informada. Tente novamente." >&2
+          continue
+        }
+        DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$custom_branch")"
+        return
+        ;;
+      *)
+        echo "Opcao invalida: $selected_option. Use 1-5 ou o nome da branch (lts/release/beta/dev)." >&2
+        ;;
+    esac
+  done
 }
 
 normalize_access_mode() {
   ACCESS_MODE="${ACCESS_MODE:-internal}"
-  ACCESS_MODE="$(printf '%s' "$ACCESS_MODE" | tr '[:upper:]' '[:lower:]')"
+  ACCESS_MODE="$(printf '%s' "$ACCESS_MODE" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   case "$ACCESS_MODE" in
-    internal|external|hybrid) ;;
-    *) fail "ACCESS_MODE invalido: $ACCESS_MODE (use internal, external ou hybrid)" ;;
+    1|internal)
+      ACCESS_MODE="internal"
+      ;;
+    2|external)
+      ACCESS_MODE="external"
+      ;;
+    3|hybrid)
+      ACCESS_MODE="hybrid"
+      ;;
+    *)
+      fail "ACCESS_MODE invalido: $ACCESS_MODE (use 1/2/3 ou internal/external/hybrid)"
+      ;;
+  esac
+}
+
+normalize_openapi_enabled() {
+  local normalized
+  normalized="$(printf '%s' "${OPENAPI_ENABLED:-0}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  case "$normalized" in
+    1|true|yes|y|sim|s)
+      OPENAPI_ENABLED=1
+      ;;
+    0|false|no|n|nao|"" )
+      OPENAPI_ENABLED=0
+      ;;
+    *)
+      fail "OPENAPI_ENABLED invalido: ${OPENAPI_ENABLED}. Use 1/0 (ou sim/nao)."
+      ;;
   esac
 }
 
@@ -453,6 +695,10 @@ load_existing_nats_defaults() {
 
 prompt_nats_configuration() {
   load_existing_nats_defaults
+  wizard_header "Mensageria (NATS)" "$(wizard_step_label "8/8" "7/7")"
+  echo "Configure as credenciais e hosts do NATS local."
+  echo "Esses dados sao usados pela API e agentes para mensagens."
+  echo "----------------------------------------"
 
   prompt_if_empty NATS_USER "Usuario NATS" 0 "discovery_nats"
   prompt_if_empty NATS_PASSWORD "Senha NATS" 1
@@ -529,10 +775,18 @@ install_apt_dependencies() {
     gnupg \
     jq \
     lsb-release \
+    nginx \
     openssl \
     postgresql \
     postgresql-contrib \
+    redis-server \
     nats-server
+}
+
+setup_redis() {
+  log "Configurando Redis"
+  sudo systemctl enable redis-server
+  sudo systemctl restart redis-server
 }
 
 ensure_pgvector_package() {
@@ -583,6 +837,30 @@ ensure_dotnet_sdk() {
   command -v dotnet >/dev/null 2>&1 || fail "dotnet nao foi instalado com sucesso"
 }
 
+ensure_nodejs() {
+  local required_major="20"
+  local current_major=""
+
+  if command -v node >/dev/null 2>&1; then
+    current_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+    if [[ "$current_major" =~ ^[0-9]+$ ]] && (( current_major >= required_major )); then
+      log "Node.js $current_major ja instalado"
+      return
+    fi
+    log "Node.js atual insuficiente (${current_major:-desconhecido}); atualizando para uma versao suportada"
+  else
+    log "Instalando Node.js"
+  fi
+
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --yes --dearmor -o /usr/share/keyrings/nodesource.gpg
+  echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+  sudo apt-get update -y
+  sudo apt-get install -y nodejs
+
+  command -v node >/dev/null 2>&1 || fail "node nao foi instalado com sucesso"
+  command -v npm >/dev/null 2>&1 || fail "npm nao foi instalado com sucesso"
+}
+
 ensure_service_user() {
   if id -u discovery-api >/dev/null 2>&1; then
     log "Usuario de servico discovery-api ja existe"
@@ -599,6 +877,9 @@ create_directories() {
   sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_API_RELEASES"
   sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_API_SHARED"
   sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_API_SOURCE"
+  sudo install -d -m 755 -o discovery-api -g discovery-api "$DISCOVERY_SITE_BASE"
+  sudo install -d -m 755 -o discovery-api -g discovery-api "$DISCOVERY_SITE_RELEASES"
+  sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_SITE_SOURCE"
   sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_AGENT_SRC"
   sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_AGENT_ARTIFACTS"
   sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_OPS_DIR"
@@ -607,6 +888,11 @@ create_directories() {
 }
 
 setup_git_askpass() {
+  if [[ -z "${GITHUB_PAT:-}" ]]; then
+    log "GITHUB_PAT vazio; seguindo sem autenticacao GitHub (repo publico)"
+    return
+  fi
+
   local askpass_tmp
   askpass_tmp="$(mktemp)"
   cat > "$askpass_tmp" <<'EOF'
@@ -638,12 +924,20 @@ clone_or_update_repo() {
   local -a git_env
   git_env=(
     env
-    "GIT_ASKPASS=$GIT_ASKPASS"
     "GIT_TERMINAL_PROMPT=0"
-    "GITHUB_PAT=$GITHUB_PAT"
   )
 
-  if [[ ! -d "$repo_dir/.git" ]]; then
+  if [[ -n "${GITHUB_PAT:-}" ]]; then
+    git_env+=("GIT_ASKPASS=$GIT_ASKPASS" "GITHUB_PAT=$GITHUB_PAT")
+  fi
+
+  if ! sudo test -d "$repo_dir/.git"; then
+    if sudo test -d "$repo_dir"; then
+      local backup_dir="${repo_dir}.bak-$(date +%Y%m%d%H%M%S)"
+      log "Diretorio $repo_dir sem .git; movendo para $backup_dir"
+      sudo mv "$repo_dir" "$backup_dir"
+    fi
+    sudo install -d -m 750 -o discovery-api -g discovery-api "$repo_dir"
     log "Clonando repositorio: $repo_url"
     sudo -u discovery-api "${git_env[@]}" git clone --branch "$DISCOVERY_GIT_BRANCH" "$repo_url" "$repo_dir"
   else
@@ -671,6 +965,8 @@ setup_postgres() {
 
   if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${escaped_db_user}'" | grep -q 1; then
     sudo -u postgres psql -c "CREATE USER \"${POSTGRES_USER}\" WITH PASSWORD '${escaped_db_password}';"
+  else
+    sudo -u postgres psql -c "ALTER USER \"${POSTGRES_USER}\" WITH PASSWORD '${escaped_db_password}';"
   fi
 
   if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${escaped_db_name}'" | grep -q 1; then
@@ -730,15 +1026,42 @@ EOF
   sudo systemctl restart nats-server
 }
 
-setup_internal_certificate() {
-  [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]] || return 0
+build_certificate_san_entry() {
+  local host="$1"
 
-  log "Gerando certificado self-signed para acesso interno"
+  [[ -n "$host" ]] || return 0
 
-  local san_entry="DNS:$INTERNAL_API_HOST"
-  if [[ "$INTERNAL_API_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    san_entry="IP:$INTERNAL_API_HOST"
+  if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'IP:%s' "$host"
+    return
   fi
+
+  printf 'DNS:%s' "$host"
+}
+
+setup_proxy_certificate() {
+  log "Gerando certificado self-signed para o proxy web local"
+
+  local primary_host="localhost"
+  local -a san_entries=("DNS:localhost" "IP:127.0.0.1")
+  local san_entry=""
+
+  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
+    primary_host="$INTERNAL_API_HOST"
+    san_entry="$(build_certificate_san_entry "$INTERNAL_API_HOST")"
+    [[ -n "$san_entry" ]] && san_entries+=("$san_entry")
+  fi
+
+  if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
+    if [[ "$primary_host" == "localhost" ]]; then
+      primary_host="$EXTERNAL_API_HOST"
+    fi
+    san_entry="$(build_certificate_san_entry "$EXTERNAL_API_HOST")"
+    [[ -n "$san_entry" ]] && san_entries+=("$san_entry")
+  fi
+
+  local san_list
+  san_list="$(IFS=, ; printf '%s' "${san_entries[*]}")"
 
   local cert_conf
   cert_conf="$(mktemp)"
@@ -751,11 +1074,11 @@ distinguished_name = dn
 x509_extensions = v3_req
 
 [dn]
-CN = $INTERNAL_API_HOST
+CN = $primary_host
 O = Discovery
 
 [v3_req]
-subjectAltName = $san_entry
+subjectAltName = $san_list
 extendedKeyUsage = serverAuth
 keyUsage = digitalSignature, keyEncipherment
 EOF
@@ -773,6 +1096,114 @@ EOF
   sudo chmod 640 /etc/discovery-api/certs/api-internal.key
   sudo chmod 644 /etc/discovery-api/certs/api-internal.crt
   sudo chown root:discovery-api /etc/discovery-api/certs/api-internal.key
+}
+
+apply_site_release_permissions() {
+  local release_dir="$1"
+
+  sudo find "$release_dir" -type d -exec chmod 755 {} +
+  sudo find "$release_dir" -type f -exec chmod 644 {} +
+}
+
+write_site_proxy_config() {
+  log "Configurando Nginx para portal web + proxy da API"
+
+  local -a server_names=("localhost" "127.0.0.1")
+  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]] && [[ -n "${INTERNAL_API_HOST:-}" ]]; then
+    server_names+=("$INTERNAL_API_HOST")
+  fi
+  if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]] && [[ -n "${EXTERNAL_API_HOST:-}" ]]; then
+    server_names+=("$EXTERNAL_API_HOST")
+  fi
+
+  local server_name_list
+  server_name_list="$(printf '%s ' "${server_names[@]}")"
+  server_name_list="${server_name_list% }"
+
+  sudo tee /etc/nginx/sites-available/discovery-rmm >/dev/null <<EOF
+map \$http_upgrade \$connection_upgrade {
+  default upgrade;
+  '' close;
+}
+
+server {
+  listen 80;
+  listen [::]:80;
+  server_name ${server_name_list};
+  return 301 https://\$host\$request_uri;
+}
+
+server {
+  listen 443 ssl http2;
+  listen [::]:443 ssl http2;
+  listen 8443 ssl http2;
+  listen [::]:8443 ssl http2;
+  server_name ${server_name_list};
+
+  ssl_certificate /etc/discovery-api/certs/api-internal.crt;
+  ssl_certificate_key /etc/discovery-api/certs/api-internal.key;
+
+  root ${DISCOVERY_SITE_CURRENT};
+  index index.html;
+
+  location /api/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+  }
+
+  location /hubs/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection \$connection_upgrade;
+  }
+
+  location = /health {
+    proxy_pass http://127.0.0.1:8080/health;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+  }
+
+  location ^~ /openapi {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+  }
+
+  location ^~ /scalar {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+  }
+
+  location / {
+    try_files \$uri \$uri/ /index.html;
+  }
+}
+EOF
+
+  sudo rm -f /etc/nginx/sites-enabled/default
+  sudo ln -sfn /etc/nginx/sites-available/discovery-rmm /etc/nginx/sites-enabled/discovery-rmm
+  sudo nginx -t
+  sudo systemctl enable nginx
+  sudo systemctl restart nginx
 }
 
 setup_cloudflare_tunnel() {
@@ -810,7 +1241,34 @@ publish_api() {
   sudo -u discovery-api rm -f "$release_dir"/appsettings*.json || true
   sudo -u discovery-api ln -sfn "$release_dir" "$DISCOVERY_API_CURRENT"
 
-  [[ -x "$release_dir/Discovery.Api" ]] || fail "Binario Discovery.Api nao gerado"
+  if ! sudo -u discovery-api test -x "$release_dir/Discovery.Api"; then
+    fail "Binario Discovery.Api nao gerado"
+  fi
+}
+
+publish_site() {
+  log "Publicando portal web Discovery"
+
+  local release_id
+  release_id="$(date +%Y%m%d%H%M%S)-initial"
+  local release_dir="$DISCOVERY_SITE_RELEASES/$release_id"
+
+  sudo -u discovery-api mkdir -p "$release_dir"
+  sudo -u discovery-api -H npm --prefix "$DISCOVERY_SITE_SOURCE" ci
+  sudo -u discovery-api -H env \
+    VITE_API_URL="$DISCOVERY_SITE_API_URL" \
+    VITE_REALTIME_PROVIDER="$DISCOVERY_SITE_REALTIME_PROVIDER" \
+    VITE_NATS_ENABLED="$DISCOVERY_SITE_NATS_ENABLED" \
+    VITE_NATS_URL="$DISCOVERY_SITE_NATS_URL" \
+    npm --prefix "$DISCOVERY_SITE_SOURCE" run build
+
+  if ! sudo -u discovery-api test -f "$DISCOVERY_SITE_SOURCE/dist/index.html"; then
+    fail "Build do portal web nao gerou dist/index.html"
+  fi
+
+  sudo -u discovery-api cp -a "$DISCOVERY_SITE_SOURCE/dist/." "$release_dir/"
+  apply_site_release_permissions "$release_dir"
+  sudo -u discovery-api ln -sfn "$release_dir" "$DISCOVERY_SITE_CURRENT"
 }
 
 write_environment_file() {
@@ -825,18 +1283,10 @@ write_environment_file() {
     public_host="$INTERNAL_API_HOST"
   fi
 
-  local cert_env=""
-  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
-    cert_env=$(cat <<'EOF'
-ASPNETCORE_Kestrel__Certificates__Default__Path=/etc/discovery-api/certs/api-internal.crt
-ASPNETCORE_Kestrel__Certificates__Default__KeyPath=/etc/discovery-api/certs/api-internal.key
-EOF
-)
-  fi
-
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
-ASPNETCORE_URLS=http://0.0.0.0:8080;https://0.0.0.0:8443
+ASPNETCORE_URLS=http://127.0.0.1:8080
+OPENAPI__ENABLED=$( [[ "${OPENAPI_ENABLED:-0}" == "1" ]] && echo true || echo false )
 ConnectionStrings__DefaultConnection=Host=127.0.0.1;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
 Nats__Url=nats://${NATS_AUTH_USER}:${NATS_AUTH_PASSWORD}@127.0.0.1:4222
 Nats__AuthUser=${NATS_AUTH_USER}
@@ -853,26 +1303,235 @@ DISCOVERY_GIT_REPO=${DISCOVERY_GIT_REPO}
 DISCOVERY_GIT_BRANCH=${DISCOVERY_GIT_BRANCH}
 DISCOVERY_GIT_TOKEN_FILE=/etc/discovery-api/github.token
 DISCOVERY_DOTNET_RUNTIME=${DISCOVERY_DOTNET_RUNTIME}
-${cert_env}
+DISCOVERY_SITE_GIT_REPO=${DISCOVERY_SITE_GIT_REPO}
+DISCOVERY_SITE_BASE=${DISCOVERY_SITE_BASE}
+DISCOVERY_SITE_SOURCE=${DISCOVERY_SITE_SOURCE}
+DISCOVERY_SITE_RELEASES=${DISCOVERY_SITE_RELEASES}
+DISCOVERY_SITE_CURRENT=${DISCOVERY_SITE_CURRENT}
+DISCOVERY_SITE_API_URL=${DISCOVERY_SITE_API_URL}
+DISCOVERY_SITE_REALTIME_PROVIDER=${DISCOVERY_SITE_REALTIME_PROVIDER}
+DISCOVERY_SITE_NATS_ENABLED=${DISCOVERY_SITE_NATS_ENABLED}
+DISCOVERY_SITE_NATS_URL=${DISCOVERY_SITE_NATS_URL}
 EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
   sudo chown root:discovery-api /etc/discovery-api/discovery.env
 
   sudo tee /etc/discovery-api/github.token >/dev/null <<EOF
-${GITHUB_PAT}
+${GITHUB_PAT:-}
 EOF
   sudo chmod 640 /etc/discovery-api/github.token
   sudo chown root:discovery-api /etc/discovery-api/github.token
+  if [[ -z "${GITHUB_PAT:-}" ]]; then
+    sudo rm -f /etc/discovery-api/github.token || true
+  fi
 }
 
 install_selfupdate_script() {
-  local source_script="$SCRIPT_DIR/selfupdate_discovery_api.sh"
   local target_script="$DISCOVERY_OPS_DIR/selfupdate-discovery-api.sh"
 
-  [[ -f "$source_script" ]] || fail "Script de self-update nao encontrado em $source_script"
+  log "Escrevendo script de self-update em $target_script"
 
-  sudo install -m 750 -o discovery-api -g discovery-api "$source_script" "$target_script"
+  sudo tee "$target_script" >/dev/null <<'SELFUPDATE_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+log() {
+  printf '[selfupdate] %s\n' "$*"
+}
+
+fail() {
+  printf '[selfupdate][erro] %s\n' "$*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
+}
+
+require_cmd git
+require_cmd dotnet
+require_cmd flock
+require_cmd npm
+
+DISCOVERY_API_BASE="${DISCOVERY_API_BASE:-/opt/discovery-api}"
+DISCOVERY_API_SOURCE="${DISCOVERY_API_SOURCE:-$DISCOVERY_API_BASE/source}"
+DISCOVERY_API_RELEASES="${DISCOVERY_API_RELEASES:-$DISCOVERY_API_BASE/releases}"
+DISCOVERY_API_CURRENT="${DISCOVERY_API_CURRENT:-$DISCOVERY_API_BASE/current}"
+DISCOVERY_API_PROJECT="${DISCOVERY_API_PROJECT:-src/Discovery.Api/Discovery.Api.csproj}"
+DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-}"
+DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-release}"
+DISCOVERY_GIT_TOKEN_FILE="${DISCOVERY_GIT_TOKEN_FILE:-/etc/discovery-api/github.token}"
+DISCOVERY_SITE_GIT_REPO="${DISCOVERY_SITE_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Site}"
+DISCOVERY_SITE_BASE="${DISCOVERY_SITE_BASE:-/opt/discovery-site}"
+DISCOVERY_SITE_SOURCE="${DISCOVERY_SITE_SOURCE:-$DISCOVERY_SITE_BASE/source}"
+DISCOVERY_SITE_RELEASES="${DISCOVERY_SITE_RELEASES:-$DISCOVERY_SITE_BASE/releases}"
+DISCOVERY_SITE_CURRENT="${DISCOVERY_SITE_CURRENT:-$DISCOVERY_SITE_BASE/current}"
+DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
+DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-signalr}"
+DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-false}"
+DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-}"
+DISCOVERY_KEEP_RELEASES="${DISCOVERY_KEEP_RELEASES:-5}"
+DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-linux-x64}"
+
+LOCK_FILE="/opt/discovery-ops/selfupdate.lock"
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  log "Outro processo de self-update ja esta em execucao."
+  exit 0
+fi
+
+[[ -n "$DISCOVERY_GIT_REPO" ]] || fail "DISCOVERY_GIT_REPO nao definido."
+[[ -n "$DISCOVERY_SITE_GIT_REPO" ]] || fail "DISCOVERY_SITE_GIT_REPO nao definido."
+
+mkdir -p "$DISCOVERY_API_RELEASES"
+mkdir -p "$DISCOVERY_SITE_RELEASES"
+
+GITHUB_PAT=""
+if [[ -f "$DISCOVERY_GIT_TOKEN_FILE" ]]; then
+  GITHUB_PAT="$(tr -d '\r\n' < "$DISCOVERY_GIT_TOKEN_FILE")"
+fi
+
+ASKPASS_FILE=""
+cleanup() {
+  if [[ -n "$ASKPASS_FILE" ]]; then
+    rm -f "$ASKPASS_FILE"
+  fi
+}
+trap cleanup EXIT
+
+if [[ -n "$GITHUB_PAT" ]]; then
+  ASKPASS_FILE="$(mktemp)"
+  cat > "$ASKPASS_FILE" <<'EOF'
+#!/usr/bin/env sh
+case "$1" in
+  *Username*) printf '%s\n' "x-access-token" ;;
+  *Password*) printf '%s\n' "$GITHUB_PAT" ;;
+  *) printf '\n' ;;
+esac
+EOF
+  chmod 700 "$ASKPASS_FILE"
+  export GIT_ASKPASS="$ASKPASS_FILE"
+  export GIT_TERMINAL_PROMPT=0
+  export GITHUB_PAT
+else
+  log "Token GitHub nao informado; seguindo sem autenticacao (repo publico)"
+  export GIT_TERMINAL_PROMPT=0
+fi
+
+clone_or_fetch_repo() {
+  local repo_url="$1"
+  local repo_dir="$2"
+
+  if [[ ! -d "$repo_dir/.git" ]]; then
+    log "Repositorio nao encontrado. Clonando $repo_url em $repo_dir"
+    mkdir -p "$(dirname "$repo_dir")"
+    git clone --branch "$DISCOVERY_GIT_BRANCH" "$repo_url" "$repo_dir"
+    return
+  fi
+
+  log "Buscando atualizacoes de $repo_dir"
+  git -C "$repo_dir" fetch origin "$DISCOVERY_GIT_BRANCH"
+}
+
+cleanup_old_releases() {
+  local releases_dir="$1"
+
+  mapfile -t RELEASE_DIRS < <(ls -1dt "$releases_dir"/* 2>/dev/null || true)
+  if (( ${#RELEASE_DIRS[@]} > DISCOVERY_KEEP_RELEASES )); then
+    for old_release in "${RELEASE_DIRS[@]:DISCOVERY_KEEP_RELEASES}"; do
+      rm -rf "$old_release"
+    done
+  fi
+}
+
+publish_api_release() {
+  local remote_rev="$1"
+  local release_id="$(date +%Y%m%d%H%M%S)-${remote_rev:0:8}"
+  local release_dir="$DISCOVERY_API_RELEASES/$release_id"
+
+  mkdir -p "$release_dir"
+  dotnet publish "$DISCOVERY_API_SOURCE/$DISCOVERY_API_PROJECT" \
+    -c Release \
+    -r "$DISCOVERY_DOTNET_RUNTIME" \
+    --self-contained false \
+    -o "$release_dir" \
+    /p:UseAppHost=true
+
+  rm -f "$release_dir"/appsettings*.json || true
+  [[ -x "$release_dir/Discovery.Api" ]] || fail "Binario Discovery.Api nao gerado na release $release_id"
+
+  ln -sfn "$release_dir" "$DISCOVERY_API_CURRENT"
+  log "Release ativa da API atualizada para $release_id"
+  cleanup_old_releases "$DISCOVERY_API_RELEASES"
+}
+
+publish_site_release() {
+  local remote_rev="$1"
+  local release_id="$(date +%Y%m%d%H%M%S)-${remote_rev:0:8}"
+  local release_dir="$DISCOVERY_SITE_RELEASES/$release_id"
+
+  mkdir -p "$release_dir"
+  npm --prefix "$DISCOVERY_SITE_SOURCE" ci
+  env \
+    VITE_API_URL="$DISCOVERY_SITE_API_URL" \
+    VITE_REALTIME_PROVIDER="$DISCOVERY_SITE_REALTIME_PROVIDER" \
+    VITE_NATS_ENABLED="$DISCOVERY_SITE_NATS_ENABLED" \
+    VITE_NATS_URL="$DISCOVERY_SITE_NATS_URL" \
+    npm --prefix "$DISCOVERY_SITE_SOURCE" run build
+
+  [[ -f "$DISCOVERY_SITE_SOURCE/dist/index.html" ]] || fail "Build do portal web nao gerou dist/index.html"
+
+  cp -a "$DISCOVERY_SITE_SOURCE/dist/." "$release_dir/"
+  find "$release_dir" -type d -exec chmod 755 {} +
+  find "$release_dir" -type f -exec chmod 644 {} +
+  ln -sfn "$release_dir" "$DISCOVERY_SITE_CURRENT"
+  log "Release ativa do portal web atualizada para $release_id"
+  cleanup_old_releases "$DISCOVERY_SITE_RELEASES"
+}
+
+clone_or_fetch_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
+clone_or_fetch_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
+
+API_LOCAL_REV="$(git -C "$DISCOVERY_API_SOURCE" rev-parse HEAD 2>/dev/null || true)"
+API_REMOTE_REV="$(git -C "$DISCOVERY_API_SOURCE" rev-parse "origin/$DISCOVERY_GIT_BRANCH")"
+SITE_LOCAL_REV="$(git -C "$DISCOVERY_SITE_SOURCE" rev-parse HEAD 2>/dev/null || true)"
+SITE_REMOTE_REV="$(git -C "$DISCOVERY_SITE_SOURCE" rev-parse "origin/$DISCOVERY_GIT_BRANCH")"
+
+API_CHANGED=0
+SITE_CHANGED=0
+[[ "$API_LOCAL_REV" != "$API_REMOTE_REV" ]] && API_CHANGED=1
+[[ "$SITE_LOCAL_REV" != "$SITE_REMOTE_REV" ]] && SITE_CHANGED=1
+
+if [[ "$API_CHANGED" -eq 0 && "$SITE_CHANGED" -eq 0 ]]; then
+  log "Sem atualizacoes no branch $DISCOVERY_GIT_BRANCH para API e portal web"
+  exit 0
+fi
+
+if [[ "$API_CHANGED" -eq 1 ]]; then
+  log "Atualizacao detectada na API. Aplicando commit $API_REMOTE_REV"
+  git -C "$DISCOVERY_API_SOURCE" checkout "$DISCOVERY_GIT_BRANCH"
+  git -C "$DISCOVERY_API_SOURCE" reset --hard "origin/$DISCOVERY_GIT_BRANCH"
+  publish_api_release "$API_REMOTE_REV"
+else
+  log "Sem atualizacoes na API"
+fi
+
+if [[ "$SITE_CHANGED" -eq 1 ]]; then
+  log "Atualizacao detectada no portal web. Aplicando commit $SITE_REMOTE_REV"
+  git -C "$DISCOVERY_SITE_SOURCE" checkout "$DISCOVERY_GIT_BRANCH"
+  git -C "$DISCOVERY_SITE_SOURCE" reset --hard "origin/$DISCOVERY_GIT_BRANCH"
+  publish_site_release "$SITE_REMOTE_REV"
+else
+  log "Sem atualizacoes no portal web"
+fi
+
+log "Self-update concluido com sucesso"
+SELFUPDATE_EOF
+
+  sudo chmod 750 "$target_script"
+  sudo chown discovery-api:discovery-api "$target_script"
 }
 
 write_systemd_service() {
@@ -908,8 +1567,7 @@ EOF
 }
 
 run_db_migrations() {
-  log "Aplicando migracoes"
-  sudo -u discovery-api bash -c "set -a; source /etc/discovery-api/discovery.env; set +a; dotnet '${DISCOVERY_API_CURRENT}/Discovery.Migrations.dll'" || true
+  log "Migracoes sao executadas no startup da API; etapa manual desativada"
 }
 
 show_summary() {
@@ -918,21 +1576,31 @@ show_summary() {
   echo "Resumo:"
   echo "- API base: $DISCOVERY_API_BASE"
   echo "- API current: $DISCOVERY_API_CURRENT"
+  echo "- Site base: $DISCOVERY_SITE_BASE"
+  echo "- Site current: $DISCOVERY_SITE_CURRENT"
   echo "- Agent source: $DISCOVERY_AGENT_SRC"
   echo "- Agent artifacts: $DISCOVERY_AGENT_ARTIFACTS"
   echo "- Access mode: $ACCESS_MODE"
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo "- Host interno: $INTERNAL_API_HOST"
+    echo "- Portal interno: https://$INTERNAL_API_HOST/"
   fi
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo "- Host externo: $EXTERNAL_API_HOST"
+    echo "- Portal externo: https://$EXTERNAL_API_HOST/"
   fi
   echo
   echo "Verificacoes recomendadas:"
   echo "1) sudo systemctl status discovery-api --no-pager"
-  echo "2) sudo systemctl status nats-server --no-pager"
-  echo "3) sudo systemctl status postgresql --no-pager"
-  echo "4) curl -k https://127.0.0.1:8443/health"
+  echo "2) sudo systemctl status nginx --no-pager"
+  echo "3) sudo systemctl status nats-server --no-pager"
+  echo "4) sudo systemctl status postgresql --no-pager"
+  echo "5) curl -k https://127.0.0.1/"
+  if [[ "${OPENAPI_ENABLED:-0}" == "1" ]]; then
+    echo "6) curl -k https://127.0.0.1/openapi/v1.json"
+  else
+    echo "6) sudo ss -ltnp '( sport = :8080 )'"
+  fi
 }
 
 main() {
@@ -943,25 +1611,61 @@ main() {
     return
   fi
 
-  prompt_if_empty GITHUB_PAT "GitHub PAT (bootstrap, sera salvo localmente para self-update)" 1
-  prompt_if_empty DISCOVERY_GIT_REPO "URL do repositorio da API"
-  prompt_if_empty DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)"
+  wizard_header "Repositorios" "$(wizard_step_label "3/8" "2/7")"
+  echo "Informe os repositorios Git que serao clonados."
+  echo "API: backend principal (DiscoveryRMM_API)."
+  echo "Agent: codigo do agente para build."
+  echo "Site: portal web/console administrativo."
+  echo "Exemplos:"
+  echo "- https://github.com/OWNER/DiscoveryRMM_API.git"
+  echo "- git@github.com:OWNER/DiscoveryRMM_API.git"
+  echo "----------------------------------------"
+  prompt_repo_url DISCOVERY_GIT_REPO "URL do repositorio da API" "https://github.com/pedrostefanogv/DiscoveryRMM_API"
+  prompt_repo_url DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)" "https://github.com/pedrostefanogv/DiscoveryRMM_Agent"
+  prompt_repo_url DISCOVERY_SITE_GIT_REPO "URL do repositorio do portal web" "https://github.com/pedrostefanogv/DiscoveryRMM_Site"
   select_install_branch
-  prompt_if_empty ACCESS_MODE "Modo de acesso (internal/external/hybrid)" 0 "internal"
+
+  wizard_header "Acesso do portal/API" "$(wizard_step_label "5/8" "4/7")"
+  echo "1) internal - acesso somente na rede interna."
+  echo "2) external - acesso somente via Cloudflare Tunnel."
+  echo "3) hybrid   - interno e externo ao mesmo tempo."
+  echo "----------------------------------------"
+  prompt_if_empty ACCESS_MODE "Modo de acesso (1/2/3 ou internal/external/hybrid)" 0 "internal"
 
   normalize_access_mode
 
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
-    prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API"
+    echo
+    echo "Endereco interno usado por agentes/UI na rede local."
+    local internal_ip
+    internal_ip="$(detect_internal_ipv4)"
+    if [[ -n "$internal_ip" ]]; then
+      prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API" 0 "$internal_ip"
+    else
+      prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API"
+    fi
   fi
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
+    echo
+    echo "Endereco externo publicado via Cloudflare (ex: api.suaempresa.com)."
     prompt_if_empty EXTERNAL_API_HOST "Hostname externo da API (Cloudflare)"
+    echo "Token do Cloudflare Tunnel para publicar a API."
     prompt_if_empty CLOUDFLARE_TUNNEL_TOKEN "Cloudflare Tunnel token" 1
   fi
 
+  wizard_header "Documentacao OpenAPI (Scalar)" "$(wizard_step_label "6/8" "5/7")"
+  echo "Habilite ou nao a documentacao OpenAPI (Scalar) na API."
+  echo "Se desativado, os endpoints /openapi e /scalar ficam indisponiveis."
+  echo "----------------------------------------"
+  prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI/Scalar? (1/0)" 0 "0"
+  normalize_openapi_enabled
+
+  wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "7/8" "6/7")"
+  echo "O instalador cria o usuario e o database se nao existirem."
+  echo "----------------------------------------"
   prompt_if_empty POSTGRES_DB "Nome do database PostgreSQL" 0 "discovery"
   prompt_if_empty POSTGRES_USER "Usuario PostgreSQL" 0 "discovery_app"
-  prompt_if_empty POSTGRES_PASSWORD "Senha PostgreSQL" 1
+  prompt_postgres_password
 
   prompt_nats_configuration
 
@@ -969,24 +1673,36 @@ main() {
   normalize_nats_settings
 
   DISCOVERY_API_BASE="${DISCOVERY_API_BASE:-/opt/discovery-api}"
+  DISCOVERY_SITE_BASE="${DISCOVERY_SITE_BASE:-/opt/discovery-site}"
   DISCOVERY_AGENT_SRC="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}"
   DISCOVERY_AGENT_ARTIFACTS="${DISCOVERY_AGENT_ARTIFACTS:-/opt/discovery-agent-artifacts}"
   DISCOVERY_OPS_DIR="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"
   DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-linux-x64}"
+  DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
+  DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-signalr}"
+  DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-false}"
+  DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-}"
 
   DISCOVERY_API_RELEASES="${DISCOVERY_API_BASE}/releases"
   DISCOVERY_API_SHARED="${DISCOVERY_API_BASE}/shared"
   DISCOVERY_API_SOURCE="${DISCOVERY_API_BASE}/source"
   DISCOVERY_API_CURRENT="${DISCOVERY_API_BASE}/current"
+  DISCOVERY_SITE_RELEASES="${DISCOVERY_SITE_BASE}/releases"
+  DISCOVERY_SITE_SOURCE="${DISCOVERY_SITE_BASE}/source"
+  DISCOVERY_SITE_CURRENT="${DISCOVERY_SITE_BASE}/current"
+
+  confirm_installation
 
   install_apt_dependencies
   ensure_dotnet_sdk
+  ensure_nodejs
   ensure_service_user
   create_directories
 
   setup_postgres
+  setup_redis
   setup_nats
-  setup_internal_certificate
+  setup_proxy_certificate
   setup_cloudflare_tunnel
   write_environment_file
 
@@ -994,10 +1710,13 @@ main() {
   setup_git_askpass
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
+  clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
 
   publish_api
+  publish_site
   install_selfupdate_script
   write_systemd_service
+  write_site_proxy_config
   run_db_migrations
   show_summary
 }
