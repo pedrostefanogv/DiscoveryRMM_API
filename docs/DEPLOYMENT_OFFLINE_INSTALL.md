@@ -1,6 +1,6 @@
 # Deployment and offline install
 
-Este guia cobre a instalacao inicial do servidor Discovery API em Linux (Ubuntu 22.04/24.04), com PostgreSQL + NATS no mesmo host, escolha de acesso interno/externo e self-update do servidor.
+Este guia cobre a instalacao inicial do Discovery RMM em Linux (Ubuntu 22.04/24.04), incluindo API + portal web, com PostgreSQL + NATS no mesmo host, escolha de acesso interno/externo e self-update do servidor.
 
 ## Scripts adicionados
 
@@ -10,7 +10,7 @@ Este guia cobre a instalacao inicial do servidor Discovery API em Linux (Ubuntu 
 
 ## Regras de seguranca adotadas
 
-1. O instalador falha se for executado como root.
+1. Se o instalador for executado como root, ele reexecuta sob um usuario comum com sudo.
 2. O fluxo exige usuario comum com sudo.
 3. Secrets nao sao impressos no terminal.
 4. O token GitHub usado para bootstrap deve ser temporario e rotacionado apos a instalacao.
@@ -27,7 +27,7 @@ Ao iniciar, o wizard pergunta qual operacao executar:
 - `2` Atualizar somente configuracao do NATS
 
 O wizard pergunta:
-- repositorio da API e do Agent
+- repositorio da API, do Agent e do portal web
 - branch
 - modo de acesso (`internal`, `external`, `hybrid`)
 - IP/hostname interno (quando aplicavel)
@@ -103,19 +103,35 @@ Esse modo:
 - Releases da API: `/opt/discovery-api/releases`
 - Link ativo da API: `/opt/discovery-api/current`
 - Shared da API: `/opt/discovery-api/shared`
+- Site: `/opt/discovery-site`
+- Source do Site para self-update: `/opt/discovery-site/source`
+- Releases do Site: `/opt/discovery-site/releases`
+- Link ativo do Site: `/opt/discovery-site/current`
 - Source do Agent: `/opt/discovery-agent-src`
 - Artefatos do Agent: `/opt/discovery-agent-artifacts`
 - Operacao (scripts/locks): `/opt/discovery-ops`
+
+## Publicacao do portal web
+
+O instalador agora:
+- clona o repositiorio `DiscoveryRMM_Site`
+- instala Node.js suportado pelo Vite atual
+- executa `npm ci` + `npm run build`
+- publica a SPA em releases versionadas
+- configura Nginx para servir o portal e fazer proxy de `/api`, `/hubs`, `/health`, `/openapi` e `/scalar` para a API local
+
+Por padrao, o portal usa a mesma origem do Nginx (`DISCOVERY_SITE_API_URL=""`) e sobe com realtime em `signalr`, evitando depender de NATS/WebSocket no browser durante a instalacao inicial.
 
 ## Self-update do servidor
 
 O servico systemd da API executa `ExecStartPre=/opt/discovery-ops/selfupdate-discovery-api.sh`.
 
 Fluxo de update:
-1. Busca atualizacoes no branch configurado.
-2. Se houver novo commit, publica nova release com `dotnet publish`.
-3. Troca o link simbolico `current` de forma atomica.
-4. Mantem apenas as ultimas releases (default: 5).
+1. Busca atualizacoes da API e do portal web no branch configurado.
+2. Se houver novo commit na API, publica nova release com `dotnet publish`.
+3. Se houver novo commit no portal web, executa novo build Vite e publica nova release estatica.
+4. Troca os links simbolicos `current` de forma atomica.
+5. Mantem apenas as ultimas releases (default: 5).
 
 Variaveis de update ficam em `/etc/discovery-api/discovery.env`.
 O token GitHub fica em `/etc/discovery-api/github.token`.
@@ -125,6 +141,7 @@ O token GitHub fica em `/etc/discovery-api/github.token`.
 - `postgresql`
 - `nats-server`
 - `discovery-api`
+- `nginx`
 - `cloudflared` (somente modo `external` ou `hybrid`)
 
 ## PostgreSQL para IA (embeddings)
@@ -139,10 +156,22 @@ O instalador garante:
 
 ```bash
 sudo systemctl status discovery-api --no-pager
+sudo systemctl status nginx --no-pager
 sudo systemctl status nats-server --no-pager
 sudo systemctl status postgresql --no-pager
-curl -k https://127.0.0.1:8443/health
+curl -k https://127.0.0.1/
+curl -k https://127.0.0.1/openapi/v1.json
 ```
+
+Se o OpenAPI estiver desativado (`OPENAPI_ENABLED=0`), substitua a ultima verificacao por uma checagem de socket/local bind da API:
+
+```bash
+sudo ss -ltnp '( sport = :8080 )'
+```
+
+## Observacao sobre Cloudflare Tunnel
+
+Quando usar `ACCESS_MODE=external` ou `hybrid`, o tunnel deve apontar para o proxy local que publica o portal/API. O instalador passa a disponibilizar o portal na mesma origem web e mantem a API atras do Nginx.
 
 ## Observacao importante
 

@@ -119,6 +119,65 @@ public class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> options) : 
         // P2P
         ConfigureP2pEntities(modelBuilder);
 
+        // AI Chat
+        modelBuilder.Entity<AiChatSession>(entity =>
+        {
+            entity.ToTable("ai_chat_sessions");
+            entity.HasKey(session => session.Id);
+            entity.Property(session => session.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(session => session.AgentId).HasColumnName("agent_id");
+            entity.Property(session => session.SiteId).HasColumnName("site_id");
+            entity.Property(session => session.ClientId).HasColumnName("client_id");
+            entity.Property(session => session.Topic).HasColumnName("topic").HasMaxLength(100);
+            entity.Property(session => session.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(session => session.ClosedAt).HasColumnName("closed_at").HasColumnType("timestamptz");
+            entity.Property(session => session.CreatedByIp).HasColumnName("created_by_ip").HasMaxLength(45);
+            entity.Property(session => session.TraceId).HasColumnName("trace_id").HasMaxLength(100);
+            entity.Property(session => session.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
+            entity.Property(session => session.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+
+            entity.HasMany(session => session.Messages)
+                .WithOne(message => message.Session)
+                .HasForeignKey(message => message.SessionId);
+        });
+
+        modelBuilder.Entity<AiChatMessage>(entity =>
+        {
+            entity.ToTable("ai_chat_messages");
+            entity.HasKey(message => message.Id);
+            entity.Property(message => message.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(message => message.SessionId).HasColumnName("session_id");
+            entity.Property(message => message.SequenceNumber).HasColumnName("sequence_number");
+            entity.Property(message => message.Role).HasColumnName("role").HasMaxLength(20);
+            entity.Property(message => message.Content).HasColumnName("content");
+            entity.Property(message => message.TokensUsed).HasColumnName("tokens_used");
+            entity.Property(message => message.LatencyMs).HasColumnName("latency_ms");
+            entity.Property(message => message.ModelVersion).HasColumnName("model_version").HasMaxLength(50);
+            entity.Property(message => message.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(message => message.ToolName).HasColumnName("tool_name").HasMaxLength(100);
+            entity.Property(message => message.ToolCallId).HasColumnName("tool_call_id").HasMaxLength(100);
+            entity.Property(message => message.ToolArgumentsJson).HasColumnName("tool_arguments_json");
+            entity.Property(message => message.TraceId).HasColumnName("trace_id").HasMaxLength(100);
+        });
+
+        modelBuilder.Entity<AiChatJob>(entity =>
+        {
+            entity.ToTable("ai_chat_jobs");
+            entity.HasKey(job => job.Id);
+            entity.Property(job => job.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(job => job.SessionId).HasColumnName("session_id");
+            entity.Property(job => job.AgentId).HasColumnName("agent_id");
+            entity.Property(job => job.Status).HasColumnName("status").HasMaxLength(20);
+            entity.Property(job => job.UserMessage).HasColumnName("user_message");
+            entity.Property(job => job.AssistantMessage).HasColumnName("assistant_message");
+            entity.Property(job => job.TokensUsed).HasColumnName("tokens_used");
+            entity.Property(job => job.ErrorMessage).HasColumnName("error_message").HasMaxLength(1000);
+            entity.Property(job => job.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(job => job.StartedAt).HasColumnName("started_at").HasColumnType("timestamptz");
+            entity.Property(job => job.CompletedAt).HasColumnName("completed_at").HasColumnType("timestamptz");
+            entity.Property(job => job.TraceId).HasColumnName("trace_id").HasMaxLength(100);
+        });
+
         // Configurar Attachment (genérico para múltiplos escopos)
         modelBuilder.Entity<Attachment>(entity =>
         {
