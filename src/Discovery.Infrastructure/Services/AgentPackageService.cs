@@ -219,16 +219,13 @@ public class AgentPackageService : IAgentPackageService
 
         await PrebuildBaseBinaryAsync();
 
-        if (OperatingSystem.IsWindows())
-            return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken, activeProfile);
-        else
-            return await BuildInstallerFromBinaryAsync(rawDeployToken);
+        return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken, activeProfile);
     }
 
     private async Task<(byte[] Content, string FileName)> BuildInstallerWithNsisAsync(string projectPath, string rawDeployToken, string activeProfile)
     {
         var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
-            ?? Path.Combine("build", "windows", "installer");
+            ?? Path.Combine("src", "build", "windows", "installer");
         var installerDir = Path.Combine(projectPath, installerDirectory);
         var projectNsi = Path.Combine(installerDir, "project.nsi");
         if (!File.Exists(projectNsi))
@@ -236,61 +233,78 @@ public class AgentPackageService : IAgentPackageService
 
         var makensisPath = ResolveMakensisPath();
 
+        var apiScheme = _config["AgentPackage:PublicApiScheme"] ?? "https";
         var publicApiServer = _config["AgentPackage:PublicApiServer"]
             ?? throw new InvalidOperationException("AgentPackage:PublicApiServer is not configured.");
+        var publicApiUrl = $"{apiScheme}://{publicApiServer}";
 
         var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
         var defaultMinimal = (_config["AgentPackage:InstallerDefaults:MinimalDefault"] ?? "1") == "0" ? "0" : "1";
+        var outputName = GetAgentPackageSetting("InstallerOutputName") ?? "discovery-agent-install.exe";
 
         _logger.LogInformation(
             "Agent installer build with profile={Profile}, installerDir={InstallerDir}",
             activeProfile,
             installerDir);
 
+        // WebView2 bootstrapper is embedded by the NSIS script (wails_tools.nsh).
+        await EnsureWebView2BootstrapperAsync(installerDir);
+
         var binaryPath = GetBinaryPath();
-        var binaryRelPath = Path.GetRelativePath(installerDir, binaryPath);
 
         await RunProcessAsync(
             fileName: makensisPath,
             workingDirectory: installerDir,
             arguments:
             [
-                $"-DARG_WAILS_AMD64_BINARY={binaryRelPath}",
-                $"-DARG_DEFAULT_URL={publicApiServer}",
+                "-V3",
+                "-INPUTCHARSET", "UTF8",
+                $"-DARG_WAILS_AMD64_BINARY={binaryPath}",
+                $"-DARG_DEFAULT_URL={publicApiUrl}",
                 $"-DARG_DEFAULT_KEY={rawDeployToken}",
                 $"-DARG_DEFAULT_DISCOVERY={defaultDiscovery}",
                 $"-DARG_DEFAULT_MINIMAL={defaultMinimal}",
+                $"-DARG_OUTFILE_NAME={outputName}",
                 "project.nsi"
             ]);
 
         var binDir = Path.Combine(projectPath, "src", "build", "bin");
         if (!Directory.Exists(binDir))
-        {
-            // Fallback para estrutura antiga sem /src/
             binDir = Path.Combine(projectPath, "build", "bin");
-        }
 
         if (!Directory.Exists(binDir))
             throw new InvalidOperationException("Installer output directory not found after build.");
 
-        var installerPattern = GetAgentPackageSetting("InstallerPattern") ?? "*-installer.exe";
-        var installerPath = Directory.GetFiles(binDir, installerPattern)
-            .Select(path => new FileInfo(path))
-            .OrderByDescending(file => file.LastWriteTimeUtc)
-            .FirstOrDefault()?.FullName;
-
-        if (installerPath is null)
-            throw new FileNotFoundException($"Installer executable was not generated in {binDir} (pattern: {installerPattern}).");
+        var installerPath = Path.Combine(binDir, outputName);
+        if (!File.Exists(installerPath))
+            throw new FileNotFoundException($"Installer executable was not generated: {installerPath}");
 
         var bytes = await File.ReadAllBytesAsync(installerPath);
-        return (bytes, Path.GetFileName(installerPath));
+        return (bytes, outputName);
     }
 
-    /// <summary>
-    /// On Linux the API doesn't run NSIS. Instead it wraps the pre-built binary in a ZIP
-    /// that functions as the "installer package". The actual NSIS-based installer is
-    /// produced by the GitHub Actions CI or on a Windows machine.
-    /// </summary>
+    private async Task EnsureWebView2BootstrapperAsync(string installerDir)
+    {
+        var tmpDir = Path.Combine(installerDir, "tmp");
+        var webview2Path = Path.Combine(tmpDir, "MicrosoftEdgeWebview2Setup.exe");
+
+        if (File.Exists(webview2Path))
+            return;
+
+        _logger.LogInformation("Downloading WebView2 bootstrapper for NSIS installer...");
+        Directory.CreateDirectory(tmpDir);
+
+        using var http = new HttpClient();
+        using var response = await http.GetAsync(
+            "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+            HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
+
+        await using var fs = new FileStream(webview2Path, FileMode.Create, FileAccess.Write, FileShare.None);
+        await response.Content.CopyToAsync(fs);
+        _logger.LogInformation("WebView2 bootstrapper downloaded to {Path}", webview2Path);
+    }
+
     private async Task<(byte[] Content, string FileName)> BuildInstallerFromBinaryAsync(string rawDeployToken)
     {
         var content = await BuildPortablePackageAsync(rawDeployToken);
