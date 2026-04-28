@@ -211,7 +211,7 @@ public class AgentUpdatesController(
             if (request.ForceRebuild)
                 await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
 
-            var (content, fileName) = await agentPackageService.BuildInstallerAsync(string.Empty);
+            var (content, fileName) = await agentPackageService.BuildInstallerAsync(string.Empty, ResolvePublicApiBaseUrl(Request));
 
             var contentType = configuration["AgentPackage:InstallerContentType"]
                 ?? "application/x-msdownload";
@@ -251,6 +251,9 @@ public class AgentUpdatesController(
             return BadRequest(new { error = ex.Message });
         }
     }
+
+    private static string ResolvePublicApiBaseUrl(HttpRequest request)
+        => $"{request.Scheme}://{request.Host}{request.PathBase}/api/";
 }
 
 public sealed record UploadAgentReleaseArtifactRequest(

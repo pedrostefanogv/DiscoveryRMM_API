@@ -155,14 +155,10 @@ public class AgentPackageService : IAgentPackageService
         }
     }
 
-    public async Task<byte[]> BuildPortablePackageAsync(string rawDeployToken)
+    public async Task<byte[]> BuildPortablePackageAsync(string rawDeployToken, string? publicApiBaseUrl = null)
     {
         var binaryPath = GetBinaryPath();
-
-        var apiScheme = _config["AgentPackage:PublicApiScheme"] ?? "http";
-
-        var apiServer = _config["AgentPackage:PublicApiServer"]
-            ?? throw new InvalidOperationException("AgentPackage:PublicApiServer is not configured.");
+        var (apiScheme, apiServer) = ResolvePublicApiEndpoint(publicApiBaseUrl);
 
         var serverConfig = await _configurationService.GetServerConfigAsync();
         var natsHost = !string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
@@ -216,7 +212,7 @@ public class AgentPackageService : IAgentPackageService
         return ms.ToArray();
     }
 
-    public async Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken)
+    public async Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null)
     {
         var activeProfile = GetActiveProfileName();
         var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
@@ -227,10 +223,10 @@ public class AgentPackageService : IAgentPackageService
 
         await PrebuildBaseBinaryAsync();
 
-        return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken, activeProfile);
+        return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken, activeProfile, publicApiBaseUrl);
     }
 
-    private async Task<(byte[] Content, string FileName)> BuildInstallerWithNsisAsync(string projectPath, string rawDeployToken, string activeProfile)
+    private async Task<(byte[] Content, string FileName)> BuildInstallerWithNsisAsync(string projectPath, string rawDeployToken, string activeProfile, string? publicApiBaseUrl)
     {
         var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
             ?? Path.Combine("src", "build", "windows", "installer");
@@ -241,10 +237,7 @@ public class AgentPackageService : IAgentPackageService
 
         var makensisPath = ResolveMakensisPath();
 
-        var apiScheme = _config["AgentPackage:PublicApiScheme"] ?? "https";
-        var publicApiServer = _config["AgentPackage:PublicApiServer"]
-            ?? throw new InvalidOperationException("AgentPackage:PublicApiServer is not configured.");
-        var publicApiUrl = $"{apiScheme}://{publicApiServer}";
+        var publicApiUrl = ResolveInstallerServerUrl(publicApiBaseUrl);
 
         var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
         var defaultMinimal = (_config["AgentPackage:InstallerDefaults:MinimalDefault"] ?? "1") == "0" ? "0" : "1";
@@ -319,6 +312,52 @@ public class AgentPackageService : IAgentPackageService
         var outputName = GetAgentPackageSetting("OutputName") ?? "discovery-agent.exe";
         var zipName = Path.ChangeExtension(outputName, ".zip");
         return (content, zipName);
+    }
+
+    private (string ApiScheme, string ApiServer) ResolvePublicApiEndpoint(string? publicApiBaseUrl)
+    {
+        if (TryParsePublicApiBaseUrl(publicApiBaseUrl, out var apiScheme, out var apiServer))
+            return (apiScheme, apiServer);
+
+        var configuredScheme = (_config["AgentPackage:PublicApiScheme"] ?? "https").Trim().ToLowerInvariant();
+        var configuredServer = _config["AgentPackage:PublicApiServer"]
+            ?? throw new InvalidOperationException("AgentPackage:PublicApiServer is not configured.");
+
+        return (configuredScheme, configuredServer.Trim());
+    }
+
+    private string ResolveInstallerServerUrl(string? publicApiBaseUrl)
+    {
+        var (apiScheme, apiServer) = ResolvePublicApiEndpoint(publicApiBaseUrl);
+        return BuildPublicApiBaseUrl(apiScheme, apiServer);
+    }
+
+    private static string BuildPublicApiBaseUrl(string apiScheme, string apiServer)
+        => $"{apiScheme.Trim().ToLowerInvariant()}://{apiServer.Trim().TrimEnd('/')}/api/";
+
+    private static bool TryParsePublicApiBaseUrl(string? publicApiBaseUrl, out string apiScheme, out string apiServer)
+    {
+        apiScheme = string.Empty;
+        apiServer = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(publicApiBaseUrl))
+            return false;
+
+        if (!Uri.TryCreate(publicApiBaseUrl.Trim(), UriKind.Absolute, out var parsed))
+            return false;
+
+        if (!string.Equals(parsed.Scheme, "http", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(parsed.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(parsed.Authority))
+            return false;
+
+        apiScheme = parsed.Scheme.Trim().ToLowerInvariant();
+        apiServer = parsed.Authority.Trim();
+        return true;
     }
 
     private string GetBinaryPath()

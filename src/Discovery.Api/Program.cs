@@ -421,10 +421,26 @@ await DatabaseSeeder.SeedAsync(app.Services);
 
 // Configure the HTTP request pipeline
 var openApiEnabled = builder.Configuration.GetValue("OpenApi:Enabled", app.Environment.IsDevelopment());
+var scalarEnabled = openApiEnabled && builder.Configuration.GetValue("OpenApi:Scalar:Enabled", true);
 if (openApiEnabled)
 {
     app.MapOpenApi().AllowAnonymous();
+    app.MapGet("/api/openapi/{**rest}", (string? rest) =>
+    {
+        var suffix = string.IsNullOrWhiteSpace(rest) ? "v1.json" : rest.TrimStart('/');
+        return Results.Redirect($"/openapi/{suffix}");
+    }).AllowAnonymous();
+}
+
+if (scalarEnabled)
+{
     app.MapScalarApiReference().AllowAnonymous();
+    app.MapGet("/api/scalar/{**rest}", (string? rest) =>
+    {
+        var suffix = string.IsNullOrWhiteSpace(rest) ? string.Empty : rest.TrimStart('/');
+        var target = string.IsNullOrWhiteSpace(suffix) ? "/scalar/" : $"/scalar/{suffix}";
+        return Results.Redirect(target);
+    }).AllowAnonymous();
 }
 
 app.UseForwardedHeaders();

@@ -94,7 +94,8 @@ public class DeployTokensController : ControllerBase
         {
             try
             {
-                var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(rawToken);
+                var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
+                var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(rawToken, publicApiBaseUrl);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
             catch (FileNotFoundException ex)
@@ -212,11 +213,12 @@ public class DeployTokensController : ControllerBase
         {
             if (installerType == "online")
             {
-                var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(request.RawToken);
+                var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
+                var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(request.RawToken, publicApiBaseUrl);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
 
-            var package = await _agentPackageService.BuildPortablePackageAsync(request.RawToken);
+            var package = await _agentPackageService.BuildPortablePackageAsync(request.RawToken, ResolvePublicApiBaseUrl(Request));
             return File(package, "application/zip", "discovery-discovery-offline.zip");
         }
         catch (FileNotFoundException ex)
@@ -248,11 +250,12 @@ public class DeployTokensController : ControllerBase
         {
             if (artifact == "installer")
             {
-                var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(request.RawToken);
+                var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
+                var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(request.RawToken, publicApiBaseUrl);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
 
-            var package = await _agentPackageService.BuildPortablePackageAsync(request.RawToken);
+            var package = await _agentPackageService.BuildPortablePackageAsync(request.RawToken, ResolvePublicApiBaseUrl(Request));
             return File(package, "application/zip", "discovery-discovery-setup.zip");
         }
         catch (FileNotFoundException ex)
@@ -373,6 +376,9 @@ public class DeployTokensController : ControllerBase
             _ => "online"
         };
     }
+
+    private static string ResolvePublicApiBaseUrl(HttpRequest request)
+        => $"{request.Scheme}://{request.Host}{request.PathBase}/api/";
 }
 
 public record CreateDeployTokenRequest(Guid ClientId, Guid SiteId, string? Description, int? ExpiresInHours, bool? MultiUse, string? Delivery);

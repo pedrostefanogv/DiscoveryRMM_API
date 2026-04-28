@@ -451,9 +451,15 @@ confirm_installation() {
   fi
   echo "- Portal web: publicado no mesmo host da API via Nginx"
   if [[ "${OPENAPI_ENABLED:-0}" == "1" ]]; then
-    echo "- OpenAPI/Scalar: habilitado"
+    echo "- OpenAPI: habilitado"
+    if [[ "${OPENAPI_SCALAR_ENABLED:-$OPENAPI_ENABLED}" == "1" ]]; then
+      echo "- Scalar: habilitado"
+    else
+      echo "- Scalar: desativado"
+    fi
   else
-    echo "- OpenAPI/Scalar: desativado"
+    echo "- OpenAPI: desativado"
+    echo "- Scalar: desativado"
   fi
   echo "- PostgreSQL DB: $POSTGRES_DB"
   echo "- PostgreSQL user: $POSTGRES_USER"
@@ -674,6 +680,23 @@ normalize_openapi_enabled() {
       ;;
     *)
       fail "OPENAPI_ENABLED invalido: ${OPENAPI_ENABLED}. Use 1/0 (ou sim/nao)."
+      ;;
+  esac
+}
+
+normalize_openapi_scalar_enabled() {
+  local normalized
+  normalized="$(printf '%s' "${OPENAPI_SCALAR_ENABLED:-$OPENAPI_ENABLED}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  case "$normalized" in
+    1|true|yes|y|sim|s)
+      OPENAPI_SCALAR_ENABLED=1
+      ;;
+    0|false|no|n|nao|"" )
+      OPENAPI_SCALAR_ENABLED=0
+      ;;
+    *)
+      fail "OPENAPI_SCALAR_ENABLED invalido: ${OPENAPI_SCALAR_ENABLED}. Use 1/0 (ou sim/nao)."
       ;;
   esac
 }
@@ -1508,6 +1531,7 @@ write_environment_file() {
 ASPNETCORE_ENVIRONMENT=Production
 ASPNETCORE_URLS=http://127.0.0.1:8080
 OPENAPI__ENABLED=$( [[ "${OPENAPI_ENABLED:-0}" == "1" ]] && echo true || echo false )
+OpenApi__Scalar__Enabled=$( [[ "${OPENAPI_SCALAR_ENABLED:-$OPENAPI_ENABLED}" == "1" ]] && echo true || echo false )
 ConnectionStrings__DefaultConnection=Host=127.0.0.1;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
 Nats__Url=nats://${NATS_AUTH_USER}:${NATS_AUTH_PASSWORD}@127.0.0.1:4222
 Nats__AuthUser=${NATS_AUTH_USER}
@@ -1940,10 +1964,12 @@ main() {
 
   wizard_header "Documentacao OpenAPI (Scalar)" "$(wizard_step_label "6/8" "5/7")"
   echo "Habilite ou nao a documentacao OpenAPI (Scalar) na API."
-  echo "Se desativado, os endpoints /openapi e /scalar ficam indisponiveis."
+  echo "Se OpenAPI estiver desativado, os endpoints /openapi e /scalar ficam indisponiveis."
   echo "----------------------------------------"
   prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI/Scalar? (1/0)" 0 "0"
   normalize_openapi_enabled
+  prompt_if_empty OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (1/0)" 0 "$OPENAPI_ENABLED"
+  normalize_openapi_scalar_enabled
 
   wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "7/8" "6/7")"
   echo "O instalador cria o usuario e o database se nao existirem."
