@@ -59,6 +59,33 @@ O instalador grava em `/etc/discovery-api/discovery.env`:
 - `Nats__AuthCallout__Enabled`
 - `Nats__AuthCallout__Subject`
 
+## CORS, MFA/FIDO2 e chaves JWT na instalacao
+
+Para evitar falhas de login em ambiente local (IP/hostname proprio), o instalador tambem grava automaticamente no `discovery.env`:
+
+- `Security__Cors__AllowedOrigins__*` com as origens HTTPS do host local/interno/externo (incluindo porta `8443`)
+- `Authentication__Fido2__ServerDomain` e `Authentication__Fido2__Origins__*`
+- `Authentication__Jwt__PrivateKeyPath` e `Authentication__Jwt__PublicKeyPath`
+
+Comportamento adicional para WebAuthn/FIDO2 em modo interno:
+
+- Se `Authentication__Fido2__ServerDomain` nao for informado e o host resolvido for IP, o instalador converte automaticamente para `${ip-com-hifen}.nip.io`.
+- O certificado local e gerado com SAN incluindo esse hostname canônico.
+- O Nginx adiciona redirecionamento `308` do host IP para o host canônico, reduzindo erros de RP ID mismatch no navegador.
+
+Durante a instalacao, um par de chaves RSA JWT persistente e gerado em:
+
+- `/etc/discovery-api/certs/jwt-private.pem`
+- `/etc/discovery-api/certs/jwt-public.pem`
+
+Isso evita o fallback de chaves em memoria (token invalido apos restart) e reduz erros de CORS/MFA causados por placeholders de configuracao.
+
+Variaveis opcionais no `discovery-install.env` para override:
+
+- `DISCOVERY_FIDO2_SERVER_DOMAIN`
+- `DISCOVERY_FIDO2_SERVER_NAME`
+- `DISCOVERY_ADDITIONAL_ALLOWED_ORIGINS` (CSV)
+
 ## Modo nao interativo
 
 1. Copie o arquivo exemplo:

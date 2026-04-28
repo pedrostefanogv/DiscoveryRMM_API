@@ -1090,23 +1090,102 @@ build_certificate_san_entry() {
   printf 'DNS:%s' "$host"
 }
 
+is_ipv4_address() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+normalize_host_without_scheme() {
+  local value="$1"
+  value="${value#http://}"
+  value="${value#https://}"
+  value="${value%%/*}"
+  printf '%s' "$value"
+}
+
+build_https_origin_from_host() {
+  local host="$1"
+  [[ -n "$host" ]] || return 0
+  host="$(normalize_host_without_scheme "$host")"
+  [[ -n "$host" ]] || return 0
+  printf 'https://%s' "$host"
+}
+
+build_nip_io_host_from_ipv4() {
+  local ip="$1"
+  [[ -n "$ip" ]] || return 0
+  printf '%s.nip.io' "$(printf '%s' "$ip" | tr '.' '-')"
+}
+
+resolve_fido2_server_domain() {
+  local explicit_domain="${DISCOVERY_FIDO2_SERVER_DOMAIN:-}"
+  local resolved=""
+
+  if [[ -n "$explicit_domain" ]]; then
+    resolved="$(normalize_host_without_scheme "$explicit_domain")"
+  elif [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
+    resolved="$(normalize_host_without_scheme "$EXTERNAL_API_HOST")"
+  elif [[ "$ACCESS_MODE" == "internal" ]]; then
+    resolved="$(normalize_host_without_scheme "$INTERNAL_API_HOST")"
+  fi
+
+  if [[ -z "$resolved" ]]; then
+    resolved="localhost"
+  fi
+
+  if is_ipv4_address "$resolved"; then
+    local nip_host
+    nip_host="$(build_nip_io_host_from_ipv4 "$resolved")"
+    warn "FIDO2 ServerDomain informado como IP ($resolved). Convertendo automaticamente para dominio compativel: $nip_host"
+    resolved="$nip_host"
+  fi
+
+  printf '%s' "$resolved"
+}
+
+setup_jwt_signing_keys() {
+  local private_key_path="/etc/discovery-api/certs/jwt-private.pem"
+  local public_key_path="/etc/discovery-api/certs/jwt-public.pem"
+
+  if sudo test -f "$private_key_path" && sudo test -f "$public_key_path"; then
+    log "Par de chaves JWT ja existe; mantendo arquivos atuais"
+    return
+  fi
+
+  log "Gerando par de chaves JWT persistentes (RS256)"
+  local private_tmp
+  local public_tmp
+  private_tmp="$(mktemp)"
+  public_tmp="$(mktemp)"
+
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$private_tmp"
+  openssl rsa -in "$private_tmp" -pubout -out "$public_tmp"
+
+  sudo install -m 640 -o root -g discovery-api "$private_tmp" "$private_key_path"
+  sudo install -m 644 -o root -g discovery-api "$public_tmp" "$public_key_path"
+
+  rm -f "$private_tmp" "$public_tmp"
+}
+
 setup_proxy_certificate() {
   log "Gerando certificado self-signed para o proxy web local"
 
-  local primary_host="localhost"
+  local fido2_server_domain
+  fido2_server_domain="$(resolve_fido2_server_domain)"
+
+  local primary_host="$fido2_server_domain"
   local -a san_entries=("DNS:localhost" "IP:127.0.0.1")
   local san_entry=""
 
+  san_entry="$(build_certificate_san_entry "$fido2_server_domain")"
+  [[ -n "$san_entry" ]] && san_entries+=("$san_entry")
+
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
-    primary_host="$INTERNAL_API_HOST"
     san_entry="$(build_certificate_san_entry "$INTERNAL_API_HOST")"
     [[ -n "$san_entry" ]] && san_entries+=("$san_entry")
   fi
 
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
-    if [[ "$primary_host" == "localhost" ]]; then
-      primary_host="$EXTERNAL_API_HOST"
-    fi
     san_entry="$(build_certificate_san_entry "$EXTERNAL_API_HOST")"
     [[ -n "$san_entry" ]] && san_entries+=("$san_entry")
   fi
@@ -1159,7 +1238,11 @@ apply_site_release_permissions() {
 write_site_proxy_config() {
   log "Configurando Nginx para portal web + proxy da API"
 
+  local fido2_server_domain
+  fido2_server_domain="$(resolve_fido2_server_domain)"
+
   local -a server_names=("localhost" "127.0.0.1")
+  [[ -n "$fido2_server_domain" ]] && server_names+=("$fido2_server_domain")
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]] && [[ -n "${INTERNAL_API_HOST:-}" ]]; then
     server_names+=("$INTERNAL_API_HOST")
   fi
@@ -1170,6 +1253,17 @@ write_site_proxy_config() {
   local server_name_list
   server_name_list="$(printf '%s ' "${server_names[@]}")"
   server_name_list="${server_name_list% }"
+
+  local redirect_rules=""
+  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
+    local normalized_internal_host
+    normalized_internal_host="$(normalize_host_without_scheme "${INTERNAL_API_HOST:-}")"
+    if [[ -n "$normalized_internal_host" && "$normalized_internal_host" != "$fido2_server_domain" ]]; then
+      redirect_rules+="  if (\$host = ${normalized_internal_host}) {\n"
+      redirect_rules+="    return 308 https://${fido2_server_domain}\$request_uri;\n"
+      redirect_rules+="  }\n\n"
+    fi
+  fi
 
   sudo tee /etc/nginx/sites-available/discovery-rmm >/dev/null <<EOF
 map \$http_upgrade \$connection_upgrade {
@@ -1190,6 +1284,8 @@ server {
   listen 8443 ssl http2;
   listen [::]:8443 ssl http2;
   server_name ${server_name_list};
+
+${redirect_rules}  
 
   ssl_certificate /etc/discovery-api/certs/api-internal.crt;
   ssl_certificate_key /etc/discovery-api/certs/api-internal.key;
@@ -1355,6 +1451,59 @@ write_environment_file() {
     public_host="$INTERNAL_API_HOST"
   fi
 
+  local fido2_server_domain
+  fido2_server_domain="$(resolve_fido2_server_domain)"
+  local fido2_server_name="${DISCOVERY_FIDO2_SERVER_NAME:-Discovery RMM}"
+
+  local -a web_hosts=("localhost" "127.0.0.1")
+  web_hosts+=("$fido2_server_domain")
+  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
+    web_hosts+=("$(normalize_host_without_scheme "$INTERNAL_API_HOST")")
+  fi
+  if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
+    web_hosts+=("$(normalize_host_without_scheme "$EXTERNAL_API_HOST")")
+  fi
+
+  local -a allowed_origins=()
+  local host_entry=""
+  for host_entry in "${web_hosts[@]}"; do
+    [[ -n "$host_entry" ]] || continue
+
+    local base_origin
+    base_origin="$(build_https_origin_from_host "$host_entry")"
+    [[ -n "$base_origin" ]] || continue
+
+    if [[ ! " ${allowed_origins[*]} " =~ " ${base_origin} " ]]; then
+      allowed_origins+=("$base_origin")
+    fi
+
+    local alt_origin="${base_origin}:8443"
+    if [[ ! " ${allowed_origins[*]} " =~ " ${alt_origin} " ]]; then
+      allowed_origins+=("$alt_origin")
+    fi
+  done
+
+  if [[ -n "${DISCOVERY_ADDITIONAL_ALLOWED_ORIGINS:-}" ]]; then
+    local extra_origin=""
+    IFS=',' read -r -a _extra_origins <<< "$DISCOVERY_ADDITIONAL_ALLOWED_ORIGINS"
+    for extra_origin in "${_extra_origins[@]}"; do
+      extra_origin="$(printf '%s' "$extra_origin" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      [[ -n "$extra_origin" ]] || continue
+      if [[ ! " ${allowed_origins[*]} " =~ " ${extra_origin} " ]]; then
+        allowed_origins+=("$extra_origin")
+      fi
+    done
+  fi
+
+  local cors_lines=""
+  local fido2_origin_lines=""
+  local idx=0
+  for origin in "${allowed_origins[@]}"; do
+    cors_lines+="Security__Cors__AllowedOrigins__${idx}=${origin}"$'\n'
+    fido2_origin_lines+="Authentication__Fido2__Origins__${idx}=${origin}"$'\n'
+    idx=$((idx + 1))
+  done
+
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
 ASPNETCORE_URLS=http://127.0.0.1:8080
@@ -1367,6 +1516,13 @@ Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo 
 Nats__AuthCallout__Subject=${NATS_AUTH_CALLOUT_SUBJECT}
 AgentPackage__PublicApiScheme=https
 AgentPackage__PublicApiServer=${public_host}
+Authentication__Jwt__Issuer=discovery
+Authentication__Jwt__Audience=discovery
+Authentication__Jwt__PrivateKeyPath=/etc/discovery-api/certs/jwt-private.pem
+Authentication__Jwt__PublicKeyPath=/etc/discovery-api/certs/jwt-public.pem
+Authentication__Fido2__ServerDomain=${fido2_server_domain}
+Authentication__Fido2__ServerName=${fido2_server_name}
+${cors_lines}${fido2_origin_lines}DISCOVERY_ADDITIONAL_ALLOWED_ORIGINS=${DISCOVERY_ADDITIONAL_ALLOWED_ORIGINS:-}
 DISCOVERY_API_BASE=${DISCOVERY_API_BASE}
 DISCOVERY_API_SOURCE=${DISCOVERY_API_SOURCE}
 DISCOVERY_API_RELEASES=${DISCOVERY_API_RELEASES}
@@ -1852,6 +2008,7 @@ main() {
   setup_redis
   setup_nats
   setup_proxy_certificate
+  setup_jwt_signing_keys
   setup_cloudflare_tunnel
   write_environment_file
 
