@@ -25,7 +25,9 @@ public class AgentPackageService : IAgentPackageService
     public async Task PrebuildBaseBinaryAsync(bool forceRebuild = false, CancellationToken cancellationToken = default)
     {
         var activeProfile = GetActiveProfileName();
-        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath") ?? @"C:\Projetos\Discovery";
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+        
         if (!Directory.Exists(projectPath))
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
@@ -33,14 +35,11 @@ public class AgentPackageService : IAgentPackageService
         if (!forceRebuild && File.Exists(binaryPath))
             return;
 
-        var wailsPath = ResolveWailsPath();
-        var targetPlatform = GetAgentPackageSetting("InstallerTargetPlatform") ?? "windows/amd64";
-
         _logger.LogInformation(
-            "Agent prebuild starting with profile={Profile}, host={Host}, target={Target}",
+            "Agent prebuild starting with profile={Profile}, host={Host}, projectPath={ProjectPath}",
             activeProfile,
             OperatingSystem.IsWindows() ? "windows" : "linux",
-            targetPlatform);
+            projectPath);
 
         await BuildLock.WaitAsync(cancellationToken);
         try
@@ -53,11 +52,15 @@ public class AgentPackageService : IAgentPackageService
             if (forceRebuild && File.Exists(binaryPath))
                 File.Delete(binaryPath);
 
-            await RunProcessAsync(
-                fileName: wailsPath,
-                workingDirectory: projectPath,
-                arguments: ["build", "-s", "-nopackage", "-platform", targetPlatform],
-                cancellationToken: cancellationToken);
+            // Use the build script from the agent repository
+            if (OperatingSystem.IsWindows())
+            {
+                await BuildOnWindowsAsync(projectPath, cancellationToken);
+            }
+            else
+            {
+                await BuildOnLinuxAsync(projectPath, cancellationToken);
+            }
 
             if (!File.Exists(binaryPath))
                 throw new FileNotFoundException("Prebuild finished but binary was not found.", binaryPath);
@@ -65,6 +68,82 @@ public class AgentPackageService : IAgentPackageService
         finally
         {
             BuildLock.Release();
+        }
+    }
+
+    private async Task BuildOnLinuxAsync(string projectPath, CancellationToken cancellationToken)
+    {
+        var buildScriptPath = Path.Combine(projectPath, "build", "server-api", "linux", "build-agent-server-linux.sh");
+        if (!File.Exists(buildScriptPath))
+            throw new FileNotFoundException($"Build script not found: {buildScriptPath}");
+
+        var outDir = GetAgentPackageSetting("OutputDirectory") ?? Path.Combine(projectPath, "src", "build", "bin");
+        var outputName = GetAgentPackageSetting("OutputName") ?? "discovery-agent.exe";
+
+        _logger.LogInformation("Building agent on Linux using script: {BuildScript}", buildScriptPath);
+
+        // GOFLAGS=-buildvcs=false is required when running as root (sudo) because git
+        // detects the directory owner mismatch and refuses to embed VCS info.
+        var extraEnv = new Dictionary<string, string>
+        {
+            ["GOFLAGS"] = "-buildvcs=false"
+        };
+
+        try
+        {
+            await RunProcessAsync(
+                fileName: "bash",
+                workingDirectory: projectPath,
+                arguments: [buildScriptPath, "--project-root", projectPath, "--out-dir", outDir, "--output-name", outputName, "--write-installer-json", "0"],
+                extraEnvironment: extraEnv,
+                cancellationToken: cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (ex.Message.Contains("go nao encontrado") || ex.Message.Contains("go not found"))
+            {
+                throw new InvalidOperationException(
+                    "Go toolchain is not installed. Required for building the agent on Linux.\n" +
+                    "Install Go: sudo apt-get install golang-go\n" +
+                    "Or download from: https://golang.org/dl/", ex);
+            }
+            if (ex.Message.Contains("x86_64-w64-mingw32-gcc") || ex.Message.Contains("MinGW"))
+            {
+                throw new InvalidOperationException(
+                    "MinGW cross-compiler is not installed. Required for building Windows agent on Linux.\n" +
+                    "Install: sudo apt-get install gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64", ex);
+            }
+            throw;
+        }
+    }
+
+    private async Task BuildOnWindowsAsync(string projectPath, CancellationToken cancellationToken)
+    {
+        var buildScriptPath = Path.Combine(projectPath, "build", "scripts", "build-install-installer.ps1");
+        if (!File.Exists(buildScriptPath))
+            throw new FileNotFoundException($"Build script not found: {buildScriptPath}");
+
+        var outputName = GetAgentPackageSetting("OutputName") ?? "discovery-agent.exe";
+
+        _logger.LogInformation("Building agent on Windows using script: {BuildScript}", buildScriptPath);
+
+        try
+        {
+            await RunProcessAsync(
+                fileName: "powershell.exe",
+                workingDirectory: projectPath,
+                arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", buildScriptPath, "-ProjectRoot", projectPath, "-OutputName", outputName],
+                cancellationToken: cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (ex.Message.Contains("'go'") || ex.Message.Contains("Go"))
+            {
+                throw new InvalidOperationException(
+                    "Go toolchain is not installed. Required for building the agent.\n" +
+                    "Download from: https://golang.org/dl/", ex);
+            }
+            throw;
         }
     }
 
@@ -132,18 +211,28 @@ public class AgentPackageService : IAgentPackageService
     public async Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken)
     {
         var activeProfile = GetActiveProfileName();
-        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath") ?? @"C:\Projetos\Discovery";
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+        
         if (!Directory.Exists(projectPath))
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
+        await PrebuildBaseBinaryAsync();
+
+        if (OperatingSystem.IsWindows())
+            return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken, activeProfile);
+        else
+            return await BuildInstallerFromBinaryAsync(rawDeployToken);
+    }
+
+    private async Task<(byte[] Content, string FileName)> BuildInstallerWithNsisAsync(string projectPath, string rawDeployToken, string activeProfile)
+    {
         var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
             ?? Path.Combine("build", "windows", "installer");
         var installerDir = Path.Combine(projectPath, installerDirectory);
         var projectNsi = Path.Combine(installerDir, "project.nsi");
         if (!File.Exists(projectNsi))
             throw new FileNotFoundException("NSIS project file not found.", projectNsi);
-
-        await PrebuildBaseBinaryAsync();
 
         var makensisPath = ResolveMakensisPath();
 
@@ -158,11 +247,8 @@ public class AgentPackageService : IAgentPackageService
             activeProfile,
             installerDir);
 
-        // Deriva o caminho relativo do binário a partir do BinaryPath configurado,
-        // garantindo que o nome do arquivo coincida com o que o Wails gerou.
-        var binaryRelPath = Path.GetRelativePath(installerDir, GetBinaryPath());
-        if (!OperatingSystem.IsWindows())
-            binaryRelPath = binaryRelPath.Replace('\\', '/');
+        var binaryPath = GetBinaryPath();
+        var binaryRelPath = Path.GetRelativePath(installerDir, binaryPath);
 
         await RunProcessAsync(
             fileName: makensisPath,
@@ -177,7 +263,13 @@ public class AgentPackageService : IAgentPackageService
                 "project.nsi"
             ]);
 
-        var binDir = Path.Combine(projectPath, "build", "bin");
+        var binDir = Path.Combine(projectPath, "src", "build", "bin");
+        if (!Directory.Exists(binDir))
+        {
+            // Fallback para estrutura antiga sem /src/
+            binDir = Path.Combine(projectPath, "build", "bin");
+        }
+
         if (!Directory.Exists(binDir))
             throw new InvalidOperationException("Installer output directory not found after build.");
 
@@ -188,43 +280,36 @@ public class AgentPackageService : IAgentPackageService
             .FirstOrDefault()?.FullName;
 
         if (installerPath is null)
-            throw new FileNotFoundException("Installer executable was not generated in build/bin.");
+            throw new FileNotFoundException($"Installer executable was not generated in {binDir} (pattern: {installerPattern}).");
 
         var bytes = await File.ReadAllBytesAsync(installerPath);
         return (bytes, Path.GetFileName(installerPath));
     }
 
-    private string GetBinaryPath()
+    /// <summary>
+    /// On Linux the API doesn't run NSIS. Instead it wraps the pre-built binary in a ZIP
+    /// that functions as the "installer package". The actual NSIS-based installer is
+    /// produced by the GitHub Actions CI or on a Windows machine.
+    /// </summary>
+    private async Task<(byte[] Content, string FileName)> BuildInstallerFromBinaryAsync(string rawDeployToken)
     {
-        return GetAgentPackageSetting("BinaryPath")
-            ?? throw new InvalidOperationException("AgentPackage:BinaryPath is not configured.");
+        var content = await BuildPortablePackageAsync(rawDeployToken);
+        var outputName = GetAgentPackageSetting("OutputName") ?? "discovery-agent.exe";
+        var zipName = Path.ChangeExtension(outputName, ".zip");
+        return (content, zipName);
     }
 
-    private string ResolveWailsPath()
+    private string GetBinaryPath()
     {
-        var configured = GetAgentPackageSetting("WailsPath");
-
-        // Se a configuração aponta para um arquivo existente, use diretamente.
-        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+        var configured = GetAgentPackageSetting("BinaryPath");
+        if (!string.IsNullOrWhiteSpace(configured))
             return configured;
 
-        // Caminhos comuns de instalação (Windows e Linux).
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var candidates = new[]
-        {
-            Path.Combine(userProfile, "go", "bin", "wails.exe"),
-            Path.Combine(userProfile, "go", "bin", "wails"),
-            "/root/go/bin/wails",
-            "/usr/local/bin/wails",
-            "/usr/bin/wails",
-        };
-
-        var existing = candidates.FirstOrDefault(File.Exists);
-        if (existing is not null)
-            return existing;
-
-        // Fallback: resolução via PATH do sistema (funciona em Windows e Linux).
-        return configured ?? (OperatingSystem.IsWindows() ? "wails.exe" : "wails");
+        // Derive default BinaryPath from DiscoveryProjectPath
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+        var outputName = GetAgentPackageSetting("OutputName") ?? "discovery-agent.exe";
+        return Path.Combine(projectPath, "src", "build", "bin", outputName);
     }
 
     private string ResolveMakensisPath()
@@ -270,7 +355,7 @@ public class AgentPackageService : IAgentPackageService
         return _config[$"AgentPackage:{key}"];
     }
 
-    private static async Task RunProcessAsync(string fileName, string workingDirectory, string[] arguments, CancellationToken cancellationToken = default)
+    private static async Task RunProcessAsync(string fileName, string workingDirectory, string[] arguments, Dictionary<string, string>? extraEnvironment = null, CancellationToken cancellationToken = default)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -284,6 +369,12 @@ public class AgentPackageService : IAgentPackageService
 
         foreach (var arg in arguments)
             startInfo.ArgumentList.Add(arg);
+
+        if (extraEnvironment is not null)
+        {
+            foreach (var (key, value) in extraEnvironment)
+                startInfo.Environment[key] = value;
+        }
 
         using var process = new Process { StartInfo = startInfo };
         try
