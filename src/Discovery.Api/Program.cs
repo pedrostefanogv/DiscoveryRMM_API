@@ -441,6 +441,11 @@ if (scalarEnabled)
         var target = string.IsNullOrWhiteSpace(suffix) ? "/scalar/" : $"/scalar/{suffix}";
         return Results.Redirect(target);
     }).AllowAnonymous();
+    app.MapGet("/scalar/openapi/{**rest}", (string? rest) =>
+    {
+        var suffix = string.IsNullOrWhiteSpace(rest) ? "v1.json" : rest.TrimStart('/');
+        return Results.Redirect($"/openapi/{suffix}");
+    }).AllowAnonymous();
 }
 
 app.UseForwardedHeaders();

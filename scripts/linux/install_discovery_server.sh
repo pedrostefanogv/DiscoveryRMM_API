@@ -3,11 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+TEMPLATES_DIR="$SCRIPT_DIR/templates"
+NGINX_TEMPLATE_PATH="$TEMPLATES_DIR/nginx-discovery.conf.tpl"
+SELFUPDATE_TEMPLATE_PATH="$TEMPLATES_DIR/selfupdate-discovery-api.sh"
 ORIGINAL_ARGS=("$@")
 
 NON_INTERACTIVE=0
 CONFIG_FILE=""
 UPDATE_NATS_CONFIG_ONLY=0
+UPDATE_STACK_ONLY=0
 INSTALL_MODE=""
 SUDO_KEEPALIVE_PID=""
 
@@ -26,9 +30,13 @@ while [[ $# -gt 0 ]]; do
       UPDATE_NATS_CONFIG_ONLY=1
       shift
       ;;
+    --update-stack|--update-repos|--rebuild-only)
+      UPDATE_STACK_ONLY=1
+      shift
+      ;;
     --mode)
       INSTALL_MODE="${2:-}"
-      [[ -n "$INSTALL_MODE" ]] || { echo "Parametro --mode exige valor (full|nats)" >&2; exit 1; }
+      [[ -n "$INSTALL_MODE" ]] || { echo "Parametro --mode exige valor (full|nats|update)" >&2; exit 1; }
       shift 2
       ;;
     *)
@@ -510,7 +518,7 @@ generate_random_password() {
 }
 
 select_operation_mode() {
-  if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then
+  if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 || "$UPDATE_STACK_ONLY" -eq 1 ]]; then
     return
   fi
 
@@ -530,8 +538,12 @@ select_operation_mode() {
         UPDATE_NATS_CONFIG_ONLY=1
         return
         ;;
+      update|update-stack|rebuild)
+        UPDATE_STACK_ONLY=1
+        return
+        ;;
       *)
-        fail "Modo invalido: $requested_mode (use full ou nats)"
+        fail "Modo invalido: $requested_mode (use full, nats ou update)"
         ;;
     esac
   fi
@@ -544,6 +556,7 @@ select_operation_mode() {
   echo "Escolha o que sera executado neste momento:"
   echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)"
   echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
+  echo "3) Atualizar repositorios (API + Agent + Site) e rebuildar API/portal"
   echo "----------------------------------------"
 
   local selected_option
@@ -553,14 +566,91 @@ select_operation_mode() {
   case "$selected_option" in
     1)
       UPDATE_NATS_CONFIG_ONLY=0
+      UPDATE_STACK_ONLY=0
       ;;
     2)
       UPDATE_NATS_CONFIG_ONLY=1
+      UPDATE_STACK_ONLY=0
+      ;;
+    3)
+      UPDATE_NATS_CONFIG_ONLY=0
+      UPDATE_STACK_ONLY=1
       ;;
     *)
       fail "Opcao invalida: $selected_option"
       ;;
   esac
+}
+
+apply_stack_update_only() {
+  log "Modo de update da stack: atualizando repositorios e rebuildando API/portal"
+
+  DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_API}"
+  DISCOVERY_AGENT_GIT_REPO="${DISCOVERY_AGENT_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Agent}"
+  DISCOVERY_SITE_GIT_REPO="${DISCOVERY_SITE_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Site}"
+  DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-release}"
+
+  DISCOVERY_API_BASE="${DISCOVERY_API_BASE:-/opt/discovery-api}"
+  DISCOVERY_SITE_BASE="${DISCOVERY_SITE_BASE:-/opt/discovery-site}"
+  DISCOVERY_AGENT_SRC="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}"
+  DISCOVERY_AGENT_ARTIFACTS="${DISCOVERY_AGENT_ARTIFACTS:-/opt/discovery-agent-artifacts}"
+  DISCOVERY_OPS_DIR="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"
+
+  local detected_arch
+  local detected_dotnet_runtime
+  detected_arch="$(detect_system_architecture)"
+  if detected_dotnet_runtime="$(map_arch_to_dotnet_runtime "$detected_arch")"; then
+    :
+  else
+    detected_dotnet_runtime="linux-x64"
+    warn "Arquitetura nao mapeada (${detected_arch:-desconhecida}); usando runtime padrao linux-x64"
+  fi
+
+  if [[ -z "${DISCOVERY_DOTNET_RUNTIME:-}" ]]; then
+    DISCOVERY_DOTNET_RUNTIME="$detected_dotnet_runtime"
+  fi
+  validate_dotnet_runtime "$DISCOVERY_DOTNET_RUNTIME"
+
+  DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
+  DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-signalr}"
+  DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-false}"
+  DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-}"
+
+  DISCOVERY_API_RELEASES="${DISCOVERY_API_BASE}/releases"
+  DISCOVERY_API_SHARED="${DISCOVERY_API_BASE}/shared"
+  DISCOVERY_API_SOURCE="${DISCOVERY_API_BASE}/source"
+  DISCOVERY_API_CURRENT="${DISCOVERY_API_BASE}/current"
+  DISCOVERY_SITE_RELEASES="${DISCOVERY_SITE_BASE}/releases"
+  DISCOVERY_SITE_SOURCE="${DISCOVERY_SITE_BASE}/source"
+  DISCOVERY_SITE_CURRENT="${DISCOVERY_SITE_BASE}/current"
+
+  ensure_dotnet_sdk
+  ensure_nodejs
+  ensure_service_user
+  create_directories
+
+  trap cleanup_on_exit EXIT
+  setup_git_askpass
+  clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
+  clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
+  clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
+
+  publish_api
+  publish_site
+  install_selfupdate_script
+  write_site_proxy_config
+
+  if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
+    sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api"
+  else
+    warn "Servico discovery-api nao encontrado; pulando restart"
+  fi
+
+  if sudo systemctl list-unit-files nginx.service >/dev/null 2>&1; then
+    sudo systemctl restart nginx || warn "Falha ao reiniciar nginx"
+  fi
+
+  log "Update da stack concluido"
 }
 
 normalize_install_branch_input() {
@@ -1282,92 +1372,36 @@ write_site_proxy_config() {
     local normalized_internal_host
     normalized_internal_host="$(normalize_host_without_scheme "${INTERNAL_API_HOST:-}")"
     if [[ -n "$normalized_internal_host" && "$normalized_internal_host" != "$fido2_server_domain" ]]; then
-      redirect_rules+="  if (\$host = ${normalized_internal_host}) {\n"
-      redirect_rules+="    return 308 https://${fido2_server_domain}\$request_uri;\n"
-      redirect_rules+="  }\n\n"
+      redirect_rules+="  if (\$host = ${normalized_internal_host}) {"$'\n'
+      redirect_rules+="    return 308 https://${fido2_server_domain}\$request_uri;"$'\n'
+      redirect_rules+="  }"$'\n'
     fi
   fi
 
-  sudo tee /etc/nginx/sites-available/discovery-rmm >/dev/null <<EOF
-map \$http_upgrade \$connection_upgrade {
-  default upgrade;
-  '' close;
-}
+  [[ -f "$NGINX_TEMPLATE_PATH" ]] || fail "Template Nginx nao encontrado: $NGINX_TEMPLATE_PATH"
 
-server {
-  listen 80;
-  listen [::]:80;
-  server_name ${server_name_list};
-  return 301 https://\$host\$request_uri;
-}
+  local rendered_conf
+  rendered_conf="$(mktemp)"
+  awk \
+    -v server_name_list="$server_name_list" \
+    -v discovery_site_current="$DISCOVERY_SITE_CURRENT" \
+    -v redirect_rules="$redirect_rules" \
+    '
+      {
+        gsub("__SERVER_NAME_LIST__", server_name_list)
+        gsub("__DISCOVERY_SITE_CURRENT__", discovery_site_current)
+        if ($0 ~ /__REDIRECT_RULES__/) {
+          if (length(redirect_rules) > 0) {
+            printf "%s", redirect_rules
+          }
+          next
+        }
+        print
+      }
+    ' "$NGINX_TEMPLATE_PATH" > "$rendered_conf"
 
-server {
-  listen 443 ssl http2;
-  listen [::]:443 ssl http2;
-  listen 8443 ssl http2;
-  listen [::]:8443 ssl http2;
-  server_name ${server_name_list};
-
-${redirect_rules}  
-
-  ssl_certificate /etc/discovery-api/certs/api-internal.crt;
-  ssl_certificate_key /etc/discovery-api/certs/api-internal.key;
-
-  root ${DISCOVERY_SITE_CURRENT};
-  index index.html;
-
-  location /api/ {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-  }
-
-  location /hubs/ {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection \$connection_upgrade;
-  }
-
-  location = /health {
-    proxy_pass http://127.0.0.1:8080/health;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-  }
-
-  location ^~ /openapi {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-  }
-
-  location ^~ /scalar {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-  }
-
-  location / {
-    try_files \$uri \$uri/ /index.html;
-  }
-}
-EOF
+  sudo install -m 644 -o root -g root "$rendered_conf" /etc/nginx/sites-available/discovery-rmm
+  rm -f "$rendered_conf"
 
   sudo rm -f /etc/nginx/sites-enabled/default
   sudo ln -sfn /etc/nginx/sites-available/discovery-rmm /etc/nginx/sites-enabled/discovery-rmm
@@ -1583,261 +1617,8 @@ install_selfupdate_script() {
   local target_script="$DISCOVERY_OPS_DIR/selfupdate-discovery-api.sh"
 
   log "Escrevendo script de self-update em $target_script"
-
-  sudo tee "$target_script" >/dev/null <<'SELFUPDATE_EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-log() {
-  printf '[selfupdate] %s\n' "$*"
-}
-
-fail() {
-  printf '[selfupdate][erro] %s\n' "$*" >&2
-  exit 1
-}
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
-}
-
-require_cmd git
-require_cmd dotnet
-require_cmd flock
-require_cmd npm
-
-detect_system_architecture() {
-  local arch=""
-
-  if command -v dpkg >/dev/null 2>&1; then
-    arch="$(dpkg --print-architecture 2>/dev/null || true)"
-  fi
-
-  if [[ -z "$arch" ]]; then
-    arch="$(uname -m 2>/dev/null || true)"
-  fi
-
-  printf '%s' "$arch"
-}
-
-map_arch_to_dotnet_runtime() {
-  local arch_raw="${1:-}"
-  local arch
-  arch="$(printf '%s' "$arch_raw" | tr '[:upper:]' '[:lower:]')"
-
-  case "$arch" in
-    amd64|x86_64)
-      printf 'linux-x64'
-      ;;
-    arm64|aarch64)
-      printf 'linux-arm64'
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-validate_dotnet_runtime() {
-  local runtime="$1"
-  case "$runtime" in
-    linux-x64|linux-arm64)
-      return
-      ;;
-    *)
-      fail "DISCOVERY_DOTNET_RUNTIME invalido: $runtime (use linux-x64 ou linux-arm64)"
-      ;;
-  esac
-}
-
-DISCOVERY_API_BASE="${DISCOVERY_API_BASE:-/opt/discovery-api}"
-DISCOVERY_API_SOURCE="${DISCOVERY_API_SOURCE:-$DISCOVERY_API_BASE/source}"
-DISCOVERY_API_RELEASES="${DISCOVERY_API_RELEASES:-$DISCOVERY_API_BASE/releases}"
-DISCOVERY_API_CURRENT="${DISCOVERY_API_CURRENT:-$DISCOVERY_API_BASE/current}"
-DISCOVERY_API_PROJECT="${DISCOVERY_API_PROJECT:-src/Discovery.Api/Discovery.Api.csproj}"
-DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-}"
-DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-release}"
-DISCOVERY_GIT_TOKEN_FILE="${DISCOVERY_GIT_TOKEN_FILE:-/etc/discovery-api/github.token}"
-DISCOVERY_SITE_GIT_REPO="${DISCOVERY_SITE_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Site}"
-DISCOVERY_SITE_BASE="${DISCOVERY_SITE_BASE:-/opt/discovery-site}"
-DISCOVERY_SITE_SOURCE="${DISCOVERY_SITE_SOURCE:-$DISCOVERY_SITE_BASE/source}"
-DISCOVERY_SITE_RELEASES="${DISCOVERY_SITE_RELEASES:-$DISCOVERY_SITE_BASE/releases}"
-DISCOVERY_SITE_CURRENT="${DISCOVERY_SITE_CURRENT:-$DISCOVERY_SITE_BASE/current}"
-DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
-DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-signalr}"
-DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-false}"
-DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-}"
-DISCOVERY_KEEP_RELEASES="${DISCOVERY_KEEP_RELEASES:-5}"
-DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-}"
-
-DETECTED_ARCH="$(detect_system_architecture)"
-if DETECTED_DOTNET_RUNTIME="$(map_arch_to_dotnet_runtime "$DETECTED_ARCH")"; then
-  :
-else
-  DETECTED_DOTNET_RUNTIME="linux-x64"
-  log "Arquitetura nao mapeada (${DETECTED_ARCH:-desconhecida}); usando runtime padrao linux-x64"
-fi
-
-if [[ -z "$DISCOVERY_DOTNET_RUNTIME" ]]; then
-  DISCOVERY_DOTNET_RUNTIME="$DETECTED_DOTNET_RUNTIME"
-fi
-validate_dotnet_runtime "$DISCOVERY_DOTNET_RUNTIME"
-
-LOCK_FILE="/opt/discovery-ops/selfupdate.lock"
-mkdir -p "$(dirname "$LOCK_FILE")"
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  log "Outro processo de self-update ja esta em execucao."
-  exit 0
-fi
-
-[[ -n "$DISCOVERY_GIT_REPO" ]] || fail "DISCOVERY_GIT_REPO nao definido."
-[[ -n "$DISCOVERY_SITE_GIT_REPO" ]] || fail "DISCOVERY_SITE_GIT_REPO nao definido."
-
-mkdir -p "$DISCOVERY_API_RELEASES"
-mkdir -p "$DISCOVERY_SITE_RELEASES"
-
-GITHUB_PAT=""
-if [[ -f "$DISCOVERY_GIT_TOKEN_FILE" ]]; then
-  GITHUB_PAT="$(tr -d '\r\n' < "$DISCOVERY_GIT_TOKEN_FILE")"
-fi
-
-ASKPASS_FILE=""
-cleanup() {
-  if [[ -n "$ASKPASS_FILE" ]]; then
-    rm -f "$ASKPASS_FILE"
-  fi
-}
-trap cleanup EXIT
-
-if [[ -n "$GITHUB_PAT" ]]; then
-  ASKPASS_FILE="$(mktemp)"
-  cat > "$ASKPASS_FILE" <<'EOF'
-#!/usr/bin/env sh
-case "$1" in
-  *Username*) printf '%s\n' "x-access-token" ;;
-  *Password*) printf '%s\n' "$GITHUB_PAT" ;;
-  *) printf '\n' ;;
-esac
-EOF
-  chmod 700 "$ASKPASS_FILE"
-  export GIT_ASKPASS="$ASKPASS_FILE"
-  export GIT_TERMINAL_PROMPT=0
-  export GITHUB_PAT
-else
-  log "Token GitHub nao informado; seguindo sem autenticacao (repo publico)"
-  export GIT_TERMINAL_PROMPT=0
-fi
-
-clone_or_fetch_repo() {
-  local repo_url="$1"
-  local repo_dir="$2"
-
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    log "Repositorio nao encontrado. Clonando $repo_url em $repo_dir"
-    mkdir -p "$(dirname "$repo_dir")"
-    git clone --branch "$DISCOVERY_GIT_BRANCH" "$repo_url" "$repo_dir"
-    return
-  fi
-
-  log "Buscando atualizacoes de $repo_dir"
-  git -C "$repo_dir" fetch origin "$DISCOVERY_GIT_BRANCH"
-}
-
-cleanup_old_releases() {
-  local releases_dir="$1"
-
-  mapfile -t RELEASE_DIRS < <(ls -1dt "$releases_dir"/* 2>/dev/null || true)
-  if (( ${#RELEASE_DIRS[@]} > DISCOVERY_KEEP_RELEASES )); then
-    for old_release in "${RELEASE_DIRS[@]:DISCOVERY_KEEP_RELEASES}"; do
-      rm -rf "$old_release"
-    done
-  fi
-}
-
-publish_api_release() {
-  local remote_rev="$1"
-  local release_id="$(date +%Y%m%d%H%M%S)-${remote_rev:0:8}"
-  local release_dir="$DISCOVERY_API_RELEASES/$release_id"
-
-  mkdir -p "$release_dir"
-  dotnet publish "$DISCOVERY_API_SOURCE/$DISCOVERY_API_PROJECT" \
-    -c Release \
-    -r "$DISCOVERY_DOTNET_RUNTIME" \
-    --self-contained false \
-    -o "$release_dir" \
-    /p:UseAppHost=true
-
-  rm -f "$release_dir"/appsettings*.json || true
-  [[ -x "$release_dir/Discovery.Api" ]] || fail "Binario Discovery.Api nao gerado na release $release_id"
-
-  ln -sfn "$release_dir" "$DISCOVERY_API_CURRENT"
-  log "Release ativa da API atualizada para $release_id"
-  cleanup_old_releases "$DISCOVERY_API_RELEASES"
-}
-
-publish_site_release() {
-  local remote_rev="$1"
-  local release_id="$(date +%Y%m%d%H%M%S)-${remote_rev:0:8}"
-  local release_dir="$DISCOVERY_SITE_RELEASES/$release_id"
-
-  mkdir -p "$release_dir"
-  npm --prefix "$DISCOVERY_SITE_SOURCE" ci
-  env \
-    VITE_API_URL="$DISCOVERY_SITE_API_URL" \
-    VITE_REALTIME_PROVIDER="$DISCOVERY_SITE_REALTIME_PROVIDER" \
-    VITE_NATS_ENABLED="$DISCOVERY_SITE_NATS_ENABLED" \
-    VITE_NATS_URL="$DISCOVERY_SITE_NATS_URL" \
-    npm --prefix "$DISCOVERY_SITE_SOURCE" run build
-
-  [[ -f "$DISCOVERY_SITE_SOURCE/dist/index.html" ]] || fail "Build do portal web nao gerou dist/index.html"
-
-  cp -a "$DISCOVERY_SITE_SOURCE/dist/." "$release_dir/"
-  find "$release_dir" -type d -exec chmod 755 {} +
-  find "$release_dir" -type f -exec chmod 644 {} +
-  ln -sfn "$release_dir" "$DISCOVERY_SITE_CURRENT"
-  log "Release ativa do portal web atualizada para $release_id"
-  cleanup_old_releases "$DISCOVERY_SITE_RELEASES"
-}
-
-clone_or_fetch_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
-clone_or_fetch_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
-
-API_LOCAL_REV="$(git -C "$DISCOVERY_API_SOURCE" rev-parse HEAD 2>/dev/null || true)"
-API_REMOTE_REV="$(git -C "$DISCOVERY_API_SOURCE" rev-parse "origin/$DISCOVERY_GIT_BRANCH")"
-SITE_LOCAL_REV="$(git -C "$DISCOVERY_SITE_SOURCE" rev-parse HEAD 2>/dev/null || true)"
-SITE_REMOTE_REV="$(git -C "$DISCOVERY_SITE_SOURCE" rev-parse "origin/$DISCOVERY_GIT_BRANCH")"
-
-API_CHANGED=0
-SITE_CHANGED=0
-[[ "$API_LOCAL_REV" != "$API_REMOTE_REV" ]] && API_CHANGED=1
-[[ "$SITE_LOCAL_REV" != "$SITE_REMOTE_REV" ]] && SITE_CHANGED=1
-
-if [[ "$API_CHANGED" -eq 0 && "$SITE_CHANGED" -eq 0 ]]; then
-  log "Sem atualizacoes no branch $DISCOVERY_GIT_BRANCH para API e portal web"
-  exit 0
-fi
-
-if [[ "$API_CHANGED" -eq 1 ]]; then
-  log "Atualizacao detectada na API. Aplicando commit $API_REMOTE_REV"
-  git -C "$DISCOVERY_API_SOURCE" checkout "$DISCOVERY_GIT_BRANCH"
-  git -C "$DISCOVERY_API_SOURCE" reset --hard "origin/$DISCOVERY_GIT_BRANCH"
-  publish_api_release "$API_REMOTE_REV"
-else
-  log "Sem atualizacoes na API"
-fi
-
-if [[ "$SITE_CHANGED" -eq 1 ]]; then
-  log "Atualizacao detectada no portal web. Aplicando commit $SITE_REMOTE_REV"
-  git -C "$DISCOVERY_SITE_SOURCE" checkout "$DISCOVERY_GIT_BRANCH"
-  git -C "$DISCOVERY_SITE_SOURCE" reset --hard "origin/$DISCOVERY_GIT_BRANCH"
-  publish_site_release "$SITE_REMOTE_REV"
-else
-  log "Sem atualizacoes no portal web"
-fi
-
-log "Self-update concluido com sucesso"
-SELFUPDATE_EOF
+  [[ -f "$SELFUPDATE_TEMPLATE_PATH" ]] || fail "Template de self-update nao encontrado: $SELFUPDATE_TEMPLATE_PATH"
+  sudo install -m 750 -o discovery-api -g discovery-api "$SELFUPDATE_TEMPLATE_PATH" "$target_script"
 
   sudo chmod 750 "$target_script"
   sudo chown discovery-api:discovery-api "$target_script"
@@ -1917,6 +1698,11 @@ main() {
 
   if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then
     apply_nats_reconfiguration_only
+    return
+  fi
+
+  if [[ "$UPDATE_STACK_ONLY" -eq 1 ]]; then
+    apply_stack_update_only
     return
   fi
 
