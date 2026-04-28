@@ -82,12 +82,20 @@ public class AgentPackageService : IAgentPackageService
 
         _logger.LogInformation("Building agent on Linux using script: {BuildScript}", buildScriptPath);
 
-        // GOFLAGS=-buildvcs=false is required when running as root (sudo) because git
-        // detects the directory owner mismatch and refuses to embed VCS info.
+        // CGO cross-compilation caches can become stale between builds (Go 1.22 + MinGW bug).
+        // Clear the build cache before each build to ensure a clean link step.
         var extraEnv = new Dictionary<string, string>
         {
             ["GOFLAGS"] = "-buildvcs=false"
         };
+
+        _logger.LogInformation("Clearing Go build cache to prevent stale CGO artifacts...");
+        await RunProcessAsync(
+            fileName: "go",
+            workingDirectory: projectPath,
+            arguments: ["clean", "-cache"],
+            extraEnvironment: extraEnv,
+            cancellationToken: cancellationToken);
 
         try
         {
