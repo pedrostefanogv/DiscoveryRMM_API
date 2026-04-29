@@ -46,23 +46,27 @@ public sealed class ReportRetentionJob : IJob
             return;
         }
 
-        var dbDeleted = await reportRepo.PurgeExpiredExecutionsAsync(dbCutoff, ct);
+        var dbDeleted = 0;
+        var dbExpired = await reportRepo.GetExpiredAsync(dbCutoff, 1000);
+        if (dbExpired.Count > 0)
+        {
+            dbDeleted = await reportRepo.DeleteByIdsAsync(dbExpired.Select(e => e.Id).ToList());
+        }
         logger.LogInformation("Report retention: purged {Count} DB records older than {Days}d.", dbDeleted, dbRetentionDays);
 
         var filesDeleted = 0;
         var filesFailed = 0;
-        var oldFiles = await reportRepo.GetExpiredFilesAsync(fileCutoff, 1000, ct);
+        var oldFiles = await reportRepo.GetExpiredAsync(fileCutoff, 1000);
+        var storage = storageFactory.CreateObjectStorageService();
         foreach (var file in oldFiles)
         {
+            if (string.IsNullOrWhiteSpace(file.StorageObjectKey))
+                continue;
+
             try
             {
-                if (!string.IsNullOrWhiteSpace(file.StorageObjectKey))
-                {
-                    var storage = storageFactory.CreateObjectStorageService();
-                    await storage.DeleteFileAsync(file.StorageObjectKey, file.StorageBucket, ct);
-                    await reportRepo.MarkFileDeletedAsync(file.Id, ct);
-                    filesDeleted++;
-                }
+                await storage.DeleteAsync(file.StorageObjectKey, ct);
+                filesDeleted++;
             }
             catch (Exception ex)
             {

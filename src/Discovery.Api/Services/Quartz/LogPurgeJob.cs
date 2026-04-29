@@ -24,7 +24,7 @@ public sealed class LogPurgeJob : IJob
 
         await using var scope = scopeFactory.CreateAsyncScope();
         var logRepo = scope.ServiceProvider.GetRequiredService<ILogRepository>();
-        var deleted = await logRepo.PurgeAsync(cutoff, context.CancellationToken);
+        var deleted = await logRepo.PurgeAsync(cutoff);
 
         logger.LogInformation("Log purge completed. Deleted {Count} entries older than {Days} days.", deleted, retentionDays);
         context.Result = deleted;

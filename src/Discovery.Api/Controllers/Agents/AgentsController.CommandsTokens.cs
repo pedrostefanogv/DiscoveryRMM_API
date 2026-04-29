@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Microsoft.AspNetCore.Mvc;

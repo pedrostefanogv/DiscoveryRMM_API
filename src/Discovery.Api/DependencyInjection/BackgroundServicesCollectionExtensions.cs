@@ -1,4 +1,5 @@
 using Discovery.Api.Services;
+using Discovery.Api.Services.BackgroundServices;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Api.DependencyInjection;
@@ -36,6 +37,10 @@ public static class BackgroundServicesCollectionExtensions
         this IServiceCollection services,
         BackgroundServicesConfig config)
     {
+        // Observability registry — shared by every IHostedService and the
+        // BackgroundServicesController dashboard.
+        services.AddSingleton<BackgroundServiceRegistry>();
+
         // Always-registered services
         services.AddHostedService<AlertSchedulerBackgroundService>();
         services.AddHostedService<AgentPackagePrebuildHostedService>();

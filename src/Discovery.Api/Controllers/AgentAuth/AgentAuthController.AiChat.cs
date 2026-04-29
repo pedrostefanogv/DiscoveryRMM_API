@@ -1,5 +1,4 @@
 using Discovery.Core.DTOs;
-using Discovery.Core.DTOs.AiChatDtos;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -15,12 +14,12 @@ public partial class AgentAuthController
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
         if (blocked is not null) return blocked;
 
         try
         {
-            var response = await _aiChatService.SendMessageAsync(agentId, agent!.SiteId, request.Message, ct);
+            var response = await _aiChatService.ProcessSyncAsync(agentId, request.Message, request.SessionId, ct);
             return Ok(response);
         }
         catch (InvalidOperationException ex)
@@ -30,18 +29,18 @@ public partial class AgentAuthController
     }
 
     [HttpPost("me/ai-chat/async")]
-    public async Task<IActionResult> ChatAsync([FromBody] AgentChatRequest request)
+    public async Task<IActionResult> ChatAsync([FromBody] AgentChatRequest request, CancellationToken ct)
     {
         if (!TryGetAuthenticatedAgentId(out var agentId))
             return Unauthorized(new { error = "Agent not authenticated." });
 
-        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
+        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
         if (blocked is not null) return blocked;
 
         try
         {
-            var job = await _aiChatService.EnqueueMessageAsync(agentId, agent!.SiteId, request.Message);
-            return Accepted(new { jobId = job.JobId, status = "queued" });
+            var jobId = await _aiChatService.ProcessAsyncAsync(agentId, request.Message, request.SessionId, ct);
+            return Accepted(new { jobId, status = "queued" });
         }
         catch (InvalidOperationException ex)
         {
@@ -58,28 +57,8 @@ public partial class AgentAuthController
         var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
         if (blocked is not null) return blocked;
 
-        var job = await _aiChatService.GetJobAsync(jobId, ct);
+        var job = await _aiChatService.GetJobStatusAsync(jobId, agentId, ct);
         if (job is null) return NotFound(new { error = "Job not found." });
         return Ok(job);
-    }
-
-    [HttpPost("me/ai-chat/stream")]
-    public async Task<IActionResult> ChatStream([FromBody] AgentChatRequest request, CancellationToken ct)
-    {
-        if (!TryGetAuthenticatedAgentId(out var agentId))
-            return Unauthorized(new { error = "Agent not authenticated." });
-
-        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: false);
-        if (blocked is not null) return blocked;
-
-        try
-        {
-            var result = await _aiChatService.CreateSessionAsync(agentId, agent!.SiteId, request.Message, ct);
-            return Ok(result);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
     }
 }

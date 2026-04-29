@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using Discovery.Api;
 using Discovery.Api.Filters;
 using Discovery.Api.Validators;
 using FluentMigrator.Runner;

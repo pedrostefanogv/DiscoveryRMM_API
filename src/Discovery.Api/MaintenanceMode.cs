@@ -2,7 +2,9 @@ using System.Security.Cryptography;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
+using Discovery.Core.Interfaces.Security;
 using Discovery.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Api;
 

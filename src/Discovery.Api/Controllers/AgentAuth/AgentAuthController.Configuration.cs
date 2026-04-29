@@ -1,3 +1,6 @@
+using Discovery.Api.Services;
+using Discovery.Core.DTOs;
+using Discovery.Core.Enums;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;

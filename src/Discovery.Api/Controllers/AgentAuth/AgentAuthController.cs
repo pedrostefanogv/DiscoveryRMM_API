@@ -189,8 +189,8 @@ public partial class AgentAuthController : ControllerBase
                 var allKey = $"inventory:catalog:client:{site.ClientId}";
                 var swKey = $"inventory:software:agent:{agentId}";
                 await Task.WhenAll(
-                    _redisService.RemoveAsync(allKey),
-                    _redisService.RemoveAsync(swKey));
+                    _redisService.DeleteAsync(allKey),
+                    _redisService.DeleteAsync(swKey));
             }
         }
         catch

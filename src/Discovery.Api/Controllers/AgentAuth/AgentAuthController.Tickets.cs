@@ -264,3 +264,8 @@ public partial class AgentAuthController
         return Ok(new { message = "Ticket closed successfully", ticket = await _ticketRepo.GetByIdAsync(ticketId), rating = request.Rating });
     }
 }
+
+// ── Request DTOs (used only by the agent ticket endpoints) ──────────────────
+public sealed record AgentAddCommentRequest(string Content, bool? IsInternal);
+public sealed record AgentUpdateWorkflowStateRequest(Guid WorkflowStateId);
+public sealed record AgentCloseTicketRequest(int? Rating, Guid? WorkflowStateId, string? Comment);

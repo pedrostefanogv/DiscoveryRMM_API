@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Quartz;
 using Quartz.Impl.Matchers;
+using Discovery.Api.Services.Quartz;
 
 namespace Discovery.Api.Controllers;
 
@@ -52,7 +53,7 @@ public class JobsController : ControllerBase
                     description = trigger.Description,
                     previousFireTimeUtc = trigger.GetPreviousFireTimeUtc()?.UtcDateTime,
                     nextFireTimeUtc = trigger.GetNextFireTimeUtc()?.UtcDateTime,
-                    finalFireTimeUtc = trigger.GetFinalFireTimeUtc()?.UtcDateTime,
+                    finalFireTimeUtc = trigger.FinalFireTimeUtc?.UtcDateTime,
                     mayFireAgain = trigger.GetMayFireAgain(),
                 });
             }
@@ -71,7 +72,7 @@ public class JobsController : ControllerBase
         return Ok(new
         {
             schedulerName = scheduler.SchedulerName,
-            schedulerId = scheduler.SchedulerId,
+            schedulerInstanceId = scheduler.SchedulerInstanceId,
             isStarted = scheduler.IsStarted,
             inStandbyMode = scheduler.InStandbyMode,
             jobCount = jobs.Count,

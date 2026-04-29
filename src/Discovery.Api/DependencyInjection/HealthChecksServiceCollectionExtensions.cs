@@ -15,19 +15,7 @@ public static class HealthChecksServiceCollectionExtensions
         var redisConnString = configuration.GetValue<string>("Redis:Connection") ?? "127.0.0.1:6379";
 
         var healthChecksBuilder = services.AddHealthChecks()
-            .AddAsyncCheck("postgresql", async (sp, ct) =>
-            {
-                try
-                {
-                    var db = sp.GetRequiredService<Discovery.Infrastructure.Data.DiscoveryDbContext>();
-                    await db.Database.CanConnectAsync(ct);
-                    return HealthCheckResult.Healthy("PostgreSQL connected");
-                }
-                catch (Exception ex)
-                {
-                    return HealthCheckResult.Unhealthy("PostgreSQL unavailable", ex);
-                }
-            }, tags: ["db", "critical"]);
+            .AddCheck<PostgresHealthCheck>("postgresql", tags: ["db", "critical"]);
 
         // Redis health check
         healthChecksBuilder.AddAsyncCheck("redis", async ct =>
@@ -70,5 +58,24 @@ public static class HealthChecksServiceCollectionExtensions
         }, tags: ["messaging"]);
 
         return services;
+    }
+}
+
+internal sealed class PostgresHealthCheck : IHealthCheck
+{
+    private readonly Discovery.Infrastructure.Data.DiscoveryDbContext _db;
+    public PostgresHealthCheck(Discovery.Infrastructure.Data.DiscoveryDbContext db) => _db = db;
+
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await _db.Database.CanConnectAsync(cancellationToken);
+            return HealthCheckResult.Healthy("PostgreSQL connected");
+        }
+        catch (Exception ex)
+        {
+            return HealthCheckResult.Unhealthy("PostgreSQL unavailable", ex);
+        }
     }
 }

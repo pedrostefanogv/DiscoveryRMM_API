@@ -2677,6 +2677,8 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
                 .OnDelete(DeleteBehavior.Cascade);
         });
     ConfigureIdentity(modelBuilder);
+    }
+
     // ── Infrastructure (defined in partial files) ─────────────────────────
     static partial void ConfigureIdentity(ModelBuilder modelBuilder);
     static partial void ConfigureP2pEntities(ModelBuilder modelBuilder);

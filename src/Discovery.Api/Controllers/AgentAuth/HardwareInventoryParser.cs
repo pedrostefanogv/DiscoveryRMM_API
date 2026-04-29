@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Discovery.Core.Entities;
 
 namespace Discovery.Api.Controllers;
 

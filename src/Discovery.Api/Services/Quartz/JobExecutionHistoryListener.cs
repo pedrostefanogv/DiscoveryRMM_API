@@ -10,18 +10,18 @@ public sealed class JobExecutionHistoryListener : IJobListener
 {
     public string Name => "Discovery-JobHistoryListener";
 
-    public ValueTask JobToBeExecuted(IJobExecutionContext context, CancellationToken ct)
+    public Task JobToBeExecuted(IJobExecutionContext context, CancellationToken ct)
     {
         context.Put("startedAt", DateTime.UtcNow);
-        return ValueTask.CompletedTask;
+        return Task.CompletedTask;
     }
 
-    public ValueTask JobExecutionVetoed(IJobExecutionContext context, CancellationToken ct)
+    public Task JobExecutionVetoed(IJobExecutionContext context, CancellationToken ct)
     {
-        return ValueTask.CompletedTask;
+        return Task.CompletedTask;
     }
 
-    public ValueTask JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken ct)
+    public Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken ct)
     {
         var startedAt = context.Get("startedAt") as DateTime? ?? context.FireTimeUtc.UtcDateTime;
         var completedAt = DateTime.UtcNow;
@@ -37,6 +37,6 @@ public sealed class JobExecutionHistoryListener : IJobListener
 
         JobExecutionHistoryStore.Record(context.JobDetail.Key, record);
 
-        return ValueTask.CompletedTask;
+        return Task.CompletedTask;
     }
 }

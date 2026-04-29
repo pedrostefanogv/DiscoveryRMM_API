@@ -1,3 +1,4 @@
+using Discovery.Core.Entities;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
