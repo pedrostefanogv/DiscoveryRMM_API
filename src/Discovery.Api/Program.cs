@@ -254,7 +254,6 @@ if (scalarEnabled)
         options.WithOpenApiRoutePattern("/openapi/{documentName}.json");
         options.WithTitle("Discovery RMM API");
         options.WithTheme(ScalarTheme.Purple);
-        options.WithDarkModeToggle(true);
         options.WithDefaultHttpClient(ScalarTarget.CSharp, ScalarClient.HttpClient);
     }).AllowAnonymous();
 

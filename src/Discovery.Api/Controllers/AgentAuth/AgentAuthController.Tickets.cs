@@ -110,7 +110,7 @@ public partial class AgentAuthController
             DepartmentId = request.DepartmentId,
             WorkflowProfileId = workflowProfile?.Id,
             Title = request.Title,
-            Description = request.Description,
+            Description = request.Description ?? string.Empty,
             Priority = request.Priority ?? (workflowProfile?.DefaultPriority ?? TicketPriority.Medium),
             Category = request.Category,
             WorkflowStateId = initialState.Id,
