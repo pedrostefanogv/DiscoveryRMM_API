@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/ticket-saved-views")]
+[Route("api/v{version:apiVersion}/ticket-saved-views")]
 public class TicketSavedViewsController : ControllerBase
 {
     private readonly ITicketSavedViewRepository _repo;

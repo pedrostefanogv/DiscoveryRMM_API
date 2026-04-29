@@ -142,8 +142,8 @@ public class ReportService : IReportService
                     rowCount = data.Rows.Count,
                     format = execution.Format,
                     downloadPath = clientId.HasValue
-                        ? $"/api/reports/executions/{executionId}/download?clientId={clientId}"
-                        : $"/api/reports/executions/{executionId}/download"
+                        ? $"/api/v1/reports/executions/{executionId}/download?clientId={clientId}"
+                        : $"/api/v1/reports/executions/{executionId}/download"
                 },
                 RecipientUserId: null,
                 RecipientKey: createdBy,

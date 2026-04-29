@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/software-inventory")]
+[Route("api/v{version:apiVersion}/software-inventory")]
 public class SoftwareInventoryController : ControllerBase
 {
     private static readonly JsonSerializerOptions CacheJsonOptions = new(JsonSerializerDefaults.Web);

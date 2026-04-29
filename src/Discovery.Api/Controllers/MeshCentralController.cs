@@ -11,7 +11,7 @@ using Microsoft.Extensions.Options;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/meshcentral")]
+[Route("api/v{version:apiVersion}/meshcentral")]
 [RequireUserAuth]
 public class MeshCentralController : ControllerBase
 {

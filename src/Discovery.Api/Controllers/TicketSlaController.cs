@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/tickets/{ticketId:guid}/sla")]
+[Route("api/v{version:apiVersion}/tickets/{ticketId:guid}/sla")]
 public class TicketSlaController : ControllerBase
 {
     private readonly ITicketRepository _ticketRepo;

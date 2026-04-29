@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/v{version:apiVersion}/[controller]")]
 public class ClientsController : ControllerBase
 {
     private readonly IClientRepository _repo;

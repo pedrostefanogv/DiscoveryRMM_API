@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/escalation-rules")]
+[Route("api/v{version:apiVersion}/escalation-rules")]
 public class EscalationRulesController : ControllerBase
 {
     private readonly ITicketEscalationRuleRepository _repo;

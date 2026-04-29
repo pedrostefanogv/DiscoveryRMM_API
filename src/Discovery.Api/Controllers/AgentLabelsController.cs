@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/agent-labels")]
+[Route("api/v{version:apiVersion}/agent-labels")]
 public class AgentLabelsController : ControllerBase
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)

@@ -12,7 +12,7 @@ using System.Text.Json.Nodes;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/reports")]
+[Route("api/v{version:apiVersion}/reports")]
 public class ReportsController : ControllerBase
 {
     private static readonly IReadOnlyDictionary<ReportDatasetType, ReportDatasetSpecification> DatasetCatalog = BuildDatasetCatalog();

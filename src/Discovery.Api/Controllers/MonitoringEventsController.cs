@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/monitoring-events")]
+[Route("api/v{version:apiVersion}/monitoring-events")]
 public class MonitoringEventsController : ControllerBase
 {
     private readonly IAgentMonitoringEventRepository _monitoringEventRepository;

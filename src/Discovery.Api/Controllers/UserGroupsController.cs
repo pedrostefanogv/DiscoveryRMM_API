@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/user-groups")]
+[Route("api/v{version:apiVersion}/user-groups")]
 [RequireUserAuth]
 public class UserGroupsController : ControllerBase
 {

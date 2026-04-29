@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/configuration-audit")]
+[Route("api/v{version:apiVersion}/configuration-audit")]
 public class ConfigurationAuditController : ControllerBase
 {
     private readonly IConfigurationAuditService _service;

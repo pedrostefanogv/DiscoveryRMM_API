@@ -216,7 +216,7 @@ public class LocalObjectStorageProvider : IObjectStorageService
             throw new ArgumentException("Object key cannot be empty", nameof(objectKey));
 
         // Para local, retornar fake URL
-        var fakeUrl = $"/api/storage/download/{Uri.EscapeDataString(objectKey)}?ttl={ttlHours}";
+        var fakeUrl = $"/api/v1/storage/download/{Uri.EscapeDataString(objectKey)}?ttl={ttlHours}";
         _logger.LogInformation("Generated (local) presigned URL for {ObjectKey}", objectKey);
 
         return Task.FromResult(fakeUrl);
@@ -237,7 +237,7 @@ public class LocalObjectStorageProvider : IObjectStorageService
         if (string.IsNullOrWhiteSpace(contentType))
             throw new ArgumentException("Content type cannot be empty", nameof(contentType));
 
-        var fakeUrl = $"/api/storage/upload/{Uri.EscapeDataString(objectKey)}?ttl={ttlMinutes}&contentType={Uri.EscapeDataString(contentType)}";
+        var fakeUrl = $"/api/v1/storage/upload/{Uri.EscapeDataString(objectKey)}?ttl={ttlMinutes}&contentType={Uri.EscapeDataString(contentType)}";
         _logger.LogInformation("Generated (local) presigned upload URL for {ObjectKey}", objectKey);
 
         return Task.FromResult(fakeUrl);

@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/automation/tasks")]
+[Route("api/v{version:apiVersion}/automation/tasks")]
 public class AutomationTasksController : ControllerBase
 {
     private readonly IAutomationTaskService _service;

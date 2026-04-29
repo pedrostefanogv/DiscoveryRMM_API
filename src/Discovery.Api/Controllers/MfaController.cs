@@ -11,7 +11,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/mfa")]
+[Route("api/v{version:apiVersion}/mfa")]
 [Microsoft.AspNetCore.Authorization.AllowAnonymous]
 public class MfaController : ControllerBase
 {

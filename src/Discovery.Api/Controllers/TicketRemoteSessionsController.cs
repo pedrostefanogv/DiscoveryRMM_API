@@ -10,7 +10,7 @@ namespace Discovery.Api.Controllers;
 /// Permite registrar o início/fim de uma sessão remota e consultá-las no histórico do ticket.
 /// </summary>
 [ApiController]
-[Route("api/tickets/{ticketId:guid}/remote-sessions")]
+[Route("api/v{version:apiVersion}/tickets/{ticketId:guid}/remote-sessions")]
 public class TicketRemoteSessionsController : ControllerBase
 {
     private readonly ITicketRepository _ticketRepo;

@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/tickets/kpi")]
+[Route("api/v{version:apiVersion}/tickets/kpi")]
 public class TicketKpiController : ControllerBase
 {
     private readonly ITicketRepository _repo;

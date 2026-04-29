@@ -14,7 +14,7 @@ using AgentCommandStatus = Discovery.Core.Enums.CommandStatus;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/realtime")]
+[Route("api/v{version:apiVersion}/realtime")]
 public class RealtimeController : ControllerBase
 {
     private readonly IAgentMessaging _messaging;

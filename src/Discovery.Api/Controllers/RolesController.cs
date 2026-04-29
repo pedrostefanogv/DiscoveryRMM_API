@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/roles")]
+[Route("api/v{version:apiVersion}/roles")]
 [RequireUserAuth]
 public class RolesController : ControllerBase
 {

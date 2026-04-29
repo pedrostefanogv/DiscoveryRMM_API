@@ -14,7 +14,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/users")]
+[Route("api/v{version:apiVersion}/users")]
 [RequireUserAuth]
 public class UsersController : ControllerBase
 {

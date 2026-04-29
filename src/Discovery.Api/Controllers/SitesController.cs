@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/clients/{clientId:guid}/[controller]")]
+[Route("api/v{version:apiVersion}/clients/{clientId:guid}/[controller]")]
 public class SitesController : ControllerBase
 {
     private readonly ISiteRepository _repo;

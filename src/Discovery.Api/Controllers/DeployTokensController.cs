@@ -6,7 +6,7 @@ using Discovery.Core.Configuration;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/deploy-tokens")]
+[Route("api/v{version:apiVersion}/deploy-tokens")]
 public class DeployTokensController : ControllerBase
 {
     private readonly IConfiguration _configuration;

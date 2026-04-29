@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/app-store")]
+[Route("api/v{version:apiVersion}/app-store")]
 public class AppStoreController : ControllerBase
 {
     private readonly IAppStoreService _appStoreService;

@@ -15,7 +15,7 @@ namespace Discovery.Api.Controllers;
 /// Valores null em cliente/site indicam herança do nível superior.
 /// </summary>
 [ApiController]
-[Route("api/configurations")]
+[Route("api/v{version:apiVersion}/configurations")]
 public class ConfigurationsController : ControllerBase
 {
     private readonly IConfigurationService _configService;

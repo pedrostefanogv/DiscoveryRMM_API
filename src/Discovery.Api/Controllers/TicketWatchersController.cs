@@ -9,7 +9,7 @@ namespace Discovery.Api.Controllers;
 /// Watchers recebem notificações de comentários públicos, mudança de estado e encerramento.
 /// </summary>
 [ApiController]
-[Route("api/tickets/{ticketId:guid}/watchers")]
+[Route("api/v{version:apiVersion}/tickets/{ticketId:guid}/watchers")]
 public class TicketWatchersController : ControllerBase
 {
     private readonly ITicketWatcherRepository _watcherRepo;

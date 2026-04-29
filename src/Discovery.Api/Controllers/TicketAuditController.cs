@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/tickets/{ticketId:guid}/audit")]
+[Route("api/v{version:apiVersion}/tickets/{ticketId:guid}/audit")]
 public class TicketAuditController : ControllerBase
 {
     private readonly ITicketActivityLogRepository _logRepo;

@@ -11,7 +11,7 @@ namespace Discovery.Api.Controllers;
 /// o servidor dispara automaticamente o alerta PSADT.
 /// </summary>
 [ApiController]
-[Route("api/ticket-alert-rules")]
+[Route("api/v{version:apiVersion}/ticket-alert-rules")]
 public class TicketAlertRulesController : ControllerBase
 {
     private readonly ITicketAlertRuleRepository _repo;

@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/agent-updates")]
+[Route("api/v{version:apiVersion}/agent-updates")]
 public class AgentUpdatesController(
     IAgentUpdateService agentUpdateService,
     IAgentPackageService agentPackageService,

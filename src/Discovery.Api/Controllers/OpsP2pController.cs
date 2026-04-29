@@ -11,7 +11,7 @@ namespace Discovery.Api.Controllers;
 /// Oferece visão em 4 escopos: global / tenant / site / agent.
 /// </summary>
 [ApiController]
-[Route("api/ops/p2p")]
+[Route("api/v{version:apiVersion}/ops/p2p")]
 [RequireUserAuth]
 public class OpsP2pController : ControllerBase
 {

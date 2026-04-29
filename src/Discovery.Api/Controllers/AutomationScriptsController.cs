@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/automation/scripts")]
+[Route("api/v{version:apiVersion}/automation/scripts")]
 public class AutomationScriptsController : ControllerBase
 {
     private readonly IAutomationScriptService _service;

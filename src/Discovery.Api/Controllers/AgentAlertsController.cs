@@ -11,7 +11,7 @@ namespace Discovery.Api.Controllers;
 /// O escopo de entrega pode ser: Agent, Site, Client ou Label.
 /// </summary>
 [ApiController]
-[Route("api/agent-alerts")]
+[Route("api/v{version:apiVersion}/agent-alerts")]
 public class AgentAlertsController : ControllerBase
 {
     private readonly IAgentAlertService _alertService;

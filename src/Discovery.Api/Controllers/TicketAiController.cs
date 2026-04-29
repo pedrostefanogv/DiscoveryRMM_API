@@ -10,7 +10,7 @@ namespace Discovery.Api.Controllers;
 /// Endpoints de IA aplicada a tickets: triagem, resumo e sugestão de resposta.
 /// </summary>
 [ApiController]
-[Route("api/tickets/{id:guid}/ai")]
+[Route("api/v{version:apiVersion}/tickets/{id:guid}/ai")]
 public class TicketAiController : ControllerBase
 {
     private readonly ITicketRepository _ticketRepo;

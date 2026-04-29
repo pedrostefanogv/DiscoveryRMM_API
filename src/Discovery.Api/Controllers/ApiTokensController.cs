@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/api-tokens")]
+[Route("api/v{version:apiVersion}/api-tokens")]
 [RequireUserAuth]
 public class ApiTokensController : ControllerBase
 {

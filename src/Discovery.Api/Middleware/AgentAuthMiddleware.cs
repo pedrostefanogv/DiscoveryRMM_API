@@ -18,9 +18,9 @@ namespace Discovery.Api.Middleware;
 public class AgentAuthMiddleware
 {
     private readonly RequestDelegate _next;
-    private const string AgentAuthPathPrefix = "/api/agent-auth";
+    private const string AgentAuthPathPrefix = "/api/v1/agent-auth";
     private const string AgentHubPath = "/hubs/agent";
-    private const string AgentNatsCredentialsPath = "/api/agent-auth/me/nats-credentials";
+    private const string AgentNatsCredentialsPath = "/api/v1/agent-auth/me/nats-credentials";
     private const string AgentTlsHashHeader = "X-Agent-Tls-Cert-Hash";
     private const string AgentIdHeader = "X-Agent-ID";
 

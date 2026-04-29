@@ -9,7 +9,7 @@ using Pgvector;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/knowledge")]
+[Route("api/v{version:apiVersion}/knowledge")]
 public class KnowledgeController(
     IKnowledgeArticleRepository articleRepository,
     IKnowledgeChunkRepository chunkRepository,
@@ -208,9 +208,9 @@ public class KnowledgeController(
         return Ok(ordered);
     }
 
-    // ─── Vínculo Ticket ↔ KB (montado em /api/tickets/{ticketId}/knowledge) ──
+    // ─── Vínculo Ticket ↔ KB (montado em /api/v1/tickets/{ticketId}/knowledge) ──
 
-    [HttpGet("/api/tickets/{ticketId:guid}/knowledge")]
+    [HttpGet("/api/v1/tickets/{ticketId:guid}/knowledge")]
     public async Task<ActionResult<List<TicketKnowledgeLinkResponse>>> GetTicketKnowledge(
         Guid ticketId, CancellationToken ct = default)
     {
@@ -227,7 +227,7 @@ public class KnowledgeController(
         return Ok(response);
     }
 
-    [HttpPost("/api/tickets/{ticketId:guid}/knowledge")]
+    [HttpPost("/api/v1/tickets/{ticketId:guid}/knowledge")]
     public async Task<ActionResult<TicketKnowledgeLinkResponse>> LinkToTicket(
         Guid ticketId,
         [FromBody] LinkTicketRequest request,
@@ -250,7 +250,7 @@ public class KnowledgeController(
         return CreatedAtAction(nameof(GetTicketKnowledge), new { ticketId }, response);
     }
 
-    [HttpDelete("/api/tickets/{ticketId:guid}/knowledge/{articleId:guid}")]
+    [HttpDelete("/api/v1/tickets/{ticketId:guid}/knowledge/{articleId:guid}")]
     public async Task<IActionResult> UnlinkFromTicket(
         Guid ticketId, Guid articleId, CancellationToken ct = default)
     {
@@ -263,7 +263,7 @@ public class KnowledgeController(
     /// <summary>
     /// Sugere artigos relevantes para um ticket via busca semântica no título+descrição
     /// </summary>
-    [HttpGet("/api/tickets/{ticketId:guid}/knowledge/suggest")]
+    [HttpGet("/api/v1/tickets/{ticketId:guid}/knowledge/suggest")]
     public async Task<ActionResult<List<KbSearchResult>>> SuggestForTicket(
         Guid ticketId,
         [FromQuery] string q,
@@ -304,7 +304,7 @@ public class KnowledgeController(
     /// <summary>
     /// Registra feedback (útil / não útil) para um artigo vinculado a um ticket.
     /// </summary>
-    [HttpPost("/api/tickets/{ticketId:guid}/knowledge/{articleId:guid}/feedback")]
+    [HttpPost("/api/v1/tickets/{ticketId:guid}/knowledge/{articleId:guid}/feedback")]
     public async Task<IActionResult> SetKbLinkFeedback(
         Guid ticketId,
         Guid articleId,

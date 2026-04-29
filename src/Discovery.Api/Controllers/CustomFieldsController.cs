@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/custom-fields")]
+[Route("api/v{version:apiVersion}/custom-fields")]
 public class CustomFieldsController : ControllerBase
 {
     private readonly ICustomFieldService _service;

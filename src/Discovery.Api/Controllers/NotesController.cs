@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api")]
+[Route("api/v{version:apiVersion}")]
 public class NotesController : ControllerBase
 {
     private readonly IEntityNoteRepository _notes;
@@ -55,7 +55,7 @@ public class NotesController : ControllerBase
         };
 
         var created = await _notes.CreateAsync(note);
-        return Created($"/api/notes/{created.Id}", created);
+        return Created($"/api/v1/notes/{created.Id}", created);
     }
 
     // ============ Site notes ============
@@ -88,7 +88,7 @@ public class NotesController : ControllerBase
         };
 
         var created = await _notes.CreateAsync(note);
-        return Created($"/api/notes/{created.Id}", created);
+        return Created($"/api/v1/notes/{created.Id}", created);
     }
 
     // ============ Agent notes ============
@@ -121,7 +121,7 @@ public class NotesController : ControllerBase
         };
 
         var created = await _notes.CreateAsync(note);
-        return Created($"/api/notes/{created.Id}", created);
+        return Created($"/api/v1/notes/{created.Id}", created);
     }
 
     // ============ Shared note operations ============

@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/nats-auth")]
+[Route("api/v{version:apiVersion}/nats-auth")]
 public class NatsAuthController : ControllerBase
 {
     private readonly INatsCredentialsService _credentialsService;

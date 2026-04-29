@@ -5,7 +5,7 @@ using Discovery.Core.Enums;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/notifications")]
+[Route("api/v{version:apiVersion}/notifications")]
 public class NotificationsController : ControllerBase
 {
     private readonly INotificationService _notificationService;

@@ -9,7 +9,7 @@ namespace Discovery.Api.Controllers;
 /// Gerencia vínculos entre tickets e tarefas de automação, com suporte a aprovação.
 /// </summary>
 [ApiController]
-[Route("api/tickets/{ticketId:guid}/automation-links")]
+[Route("api/v{version:apiVersion}/tickets/{ticketId:guid}/automation-links")]
 public class TicketAutomationLinksController : ControllerBase
 {
     private readonly ITicketRepository _ticketRepo;

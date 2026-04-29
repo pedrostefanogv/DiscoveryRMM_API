@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/[controller]")]
+[Route("api/v{version:apiVersion}/[controller]")]
 public class TicketsController : ControllerBase
 {
     private readonly ITicketRepository _repo;

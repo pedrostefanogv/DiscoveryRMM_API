@@ -11,7 +11,7 @@ namespace Discovery.Api.Controllers;
 /// Reutiliza a infraestrutura de custom fields com ScopeType=Ticket.
 /// </summary>
 [ApiController]
-[Route("api/tickets/{ticketId:guid}/custom-fields")]
+[Route("api/v{version:apiVersion}/tickets/{ticketId:guid}/custom-fields")]
 public class TicketCustomFieldsController : ControllerBase
 {
     private readonly ITicketRepository _ticketRepo;

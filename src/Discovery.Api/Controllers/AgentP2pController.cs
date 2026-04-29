@@ -10,7 +10,7 @@ namespace Discovery.Api.Controllers;
 /// Autenticação: Bearer mdz_... validado pelo AgentAuthMiddleware.
 /// </summary>
 [ApiController]
-[Route("api/agent-auth")]
+[Route("api/v{version:apiVersion}/agent-auth")]
 [AllowAnonymous]
 public class AgentP2pController : ControllerBase
 {

@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/auto-ticket-rules")]
+[Route("api/v{version:apiVersion}/auto-ticket-rules")]
 public class AutoTicketRulesController : ControllerBase
 {
     private readonly IAutoTicketRuleRepository _ruleRepository;

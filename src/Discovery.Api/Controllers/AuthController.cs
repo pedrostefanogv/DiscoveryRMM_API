@@ -12,7 +12,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/auth")]
+[Route("api/v{version:apiVersion}/auth")]
 [AllowAnonymous]
 public class AuthController : ControllerBase
 {

@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api")]
+[Route("api/v{version:apiVersion}")]
 public class DashboardController : ControllerBase
 {
     private readonly IDashboardService _dashboardService;

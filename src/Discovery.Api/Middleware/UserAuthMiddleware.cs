@@ -7,14 +7,14 @@ namespace Discovery.Api.Middleware;
 /// Middleware que valida tokens JWT de usuário.
 /// Extrai UserId e outros claims, armazenando em HttpContext.Items.
 /// Não bloqueia requisições — a autorização é feita pelos action filters.
-/// Rotas públicas (/api/auth/login, /api/auth/refresh) são liberadas sem JWT.
+/// Rotas públicas (/api/v1/auth/login, /api/v1/auth/refresh) são liberadas sem JWT.
 /// </summary>
 public class UserAuthMiddleware
 {
     private static readonly HashSet<string> _publicPaths = new(StringComparer.OrdinalIgnoreCase)
     {
-        "/api/auth/login",
-        "/api/auth/refresh"
+        "/api/v1/auth/login",
+        "/api/v1/auth/refresh"
     };
 
     private readonly RequestDelegate _next;

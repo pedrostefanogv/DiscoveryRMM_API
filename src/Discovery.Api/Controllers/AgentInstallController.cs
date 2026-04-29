@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/agent-install")]
+[Route("api/v{version:apiVersion}/agent-install")]
 [AllowAnonymous]
 public class AgentInstallController : ControllerBase
 {

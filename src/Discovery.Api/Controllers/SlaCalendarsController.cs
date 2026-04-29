@@ -8,7 +8,7 @@ namespace Discovery.Api.Controllers;
 /// Gerencia calendários de horas úteis para cálculo de SLA.
 /// </summary>
 [ApiController]
-[Route("api/sla-calendars")]
+[Route("api/v{version:apiVersion}/sla-calendars")]
 public class SlaCalendarsController : ControllerBase
 {
     private readonly ISlaCalendarRepository _calendarRepo;
