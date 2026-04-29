@@ -57,6 +57,16 @@ public sealed class AgentUpdateRedirectPayload
     public required AgentReleaseArtifactType ArtifactType { get; init; }
 }
 
+/// <summary>
+/// Resultado da sincronização do repositório do agent.
+/// </summary>
+public sealed record AgentRepositorySyncResult(
+    string Branch,
+    string? BeforeCommit,
+    string AfterCommit,
+    bool Changed,
+    string? GitMessage);
+
 public sealed record AgentUpdateReportRequest(
     AgentUpdateEventType EventType,
     Guid? ReleaseId,

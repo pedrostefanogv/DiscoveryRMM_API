@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Discovery.Core.DTOs;
@@ -15,10 +16,15 @@ public class CustomFieldService : ICustomFieldService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    // Rate limiting: max 30 writes per agent per minute
+    private static readonly ConcurrentDictionary<Guid, AgentWriteWindow> AgentWriteWindows = new();
+    private const int MaxAgentWritesPerMinute = 30;
+
     private readonly DiscoveryDbContext _db;
     private readonly IAgentRepository _agentRepository;
     private readonly ISiteRepository _siteRepository;
     private readonly IAgentAutoLabelingService _autoLabelingService;
+    private readonly ILogRepository _logRepository;
     private readonly ILogger<CustomFieldService> _logger;
 
     public CustomFieldService(
@@ -26,12 +32,14 @@ public class CustomFieldService : ICustomFieldService
         IAgentRepository agentRepository,
         ISiteRepository siteRepository,
         IAgentAutoLabelingService autoLabelingService,
+        ILogRepository logRepository,
         ILogger<CustomFieldService> logger)
     {
         _db = db;
         _agentRepository = agentRepository;
         _siteRepository = siteRepository;
         _autoLabelingService = autoLabelingService;
+        _logRepository = logRepository;
         _logger = logger;
     }
 
@@ -108,6 +116,7 @@ public class CustomFieldService : ICustomFieldService
         await _db.SaveChangesAsync(cancellationToken);
 
         await ReplaceExecutionAccessAsync(definition.Id, input.AccessBindings, cancellationToken);
+        await AuditAsync("Created", definition.Name, definition.ScopeType, null, definition.Id.ToString(), null, updatedBy, cancellationToken);
         return definition;
     }
 
@@ -157,6 +166,7 @@ public class CustomFieldService : ICustomFieldService
 
         await _db.SaveChangesAsync(cancellationToken);
         await ReplaceExecutionAccessAsync(definition.Id, input.AccessBindings, cancellationToken);
+        await AuditAsync("Updated", definition.Name, definition.ScopeType, null, definition.Id.ToString(), null, updatedBy, cancellationToken);
 
         return definition;
     }
@@ -172,6 +182,7 @@ public class CustomFieldService : ICustomFieldService
         definition.IsActive = false;
         definition.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(cancellationToken);
+        await AuditAsync("Deactivated", definition.Name, definition.ScopeType, null, definition.Id.ToString(), null, null, cancellationToken);
 
         return true;
     }
@@ -367,6 +378,7 @@ public class CustomFieldService : ICustomFieldService
         await _db.SaveChangesAsync(cancellationToken);
 
         _ = TriggerLabelRevaluationAsync(input.ScopeType, input.EntityId);
+        await AuditAsync("ValueUpdated", definition.Name, input.ScopeType, input.EntityId, definition.Id.ToString(), valueJson, input.UpdatedBy, cancellationToken);
 
         return new CustomFieldResolvedValueDto(
             definition.Id,
@@ -440,6 +452,12 @@ public class CustomFieldService : ICustomFieldService
 
         if (!await HasExecutionAccessAsync(definition, input.TaskId, input.ScriptId, requireWrite: true, cancellationToken))
             throw new InvalidOperationException("Agent is not allowed to write this custom field in the current execution context.");
+
+        // Rate limiting: max MaxAgentWritesPerMinute writes per agent per minute
+        if (!TryAcquireAgentWriteWindow(agentId))
+            throw new InvalidOperationException("Agent write rate limit exceeded. Max 30 writes per minute.");
+
+        await AuditAgentWriteAsync(agentId, definition.Name, input.ValueJson, input.TaskId, input.ScriptId, cancellationToken);
 
         var updatedBy = string.IsNullOrWhiteSpace(input.UpdatedBy) ? "agent" : input.UpdatedBy.Trim();
         return await UpsertValueAsync(
@@ -889,5 +907,118 @@ public class CustomFieldService : ICustomFieldService
             if (!options.Contains(option, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Custom field value contains an invalid list option.");
         }
+    }
+
+    // ── Audit helpers ─────────────────────────────────────────────────────
+
+    private async Task AuditAsync(
+        string action,
+        string fieldName,
+        CustomFieldScopeType scopeType,
+        Guid? entityId,
+        string? definitionId,
+        string? valueJson,
+        string? changedBy,
+        CancellationToken ct)
+    {
+        try
+        {
+            var message = $"[CustomField] {action}: {fieldName} (scope={scopeType}, entityId={entityId})";
+            var data = new
+            {
+                action,
+                fieldName,
+                scopeType = scopeType.ToString(),
+                entityId = entityId?.ToString(),
+                definitionId,
+                valueLength = valueJson?.Length,
+                changedBy
+            };
+
+            await _logRepository.CreateAsync(new LogEntry
+            {
+                Id = IdGenerator.NewId(),
+                Type = LogType.CustomField,
+                Level = action.StartsWith("Error") ? Discovery.Core.Enums.LogLevel.Error : Discovery.Core.Enums.LogLevel.Info,
+                Source = LogSource.Api,
+                Message = message,
+                DataJson = JsonSerializer.Serialize(data, JsonOptions),
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao registrar auditoria de custom field. Action={Action}, Field={Field}", action, fieldName);
+        }
+    }
+
+    private async Task AuditAgentWriteAsync(
+        Guid agentId,
+        string fieldName,
+        string valueJson,
+        Guid? taskId,
+        Guid? scriptId,
+        CancellationToken ct)
+    {
+        try
+        {
+            var agent = await _agentRepository.GetByIdAsync(agentId);
+            var message = $"[CustomField] AgentWrite: {fieldName} by agent={agentId} (task={taskId}, script={scriptId})";
+            var data = new
+            {
+                action = "AgentWrite",
+                fieldName,
+                agentId = agentId.ToString(),
+                agentHostname = agent?.Hostname,
+                siteId = agent?.SiteId.ToString(),
+                taskId = taskId?.ToString(),
+                scriptId = scriptId?.ToString(),
+                valueLength = valueJson?.Length
+            };
+
+            await _logRepository.CreateAsync(new LogEntry
+            {
+                Id = IdGenerator.NewId(),
+                Type = LogType.CustomField,
+                Level = Discovery.Core.Enums.LogLevel.Info,
+                Source = LogSource.Agent,
+                SiteId = agent?.SiteId,
+                AgentId = agentId,
+                Message = message,
+                DataJson = JsonSerializer.Serialize(data, JsonOptions),
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao registrar auditoria de escrita por agent. AgentId={AgentId}, Field={Field}", agentId, fieldName);
+        }
+    }
+
+    // ── Rate limiting for agent writes ────────────────────────────────────
+
+    private static bool TryAcquireAgentWriteWindow(Guid agentId)
+    {
+        var now = DateTime.UtcNow.Ticks;
+        var windowTicks = TimeSpan.FromMinutes(1).Ticks;
+
+        var window = AgentWriteWindows.GetOrAdd(agentId, _ => new AgentWriteWindow());
+
+        lock (window)
+        {
+            // Expire old entries
+            window.Timestamps.RemoveAll(ts => now - ts > windowTicks);
+
+            if (window.Timestamps.Count >= MaxAgentWritesPerMinute)
+                return false;
+
+            window.Timestamps.Add(now);
+            return true;
+        }
+    }
+
+    private sealed class AgentWriteWindow
+    {
+        public readonly List<long> Timestamps = [];
     }
 }

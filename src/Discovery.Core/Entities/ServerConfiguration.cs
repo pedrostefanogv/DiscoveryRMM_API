@@ -112,6 +112,12 @@ public class ServerConfiguration
     public string ReportingSettingsJson { get; set; } = "{}";
 
     /// <summary>
+    /// Configurações de retenção e manutenção de base de dados (JSON).
+    /// Controla: logs, notificações, comandos, sessões, tokens, telemetria, VACUUM/REINDEX.
+    /// </summary>
+    public string RetentionSettingsJson { get; set; } = "{}";
+
+    /// <summary>
     /// Configurações globais de anexos de tickets (JSON).
     /// Exemplo: {"enabled":true,"maxFileSizeBytes":10485760,"allowedContentTypes":["image/jpeg","image/png","application/pdf"]}
     /// </summary>

@@ -24,6 +24,22 @@ public class ReportHtmlComposer : IReportHtmlComposer
             ? string.Empty
             : $"<img class=\"report-logo\" src=\"{HtmlAttributeEscape(logoUrl)}\" alt=\"logo\" />";
 
+        // Cover page (before the shell)
+        var coverPageHtml = BuildCoverPage(layout, context, data.Rows.Count, logoUrl, style);
+
+        // Table of Contents
+        var tocHtml = BuildTableOfContents(layout);
+
+        // Charts
+        var chartsHtml = BuildChartsSection(layout);
+
+        // Page header/footer
+        var pageHeaderHtml = BuildPageHeader(layout);
+        var pageFooterHtml = BuildPageFooter(layout);
+
+        // Watermark
+        var watermarkHtml = BuildWatermark(layout);
+
         return $$"""
             <!DOCTYPE html>
             <html>
@@ -38,6 +54,13 @@ public class ReportHtmlComposer : IReportHtmlComposer
                         --report-border: {{CssValueOrDefault(style.BorderColor, "#d9e2ec")}};
                         --report-muted: {{CssValueOrDefault(style.SecondaryColor, "#52606d")}};
                         --report-font: {{CssValueOrDefault(style.FontFamily, "Arial, sans-serif")}};
+                    }
+
+                    @page {
+                        size: A4 {{layout.Orientation ?? "portrait"}};
+                        margin: 20mm 15mm 25mm 15mm;
+                        @top-center { content: "{{pageHeaderHtml}}"; font-size: 10px; color: var(--report-muted); }
+                        @bottom-center { content: "{{pageFooterHtml}}"; font-size: 9px; color: var(--report-muted); }
                     }
 
                     body { font-family: var(--report-font); margin: 0; color: #1f2933; background: #ffffff; }
@@ -58,9 +81,35 @@ public class ReportHtmlComposer : IReportHtmlComposer
                     th { background:var(--report-header-bg); color:var(--report-header-text); font-weight:700; }
                     tbody tr:nth-child(even) { background:var(--report-alt-row); }
                     .section-caption { margin: 16px 0 6px; color: var(--report-muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; }
+
+                    /* Cover page */
+                    .report-cover { page-break-after: always; display:flex; flex-direction:column; justify-content:center; align-items:center; min-height:90vh; text-align:center; }
+                    .report-cover-title { font-size:36px; color:var(--report-primary); margin-bottom:16px; }
+                    .report-cover-subtitle { font-size:16px; color:var(--report-muted); margin-bottom:40px; }
+                    .report-cover-meta { font-size:12px; color:var(--report-muted); line-height:1.8; }
+                    .report-cover-logo { max-height:80px; max-width:280px; margin-bottom:30px; }
+
+                    /* TOC */
+                    .report-toc { page-break-after: always; }
+                    .report-toc-title { font-size:22px; color:var(--report-primary); border-bottom:2px solid var(--report-primary); padding-bottom:8px; margin-bottom:16px; }
+                    .report-toc-item { display:flex; justify-content:space-between; padding:6px 0; font-size:13px; }
+                    .report-toc-item-level1 { font-weight:700; }
+                    .report-toc-item-level2 { padding-left:20px; }
+
+                    /* Charts */
+                    .report-charts { margin: 20px 0; page-break-inside: avoid; }
+                    .report-chart { margin: 16px 0; text-align:center; }
+                    .report-chart-title { font-size:14px; font-weight:700; margin-bottom:8px; color:var(--report-primary); }
+                    .report-chart img { max-width:100%; height:auto; }
+
+                    /* Watermark */
+                    .report-watermark { position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:-1; opacity:0.06; display:flex; align-items:center; justify-content:center; font-size:{{layout.Watermark?.FontSize ?? 120}}px; color:{{CssValueOrDefault(layout.Watermark?.Color, "#000000")}}; transform:rotate({{layout.Watermark?.Angle ?? -45}}deg); }
                 </style>
             </head>
             <body>
+                {{coverPageHtml}}
+                {{tocHtml}}
+                {{watermarkHtml}}
                 <div class="report-shell">
                     <div class="report-header">
                         <div>
@@ -69,6 +118,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                         </div>
                         {{logoHtml}}
                     </div>
+                    {{chartsHtml}}
                     {{content}}
                 </div>
             </body>
@@ -116,7 +166,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         {
             var columns = (section.Columns ?? [])
                 .Where(column => !string.IsNullOrWhiteSpace(column.Field))
-                .Select(column => new ReportLayoutColumn(column.Field!, ResolveDisplayHeader(column), column.Format, section.Title))
+                .Select(column => new ReportLayoutColumn(column.Field!, ResolveDisplayHeader(column), column.Format, section.Title, column.ConditionalFormat))
                 .ToList();
 
             if (columns.Count == 0)
@@ -192,7 +242,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         {
             var directColumns = layout.Columns
                 .Where(column => !string.IsNullOrWhiteSpace(column.Field))
-                .Select(column => new ReportLayoutColumn(column.Field!, ResolveDisplayHeader(column), column.Format, null))
+                .Select(column => new ReportLayoutColumn(column.Field!, ResolveDisplayHeader(column), column.Format, null, column.ConditionalFormat))
                 .ToList();
 
             if (directColumns.Count > 0)
@@ -259,7 +309,103 @@ public class ReportHtmlComposer : IReportHtmlComposer
             return sum;
         }
 
+        if (string.Equals(summary.Aggregate, "avg", StringComparison.OrdinalIgnoreCase))
+        {
+            decimal sum = 0;
+            int count = 0;
+            foreach (var row in rows)
+            {
+                if (!row.TryGetValue(summary.Field, out var value) || value is null)
+                    continue;
+                if (TryConvertToDecimal(value, out var decimalValue)) { sum += decimalValue; count++; }
+            }
+            return count > 0 ? sum / count : null;
+        }
+
+        if (string.Equals(summary.Aggregate, "min", StringComparison.OrdinalIgnoreCase))
+        {
+            decimal? min = null;
+            foreach (var row in rows)
+            {
+                if (!row.TryGetValue(summary.Field, out var value) || value is null)
+                    continue;
+                if (TryConvertToDecimal(value, out var decimalValue) && (min is null || decimalValue < min))
+                    min = decimalValue;
+            }
+            return min;
+        }
+
+        if (string.Equals(summary.Aggregate, "max", StringComparison.OrdinalIgnoreCase))
+        {
+            decimal? max = null;
+            foreach (var row in rows)
+            {
+                if (!row.TryGetValue(summary.Field, out var value) || value is null)
+                    continue;
+                if (TryConvertToDecimal(value, out var decimalValue) && (max is null || decimalValue > max))
+                    max = decimalValue;
+            }
+            return max;
+        }
+
         return null;
+    }
+
+    private static string? ResolveConditionalCellStyle(ReportLayoutConditionalFormat? conditionalFormat, object? value)
+    {
+        if (conditionalFormat?.Rules is not { Count: > 0 })
+            return null;
+
+        foreach (var rule in conditionalFormat.Rules)
+        {
+            if (EvaluateCondition(rule.Operator, value, rule.Value))
+            {
+                var parts = new List<string>();
+                if (!string.IsNullOrWhiteSpace(rule.BackgroundColor))
+                    parts.Add($"background-color:{rule.BackgroundColor}");
+                if (!string.IsNullOrWhiteSpace(rule.TextColor))
+                    parts.Add($"color:{rule.TextColor}");
+                return parts.Count > 0 ? string.Join(";", parts) : null;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ResolveConditionalIcon(ReportLayoutConditionalFormat? conditionalFormat, object? value)
+    {
+        if (conditionalFormat?.Rules is not { Count: > 0 })
+            return null;
+
+        foreach (var rule in conditionalFormat.Rules)
+        {
+            if (EvaluateCondition(rule.Operator, value, rule.Value) && !string.IsNullOrWhiteSpace(rule.Icon))
+                return rule.Icon;
+        }
+
+        return null;
+    }
+
+    private static bool EvaluateCondition(string? op, object? left, object? right)
+    {
+        if (op is null || left is null || right is null) return false;
+
+        if (string.Equals(op, "eq", StringComparison.OrdinalIgnoreCase))
+            return string.Equals(left.ToString(), right.ToString(), StringComparison.OrdinalIgnoreCase);
+
+        if (TryConvertToDecimal(left, out var leftNum) && TryConvertToDecimal(right, out var rightNum))
+        {
+            return op.ToLowerInvariant() switch
+            {
+                "lt" => leftNum < rightNum,
+                "lte" => leftNum <= rightNum,
+                "gt" => leftNum > rightNum,
+                "gte" => leftNum >= rightNum,
+                _ => false
+            };
+        }
+
+        return false;
     }
 
     private static IReadOnlyList<ReportLayoutColumn> FilterColumnsForGrouping(IReadOnlyList<ReportLayoutColumn> columns, ReportLayoutDefinition layout)
@@ -302,6 +448,13 @@ public class ReportHtmlComposer : IReportHtmlComposer
     {
         if (value is null)
             return string.Empty;
+
+        if (string.Equals(format, "bytes", StringComparison.OrdinalIgnoreCase) && TryConvertToDecimal(value, out var bytes))
+            return FormatBytes(bytes);
+
+        if (string.Equals(format, "percent", StringComparison.OrdinalIgnoreCase) && TryConvertToDecimal(value, out var pct))
+            return $"{pct:F1}%";
+
         if (value is DateTime dateTime)
             return string.Equals(format, "datetime", StringComparison.OrdinalIgnoreCase) ? dateTime.ToString("yyyy-MM-dd HH:mm:ss") : dateTime.ToString("yyyy-MM-dd");
         if (value is DateTimeOffset dateTimeOffset)
@@ -311,6 +464,15 @@ public class ReportHtmlComposer : IReportHtmlComposer
         if (value is double doubleValue && string.Equals(format, "number", StringComparison.OrdinalIgnoreCase))
             return doubleValue.ToString("0.##");
         return value.ToString() ?? string.Empty;
+    }
+
+    private static string FormatBytes(decimal bytes)
+    {
+        if (bytes >= 1_099_511_627_776m) return $"{bytes / 1_099_511_627_776m:F1} TB";
+        if (bytes >= 1_073_741_824m) return $"{bytes / 1_073_741_824m:F1} GB";
+        if (bytes >= 1_048_576m) return $"{bytes / 1_048_576m:F1} MB";
+        if (bytes >= 1_024m) return $"{bytes / 1_024m:F1} KB";
+        return $"{bytes:F0} B";
     }
 
     private static string BuildGroupTitle(ReportLayoutDefinition layout, string? key, int count)
@@ -348,5 +510,228 @@ public class ReportHtmlComposer : IReportHtmlComposer
         return string.IsNullOrWhiteSpace(display) ? (column.Field ?? string.Empty) : display;
     }
 
-    private sealed record ReportLayoutColumn(string Field, string Header, string? Format, string? SectionTitle);
+    // ─── Cover Page ────────────────────────────────────────────────
+
+    private static string BuildCoverPage(ReportLayoutDefinition layout, ReportRenderContext context, int rowCount, string? logoUrl, ReportLayoutStyleDefinition style)
+    {
+        if (layout.CoverPage is not { Enabled: true })
+            return string.Empty;
+
+        var title = string.IsNullOrWhiteSpace(layout.CoverPage.Title) ? context.Title : layout.CoverPage.Title;
+        var subtitle = layout.CoverPage.Subtitle ?? context.Subtitle ?? "";
+        var logoHtml = string.IsNullOrWhiteSpace(layout.CoverPage.LogoUrl ?? logoUrl)
+            ? string.Empty
+            : $"<img class=\"report-cover-logo\" src=\"{HtmlAttributeEscape(layout.CoverPage.LogoUrl ?? logoUrl!)}\" alt=\"logo\" />";
+
+        var meta = new StringBuilder();
+        if (layout.CoverPage.ShowGeneratedAt)
+            meta.AppendLine($"<div>Gerado em: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC</div>");
+        if (layout.CoverPage.ShowRowCount)
+            meta.AppendLine($"<div>Registros: {rowCount}</div>");
+        if (layout.CoverPage.ShowParameters && !string.IsNullOrWhiteSpace(context.LayoutJson))
+            meta.AppendLine("<div>Fonte: Discovery RMM Reporting Engine</div>");
+
+        return $$"""
+            <div class="report-cover">
+                {{logoHtml}}
+                <h1 class="report-cover-title">{{HtmlEscape(title)}}</h1>
+                <p class="report-cover-subtitle">{{HtmlEscape(subtitle)}}</p>
+                <div class="report-cover-meta">
+                    {{meta}}
+                </div>
+            </div>
+            """;
+    }
+
+    // ─── Table of Contents ─────────────────────────────────────────
+
+    private static string BuildTableOfContents(ReportLayoutDefinition layout)
+    {
+        if (layout.TableOfContents is not { Enabled: true })
+            return string.Empty;
+
+        var tocTitle = string.IsNullOrWhiteSpace(layout.TableOfContents.Title) ? "Índice" : layout.TableOfContents.Title;
+
+        // Build TOC from group titles
+        var items = new List<(string Title, int Level)>();
+        items.Add((layout.Title ?? "Relatório", 1));
+
+        if (layout.Sections is { Count: > 0 })
+        {
+            foreach (var section in layout.Sections)
+            {
+                if (!string.IsNullOrWhiteSpace(section.Title))
+                    items.Add((section.Title, 2));
+            }
+        }
+
+        var tocItems = string.Join("\n", items.Select(item =>
+        {
+            var cls = item.Level == 1 ? "report-toc-item report-toc-item-level1" : "report-toc-item report-toc-item-level2";
+            return $"<div class=\"{cls}\"><span>{HtmlEscape(item.Title)}</span></div>";
+        }));
+
+        return $$"""
+            <div class="report-toc">
+                <h2 class="report-toc-title">{{HtmlEscape(tocTitle)}}</h2>
+                {{tocItems}}
+            </div>
+            """;
+    }
+
+    // ─── Charts (QuickChart.io integration) ────────────────────────
+
+    private static string BuildChartsSection(ReportLayoutDefinition layout)
+    {
+        if (layout.Charts is not { Count: > 0 })
+            return string.Empty;
+
+        var charts = new StringBuilder();
+        foreach (var chart in layout.Charts)
+        {
+            var chartTitle = string.IsNullOrWhiteSpace(chart.Title) ? (chart.Type ?? "Chart") : chart.Title;
+            var chartUrl = BuildQuickChartUrl(chart);
+            if (string.IsNullOrWhiteSpace(chartUrl))
+                continue;
+
+            charts.AppendLine("<div class=\"report-chart\">");
+            charts.AppendLine($"<div class=\"report-chart-title\">{HtmlEscape(chartTitle)}</div>");
+            charts.AppendLine($"<img src=\"{HtmlAttributeEscape(chartUrl)}\" alt=\"{HtmlAttributeEscape(chartTitle)}\" style=\"max-width:100%;height:auto;\" />");
+            charts.AppendLine("</div>");
+        }
+
+        if (charts.Length == 0)
+            return string.Empty;
+
+        return $$"""
+            <div class="report-charts">
+                {{charts}}
+            </div>
+            """;
+    }
+
+    private static string? BuildQuickChartUrl(ReportLayoutChartDefinition chart)
+    {
+        if (string.IsNullOrWhiteSpace(chart.Type))
+            return null;
+
+        var w = Math.Clamp(chart.Width, 200, 1200);
+        var h = Math.Clamp(chart.Height, 150, 800);
+
+        // Base config for specific chart types
+        var chartConfig = chart.Type.ToLowerInvariant() switch
+        {
+            "gauge" => BuildGaugeConfig(chart),
+            _ => BuildStandardChartConfig(chart)
+        };
+
+        if (chartConfig is null)
+            return null;
+
+        var encoded = Uri.EscapeDataString(chartConfig);
+        return $"https://quickchart.io/chart?c={encoded}&w={w}&h={h}";
+    }
+
+    private static string BuildStandardChartConfig(ReportLayoutChartDefinition chart)
+    {
+        var chartType = chart.Type?.ToLowerInvariant() switch
+        {
+            "horizontalbar" => "horizontalBar",
+            "pie" => "pie",
+            "doughnut" => "doughnut",
+            "line" => "line",
+            _ => "bar"
+        };
+
+        // Placeholder — data will be injected dynamically in future iterations
+        // For now, we generate a chart with labels only as placeholder
+        var labels = "[\"A\", \"B\", \"C\"]";
+        var data = "[10, 25, 15]";
+
+        return $$"""
+            {
+                "type": "{{chartType}}",
+                "data": {
+                    "labels": {{labels}},
+                    "datasets": [{
+                        "label": "{{chart.Title ?? "Dados"}}",
+                        "data": {{data}}
+                    }]
+                },
+                "options": {
+                    "plugins": {
+                        "title": { "display": true, "text": "{{chart.Title ?? ""}}" }
+                    }
+                }
+            }
+            """;
+    }
+
+    private static string? BuildGaugeConfig(ReportLayoutChartDefinition chart)
+    {
+        if (!chart.ValueExpr.HasValue && chart.Thresholds is null)
+            return null;
+
+        var value = chart.ValueExpr ?? 0;
+        var thresholds = chart.Thresholds is { Count: > 0 }
+            ? string.Join(",", chart.Thresholds.Select(t => $"{{ \"value\": {t.Value}, \"color\": \"{t.Color ?? "#888"}\" }}"))
+            : "";
+
+        return $$"""
+            {
+                "type": "radialGauge",
+                "data": {
+                    "datasets": [{
+                        "data": [{{value}}],
+                        "backgroundColor": ["{{chart.Thresholds?.LastOrDefault()?.Color ?? "#22c55e"}}"]
+                    }]
+                },
+                "options": {
+                    "plugins": { "title": { "display": true, "text": "{{chart.Title ?? ""}}" } },
+                    "needle": { "radiusPercentage": 2, "widthPercentage": 3.2, "lengthPercentage": 80, "color": "rgba(0,0,0,0.7)" },
+                    "valueLabel": { "display": true, "formatter": "{value}%" }
+                }
+            }
+            """;
+    }
+
+    // ─── Page Header / Footer ──────────────────────────────────────
+
+    private static string BuildPageHeader(ReportLayoutDefinition layout)
+    {
+        var ph = layout.PageHeader;
+        if (ph is null) return "";
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(ph.Left)) parts.Add(ph.Left);
+        if (!string.IsNullOrWhiteSpace(ph.Center)) parts.Add(ph.Center);
+        if (!string.IsNullOrWhiteSpace(ph.Right)) parts.Add(ph.Right);
+        return string.Join(" | ", parts);
+    }
+
+    private static string BuildPageFooter(ReportLayoutDefinition layout)
+    {
+        var pf = layout.PageFooter;
+        if (pf is null) return "";
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(pf.Left)) parts.Add(pf.Left);
+        if (!string.IsNullOrWhiteSpace(pf.Center)) parts.Add(pf.Center);
+        if (!string.IsNullOrWhiteSpace(pf.Right)) parts.Add(pf.Right);
+        return string.Join(" | ", parts);
+    }
+
+    // ─── Watermark ─────────────────────────────────────────────────
+
+    private static string BuildWatermark(ReportLayoutDefinition layout)
+    {
+        if (layout.Watermark is not { } wm || string.IsNullOrWhiteSpace(wm.Text))
+            return string.Empty;
+
+        return $$"""
+            <div class="report-watermark">
+                {{HtmlEscape(wm.Text)}}
+            </div>
+            """;
+    }
+
+    private sealed record ReportLayoutColumn(string Field, string Header, string? Format, string? SectionTitle, ReportLayoutConditionalFormat? ConditionalFormat = null);
 }

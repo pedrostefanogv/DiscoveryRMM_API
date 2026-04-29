@@ -15,6 +15,7 @@ public class ReportTemplate
     public string LayoutJson { get; set; } = "{}";
     public string? FiltersJson { get; set; }
     public bool IsActive { get; set; } = true;
+    public bool IsBuiltIn { get; set; }
     public int Version { get; set; } = 1;
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

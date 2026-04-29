@@ -14,6 +14,10 @@ public class AgentPackageService : IAgentPackageService
     private readonly IConfigurationService _configurationService;
     private readonly ILogger<AgentPackageService> _logger;
     private static readonly SemaphoreSlim BuildLock = new(1, 1);
+    private static readonly HashSet<string> AllowedBranches = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "dev", "release", "beta", "lts"
+    };
 
     public AgentPackageService(IConfiguration config, IConfigurationService configurationService, ILogger<AgentPackageService> logger)
     {
@@ -461,5 +465,123 @@ public class AgentPackageService : IAgentPackageService
             throw new InvalidOperationException(
                 $"Process failed ({fileName}). ExitCode={process.ExitCode}.\nOUT: {stdOut}\nERR: {stdErr}");
         }
+    }
+
+    // ── Repository sync ───────────────────────────────────────────────────
+
+    public async Task<Discovery.Core.DTOs.AgentRepositorySyncResult> SyncRepositoryAsync(
+        string branch,
+        CancellationToken cancellationToken = default)
+    {
+        branch = (branch ?? string.Empty).Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(branch))
+            branch = "release";
+
+        if (!AllowedBranches.Contains(branch))
+            throw new InvalidOperationException(
+                $"Branch '{branch}' is not allowed. Allowed branches: {string.Join(", ", AllowedBranches.OrderBy(b => b))}.");
+
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+
+        if (!Directory.Exists(projectPath))
+            throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
+
+        // Validate that the directory is a git repository
+        var gitDir = Path.Combine(projectPath, ".git");
+        if (!Directory.Exists(gitDir))
+            throw new InvalidOperationException($"Not a git repository: {projectPath}");
+
+        _logger.LogInformation(
+            "Syncing agent repository at {Path} to branch {Branch}",
+            projectPath, branch);
+
+        // 1. Capture current HEAD before sync
+        var beforeCommit = await CaptureGitHeadAsync(projectPath, cancellationToken);
+
+        // 2. git fetch origin {branch} — only fetch the target branch, not all
+        await RunProcessAsync(
+            fileName: "git",
+            workingDirectory: projectPath,
+            arguments: ["fetch", "origin", branch, "--prune", "--quiet"],
+            cancellationToken: cancellationToken);
+
+        // 3. git reset --hard origin/{branch}
+        var resetOutput = await CaptureGitOutputAsync(projectPath,
+            ["reset", "--hard", $"origin/{branch}"],
+            cancellationToken);
+        _logger.LogInformation("Git reset output: {Output}", resetOutput.Trim());
+
+        // 4. Capture new HEAD after sync
+        var afterCommit = await CaptureGitHeadAsync(projectPath, cancellationToken);
+
+        var changed = !string.Equals(beforeCommit, afterCommit, StringComparison.Ordinal);
+        _logger.LogInformation(
+            "Agent repository sync completed. Branch={Branch}, Before={Before}, After={After}, Changed={Changed}",
+            branch, beforeCommit, afterCommit, changed);
+
+        return new Discovery.Core.DTOs.AgentRepositorySyncResult(
+            branch,
+            beforeCommit,
+            afterCommit ?? "unknown",
+            changed,
+            changed ? $"Updated to {afterCommit?[..Math.Min(12, afterCommit.Length)]}" : "Already up to date."
+        );
+    }
+
+    private static async Task<string?> CaptureGitHeadAsync(string projectPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await CaptureGitOutputAsync(projectPath, ["rev-parse", "HEAD"], cancellationToken)).Trim();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<string> CaptureGitOutputAsync(
+        string projectPath,
+        string[] arguments,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = projectPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        foreach (var arg in arguments)
+            startInfo.ArgumentList.Add(arg);
+
+        using var process = new Process { StartInfo = startInfo };
+
+        try
+        {
+            if (!process.Start())
+                throw new InvalidOperationException("Could not start git process.");
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            throw new InvalidOperationException("Git is not installed or not in PATH. Required for repository sync.", ex);
+        }
+
+        var stdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stdErrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
+        await process.WaitForExitAsync(cancellationToken);
+
+        if (process.ExitCode != 0)
+        {
+            var err = await stdErrTask;
+            throw new InvalidOperationException($"Git command failed. ExitCode={process.ExitCode}. {err}");
+        }
+
+        return await stdOutTask;
     }
 }

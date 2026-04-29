@@ -16,6 +16,10 @@ public class AgentUpdatesController(
     ISyncInvalidationPublisher syncInvalidationPublisher,
     IConfiguration configuration) : ControllerBase
 {
+    private static readonly HashSet<string> AllowedSyncBranches = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "dev", "release", "beta", "lts"
+    };
     [HttpGet("releases")]
     [RequirePermission(ResourceType.Deployment, ActionType.View)]
     public async Task<IActionResult> ListReleases([FromQuery] bool includeInactive = false, [FromQuery] string? channel = null, CancellationToken cancellationToken = default)
@@ -252,6 +256,130 @@ public class AgentUpdatesController(
         }
     }
 
+    // ── Repository Sync ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Synchronizes the agent source repository with the configured branch.
+    /// Allowed branches: dev, release (default), beta, lts.
+    /// Executes git fetch + git reset --hard to origin/{branch}.
+    /// </summary>
+    [HttpPost("repository/sync")]
+    [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
+    public async Task<IActionResult> SyncRepository(
+        [FromBody] SyncAgentRepositoryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var branch = string.IsNullOrWhiteSpace(request.Branch) ? "release" : request.Branch.Trim();
+        if (!AllowedSyncBranches.Contains(branch))
+            return BadRequest(new { error = $"Branch '{branch}' is not allowed. Allowed: {string.Join(", ", AllowedSyncBranches.OrderBy(b => b))}." });
+
+        try
+        {
+            var result = await agentPackageService.SyncRepositoryAsync(branch, cancellationToken);
+            return Ok(new
+            {
+                result.Branch,
+                BeforeCommit = result.BeforeCommit?[..Math.Min(12, result.BeforeCommit.Length)],
+                AfterCommit = result.AfterCommit[..Math.Min(12, result.AfterCommit.Length)],
+                result.Changed,
+                result.GitMessage
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Synchronizes the agent source repository AND triggers a full rebuild
+    /// (wails build + makensis) after sync. If the sync produces no changes,
+    /// the rebuild is skipped unless forceRebuild is true.
+    /// </summary>
+    [HttpPost("repository/sync-and-build")]
+    [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
+    public async Task<IActionResult> SyncAndBuild(
+        [FromBody] SyncAgentRepositoryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var branch = string.IsNullOrWhiteSpace(request.Branch) ? "release" : request.Branch.Trim();
+        if (!AllowedSyncBranches.Contains(branch))
+            return BadRequest(new { error = $"Branch '{branch}' is not allowed. Allowed: {string.Join(", ", AllowedSyncBranches.OrderBy(b => b))}." });
+
+        try
+        {
+            var syncResult = await agentPackageService.SyncRepositoryAsync(branch, cancellationToken);
+
+            if (!syncResult.Changed && !request.ForceRebuild)
+            {
+                return Ok(new
+                {
+                    synced = true,
+                    rebuilt = false,
+                    sync = new
+                    {
+                        syncResult.Branch,
+                        BeforeCommit = syncResult.BeforeCommit?[..Math.Min(12, syncResult.BeforeCommit.Length)],
+                        AfterCommit = syncResult.AfterCommit[..Math.Min(12, syncResult.AfterCommit.Length)],
+                        syncResult.Changed,
+                        syncResult.GitMessage
+                    },
+                    message = "Repository is already up to date. Use forceRebuild=true to force a rebuild."
+                });
+            }
+
+            // Force rebuild after sync
+            await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
+
+            var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
+            var (content, fileName) = await agentPackageService.BuildInstallerAsync(string.Empty, publicApiBaseUrl);
+
+            var syncInfo = new
+            {
+                syncResult.Branch,
+                BeforeCommit = syncResult.BeforeCommit?[..Math.Min(12, syncResult.BeforeCommit.Length)],
+                AfterCommit = syncResult.AfterCommit[..Math.Min(12, syncResult.AfterCommit.Length)],
+                syncResult.Changed,
+                syncResult.GitMessage
+            };
+
+            // If there's a latest active release, auto-register the artifact
+            try
+            {
+                // Try to get the latest active release for the current channel
+                // The release admin should create releases manually; we won't auto-create.
+                // But if a release exists, we'll note the installer was rebuilt.
+                return Ok(new
+                {
+                    synced = true,
+                    rebuilt = true,
+                    sync = syncInfo,
+                    build = new
+                    {
+                        fileName,
+                        sizeBytes = content.Length,
+                        message = "Installer rebuilt successfully. Use POST /releases/{releaseId}/build-artifact to register the artifact with a specific release."
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new
+                {
+                    synced = true,
+                    rebuilt = true,
+                    sync = syncInfo,
+                    build = new { fileName, sizeBytes = content.Length },
+                    warning = ex.Message
+                });
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     private static string ResolvePublicApiBaseUrl(HttpRequest request)
         => $"{request.Scheme}://{request.Host}{request.PathBase}/api/";
 }
@@ -266,4 +394,8 @@ public sealed record UploadAgentReleaseArtifactRequest(
 public sealed record BuildAgentReleaseArtifactRequest(
     string? Platform,
     string? Architecture,
+    bool ForceRebuild = false);
+
+public sealed record SyncAgentRepositoryRequest(
+    string? Branch = "release",
     bool ForceRebuild = false);

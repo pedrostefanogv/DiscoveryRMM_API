@@ -77,6 +77,7 @@ var autoRegisteredServices = builder.Services.AddDiscoveryAutoRegisteredServices
 // Multi-implementation services (explicitly registered)
 builder.Services.AddScoped<IReportRenderer, XlsxReportRenderer>();
 builder.Services.AddScoped<IReportRenderer, CsvReportRenderer>();
+builder.Services.AddScoped<IReportRenderer, MarkdownReportRenderer>();
 
 // Implemented in Discovery.Api (outside Discovery.Infrastructure auto-scan)
 builder.Services.AddScoped<INotificationService, NotificationService>();

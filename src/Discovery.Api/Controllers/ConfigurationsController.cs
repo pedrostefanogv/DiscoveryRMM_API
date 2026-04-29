@@ -311,6 +311,149 @@ public class ConfigurationsController : ControllerBase
         return Ok(TicketAttachmentSettings.FromJson(server.TicketAttachmentSettingsJson));
     }
 
+    // ============ Server Retention ============
+
+    [HttpGet("server/retention")]
+    public async Task<IActionResult> GetServerRetention()
+    {
+        var server = await _configService.GetServerConfigAsync();
+        var settings = RetentionSettingsHelper.DeserializeOrDefault(server.RetentionSettingsJson);
+        return Ok(settings);
+    }
+
+    [HttpPut("server/retention")]
+    public async Task<IActionResult> UpdateServerRetention([FromBody] UpdateRetentionRequest request)
+    {
+        var errors = new List<string>();
+
+        // Validate ranges
+        if (request.LogRetentionDays is < 7 or > 3650)
+            errors.Add("logRetentionDays must be between 7 and 3650.");
+        if (request.NotificationRetentionDays is < 7 or > 3650)
+            errors.Add("notificationRetentionDays must be between 7 and 3650.");
+        if (request.AgentCommandRetentionDays is < 1 or > 3650)
+            errors.Add("agentCommandRetentionDays must be between 1 and 3650.");
+        if (request.SessionRetentionDays is < 1 or > 3650)
+            errors.Add("sessionRetentionDays must be between 1 and 3650.");
+        if (request.TokenExpiredGraceDays is < 1 or > 365)
+            errors.Add("tokenExpiredGraceDays must be between 1 and 365.");
+        if (request.SyncPingRetentionDays is < 1 or > 365)
+            errors.Add("syncPingRetentionDays must be between 1 and 365.");
+        if (request.TelemetryRetentionDays is < 1 or > 365)
+            errors.Add("telemetryRetentionDays must be between 1 and 365.");
+        if (request.AutomationReportRetentionDays is < 1 or > 3650)
+            errors.Add("automationReportRetentionDays must be between 1 and 3650.");
+
+        if (errors.Count > 0)
+            return BadRequest(new { errors });
+
+        var server = await _configService.GetServerConfigAsync();
+        var current = RetentionSettingsHelper.DeserializeOrDefault(server.RetentionSettingsJson);
+
+        // Merge request over current
+        var updated = new RetentionSettings
+        {
+            LogRetentionDays = request.LogRetentionDays ?? current.LogRetentionDays,
+            NotificationRetentionDays = request.NotificationRetentionDays ?? current.NotificationRetentionDays,
+            AgentCommandRetentionDays = request.AgentCommandRetentionDays ?? current.AgentCommandRetentionDays,
+            SessionRetentionDays = request.SessionRetentionDays ?? current.SessionRetentionDays,
+            TokenExpiredGraceDays = request.TokenExpiredGraceDays ?? current.TokenExpiredGraceDays,
+            SyncPingRetentionDays = request.SyncPingRetentionDays ?? current.SyncPingRetentionDays,
+            TelemetryRetentionDays = request.TelemetryRetentionDays ?? current.TelemetryRetentionDays,
+            AutomationReportRetentionDays = request.AutomationReportRetentionDays ?? current.AutomationReportRetentionDays,
+            AiChatExpiryDays = current.AiChatExpiryDays,
+            AiChatGraceDays = current.AiChatGraceDays,
+            DatabaseMaintenance = request.DatabaseMaintenance is not null
+                ? new DatabaseMaintenanceSettings
+                {
+                    Enabled = request.DatabaseMaintenance.Enabled ?? current.DatabaseMaintenance?.Enabled ?? true,
+                    Schedule = current.DatabaseMaintenance?.Schedule ?? "0 0 3 ? * SUN",
+                    VacuumFull = request.DatabaseMaintenance.VacuumFull ?? current.DatabaseMaintenance?.VacuumFull ?? true,
+                    Reindex = request.DatabaseMaintenance.Reindex ?? current.DatabaseMaintenance?.Reindex ?? true,
+                    Analyze = request.DatabaseMaintenance.Analyze ?? current.DatabaseMaintenance?.Analyze ?? true,
+                    VacuumAnalyze = request.DatabaseMaintenance.VacuumAnalyze ?? current.DatabaseMaintenance?.VacuumAnalyze ?? false
+                }
+                : current.DatabaseMaintenance
+        };
+
+        server.RetentionSettingsJson = JsonSerializer.Serialize(updated, JsonSerializerOptions.Web);
+
+        await _configService.UpdateServerAsync(server, HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.Configuration,
+            "server-retention-updated");
+        return Ok(updated);
+    }
+
+    [HttpPost("server/retention/reset")]
+    public async Task<IActionResult> ResetServerRetention()
+    {
+        var server = await _configService.GetServerConfigAsync();
+        var defaults = new RetentionSettings();
+        server.RetentionSettingsJson = JsonSerializer.Serialize(defaults, JsonSerializerOptions.Web);
+
+        await _configService.UpdateServerAsync(server, HttpContext.Items["Username"] as string ?? "api");
+        await _syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.Configuration,
+            "server-retention-reset");
+        return Ok(defaults);
+    }
+
+    /// <summary>
+    /// Triggers a manual execution of one or more maintenance jobs immediately.
+    /// Jobs: data-retention, database-maintenance, log-purge, report-retention, ai-chat-retention.
+    /// </summary>
+    [HttpPost("server/retention/trigger")]
+    public async Task<IActionResult> TriggerMaintenanceJobs([FromBody] TriggerMaintenanceRequest request)
+    {
+        var jobs = (request.Jobs ?? []).Select(j => j.ToLowerInvariant().Trim()).ToHashSet();
+        if (jobs.Count == 0)
+            return BadRequest(new { error = "At least one job must be specified. Valid values: log-purge, data-retention, report-retention, ai-chat-retention, database-maintenance." });
+
+        var validJobs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "log-purge", "data-retention", "report-retention", "ai-chat-retention", "database-maintenance" };
+
+        var invalid = jobs.Where(j => !validJobs.Contains(j)).ToList();
+        if (invalid.Count > 0)
+            return BadRequest(new { error = $"Invalid job(s): {string.Join(", ", invalid)}. Valid: {string.Join(", ", validJobs)}." });
+
+        var schedulerFactory = HttpContext.RequestServices.GetRequiredService<Quartz.ISchedulerFactory>();
+        var scheduler = await schedulerFactory.GetScheduler();
+        var results = new Dictionary<string, object>();
+
+        var jobKeyMap = new Dictionary<string, Quartz.JobKey>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["log-purge"] = Services.Quartz.LogPurgeJob.Key,
+            ["data-retention"] = Services.Quartz.DataRetentionJob.Key,
+            ["report-retention"] = Services.Quartz.ReportRetentionJob.Key,
+            ["ai-chat-retention"] = Services.Quartz.AiChatRetentionJob.Key,
+            ["database-maintenance"] = Services.Quartz.DatabaseMaintenanceJob.Key,
+        };
+
+        foreach (var jobName in jobs)
+        {
+            var jobKey = jobKeyMap[jobName];
+            try
+            {
+                var jobDetail = await scheduler.GetJobDetail(jobKey);
+                if (jobDetail is null)
+                {
+                    results[jobName] = new { status = "not-found", message = $"Job '{jobKey.Name}' is not registered in the scheduler." };
+                    continue;
+                }
+
+                await scheduler.TriggerJob(jobKey);
+                results[jobName] = new { status = "triggered", message = $"Job '{jobKey.Name}' triggered successfully." };
+            }
+            catch (Exception ex)
+            {
+                results[jobName] = new { status = "error", message = ex.Message };
+            }
+        }
+
+        return Ok(new { message = "Maintenance jobs triggered.", results });
+    }
+
     // ============ Client ============
 
     [HttpPost("server/object-storage/test")]
@@ -1119,3 +1262,43 @@ public record ReportingSettingsResponse(
     int DatabaseRetentionDays,
     int FileRetentionDays,
     int[] AllowedRetentionDays);
+
+public record UpdateRetentionRequest(
+    int? LogRetentionDays = null,
+    int? NotificationRetentionDays = null,
+    int? AgentCommandRetentionDays = null,
+    int? SessionRetentionDays = null,
+    int? TokenExpiredGraceDays = null,
+    int? SyncPingRetentionDays = null,
+    int? TelemetryRetentionDays = null,
+    int? AutomationReportRetentionDays = null,
+    UpdateDatabaseMaintenanceRequest? DatabaseMaintenance = null);
+
+public record UpdateDatabaseMaintenanceRequest(
+    bool? Enabled = null,
+    bool? VacuumFull = null,
+    bool? Reindex = null,
+    bool? Analyze = null,
+    bool? VacuumAnalyze = null);
+
+public record TriggerMaintenanceRequest(
+    string[]? Jobs = null);
+
+internal static class RetentionSettingsHelper
+{
+    public static RetentionSettings DeserializeOrDefault(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json == "{}")
+            return new RetentionSettings();
+
+        try
+        {
+            return JsonSerializer.Deserialize<RetentionSettings>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? new RetentionSettings();
+        }
+        catch
+        {
+            return new RetentionSettings();
+        }
+    }
+}

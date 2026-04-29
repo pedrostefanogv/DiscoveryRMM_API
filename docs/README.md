@@ -13,26 +13,20 @@
 | # | Documento | Escopo |
 |---|----------|-------|
 | 1 | [`AUTHENTICATION.md`](AUTHENTICATION.md) | Login, MFA, primeiro acesso, permissões, autorização por escopo |
-| 2 | [`AUTOMATION.md`](AUTOMATION.md) | Scripts, tarefas, policy sync, ACK/result, enums |
-| 3 | [`CONFIGURATION.md`](CONFIGURATION.md) | Configuração hierárquica Server→Client→Site, herança, locks |
-| 4 | [`DEPLOYMENT_OFFLINE_INSTALL.md`](DEPLOYMENT_OFFLINE_INSTALL.md) | Instalação Linux, deploy tokens, self-update, offline install |
-| 5 | [`MESHCENTRAL.md`](MESHCENTRAL.md) | Embed, identity sync, group policy, node-link, diagnostics |
-| 6 | [`MESSAGING_NATS.md`](MESSAGING_NATS.md) | Auth callout, credenciais scoped, subjects canônicos, remote debug dual-channel |
-| 7 | [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md) | S3-compatible, ticket attachments, report download presigned |
-| 8 | [`P2P.md`](P2P.md) | Cloud bootstrap, seed plan, telemetry, distribuição |
-| 9 | [`REPORTING.md`](REPORTING.md) | Datasets, templates, preview, execuções, multi-source layouts |
-| 10 | [`PSADT_ALERTS_PLAN.md`](PSADT_ALERTS_PLAN.md) | Alertas PSADT (Toast/Modal) — implementado ✅ |
+| 2 | [`MESHCENTRAL.md`](MESHCENTRAL.md) | Embed, identity sync, group policy, node-link, diagnostics |
+| 4 | [`MESSAGING_NATS.md`](MESSAGING_NATS.md) | Auth callout, credenciais scoped, subjects canônicos, remote debug dual-channel |
+| 5 | [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md) | S3-compatible, ticket attachments, report download presigned |
+| 6 | [`REPORTING.md`](REPORTING.md) | Datasets, templates, preview, execuções, multi-source layouts |
+| 7 | [`PSADT_ALERTS_PLAN.md`](PSADT_ALERTS_PLAN.md) | Alertas PSADT (Toast/Modal) — implementado ✅ |
 
 ### 🗺️ Planos e roadmaps (o que ainda está em andamento)
 
 | # | Documento | Status |
 |---|----------|--------|
 | 11 | [`AGENT_UPDATE_PLAN.md`](AGENT_UPDATE_PLAN.md) | ⚠️ Fase 1 concluída (releases, build, manifest, download). Fases 2-3 pendentes |
-| 12 | [`CUSTOM_FIELDS_PLAN.md`](CUSTOM_FIELDS_PLAN.md) | ⚠️ Fases 1-5 backend concluídas. Fases 6-8 pendentes |
-| 13 | [`PLANO_AUTO_TICKET.md`](PLANO_AUTO_TICKET.md) | 📋 Planejado — motor de auto-ticket por eventos de monitoramento |
-| 14 | [`KNOWLEDGE_EMBEDDING_ANALYSIS.md`](KNOWLEDGE_EMBEDDING_ANALYSIS.md) | 📋 Análise — otimização do pipeline de embeddings |
-| 15 | [`MESHCENTRAL_ROADMAP.md`](MESHCENTRAL_ROADMAP.md) | 📋 O que falta: conta técnica, ACL por node, login token, node id no Agent |
-| 16 | [`BACKLOG_NATS_OBJECT_STORAGE.md`](BACKLOG_NATS_OBJECT_STORAGE.md) | ⚠️ F4 concluída, F4.4 e F5 em andamento |
+| 12 | [`PLANO_AUTO_TICKET.md`](PLANO_AUTO_TICKET.md) | 📋 Planejado — motor de auto-ticket por eventos de monitoramento |
+| 13 | [`KNOWLEDGE_EMBEDDING_ANALYSIS.md`](KNOWLEDGE_EMBEDDING_ANALYSIS.md) | ✅ Pipeline de embeddings unificado (Quartz Job), batching, métricas |
+| 14 | [`MESHCENTRAL_ROADMAP.md`](MESHCENTRAL_ROADMAP.md) | 📋 O que falta: conta técnica, ACL por node, login token, node id no Agent |
 
 ### 📐 ADRs (Architecture Decision Records)
 

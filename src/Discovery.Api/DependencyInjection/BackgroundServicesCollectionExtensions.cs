@@ -11,26 +11,12 @@ namespace Discovery.Api.DependencyInjection;
 public static class BackgroundServicesCollectionExtensions
 {
     public sealed record BackgroundServicesConfig(
-        bool IsDevelopment,
-        bool KnowledgeEmbeddingEnabled,
-        bool KnowledgeEmbeddingQueueEnabled,
-        bool SlaMonitoringEnabled,
-        bool ReportGenerationEnabled,
-        bool AgentLabelingReconciliationEnabled,
-        bool MeshCentralIdentityReconciliationEnabled,
-        bool MeshCentralGroupPolicyReconciliationEnabled);
+        bool IsDevelopment);
 
     public static BackgroundServicesConfig ReadBackgroundServicesConfig(IConfiguration configuration, bool isDevelopment)
     {
         return new BackgroundServicesConfig(
-            IsDevelopment: isDevelopment,
-            KnowledgeEmbeddingEnabled: configuration.GetValue<bool?>("BackgroundJobs:KnowledgeEmbeddingEnabled") ?? true,
-            KnowledgeEmbeddingQueueEnabled: configuration.GetValue<bool?>("BackgroundJobs:KnowledgeEmbeddingQueueEnabled") ?? false,
-            SlaMonitoringEnabled: configuration.GetValue<bool?>("BackgroundJobs:SlaMonitoringEnabled") ?? true,
-            ReportGenerationEnabled: configuration.GetValue<bool?>("BackgroundJobs:ReportGenerationEnabled") ?? true,
-            AgentLabelingReconciliationEnabled: configuration.GetValue<bool?>("BackgroundJobs:AgentLabelingReconciliationEnabled") ?? true,
-            MeshCentralIdentityReconciliationEnabled: configuration.GetValue<bool?>("BackgroundJobs:MeshCentralIdentityReconciliationEnabled") ?? true,
-            MeshCentralGroupPolicyReconciliationEnabled: configuration.GetValue<bool?>("BackgroundJobs:MeshCentralGroupPolicyReconciliationEnabled") ?? true);
+            IsDevelopment: isDevelopment);
     }
 
     public static IServiceCollection AddDiscoveryBackgroundServices(
@@ -50,50 +36,10 @@ public static class BackgroundServicesCollectionExtensions
         services.AddSingleton<ISyncPingDispatchQueue, SyncPingDispatchBackgroundService>();
         services.AddHostedService(sp => (SyncPingDispatchBackgroundService)sp.GetRequiredService<ISyncPingDispatchQueue>());
 
-        // Note: LogPurge, ReportRetention, AiChatRetention, and P2pMaintenance
-        // have been migrated to Quartz.NET jobs. See QuartzServiceCollectionExtensions.
-
-        // Knowledge Base
-        if (config.KnowledgeEmbeddingEnabled)
-        {
-            services.AddHostedService<KnowledgeEmbeddingBackgroundService>();
-        }
-
-        if (config.KnowledgeEmbeddingQueueEnabled)
-        {
-            services.AddHostedService<KnowledgeEmbeddingQueueBackgroundService>();
-        }
-
-        // SLA
-        if (config.SlaMonitoringEnabled)
-        {
-            services.AddHostedService<SlaMonitoringBackgroundService>();
-        }
-
-        // Reports
-        if (config.ReportGenerationEnabled)
-        {
-            services.AddHostedService<ReportGenerationBackgroundService>();
-        }
-
-        // Non-development only services (reconciliations)
-        if (!config.IsDevelopment)
-        {
-            if (config.AgentLabelingReconciliationEnabled)
-            {
-                services.AddHostedService<AgentLabelingReconciliationBackgroundService>();
-            }
-
-            if (config.MeshCentralIdentityReconciliationEnabled)
-            {
-                services.AddHostedService<MeshCentralIdentityReconciliationBackgroundService>();
-            }
-
-            if (config.MeshCentralGroupPolicyReconciliationEnabled)
-            {
-                services.AddHostedService<MeshCentralGroupPolicyReconciliationBackgroundService>();
-            }
-        }
+        // Note: LogPurge, ReportRetention, AiChatRetention, P2pMaintenance,
+        // KnowledgeEmbedding, AlertScheduler, SlaMonitoring, ReportGeneration,
+        // and all Reconciliations have been migrated to Quartz.NET jobs.
+        // See QuartzServiceCollectionExtensions.
 
         return services;
     }

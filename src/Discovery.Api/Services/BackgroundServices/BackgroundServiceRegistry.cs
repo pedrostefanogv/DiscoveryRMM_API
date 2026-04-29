@@ -204,9 +204,7 @@ public static class BackgroundServiceCategoryMap
         ["NatsBackgroundService"] = BackgroundServiceCategories.Messaging,
         ["NatsSignalRBridge"] = BackgroundServiceCategories.Messaging,
         ["NatsAuthCalloutBackgroundService"] = BackgroundServiceCategories.Messaging,
-        // Knowledge
-        ["KnowledgeEmbeddingBackgroundService"] = BackgroundServiceCategories.Knowledge,
-        ["KnowledgeEmbeddingQueueBackgroundService"] = BackgroundServiceCategories.Knowledge,
+        // Knowledge — migrated to Quartz (KnowledgeEmbeddingJob)
         // Alerts
         ["AlertSchedulerBackgroundService"] = BackgroundServiceCategories.Alerts,
         ["SlaMonitoringBackgroundService"] = BackgroundServiceCategories.Alerts,

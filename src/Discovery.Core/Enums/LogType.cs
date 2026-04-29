@@ -10,5 +10,6 @@ public enum LogType
     Ticket = 5,
     Workflow = 6,
     AiChat = 7,
-    Automation = 8
+    Automation = 8,
+    CustomField = 9
 }

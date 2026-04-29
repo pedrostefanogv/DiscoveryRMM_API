@@ -215,10 +215,8 @@ git secrets --register-aws
 
 | Tipo | Arquivo |
 |------|---------|
-| Setup/Deploy | `docs/DEPLOYMENT_OFFLINE_INSTALL.md` |
-| Configuração | `docs/CONFIGURATION.md` |
 | APIs | `src/Discovery.Api/Controllers/*.cs` (XML comments) |
-| Integrações | `docs/MESHCENTRAL_INTEGRATION_PLAN.md` |
+| Integrações | `docs/MESHCENTRAL.md` |
 
 ---
 

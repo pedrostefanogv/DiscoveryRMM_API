@@ -258,7 +258,7 @@ DISCOVERY_RELEASE_CHANNEL=dev bash -c "$(curl -fsSL https://raw.githubuserconten
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/pedrostefanogv/DiscoveryRMM_API/release/scripts/linux/bootstrap_install_discovery.sh)" -- --branch beta
 ```
 
-> Consulte [DEPLOYMENT_OFFLINE_INSTALL.md](docs/DEPLOYMENT_OFFLINE_INSTALL.md) para instalação offline.
+> Consulte [scripts/linux/](scripts/linux/) para scripts de instalação.
 
 ---
 
@@ -285,8 +285,6 @@ As principais configurações ficam em `appsettings.json` / variáveis de ambien
   }
 }
 ```
-
-> Consulte [CONFIGURATION.md](docs/CONFIGURATION.md) para referência completa.
 
 ---
 
@@ -336,7 +334,7 @@ Distribuído sob a licença MIT. Veja [LICENSE](LICENSE) para mais informações
 - 📖 [Documentação Completa](docs/)
 - 🔄 [Changelog](CHANGELOG.md)
 - 🔒 [Security Advisories](https://github.com/pedrostefanogv/DiscoveryRMM_API/security/advisories)
-- 📋 [Guia de Deployment](docs/DEPLOYMENT_OFFLINE_INSTALL.md)
+- 📋 [Scripts de Instalação](scripts/linux/)
 
 ---
 
@@ -503,4 +501,4 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
 - 📖 [Full Documentation](docs/)
 - 🔄 [Changelog](CHANGELOG.md)
 - 🔒 [Security Advisories](https://github.com/pedrostefanogv/DiscoveryRMM_API/security/advisories)
-- 📋 [Deployment Guide](docs/DEPLOYMENT_OFFLINE_INSTALL.md)
+- 📋 [Installation Scripts](scripts/linux/)

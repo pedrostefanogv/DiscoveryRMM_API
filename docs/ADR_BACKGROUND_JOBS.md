@@ -1,136 +1,112 @@
-# ADR: Estratégia de Background Jobs — Quartz.NET vs IHostedService
+# ADR: Background Jobs — Quartz.NET
 
-> **Status:** Fase 1 e 2 implementadas ✅  
+> **Status:** Implementado ✅  
 > **Data:** 2026-04-29  
 > **Decisores:** Time DiscoveryRMM  
 
 ---
 
-## Contexto
-
-Atualmente o projeto usa `IHostedService` + `BackgroundService` para todos os jobs, com toggles via `appsettings.json` (`BackgroundJobs:*Enabled`). São **15+ serviços** registrados manualmente.
-
-### Serviços atuais
-
-| Serviço | Tipo | Complexidade |
-|---------|------|-------------|
-| `AlertSchedulerBackgroundService` | Agendamento recorrente | Alta — precisa de cron |
-| `SlaMonitoringBackgroundService` | Polling periódico | Média |
-| `ReportGenerationBackgroundService` | Job sob demanda | Média |
-| `ReportRetentionBackgroundService` | Limpeza agendada | Baixa |
-| `AiChatRetentionBackgroundService` | Limpeza agendada | Baixa |
-| `LogPurgeBackgroundService` | Limpeza agendada | Baixa |
-| `P2pMaintenanceBackgroundService` | Manutenção periódica | Baixa |
-| `KnowledgeEmbeddingBackgroundService` | Processamento contínuo | Alta |
-| `KnowledgeEmbeddingQueueBackgroundService` | Fila dedicada | Alta |
-| Reconciliations (3 serviços) | Sync agendado | Média |
-| `AgentPackagePrebuildHostedService` | One-time na startup | Baixa |
-
-### Limitações do modelo atual
-
-1. **Sem retry nativo** — falhas silenciosas
-2. **Sem dashboard** — impossível saber estado dos jobs sem logs
-3. **Sem agendamento cron** — apenas loops com `Task.Delay`
-4. **Sem execução distribuída** — scaling horizontal pode duplicar jobs
-5. **Sem pausa/retomada** — impossível pausar um job específico
-
----
-
-## Alternativas Consideradas
-
-### A) Manter IHostedService (atual)
-
-**Prós:** Nenhuma dependência nova, simples.  
-**Contras:** Todas as limitações acima.
-
-### B) Quartz.NET
-
-**Prós:**
-- Agendamento cron nativo
-- Persistência em PostgreSQL (via `Quartz.Serialization.Json` + ADO.NET job store)
-- Dashboard via API (expor `/quartz/dashboard` ou usar UI standalone)
-- Clustering para execução distribuída
-- Retry policy configurável
-- Suporte a misfire handling
-- Comunidade ativa, maduro
-
-**Contras:**
-- +1 dependência
-- Curva de aprendizado
-- Migração dos `IHostedService` existentes
-
-### C) Hangfire
-
-**Prós:** Dashboard integrado, simples.  
-**Contras:** Licença paga para recursos avançados (batches, continuations). Pouco adotado em .NET 10.
-
----
-
-## Recomendação: **Quartz.NET** (Alternativa B)
-
-### Plano de Migração (Faseado)
-
-#### Fase 1 — Infraestrutura (baixo risco)
-- Adicionar pacotes `Quartz`, `Quartz.Extensions.Hosting`, `Quartz.Serialization.Json`
-- Configurar `AddQuartz()` no `Program.cs` com store PostgreSQL
-- Criar `QuartzServiceCollectionExtensions.cs` na pasta `DependencyInjection/`
-
-#### Fase 2 — Jobs simples primeiro
-Migrar os 4 jobs agendados de menor complexidade:
-1. `LogPurgeBackgroundService` → `LogPurgeJob : IJob`
-2. `ReportRetentionBackgroundService` → `ReportRetentionJob : IJob`
-3. `AiChatRetentionBackgroundService` → `AiChatRetentionJob : IJob`
-4. `P2pMaintenanceBackgroundService` → `P2pMaintenanceJob : IJob`
-
-#### Fase 3 — Jobs complexos
-5. `AlertSchedulerBackgroundService` → `AlertSchedulerJob : IJob` (com cron `0 */5 * * * ?`)
-6. `SlaMonitoringBackgroundService` → `SlaMonitoringJob : IJob`
-7. Reconciliations → jobs independentes com cron
-
-#### Fase 4 — Jobs contínuos (avaliação)
-`KnowledgeEmbedding*` pode não se beneficiar de Quartz (são loops contínuos). Manter como `BackgroundService` ou avaliar Channels.
-
-### Configuração proposta
-
-```csharp
-// QuartzServiceCollectionExtensions.cs
-services.AddQuartz(q =>
-{
-    q.UsePersistentStore(s =>
-    {
-        s.UsePostgres(connectionString);
-        s.UseJsonSerializer();
-    });
-
-    // Job schedules
-    q.ScheduleJob<LogPurgeJob>(trigger => trigger
-        .WithIdentity("log-purge")
-        .WithCronSchedule("0 0 3 * * ?")); // Diário às 3AM
-});
-```
-
-### Feature flags
-
-Manter os toggles `BackgroundJobs:*Enabled` do `appsettings.json` — o Quartz respeita `WithSchedule()` condicional.
-
----
-
 ## Decisão
 
-- [x] **Aprovar** — Fase 1 e 2 implementadas ✅
-- [ ] **Rejeitar** — descartado
-- [ ] **Adiar** — descartado
+Migrar todos os jobs agendados e recorrentes de `IHostedService` / `BackgroundService` para **Quartz.NET 3.14.0** com store in-memory, `[DisallowConcurrentExecution]` em todos os jobs, e dashboard administrativo via `JobsController`.
 
-### O que foi implementado
+Três serviços foram mantidos como `IHostedService` por design: `AgentPackagePrebuildHostedService` (one-time startup), `SyncPingDispatchBackgroundService` (padrão singleton com estado interno) e `AlertDispatchService` (scoped, não é background).
 
-| Job Quartz | Cron / Schedule | Substitui |
-|-----------|----------------|-----------|
-| `LogPurgeJob` | `0 0 3 * * ?` (diário 3AM) | `LogPurgeBackgroundService` |
-| `ReportRetentionJob` | `0 0 4 * * ?` (diário 4AM) | `ReportRetentionBackgroundService` |
-| `AiChatRetentionJob` | `0 0 2 * * ?` (diário 2AM) | `AiChatRetentionBackgroundService` |
-| `P2pMaintenanceJob` | cada 15 min | `P2pMaintenanceBackgroundService` |
+---
 
-**Arquitetura:** Quartz.NET 3.14.0 com store in-memory (Phase 1), `Quartz.Extensions.Hosting` para integração ASP.NET, `Quartz.Serialization.Json` para serialização. `[DisallowConcurrentExecution]` em todos os jobs.
+## Jobs Quartz implementados
+
+| Job | Grupo | Schedule | Descrição |
+|-----|-------|----------|-----------|
+| `LogPurgeJob` | `maintenance` | `0 0 3 * * ?` (3AM) | Purge de logs antigos |
+| `ReportRetentionJob` | `maintenance` | `0 0 4 * * ?` (4AM) | Purge de relatórios expirados |
+| `AiChatRetentionJob` | `maintenance` | `0 0 2 * * ?` (2AM) | Soft/hard delete de chat sessions |
+| `P2pMaintenanceJob` | `maintenance` | a cada 15 min | Limpeza de P2P presence + seed plans |
+| `KnowledgeEmbeddingJob` | `kb` | a cada 30s | Re-chunking + embeddings em batch |
+| `AlertSchedulerJob` | `alerts` | a cada 30s | Despacho de alertas agendados |
+| `SlaMonitoringJob` | `alerts` | a cada 5 min | Verificação de SLA + escalações |
+| `ReportGenerationJob` | `reports` | a cada 15s | Processamento de execuções de relatório |
+| `AgentLabelingReconciliationJob` | `reconciliation` | a cada 10 min | Reconciliação de labels de agentes |
+| `MeshCentralIdentityReconciliationJob` | `reconciliation` | `0 0 * * * ?` (horário) | Backfill de identidade MeshCentral |
+| `MeshCentralGroupPolicyReconciliationJob` | `reconciliation` | `0 30 * * * ?` (hora:30) | Backfill de group policy MeshCentral |
+| `WingetCatalogSyncJob` | `catalog` | a cada N dias (config) | Sincronização do catálogo Winget |
+
+---
+
+## Justificativa
+
+### Por que Quartz.NET
+
+- **Agendamento cron nativo** — jobs de manutenção usam cron, não `Task.Delay`
+- **`[DisallowConcurrentExecution]`** — garante que jobs longos não sobreponham
+- **Dashboard administrativo** — `GET /api/v1/admin/jobs` lista estado, histórico, triggers
+- **Trigger manual** — `POST /api/v1/admin/jobs/{group}/{name}/trigger`
+- **Pause/Resume** — `POST /api/v1/admin/jobs/{group}/{name}/pause`
+- **Histórico de execução** — `JobExecutionHistoryListener` registra sucesso/erro/duração
+- **Store in-memory** — suficiente para single-node; PostgreSQL via ADO.NET job store disponível quando necessário para clustering
+
+### Por que NÃO Hangfire
+
+- Licença paga para recursos como batches e continuations
+- Menor adoção em .NET 10
+
+---
+
+## Arquitetura
+
+```
+QuartzServiceCollectionExtensions.AddDiscoveryQuartz()
+  ├── services.AddQuartz(q => q.ScheduleJob<T>(...))   // 12 jobs
+  ├── services.AddQuartzHostedService()                   // integração ASP.NET
+  ├── services.AddSingleton<JobExecutionHistoryListener>() // métricas
+  └── WireJobListenerAsync()                             // wiring no startup
+
+Program.cs
+  ├── builder.Services.AddDiscoveryQuartz(configuration)
+  └── await WireJobListenerAsync(app.Services)
+
+BackgroundServicesCollectionExtensions
+  └── Apenas AgentPackagePrebuild + SyncPingDispatch (não migrados)
+```
+
+### Padrão dos jobs
+
+```csharp
+[DisallowConcurrentExecution]
+public sealed class SeuJob : IJob
+{
+    public static readonly JobKey Key = new("nome", "grupo");
+
+    public async Task Execute(IJobExecutionContext context)
+    {
+        var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
+        var logger = context.GetLogger<SeuJob>();
+        await using var scope = scopeFactory.CreateAsyncScope();
+        // ... lógica do job
+    }
+}
+```
+
+---
+
+## Configurações especiais
+
+### WingetCatalogSyncJob
+
+```json
+{
+  "BackgroundJobs": {
+    "WingetCatalogSync": {
+      "Enabled": false,
+      "IntervalDays": 5
+    }
+  }
+}
+```
+
+- `Enabled: false` por padrão — ativar manualmente
+- `IntervalDays`: 1, 5, 10, 15, 30
+- Se `Enabled = false`, o job não é registrado no scheduler
 
 ---
 
@@ -138,3 +114,7 @@ Manter os toggles `BackgroundJobs:*Enabled` do `appsettings.json` — o Quartz r
 
 - [Quartz.NET Documentation](https://www.quartz-scheduler.net/)
 - [Quartz.NET ASP.NET Core Integration](https://www.quartz-scheduler.net/documentation/quartz-3.x/packages/hosted-services-integration.html)
+- Código: `src/Discovery.Api/DependencyInjection/QuartzServiceCollectionExtensions.cs`
+- Código: `src/Discovery.Api/Services/Quartz/*.cs`
+- API: `src/Discovery.Api/Controllers/JobsController.cs`
+

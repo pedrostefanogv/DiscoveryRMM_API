@@ -19,23 +19,26 @@ public class ReportsController : ControllerBase
 
     private readonly IReportTemplateRepository _templateRepository;
     private readonly IReportExecutionRepository _executionRepository;
+    private readonly IReportScheduleRepository _scheduleRepository;
     private readonly IReportService _reportService;
     private readonly ReportFormat[] _enabledFormats;
 
     public ReportsController(
         IReportTemplateRepository templateRepository,
         IReportExecutionRepository executionRepository,
+        IReportScheduleRepository scheduleRepository,
         IReportService reportService,
         IOptions<ReportingOptions> reportingOptions)
     {
         _templateRepository = templateRepository;
         _executionRepository = executionRepository;
+        _scheduleRepository = scheduleRepository;
         _reportService = reportService;
 
         var options = reportingOptions.Value;
         _enabledFormats = options.EnablePdf
-            ? [ReportFormat.Xlsx, ReportFormat.Csv, ReportFormat.Pdf]
-            : [ReportFormat.Xlsx, ReportFormat.Csv];
+            ? [ReportFormat.Xlsx, ReportFormat.Csv, ReportFormat.Pdf, ReportFormat.Markdown]
+            : [ReportFormat.Xlsx, ReportFormat.Csv, ReportFormat.Markdown];
     }
 
     [HttpGet("datasets")]
@@ -185,6 +188,43 @@ public class ReportsController : ControllerBase
         };
 
         var created = await _templateRepository.CreateAsync(template);
+        return CreatedAtAction(nameof(GetTemplateById), new { id = created.Id }, ToTemplateResponse(created));
+    }
+
+    [HttpGet("templates/library")]
+    public async Task<IActionResult> GetLibraryTemplates(
+        [FromQuery] ReportDatasetType? datasetType)
+    {
+        var templates = await _templateRepository.GetAllAsync(null, datasetType, isActive: true);
+        var builtIn = templates.Where(t => t.IsBuiltIn).Select(ToTemplateResponse);
+        return Ok(builtIn);
+    }
+
+    [HttpPost("templates/library/{id:guid}/install")]
+    public async Task<IActionResult> InstallLibraryTemplate(Guid id, [FromQuery] string? createdBy)
+    {
+        var source = await _templateRepository.GetByIdAsync(id, null);
+        if (source is null || !source.IsBuiltIn)
+            return NotFound(new { error = "Built-in template not found." });
+
+        var clone = new ReportTemplate
+        {
+            ClientId = null,
+            Name = source.Name,
+            Description = source.Description,
+            Instructions = source.Instructions,
+            ExecutionSchemaJson = source.ExecutionSchemaJson,
+            DatasetType = source.DatasetType,
+            DefaultFormat = source.DefaultFormat,
+            LayoutJson = source.LayoutJson,
+            FiltersJson = source.FiltersJson,
+            IsActive = true,
+            IsBuiltIn = false,
+            CreatedBy = createdBy ?? "user",
+            UpdatedBy = createdBy ?? "user"
+        };
+
+        var created = await _templateRepository.CreateAsync(clone);
         return CreatedAtAction(nameof(GetTemplateById), new { id = created.Id }, ToTemplateResponse(created));
     }
 
@@ -475,6 +515,100 @@ public class ReportsController : ControllerBase
 
         return Redirect(url);
     }
+
+    // ───────────────────── Schedule Endpoints ─────────────────────
+
+    [HttpPost("schedules")]
+    public async Task<IActionResult> CreateSchedule([FromBody] CreateReportScheduleRequest request)
+    {
+        var template = await _templateRepository.GetByIdAsync(request.TemplateId, null);
+        if (template is null)
+            return NotFound(new { error = "Template not found." });
+
+        if (!_enabledFormats.Contains(request.Format))
+        {
+            return BadRequest(new
+            {
+                error = "Format not enabled in current reporting configuration.",
+                requested = request.Format,
+                enabled = _enabledFormats
+            });
+        }
+
+        var schedule = new ReportSchedule
+        {
+            TemplateId = request.TemplateId,
+            ClientId = TryGetGuidFromFilters(request.FiltersJson, "clientId"),
+            Format = request.Format,
+            FiltersJson = request.FiltersJson,
+            ScheduleLabel = request.Label,
+            CronExpression = request.CronExpression ?? "0 8 * * 1",
+            TimeZoneId = request.TimeZoneId ?? "UTC",
+            MaxRetainedExecutions = Math.Clamp(request.MaxRetainedExecutions ?? 10, 1, 100),
+            IsActive = request.IsActive ?? true,
+            CreatedBy = request.CreatedBy,
+            UpdatedBy = request.CreatedBy
+        };
+
+        var created = await _scheduleRepository.CreateAsync(schedule);
+        return CreatedAtAction(nameof(GetScheduleById), new { id = created.Id }, created);
+    }
+
+    [HttpGet("schedules")]
+    public async Task<IActionResult> GetSchedules(
+        [FromQuery] Guid? templateId,
+        [FromQuery] Guid? clientId,
+        [FromQuery] bool? isActive)
+    {
+        IReadOnlyList<ReportSchedule> schedules;
+        if (templateId.HasValue)
+            schedules = await _scheduleRepository.GetByTemplateAsync(templateId.Value, clientId);
+        else
+            schedules = await _scheduleRepository.GetAllAsync(clientId, isActive ?? true);
+
+        return Ok(schedules);
+    }
+
+    [HttpGet("schedules/{id:guid}")]
+    public async Task<IActionResult> GetScheduleById(Guid id, [FromQuery] Guid? clientId)
+    {
+        var schedule = await _scheduleRepository.GetByIdAsync(id, clientId);
+        return schedule is null ? NotFound() : Ok(schedule);
+    }
+
+    [HttpPut("schedules/{id:guid}")]
+    public async Task<IActionResult> UpdateSchedule(Guid id, [FromBody] UpdateReportScheduleRequest request)
+    {
+        var schedule = await _scheduleRepository.GetByIdAsync(id, request.ClientId);
+        if (schedule is null)
+            return NotFound();
+
+        if (request.Label is not null)
+            schedule.ScheduleLabel = request.Label;
+        if (request.CronExpression is not null)
+            schedule.CronExpression = request.CronExpression;
+        if (request.TimeZoneId is not null)
+            schedule.TimeZoneId = request.TimeZoneId;
+        if (request.MaxRetainedExecutions.HasValue)
+            schedule.MaxRetainedExecutions = Math.Clamp(request.MaxRetainedExecutions.Value, 1, 100);
+        if (request.IsActive.HasValue)
+            schedule.IsActive = request.IsActive.Value;
+        if (request.FiltersJson is not null)
+            schedule.FiltersJson = request.FiltersJson;
+        schedule.UpdatedBy = request.UpdatedBy;
+
+        await _scheduleRepository.UpdateAsync(schedule);
+        return Ok(schedule);
+    }
+
+    [HttpDelete("schedules/{id:guid}")]
+    public async Task<IActionResult> DeleteSchedule(Guid id, [FromQuery] Guid? clientId)
+    {
+        var deleted = await _scheduleRepository.DeleteAsync(id, clientId);
+        return deleted ? NoContent() : NotFound();
+    }
+
+    // ───────────────────── Private helpers ─────────────────────
 
     private static Guid? TryGetGuidFromFilters(string? filtersJson, string propertyName)
     {
@@ -1227,3 +1361,26 @@ public record ReportFilterPreset(
     string Name,
     string Description,
     string FiltersJson);
+
+// ── Schedule request/response records ──
+
+public record CreateReportScheduleRequest(
+    Guid TemplateId,
+    ReportFormat Format = ReportFormat.Pdf,
+    string? Label = null,
+    string? CronExpression = "0 8 * * 1",
+    string? TimeZoneId = "UTC",
+    int? MaxRetainedExecutions = 10,
+    bool? IsActive = true,
+    string? FiltersJson = null,
+    string? CreatedBy = null);
+
+public record UpdateReportScheduleRequest(
+    string? Label = null,
+    string? CronExpression = null,
+    string? TimeZoneId = null,
+    int? MaxRetainedExecutions = null,
+    bool? IsActive = null,
+    string? FiltersJson = null,
+    string? UpdatedBy = null,
+    Guid? ClientId = null);

@@ -37,6 +37,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
     public DbSet<ReportTemplateHistory> ReportTemplateHistories => Set<ReportTemplateHistory>();
     public DbSet<ReportExecution> ReportExecutions => Set<ReportExecution>();
+    public DbSet<ReportSchedule> ReportSchedules => Set<ReportSchedule>();
     public DbSet<AppNotification> AppNotifications => Set<AppNotification>();
     
     // AI Chat & MCP
@@ -765,7 +766,8 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
             entity.Property(config => config.NatsServerHostInternal).HasColumnName("nats_server_host_internal");
             entity.Property(config => config.NatsServerHostExternal).HasColumnName("nats_server_host_external");
             entity.Property(config => config.NatsUseWssExternal).HasColumnName("nats_use_wss_external");
-            entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json");
+            entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json").HasColumnType("jsonb");
+            entity.Property(config => config.RetentionSettingsJson).HasColumnName("retention_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.TicketAttachmentSettingsJson)
                 .HasColumnName("ticket_attachment_settings_json")
                 .HasColumnType("jsonb");
@@ -1544,6 +1546,8 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
                 .HasColumnType("jsonb");
             entity.Property(template => template.IsActive)
                 .HasColumnName("is_active");
+            entity.Property(template => template.IsBuiltIn)
+                .HasColumnName("is_built_in");
             entity.Property(template => template.Version)
                 .HasColumnName("version");
             entity.Property(template => template.CreatedAt)
@@ -1631,6 +1635,8 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
             entity.Property(execution => execution.CreatedBy)
                 .HasColumnName("created_by")
                 .HasMaxLength(256);
+            entity.Property(execution => execution.ScheduleId)
+                .HasColumnName("schedule_id");
 
             entity.HasOne<ReportTemplate>()
                 .WithMany()
@@ -1639,6 +1645,10 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
             entity.HasOne<Client>()
                 .WithMany()
                 .HasForeignKey(execution => execution.ClientId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne<ReportSchedule>()
+                .WithMany()
+                .HasForeignKey(execution => execution.ScheduleId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
@@ -1670,6 +1680,74 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
             entity.Property(history => history.ChangedBy)
                 .HasColumnName("changed_by")
                 .HasMaxLength(256);
+        });
+
+        modelBuilder.Entity<ReportSchedule>(entity =>
+        {
+            entity.ToTable("report_schedules");
+            entity.HasKey(s => s.Id);
+            entity.HasIndex(s => s.TemplateId)
+                .HasDatabaseName("ix_report_schedules_template_id");
+            entity.HasIndex(s => s.ClientId)
+                .HasDatabaseName("ix_report_schedules_client_id");
+            entity.HasIndex(s => s.NextTriggerAt)
+                .HasDatabaseName("ix_report_schedules_next_trigger_at");
+            entity.HasIndex(s => s.IsActive)
+                .HasDatabaseName("ix_report_schedules_is_active");
+
+            entity.Property(s => s.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(s => s.TemplateId)
+                .HasColumnName("template_id");
+            entity.Property(s => s.ClientId)
+                .HasColumnName("client_id");
+            entity.Property(s => s.Format)
+                .HasColumnName("format")
+                .HasConversion<int>();
+            entity.Property(s => s.FiltersJson)
+                .HasColumnName("filters_json")
+                .HasColumnType("jsonb");
+            entity.Property(s => s.ScheduleLabel)
+                .HasColumnName("schedule_label")
+                .HasMaxLength(300);
+            entity.Property(s => s.CronExpression)
+                .HasColumnName("cron_expression")
+                .HasMaxLength(200);
+            entity.Property(s => s.TimeZoneId)
+                .HasColumnName("time_zone_id")
+                .HasMaxLength(100);
+            entity.Property(s => s.MaxRetainedExecutions)
+                .HasColumnName("max_retained_executions");
+            entity.Property(s => s.IsActive)
+                .HasColumnName("is_active");
+            entity.Property(s => s.NextTriggerAt)
+                .HasColumnName("next_trigger_at")
+                .HasColumnType("timestamptz");
+            entity.Property(s => s.LastTriggeredAt)
+                .HasColumnName("last_triggered_at")
+                .HasColumnType("timestamptz");
+            entity.Property(s => s.CreatedAt)
+                .HasColumnName("created_at")
+                .HasColumnType("timestamptz");
+            entity.Property(s => s.UpdatedAt)
+                .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+            entity.Property(s => s.CreatedBy)
+                .HasColumnName("created_by")
+                .HasMaxLength(256);
+            entity.Property(s => s.UpdatedBy)
+                .HasColumnName("updated_by")
+                .HasMaxLength(256);
+
+            entity.HasOne<ReportTemplate>()
+                .WithMany()
+                .HasForeignKey(s => s.TemplateId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<Client>()
+                .WithMany()
+                .HasForeignKey(s => s.ClientId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<AppNotification>(entity =>
