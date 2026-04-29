@@ -79,4 +79,48 @@ public class AIIntegrationSettings
 
     /// <summary>Número máximo de chunks da KB injetados no system prompt via RAG (1–10)</summary>
     public int MaxKbChunks { get; set; } = 3;
+
+    // --- OpenRouter ---
+
+    /// <summary>Header HTTP-Referer para OpenRouter (URL do site/app)</summary>
+    public string? OpenRouterReferer { get; set; }
+
+    /// <summary>Header X-Title para OpenRouter (nome do app)</summary>
+    public string? OpenRouterTitle { get; set; }
+
+    /// <summary>Header X-Categories para OpenRouter (categorias separadas por vírgula, ex: "rmm,monitoring")</summary>
+    public string? OpenRouterCategories { get; set; }
+
+    /// <summary>TTL em minutos do cache de catálogo de modelos (0 = desabilitado, padrão 60)</summary>
+    public int ModelCatalogCacheMinutes { get; set; } = 60;
+
+    /// <summary>Permite fallback automático entre providers configurados</summary>
+    public bool AllowProviderFallbacks { get; set; } = false;
+
+    // --- Constantes de provider ---
+
+    public const string ProviderOpenAi = "openai";
+    public const string ProviderOpenRouter = "openrouter";
+    public const string ProviderOpenAiCompatible = "openai-compatible";
+
+    public const string OpenRouterDefaultBaseUrl = "https://openrouter.ai/api/v1/";
+    public const string OpenAiDefaultBaseUrl = "https://api.openai.com/v1/";
+
+    /// <summary>Retorna a BaseUrl padrão conforme o provider configurado</summary>
+    public string? ResolveDefaultBaseUrl() => Provider?.ToLowerInvariant() switch
+    {
+        ProviderOpenRouter => OpenRouterDefaultBaseUrl,
+        ProviderOpenAiCompatible => null, // genérico: sem default fixo, usuário deve informar
+        _ => OpenAiDefaultBaseUrl
+    };
+
+    /// <summary>Indica se o provider atual é OpenRouter</summary>
+    public bool IsOpenRouter() => string.Equals(Provider, ProviderOpenRouter, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Indica se o provider atual é compatível com OpenAI (inclui OpenAI direto, OpenRouter e genérico)</summary>
+    public bool IsOpenAiCompatible() => Provider?.ToLowerInvariant() switch
+    {
+        ProviderOpenAi or ProviderOpenRouter or ProviderOpenAiCompatible => true,
+        _ => false
+    };
 }

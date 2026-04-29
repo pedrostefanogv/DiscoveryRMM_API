@@ -902,6 +902,8 @@ Nats__AuthUser=${NATS_AUTH_USER}
 Nats__AuthPassword=${NATS_AUTH_PASSWORD}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
 Nats__AuthCallout__Subject=${NATS_AUTH_CALLOUT_SUBJECT}
+Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}
+Nats__XKeySeed=${NATS_XKEY_SEED:-}
 EOF
 
   sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
@@ -1209,6 +1211,38 @@ setup_nats() {
 
   sudo install -d -m 755 -o root -g root "$(dirname "$nats_conf")"
 
+  # WebSocket para browsers (fallback quando SignalR indisponivel)
+  local nats_ws_port="${NATS_WS_PORT:-8443}"
+  local nats_ws_host="${NATS_WS_HOST:-0.0.0.0}"
+  local nats_ws_tls="${NATS_WS_TLS_ENABLED:-false}"
+
+  local ws_block=""
+  if [[ "$nats_ws_tls" == "true" ]]; then
+    ws_block=$(cat <<EOF
+
+websocket {
+  port: $nats_ws_port
+  host: $nats_ws_host
+  tls {
+    cert_file: "/etc/discovery-api/certs/api-internal.crt"
+    key_file: "/etc/discovery-api/certs/api-internal.key"
+  }
+  no_auth_user: "$NATS_AUTH_USER"
+}
+EOF
+)
+  else
+    ws_block=$(cat <<EOF
+
+websocket {
+  port: $nats_ws_port
+  host: $nats_ws_host
+  no_auth_user: "$NATS_AUTH_USER"
+}
+EOF
+)
+  fi
+
   local auth_block
   if [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]]; then
     auth_block=$(cat <<EOF
@@ -1240,7 +1274,7 @@ EOF
 listen: ${NATS_BIND_HOST}:4222
 http: ${NATS_MONITOR_HOST}:8222
 server_name: discovery-nats
-${auth_block}
+${auth_block}${ws_block}
 EOF
 
   sudo chmod 640 "$nats_conf"
@@ -1632,6 +1666,9 @@ Nats__AuthUser=${NATS_AUTH_USER}
 Nats__AuthPassword=${NATS_AUTH_PASSWORD}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
 Nats__AuthCallout__Subject=${NATS_AUTH_CALLOUT_SUBJECT}
+Nats__ServerHostExternal=$(normalize_host_without_scheme "${EXTERNAL_API_HOST:-}")
+Nats__ServerHostInternal=127.0.0.1
+Nats__UseWssExternal=$([[ -n "${EXTERNAL_API_HOST:-}" ]] && echo true || echo false)
 AgentPackage__PublicApiScheme=https
 AgentPackage__PublicApiServer=${public_host}
 Authentication__Jwt__Issuer=discovery
@@ -1658,6 +1695,9 @@ DISCOVERY_SITE_API_URL=${DISCOVERY_SITE_API_URL}
 DISCOVERY_SITE_REALTIME_PROVIDER=${DISCOVERY_SITE_REALTIME_PROVIDER}
 DISCOVERY_SITE_NATS_ENABLED=${DISCOVERY_SITE_NATS_ENABLED}
 DISCOVERY_SITE_NATS_URL=${DISCOVERY_SITE_NATS_URL}
+NATS_WS_PORT=${NATS_WS_PORT:-8443}
+NATS_WS_HOST=${NATS_WS_HOST:-0.0.0.0}
+NATS_WS_TLS_ENABLED=${NATS_WS_TLS_ENABLED:-false}
 EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env

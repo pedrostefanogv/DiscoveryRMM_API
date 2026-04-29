@@ -1,4 +1,5 @@
 using Discovery.Core.Interfaces;
+using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Logging;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
@@ -13,16 +14,29 @@ public class OpenAiProvider : ILlmProvider
     private readonly HttpClient _httpClient;
     private readonly ILogger<OpenAiProvider> _logger;
 
-    private const string DefaultBaseUrl = "https://api.openai.com/v1/";
-
     public OpenAiProvider(ILogger<OpenAiProvider> logger)
     {
         _httpClient = new HttpClient
         {
-            BaseAddress = new Uri(DefaultBaseUrl),
             Timeout = TimeSpan.FromSeconds(30)
         };
         _logger = logger;
+    }
+
+    /// <summary>Aplica headers OpenRouter se o provider for openrouter</summary>
+    private static void ApplyOpenRouterHeaders(HttpRequestMessage request, LlmOptions options)
+    {
+        if (!string.Equals(options.Provider, AIIntegrationSettings.ProviderOpenRouter, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (!string.IsNullOrWhiteSpace(options.OpenRouterReferer))
+            request.Headers.TryAddWithoutValidation("HTTP-Referer", options.OpenRouterReferer);
+
+        if (!string.IsNullOrWhiteSpace(options.OpenRouterTitle))
+            request.Headers.TryAddWithoutValidation("X-Title", options.OpenRouterTitle);
+
+        if (!string.IsNullOrWhiteSpace(options.OpenRouterCategories))
+            request.Headers.TryAddWithoutValidation("X-Categories", options.OpenRouterCategories);
     }
 
     public async Task<LlmResponse> CompleteAsync(
@@ -41,12 +55,14 @@ public class OpenAiProvider : ILlmProvider
             if (string.IsNullOrWhiteSpace(apiKey))
                 throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
 
-            var baseUrl = string.IsNullOrWhiteSpace(options.BaseUrl) ? DefaultBaseUrl : options.BaseUrl;
+            var baseUrl = !string.IsNullOrWhiteSpace(options.BaseUrl)
+                ? options.BaseUrl
+                : ResolveDefaultBaseUrl(options.Provider);
 
             // IMPORTANTE: NUNCA logar _apiKey
             _logger.LogInformation(
-                "Calling OpenAI with {MessageCount} messages, maxTokens={MaxTokens}, model={Model}", 
-                messages.Count, options.MaxTokens, model);
+                "Calling LLM provider={Provider} with {MessageCount} messages, maxTokens={MaxTokens}, model={Model}",
+                options.Provider ?? "openai", messages.Count, options.MaxTokens, model);
 
             // Preparar mensagens no formato OpenAI
             var openAiMessages = new List<object>
@@ -110,6 +126,7 @@ public class OpenAiProvider : ILlmProvider
                 Content = content
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            ApplyOpenRouterHeaders(request, options);
 
             var response = await _httpClient.SendAsync(request, cancellationToken);
             
@@ -176,11 +193,13 @@ public class OpenAiProvider : ILlmProvider
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
 
-        var baseUrl = string.IsNullOrWhiteSpace(options.BaseUrl) ? DefaultBaseUrl : options.BaseUrl;
+        var baseUrl = !string.IsNullOrWhiteSpace(options.BaseUrl)
+            ? options.BaseUrl
+            : ResolveDefaultBaseUrl(options.Provider);
 
         _logger.LogInformation(
-            "StreamAsync OpenAI: {MessageCount} messages, model={Model}",
-            messages.Count, model);
+            "StreamAsync LLM provider={Provider}: {MessageCount} messages, model={Model}",
+            options.Provider ?? "openai", messages.Count, model);
 
         // Montar mensagens
         var openAiMessages = new List<object>
@@ -213,6 +232,7 @@ public class OpenAiProvider : ILlmProvider
             Content = requestBody
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        ApplyOpenRouterHeaders(request, options);
 
         using var response = await _httpClient.SendAsync(
             request,
@@ -307,4 +327,10 @@ public class OpenAiProvider : ILlmProvider
         [property: JsonPropertyName("completion_tokens")] int CompletionTokens,
         [property: JsonPropertyName("total_tokens")] int TotalTokens
     );
+
+    private static string ResolveDefaultBaseUrl(string? provider) => provider?.ToLowerInvariant() switch
+    {
+        AIIntegrationSettings.ProviderOpenRouter => AIIntegrationSettings.OpenRouterDefaultBaseUrl,
+        _ => AIIntegrationSettings.OpenAiDefaultBaseUrl
+    };
 }

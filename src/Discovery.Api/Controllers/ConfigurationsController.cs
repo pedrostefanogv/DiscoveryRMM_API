@@ -1,8 +1,10 @@
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Configuration;
 using System.Text.Json;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Security;
 using Discovery.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -28,6 +30,10 @@ public class ConfigurationsController : ControllerBase
     private readonly IConfiguration _configuration;
     private readonly INatsAuthCalloutReloadSignal _natsReloadSignal;
     private readonly IKnowledgeEmbeddingResetService _embeddingResetService;
+    private readonly IAiCredentialResolver _aiCredentialResolver;
+    private readonly IAiProviderCredentialRepository _aiCredentialRepo;
+    private readonly IAiModelCatalogService _aiModelCatalog;
+    private readonly ISecretProtector _secretProtector;
 
     public ConfigurationsController(
         IConfigurationService configService,
@@ -39,7 +45,11 @@ public class ConfigurationsController : ControllerBase
         INatsConnectionValidator natsConnectionValidator,
         IConfiguration configuration,
         INatsAuthCalloutReloadSignal natsReloadSignal,
-        IKnowledgeEmbeddingResetService embeddingResetService)
+        IKnowledgeEmbeddingResetService embeddingResetService,
+        IAiCredentialResolver aiCredentialResolver,
+        IAiProviderCredentialRepository aiCredentialRepo,
+        IAiModelCatalogService aiModelCatalog,
+        ISecretProtector secretProtector)
     {
         _configService = configService;
         _resolver = resolver;
@@ -51,6 +61,10 @@ public class ConfigurationsController : ControllerBase
         _configuration = configuration;
         _natsReloadSignal = natsReloadSignal;
         _embeddingResetService = embeddingResetService;
+        _aiCredentialResolver = aiCredentialResolver;
+        _aiCredentialRepo = aiCredentialRepo;
+        _aiModelCatalog = aiModelCatalog;
+        _secretProtector = secretProtector;
     }
 
     // ============ Server ============
@@ -616,6 +630,218 @@ public class ConfigurationsController : ControllerBase
         }
     }
 
+    // ============ AI Providers & Credentials ============
+
+    /// <summary>Lista providers suportados</summary>
+    [HttpGet("ai/providers")]
+    public IActionResult GetAiProviders()
+    {
+        return Ok(new
+        {
+            providers = _aiModelCatalog.GetSupportedProviders(),
+            defaults = new
+            {
+                openai = AIIntegrationSettings.OpenAiDefaultBaseUrl,
+                openrouter = AIIntegrationSettings.OpenRouterDefaultBaseUrl,
+                openai_compatible = (string?)null
+            }
+        });
+    }
+
+    /// <summary>Lista/obtém credenciais AI. scopeType=global|client|site</summary>
+    [HttpGet("ai/credentials")]
+    public async Task<IActionResult> GetAiCredentials(
+        [FromQuery] string? scopeType = null,
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        CancellationToken ct = default)
+    {
+        var all = await _aiCredentialRepo.GetAllAsync(ct);
+
+        // Filtra por scope se solicitado
+        if (!string.IsNullOrWhiteSpace(scopeType))
+        {
+            var scope = Enum.Parse<AppApprovalScopeType>(scopeType, ignoreCase: true);
+            all = all.Where(c => c.ScopeType == scope).ToList();
+            if (clientId.HasValue)
+                all = all.Where(c => c.ClientId == clientId.Value).ToList();
+            if (siteId.HasValue)
+                all = all.Where(c => c.SiteId == siteId.Value).ToList();
+        }
+
+        var dtos = all.Select(c => new AiProviderCredentialDto(
+            c.Id, c.ScopeType.ToString(), c.ClientId, c.SiteId, c.Provider,
+            c.BaseUrl, c.EmbeddingBaseUrl, c.HasApiKey, c.HasEmbeddingApiKey,
+            c.CreatedAt, c.UpdatedAt, c.CreatedBy, c.UpdatedBy
+        )).ToList();
+
+        return Ok(dtos);
+    }
+
+    /// <summary>Cria/atualiza credencial AI (upsert por scope+provider)</summary>
+    [HttpPut("ai/credentials")]
+    public async Task<IActionResult> UpsertAiCredential(
+        [FromBody] AiProviderCredentialUpsertRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Provider))
+            return BadRequest(new { error = "Provider é obrigatório." });
+
+        var scope = Enum.Parse<AppApprovalScopeType>(request.ScopeType, ignoreCase: true);
+        var username = HttpContext.Items["Username"] as string ?? "api";
+
+        // Busca existente
+        var existing = await _aiCredentialRepo.GetByScopeAsync(request.ClientId, request.SiteId, request.Provider, ct);
+
+        if (existing is not null)
+        {
+            // Update
+            existing.Provider = request.Provider;
+            existing.BaseUrl = request.BaseUrl;
+            existing.EmbeddingBaseUrl = request.EmbeddingBaseUrl;
+            if (!string.IsNullOrWhiteSpace(request.ApiKey))
+                existing.ApiKeyEncrypted = _secretProtector.Protect(request.ApiKey);
+            if (!string.IsNullOrWhiteSpace(request.EmbeddingApiKey))
+                existing.EmbeddingApiKeyEncrypted = _secretProtector.Protect(request.EmbeddingApiKey);
+            existing.UpdatedAt = DateTime.UtcNow;
+            existing.UpdatedBy = username;
+
+            await _aiCredentialRepo.UpdateAsync(existing, ct);
+
+            return Ok(new AiProviderCredentialDto(
+                existing.Id, existing.ScopeType.ToString(), existing.ClientId, existing.SiteId,
+                existing.Provider, existing.BaseUrl, existing.EmbeddingBaseUrl,
+                existing.HasApiKey, existing.HasEmbeddingApiKey,
+                existing.CreatedAt, existing.UpdatedAt, existing.CreatedBy, existing.UpdatedBy
+            ));
+        }
+
+        // Create
+        var credential = new AiProviderCredential
+        {
+            ScopeType = scope,
+            ClientId = request.ClientId,
+            SiteId = request.SiteId,
+            Provider = request.Provider,
+            BaseUrl = request.BaseUrl,
+            EmbeddingBaseUrl = request.EmbeddingBaseUrl,
+            ApiKeyEncrypted = string.IsNullOrWhiteSpace(request.ApiKey) ? null : _secretProtector.Protect(request.ApiKey),
+            EmbeddingApiKeyEncrypted = string.IsNullOrWhiteSpace(request.EmbeddingApiKey) ? null : _secretProtector.Protect(request.EmbeddingApiKey),
+            CreatedBy = username,
+            UpdatedBy = username
+        };
+
+        var created = await _aiCredentialRepo.CreateAsync(credential, ct);
+
+        return CreatedAtAction(nameof(GetAiCredentials), new { id = created.Id },
+            new AiProviderCredentialDto(
+                created.Id, created.ScopeType.ToString(), created.ClientId, created.SiteId,
+                created.Provider, created.BaseUrl, created.EmbeddingBaseUrl,
+                created.HasApiKey, created.HasEmbeddingApiKey,
+                created.CreatedAt, created.UpdatedAt, created.CreatedBy, created.UpdatedBy
+            ));
+    }
+
+    /// <summary>Remove credencial AI</summary>
+    [HttpDelete("ai/credentials/{credentialId:guid}")]
+    public async Task<IActionResult> DeleteAiCredential(Guid credentialId, CancellationToken ct)
+    {
+        var existing = await _aiCredentialRepo.GetByIdAsync(credentialId, ct);
+        if (existing is null)
+            return NotFound(new { error = $"Credential '{credentialId}' not found." });
+
+        await _aiCredentialRepo.DeleteAsync(credentialId, ct);
+        return NoContent();
+    }
+
+    /// <summary>Testa conexão com provider (valida chave, lista modelos)</summary>
+    [HttpPost("ai/credentials/test")]
+    public async Task<IActionResult> TestAiCredential(
+        [FromBody] AiProviderCredentialUpsertRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.ApiKey))
+            return BadRequest(new { error = "ApiKey é obrigatória para teste." });
+
+        try
+        {
+            var scope = Enum.Parse<AppApprovalScopeType>(request.ScopeType, ignoreCase: true);
+
+            // Cria credencial temporária para teste (não persiste)
+            var tempCredential = new AiProviderCredential
+            {
+                ScopeType = scope,
+                ClientId = request.ClientId,
+                SiteId = request.SiteId,
+                Provider = request.Provider,
+                BaseUrl = request.BaseUrl,
+                EmbeddingBaseUrl = request.EmbeddingBaseUrl,
+                ApiKeyEncrypted = _secretProtector.Protect(request.ApiKey),
+                EmbeddingApiKeyEncrypted = !string.IsNullOrWhiteSpace(request.EmbeddingApiKey)
+                    ? _secretProtector.Protect(request.EmbeddingApiKey) : null
+            };
+
+            // Tenta listar modelos como teste de conectividade
+            var models = await _aiModelCatalog.ListModelsAsync(
+                request.ClientId, request.SiteId,
+                new AiModelSearchRequest { Provider = request.Provider, ForceRefresh = true }, ct);
+
+            return Ok(new { success = true, modelCount = models.TotalCount, provider = request.Provider });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { success = false, error = ex.Message });
+        }
+    }
+
+    // ============ AI Model Catalog ============
+
+    /// <summary>Lista modelos disponíveis do provider</summary>
+    [HttpGet("ai/models")]
+    public async Task<IActionResult> ListAiModels(
+        [FromQuery] string? provider = null,
+        [FromQuery] string? capability = null,
+        [FromQuery] string? search = null,
+        [FromQuery] bool refresh = false,
+        [FromQuery] bool freeOnly = false,
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        CancellationToken ct = default)
+    {
+        var response = await _aiModelCatalog.ListModelsAsync(
+            clientId, siteId,
+            new AiModelSearchRequest(provider, capability, search, refresh, freeOnly),
+            ct);
+
+        return Ok(response);
+    }
+
+    /// <summary>Obtém detalhes de um modelo específico</summary>
+    [HttpGet("ai/models/{modelId}")]
+    public async Task<IActionResult> GetAiModel(
+        string modelId,
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        CancellationToken ct = default)
+    {
+        var model = await _aiModelCatalog.GetModelAsync(clientId, siteId, modelId, ct);
+        if (model is null)
+            return NotFound(new { error = $"Model '{modelId}' not found." });
+
+        return Ok(model);
+    }
+
+    /// <summary>Valida um modelo (testa conectividade e capacidades)</summary>
+    [HttpPost("ai/models/validate")]
+    public async Task<IActionResult> ValidateAiModel(
+        [FromBody] AiModelValidationRequest req,
+        CancellationToken ct = default)
+    {
+        var result = await _aiModelCatalog.ValidateModelAsync(
+            req.ClientId, req.SiteId, req.ModelId, req.Capability, ct);
+        return Ok(result);
+    }
+
     private static readonly string[] ManagedFields = ConfigurationFieldCatalog.ManagedFields;
 
     private static HashSet<string> ParseLockedFields(string? json)
@@ -671,6 +897,7 @@ public class ConfigurationsController : ControllerBase
             ?? DeserializeOrDefault<AIIntegrationSettings>(server.AIIntegrationSettingsJson)
             ?? new AIIntegrationSettings();
         ai.ApiKey = null;
+        ai.EmbeddingApiKey = null;
 
         return new
         {
@@ -753,7 +980,10 @@ public class ConfigurationsController : ControllerBase
     private static ResolvedConfiguration SanitizeResolvedConfiguration(ResolvedConfiguration config)
     {
         if (config.AIIntegration is not null)
+        {
             config.AIIntegration.ApiKey = null;
+            config.AIIntegration.EmbeddingApiKey = null;
+        }
         return config;
     }
 
@@ -768,6 +998,7 @@ public class ConfigurationsController : ControllerBase
             if (ai is null)
                 return json;
             ai.ApiKey = null;
+            ai.EmbeddingApiKey = null;
             return JsonSerializer.Serialize(ai, JsonSerializerOptions.Web);
         }
         catch

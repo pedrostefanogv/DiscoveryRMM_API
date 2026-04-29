@@ -25,6 +25,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private readonly ICommandRepository _commandRepo;
     private readonly ISiteRepository _siteRepo;
     private readonly IAgentAuthService _agentAuthService;
+    private readonly IHeartbeatCacheService _heartbeatCache;
     private readonly ILogger<NatsAgentMessaging> _logger;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -38,6 +39,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         ICommandRepository commandRepo,
         ISiteRepository siteRepo,
         IAgentAuthService agentAuthService,
+        IHeartbeatCacheService heartbeatCache,
         ILogger<NatsAgentMessaging> logger)
     {
         _connection = connection;
@@ -45,6 +47,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         _commandRepo = commandRepo;
         _siteRepo = siteRepo;
         _agentAuthService = agentAuthService;
+        _heartbeatCache = heartbeatCache;
         _logger = logger;
     }
 
@@ -121,8 +124,16 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 continue;
                             }
                             var heartbeat = JsonSerializer.Deserialize<HeartbeatMessage>(msg.Data ?? "", JsonOptions);
-                            await _agentRepo.UpdateStatusAsync(agentId.Value, AgentStatus.Online, heartbeat?.IpAddress);
+                            // Cache no Redis (write-behind evita escrita direta no PostgreSQL)
+                            await _heartbeatCache.SetHeartbeatAsync(agentId.Value, AgentStatus.Online, heartbeat?.IpAddress);
                             _logger.LogDebug("Heartbeat processed from agent {AgentId} (IP: {IpAddress})", agentId.Value, heartbeat?.IpAddress);
+
+                            // Propaga status para dashboards via NATS → SignalR bridge
+                            await PublishDashboardEventForAgentAsync(
+                                agentId.Value,
+                                "AgentStatusChanged",
+                                new { AgentId = agentId.Value, Status = "Online", IpAddress = heartbeat?.IpAddress },
+                                CancellationToken.None);
                         }
                     }
                     catch (Exception ex)
@@ -203,6 +214,12 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 continue;
                             }
                             _logger.LogDebug("Hardware report received from agent {AgentId}", agentId.Value);
+                            // Propaga para dashboards via NATS → SignalR bridge
+                            await PublishDashboardEventForAgentAsync(
+                                agentId.Value,
+                                "AgentHardwareReported",
+                                new { AgentId = agentId.Value },
+                                CancellationToken.None);
                         }
                     }
                     catch (Exception ex)

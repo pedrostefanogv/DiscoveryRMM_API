@@ -32,7 +32,11 @@ public record LlmOptions(
     string? BaseUrl = null,
     string? ApiKey = null,
     bool EnableTools = false,
-    List<LlmTool>? Tools = null);
+    List<LlmTool>? Tools = null,
+    string? OpenRouterReferer = null,
+    string? OpenRouterTitle = null,
+    string? OpenRouterCategories = null,
+    string? Provider = null);
 
 public record LlmTool(
     string Name, 

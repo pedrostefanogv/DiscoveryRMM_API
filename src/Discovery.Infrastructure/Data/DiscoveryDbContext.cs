@@ -87,6 +87,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<TicketKnowledgeLink> TicketKnowledgeLinks => Set<TicketKnowledgeLink>();
     public DbSet<KnowledgeEmbeddingQueueItem> KnowledgeEmbeddingQueueItems => Set<KnowledgeEmbeddingQueueItem>();
 
+    // AI Provider Credentials
+    public DbSet<AiProviderCredential> AiProviderCredentials => Set<AiProviderCredential>();
+
     // Object Storage & Attachments (genérico para qualquer escopo)
     public DbSet<Attachment> Attachments => Set<Attachment>();
 

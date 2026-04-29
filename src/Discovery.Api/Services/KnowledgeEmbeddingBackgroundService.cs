@@ -111,28 +111,78 @@ public class KnowledgeEmbeddingBackgroundService(
         if (chunksWithoutEmbedding.Count > 0)
         {
             processedAnyItem = true;
-            logger.LogInformation("Gerando embeddings para {Count} chunks...", chunksWithoutEmbedding.Count);
+            logger.LogInformation("Gerando embeddings para {Count} chunks em batch...", chunksWithoutEmbedding.Count);
 
-            foreach (var chunk in chunksWithoutEmbedding)
+            try
             {
-                try
+                // Prepara inputs e busca artigo associado ao primeiro chunk para resolver escopo
+                var inputs = chunksWithoutEmbedding.Select(c =>
+                    string.IsNullOrEmpty(c.SectionTitle)
+                        ? c.Content
+                        : $"{c.SectionTitle}\n\n{c.Content}").ToList();
+
+                // Busca artigo do primeiro chunk para determinar escopo
+                var firstChunk = chunksWithoutEmbedding[0];
+                var article = await articleRepository.GetByIdAsync(firstChunk.ArticleId, ct);
+
+                var credential = (article?.ClientId.HasValue == true || article?.SiteId.HasValue == true)
+                    ? await scope.ServiceProvider.GetRequiredService<IAiCredentialResolver>()
+                        .ResolveAsync(article.ClientId, article.SiteId, ct)
+                    : null;
+
+                var embBaseUrl = credential?.EffectiveEmbeddingBaseUrl
+                    ?? (string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl);
+                var embApiKey = credential?.EffectiveEmbeddingApiKey
+                    ?? (string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey);
+
+                // Batch — uma única chamada HTTP para todos os chunks
+                var allEmbeddings = await embeddingProvider.GenerateEmbeddingsAsync(
+                    inputs,
+                    aiSettings.EmbeddingModel,
+                    embApiKey,
+                    embBaseUrl,
+                    ct);
+
+                // Valida dimensão
+                if (allEmbeddings.Count > 0 && allEmbeddings[0].Length != aiSettings.EmbeddingDimensions)
                 {
-                    // Input: título da seção + conteúdo (mais rico para embedding)
-                    var embeddingInput = string.IsNullOrEmpty(chunk.SectionTitle)
-                        ? chunk.Content
-                        : $"{chunk.SectionTitle}\n\n{chunk.Content}";
-
-                    // EmbeddingBaseUrl e EmbeddingApiKey permitem separar chat (ex: OpenRouter) de embeddings (ex: OpenAI direto)
-                    var embeddingBaseUrl = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
-                    var embeddingApiKey = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey;
-                    var floats = await embeddingProvider.GenerateEmbeddingAsync(embeddingInput, aiSettings.EmbeddingModel, embeddingApiKey, embeddingBaseUrl, ct);
-                    await chunkRepository.UpdateEmbeddingAsync(chunk.Id, new Vector(floats), ct);
-
-                    logger.LogDebug("Embedding gerado para chunk {Id} ({Tokens} tokens)", chunk.Id, chunk.TokenCount);
+                    logger.LogError(
+                        "Dimensão do embedding ({Actual}) difere da configurada ({Expected}). Abortando batch.",
+                        allEmbeddings[0].Length, aiSettings.EmbeddingDimensions);
+                    return _activeInterval;
                 }
-                catch (Exception ex)
+
+                // Persiste
+                for (int i = 0; i < chunksWithoutEmbedding.Count && i < allEmbeddings.Count; i++)
                 {
-                    logger.LogError(ex, "Erro ao gerar embedding para chunk {Id}", chunk.Id);
+                    var chunk = chunksWithoutEmbedding[i];
+                    var floats = allEmbeddings[i];
+                    await chunkRepository.UpdateEmbeddingAsync(chunk.Id, new Vector(floats), ct);
+                }
+
+                logger.LogInformation("Embeddings batch concluído: {Count} chunks processados.", allEmbeddings.Count);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Erro no batch de embeddings. Voltando para modo individual.");
+                // Fallback: processa individualmente
+                foreach (var chunk in chunksWithoutEmbedding)
+                {
+                    try
+                    {
+                        var embeddingInput = string.IsNullOrEmpty(chunk.SectionTitle)
+                            ? chunk.Content
+                            : $"{chunk.SectionTitle}\n\n{chunk.Content}";
+
+                        var embBaseUrl = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
+                        var embApiKey = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey;
+                        var floats = await embeddingProvider.GenerateEmbeddingAsync(embeddingInput, aiSettings.EmbeddingModel, embApiKey, embBaseUrl, ct);
+                        await chunkRepository.UpdateEmbeddingAsync(chunk.Id, new Vector(floats), ct);
+                    }
+                    catch (Exception inner)
+                    {
+                        logger.LogError(inner, "Erro ao gerar embedding para chunk {Id}", chunk.Id);
+                    }
                 }
             }
         }

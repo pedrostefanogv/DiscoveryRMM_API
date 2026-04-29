@@ -124,7 +124,10 @@ public class ConfigurationResolver : IConfigurationResolver
         {
             var value = JsonSerializer.Deserialize<T>(json, JsonSerializerOptions.Web);
             if (value is AIIntegrationSettings ai)
+            {
                 ai.ApiKey = _secretProtector.UnprotectOrSelf(ai.ApiKey);
+                ai.EmbeddingApiKey = _secretProtector.UnprotectOrSelf(ai.EmbeddingApiKey);
+            }
 
             return value;
         }
@@ -172,6 +175,7 @@ public class ConfigurationResolver : IConfigurationResolver
         var server = await GetServerAsync();
         var settings = DeserializeOrDefault<AIIntegrationSettings>(server.AIIntegrationSettingsJson);
         settings.ApiKey = _secretProtector.UnprotectOrSelf(settings.ApiKey);
+        settings.EmbeddingApiKey = _secretProtector.UnprotectOrSelf(settings.EmbeddingApiKey);
         return settings;
     }
 
@@ -308,6 +312,7 @@ public class ConfigurationResolver : IConfigurationResolver
         // (ApiKey, EmbeddingModel, Provider, EmbeddingEnabled, etc.)
         var result = DeserializeOrDefault<AIIntegrationSettings>(serverJson);
         result.ApiKey = _secretProtector.UnprotectOrSelf(result.ApiKey);
+        result.EmbeddingApiKey = _secretProtector.UnprotectOrSelf(result.EmbeddingApiKey);
 
         // Aplica override de client: só campos presentes em AIIntegrationSettingsOverride
         // são sobrescritos; campos globais (ApiKey, EmbeddingModel, etc.) são ignorados por design.

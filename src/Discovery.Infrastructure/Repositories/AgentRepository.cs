@@ -93,6 +93,15 @@ public class AgentRepository : IAgentRepository
                 .SetProperty(agent => agent.UpdatedAt, _ => now));
     }
 
+    public async Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default)
+    {
+        return await _db.Agents
+            .AsNoTracking()
+            .Where(agent => agent.Status == AgentStatus.Online)
+            .OrderBy(agent => agent.Hostname)
+            .ToListAsync(ct);
+    }
+
     public async Task UpdateStatusAsync(Guid id, AgentStatus status, string? ipAddress)
     {
         const int maxAttempts = 2;

@@ -17,6 +17,7 @@ public class KnowledgeMcpTool(
     IKnowledgeArticleRepository articleRepository,
     IEmbeddingProvider embeddingProvider,
     IConfigurationResolver configurationResolver,
+    IAiCredentialResolver credentialResolver,
     ILogger<KnowledgeMcpTool> logger) : IKnowledgeMcpTool
 {
     public Task<string> ExecuteAsync(
@@ -54,6 +55,22 @@ public class KnowledgeMcpTool(
         {
             // Usa settings passadas pelo caller (evita GetAISettingsAsync redundante por tool call)
             var settings = aiSettings ?? await configurationResolver.GetAISettingsAsync();
+
+            // Sobrescreve com credencial por escopo (Site > Client > Global) se disponível
+            if (clientId.HasValue || siteId.HasValue)
+            {
+                var credential = await credentialResolver.ResolveAsync(clientId, siteId, ct);
+                if (credential is not null)
+                {
+                    if (!string.IsNullOrWhiteSpace(credential.EffectiveEmbeddingApiKey))
+                    {
+                        settings.EmbeddingApiKey = credential.EffectiveEmbeddingApiKey;
+                        // Se a credencial tem EmbeddingApiKey própria, não usar a do settings
+                    }
+                    if (!string.IsNullOrWhiteSpace(credential.EffectiveEmbeddingBaseUrl))
+                        settings.EmbeddingBaseUrl = credential.EffectiveEmbeddingBaseUrl;
+                }
+            }
 
             // Busca semântica via embedding
             var embBaseUrl = string.IsNullOrWhiteSpace(settings.EmbeddingBaseUrl) ? settings.BaseUrl : settings.EmbeddingBaseUrl;

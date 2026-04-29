@@ -21,4 +21,7 @@ public interface IRedisService
     Task PublishAsync(string channel, string message);
 
     Task SubscribeAsync(string channel, Action<string, string> handler);
+
+    /// <summary>Retorna todas as chaves com o prefixo informado. Usa SCAN internamente.</summary>
+    Task<IReadOnlyList<string>> GetKeysByPrefixAsync(string prefix, int maxResults = 10000);
 }

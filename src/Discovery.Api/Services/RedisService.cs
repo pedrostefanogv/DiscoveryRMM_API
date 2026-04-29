@@ -177,4 +177,31 @@ public class RedisService : IRedisService
             _logger.LogError(ex, "Error subscribing to Redis channel {Channel}", LogSanitizer.Sanitize(channel));
         }
     }
+
+    public async Task<IReadOnlyList<string>> GetKeysByPrefixAsync(string prefix, int maxResults = 10000)
+    {
+        var keys = new List<string>();
+        try
+        {
+            var endpoints = _connection.GetEndPoints();
+            foreach (var endpoint in endpoints)
+            {
+                var server = _connection.GetServer(endpoint);
+                if (!server.IsConnected) continue;
+
+                await foreach (var key in server.KeysAsync(pattern: $"{prefix}*", pageSize: 1000))
+                {
+                    if (keys.Count >= maxResults) break;
+                    keys.Add(key.ToString());
+                }
+
+                if (keys.Count >= maxResults) break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error scanning Redis keys by prefix {Prefix}", LogSanitizer.Sanitize(prefix));
+        }
+        return keys;
+    }
 }

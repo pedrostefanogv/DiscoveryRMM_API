@@ -3,10 +3,13 @@ namespace Discovery.Core.ValueObjects;
 /// <summary>
 /// Campos de <see cref="AIIntegrationSettings"/> que podem ser sobrescritos em nível de Client ou Site.
 ///
-/// Campos globais — definidos exclusivamente no servidor global e herdados sem possibilidade de
-/// sobrescrita — estão ausentes nesta classe:
-///   - ApiKey, BaseUrl, Provider
-///   - EmbeddingModel, EmbeddingEnabled, EmbeddingArticlesEnabled
+/// Campos gerenciados por <see cref="AiProviderCredential"/> (herdáveis via credencial própria):
+///   - ApiKey, BaseUrl, Provider (chat)
+///   - EmbeddingApiKey, EmbeddingBaseUrl (embeddings)
+///   Resolução: Site credential → Client credential → Global credential → AIIntegrationSettings global.
+///
+/// Campos globais (sem herança por escopo no MVP):
+///   - EmbeddingModel, EmbeddingDimensions, EmbeddingEnabled, EmbeddingArticlesEnabled
 ///     (o espaço vetorial deve ser único; modelos diferentes geram vetores incompatíveis)
 ///   - MSPServers, TimeoutMs, RateLimitPerMinute, TokenBudgetDaily, CostControlEnabled
 ///

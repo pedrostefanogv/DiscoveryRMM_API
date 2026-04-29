@@ -1,5 +1,6 @@
 using Discovery.Api.Services;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Services;
 using StackExchange.Redis;
 
 namespace Discovery.Api.DependencyInjection;
@@ -36,6 +37,8 @@ public static class RedisServiceCollectionExtensions
         });
 
         services.AddSingleton<IRedisService, RedisService>();
+        services.AddSingleton<IHeartbeatCacheService, HeartbeatCacheService>();
+        services.AddHostedService<HeartbeatExpiryBackgroundService>();
 
         return services;
     }

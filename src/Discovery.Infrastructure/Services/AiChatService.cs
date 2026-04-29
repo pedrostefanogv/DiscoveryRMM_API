@@ -32,6 +32,7 @@ public class AiChatService : IAiChatService
     private readonly IKnowledgeChunkRepository _chunkRepository;
     private readonly IKnowledgeMcpTool _knowledgeMcpTool;
     private readonly IConfigurationResolver _configurationResolver;
+    private readonly IAiCredentialResolver _credentialResolver;
     
     private const int MaxMessageSizeBytes = 2048; // 2KB
     private const int SessionExpirationDays = 180;
@@ -54,7 +55,8 @@ public class AiChatService : IAiChatService
         IEmbeddingProvider embeddingProvider,
         IKnowledgeChunkRepository chunkRepository,
         IKnowledgeMcpTool knowledgeMcpTool,
-        IConfigurationResolver configurationResolver)
+        IConfigurationResolver configurationResolver,
+        IAiCredentialResolver credentialResolver)
     {
         _sessionRepository = sessionRepository;
         _messageRepository = messageRepository;
@@ -69,6 +71,7 @@ public class AiChatService : IAiChatService
         _chunkRepository = chunkRepository;
         _knowledgeMcpTool = knowledgeMcpTool;
         _configurationResolver = configurationResolver;
+        _credentialResolver = credentialResolver;
     }
     
     /// <summary>
@@ -196,7 +199,11 @@ public class AiChatService : IAiChatService
                 BaseUrl: string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
                 ApiKey: string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
                 EnableTools: aiSettings.KnowledgeBaseEnabled,
-                Tools: [knowledgeSearchTool]);
+                Tools: [knowledgeSearchTool],
+                Provider: aiSettings.Provider,
+                OpenRouterReferer: aiSettings.OpenRouterReferer,
+                OpenRouterTitle: aiSettings.OpenRouterTitle,
+                OpenRouterCategories: aiSettings.OpenRouterCategories);
             
             LlmResponse llmResponse;
             var toolIterations = 0;
@@ -859,7 +866,28 @@ Responda de forma profissional e prestativa.";
     {
         var resolved = await _configurationResolver.ResolveForSiteAsync(siteId);
         ct.ThrowIfCancellationRequested();
-        return resolved.AIIntegration ?? new AIIntegrationSettings();
+        var ai = resolved.AIIntegration ?? new AIIntegrationSettings();
+
+        // Integra credencial por escopo (Site > Client > Global) — sobrescreve ApiKey e BaseUrl
+        if (resolved.ClientId.HasValue)
+        {
+            var credential = await _credentialResolver.ResolveAsync(resolved.ClientId.Value, siteId, ct);
+            if (credential is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(credential.ApiKey))
+                    ai.ApiKey = credential.ApiKey;
+                if (!string.IsNullOrWhiteSpace(credential.BaseUrl))
+                    ai.BaseUrl = credential.BaseUrl;
+                if (!string.IsNullOrWhiteSpace(credential.EmbeddingBaseUrl))
+                    ai.EmbeddingBaseUrl = credential.EmbeddingBaseUrl;
+                if (!string.IsNullOrWhiteSpace(credential.EmbeddingApiKey))
+                    ai.EmbeddingApiKey = credential.EmbeddingApiKey;
+                if (!string.IsNullOrWhiteSpace(credential.Provider))
+                    ai.Provider = credential.Provider;
+            }
+        }
+
+        return ai;
     }
 
     private static int ClampHistoryMessages(AIIntegrationSettings settings)

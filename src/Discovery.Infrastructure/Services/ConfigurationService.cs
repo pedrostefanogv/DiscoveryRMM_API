@@ -749,6 +749,9 @@ public class ConfigurationService : IConfigurationService
             if (!string.IsNullOrWhiteSpace(ai.ApiKey))
                 ai.ApiKey = _secretProtector.Protect(ai.ApiKey);
 
+            if (!string.IsNullOrWhiteSpace(ai.EmbeddingApiKey))
+                ai.EmbeddingApiKey = _secretProtector.Protect(ai.EmbeddingApiKey);
+
             return JsonSerializer.Serialize(ai, JsonSerializerOptions.Web);
         }
         catch

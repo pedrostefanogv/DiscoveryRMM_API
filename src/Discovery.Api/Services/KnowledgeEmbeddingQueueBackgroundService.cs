@@ -79,6 +79,7 @@ public class KnowledgeEmbeddingQueueBackgroundService(
         if (items.Count == 0)
             return false;
 
+        // Agrupa chunks para batch por artigo
         foreach (var item in items)
         {
             try
@@ -91,23 +92,43 @@ public class KnowledgeEmbeddingQueueBackgroundService(
                 }
 
                 var chunks = chunkingService.ChunkArticle(article);
-                foreach (var chunk in chunks)
+                var inputs = chunks.Select(c =>
+                    string.IsNullOrEmpty(c.SectionTitle)
+                        ? c.Content
+                        : $"{c.SectionTitle}\n\n{c.Content}").ToList();
+
+                // Resolve credencial de embedding com herança
+                var credential = article.ClientId.HasValue || article.SiteId.HasValue
+                    ? await scope.ServiceProvider.GetRequiredService<IAiCredentialResolver>()
+                        .ResolveAsync(article.ClientId, article.SiteId, ct)
+                    : null;
+
+                var embBaseUrl = credential?.EffectiveEmbeddingBaseUrl
+                    ?? (string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl);
+                var embApiKey = credential?.EffectiveEmbeddingApiKey
+                    ?? (string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey);
+
+                // Batch embedding
+                var allEmbeddings = await embeddingProvider.GenerateEmbeddingsAsync(
+                    inputs,
+                    aiSettings.EmbeddingModel,
+                    embApiKey,
+                    embBaseUrl,
+                    ct);
+
+                if (allEmbeddings.Count > 0 && allEmbeddings[0].Length != aiSettings.EmbeddingDimensions)
                 {
-                    var embeddingInput = string.IsNullOrEmpty(chunk.SectionTitle)
-                        ? chunk.Content
-                        : $"{chunk.SectionTitle}\n\n{chunk.Content}";
+                    logger.LogError(
+                        "Dimensão do embedding ({Actual}) difere da configurada ({Expected}) para ArticleId={ArticleId}.",
+                        allEmbeddings[0].Length, aiSettings.EmbeddingDimensions, article.Id);
+                    await queueRepository.MarkFailedAsync(item.Id, $"Embedding dimension mismatch: {allEmbeddings[0].Length} vs {aiSettings.EmbeddingDimensions}", _retryDelay, ct);
+                    continue;
+                }
 
-                    var embBaseUrl = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
-                    var embApiKey = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey;
-                    var floats = await embeddingProvider.GenerateEmbeddingAsync(
-                        embeddingInput,
-                        aiSettings.EmbeddingModel,
-                        embApiKey,
-                        embBaseUrl,
-                        ct);
-
-                    chunk.Embedding = new Vector(floats);
-                    chunk.EmbeddingGeneratedAt = DateTime.UtcNow;
+                for (int i = 0; i < chunks.Count && i < allEmbeddings.Count; i++)
+                {
+                    chunks[i].Embedding = new Vector(allEmbeddings[i]);
+                    chunks[i].EmbeddingGeneratedAt = DateTime.UtcNow;
                 }
 
                 await chunkRepository.ReplaceAllForArticleAsync(article.Id, chunks, ct);
@@ -115,7 +136,7 @@ public class KnowledgeEmbeddingQueueBackgroundService(
                 await articleRepository.UpdateAsync(article, ct);
 
                 await queueRepository.MarkDoneAsync(item.Id, ct);
-                logger.LogInformation("Embeddings da KB atualizados para ArticleId={ArticleId}.", article.Id);
+                logger.LogInformation("Embeddings da KB atualizados via batch para ArticleId={ArticleId} ({ChunkCount} chunks).", article.Id, chunks.Count);
             }
             catch (Exception ex)
             {

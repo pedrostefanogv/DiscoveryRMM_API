@@ -30,6 +30,7 @@ public class AgentHub : Hub
     private readonly IConfiguration _configuration;
     private readonly IAgentTlsCertificateProbe _tlsCertProbe;
     private readonly IRemoteDebugLogRelay _remoteDebugLogRelay;
+    private readonly IHeartbeatCacheService _heartbeatCache;
     private readonly ILogger<AgentHub> _logger;
 
     public AgentHub(
@@ -42,6 +43,7 @@ public class AgentHub : Hub
         IConfiguration configuration,
         IAgentTlsCertificateProbe tlsCertProbe,
         IRemoteDebugLogRelay remoteDebugLogRelay,
+        IHeartbeatCacheService heartbeatCache,
         ILogger<AgentHub> logger)
     {
         _agentRepo = agentRepo;
@@ -53,6 +55,7 @@ public class AgentHub : Hub
         _configuration = configuration;
         _tlsCertProbe = tlsCertProbe;
         _remoteDebugLogRelay = remoteDebugLogRelay;
+        _heartbeatCache = heartbeatCache;
         _logger = logger;
     }
 
@@ -290,6 +293,7 @@ public class AgentHub : Hub
 
         var now = DateTime.UtcNow;
 
+        // Throttle em memória: só propaga se passou o intervalo mínimo ou IP mudou
         if (LastPersistedHeartbeat.TryGetValue(authenticatedId, out var state)
             && now - state.LastPersistedAt < HeartbeatWriteInterval
             && string.Equals(state.LastIpAddress, ipAddress, StringComparison.OrdinalIgnoreCase))
@@ -299,12 +303,13 @@ public class AgentHub : Hub
 
         try
         {
-            await _agentRepo.UpdateStatusAsync(authenticatedId, AgentStatus.Online, ipAddress);
+            // Cache no Redis (write-behind evita escrita direta no PostgreSQL)
+            await _heartbeatCache.SetHeartbeatAsync(authenticatedId, AgentStatus.Online, ipAddress);
             LastPersistedHeartbeat[authenticatedId] = new HeartbeatState(now, ipAddress);
         }
-        catch (Exception ex) when (ex is NpgsqlException or TimeoutException)
+        catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Heartbeat update timed out for agent {AgentId}.", authenticatedId);
+            _logger.LogWarning(ex, "Heartbeat cache update failed for agent {AgentId}.", authenticatedId);
         }
     }
 
