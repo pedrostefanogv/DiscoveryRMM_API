@@ -21,10 +21,8 @@ public static class ConfigurationFieldCatalog
         "AgentHeartbeatIntervalSeconds",
         "AgentOnlineGraceSeconds",
         "NatsAuthEnabled",
-        "NatsAccountSeed",
         "NatsAgentJwtTtlMinutes",
         "NatsUserJwtTtlMinutes",
-        "NatsXKeySeed",
         "NatsServerHostInternal",
         "NatsServerHostExternal",
         "NatsUseWssExternal"

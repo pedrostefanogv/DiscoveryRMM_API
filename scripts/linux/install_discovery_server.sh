@@ -814,7 +814,8 @@ normalize_nats_settings() {
   NATS_AUTH_CALLOUT_ENABLED="${NATS_AUTH_CALLOUT_ENABLED:-1}"
 
   if [[ "$NATS_AUTH_CALLOUT_ENABLED" != "0" && -z "${NATS_AUTH_CALLOUT_ISSUER:-}" ]]; then
-    fail "NATS_AUTH_CALLOUT_ISSUER e obrigatorio quando NATS_AUTH_CALLOUT_ENABLED=1."
+    # Issuer sera derivado automaticamente do seed gerado em generate_nats_account_keys()
+    NATS_AUTH_CALLOUT_ISSUER=""
   fi
 }
 
@@ -842,6 +843,9 @@ load_existing_nats_defaults() {
       fi
     fi
     NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$(sudo awk -F= '/^Nats__AuthCallout__Subject=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    # Carrega seeds existentes para reutilizar (nao regenerar em updates)
+    NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$(sudo awk -F= '/^Nats__AccountSeed=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_XKEY_SEED="${NATS_XKEY_SEED:-$(sudo awk -F= '/^Nats__XKeySeed=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
   fi
 
   if sudo test -f "$nats_conf"; then
@@ -849,7 +853,6 @@ load_existing_nats_defaults() {
     NATS_MONITOR_HOST="${NATS_MONITOR_HOST:-$(sudo sed -n 's/^http:[[:space:]]*\([^:]*\):[0-9][0-9]*.*/\1/p' "$nats_conf" | head -n 1)}"
     NATS_AUTH_CALLOUT_ISSUER="${NATS_AUTH_CALLOUT_ISSUER:-$(sudo sed -n 's/^[[:space:]]*issuer:[[:space:]]*"\([^"]*\)".*/\1/p' "$nats_conf" | head -n 1)}"
   fi
-
   NATS_USER="${NATS_USER:-${NATS_AUTH_USER:-discovery_nats}}"
   NATS_PASSWORD="${NATS_PASSWORD:-${NATS_AUTH_PASSWORD:-}}"
 }
@@ -870,9 +873,7 @@ prompt_nats_configuration() {
   prompt_if_empty NATS_AUTH_CALLOUT_ENABLED "Habilitar NATS auth callout? (1/0)" 0 "1"
   prompt_if_empty NATS_AUTH_CALLOUT_SUBJECT "Subject do auth callout" 0 "\$SYS.REQ.USER.AUTH"
 
-  if [[ "$NATS_AUTH_CALLOUT_ENABLED" != "0" ]]; then
-    prompt_if_empty NATS_AUTH_CALLOUT_ISSUER "Issuer publico do auth callout (gerado no servidor)"
-  fi
+  # NATS_AUTH_CALLOUT_ISSUER e derivado automaticamente do account seed gerado em generate_nats_account_keys()
 }
 
 update_nats_environment_file() {
@@ -913,6 +914,8 @@ apply_nats_reconfiguration_only() {
   prompt_nats_configuration
   validate_security_inputs
   normalize_nats_settings
+  load_existing_nats_defaults
+  generate_nats_account_keys
 
   setup_nats
   update_nats_environment_file
@@ -948,6 +951,63 @@ setup_redis() {
   log "Configurando Redis"
   sudo systemctl enable redis-server
   sudo systemctl restart redis-server
+}
+
+install_nk_tool() {
+  if command -v nk &>/dev/null; then
+    return 0
+  fi
+
+  local arch
+  arch="$(uname -m)"
+  local nk_arch
+  case "$arch" in
+    x86_64)  nk_arch="amd64" ;;
+    aarch64) nk_arch="arm64" ;;
+    armv7l)  nk_arch="arm"   ;;
+    *)       fail "Arquitetura nao suportada para download do nk: $arch" ;;
+  esac
+
+  local nk_bin="/usr/local/bin/nk"
+  local nk_url="https://github.com/nats-io/nkeys/releases/latest/download/nk-linux-${nk_arch}"
+
+  log "Baixando ferramenta nk (geracao de chaves NATS)..."
+  sudo curl -fsSL "$nk_url" -o "$nk_bin"
+  sudo chmod +x "$nk_bin"
+  log "nk instalado em $nk_bin"
+}
+
+generate_nats_account_keys() {
+  # Reutiliza seeds existentes se ja foram carregados (modo update)
+  if [[ -n "${NATS_ACCOUNT_SEED:-}" && -n "${NATS_ACCOUNT_PUBLIC_KEY:-}" ]]; then
+    log "Seeds NATS ja existentes — reutilizando (sem regenerar)"
+    return 0
+  fi
+
+  # Se o seed existe mas a public key nao foi derivada ainda
+  if [[ -n "${NATS_ACCOUNT_SEED:-}" ]]; then
+    NATS_ACCOUNT_PUBLIC_KEY="$(nk -inkey <(printf '%s' "$NATS_ACCOUNT_SEED") -pubout 2>/dev/null || true)"
+    if [[ -n "$NATS_ACCOUNT_PUBLIC_KEY" ]]; then
+      log "Chave publica NATS derivada do seed existente"
+      return 0
+    fi
+  fi
+
+  install_nk_tool
+
+  log "Gerando account key NATS..."
+  local account_output
+  account_output="$(nk -gen account)"
+  NATS_ACCOUNT_SEED="$(echo "$account_output" | head -n 1)"
+  NATS_ACCOUNT_PUBLIC_KEY="$(echo "$account_output" | tail -n 1)"
+
+  log "Gerando xkey NATS (criptografia do callout)..."
+  local xkey_output
+  xkey_output="$(nk -gen curve)"
+  NATS_XKEY_SEED="$(echo "$xkey_output" | head -n 1)"
+  NATS_XKEY_PUBLIC_KEY="$(echo "$xkey_output" | tail -n 1)"
+
+  log "Chaves NATS geradas com sucesso. Issuer (account public key): $NATS_ACCOUNT_PUBLIC_KEY"
 }
 
 ensure_pgvector_package() {
@@ -1158,7 +1218,7 @@ authorization {
     { user: "$NATS_AUTH_USER", password: "$NATS_AUTH_PASSWORD" }
   ]
   auth_callout {
-    issuer: "$NATS_AUTH_CALLOUT_ISSUER"
+    issuer: "$NATS_ACCOUNT_PUBLIC_KEY"
     auth_users: [ "$NATS_AUTH_USER" ]
   }
 }
@@ -1818,6 +1878,7 @@ main() {
 
   setup_postgres
   setup_redis
+  generate_nats_account_keys
   setup_nats
   setup_proxy_certificate
   setup_jwt_signing_keys

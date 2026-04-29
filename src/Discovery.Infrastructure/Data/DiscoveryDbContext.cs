@@ -756,11 +756,9 @@ public class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> options) : 
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.NatsEnabled).HasColumnName("nats_enabled");
             entity.Property(config => config.NatsAuthEnabled).HasColumnName("nats_auth_enabled");
-            entity.Property(config => config.NatsAccountSeed).HasColumnName("nats_account_seed");
             entity.Property(config => config.NatsAgentJwtTtlMinutes).HasColumnName("nats_agent_jwt_ttl_minutes");
             entity.Property(config => config.NatsUserJwtTtlMinutes).HasColumnName("nats_user_jwt_ttl_minutes");
             entity.Property(config => config.NatsUseScopedSubjects).HasColumnName("nats_use_scoped_subjects");
-            entity.Property(config => config.NatsXKeySeed).HasColumnName("nats_xkey_seed");
             entity.Property(config => config.NatsServerHostInternal).HasColumnName("nats_server_host_internal");
             entity.Property(config => config.NatsServerHostExternal).HasColumnName("nats_server_host_external");
             entity.Property(config => config.NatsUseWssExternal).HasColumnName("nats_use_wss_external");

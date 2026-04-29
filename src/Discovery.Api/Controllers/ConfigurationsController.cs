@@ -6,7 +6,6 @@ using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using NATS.NKeys;
 using Discovery.Api.Services;
 
 namespace Discovery.Api.Controllers;
@@ -109,34 +108,6 @@ public class ConfigurationsController : ControllerBase
             SyncResourceType.Configuration,
             "server-configuration-reset");
         return Ok(SanitizeServerConfiguration(reset));
-    }
-
-    [HttpPost("server/nats/generate-account-key")]
-    public async Task<IActionResult> GenerateNatsAccountKey()
-    {
-        var accountKeyPair = KeyPair.CreatePair(PrefixByte.Account);
-        var xKeyPair = KeyPair.CreatePair(PrefixByte.Curve);
-
-        var accountSeed = accountKeyPair.GetSeed();
-        var xKeySeed = xKeyPair.GetSeed();
-
-        await _configService.PatchServerAsync(
-            new Dictionary<string, object>
-            {
-                [nameof(ServerConfiguration.NatsAccountSeed)] = accountSeed,
-                [nameof(ServerConfiguration.NatsXKeySeed)] = xKeySeed
-            },
-            HttpContext.Items["Username"] as string ?? "api");
-
-        _natsReloadSignal.Signal();
-
-        return Ok(new
-        {
-            accountSeed,
-            accountPublicKey = accountKeyPair.GetPublicKey(),
-            xKeySeed,
-            xKeyPublicKey = xKeyPair.GetPublicKey()
-        });
     }
 
     [HttpPost("server/nats/test")]
@@ -764,8 +735,6 @@ public class ConfigurationsController : ControllerBase
     private static ServerConfiguration SanitizeServerConfiguration(ServerConfiguration config)
     {
         config.AIIntegrationSettingsJson = SanitizeAiJson(config.AIIntegrationSettingsJson);
-        config.NatsAccountSeed = string.Empty;
-        config.NatsXKeySeed = string.Empty;
         return config;
     }
 

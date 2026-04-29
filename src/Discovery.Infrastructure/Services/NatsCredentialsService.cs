@@ -2,8 +2,8 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
-using Discovery.Core.Interfaces.Security;
 using Discovery.Core.Interfaces.Auth;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using NATS.Jwt;
 using NATS.NKeys;
@@ -22,20 +22,20 @@ public class NatsCredentialsService : INatsCredentialsService
     private readonly IAgentRepository _agentRepository;
     private readonly ISiteRepository _siteRepository;
     private readonly IConfigurationService _configurationService;
-    private readonly ISecretProtector _secretProtector;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<NatsCredentialsService> _logger;
 
     public NatsCredentialsService(
         IAgentRepository agentRepository,
         ISiteRepository siteRepository,
         IConfigurationService configurationService,
-        ISecretProtector secretProtector,
+        IConfiguration configuration,
         ILogger<NatsCredentialsService> logger)
     {
         _agentRepository = agentRepository;
         _siteRepository = siteRepository;
         _configurationService = configurationService;
-        _secretProtector = secretProtector;
+        _configuration = configuration;
         _logger = logger;
     }
 
@@ -53,7 +53,6 @@ public class NatsCredentialsService : INatsCredentialsService
         var subjects = BuildAgentSubjects(site.ClientId, site.Id, agent.Id);
 
         return IssueCredentials(
-            accountSeed: config.NatsAccountSeed,
             ttlMinutes: ttlMinutes,
             publishSubjects: subjects.Publish.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             subscribeSubjects: subjects.Subscribe.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
@@ -73,7 +72,6 @@ public class NatsCredentialsService : INatsCredentialsService
         var subjects = BuildAgentSubjects(site.ClientId, site.Id, agent.Id);
         return IssueUserJwtForPublicKey(
             userPublicKey,
-            config.NatsAccountSeed,
             config.NatsAgentJwtTtlMinutes,
             subjects.Publish,
             subjects.Subscribe,
@@ -93,7 +91,6 @@ public class NatsCredentialsService : INatsCredentialsService
         var subscribeSubjects = await BuildDashboardSubjectsAsync(scopeAccess, null, null, ct);
         return IssueUserJwtForPublicKey(
             userPublicKey,
-            config.NatsAccountSeed,
             config.NatsUserJwtTtlMinutes,
             Array.Empty<string>(),
             subscribeSubjects,
@@ -136,7 +133,6 @@ public class NatsCredentialsService : INatsCredentialsService
         var ttlMinutes = Math.Max(1, config.NatsUserJwtTtlMinutes);
 
         return IssueCredentials(
-            accountSeed: config.NatsAccountSeed,
             ttlMinutes: ttlMinutes,
             publishSubjects: publishSubjects,
             subscribeSubjects: subscribeSubjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
@@ -144,15 +140,14 @@ public class NatsCredentialsService : INatsCredentialsService
     }
 
     private NatsCredentialsResponse IssueCredentials(
-        string accountSeed,
         int ttlMinutes,
         IReadOnlyList<string> publishSubjects,
         IReadOnlyList<string> subscribeSubjects,
         string traceLabel)
     {
-        var accountSeedPlain = _secretProtector.UnprotectOrSelf(accountSeed);
+        var accountSeedPlain = _configuration["Nats:AccountSeed"];
         if (string.IsNullOrWhiteSpace(accountSeedPlain))
-            throw new InvalidOperationException("NATS account seed is not configured.");
+            throw new InvalidOperationException("NATS account seed is not configured (Nats:AccountSeed).");
 
         var accountKeyPair = KeyPair.FromSeed(accountSeedPlain);
         var userKeyPair = KeyPair.CreatePair(PrefixByte.User);
@@ -184,15 +179,14 @@ public class NatsCredentialsService : INatsCredentialsService
 
     private (string Jwt, DateTime ExpiresAtUtc) IssueUserJwtForPublicKey(
         string userPublicKey,
-        string accountSeed,
         int ttlMinutes,
         IReadOnlyList<string> publishSubjects,
         IReadOnlyList<string> subscribeSubjects,
         string traceLabel)
     {
-        var accountSeedPlain = _secretProtector.UnprotectOrSelf(accountSeed);
+        var accountSeedPlain = _configuration["Nats:AccountSeed"];
         if (string.IsNullOrWhiteSpace(accountSeedPlain))
-            throw new InvalidOperationException("NATS account seed is not configured.");
+            throw new InvalidOperationException("NATS account seed is not configured (Nats:AccountSeed).");
 
         var accountKeyPair = KeyPair.FromSeed(accountSeedPlain);
 

@@ -20,7 +20,6 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
     private readonly NatsConnection _natsConnection;
     private readonly IConfiguration _configuration;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly Discovery.Core.Interfaces.Security.ISecretProtector _secretProtector;
     private readonly INatsAuthCalloutReloadSignal _reloadSignal;
     private readonly ILogger<NatsAuthCalloutBackgroundService> _logger;
 
@@ -28,14 +27,12 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         NatsConnection natsConnection,
         IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
-        Discovery.Core.Interfaces.Security.ISecretProtector secretProtector,
         INatsAuthCalloutReloadSignal reloadSignal,
         ILogger<NatsAuthCalloutBackgroundService> logger)
     {
         _natsConnection = natsConnection;
         _configuration = configuration;
         _scopeFactory = scopeFactory;
-        _secretProtector = secretProtector;
         _reloadSignal = reloadSignal;
         _logger = logger;
     }
@@ -87,9 +84,9 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(serverConfig.NatsAccountSeed))
+        if (string.IsNullOrWhiteSpace(_configuration["Nats:AccountSeed"]))
         {
-            _logger.LogWarning("NATS auth callout service aguardando — NatsAccountSeed não configurado.");
+            _logger.LogWarning("NATS auth callout service aguardando — Nats:AccountSeed não configurado.");
             await Task.Delay(Timeout.Infinite, ct);
             return;
         }
@@ -112,10 +109,8 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                 var rawData = msg.Data ?? [];
 
                 // Resolve xkey seed (opcional). Quando configurado, o payload esta encriptado.
-                var msgServerConfig = await msgConfigService.GetServerConfigAsync();
-                var xKeySeedPlain = string.IsNullOrWhiteSpace(msgServerConfig.NatsXKeySeed)
-                    ? null
-                    : _secretProtector.UnprotectOrSelf(msgServerConfig.NatsXKeySeed);
+                var xKeySeedPlain = _configuration["Nats:XKeySeed"];
+                xKeySeedPlain = string.IsNullOrWhiteSpace(xKeySeedPlain) ? null : xKeySeedPlain;
 
                 string requestJwt;
                 string? serverXKey = null;
@@ -274,14 +269,15 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         return NatsJwt.EncodeAuthorizationResponseClaims(response, accountKeyPair);
     }
 
-    private async Task<KeyPair> ResolveAccountKeyPairAsync(IConfigurationService configurationService, CancellationToken ct)
+    private Task<KeyPair> ResolveAccountKeyPairAsync(IConfigurationService configurationService, CancellationToken ct)
     {
-        var config = await configurationService.GetServerConfigAsync();
-        var seed = _secretProtector.UnprotectOrSelf(config.NatsAccountSeed);
+        _ = configurationService;
+        _ = ct;
+        var seed = _configuration["Nats:AccountSeed"];
         if (string.IsNullOrWhiteSpace(seed))
-            throw new InvalidOperationException("NATS account seed is not configured.");
+            throw new InvalidOperationException("NATS account seed is not configured (Nats:AccountSeed).");
 
-        return KeyPair.FromSeed(seed);
+        return Task.FromResult(KeyPair.FromSeed(seed));
     }
 
     private sealed class AuthorizationRequest

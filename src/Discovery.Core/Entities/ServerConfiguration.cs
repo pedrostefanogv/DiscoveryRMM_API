@@ -78,9 +78,6 @@ public class ServerConfiguration
     /// <summary>Habilita autenticacao JWT no NATS para agentes/usuarios.</summary>
     public bool NatsAuthEnabled { get; set; } = true;
 
-    /// <summary>Seed da conta NATS (nkey) para assinar JWTs de usuario.</summary>
-    public string NatsAccountSeed { get; set; } = string.Empty;
-
     /// <summary>TTL em minutos para JWT de agentes.</summary>
     public int NatsAgentJwtTtlMinutes { get; set; } = 1440; // 24h
 
@@ -90,12 +87,6 @@ public class ServerConfiguration
     /// <summary>Usa subjects com tenant/client/site (novo formato).</summary>
     [JsonIgnore]
     public bool NatsUseScopedSubjects { get; set; } = true;
-
-    /// <summary>
-    /// Seed da chave xkey (curve25519) para criptografar o payload do auth callout.
-    /// Opcional — quando configurado, o NATS server deve ter xkey habilitado com a chave publica correspondente.
-    /// </summary>
-    public string NatsXKeySeed { get; set; } = string.Empty;
 
     /// <summary>
     /// Host ou hostname do servidor NATS usada internamente pelo backend da API (privada).

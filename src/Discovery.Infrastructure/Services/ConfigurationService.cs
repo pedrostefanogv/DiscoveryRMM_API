@@ -698,12 +698,6 @@ public class ConfigurationService : IConfigurationService
         if (!string.IsNullOrWhiteSpace(config.ObjectStorageSecretKey))
             config.ObjectStorageSecretKey = _secretProtector.Protect(config.ObjectStorageSecretKey);
 
-        if (!string.IsNullOrWhiteSpace(config.NatsAccountSeed))
-            config.NatsAccountSeed = _secretProtector.Protect(config.NatsAccountSeed);
-
-        if (!string.IsNullOrWhiteSpace(config.NatsXKeySeed))
-            config.NatsXKeySeed = _secretProtector.Protect(config.NatsXKeySeed);
-
         config.AIIntegrationSettingsJson = ProtectAiJson(config.AIIntegrationSettingsJson);
     }
 
@@ -729,20 +723,6 @@ public class ConfigurationService : IConfigurationService
             !string.IsNullOrWhiteSpace(secret))
         {
             return _secretProtector.Protect(secret);
-        }
-
-        if (key.Equals(nameof(ServerConfiguration.NatsAccountSeed), StringComparison.OrdinalIgnoreCase) &&
-            converted is string seed &&
-            !string.IsNullOrWhiteSpace(seed))
-        {
-            return _secretProtector.Protect(seed);
-        }
-
-        if (key.Equals(nameof(ServerConfiguration.NatsXKeySeed), StringComparison.OrdinalIgnoreCase) &&
-            converted is string xkeySeed &&
-            !string.IsNullOrWhiteSpace(xkeySeed))
-        {
-            return _secretProtector.Protect(xkeySeed);
         }
 
         if (key.Equals(nameof(ServerConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase) ||
@@ -828,8 +808,6 @@ public class ConfigurationService : IConfigurationService
                key.Contains("apikey", StringComparison.OrdinalIgnoreCase) ||
                key.Contains("password", StringComparison.OrdinalIgnoreCase) ||
                key.Contains("token", StringComparison.OrdinalIgnoreCase) ||
-             key.Equals(nameof(ServerConfiguration.NatsAccountSeed), StringComparison.OrdinalIgnoreCase) ||
-               key.Equals(nameof(ServerConfiguration.NatsXKeySeed), StringComparison.OrdinalIgnoreCase) ||
                key.Equals(nameof(ServerConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase) ||
                key.Equals(nameof(ClientConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase) ||
                key.Equals(nameof(SiteConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase);
