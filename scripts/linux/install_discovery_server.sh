@@ -612,9 +612,9 @@ apply_stack_update_only() {
   validate_dotnet_runtime "$DISCOVERY_DOTNET_RUNTIME"
 
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
-  DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-signalr}"
-  DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-false}"
-  DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-}"
+  load_existing_site_realtime_defaults
+  normalize_site_realtime_settings
+  update_site_realtime_environment_file
 
   DISCOVERY_API_RELEASES="${DISCOVERY_API_BASE}/releases"
   DISCOVERY_API_SHARED="${DISCOVERY_API_BASE}/shared"
@@ -812,11 +812,81 @@ normalize_nats_settings() {
   NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$NATS_PASSWORD}"
   NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-\$SYS.REQ.USER.AUTH}"
   NATS_AUTH_CALLOUT_ENABLED="${NATS_AUTH_CALLOUT_ENABLED:-1}"
+  NATS_WS_PORT="${NATS_WS_PORT:-8081}"
+  NATS_WS_HOST="${NATS_WS_HOST:-127.0.0.1}"
+  NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-false}"
 
   if [[ "$NATS_AUTH_CALLOUT_ENABLED" != "0" && -z "${NATS_AUTH_CALLOUT_ISSUER:-}" ]]; then
     # Issuer sera derivado automaticamente do seed gerado em generate_nats_account_keys()
     NATS_AUTH_CALLOUT_ISSUER=""
   fi
+}
+
+load_existing_site_realtime_defaults() {
+  local env_file="/etc/discovery-api/discovery.env"
+  sudo test -f "$env_file" || return 0
+
+  DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-$(sudo awk -F= '/^DISCOVERY_SITE_NATS_URL=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  NATS_WS_PORT="${NATS_WS_PORT:-$(sudo awk -F= '/^NATS_WS_PORT=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  NATS_WS_HOST="${NATS_WS_HOST:-$(sudo awk -F= '/^NATS_WS_HOST=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(sudo awk -F= '/^NATS_WS_TLS_ENABLED=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  Authentication__Fido2__ServerDomain="${Authentication__Fido2__ServerDomain:-$(sudo awk -F= '/^Authentication__Fido2__ServerDomain=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+}
+
+normalize_site_realtime_settings() {
+  DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-both}"
+  DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-true}"
+  NATS_WS_PORT="${NATS_WS_PORT:-8081}"
+  NATS_WS_HOST="${NATS_WS_HOST:-127.0.0.1}"
+  NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-false}"
+
+  if [[ -z "${DISCOVERY_SITE_NATS_URL:-}" ]]; then
+    local nats_public_host="${DISCOVERY_SITE_NATS_PUBLIC_HOST:-${Authentication__Fido2__ServerDomain:-}}"
+
+    if [[ -z "$nats_public_host" && -n "${ACCESS_MODE:-}" ]]; then
+      nats_public_host="$(resolve_fido2_server_domain)"
+    fi
+
+    if [[ -z "$nats_public_host" ]] && sudo test -f /etc/discovery-api/discovery.env; then
+      nats_public_host="$(sudo awk -F= '/^Authentication__Fido2__ServerDomain=/{print substr($0, index($0,$2)); exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+    fi
+
+    nats_public_host="$(normalize_host_without_scheme "$nats_public_host")"
+    if [[ -n "$nats_public_host" ]]; then
+      DISCOVERY_SITE_NATS_URL="wss://${nats_public_host}/nats/"
+    else
+      DISCOVERY_SITE_NATS_URL="/nats/"
+    fi
+  fi
+}
+
+update_site_realtime_environment_file() {
+  local env_file="/etc/discovery-api/discovery.env"
+  sudo test -f "$env_file" || return 0
+
+  local tmp_file
+  tmp_file="$(mktemp)"
+
+  sudo awk '
+    !/^DISCOVERY_SITE_REALTIME_PROVIDER=/ &&
+    !/^DISCOVERY_SITE_NATS_ENABLED=/ &&
+    !/^DISCOVERY_SITE_NATS_URL=/ &&
+    !/^NATS_WS_PORT=/ &&
+    !/^NATS_WS_HOST=/ &&
+    !/^NATS_WS_TLS_ENABLED=/
+  ' "$env_file" > "$tmp_file"
+
+  cat >> "$tmp_file" <<EOF
+DISCOVERY_SITE_REALTIME_PROVIDER=${DISCOVERY_SITE_REALTIME_PROVIDER}
+DISCOVERY_SITE_NATS_ENABLED=${DISCOVERY_SITE_NATS_ENABLED}
+DISCOVERY_SITE_NATS_URL=${DISCOVERY_SITE_NATS_URL}
+NATS_WS_PORT=${NATS_WS_PORT:-8081}
+NATS_WS_HOST=${NATS_WS_HOST:-127.0.0.1}
+NATS_WS_TLS_ENABLED=${NATS_WS_TLS_ENABLED:-false}
+EOF
+
+  sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
+  rm -f "$tmp_file"
 }
 
 resolve_nats_conf_path() {
@@ -843,6 +913,20 @@ load_existing_nats_defaults() {
       fi
     fi
     NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$(sudo awk -F= '/^Nats__AuthCallout__Subject=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_SERVER_HOST_EXTERNAL="${NATS_SERVER_HOST_EXTERNAL:-$(sudo awk -F= '/^Nats__ServerHostExternal=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_SERVER_HOST_INTERNAL="${NATS_SERVER_HOST_INTERNAL:-$(sudo awk -F= '/^Nats__ServerHostInternal=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    local existing_use_wss_external
+    existing_use_wss_external="$(sudo awk -F= '/^Nats__UseWssExternal=/{print tolower(substr($0, index($0,$2))); exit}' "$env_file" 2>/dev/null || true)"
+    if [[ -z "${NATS_USE_WSS_EXTERNAL:-}" && -n "$existing_use_wss_external" ]]; then
+      if [[ "$existing_use_wss_external" == "true" ]]; then
+        NATS_USE_WSS_EXTERNAL="true"
+      elif [[ "$existing_use_wss_external" == "false" ]]; then
+        NATS_USE_WSS_EXTERNAL="false"
+      fi
+    fi
+    NATS_WS_PORT="${NATS_WS_PORT:-$(sudo awk -F= '/^NATS_WS_PORT=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_WS_HOST="${NATS_WS_HOST:-$(sudo awk -F= '/^NATS_WS_HOST=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(sudo awk -F= '/^NATS_WS_TLS_ENABLED=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
     # Carrega seeds existentes para reutilizar (nao regenerar em updates)
     NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$(sudo awk -F= '/^Nats__AccountSeed=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
     NATS_XKEY_SEED="${NATS_XKEY_SEED:-$(sudo awk -F= '/^Nats__XKeySeed=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
@@ -892,18 +976,35 @@ update_nats_environment_file() {
     !/^Nats__Url=/ &&
     !/^Nats__AuthUser=/ &&
     !/^Nats__AuthPassword=/ &&
+    !/^Nats__ServerHostExternal=/ &&
+    !/^Nats__ServerHostInternal=/ &&
+    !/^Nats__UseWssExternal=/ &&
     !/^Nats__AuthCallout__Enabled=/ &&
-    !/^Nats__AuthCallout__Subject=/
+    !/^Nats__AuthCallout__Subject=/ &&
+    !/^Nats__AccountSeed=/ &&
+    !/^Nats__XKeySeed=/ &&
+    !/^NATS_WS_PORT=/ &&
+    !/^NATS_WS_HOST=/ &&
+    !/^NATS_WS_TLS_ENABLED=/
   ' "$env_file" > "$tmp_file"
+
+  local nats_server_external_host
+  nats_server_external_host="$(normalize_host_without_scheme "${NATS_SERVER_HOST_EXTERNAL:-${EXTERNAL_API_HOST:-${INTERNAL_API_HOST:-}}}")"
 
   cat >> "$tmp_file" <<EOF
 Nats__Url=nats://${NATS_AUTH_USER}:${NATS_AUTH_PASSWORD}@127.0.0.1:4222
 Nats__AuthUser=${NATS_AUTH_USER}
 Nats__AuthPassword=${NATS_AUTH_PASSWORD}
+Nats__ServerHostExternal=${nats_server_external_host}
+Nats__ServerHostInternal=${NATS_SERVER_HOST_INTERNAL:-127.0.0.1}
+Nats__UseWssExternal=${NATS_USE_WSS_EXTERNAL:-false}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
 Nats__AuthCallout__Subject=${NATS_AUTH_CALLOUT_SUBJECT}
 Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}
 Nats__XKeySeed=${NATS_XKEY_SEED:-}
+NATS_WS_PORT=${NATS_WS_PORT:-8081}
+NATS_WS_HOST=${NATS_WS_HOST:-127.0.0.1}
+NATS_WS_TLS_ENABLED=${NATS_WS_TLS_ENABLED:-false}
 EOF
 
   sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
@@ -916,11 +1017,13 @@ apply_nats_reconfiguration_only() {
   prompt_nats_configuration
   validate_security_inputs
   normalize_nats_settings
+  normalize_site_realtime_settings
   load_existing_nats_defaults
   generate_nats_account_keys
 
   setup_nats
   update_nats_environment_file
+  update_site_realtime_environment_file
 
   if sudo systemctl is-active --quiet discovery-api; then
     log "Reiniciando discovery-api para aplicar novas configuracoes NATS"
@@ -1211,9 +1314,9 @@ setup_nats() {
 
   sudo install -d -m 755 -o root -g root "$(dirname "$nats_conf")"
 
-  # WebSocket para browsers (fallback quando SignalR indisponivel)
-  local nats_ws_port="${NATS_WS_PORT:-8443}"
-  local nats_ws_host="${NATS_WS_HOST:-0.0.0.0}"
+  # WebSocket local para browsers via proxy Nginx (/nats/).
+  local nats_ws_port="${NATS_WS_PORT:-8081}"
+  local nats_ws_host="${NATS_WS_HOST:-127.0.0.1}"
   local nats_ws_tls="${NATS_WS_TLS_ENABLED:-false}"
 
   local ws_block=""
@@ -1227,7 +1330,6 @@ websocket {
     cert_file: "/etc/discovery-api/certs/api-internal.crt"
     key_file: "/etc/discovery-api/certs/api-internal.key"
   }
-  no_auth_user: "$NATS_AUTH_USER"
 }
 EOF
 )
@@ -1237,7 +1339,6 @@ EOF
 websocket {
   port: $nats_ws_port
   host: $nats_ws_host
-  no_auth_user: "$NATS_AUTH_USER"
 }
 EOF
 )
@@ -1479,11 +1580,13 @@ write_site_proxy_config() {
   awk \
     -v server_name_list="$server_name_list" \
     -v discovery_site_current="$DISCOVERY_SITE_CURRENT" \
+    -v nats_ws_port="${NATS_WS_PORT:-8081}" \
     -v redirect_rules="$redirect_rules" \
     '
       {
         gsub("__SERVER_NAME_LIST__", server_name_list)
         gsub("__DISCOVERY_SITE_CURRENT__", discovery_site_current)
+        gsub("__NATS_WS_PORT__", nats_ws_port)
         if ($0 ~ /__REDIRECT_RULES__/) {
           if (length(redirect_rules) > 0) {
             printf "%s", redirect_rules
@@ -1605,6 +1708,9 @@ write_environment_file() {
   local fido2_server_domain
   fido2_server_domain="$(resolve_fido2_server_domain)"
   local fido2_server_name="${DISCOVERY_FIDO2_SERVER_NAME:-Discovery RMM}"
+  local nats_server_external_host
+  nats_server_external_host="$(normalize_host_without_scheme "${NATS_SERVER_HOST_EXTERNAL:-$public_host}")"
+  local nats_use_wss_external="${NATS_USE_WSS_EXTERNAL:-false}"
 
   local -a web_hosts=("localhost" "127.0.0.1")
   web_hosts+=("$fido2_server_domain")
@@ -1664,11 +1770,13 @@ ConnectionStrings__DefaultConnection=Host=127.0.0.1;Port=5432;Database=${POSTGRE
 Nats__Url=nats://${NATS_AUTH_USER}:${NATS_AUTH_PASSWORD}@127.0.0.1:4222
 Nats__AuthUser=${NATS_AUTH_USER}
 Nats__AuthPassword=${NATS_AUTH_PASSWORD}
+Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}
+Nats__XKeySeed=${NATS_XKEY_SEED:-}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
 Nats__AuthCallout__Subject=${NATS_AUTH_CALLOUT_SUBJECT}
-Nats__ServerHostExternal=$(normalize_host_without_scheme "${EXTERNAL_API_HOST:-}")
+Nats__ServerHostExternal=${nats_server_external_host}
 Nats__ServerHostInternal=127.0.0.1
-Nats__UseWssExternal=$([[ -n "${EXTERNAL_API_HOST:-}" ]] && echo true || echo false)
+Nats__UseWssExternal=${nats_use_wss_external}
 AgentPackage__PublicApiScheme=https
 AgentPackage__PublicApiServer=${public_host}
 Authentication__Jwt__Issuer=discovery
@@ -1695,8 +1803,8 @@ DISCOVERY_SITE_API_URL=${DISCOVERY_SITE_API_URL}
 DISCOVERY_SITE_REALTIME_PROVIDER=${DISCOVERY_SITE_REALTIME_PROVIDER}
 DISCOVERY_SITE_NATS_ENABLED=${DISCOVERY_SITE_NATS_ENABLED}
 DISCOVERY_SITE_NATS_URL=${DISCOVERY_SITE_NATS_URL}
-NATS_WS_PORT=${NATS_WS_PORT:-8443}
-NATS_WS_HOST=${NATS_WS_HOST:-0.0.0.0}
+NATS_WS_PORT=${NATS_WS_PORT:-8081}
+NATS_WS_HOST=${NATS_WS_HOST:-127.0.0.1}
 NATS_WS_TLS_ENABLED=${NATS_WS_TLS_ENABLED:-false}
 EOF
 
@@ -1896,9 +2004,7 @@ main() {
   log "Runtime .NET da API: ${DISCOVERY_DOTNET_RUNTIME}"
   log "Build do Agent permanece Windows x86/x64 nesta fase"
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
-  DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-signalr}"
-  DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-false}"
-  DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-}"
+  normalize_site_realtime_settings
 
   DISCOVERY_API_RELEASES="${DISCOVERY_API_BASE}/releases"
   DISCOVERY_API_SHARED="${DISCOVERY_API_BASE}/shared"

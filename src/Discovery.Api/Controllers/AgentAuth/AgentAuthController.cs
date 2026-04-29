@@ -201,6 +201,52 @@ public partial class AgentAuthController : ControllerBase
 
     // ── NATS TLS Helpers ──────────────────────────────────────────────────
 
+    private (string Host, bool UseWssExternal) ResolveAgentNatsEndpoint(ServerConfiguration serverConfig)
+    {
+        var configExternalHost = NormalizeAgentNatsHost(serverConfig.NatsServerHostExternal);
+        var configInternalHost = NormalizeAgentNatsHost(serverConfig.NatsServerHostInternal);
+        var envExternalHost = NormalizeAgentNatsHost(_configuration.GetValue<string>("Nats:ServerHostExternal"));
+        var envInternalHost = NormalizeAgentNatsHost(_configuration.GetValue<string>("Nats:ServerHostInternal"));
+
+        var host = configExternalHost;
+        if (IsLocalNatsHost(host) && !string.IsNullOrWhiteSpace(envExternalHost))
+            host = envExternalHost;
+
+        if (string.IsNullOrWhiteSpace(host))
+            host = !string.IsNullOrWhiteSpace(envInternalHost) ? envInternalHost : configInternalHost;
+
+        var envUseWssExternal = _configuration.GetValue<bool?>("Nats:UseWssExternal");
+        var useWssExternal = serverConfig.NatsUseWssExternal;
+        if (IsLocalNatsHost(configExternalHost) && envUseWssExternal.HasValue)
+            useWssExternal = envUseWssExternal.Value;
+
+        return (string.IsNullOrWhiteSpace(host) ? "localhost" : host, useWssExternal);
+    }
+
+    private static string? NormalizeAgentNatsHost(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = value.Trim();
+        var schemeIndex = normalized.IndexOf("://", StringComparison.Ordinal);
+        if (schemeIndex >= 0)
+            normalized = normalized[(schemeIndex + 3)..];
+
+        var pathIndex = normalized.IndexOf('/');
+        if (pathIndex >= 0)
+            normalized = normalized[..pathIndex];
+
+        normalized = normalized.Trim().TrimEnd('/');
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static bool IsLocalNatsHost(string? host)
+        => string.IsNullOrWhiteSpace(host)
+            || string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase);
+
     private static string? BuildNatsProbeUrl(string? natsHost)
     {
         if (string.IsNullOrWhiteSpace(natsHost))

@@ -41,12 +41,10 @@ public partial class AgentAuthController
             apiTlsCertHash = await _tlsCertProbe.GetExpectedTlsCertHashAsync(HttpContext.RequestAborted);
 
         string? natsTlsCertHash = null;
-        var natsHost = string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
-            ? serverConfig.NatsServerHostInternal
-            : serverConfig.NatsServerHostExternal;
+        var (natsHost, natsUseWssExternal) = ResolveAgentNatsEndpoint(serverConfig);
         var natsProbeUrl = BuildNatsProbeUrl(natsHost);
         var natsCacheKey = BuildNatsCacheKey(natsHost);
-        if (serverConfig.NatsUseWssExternal && !string.IsNullOrWhiteSpace(natsProbeUrl) && !string.IsNullOrWhiteSpace(natsCacheKey))
+        if (natsUseWssExternal && !string.IsNullOrWhiteSpace(natsProbeUrl) && !string.IsNullOrWhiteSpace(natsCacheKey))
             natsTlsCertHash = await _tlsCertProbe.GetExpectedTlsCertHashAsync(natsProbeUrl, natsCacheKey, HttpContext.RequestAborted);
 
         return Ok(new
@@ -68,7 +66,7 @@ public partial class AgentAuthController
             resolved.ClientId,
             resolved.ResolvedAt,
             NatsServerHost = natsHost,
-            NatsUseWssExternal = serverConfig.NatsUseWssExternal,
+            NatsUseWssExternal = natsUseWssExternal,
             EnforceTlsHashValidation = enforceTls,
             HandshakeEnabled = handshakeEnabled,
             ApiTlsCertHash = apiTlsCertHash,
@@ -101,9 +99,7 @@ public partial class AgentAuthController
         else
         {
             var serverConfig = await _configService.GetServerConfigAsync();
-            var natsHost = string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
-                ? serverConfig.NatsServerHostInternal
-                : serverConfig.NatsServerHostExternal;
+            var (natsHost, _) = ResolveAgentNatsEndpoint(serverConfig);
             var natsProbeUrl = BuildNatsProbeUrl(natsHost);
             var natsCacheKey = BuildNatsCacheKey(natsHost);
             if (!string.IsNullOrWhiteSpace(natsCacheKey))
