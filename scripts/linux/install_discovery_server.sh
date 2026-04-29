@@ -6,6 +6,7 @@ SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
 NGINX_TEMPLATE_PATH="$TEMPLATES_DIR/nginx-discovery.conf.tpl"
 SELFUPDATE_TEMPLATE_PATH="$TEMPLATES_DIR/selfupdate-discovery-api.sh"
+ZEROSSL_ACME_TEMPLATE_PATH="$TEMPLATES_DIR/zerossl-acme-certificate.sh"
 ORIGINAL_ARGS=("$@")
 
 NON_INTERACTIVE=0
@@ -444,7 +445,7 @@ confirm_installation() {
     return
   fi
 
-  wizard_header "Confirmacao" "$(wizard_step_label "8/8" "7/7")"
+  wizard_header "Confirmacao" "$(wizard_step_label "9/9" "8/8")"
   echo "Resumo das configuracoes selecionadas:"
   echo "- Branch: $DISCOVERY_GIT_BRANCH"
   echo "- Repo API: $DISCOVERY_GIT_REPO"
@@ -478,6 +479,10 @@ confirm_installation() {
   fi
   echo "- NATS user: $NATS_USER"
   echo "- NATS auth user: $NATS_AUTH_USER"
+  echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
+  if [[ "${TLS_CERT_PROVIDER:-self-signed}" == "zerossl-acme" ]]; then
+    echo "- TLS dominio: ${ZEROSSL_CERT_DOMAIN:-$(resolve_fido2_server_domain)}"
+  fi
   echo
 
   local confirm
@@ -791,6 +796,23 @@ normalize_openapi_scalar_enabled() {
   esac
 }
 
+normalize_zerossl_auto_renew_enabled() {
+  local normalized
+  normalized="$(printf '%s' "${ZEROSSL_AUTO_RENEW_ENABLED:-1}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  case "$normalized" in
+    1|true|yes|y|sim|s)
+      ZEROSSL_AUTO_RENEW_ENABLED=1
+      ;;
+    0|false|no|n|nao|"" )
+      ZEROSSL_AUTO_RENEW_ENABLED=0
+      ;;
+    *)
+      fail "ZEROSSL_AUTO_RENEW_ENABLED invalido: ${ZEROSSL_AUTO_RENEW_ENABLED}. Use 1/0 (ou sim/nao)."
+      ;;
+  esac
+}
+
 validate_security_inputs() {
   if [[ -n "${POSTGRES_PASSWORD:-}" ]] && (( ${#POSTGRES_PASSWORD} < 12 )); then
     fail "POSTGRES_PASSWORD precisa ter pelo menos 12 caracteres."
@@ -1044,6 +1066,7 @@ install_apt_dependencies() {
     gnupg \
     jq \
     lsb-release \
+    dnsutils \
     nginx \
     openssl \
     postgresql \
@@ -1451,6 +1474,92 @@ resolve_fido2_server_domain() {
   printf '%s' "$resolved"
 }
 
+load_existing_tls_defaults() {
+  local env_file="/etc/discovery-api/discovery.env"
+  sudo test -f "$env_file" || return 0
+
+  TLS_CERT_PROVIDER="${TLS_CERT_PROVIDER:-$(sudo awk -F= '/^TLS_CERT_PROVIDER=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_CERT_DOMAIN="${ZEROSSL_CERT_DOMAIN:-$(sudo awk -F= '/^ZEROSSL_CERT_DOMAIN=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-$(sudo awk -F= '/^ZEROSSL_CERT_ALT_DOMAINS=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_ACME_EMAIL="${ZEROSSL_ACME_EMAIL:-$(sudo awk -F= '/^ZEROSSL_ACME_EMAIL=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_ACME_EAB_KID="${ZEROSSL_ACME_EAB_KID:-$(sudo awk -F= '/^ZEROSSL_ACME_EAB_KID=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_ACME_EAB_HMAC_KEY="${ZEROSSL_ACME_EAB_HMAC_KEY:-$(sudo awk -F= '/^ZEROSSL_ACME_EAB_HMAC_KEY=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_DNS_RESOLVERS="${ZEROSSL_DNS_RESOLVERS:-$(sudo awk -F= '/^ZEROSSL_DNS_RESOLVERS=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS="${ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS:-$(sudo awk -F= '/^ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_DNS_POLL_INTERVAL_SECONDS="${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-$(sudo awk -F= '/^ZEROSSL_DNS_POLL_INTERVAL_SECONDS=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-$(sudo awk -F= '/^ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_AUTO_RENEW_ENABLED="${ZEROSSL_AUTO_RENEW_ENABLED:-$(sudo awk -F= '/^ZEROSSL_AUTO_RENEW_ENABLED=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_DNS_AUTOMATION_HOOK="${ZEROSSL_DNS_AUTOMATION_HOOK:-$(sudo awk -F= '/^ZEROSSL_DNS_AUTOMATION_HOOK=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+}
+
+normalize_tls_certificate_provider() {
+  local provider
+  provider="$(printf '%s' "${TLS_CERT_PROVIDER:-self-signed}" | tr '[:upper:]' '[:lower:]')"
+  case "$provider" in
+    self-signed|selfsigned|local)
+      TLS_CERT_PROVIDER="self-signed"
+      ;;
+    zerossl|zerossl-acme|acme)
+      TLS_CERT_PROVIDER="zerossl-acme"
+      ;;
+    *)
+      fail "TLS_CERT_PROVIDER invalido: $provider (use self-signed ou zerossl-acme)"
+      ;;
+  esac
+
+  if [[ "$TLS_CERT_PROVIDER" == "zerossl-acme" ]]; then
+    ZEROSSL_CERT_DOMAIN="$(normalize_host_without_scheme "${ZEROSSL_CERT_DOMAIN:-$(resolve_fido2_server_domain)}")"
+    ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-}"
+    ZEROSSL_DNS_RESOLVERS="${ZEROSSL_DNS_RESOLVERS:-1.1.1.1,8.8.8.8}"
+    ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS="${ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS:-600}"
+    ZEROSSL_DNS_POLL_INTERVAL_SECONDS="${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-15}"
+    ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-30}"
+    ZEROSSL_AUTO_RENEW_ENABLED="${ZEROSSL_AUTO_RENEW_ENABLED:-1}"
+    normalize_zerossl_auto_renew_enabled
+    ZEROSSL_DNS_AUTOMATION_HOOK="${ZEROSSL_DNS_AUTOMATION_HOOK:-}"
+  fi
+}
+
+prompt_tls_certificate_configuration() {
+  load_existing_tls_defaults
+  wizard_header "Certificado TLS" "$(wizard_step_label "6/9" "5/8")"
+  echo "1) self-signed  - certificado local gerado pelo instalador"
+  echo "2) zerossl-acme - ZeroSSL via ACME com validacao DNS manual"
+  echo "----------------------------------------"
+
+  prompt_if_empty TLS_CERT_PROVIDER "Modo de certificado TLS (1/2 ou self-signed/zerossl-acme)" 0 "self-signed"
+  case "$(printf '%s' "$TLS_CERT_PROVIDER" | tr '[:upper:]' '[:lower:]')" in
+    1) TLS_CERT_PROVIDER="self-signed" ;;
+    2) TLS_CERT_PROVIDER="zerossl-acme" ;;
+  esac
+  normalize_tls_certificate_provider
+
+  if [[ "$TLS_CERT_PROVIDER" != "zerossl-acme" ]]; then
+    return
+  fi
+
+  echo
+  echo "ZeroSSL ACME usa desafio DNS-01. O instalador exibira o registro TXT,"
+  echo "aguardara sua confirmacao e validara o DNS com dig antes de continuar."
+  echo
+  prompt_if_empty ZEROSSL_CERT_DOMAIN "Dominio do certificado" 0 "$(resolve_fido2_server_domain)"
+  if [[ -z "${ZEROSSL_CERT_ALT_DOMAINS:-}" && "$NON_INTERACTIVE" -eq 0 ]]; then
+    read -r -p "SANs adicionais separados por virgula (opcional): " ZEROSSL_CERT_ALT_DOMAINS
+  fi
+  ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-}"
+  prompt_if_empty ZEROSSL_ACME_EMAIL "Email da conta ZeroSSL/ACME"
+  prompt_if_empty ZEROSSL_ACME_EAB_KID "ZeroSSL EAB KID"
+  prompt_if_empty ZEROSSL_ACME_EAB_HMAC_KEY "ZeroSSL EAB HMAC Key" 1
+  prompt_if_empty ZEROSSL_DNS_RESOLVERS "Resolvers para validar DNS (separados por virgula)" 0 "1.1.1.1,8.8.8.8"
+  prompt_if_empty ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS "Timeout de propagacao DNS em segundos" 0 "600"
+  prompt_if_empty ZEROSSL_DNS_POLL_INTERVAL_SECONDS "Intervalo de consulta DNS em segundos" 0 "15"
+  ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-30}"
+  echo "Renovacao recomendada: checar diariamente e renovar quando faltar ate ${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY} dias."
+  prompt_if_empty ZEROSSL_AUTO_RENEW_ENABLED "Criar timer automatico de renovacao ZeroSSL? (1/0)" 0 "1"
+  normalize_zerossl_auto_renew_enabled
+  normalize_tls_certificate_provider
+}
+
 setup_jwt_signing_keys() {
   local private_key_path="/etc/discovery-api/certs/jwt-private.pem"
   local public_key_path="/etc/discovery-api/certs/jwt-public.pem"
@@ -1475,7 +1584,7 @@ setup_jwt_signing_keys() {
   rm -f "$private_tmp" "$public_tmp"
 }
 
-setup_proxy_certificate() {
+setup_self_signed_proxy_certificate() {
   log "Gerando certificado self-signed para o proxy web local"
 
   local fido2_server_domain
@@ -1534,6 +1643,80 @@ EOF
   sudo chmod 640 /etc/discovery-api/certs/api-internal.key
   sudo chmod 644 /etc/discovery-api/certs/api-internal.crt
   sudo chown root:discovery-api /etc/discovery-api/certs/api-internal.key
+}
+
+install_zerossl_acme_certificate_script() {
+  [[ -f "$ZEROSSL_ACME_TEMPLATE_PATH" ]] || fail "Template ZeroSSL ACME nao encontrado: $ZEROSSL_ACME_TEMPLATE_PATH"
+  sudo install -m 750 -o root -g discovery-api "$ZEROSSL_ACME_TEMPLATE_PATH" "$DISCOVERY_OPS_DIR/zerossl-acme-certificate.sh"
+}
+
+setup_zerossl_acme_certificate() {
+  log "Emitindo certificado ZeroSSL via ACME"
+  install_zerossl_acme_certificate_script
+
+  sudo env \
+    TLS_CERT_PROVIDER="$TLS_CERT_PROVIDER" \
+    ZEROSSL_CERT_DOMAIN="$ZEROSSL_CERT_DOMAIN" \
+    ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-}" \
+    ZEROSSL_ACME_EMAIL="$ZEROSSL_ACME_EMAIL" \
+    ZEROSSL_ACME_EAB_KID="$ZEROSSL_ACME_EAB_KID" \
+    ZEROSSL_ACME_EAB_HMAC_KEY="$ZEROSSL_ACME_EAB_HMAC_KEY" \
+    ZEROSSL_DNS_RESOLVERS="${ZEROSSL_DNS_RESOLVERS:-1.1.1.1,8.8.8.8}" \
+    ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS="${ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS:-600}" \
+    ZEROSSL_DNS_POLL_INTERVAL_SECONDS="${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-15}" \
+    ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-30}" \
+    ZEROSSL_DNS_AUTOMATION_HOOK="${ZEROSSL_DNS_AUTOMATION_HOOK:-}" \
+    "$DISCOVERY_OPS_DIR/zerossl-acme-certificate.sh" issue
+}
+
+setup_proxy_certificate() {
+  normalize_tls_certificate_provider
+  if [[ "$TLS_CERT_PROVIDER" == "zerossl-acme" ]]; then
+    setup_zerossl_acme_certificate
+    return
+  fi
+
+  setup_self_signed_proxy_certificate
+}
+
+setup_zerossl_renewal_timer() {
+  [[ "${TLS_CERT_PROVIDER:-self-signed}" == "zerossl-acme" ]] || return 0
+  normalize_zerossl_auto_renew_enabled
+  if [[ "${ZEROSSL_AUTO_RENEW_ENABLED:-1}" != "1" ]]; then
+    log "Timer de renovacao ZeroSSL desativado por configuracao."
+    sudo systemctl disable --now discovery-zerossl-renew.timer >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  install_zerossl_acme_certificate_script
+
+  sudo tee /etc/systemd/system/discovery-zerossl-renew.service >/dev/null <<EOF
+[Unit]
+Description=Discovery RMM ZeroSSL certificate renewal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/discovery-api/discovery.env
+ExecStart=${DISCOVERY_OPS_DIR}/zerossl-acme-certificate.sh renew
+EOF
+
+  sudo tee /etc/systemd/system/discovery-zerossl-renew.timer >/dev/null <<EOF
+[Unit]
+Description=Discovery RMM ZeroSSL certificate renewal timer
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now discovery-zerossl-renew.timer
 }
 
 apply_site_release_permissions() {
@@ -1806,6 +1989,18 @@ DISCOVERY_SITE_NATS_URL=${DISCOVERY_SITE_NATS_URL}
 NATS_WS_PORT=${NATS_WS_PORT:-8081}
 NATS_WS_HOST=${NATS_WS_HOST:-127.0.0.1}
 NATS_WS_TLS_ENABLED=${NATS_WS_TLS_ENABLED:-false}
+TLS_CERT_PROVIDER=${TLS_CERT_PROVIDER:-self-signed}
+ZEROSSL_CERT_DOMAIN=${ZEROSSL_CERT_DOMAIN:-}
+ZEROSSL_CERT_ALT_DOMAINS=${ZEROSSL_CERT_ALT_DOMAINS:-}
+ZEROSSL_ACME_EMAIL=${ZEROSSL_ACME_EMAIL:-}
+ZEROSSL_ACME_EAB_KID=${ZEROSSL_ACME_EAB_KID:-}
+ZEROSSL_ACME_EAB_HMAC_KEY=${ZEROSSL_ACME_EAB_HMAC_KEY:-}
+ZEROSSL_DNS_RESOLVERS=${ZEROSSL_DNS_RESOLVERS:-1.1.1.1,8.8.8.8}
+ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS=${ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS:-600}
+ZEROSSL_DNS_POLL_INTERVAL_SECONDS=${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-15}
+ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY=${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-30}
+ZEROSSL_AUTO_RENEW_ENABLED=${ZEROSSL_AUTO_RENEW_ENABLED:-1}
+ZEROSSL_DNS_AUTOMATION_HOOK=${ZEROSSL_DNS_AUTOMATION_HOOK:-}
 EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
@@ -1887,6 +2082,7 @@ show_summary() {
     echo "- Host externo: $EXTERNAL_API_HOST"
     echo "- Portal externo: https://$EXTERNAL_API_HOST/"
   fi
+  echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
   echo
   echo "Verificacoes recomendadas:"
   echo "1) sudo systemctl status discovery-api --no-pager"
@@ -1956,7 +2152,9 @@ main() {
     prompt_if_empty CLOUDFLARE_TUNNEL_TOKEN "Cloudflare Tunnel token" 1
   fi
 
-  wizard_header "Documentacao OpenAPI (Scalar)" "$(wizard_step_label "6/8" "5/7")"
+  prompt_tls_certificate_configuration
+
+  wizard_header "Documentacao OpenAPI (Scalar)" "$(wizard_step_label "7/9" "6/8")"
   echo "Habilite ou nao a documentacao OpenAPI (Scalar) na API."
   echo "Se OpenAPI estiver desativado, os endpoints /openapi e /scalar ficam indisponiveis."
   echo "----------------------------------------"
@@ -1965,7 +2163,7 @@ main() {
   prompt_if_empty OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (1/0)" 0 "$OPENAPI_ENABLED"
   normalize_openapi_scalar_enabled
 
-  wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "7/8" "6/7")"
+  wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "8/9" "7/8")"
   echo "O instalador cria o usuario e o database se nao existirem."
   echo "----------------------------------------"
   prompt_if_empty POSTGRES_DB "Nome do database PostgreSQL" 0 "discovery"
@@ -2030,6 +2228,7 @@ main() {
   setup_jwt_signing_keys
   setup_cloudflare_tunnel
   write_environment_file
+  setup_zerossl_renewal_timer
 
   trap cleanup_on_exit EXIT
   setup_git_askpass
