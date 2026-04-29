@@ -42,6 +42,7 @@ public static class BackgroundServicesCollectionExtensions
         services.AddSingleton<BackgroundServiceRegistry>();
 
         // Always-registered services
+        services.AddScoped<AlertDispatchService>();
         services.AddHostedService<AlertSchedulerBackgroundService>();
         services.AddHostedService<AgentPackagePrebuildHostedService>();
 

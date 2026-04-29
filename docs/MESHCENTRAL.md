@@ -1,7 +1,11 @@
 # MeshCentral
 
+> **Status atual da capability.** Para o que ainda falta implementar, veja `MESHCENTRAL_ROADMAP.md`.  
+> **Referência técnica:** `MESHCENTRAL_PLAYBOOK.md`
+
 Consolidated from:
-- `docs\Meshcentral\PLANO_ACAO_MESHCENTRAL.md`
+- `docs\Meshcentral\PLANO_ACAO_MESHCENTRAL.md` (removido)
+- `MESHCENTRAL_INTEGRATION_PLAN.md` (V1, substituído pelo ROADMAP)
 - MeshCentral-specific sections that were duplicated in auth/deploy docs
 
 ## Current status

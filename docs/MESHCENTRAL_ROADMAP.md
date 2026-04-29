@@ -1,19 +1,19 @@
-# Plano de Integracao MeshCentral v2
+# MeshCentral — Roadmap (consolidado)
 
-Data: 2026-04-16
+> **Data:** 2026-04-16 (revisão) / consolidado em 2026-04-29  
+> **Substitui:** `MESHCENTRAL_INTEGRATION_PLAN.md` (V1, removido)  
+> **Status atual:** `MESHCENTRAL.md`
 
 ## Objetivo
 
-Registrar um plano revisado de integracao MeshCentral para o projeto Discovery, alinhado ao playbook de referencia e ao estado real do codigo, antes de qualquer implantacao.
+Registrar o plano de evolução da integração MeshCentral para o projeto Discovery, alinhado ao playbook de referência e ao estado real do código. Este documento cobre o que **falta fazer**. O que **já está implementado** está documentado em `MESHCENTRAL.md`.
 
-Este documento substitui o plano anterior como proposta tecnica para revisao, mas nao deve apagar o historico existente. O objetivo aqui e fechar um desenho implantavel, com riscos, dependencias e sequencia de rollout claros.
+## Base da Revisão
 
-## Base da Revisao
+Este plano foi elaborado a partir de três fontes:
 
-Este plano foi elaborado a partir de tres fontes:
-
-1. o playbook detalhado em docs/MESHCENTRAL_INTEGRATION_PLAYBOOK.md
-2. o plano anterior em docs/MESHCENTRAL_INTEGRATION_PLAN.md
+1. o playbook detalhado em `MESHCENTRAL_PLAYBOOK.md`
+2. o estado atual implementado em `MESHCENTRAL.md`
 3. a revisao do codigo atual da integracao MeshCentral no backend Discovery
 
 ## Resumo Executivo

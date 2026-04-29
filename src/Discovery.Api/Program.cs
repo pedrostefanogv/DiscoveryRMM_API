@@ -86,10 +86,6 @@ builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
 builder.Services.AddSingleton<IRemoteDebugLogRelay, RemoteDebugLogRelayService>();
 
-// Agent Alerts (PSADT)
-builder.Services.AddScoped<AlertDispatchService>();
-builder.Services.AddHostedService<AlertSchedulerBackgroundService>();
-
 // PDF rendering using Playwright.NET (embedded, no external service required, zero vulnerabilities)
 if (builder.Configuration.GetValue<bool>("Reporting:EnablePdf"))
 {

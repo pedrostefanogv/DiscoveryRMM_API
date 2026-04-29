@@ -1,34 +1,81 @@
-# Discovery documentation
+# Discovery RMM — Documentation
 
-This directory is organized by capability. Each file contains the current behavior, main endpoints, key configuration points, and a short roadmap only where the capability is still evolving.
+> **Última reorganização:** 2026-04-29  
+> **Branch:** dev  
+> **Status do build:** ✅ passando (0 erros, 0 warnings)
 
-Legacy markdown files from `docs\Features\` and `docs\Meshcentral\PLANO_ACAO_MESHCENTRAL.md` were consolidated and removed to eliminate duplicated or outdated guidance.
+---
 
-## Capability map
+## 📑 Índice rápido
 
-| Capability | File | Consolidated from |
-| --- | --- | --- |
-| Authentication and access control | `AUTHENTICATION.md` | auth, first access, MFA, ACL rollout |
-| Automation | `AUTOMATION.md` | agent integration, admin API, enum reference |
-| App Store | `APP_STORE.md` | catalog, approvals, agent sync |
-| Hierarchical configuration | `CONFIGURATION.md` | server/client/site configuration and metadata |
-| Deployment and offline install | `DEPLOYMENT_OFFLINE_INSTALL.md` | deploy tokens, agent install, package delivery |
-| MeshCentral | `MESHCENTRAL.md` | embed, identity sync, group policy, install flows |
-| Messaging and NATS | `MESSAGING_NATS.md` | auth callout, credentials, scoped subjects |
-| Object storage and attachments | `OBJECT_STORAGE.md` | S3-compatible storage, ticket attachments, report download |
-| P2P distribution and bootstrap | `P2P.md` | cloud bootstrap, seed planning, telemetry |
-| Reporting | `REPORTING.md` | datasets, templates, preview, executions |
+### 📘 Capability docs (o que está implementado)
 
-## Notes
+| # | Documento | Escopo |
+|---|----------|-------|
+| 1 | [`AUTHENTICATION.md`](AUTHENTICATION.md) | Login, MFA, primeiro acesso, permissões, autorização por escopo |
+| 2 | [`AUTOMATION.md`](AUTOMATION.md) | Scripts, tarefas, policy sync, ACK/result, enums |
+| 3 | [`CONFIGURATION.md`](CONFIGURATION.md) | Configuração hierárquica Server→Client→Site, herança, locks |
+| 4 | [`DEPLOYMENT_OFFLINE_INSTALL.md`](DEPLOYMENT_OFFLINE_INSTALL.md) | Instalação Linux, deploy tokens, self-update, offline install |
+| 5 | [`MESHCENTRAL.md`](MESHCENTRAL.md) | Embed, identity sync, group policy, node-link, diagnostics |
+| 6 | [`MESSAGING_NATS.md`](MESSAGING_NATS.md) | Auth callout, credenciais scoped, subjects canônicos, remote debug dual-channel |
+| 7 | [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md) | S3-compatible, ticket attachments, report download presigned |
+| 8 | [`P2P.md`](P2P.md) | Cloud bootstrap, seed plan, telemetry, distribuição |
+| 9 | [`REPORTING.md`](REPORTING.md) | Datasets, templates, preview, execuções, multi-source layouts |
+| 10 | [`PSADT_ALERTS_PLAN.md`](PSADT_ALERTS_PLAN.md) | Alertas PSADT (Toast/Modal) — implementado ✅ |
 
-- `docs\Meshcentral\` still contains helper assets used for MeshCentral maintenance (`meshctrl.js`, `package.json`, `package-lock.json`). Those files are not feature docs and were kept as-is.
-- Roadmap items now live inside each capability file instead of separate planning documents.
+### 🗺️ Planos e roadmaps (o que ainda está em andamento)
 
+| # | Documento | Status |
+|---|----------|--------|
+| 11 | [`AGENT_UPDATE_PLAN.md`](AGENT_UPDATE_PLAN.md) | ⚠️ Fase 1 concluída (releases, build, manifest, download). Fases 2-3 pendentes |
+| 12 | [`CUSTOM_FIELDS_PLAN.md`](CUSTOM_FIELDS_PLAN.md) | ⚠️ Fases 1-5 backend concluídas. Fases 6-8 pendentes |
+| 13 | [`PLANO_AUTO_TICKET.md`](PLANO_AUTO_TICKET.md) | 📋 Planejado — motor de auto-ticket por eventos de monitoramento |
+| 14 | [`KNOWLEDGE_EMBEDDING_ANALYSIS.md`](KNOWLEDGE_EMBEDDING_ANALYSIS.md) | 📋 Análise — otimização do pipeline de embeddings |
+| 15 | [`MESHCENTRAL_ROADMAP.md`](MESHCENTRAL_ROADMAP.md) | 📋 O que falta: conta técnica, ACL por node, login token, node id no Agent |
+| 16 | [`BACKLOG_NATS_OBJECT_STORAGE.md`](BACKLOG_NATS_OBJECT_STORAGE.md) | ⚠️ F4 concluída, F4.4 e F5 em andamento |
 
+### 📐 ADRs (Architecture Decision Records)
 
-## Ajustes
+| # | Documento | Decisão |
+|---|----------|---------|
+| 17 | [`ADR_API_VERSIONING.md`](ADR_API_VERSIONING.md) | URL path `/api/v1/` com Asp.Versioning.Mvc |
+| 18 | [`ADR_BACKGROUND_JOBS.md`](ADR_BACKGROUND_JOBS.md) | Quartz.NET para jobs agendados, IHostedService para loops contínuos |
 
-- Remote debug opera em modelo dual-channel no backend: NATS e o transporte preferencial, e SignalR permanece como fallback para cenarios em que o agent nao consegue publicar ou consumir pelo broker.
-- O fluxo de inicio e encerramento da sessao continua reutilizando a estrategia geral de dispatch em tempo real, com tentativa por NATS e fallback para SignalR quando necessario.
-- O fluxo de logs do agent aceita tanto o subject tenant-scoped `remote-debug.log` quanto o metodo autenticado do AgentHub, e ambos convergem para o mesmo relay antes de entregar eventos ao frontend.
-- As capacidades de remote debug precisam permanecer equivalentes nos dois canais para garantir continuidade operacional e observabilidade consistente.
+### 📊 Tracking
+
+| # | Documento | Progresso |
+|---|----------|----------|
+| 19 | [`REFACTOR_PLAN.md`](REFACTOR_PLAN.md) | 11/12 concluído (resta cobertura de testes) |
+
+### 📖 Referência externa
+
+| # | Documento | Conteúdo |
+|---|----------|----------|
+| 20 | [`MESHCENTRAL_PLAYBOOK.md`](MESHCENTRAL_PLAYBOOK.md) | Análise da integração TacticalRMM ↔ MeshCentral (6 camadas) |
+
+### 🛠️ Assets
+
+| Diretório | Conteúdo |
+|-----------|----------|
+| [`Meshcentral/`](Meshcentral/) | `meshctrl.js`, `package.json` — utilitários de manutenção MeshCentral |
+
+---
+
+## 🗑️ Documentos removidos nesta reorganização
+
+| Arquivo removido | Motivo |
+|-----------------|--------|
+| `MESHCENTRAL_INTEGRATION_PLAN.md` | Substituído pelo `MESHCENTRAL_ROADMAP.md` (V2) |
+| `PLANO_ANALISE_CHAMADOS.md` | Análise pré-implementação — tudo já executado em `IMPLEMENTACAO_CHAMADOS_TASKS.md` |
+| `IMPLEMENTACAO_CHAMADOS_TASKS.md` | Checklist 100% concluído (Fases 0-3) — evidência no código |
+| `RevisaoProjeto.md` | Substituído por `REFACTOR_PLAN.md` + planos específicos |
+
+---
+
+## 🏷️ Convenções
+
+- **Capability docs** descrevem o estado atual implementado (endpoints, fluxos, configuração).
+- **Planos** (`*_PLAN.md`, `*_ROADMAP.md`, `*_BACKLOG.md`) descrevem o que ainda falta.
+- **ADRs** registram decisões de arquitetura.
+- Arquivos com status ✅ no conteúdo = feature completamente implementada.
+- Arquivos com status ⚠️ = parcialmente implementado.
