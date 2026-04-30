@@ -1112,7 +1112,12 @@ install_nk_tool() {
   curl -fsSL "$nk_url" -o "$nk_zip"
   unzip -q "$nk_zip" -d "$tmp_dir"
 
-  nk_path="$(find "$tmp_dir" -type f -name nk | head -n 1)"
+  nk_path="$(
+    cd "$tmp_dir"
+    find . -type f -name nk | head -n 1
+  )"
+  nk_path="${nk_path#./}"
+  nk_path="$tmp_dir/$nk_path"
   [[ -n "$nk_path" ]] || fail "Nao foi possivel localizar o binario nk no pacote baixado."
 
   sudo install -m 0755 "$nk_path" "$nk_bin"
@@ -1566,7 +1571,7 @@ prompt_tls_certificate_configuration() {
   ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-}"
   prompt_if_empty ZEROSSL_ACME_EMAIL "Email da conta ZeroSSL/ACME"
   prompt_if_empty ZEROSSL_ACME_EAB_KID "ZeroSSL EAB KID"
-  prompt_if_empty ZEROSSL_ACME_EAB_HMAC_KEY "ZeroSSL EAB HMAC Key" 1
+  prompt_if_empty ZEROSSL_ACME_EAB_HMAC_KEY "ZeroSSL EAB HMAC Key"
   prompt_if_empty ZEROSSL_DNS_RESOLVERS "Resolvers para validar DNS (separados por virgula)" 0 "1.1.1.1,8.8.8.8"
   prompt_if_empty ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS "Timeout de propagacao DNS em segundos" 0 "600"
   prompt_if_empty ZEROSSL_DNS_POLL_INTERVAL_SECONDS "Intervalo de consulta DNS em segundos" 0 "15"
@@ -2221,9 +2226,9 @@ main() {
   echo "Habilite ou nao a documentacao OpenAPI (Scalar) na API."
   echo "Se OpenAPI estiver desativado, os endpoints /openapi e /scalar ficam indisponiveis."
   echo "----------------------------------------"
-  prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI/Scalar? (1/0)" 0 "0"
+  prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI/Scalar? (sim/nao | yes/no | 1/0)" 0 "0"
   normalize_openapi_enabled
-  prompt_if_empty OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (1/0)" 0 "$OPENAPI_ENABLED"
+  prompt_if_empty OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (sim/nao | yes/no | 1/0)" 0 "$OPENAPI_ENABLED"
   normalize_openapi_scalar_enabled
 
   wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "8/9" "7/8")"
