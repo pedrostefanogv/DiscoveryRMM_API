@@ -2463,9 +2463,9 @@ main() {
   echo "Habilite ou nao a documentacao OpenAPI (Scalar) na API."
   echo "Se OpenAPI estiver desativado, os endpoints /openapi e /scalar ficam indisponiveis."
   echo "----------------------------------------"
-  prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI/Scalar? (sim/nao | yes/no | 1/0)" 0 "0"
+  prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI/Scalar? (y/N)" 0 "n"
   normalize_openapi_enabled
-  prompt_if_empty OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (sim/nao | yes/no | 1/0)" 0 "$OPENAPI_ENABLED"
+  prompt_if_empty OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (y/N)" 0 "$OPENAPI_ENABLED"
   normalize_openapi_scalar_enabled
 
   wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "8/9" "7/8")"
