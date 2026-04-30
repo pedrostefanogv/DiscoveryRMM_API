@@ -31,13 +31,13 @@ while [[ $# -gt 0 ]]; do
       UPDATE_NATS_CONFIG_ONLY=1
       shift
       ;;
-    --update-stack|--update-repos|--rebuild-only)
+    --update-stack|--update-repos|--rebuild-only|--upgrade)
       UPDATE_STACK_ONLY=1
       shift
       ;;
     --mode)
       INSTALL_MODE="${2:-}"
-      [[ -n "$INSTALL_MODE" ]] || { echo "Parametro --mode exige valor (full|nats|update)" >&2; exit 1; }
+      [[ -n "$INSTALL_MODE" ]] || { echo "Parametro --mode exige valor (full|nats|update|upgrade)" >&2; exit 1; }
       shift 2
       ;;
     *)
@@ -548,12 +548,12 @@ select_operation_mode() {
         UPDATE_NATS_CONFIG_ONLY=1
         return
         ;;
-      update|update-stack|rebuild)
+      update|update-stack|rebuild|upgrade)
         UPDATE_STACK_ONLY=1
         return
         ;;
       *)
-        fail "Modo invalido: $requested_mode (use full, nats ou update)"
+        fail "Modo invalido: $requested_mode (use full, nats, update ou upgrade)"
         ;;
     esac
   fi
@@ -566,7 +566,7 @@ select_operation_mode() {
   echo "Escolha o que sera executado neste momento:"
   echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)"
   echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
-  echo "3) Atualizar repositorios (API + Agent + Site) e rebuildar API/portal"
+  echo "3) Atualizar instalacao existente (repositorios + rebuild API/portal + restart servicos)"
   echo "----------------------------------------"
 
   local selected_option
