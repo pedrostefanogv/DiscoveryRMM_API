@@ -651,6 +651,30 @@ generate_random_password() {
   printf '%s' "$generated"
 }
 
+generate_random_admin_login() {
+  local suffix
+  suffix="$(generate_random_password 10 | tr '[:upper:]' '[:lower:]')"
+  printf 'admin%s' "$suffix"
+}
+
+prepare_bootstrap_admin_login() {
+  if [[ -n "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
+    ADMIN_RECOVERY_LOGIN="$DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"
+    return
+  fi
+
+  if sudo test -f /etc/discovery-api/discovery.env; then
+    DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$(sudo awk -F= '/^DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=/{print substr($0, index($0,$2)); exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+  fi
+
+  if [[ -z "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
+    DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$(generate_random_admin_login)"
+    log "Login do primeiro acesso nao informado; gerando usuario administrador temporario: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"
+  fi
+
+  ADMIN_RECOVERY_LOGIN="$DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"
+}
+
 print_server_installation_data() {
   wizard_header "Dados do servidor/instalacao" "$(wizard_step_label "2/8" "1/7")"
   echo "Leitura do ambiente local para consulta e replicacao."
@@ -2300,6 +2324,7 @@ DISCOVERY_API_RELEASES=${DISCOVERY_API_RELEASES}
 DISCOVERY_API_CURRENT=${DISCOVERY_API_CURRENT}
 DISCOVERY_GIT_REPO=${DISCOVERY_GIT_REPO}
 DISCOVERY_GIT_BRANCH=${DISCOVERY_GIT_BRANCH}
+DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}
 DISCOVERY_DOTNET_RUNTIME=${DISCOVERY_DOTNET_RUNTIME}
 SELFUPDATE_ENABLED=${SELFUPDATE_ENABLED:-1}
 SELFUPDATE_INTERVAL=${SELFUPDATE_INTERVAL:-24h}
@@ -2434,9 +2459,13 @@ run_db_migrations() {
   # Executa --recover-admin para criar admin com senha aleatoria
   # As migrations rodam automaticamente antes do recover-admin no Program.cs
   local output
+  local bootstrap_login="${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-${ADMIN_RECOVERY_LOGIN:-}}"
+  [[ -n "$bootstrap_login" ]] || fail "Login do primeiro acesso nao foi preparado antes do bootstrap admin."
+
   output="$(sudo -u discovery-api env \
     DISCOVERY_API_MAINTENANCE_ENV_FILE="$api_env_file" \
     DISCOVERY_API_MAINTENANCE_CURRENT="$api_current" \
+    DISCOVERY_API_BOOTSTRAP_LOGIN="$bootstrap_login" \
     bash -lc '
       set -euo pipefail
       set -a
@@ -2444,7 +2473,7 @@ run_db_migrations() {
       source "$DISCOVERY_API_MAINTENANCE_ENV_FILE"
       set +a
       cd "$DISCOVERY_API_MAINTENANCE_CURRENT"
-      "$DISCOVERY_API_MAINTENANCE_CURRENT/Discovery.Api" --recover-admin
+      "$DISCOVERY_API_MAINTENANCE_CURRENT/Discovery.Api" --recover-admin --login "$DISCOVERY_API_BOOTSTRAP_LOGIN"
     ' 2>&1)" || {
     local exit_code=$?
     fail "recover-admin falhou com codigo ${exit_code}:\n${output}"
@@ -2458,7 +2487,7 @@ run_db_migrations() {
   # Tenta extrair o login exibido pelo recover-admin para incluir no resumo final.
   ADMIN_RECOVERY_LOGIN="$(printf '%s\n' "$output" | sed -nE 's/^[[:space:]]*(Login|Usuario|User(name)?)[[:space:]]*:[[:space:]]*(.+)$/\4/p' | head -n 1)"
   if [[ -z "${ADMIN_RECOVERY_LOGIN:-}" ]]; then
-    ADMIN_RECOVERY_LOGIN="admin"
+    ADMIN_RECOVERY_LOGIN="$bootstrap_login"
   fi
 }
 
@@ -2652,6 +2681,7 @@ main() {
   log "Build do Agent permanece Windows x86/x64 nesta fase"
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
   normalize_site_realtime_settings
+  prepare_bootstrap_admin_login
 
   DISCOVERY_API_RELEASES="${DISCOVERY_API_BASE}/releases"
   DISCOVERY_API_SHARED="${DISCOVERY_API_BASE}/shared"
