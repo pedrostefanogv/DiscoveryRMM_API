@@ -2449,12 +2449,14 @@ run_db_migrations() {
   local api_env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
   local api_current="${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}"
 
-  if [[ ! -f "$api_current/Discovery.Api" ]]; then
+  if ! sudo -u discovery-api test -x "$api_current/Discovery.Api"; then
     fail "Binario da API nao encontrado em $api_current/Discovery.Api. Assegure-se de que publish_api foi executado com sucesso antes."
   fi
 
   log "Rodando migracoes + bootstrap admin via --recover-admin..."
-  [[ -f "$api_env_file" ]] || fail "Arquivo de ambiente da API nao encontrado: $api_env_file"
+  if ! sudo -u discovery-api test -r "$api_env_file"; then
+    fail "Arquivo de ambiente da API nao encontrado ou sem leitura para discovery-api: $api_env_file"
+  fi
 
   # Executa --recover-admin para criar admin com senha aleatoria
   # As migrations rodam automaticamente antes do recover-admin no Program.cs
