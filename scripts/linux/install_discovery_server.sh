@@ -2193,6 +2193,9 @@ Nats__ServerHostInternal=127.0.0.1
 Nats__UseWssExternal=${nats_use_wss_external}
 AgentPackage__PublicApiScheme=https
 AgentPackage__PublicApiServer=${public_host}
+AgentPackage__Profiles__linux__DiscoveryProjectPath=${DISCOVERY_AGENT_SRC}
+AgentPackage__Profiles__linux__BinaryPath=${DISCOVERY_AGENT_SRC}/src/build/bin/discovery-agent.exe
+AgentPackage__Profiles__linux__OutputName=discovery-agent.exe
 Authentication__Jwt__Issuer=discovery
 Authentication__Jwt__Audience=discovery
 Authentication__Jwt__PrivateKeyPath=/etc/discovery-api/certs/jwt-private.pem
@@ -2374,7 +2377,7 @@ run_db_migrations() {
   ADMIN_RECOVERY_OUTPUT="$output"
 
   # Tenta extrair o login exibido pelo recover-admin para incluir no resumo final.
-  ADMIN_RECOVERY_LOGIN="$(printf '%s\n' "$output" | sed -nE 's/^[[:space:]]*(Login|Usuario|User(name)?)[[:space:]]*:[[:space:]]*(.+)$/\4/p' | head -n 1)"
+  ADMIN_RECOVERY_LOGIN="$(printf '%s\n' "$output" | sed -nE 's/^[[:space:]]*(Login|Usuario|User(name)?)[[:space:]]*:[[:space:]]*(.+)$/\3/p' | head -n 1)"
   if [[ -z "${ADMIN_RECOVERY_LOGIN:-}" ]]; then
     ADMIN_RECOVERY_LOGIN="$bootstrap_login"
   fi

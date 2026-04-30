@@ -45,9 +45,12 @@ if (!string.Equals(agentInstallerTarget, "windows/amd64", StringComparison.Ordin
     throw new InvalidOperationException($"AgentPackage installer target must be windows/amd64. Resolved value: {agentInstallerTarget}");
 }
 
-AgentPackageStartup.ValidateRequired(builder.Configuration, agentHostProfile, "DiscoveryProjectPath");
-AgentPackageStartup.ValidateRequired(builder.Configuration, agentHostProfile, "BinaryPath");
-AgentPackageStartup.ValidateRequired(builder.Configuration, agentHostProfile, "PublicApiServer");
+if (!hasMaintenanceMode)
+{
+    AgentPackageStartup.ValidateRequired(builder.Configuration, agentHostProfile, "DiscoveryProjectPath");
+    AgentPackageStartup.ValidateRequired(builder.Configuration, agentHostProfile, "BinaryPath");
+    AgentPackageStartup.ValidateRequired(builder.Configuration, agentHostProfile, "PublicApiServer");
+}
 
 var databaseProvider = builder.Configuration.GetValue<string>("Database:Provider") ?? "Postgres";
 var isSqlite = databaseProvider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase);
