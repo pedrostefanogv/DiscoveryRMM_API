@@ -328,7 +328,31 @@ complete_dns_challenge() {
   local -a command_args=(--home "$ZEROSSL_ACME_HOME" --renew --server "$ZEROSSL_ACME_SERVER" --dns)
   command_args+=("${DOMAIN_ARGS[@]}")
   command_args+=(--yes-I-know-dns-manual-mode-enough-go-ahead-please --force)
-  "$ZEROSSL_ACME_SH" "${command_args[@]}"
+
+  local output_file
+  output_file="$(mktemp)"
+  set +e
+  "$ZEROSSL_ACME_SH" "${command_args[@]}" 2>&1 | tee "$output_file"
+  local exit_code=${PIPESTATUS[0]}
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    rm -f "$output_file"
+    return 0
+  fi
+
+  # Alguns cenarios com sudo retornam codigo nao zero mesmo apos emissao bem-sucedida.
+  local cert_dir_ecc="$ZEROSSL_ACME_HOME/${ZEROSSL_CERT_DOMAIN}_ecc"
+  local cert_dir_rsa="$ZEROSSL_ACME_HOME/${ZEROSSL_CERT_DOMAIN}"
+  if [[ -f "$cert_dir_ecc/fullchain.cer" || -f "$cert_dir_rsa/fullchain.cer" ]]; then
+    warn "acme.sh retornou codigo $exit_code, mas os artefatos do certificado foram gerados; seguindo instalacao."
+    rm -f "$output_file"
+    return 0
+  fi
+
+  cat "$output_file" >&2
+  rm -f "$output_file"
+  fail "acme.sh falhou ao completar o desafio DNS (codigo $exit_code)."
 }
 
 install_certificate() {
@@ -396,6 +420,8 @@ issue_or_renew() {
       confirm_manual_dns_ready "$challenge_file"
       wait_for_dns_records "$challenge_file"
       complete_dns_challenge
+    elif grep -qiE 'Domains not changed\.|Skipping\. Next renewal time is:' "$output_file"; then
+      log "Certificado ja valido e sem mudanca de dominio; seguindo com instalacao do certificado atual."
     else
       cat "$output_file" >&2
       rm -f "$output_file" "$challenge_file"
