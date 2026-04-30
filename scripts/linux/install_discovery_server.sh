@@ -1478,14 +1478,15 @@ build_nip_io_host_from_ipv4() {
 
 resolve_fido2_server_domain() {
   local explicit_domain="${DISCOVERY_FIDO2_SERVER_DOMAIN:-}"
+  local access_mode="${ACCESS_MODE:-internal}"
   local resolved=""
 
   if [[ -n "$explicit_domain" ]]; then
     resolved="$(normalize_host_without_scheme "$explicit_domain")"
-  elif [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
-    resolved="$(normalize_host_without_scheme "$EXTERNAL_API_HOST")"
-  elif [[ "$ACCESS_MODE" == "internal" ]]; then
-    resolved="$(normalize_host_without_scheme "$INTERNAL_API_HOST")"
+  elif [[ "$access_mode" == "external" || "$access_mode" == "hybrid" ]]; then
+    resolved="$(normalize_host_without_scheme "${EXTERNAL_API_HOST:-}")"
+  elif [[ "$access_mode" == "internal" ]]; then
+    resolved="$(normalize_host_without_scheme "${INTERNAL_API_HOST:-}")"
   fi
 
   if [[ -z "$resolved" ]]; then
@@ -1756,16 +1757,17 @@ apply_site_release_permissions() {
 
 write_site_proxy_config() {
   log "Configurando Nginx para portal web + proxy da API"
+  local access_mode="${ACCESS_MODE:-internal}"
 
   local fido2_server_domain
   fido2_server_domain="$(resolve_fido2_server_domain)"
 
   local -a server_names=("localhost" "127.0.0.1")
   [[ -n "$fido2_server_domain" ]] && server_names+=("$fido2_server_domain")
-  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]] && [[ -n "${INTERNAL_API_HOST:-}" ]]; then
+  if [[ "$access_mode" == "internal" || "$access_mode" == "hybrid" ]] && [[ -n "${INTERNAL_API_HOST:-}" ]]; then
     server_names+=("$INTERNAL_API_HOST")
   fi
-  if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]] && [[ -n "${EXTERNAL_API_HOST:-}" ]]; then
+  if [[ "$access_mode" == "external" || "$access_mode" == "hybrid" ]] && [[ -n "${EXTERNAL_API_HOST:-}" ]]; then
     server_names+=("$EXTERNAL_API_HOST")
   fi
 
@@ -1774,7 +1776,7 @@ write_site_proxy_config() {
   server_name_list="${server_name_list% }"
 
   local redirect_rules=""
-  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
+  if [[ "$access_mode" == "internal" || "$access_mode" == "hybrid" ]]; then
     local normalized_internal_host
     normalized_internal_host="$(normalize_host_without_scheme "${INTERNAL_API_HOST:-}")"
     if [[ -n "$normalized_internal_host" && "$normalized_internal_host" != "$fido2_server_domain" ]]; then
