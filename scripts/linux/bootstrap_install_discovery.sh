@@ -66,12 +66,21 @@ normalize_branch() {
   printf '%s' "$raw"
 }
 
+bootstrap_header() {
+  local title="$1"
+  local step_label="$2"
+
+  echo >&2
+  echo "========================================" >&2
+  echo " Discovery RMM - Etapa $step_label" >&2
+  echo "----------------------------------------" >&2
+  echo " $title" >&2
+  echo "----------------------------------------" >&2
+}
+
 choose_branch_interactive() {
   while true; do
-    echo >&2
-    echo "========================================" >&2
-    echo " Discovery RMM - Bootstrap Wizard" >&2
-    echo "----------------------------------------" >&2
+    bootstrap_header "Canal/branch de instalacao" "2/2"
     echo "Selecione o canal/branch:" >&2
     echo " 1) lts     - suporte longo prazo" >&2
     echo " 2) release - canal estavel" >&2
@@ -124,17 +133,12 @@ choose_branch_interactive() {
 
 choose_operation_mode_interactive() {
   while true; do
-    echo >&2
-    echo "========================================" >&2
-    echo " Discovery RMM - Etapa 2/8" >&2
-    echo "----------------------------------------" >&2
-    echo " Modo de Operacao" >&2
-    echo "----------------------------------------" >&2
+    bootstrap_header "Modo de Operacao" "1/2"
     echo "Escolha o que sera executado neste momento:" >&2
     echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)" >&2
     echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)" >&2
     echo "3) Atualizar instalacao existente (repositorios + rebuild API/portal + restart servicos)" >&2
-    echo "4) Ver dados do servidor (instalacao atual, credenciais e chaves)" >&2
+    echo "4) Ver dados do servidor (instalacao atual, usuario, senha, chaves e afins)" >&2
     echo "----------------------------------------" >&2
 
     local selected_option
@@ -166,6 +170,8 @@ choose_operation_mode_interactive() {
           echo "  Arquivo /etc/discovery-api/discovery.env nao encontrado." >&2
         fi
         echo "=======================================================" >&2
+        echo "Pressione Enter para voltar ao menu..." >&2
+        read -r _
         ;;
       *)
         echo "Opcao invalida: $selected_option. Use 1-4." >&2
@@ -183,6 +189,11 @@ BOOTSTRAP_INSTALL_MODE="${DISCOVERY_INSTALL_MODE:-${INSTALL_MODE:-}}"
 INSTALLER_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --mode)
+      BOOTSTRAP_INSTALL_MODE="${2:-}"
+      [[ -n "$BOOTSTRAP_INSTALL_MODE" ]] || fail "Parametro --mode exige valor (full|nats|update)"
+      shift 2
+      ;;
     --branch|-b)
       BOOTSTRAP_BRANCH="${2:-}"
       [[ -n "$BOOTSTRAP_BRANCH" ]] || fail "Parametro --branch exige valor"
@@ -292,4 +303,8 @@ if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
 fi
 
 log "Executando instalador"
-exec env DISCOVERY_DOTNET_RUNTIME="$DISCOVERY_DOTNET_RUNTIME" bash "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"
+exec env \
+  DISCOVERY_DOTNET_RUNTIME="$DISCOVERY_DOTNET_RUNTIME" \
+  DISCOVERY_GIT_BRANCH="$BOOTSTRAP_BRANCH" \
+  DISCOVERY_RELEASE_CHANNEL="$BOOTSTRAP_BRANCH" \
+  bash "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"

@@ -15,6 +15,7 @@ UPDATE_NATS_CONFIG_ONLY=0
 UPDATE_STACK_ONLY=0
 INSTALL_MODE=""
 SUDO_KEEPALIVE_PID=""
+LOG_CONTEXT="install"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,17 +60,49 @@ if [[ -z "${GITHUB_PAT:-}" && -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 GITHUB_PAT="${GITHUB_PAT:-}"
 
+set_log_context() {
+  local context="${1:-install}"
+  LOG_CONTEXT="$context"
+}
+
 log() {
-  printf '[install] %s\n' "$*"
+  printf '[%s] %s\n' "$LOG_CONTEXT" "$*"
 }
 
 warn() {
-  printf '[install][aviso] %s\n' "$*" >&2
+  printf '[%s][aviso] %s\n' "$LOG_CONTEXT" "$*" >&2
 }
 
 fail() {
-  printf '[install][erro] %s\n' "$*" >&2
+  printf '[%s][erro] %s\n' "$LOG_CONTEXT" "$*" >&2
   exit 1
+}
+
+initialize_log_context_from_requested_mode() {
+  local requested_mode="${INSTALL_MODE:-${DISCOVERY_INSTALL_MODE:-}}"
+  requested_mode="$(printf '%s' "$requested_mode" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$UPDATE_STACK_ONLY" -eq 1 ]]; then
+    set_log_context "update"
+    return
+  fi
+
+  if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then
+    set_log_context "update-nats"
+    return
+  fi
+
+  case "$requested_mode" in
+    update|update-stack|rebuild|upgrade)
+      set_log_context "update"
+      ;;
+    nats|nats-only|update-nats)
+      set_log_context "update-nats"
+      ;;
+    *)
+      set_log_context "install"
+      ;;
+  esac
 }
 
 require_cmd() {
@@ -181,9 +214,9 @@ bootstrap_root_execution() {
   echo "Este usuario executa o instalador e operacoes via sudo."
   echo "Se ja existir, sera reutilizado."
   echo
-  echo "[install][aviso] O instalador foi executado como root."
-  echo "[install][aviso] Para evitar uma instalacao presa ao root, sera criado ou usado um usuario comum com sudo para continuar."
-  echo "[install][aviso] Se o usuario ja existir, ele sera reutilizado e a senha sera atualizada."
+  echo "[$LOG_CONTEXT][aviso] O instalador foi executado como root."
+  echo "[$LOG_CONTEXT][aviso] Para evitar uma instalacao presa ao root, sera criado ou usado um usuario comum com sudo para continuar."
+  echo "[$LOG_CONTEXT][aviso] Se o usuario ja existir, ele sera reutilizado e a senha sera atualizada."
   echo
 
   DISCOVERY_INSTALL_USER="${DISCOVERY_INSTALL_USER:-discovery}"
@@ -288,6 +321,8 @@ cleanup_on_exit() {
   cleanup_git_askpass
   cleanup_sudo_keepalive
 }
+
+initialize_log_context_from_requested_mode
 
 if [[ "${EUID}" -eq 0 && "${DISCOVERY_ROOT_BOOTSTRAPPED:-0}" != "1" ]]; then
   bootstrap_root_execution
@@ -635,12 +670,14 @@ select_operation_mode() {
 }
 
 apply_stack_update_only() {
+  set_log_context "update"
   log "Modo de update da stack: atualizando repositorios e rebuildando API/portal"
 
   DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_API}"
   DISCOVERY_AGENT_GIT_REPO="${DISCOVERY_AGENT_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Agent}"
   DISCOVERY_SITE_GIT_REPO="${DISCOVERY_SITE_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Site}"
-  DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-release}"
+  DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-${DISCOVERY_RELEASE_CHANNEL:-release}}"
+  log "Canal/branch selecionado para update: ${DISCOVERY_GIT_BRANCH}"
 
   DISCOVERY_API_BASE="${DISCOVERY_API_BASE:-/opt/discovery-api}"
   DISCOVERY_SITE_BASE="${DISCOVERY_SITE_BASE:-/opt/discovery-site}"
@@ -1155,6 +1192,7 @@ EOF
 }
 
 apply_nats_reconfiguration_only() {
+  set_log_context "update-nats"
   log "Modo de atualizacao NATS: reconfigurando NATS e variaveis da API"
 
   prompt_nats_configuration
@@ -2354,6 +2392,7 @@ show_summary() {
 }
 
 main() {
+  initialize_log_context_from_requested_mode
   select_operation_mode
 
   if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then
