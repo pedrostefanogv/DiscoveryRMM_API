@@ -7,7 +7,6 @@ TEMPLATES_DIR="$SCRIPT_DIR/templates"
 NGINX_TEMPLATE_PATH="$TEMPLATES_DIR/nginx-discovery.conf.tpl"
 SELFUPDATE_TEMPLATE_PATH="$TEMPLATES_DIR/selfupdate-discovery-api.sh"
 ZEROSSL_ACME_TEMPLATE_PATH="$TEMPLATES_DIR/zerossl-acme-certificate.sh"
-ORIGINAL_ARGS=("$@")
 
 NON_INTERACTIVE=0
 CONFIG_FILE=""
@@ -154,13 +153,9 @@ validate_dotnet_runtime() {
 }
 
 wizard_step_label() {
-  local step_root="$1"
-  local step_nonroot="$2"
-  if [[ "${DISCOVERY_ROOT_BOOTSTRAPPED:-0}" == "1" ]]; then
-    printf '%s' "$step_root"
-    return
-  fi
-  printf '%s' "$step_nonroot"
+  local legacy_root_step="${1:-}"
+  local step_label="${2:-$legacy_root_step}"
+  printf '%s' "$step_label"
 }
 
 wizard_header() {
@@ -179,137 +174,28 @@ wizard_header() {
   echo "----------------------------------------"
 }
 
-validate_installer_user_name() {
-  local user_name="$1"
-  [[ "$user_name" =~ ^[a-z_][a-z0-9_-]*\$?$ ]] || fail "Nome de usuario invalido: $user_name"
-  [[ "$user_name" != "root" ]] || fail "O usuario instalador nao pode ser root."
-}
-
-ensure_installer_user_from_root() {
-  local user_name="$1"
-  local user_password="$2"
-
-  require_cmd useradd
-  require_cmd usermod
-  require_cmd chpasswd
-  require_cmd sudo
-
-  if ! getent group sudo >/dev/null 2>&1; then
-    fail "Grupo sudo nao encontrado neste sistema. Este instalador espera uma base Debian/Ubuntu com sudo."
-  fi
-
-  if id -u "$user_name" >/dev/null 2>&1; then
-    log "Usuario instalador $user_name ja existe; ajustando senha e grupo sudo"
-  else
-    log "Criando usuario instalador $user_name"
-    useradd --create-home --shell /bin/bash "$user_name"
-  fi
-
-  printf '%s:%s\n' "$user_name" "$user_password" | chpasswd
-  usermod -aG sudo "$user_name"
-}
-
-bootstrap_root_execution() {
-  wizard_header "Usuario instalador (com sudo)" "1/8"
-  echo "Este usuario executa o instalador e operacoes via sudo."
-  echo "Se ja existir, sera reutilizado."
-  echo
-  echo "[$LOG_CONTEXT][aviso] O instalador foi executado como root."
-  echo "[$LOG_CONTEXT][aviso] Para evitar uma instalacao presa ao root, sera criado ou usado um usuario comum com sudo para continuar."
-  echo "[$LOG_CONTEXT][aviso] Se o usuario ja existir, ele sera reutilizado e a senha sera atualizada."
-  echo
-
-  DISCOVERY_INSTALL_USER="${DISCOVERY_INSTALL_USER:-discovery}"
-  if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
-    local input_user=""
-    read -r -p "Nome do usuario instalador (com sudo) [$DISCOVERY_INSTALL_USER]: " input_user
-    DISCOVERY_INSTALL_USER="${input_user:-$DISCOVERY_INSTALL_USER}"
-  fi
-
-  validate_installer_user_name "$DISCOVERY_INSTALL_USER"
-
-  local installer_user_exists=0
-  id -u "$DISCOVERY_INSTALL_USER" >/dev/null 2>&1 && installer_user_exists=1
-
-  if [[ -z "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]]; then
-    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-      fail "Variavel obrigatoria ausente para modo nao interativo: DISCOVERY_INSTALL_USER_PASSWORD"
-    fi
-
-    if [[ "$installer_user_exists" -eq 1 ]]; then
-      echo
-      echo "Usuario '$DISCOVERY_INSTALL_USER' ja existe. Informe a senha atual para continuar."
-      read -r -s -p "Senha atual de $DISCOVERY_INSTALL_USER: " DISCOVERY_INSTALL_USER_PASSWORD
-      printf '\n'
-      [[ -n "$DISCOVERY_INSTALL_USER_PASSWORD" ]] || fail "Senha nao informada."
-    else
-      echo
-      echo "Usuario '$DISCOVERY_INSTALL_USER' nao existe. Defina uma senha para o novo usuario."
-      local pass1="" pass2=""
-      read -r -s -p "Nova senha para $DISCOVERY_INSTALL_USER: " pass1
-      printf '\n'
-      read -r -s -p "Confirme a senha: " pass2
-      printf '\n'
-      [[ -n "$pass1" ]] || fail "Senha nao pode ser vazia."
-      [[ "$pass1" == "$pass2" ]] || fail "As senhas nao conferem."
-      DISCOVERY_INSTALL_USER_PASSWORD="$pass1"
-    fi
-  fi
-
-  ensure_installer_user_from_root "$DISCOVERY_INSTALL_USER" "$DISCOVERY_INSTALL_USER_PASSWORD"
-
-  local askpass_file
-  askpass_file="$(mktemp /tmp/discovery-install-sudo-askpass.XXXXXX)"
-  cat > "$askpass_file" <<'EOF'
-#!/usr/bin/env sh
-printf '%s\n' "$DISCOVERY_SUDO_ASKPASS_PASSWORD"
-EOF
-  chown "$DISCOVERY_INSTALL_USER:$DISCOVERY_INSTALL_USER" "$askpass_file"
-  chmod 700 "$askpass_file"
-
-  log "Reexecutando instalador como $DISCOVERY_INSTALL_USER"
-  set +e
-  sudo -u "$DISCOVERY_INSTALL_USER" -H \
-    env \
-      DISCOVERY_ROOT_BOOTSTRAPPED=1 \
-      DISCOVERY_INSTALL_USER="$DISCOVERY_INSTALL_USER" \
-      DISCOVERY_INSTALL_USER_PASSWORD="$DISCOVERY_INSTALL_USER_PASSWORD" \
-      DISCOVERY_INSTALL_MODE="${DISCOVERY_INSTALL_MODE:-${INSTALL_MODE:-}}" \
-      INSTALL_MODE="${INSTALL_MODE:-${DISCOVERY_INSTALL_MODE:-}}" \
-      DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-}" \
-      DISCOVERY_RELEASE_CHANNEL="${DISCOVERY_RELEASE_CHANNEL:-}" \
-      DISCOVERY_SUDO_ASKPASS_PASSWORD="$DISCOVERY_INSTALL_USER_PASSWORD" \
-      SUDO_ASKPASS="$askpass_file" \
-      bash "$SCRIPT_PATH" "${ORIGINAL_ARGS[@]}"
-  local exit_code=$?
-  set -e
-
-  rm -f "$askpass_file"
-  exit "$exit_code"
-}
-
 refresh_sudo_credentials() {
-  if [[ -n "${SUDO_ASKPASS:-}" ]]; then
-    sudo -A -v >/dev/null 2>&1 || fail "sudo nao aceitou a senha do usuario instalador."
-  else
-    if sudo -n -v >/dev/null 2>&1; then
-      return
-    fi
-
-    sudo -n true >/dev/null 2>&1 || fail "sudo sem credencial ativa. Execute: sudo -v"
+  if [[ "${EUID}" -eq 0 ]]; then
+    return
   fi
+
+  if sudo -n -v >/dev/null 2>&1; then
+    return
+  fi
+
+  sudo -n true >/dev/null 2>&1 || fail "sudo sem credencial ativa. Execute: sudo -v"
 }
 
 start_sudo_keepalive() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    return
+  fi
+
   refresh_sudo_credentials
   (
     while true; do
       sleep 60
-      if [[ -n "${SUDO_ASKPASS:-}" ]]; then
-        sudo -A -v >/dev/null 2>&1 || exit 1
-      else
-        sudo -n -v >/dev/null 2>&1 || exit 1
-      fi
+      sudo -n -v >/dev/null 2>&1 || exit 1
     done
   ) &
   SUDO_KEEPALIVE_PID="$!"
@@ -327,10 +213,6 @@ cleanup_on_exit() {
 }
 
 initialize_log_context_from_requested_mode
-
-if [[ "${EUID}" -eq 0 && "${DISCOVERY_ROOT_BOOTSTRAPPED:-0}" != "1" ]]; then
-  bootstrap_root_execution
-fi
 
 require_cmd sudo
 start_sudo_keepalive
