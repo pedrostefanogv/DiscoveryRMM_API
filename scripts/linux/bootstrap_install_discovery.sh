@@ -18,6 +18,50 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
 }
 
+run_privileged() {
+  if [[ "$EUID" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+    return
+  fi
+
+  return 1
+}
+
+ensure_bootstrap_command() {
+  local command_name="$1"
+  shift
+
+  if command -v "$command_name" >/dev/null 2>&1; then
+    return
+  fi
+
+  if ! command -v apt-get >/dev/null 2>&1; then
+    fail "Comando obrigatorio ausente: $command_name. Instale os pacotes: $*"
+  fi
+
+  warn "Comando '$command_name' ausente; tentando instalar pacotes: $*"
+  if ! run_privileged env DEBIAN_FRONTEND=noninteractive apt-get update -y; then
+    fail "Nao foi possivel atualizar a lista de pacotes para instalar: $*"
+  fi
+
+  if ! run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"; then
+    fail "Nao foi possivel instalar os pacotes: $*"
+  fi
+
+  require_cmd "$command_name"
+}
+
+ensure_bootstrap_dependencies() {
+  require_cmd bash
+  ensure_bootstrap_command mktemp coreutils
+  ensure_bootstrap_command git git ca-certificates
+}
+
 detect_system_architecture() {
   local arch=""
 
@@ -223,9 +267,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-require_cmd git
-require_cmd bash
-require_cmd mktemp
+ensure_bootstrap_dependencies
 
 if [[ -z "${DISCOVERY_BOOTSTRAP_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}" && -z "${DISCOVERY_GIT_BRANCH:-}" ]]; then
   non_interactive=0
