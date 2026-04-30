@@ -446,6 +446,20 @@ confirm_installation() {
   fi
 
   wizard_header "Confirmacao" "$(wizard_step_label "9/9" "8/8")"
+
+  print_selected_configuration_summary
+  echo
+
+  local confirm
+  read -r -p "Confirmar e iniciar instalacao? (s/N): " confirm
+  confirm="$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$confirm" in
+    s|sim|y|yes) ;;
+    *) fail "Instalacao cancelada pelo usuario." ;;
+  esac
+}
+
+print_selected_configuration_summary() {
   echo "Resumo das configuracoes selecionadas:"
   echo "- Branch: $DISCOVERY_GIT_BRANCH"
   echo "- Repo API: $DISCOVERY_GIT_REPO"
@@ -483,15 +497,6 @@ confirm_installation() {
   if [[ "${TLS_CERT_PROVIDER:-self-signed}" == "zerossl-acme" ]]; then
     echo "- TLS dominio: ${ZEROSSL_CERT_DOMAIN:-$(resolve_fido2_server_domain)}"
   fi
-  echo
-
-  local confirm
-  read -r -p "Confirmar e iniciar instalacao? (s/N): " confirm
-  confirm="$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  case "$confirm" in
-    s|sim|y|yes) ;;
-    *) fail "Instalacao cancelada pelo usuario." ;;
-  esac
 }
 
 detect_internal_ipv4() {
@@ -2116,6 +2121,12 @@ run_db_migrations() {
 
   # Guarda a saida para exibir no summary
   ADMIN_RECOVERY_OUTPUT="$output"
+
+  # Tenta extrair o login exibido pelo recover-admin para incluir no resumo final.
+  ADMIN_RECOVERY_LOGIN="$(printf '%s\n' "$output" | sed -nE 's/^[[:space:]]*(Login|Usuario|User(name)?)[[:space:]]*:[[:space:]]*(.+)$/\4/p' | head -n 1)"
+  if [[ -z "${ADMIN_RECOVERY_LOGIN:-}" ]]; then
+    ADMIN_RECOVERY_LOGIN="admin"
+  fi
 }
 
 show_summary() {
@@ -2128,6 +2139,13 @@ show_summary() {
   echo "- Site current: $DISCOVERY_SITE_CURRENT"
   echo "- Agent source: $DISCOVERY_AGENT_SRC"
   echo "- Agent artifacts: $DISCOVERY_AGENT_ARTIFACTS"
+  if [[ -n "${ADMIN_RECOVERY_LOGIN:-}" ]]; then
+    echo "- Usuario administrador: $ADMIN_RECOVERY_LOGIN"
+  elif [[ -n "${ADMIN_RECOVERY_OUTPUT:-}" ]]; then
+    echo "- Usuario administrador: admin"
+  else
+    echo "- Usuario administrador: (nao gerado nesta execucao)"
+  fi
   echo "- Access mode: $ACCESS_MODE"
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo "- Host interno: $INTERNAL_API_HOST"
@@ -2138,6 +2156,16 @@ show_summary() {
     echo "- Portal externo: https://$EXTERNAL_API_HOST/"
   fi
   echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
+  echo
+
+  print_selected_configuration_summary
+  if [[ -n "${ADMIN_RECOVERY_LOGIN:-}" ]]; then
+    echo "- Usuario administrador: $ADMIN_RECOVERY_LOGIN"
+  elif [[ -n "${ADMIN_RECOVERY_OUTPUT:-}" ]]; then
+    echo "- Usuario administrador: admin"
+  else
+    echo "- Usuario administrador: (nao gerado nesta execucao)"
+  fi
   echo
 
   # Mostra credenciais do admin geradas pelo --recover-admin
