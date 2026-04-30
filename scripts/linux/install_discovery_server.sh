@@ -357,7 +357,12 @@ prompt_if_empty() {
 
   local input=""
   if [[ "$secret" -eq 1 ]]; then
-    read -r -s -p "$prompt_text" input
+    if [[ -n "$default_value" ]]; then
+      read -r -s -p "$prompt_text (pressione Enter para usar o valor padrao): " input
+      input="${input:-$default_value}"
+    else
+      read -r -s -p "$prompt_text" input
+    fi
     printf '\n'
   else
     if [[ -n "$default_value" ]]; then
