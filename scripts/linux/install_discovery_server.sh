@@ -546,7 +546,7 @@ prepare_bootstrap_admin_login() {
   fi
 
   if sudo test -f /etc/discovery-api/discovery.env; then
-    DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$(sudo awk -F= '/^DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=/{print substr($0, index($0,$2)); exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+    DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$(sudo awk -F= '/^DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
   fi
 
   if [[ -z "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
@@ -713,7 +713,7 @@ apply_stack_update_only() {
 
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
   if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" ]] && sudo test -f /etc/discovery-api/discovery.env; then
-    DISCOVERY_CLEAN_BUILD="$(sudo awk -F= '/^DISCOVERY_CLEAN_BUILD=/{print substr($0, index($0,$2)); exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+    DISCOVERY_CLEAN_BUILD="$(sudo awk -F= '/^DISCOVERY_CLEAN_BUILD=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
   fi
   case "${DISCOVERY_CLEAN_BUILD:-1}" in
     0|1) ;;
@@ -950,12 +950,12 @@ load_existing_site_realtime_defaults() {
   local env_file="/etc/discovery-api/discovery.env"
   sudo test -f "$env_file" || return 0
 
-  DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-$(sudo awk -F= '/^DISCOVERY_SITE_NATS_URL=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS="${DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS:-$(sudo awk -F= '/^DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  NATS_WS_PORT="${NATS_WS_PORT:-$(sudo awk -F= '/^NATS_WS_PORT=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  NATS_WS_HOST="${NATS_WS_HOST:-$(sudo awk -F= '/^NATS_WS_HOST=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(sudo awk -F= '/^NATS_WS_TLS_ENABLED=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  Authentication__Fido2__ServerDomain="${Authentication__Fido2__ServerDomain:-$(sudo awk -F= '/^Authentication__Fido2__ServerDomain=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-$(sudo awk -F= '/^DISCOVERY_SITE_NATS_URL=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS="${DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS:-$(sudo awk -F= '/^DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  NATS_WS_PORT="${NATS_WS_PORT:-$(sudo awk -F= '/^NATS_WS_PORT=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  NATS_WS_HOST="${NATS_WS_HOST:-$(sudo awk -F= '/^NATS_WS_HOST=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(sudo awk -F= '/^NATS_WS_TLS_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  Authentication__Fido2__ServerDomain="${Authentication__Fido2__ServerDomain:-$(sudo awk -F= '/^Authentication__Fido2__ServerDomain=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
 }
 
 normalize_site_realtime_settings() {
@@ -974,7 +974,7 @@ normalize_site_realtime_settings() {
     fi
 
     if [[ -z "$nats_public_host" ]] && sudo test -f /etc/discovery-api/discovery.env; then
-      nats_public_host="$(sudo awk -F= '/^Authentication__Fido2__ServerDomain=/{print substr($0, index($0,$2)); exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+      nats_public_host="$(sudo awk -F= '/^Authentication__Fido2__ServerDomain=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
     fi
 
     nats_public_host="$(normalize_host_without_scheme "$nats_public_host")"
@@ -1029,8 +1029,8 @@ load_existing_nats_defaults() {
   nats_conf="$(resolve_nats_conf_path)"
 
   if sudo test -f "$env_file"; then
-    NATS_AUTH_USER="${NATS_AUTH_USER:-$(sudo awk -F= '/^Nats__AuthUser=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$(sudo awk -F= '/^Nats__AuthPassword=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_AUTH_USER="${NATS_AUTH_USER:-$(sudo awk -F= '/^Nats__AuthUser=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$(sudo awk -F= '/^Nats__AuthPassword=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
     local existing_callout_enabled
     existing_callout_enabled="$(sudo awk -F= '/^Nats__AuthCallout__Enabled=/{print tolower(substr($0, index($0,$2))); exit}' "$env_file" 2>/dev/null || true)"
     if [[ -z "${NATS_AUTH_CALLOUT_ENABLED:-}" && -n "$existing_callout_enabled" ]]; then
@@ -1040,9 +1040,9 @@ load_existing_nats_defaults() {
         NATS_AUTH_CALLOUT_ENABLED="0"
       fi
     fi
-    NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$(sudo awk -F= '/^Nats__AuthCallout__Subject=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_SERVER_HOST_EXTERNAL="${NATS_SERVER_HOST_EXTERNAL:-$(sudo awk -F= '/^Nats__ServerHostExternal=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_SERVER_HOST_INTERNAL="${NATS_SERVER_HOST_INTERNAL:-$(sudo awk -F= '/^Nats__ServerHostInternal=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$(sudo awk -F= '/^Nats__AuthCallout__Subject=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_SERVER_HOST_EXTERNAL="${NATS_SERVER_HOST_EXTERNAL:-$(sudo awk -F= '/^Nats__ServerHostExternal=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_SERVER_HOST_INTERNAL="${NATS_SERVER_HOST_INTERNAL:-$(sudo awk -F= '/^Nats__ServerHostInternal=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
     local existing_use_wss_external
     existing_use_wss_external="$(sudo awk -F= '/^Nats__UseWssExternal=/{print tolower(substr($0, index($0,$2))); exit}' "$env_file" 2>/dev/null || true)"
     if [[ -z "${NATS_USE_WSS_EXTERNAL:-}" && -n "$existing_use_wss_external" ]]; then
@@ -1052,12 +1052,12 @@ load_existing_nats_defaults() {
         NATS_USE_WSS_EXTERNAL="false"
       fi
     fi
-    NATS_WS_PORT="${NATS_WS_PORT:-$(sudo awk -F= '/^NATS_WS_PORT=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_WS_HOST="${NATS_WS_HOST:-$(sudo awk -F= '/^NATS_WS_HOST=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(sudo awk -F= '/^NATS_WS_TLS_ENABLED=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_WS_PORT="${NATS_WS_PORT:-$(sudo awk -F= '/^NATS_WS_PORT=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_WS_HOST="${NATS_WS_HOST:-$(sudo awk -F= '/^NATS_WS_HOST=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(sudo awk -F= '/^NATS_WS_TLS_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
     # Carrega seeds existentes para reutilizar (nao regenerar em updates)
-    NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$(sudo awk -F= '/^Nats__AccountSeed=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_XKEY_SEED="${NATS_XKEY_SEED:-$(sudo awk -F= '/^Nats__XKeySeed=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$(sudo awk -F= '/^Nats__AccountSeed=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_XKEY_SEED="${NATS_XKEY_SEED:-$(sudo awk -F= '/^Nats__XKeySeed=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
   fi
 
   if sudo test -f "$nats_conf"; then
@@ -1303,15 +1303,26 @@ install_nk_tool() {
 generate_nats_account_keys() {
   # Reutiliza seeds existentes se ja foram carregados (modo update)
   if [[ -n "${NATS_ACCOUNT_SEED:-}" && -n "${NATS_ACCOUNT_PUBLIC_KEY:-}" ]]; then
-    log "Seeds NATS ja existentes — reutilizando (sem regenerar)"
+    log "Seeds NATS ja existentes â€” reutilizando (sem regenerar)"
+    # Garante que a chave publica do xkey tambem esteja derivada (necessaria para nats-server.conf)
+    if [[ -n "${NATS_XKEY_SEED:-}" && -z "${NATS_XKEY_PUBLIC_KEY:-}" ]]; then
+      install_nk_tool
+      NATS_XKEY_PUBLIC_KEY="$(nk -inkey <(printf '%s' "$NATS_XKEY_SEED") -pubout 2>/dev/null || true)"
+      [[ -n "$NATS_XKEY_PUBLIC_KEY" ]] || fail "Falha ao derivar chave publica XKey do seed existente."
+    fi
     return 0
   fi
 
   # Se o seed existe mas a public key nao foi derivada ainda
   if [[ -n "${NATS_ACCOUNT_SEED:-}" ]]; then
+    install_nk_tool
     NATS_ACCOUNT_PUBLIC_KEY="$(nk -inkey <(printf '%s' "$NATS_ACCOUNT_SEED") -pubout 2>/dev/null || true)"
     if [[ -n "$NATS_ACCOUNT_PUBLIC_KEY" ]]; then
       log "Chave publica NATS derivada do seed existente"
+      if [[ -n "${NATS_XKEY_SEED:-}" && -z "${NATS_XKEY_PUBLIC_KEY:-}" ]]; then
+        NATS_XKEY_PUBLIC_KEY="$(nk -inkey <(printf '%s' "$NATS_XKEY_SEED") -pubout 2>/dev/null || true)"
+        [[ -n "$NATS_XKEY_PUBLIC_KEY" ]] || fail "Falha ao derivar chave publica XKey do seed existente."
+      fi
       return 0
     fi
   fi
@@ -1567,6 +1578,10 @@ EOF
 
   local auth_block
   if [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]]; then
+    local xkey_line=""
+    if [[ -n "${NATS_XKEY_PUBLIC_KEY:-}" ]]; then
+      xkey_line=$'\n    xkey: "'"$NATS_XKEY_PUBLIC_KEY"$'"'
+    fi
     auth_block=$(cat <<EOF
 authorization {
   timeout: 1
@@ -1575,7 +1590,7 @@ authorization {
   ]
   auth_callout {
     issuer: "$NATS_ACCOUNT_PUBLIC_KEY"
-    auth_users: [ "$NATS_AUTH_USER" ]
+    auth_users: [ "$NATS_AUTH_USER" ]${xkey_line}
   }
 }
 EOF
@@ -1699,18 +1714,18 @@ load_existing_tls_defaults() {
   local env_file="/etc/discovery-api/discovery.env"
   sudo test -f "$env_file" || return 0
 
-  TLS_CERT_PROVIDER="${TLS_CERT_PROVIDER:-$(sudo awk -F= '/^TLS_CERT_PROVIDER=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_CERT_DOMAIN="${ZEROSSL_CERT_DOMAIN:-$(sudo awk -F= '/^ZEROSSL_CERT_DOMAIN=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-$(sudo awk -F= '/^ZEROSSL_CERT_ALT_DOMAINS=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_ACME_EMAIL="${ZEROSSL_ACME_EMAIL:-$(sudo awk -F= '/^ZEROSSL_ACME_EMAIL=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_ACME_EAB_KID="${ZEROSSL_ACME_EAB_KID:-$(sudo awk -F= '/^ZEROSSL_ACME_EAB_KID=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_ACME_EAB_HMAC_KEY="${ZEROSSL_ACME_EAB_HMAC_KEY:-$(sudo awk -F= '/^ZEROSSL_ACME_EAB_HMAC_KEY=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_DNS_RESOLVERS="${ZEROSSL_DNS_RESOLVERS:-$(sudo awk -F= '/^ZEROSSL_DNS_RESOLVERS=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS="${ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS:-$(sudo awk -F= '/^ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_DNS_POLL_INTERVAL_SECONDS="${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-$(sudo awk -F= '/^ZEROSSL_DNS_POLL_INTERVAL_SECONDS=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-$(sudo awk -F= '/^ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_AUTO_RENEW_ENABLED="${ZEROSSL_AUTO_RENEW_ENABLED:-$(sudo awk -F= '/^ZEROSSL_AUTO_RENEW_ENABLED=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_DNS_AUTOMATION_HOOK="${ZEROSSL_DNS_AUTOMATION_HOOK:-$(sudo awk -F= '/^ZEROSSL_DNS_AUTOMATION_HOOK=/{print substr($0, index($0,$2)); exit}' "$env_file" 2>/dev/null || true)}"
+  TLS_CERT_PROVIDER="${TLS_CERT_PROVIDER:-$(sudo awk -F= '/^TLS_CERT_PROVIDER=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_CERT_DOMAIN="${ZEROSSL_CERT_DOMAIN:-$(sudo awk -F= '/^ZEROSSL_CERT_DOMAIN=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-$(sudo awk -F= '/^ZEROSSL_CERT_ALT_DOMAINS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_ACME_EMAIL="${ZEROSSL_ACME_EMAIL:-$(sudo awk -F= '/^ZEROSSL_ACME_EMAIL=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_ACME_EAB_KID="${ZEROSSL_ACME_EAB_KID:-$(sudo awk -F= '/^ZEROSSL_ACME_EAB_KID=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_ACME_EAB_HMAC_KEY="${ZEROSSL_ACME_EAB_HMAC_KEY:-$(sudo awk -F= '/^ZEROSSL_ACME_EAB_HMAC_KEY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_DNS_RESOLVERS="${ZEROSSL_DNS_RESOLVERS:-$(sudo awk -F= '/^ZEROSSL_DNS_RESOLVERS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS="${ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS:-$(sudo awk -F= '/^ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_DNS_POLL_INTERVAL_SECONDS="${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-$(sudo awk -F= '/^ZEROSSL_DNS_POLL_INTERVAL_SECONDS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-$(sudo awk -F= '/^ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_AUTO_RENEW_ENABLED="${ZEROSSL_AUTO_RENEW_ENABLED:-$(sudo awk -F= '/^ZEROSSL_AUTO_RENEW_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  ZEROSSL_DNS_AUTOMATION_HOOK="${ZEROSSL_DNS_AUTOMATION_HOOK:-$(sudo awk -F= '/^ZEROSSL_DNS_AUTOMATION_HOOK=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
 }
 
 normalize_tls_certificate_provider() {
@@ -2146,11 +2161,6 @@ write_environment_file() {
 
     if [[ ! " ${allowed_origins[*]} " =~ " ${base_origin} " ]]; then
       allowed_origins+=("$base_origin")
-    fi
-
-    local alt_origin="${base_origin}:8443"
-    if [[ ! " ${allowed_origins[*]} " =~ " ${alt_origin} " ]]; then
-      allowed_origins+=("$alt_origin")
     fi
   done
 
