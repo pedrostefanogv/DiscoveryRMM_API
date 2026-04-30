@@ -183,22 +183,24 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
     {
         var request = ParseAuthRequest(requestJwt);
         if (request is null)
-            return await BuildErrorResponseAsync("Invalid auth request.", null, configurationService, ct);
+            return await BuildErrorResponseAsync("Invalid auth request.", null, null, configurationService, ct);
+
+        var serverId = request.Nats.Server?.Id;
 
         if (string.IsNullOrWhiteSpace(request.Nats.UserNkey))
-            return await BuildErrorResponseAsync("Missing user nkey.", null, configurationService, ct);
+            return await BuildErrorResponseAsync("Missing user nkey.", null, serverId, configurationService, ct);
 
         var token = request.Nats.ConnectOptions.AuthToken
             ?? request.Nats.ConnectOptions.Token
             ?? request.Nats.ConnectOptions.Jwt;
         if (string.IsNullOrWhiteSpace(token))
-            return await BuildErrorResponseAsync("Missing auth token.", request.Nats.UserNkey, configurationService, ct);
+            return await BuildErrorResponseAsync("Missing auth token.", request.Nats.UserNkey, serverId, configurationService, ct);
 
         if (token.StartsWith("mdz_", StringComparison.OrdinalIgnoreCase))
         {
             var agentToken = await agentAuthService.ValidateTokenAsync(token);
             if (agentToken is null)
-                return await BuildErrorResponseAsync("Invalid agent token.", request.Nats.UserNkey, configurationService, ct);
+                return await BuildErrorResponseAsync("Invalid agent token.", request.Nats.UserNkey, serverId, configurationService, ct);
 
             var jwt = await credentialsService.IssueUserJwtForAgentAsync(
                 request.Nats.UserNkey,
@@ -210,19 +212,19 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
         var principal = jwtService.ValidateToken(token);
         if (principal is null)
-            return await BuildErrorResponseAsync("Invalid user token.", request.Nats.UserNkey, configurationService, ct);
+            return await BuildErrorResponseAsync("Invalid user token.", request.Nats.UserNkey, serverId, configurationService, ct);
 
         var userIdValue = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
                           ?? principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         if (!Guid.TryParse(userIdValue, out var userId))
-            return await BuildErrorResponseAsync("Invalid user token.", request.Nats.UserNkey, configurationService, ct);
+            return await BuildErrorResponseAsync("Invalid user token.", request.Nats.UserNkey, serverId, configurationService, ct);
 
         if (principal.FindFirst("mfa_pending")?.Value == "true" || principal.FindFirst("mfa_setup")?.Value == "true")
-            return await BuildErrorResponseAsync("MFA pending token is not allowed.", request.Nats.UserNkey, configurationService, ct);
+            return await BuildErrorResponseAsync("MFA pending token is not allowed.", request.Nats.UserNkey, serverId, configurationService, ct);
 
         var scopeAccess = await permissionService.GetScopeAccessAsync(userId, Discovery.Core.Enums.Identity.ResourceType.Dashboard, Discovery.Core.Enums.Identity.ActionType.View);
         if (!scopeAccess.HasGlobalAccess && scopeAccess.AllowedClientIds.Count == 0 && scopeAccess.AllowedSiteIds.Count == 0)
-            return await BuildErrorResponseAsync("User has no dashboard access.", request.Nats.UserNkey, configurationService, ct);
+            return await BuildErrorResponseAsync("User has no dashboard access.", request.Nats.UserNkey, serverId, configurationService, ct);
 
         var userJwt = await credentialsService.IssueUserJwtForUserAsync(request.Nats.UserNkey, userId, scopeAccess, ct);
         return await BuildSuccessResponseAsync(request, userJwt.Jwt, userJwt.ExpiresAtUtc, configurationService, ct);
@@ -254,16 +256,19 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
     {
         var accountKeyPair = await ResolveAccountKeyPairAsync(configurationService, ct);
         var response = NatsJwt.NewAuthorizationResponseClaims(request.Nats.UserNkey);
+        // O NATS valida que o `aud` da resposta seja a server public key (server_id.id) que enviou a request.
+        response.Audience = request.Nats.Server?.Id ?? string.Empty;
         response.Expires = new DateTimeOffset(expiresAtUtc);
         response.AuthorizationResponse.Jwt = userJwt;
         return NatsJwt.EncodeAuthorizationResponseClaims(response, accountKeyPair);
     }
 
-    private async Task<string> BuildErrorResponseAsync(string error, string? userNkey, IConfigurationService configurationService, CancellationToken ct)
+    private async Task<string> BuildErrorResponseAsync(string error, string? userNkey, string? serverId, IConfigurationService configurationService, CancellationToken ct)
     {
         var accountKeyPair = await ResolveAccountKeyPairAsync(configurationService, ct);
         var now = DateTime.UtcNow;
         var response = NatsJwt.NewAuthorizationResponseClaims(userNkey ?? string.Empty);
+        response.Audience = serverId ?? string.Empty;
         response.Expires = new DateTimeOffset(now.AddMinutes(1));
         response.AuthorizationResponse.Error = error;
         return NatsJwt.EncodeAuthorizationResponseClaims(response, accountKeyPair);
@@ -292,6 +297,18 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
         [System.Text.Json.Serialization.JsonPropertyName("connect_opts")]
         public AuthRequestConnectOptions ConnectOptions { get; init; } = new();
+
+        [System.Text.Json.Serialization.JsonPropertyName("server_id")]
+        public AuthRequestServerId? Server { get; init; }
+    }
+
+    private sealed class AuthRequestServerId
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("id")]
+        public string Id { get; init; } = string.Empty;
+
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string? Name { get; init; }
     }
 
     private sealed class AuthRequestConnectOptions
