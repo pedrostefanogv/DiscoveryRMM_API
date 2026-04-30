@@ -1,4 +1,5 @@
 using Discovery.Core.DTOs.Auth;
+using Discovery.Core.Entities.Identity;
 using Discovery.Core.Entities.Security;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Enums.Security;
@@ -22,6 +23,7 @@ public class UserAuthService : IUserAuthService
     private readonly IUserGroupRepository _userGroups;
     private readonly IRoleRepository _roles;
     private readonly IUserMfaKeyRepository _mfaKeys;
+    private readonly IAuthAuditLogRepository _auditLog;
 
     public UserAuthService(
         IUserRepository users,
@@ -30,7 +32,8 @@ public class UserAuthService : IUserAuthService
         IJwtService jwtService,
         IUserGroupRepository userGroups,
         IRoleRepository roles,
-        IUserMfaKeyRepository mfaKeys)
+        IUserMfaKeyRepository mfaKeys,
+        IAuthAuditLogRepository auditLog)
     {
         _users = users;
         _sessions = sessions;
@@ -39,6 +42,7 @@ public class UserAuthService : IUserAuthService
         _userGroups = userGroups;
         _roles = roles;
         _mfaKeys = mfaKeys;
+        _auditLog = auditLog;
     }
 
     public async Task<LoginResponseDto> LoginAsync(
@@ -54,17 +58,45 @@ public class UserAuthService : IUserAuthService
         if (user == null)
         {
             _passwordService.VerifyPassword(password, dummySalt, dummySalt);
+            await LogAuthEventAsync(null, "login_failed", false, "unknown_user", ipAddress, userAgent);
             throw new UnauthorizedAccessException("Credenciais inválidas.");
         }
 
         if (!user.IsActive)
+        {
+            await LogAuthEventAsync(user.Id, "login_failed", false, "account_disabled", ipAddress, userAgent);
             throw new UnauthorizedAccessException("Conta desativada.");
+        }
+
+        // Lockout check: se a conta está temporariamente bloqueada
+        if (user.LockoutUntil.HasValue && user.LockoutUntil.Value > DateTime.UtcNow)
+        {
+            await LogAuthEventAsync(user.Id, "login_failed", false, "account_locked", ipAddress, userAgent,
+                $"LockoutUntil={user.LockoutUntil:O}, FailedAttempts={user.FailedLoginAttempts}");
+            var remainingSeconds = (int)(user.LockoutUntil.Value - DateTime.UtcNow).TotalSeconds;
+            throw new UnauthorizedAccessException(
+                $"Conta temporariamente bloqueada. Tente novamente em {remainingSeconds} segundos.");
+        }
 
         var valid = _passwordService.VerifyPassword(password, user.PasswordSalt, user.PasswordHash);
         if (!valid)
+        {
+            await RecordFailedLoginAttemptAsync(user);
+            await LogAuthEventAsync(user.Id, "login_failed", false, "invalid_password", ipAddress, userAgent,
+                $"LockoutUntil={user.LockoutUntil:O}, FailedAttempts={user.FailedLoginAttempts}");
             throw new UnauthorizedAccessException("Credenciais inválidas.");
+        }
+
+        // Reset lockout on success
+        if (user.FailedLoginAttempts > 0 || user.LockoutUntil.HasValue)
+        {
+            user.FailedLoginAttempts = 0;
+            user.LockoutUntil = null;
+            await _users.UpdateAsync(user);
+        }
 
         await _users.SetLastLoginAsync(user.Id, DateTime.UtcNow);
+        await LogAuthEventAsync(user.Id, "login_success", true, null, ipAddress, userAgent);
 
         var roleMfaRequirement = await GetEffectiveMfaRequirementAsync(user.Id);
         var mfaKeys = (await _mfaKeys.GetActiveByUserIdAsync(user.Id)).ToList();
@@ -275,6 +307,8 @@ public class UserAuthService : IUserAuthService
         };
 
         await _sessions.CreateAsync(session);
+        await LogAuthEventAsync(userId, "session_created", true, null, ipAddress, userAgent,
+            $"MfaVerified={mfaVerified}");
 
         return new TokenPairDto
         {
@@ -286,4 +320,64 @@ public class UserAuthService : IUserAuthService
 
     private static bool HasKeyType(IEnumerable<UserMfaKey> keys, MfaKeyType type)
         => keys.Any(k => k.IsActive && k.KeyType == type);
+
+    /// <summary>
+    /// Registra falha de login e aplica lockout progressivo:
+    /// - 5 falhas → 60 segundos
+    /// - 10 falhas → 300 segundos (5 min)
+    /// - 20+ falhas → 1800 segundos (30 min)
+    /// </summary>
+    private async Task RecordFailedLoginAttemptAsync(User user)
+    {
+        user.FailedLoginAttempts++;
+        user.LockoutUntil = user.FailedLoginAttempts switch
+        {
+            >= 20 => DateTime.UtcNow.AddSeconds(1800),
+            >= 10 => DateTime.UtcNow.AddSeconds(300),
+            >= 5 => DateTime.UtcNow.AddSeconds(60),
+            _ => null
+        };
+        await _users.UpdateAsync(user);
+    }
+
+    private async Task LogAuthEventAsync(
+        Guid? userId,
+        string eventType,
+        bool success,
+        string? failureReason,
+        string? ipAddress,
+        string? userAgent,
+        string? detail = null)
+    {
+        try
+        {
+            await _auditLog.AddAsync(new AuthAuditLog
+            {
+                Id = IdGenerator.NewId(),
+                UserId = userId,
+                EventType = eventType,
+                Success = success,
+                FailureReason = failureReason,
+                IpAddress = ipAddress,
+                UserAgent = userAgent,
+                Detail = detail,
+                OccurredAt = DateTime.UtcNow
+            });
+        }
+        catch
+        {
+            // Não falha o login por erro de auditoria
+        }
+    }
+
+    /// <summary>Desbloqueia manualmente uma conta (reset de lockout).</summary>
+    public async Task UnlockAsync(Guid userId)
+    {
+        var user = await _users.GetByIdAsync(userId)
+            ?? throw new InvalidOperationException("Usuário não encontrado.");
+        user.FailedLoginAttempts = 0;
+        user.LockoutUntil = null;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _users.UpdateAsync(user);
+    }
 }

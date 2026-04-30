@@ -2,8 +2,10 @@ using System.Text.Json;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -38,6 +40,7 @@ public class AgentLabelsController : ControllerBase
     }
 
     [HttpGet("agents/{agentId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetByAgent(Guid agentId)
     {
         var labels = await _labelRepository.GetByAgentIdAsync(agentId);
@@ -45,6 +48,7 @@ public class AgentLabelsController : ControllerBase
     }
 
     [HttpGet("rules/{ruleId:guid}/agents")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetAgentsByRule(Guid ruleId)
     {
         var rule = await _ruleRepository.GetByIdAsync(ruleId);
@@ -63,6 +67,7 @@ public class AgentLabelsController : ControllerBase
     }
 
     [HttpGet("rules")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetRules([FromQuery] bool includeDisabled = true)
     {
         var rules = await _ruleRepository.GetAllAsync(includeDisabled);
@@ -71,6 +76,7 @@ public class AgentLabelsController : ControllerBase
     }
 
     [HttpPost("rules")]
+    [RequirePermission(ResourceType.Agents, ActionType.Create)]
     public async Task<IActionResult> CreateRule([FromBody] CreateAgentLabelRuleRequest request, CancellationToken cancellationToken)
     {
         var customFieldTypes = await BuildCustomFieldTypesAsync(cancellationToken);

@@ -105,6 +105,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<UserMfaKey> UserMfaKeys => Set<UserMfaKey>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
+    public DbSet<AuthAuditLog> AuthAuditLogs => Set<AuthAuditLog>();
 
     // P2P
     public DbSet<P2pAgentTelemetry> P2pAgentTelemetries => Set<P2pAgentTelemetry>();

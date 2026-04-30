@@ -1,7 +1,9 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -40,6 +42,7 @@ public class AutoTicketRulesController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAll(
         [FromQuery] AutoTicketScopeLevel? scopeLevel,
         [FromQuery] Guid? scopeId,
@@ -51,6 +54,7 @@ public class AutoTicketRulesController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var rule = await _ruleRepository.GetByIdAsync(id);
@@ -58,6 +62,7 @@ public class AutoTicketRulesController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] UpsertAutoTicketRuleRequest request)
     {
         if (!ValidateRequest(request, out var error))
@@ -69,6 +74,7 @@ public class AutoTicketRulesController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpsertAutoTicketRuleRequest request)
     {
         if (!ValidateRequest(request, out var error))

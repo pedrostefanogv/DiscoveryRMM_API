@@ -243,22 +243,21 @@ public class UsersController : ControllerBase
     }
 
     [HttpPost("{id:guid}/change-password")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
     public async Task<IActionResult> ChangePassword(Guid id, [FromBody] ChangePasswordDto dto)
     {
         var requestingUserId = (Guid)HttpContext.Items["UserId"]!;
-        // Somente o proprio usuario ou admin pode alterar senha
-        if (requestingUserId != id)
-        {
-            var hasPermission = HttpContext.Items["HasAdminScope"] is true;
-            if (!hasPermission)
-                return Forbid();
-        }
-
         var user = await _userRepo.GetByIdAsync(id);
         if (user is null) return NotFound();
 
-        if (!_passwordService.VerifyPassword(dto.CurrentPassword, user.PasswordSalt, user.PasswordHash))
-            return BadRequest(new { message = "Senha atual incorreta." });
+        // Admin trocando senha de outro usuário: exige permissão Users.Edit (já verificada pelo filter)
+        // Usuário trocando própria senha: permitido mesmo sem permissão Users.Edit
+        if (requestingUserId == id)
+        {
+            // Self password change — verificar senha atual
+            if (!_passwordService.VerifyPassword(dto.CurrentPassword, user.PasswordSalt, user.PasswordHash))
+                return BadRequest(new { message = "Senha atual incorreta." });
+        }
 
         var (policyValid, policyReason) = _passwordService.ValidatePolicy(dto.NewPassword);
         if (!policyValid)
@@ -336,6 +335,20 @@ public class UsersController : ControllerBase
         user.MustChangePassword = true;
         user.UpdatedAt = DateTime.UtcNow;
         await _userRepo.UpdateAsync(user);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/unlock")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> Unlock(Guid id)
+    {
+        var user = await _userRepo.GetByIdAsync(id);
+        if (user is null) return NotFound();
+
+        if (!user.IsActive)
+            return BadRequest(new { message = "Não é possível desbloquear uma conta desativada." });
+
+        await _userAuthService.UnlockAsync(id);
         return NoContent();
     }
 

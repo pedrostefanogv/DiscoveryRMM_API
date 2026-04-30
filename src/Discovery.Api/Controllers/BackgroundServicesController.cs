@@ -1,6 +1,7 @@
 using Discovery.Api.Services.BackgroundServices;
 using Discovery.Api.Services.Quartz;
-using Microsoft.AspNetCore.Authorization;
+using Discovery.Api.Filters;
+using Discovery.Core.Enums.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Quartz;
 using Quartz.Impl.Matchers;
@@ -18,7 +19,7 @@ namespace Discovery.Api.Controllers;
 /// require an authenticated admin user.
 /// </summary>
 [ApiController]
-[Authorize]
+[RequireUserAuth]
 [Route("api/v{version:apiVersion}/admin/background-services")]
 public class BackgroundServicesController : ControllerBase
 {

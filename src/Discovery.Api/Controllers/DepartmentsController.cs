@@ -1,5 +1,7 @@
 using Discovery.Core.Entities;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -16,6 +18,7 @@ public class DepartmentsController : ControllerBase
     /// Obtém departamentos globais.
     /// </summary>
     [HttpGet("global")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetGlobal()
     {
         var departments = await _repo.GetGlobalAsync();
@@ -26,6 +29,7 @@ public class DepartmentsController : ControllerBase
     /// Obtém departamentos de um cliente (incluindo globais por padrão).
     /// </summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetByClient([FromQuery] Guid? clientId, [FromQuery] bool includeGlobal = true, [FromQuery] bool activeOnly = true)
     {
         if (clientId.HasValue)
@@ -43,6 +47,7 @@ public class DepartmentsController : ControllerBase
     /// Obtém um departamento específico pelo ID.
     /// </summary>
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var department = await _repo.GetByIdAsync(id);
@@ -53,6 +58,7 @@ public class DepartmentsController : ControllerBase
     /// Cria um novo departamento (global ou para um cliente específico).
     /// </summary>
     [HttpPost]
+    [RequirePermission(ResourceType.Clients, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateDepartmentRequest request)
     {
         // Validar se já existe um departamento com este nome
@@ -77,6 +83,7 @@ public class DepartmentsController : ControllerBase
     /// Atualiza um departamento existente.
     /// </summary>
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateDepartmentRequest request)
     {
         var department = await _repo.GetByIdAsync(id);
@@ -100,6 +107,7 @@ public class DepartmentsController : ControllerBase
     /// Deleta (soft delete) um departamento.
     /// </summary>
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var department = await _repo.GetByIdAsync(id);

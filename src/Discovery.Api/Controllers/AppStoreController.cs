@@ -3,6 +3,7 @@ using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces;
 using Discovery.Core.DTOs;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -35,6 +36,7 @@ public class AppStoreController : ControllerBase
     }
 
     [HttpGet("catalog")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> SearchCatalog(
         [FromQuery] AppInstallationType installationType = AppInstallationType.Winget,
         [FromQuery] string? search = null,
@@ -43,11 +45,6 @@ public class AppStoreController : ControllerBase
         [FromQuery] string? cursor = null,
         CancellationToken cancellationToken = default)
     {
-        if (HttpContext.Items["UserId"] is not Guid userId)
-            return Unauthorized(new { error = "User not authenticated." });
-
-        if (!await _permissionService.HasPermissionAsync(userId, ResourceType.AppStore, ActionType.View, ScopeLevel.Global))
-            return Forbid();
 
         var result = await _appStoreService.SearchCatalogAsync(
             installationType,
@@ -61,16 +58,12 @@ public class AppStoreController : ControllerBase
     }
 
     [HttpGet("catalog/{packageId}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> GetCatalogPackage(
         string packageId,
         [FromQuery] AppInstallationType installationType = AppInstallationType.Winget,
         CancellationToken cancellationToken = default)
     {
-        if (HttpContext.Items["UserId"] is not Guid userId)
-            return Unauthorized(new { error = "User not authenticated." });
-
-        if (!await _permissionService.HasPermissionAsync(userId, ResourceType.AppStore, ActionType.View, ScopeLevel.Global))
-            return Forbid();
 
         var item = await _appStoreService.GetCatalogPackageByIdAsync(installationType, packageId, cancellationToken);
         if (item is null)
@@ -80,15 +73,11 @@ public class AppStoreController : ControllerBase
     }
 
     [HttpPost("catalog/custom")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomCatalogPackage(
         [FromBody] UpsertCustomAppCatalogPackageRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (HttpContext.Items["UserId"] is not Guid userId)
-            return Unauthorized(new { error = "User not authenticated." });
-
-        if (!await _permissionService.HasPermissionAsync(userId, ResourceType.AppStore, ActionType.Edit, ScopeLevel.Global))
-            return Forbid();
 
         try
         {
@@ -249,16 +238,12 @@ public class AppStoreController : ControllerBase
     }
 
     [HttpDelete("approvals/{ruleId:guid}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
     public async Task<IActionResult> DeleteApproval(
         Guid ruleId,
         [FromQuery] string? reason = null,
         CancellationToken cancellationToken = default)
     {
-        if (HttpContext.Items["UserId"] is not Guid userId)
-            return Unauthorized(new { error = "User not authenticated." });
-
-        if (!await _permissionService.HasPermissionAsync(userId, ResourceType.AppStore, ActionType.Delete, ScopeLevel.Global))
-            return Forbid();
 
         await _appStoreService.DeleteRuleAsync(
             ruleId,
@@ -337,15 +322,11 @@ public class AppStoreController : ControllerBase
     }
 
     [HttpPost("sync")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
     public async Task<IActionResult> SyncCatalog(
         [FromQuery] AppInstallationType installationType,
         CancellationToken cancellationToken = default)
     {
-        if (HttpContext.Items["UserId"] is not Guid userId)
-            return Unauthorized(new { error = "User not authenticated." });
-
-        if (!await _permissionService.HasPermissionAsync(userId, ResourceType.AppStore, ActionType.Edit, ScopeLevel.Global))
-            return Forbid();
 
         var result = await _appCatalogSyncService.SyncCatalogAsync(installationType, cancellationToken);
 

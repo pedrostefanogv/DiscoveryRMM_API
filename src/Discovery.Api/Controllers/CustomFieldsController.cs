@@ -1,6 +1,8 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -17,6 +19,7 @@ public class CustomFieldsController : ControllerBase
     }
 
     [HttpGet("definitions")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetDefinitions(
         [FromQuery] CustomFieldScopeType? scopeType = null,
         [FromQuery] bool includeInactive = false,
@@ -27,6 +30,7 @@ public class CustomFieldsController : ControllerBase
     }
 
     [HttpGet("definitions/{id:guid}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetDefinitionById(Guid id, CancellationToken cancellationToken = default)
     {
         var item = await _service.GetDefinitionByIdAsync(id, cancellationToken);
@@ -34,6 +38,7 @@ public class CustomFieldsController : ControllerBase
     }
 
     [HttpPost("definitions")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Create)]
     public async Task<IActionResult> CreateDefinition(
         [FromBody] UpsertCustomFieldDefinitionRequest request,
         CancellationToken cancellationToken = default)
@@ -53,6 +58,7 @@ public class CustomFieldsController : ControllerBase
     }
 
     [HttpPut("definitions/{id:guid}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> UpdateDefinition(
         Guid id,
         [FromBody] UpsertCustomFieldDefinitionRequest request,
@@ -75,6 +81,7 @@ public class CustomFieldsController : ControllerBase
     }
 
     [HttpDelete("definitions/{id:guid}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Delete)]
     public async Task<IActionResult> DeleteDefinition(Guid id, CancellationToken cancellationToken = default)
     {
         var removed = await _service.DeactivateDefinitionAsync(id, cancellationToken);
@@ -82,6 +89,7 @@ public class CustomFieldsController : ControllerBase
     }
 
     [HttpGet("values/{scopeType}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetValues(
         CustomFieldScopeType scopeType,
         [FromQuery] Guid? entityId = null,
@@ -100,6 +108,7 @@ public class CustomFieldsController : ControllerBase
     }
 
     [HttpGet("schema/{scopeType}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetSchema(
         CustomFieldScopeType scopeType,
         [FromQuery] Guid? entityId = null,

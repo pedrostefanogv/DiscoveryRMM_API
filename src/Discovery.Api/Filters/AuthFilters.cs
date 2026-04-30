@@ -158,19 +158,27 @@ internal class RequireMfaSetupOrFullSessionFilter : IAsyncActionFilter
 
 /// <summary>
 /// Verifica se o usuário possui a permissão especificada.
-/// Usa IPermissionService para checar a permissão no escopo Global.
-/// Para escopos mais específicos (Client/Site), use a sobrecarga com scope.
+/// Por padrão, usa escopo Global. Para escopos com resolução via rota, use RequirePermission(ResourceType.X, ActionType.Y, ScopeSource.FromRoute).
 /// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true)]
 public class RequirePermissionAttribute : Attribute, IFilterFactory
 {
     private readonly ResourceType _resource;
     private readonly ActionType _action;
+    private readonly ScopeSource _scopeSource;
 
     public RequirePermissionAttribute(ResourceType resource, ActionType action)
     {
         _resource = resource;
         _action = action;
+        _scopeSource = ScopeSource.Global;
+    }
+
+    public RequirePermissionAttribute(ResourceType resource, ActionType action, ScopeSource scopeSource)
+    {
+        _resource = resource;
+        _action = action;
+        _scopeSource = scopeSource;
     }
 
     public bool IsReusable => false;
@@ -178,7 +186,7 @@ public class RequirePermissionAttribute : Attribute, IFilterFactory
     public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
     {
         var permissionService = serviceProvider.GetRequiredService<IPermissionService>();
-        return new RequirePermissionFilter(permissionService, _resource, _action);
+        return new RequirePermissionFilter(permissionService, _resource, _action, _scopeSource);
     }
 }
 
@@ -187,12 +195,28 @@ internal class RequirePermissionFilter : IAsyncActionFilter
     private readonly IPermissionService _permissionService;
     private readonly ResourceType _resource;
     private readonly ActionType _action;
+    private readonly ScopeSource _scopeSource;
 
-    public RequirePermissionFilter(IPermissionService permissionService, ResourceType resource, ActionType action)
+    private static readonly HashSet<string> EntityIdKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "id"
+    };
+
+    private static readonly HashSet<string> ClientIdKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "clientId"
+    };
+    private static readonly HashSet<string> SiteIdKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "siteId"
+    };
+
+    public RequirePermissionFilter(IPermissionService permissionService, ResourceType resource, ActionType action, ScopeSource scopeSource = ScopeSource.Global)
     {
         _permissionService = permissionService;
         _resource = resource;
         _action = action;
+        _scopeSource = scopeSource;
     }
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
@@ -203,18 +227,102 @@ internal class RequirePermissionFilter : IAsyncActionFilter
             return;
         }
 
-        var hasPermission = await _permissionService.HasPermissionAsync(
-            userId, _resource, _action, ScopeLevel.Global, null, null);
-
-        if (!hasPermission)
+        if (_scopeSource == ScopeSource.Global)
         {
-            context.Result = new ObjectResult(new { message = "Permissão insuficiente." })
+            var hasPermission = await _permissionService.HasPermissionAsync(
+                userId, _resource, _action, ScopeLevel.Global, null, null);
+
+            if (!hasPermission)
             {
-                StatusCode = StatusCodes.Status403Forbidden
-            };
-            return;
+                context.Result = new ObjectResult(new { message = "Permissão insuficiente." })
+                {
+                    StatusCode = StatusCodes.Status403Forbidden
+                };
+                return;
+            }
+        }
+        else // ScopeSource.FromRoute
+        {
+            var (scopeLevel, scopeId, parentScopeId) = ResolveScopeFromRoute(context);
+            var hasPermission = await _permissionService.HasPermissionAsync(
+                userId, _resource, _action, scopeLevel, scopeId, parentScopeId);
+
+            if (!hasPermission)
+            {
+                context.Result = new ObjectResult(new { message = "Permissão insuficiente para este escopo." })
+                {
+                    StatusCode = StatusCodes.Status403Forbidden
+                };
+                return;
+            }
+
+            // Popula HttpContext.Items para uso futuro (ex.: queries filtradas)
+            context.HttpContext.Items["ClientId"] = scopeLevel == ScopeLevel.Client ? scopeId : parentScopeId;
+            context.HttpContext.Items["SiteId"] = scopeLevel == ScopeLevel.Site ? scopeId : null;
         }
 
         await next();
+    }
+
+    /// <summary>
+    /// Resolve o escopo a partir dos parâmetros da rota.
+    /// 
+    /// Heurística:
+    /// - Se a rota tem "siteId", verifica Site (com parentScopeId = clientId da rota)
+    /// - Se a rota tem "clientId", verifica Client
+    /// - Se a rota tem apenas "id" e o controller termina com "ClientsController" ou "SitesController", trata como Client
+    /// </summary>
+    private static (ScopeLevel, Guid?, Guid?) ResolveScopeFromRoute(ActionExecutingContext context)
+    {
+        var routeValues = context.RouteData.Values;
+
+        // Tenta siteId primeiro (escopo mais específico)
+        if (TryGetRouteGuid(routeValues, SiteIdKeys, out var siteId))
+        {
+            // parentScopeId = clientId (da rota ou do HttpContext.Items)
+            Guid? parentClientId = null;
+            if (TryGetRouteGuid(routeValues, ClientIdKeys, out var clientId))
+                parentClientId = clientId;
+            else if (context.HttpContext.Items["ClientId"] is Guid ctxClientId)
+                parentClientId = ctxClientId;
+
+            return (ScopeLevel.Site, siteId, parentClientId);
+        }
+
+        // Tenta clientId (escopo intermediário)
+        if (TryGetRouteGuid(routeValues, ClientIdKeys, out var resolvedClientId))
+        {
+            return (ScopeLevel.Client, resolvedClientId, null);
+        }
+
+        // Heurística: se o controller for ClientsController/SitesController e tiver {id},
+        // trata como operação com escopo específico
+        var controllerTypeName = context.Controller.GetType().Name;
+        if (TryGetRouteGuid(routeValues, EntityIdKeys, out var entityId))
+        {
+            if (controllerTypeName.EndsWith("ClientsController", StringComparison.OrdinalIgnoreCase))
+            {
+                return (ScopeLevel.Client, entityId, null);
+            }
+        }
+
+        // Fallback: escopo global (rota sem identificadores de cliente/site)
+        return (ScopeLevel.Global, null, null);
+    }
+
+    private static bool TryGetRouteGuid(IDictionary<string, object?> routeValues, HashSet<string> keys, out Guid value)
+    {
+        foreach (var key in keys)
+        {
+            if (routeValues.TryGetValue(key, out var raw) && raw is string s && Guid.TryParse(s, out value))
+                return true;
+            if (routeValues.TryGetValue(key, out raw) && raw is Guid g)
+            {
+                value = g;
+                return true;
+            }
+        }
+        value = default;
+        return false;
     }
 }

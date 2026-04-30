@@ -29,6 +29,12 @@ public class User
     public DateTime UpdatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
 
+    /// <summary>Contador de tentativas de login falhas consecutivas. Reseta ao fazer login com sucesso.</summary>
+    public int FailedLoginAttempts { get; set; } = 0;
+
+    /// <summary>Se preenchido, a conta está bloqueada até esta data/hora (lockout temporário).</summary>
+    public DateTime? LockoutUntil { get; set; }
+
     /// <summary>Identificador da conta no MeshCentral (ex.: user/domain/username).</summary>
     public string? MeshCentralUserId { get; set; }
 

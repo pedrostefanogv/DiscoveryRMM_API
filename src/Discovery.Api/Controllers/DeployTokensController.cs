@@ -1,4 +1,6 @@
 using Discovery.Core.Interfaces;
+using Discovery.Core.Enums.Identity;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Discovery.Core.Configuration;
@@ -45,6 +47,7 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ResourceType.Deployment, ActionType.View)]
     public async Task<IActionResult> List([FromQuery] Guid clientId, [FromQuery] Guid siteId)
     {
         if (clientId == Guid.Empty || siteId == Guid.Empty)
@@ -72,6 +75,7 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Deployment, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateDeployTokenRequest request)
     {
         var site = await _siteRepository.GetByIdAsync(request.SiteId);

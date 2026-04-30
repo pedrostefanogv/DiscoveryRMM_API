@@ -1,4 +1,6 @@
 using Discovery.Core.Interfaces;
+using Discovery.Core.Enums.Identity;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -15,6 +17,7 @@ public class ConfigurationAuditController : ControllerBase
     /// Retorna mudanças recentes em configurações.
     /// </summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetRecent([FromQuery] int days = 30, [FromQuery] int limit = 200)
     {
         var items = await _service.GetRecentChangesAsync(days, limit);
@@ -25,6 +28,7 @@ public class ConfigurationAuditController : ControllerBase
     /// Retorna histórico de mudanças de uma entidade específica.
     /// </summary>
     [HttpGet("{entityType}/{entityId:guid}")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetEntityHistory(string entityType, Guid entityId, [FromQuery] int limit = 100)
     {
         var items = await _service.GetEntityHistoryAsync(entityType, entityId, limit);
@@ -35,6 +39,7 @@ public class ConfigurationAuditController : ControllerBase
     /// Retorna histórico de mudanças de um campo específico de uma entidade.
     /// </summary>
     [HttpGet("{entityType}/{entityId:guid}/field/{fieldName}")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetFieldHistory(string entityType, Guid entityId, string fieldName)
     {
         var items = await _service.GetFieldHistoryAsync(entityType, entityId, fieldName);
@@ -45,6 +50,7 @@ public class ConfigurationAuditController : ControllerBase
     /// Retorna histórico de mudanças feitas por um usuário.
     /// </summary>
     [HttpGet("by-user/{username}")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetByUser(string username, [FromQuery] int limit = 100)
     {
         var items = await _service.GetChangesByUserAsync(username, limit);
@@ -55,6 +61,7 @@ public class ConfigurationAuditController : ControllerBase
     /// Relatório de auditoria em período.
     /// </summary>
     [HttpGet("report")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetReport([FromQuery] DateTime startDate, [FromQuery] DateTime endDate)
     {
         var items = await _service.GetAuditReportAsync(startDate, endDate);

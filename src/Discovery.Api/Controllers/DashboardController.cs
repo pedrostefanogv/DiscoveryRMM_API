@@ -1,4 +1,6 @@
 using Discovery.Core.Interfaces;
+using Discovery.Core.Enums.Identity;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -22,6 +24,7 @@ public class DashboardController : ControllerBase
     }
 
     [HttpGet("dashboard/global/summary")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
     public async Task<IActionResult> GetGlobalSummary([FromQuery] string? window = null, CancellationToken cancellationToken = default)
     {
         if (!TryParseWindow(window, out var parsedWindow, out var error))
@@ -32,6 +35,7 @@ public class DashboardController : ControllerBase
     }
 
     [HttpGet("clients/{clientId:guid}/dashboard/summary")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetClientSummary(Guid clientId, [FromQuery] string? window = null, CancellationToken cancellationToken = default)
     {
         if (!TryParseWindow(window, out var parsedWindow, out var error))
@@ -46,6 +50,7 @@ public class DashboardController : ControllerBase
     }
 
     [HttpGet("clients/{clientId:guid}/sites/{siteId:guid}/dashboard/summary")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetSiteSummary(
         Guid clientId,
         Guid siteId,

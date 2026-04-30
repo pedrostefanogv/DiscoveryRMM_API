@@ -1,6 +1,8 @@
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -19,6 +21,7 @@ public class ClientsController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] bool includeInactive = false)
     {
         var clients = await _repo.GetAllAsync(includeInactive);
@@ -26,6 +29,7 @@ public class ClientsController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var client = await _repo.GetByIdAsync(id);
@@ -33,6 +37,7 @@ public class ClientsController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Clients, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateClientRequest request)
     {
         var client = new Client
@@ -45,6 +50,7 @@ public class ClientsController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateClientRequest request)
     {
         var client = await _repo.GetByIdAsync(id);
@@ -59,6 +65,7 @@ public class ClientsController : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         await _repo.DeleteAsync(id);
@@ -66,6 +73,7 @@ public class ClientsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/custom-fields")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, CancellationToken cancellationToken = default)
     {
         var client = await _repo.GetByIdAsync(id);
@@ -77,6 +85,7 @@ public class ClientsController : ControllerBase
     }
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomFieldValue(
         Guid id,
         Guid definitionId,

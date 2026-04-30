@@ -1,6 +1,7 @@
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Discovery.Api.Filters;
 
 namespace Discovery.Api.Controllers;
 
@@ -42,6 +44,7 @@ public class ReportsController : ControllerBase
     }
 
     [HttpGet("datasets")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public IActionResult GetDatasetCatalog()
     {
         var datasets = DatasetCatalog
@@ -75,6 +78,7 @@ public class ReportsController : ControllerBase
     }
 
     [HttpGet("layout-schema")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public IActionResult GetLayoutSchema()
     {
         return Ok(new
@@ -116,6 +120,7 @@ public class ReportsController : ControllerBase
     }
 
     [HttpGet("autocomplete")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public IActionResult GetAutocomplete(
         [FromQuery] string? term,
         [FromQuery] ReportDatasetType? datasetType,
@@ -169,6 +174,7 @@ public class ReportsController : ControllerBase
     }
 
     [HttpPost("templates")]
+    [RequirePermission(ResourceType.Reports, ActionType.Create)]
     public async Task<IActionResult> CreateTemplate([FromBody] CreateReportTemplateRequest request)
     {
         var template = new ReportTemplate
@@ -192,6 +198,7 @@ public class ReportsController : ControllerBase
     }
 
     [HttpGet("templates/library")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public async Task<IActionResult> GetLibraryTemplates(
         [FromQuery] ReportDatasetType? datasetType)
     {

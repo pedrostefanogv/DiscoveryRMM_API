@@ -41,4 +41,9 @@ public interface IUserAuthService
     /// Retorna a política efetiva de MFA para o usuário com base nas roles vinculadas.
     /// </summary>
     Task<RoleMfaRequirement> GetEffectiveMfaRequirementAsync(Guid userId);
+
+    /// <summary>
+    /// Desbloqueia manualmente uma conta (reset de lockout). Ex.: admin desbloqueia usuário após lockout temporário.
+    /// </summary>
+    Task UnlockAsync(Guid userId);
 }

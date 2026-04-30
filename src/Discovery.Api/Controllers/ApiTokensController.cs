@@ -1,4 +1,5 @@
 using Discovery.Core.DTOs.ApiTokens;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
@@ -31,6 +32,7 @@ public class ApiTokensController : ControllerBase
     /// A accessKey retornada é exibida apenas uma vez — não pode ser recuperada depois.
     /// </summary>
     [HttpPost]
+    [RequirePermission(ResourceType.Users, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateApiTokenRequestDto dto)
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
@@ -40,6 +42,7 @@ public class ApiTokensController : ControllerBase
 
     /// <summary>Revoga (desativa) um token de API.</summary>
     [HttpDelete("{tokenId:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Delete)]
     public async Task<IActionResult> Revoke(Guid tokenId)
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;

@@ -1,6 +1,7 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Configuration;
 using System.Text.Json;
 using Discovery.Core.Interfaces;
@@ -9,6 +10,7 @@ using Discovery.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Discovery.Api.Services;
+using Discovery.Api.Filters;
 
 namespace Discovery.Api.Controllers;
 
@@ -70,6 +72,7 @@ public class ConfigurationsController : ControllerBase
     // ============ Server ============
 
     [HttpGet("server")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetServer()
     {
         var config = await _configService.GetServerConfigAsync();
@@ -77,6 +80,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpPut("server")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> UpdateServer([FromBody] ServerConfiguration config)
     {
         var (isValid, errors) = await _configService.ValidateAsync(config);
@@ -102,6 +106,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpPatch("server")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> PatchServer([FromBody] Dictionary<string, object> updates)
     {
         var updated = await _configService.PatchServerAsync(updates,
@@ -114,6 +119,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpPost("server/reset")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> ResetServer()
     {
         var reset = await _configService.ResetServerAsync(
@@ -125,6 +131,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpPost("server/nats/test")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> TestNatsConnection([FromBody] NatsConnectionTestRequest? request, CancellationToken cancellationToken)
     {
         request ??= new NatsConnectionTestRequest();
@@ -150,6 +157,7 @@ public class ConfigurationsController : ControllerBase
     /// TTL de JWT deve estar entre 15 minutos (mínimo) e 4320 minutos / 72h (máximo).
     /// </summary>
     [HttpPatch("server/nats")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> PatchNatsSettings([FromBody] NatsSettingsRequest request)
     {
         const int minTtl = 15;
@@ -205,6 +213,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpGet("server/metadata")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetServerMetadata()
     {
         var server = await _configService.GetServerConfigAsync();
@@ -237,6 +246,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpGet("server/reporting")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetServerReporting()
     {
         var server = await _configService.GetServerConfigAsync();
@@ -247,6 +257,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpPut("server/reporting")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> UpdateServerReporting([FromBody] ReportingSettingsRequest request)
     {
         var normalizedMaxConcurrent = Math.Clamp(request.MaxConcurrentExecutions, 1, 16);
@@ -286,6 +297,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpGet("server/ticket-attachments")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetServerTicketAttachments()
     {
         var server = await _configService.GetServerConfigAsync();
@@ -294,6 +306,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpPut("server/ticket-attachments")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> UpdateServerTicketAttachments([FromBody] TicketAttachmentSettings request)
     {
         request ??= new TicketAttachmentSettings();
@@ -314,6 +327,7 @@ public class ConfigurationsController : ControllerBase
     // ============ Server Retention ============
 
     [HttpGet("server/retention")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetServerRetention()
     {
         var server = await _configService.GetServerConfigAsync();
@@ -322,6 +336,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpPut("server/retention")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> UpdateServerRetention([FromBody] UpdateRetentionRequest request)
     {
         var errors = new List<string>();
@@ -386,6 +401,7 @@ public class ConfigurationsController : ControllerBase
     }
 
     [HttpPost("server/retention/reset")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> ResetServerRetention()
     {
         var server = await _configService.GetServerConfigAsync();

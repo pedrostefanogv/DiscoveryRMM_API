@@ -1,6 +1,8 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -30,6 +32,7 @@ public class MonitoringEventsController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Logs, ActionType.Execute)]
     public async Task<IActionResult> Create([FromBody] CreateMonitoringEventRequest request, CancellationToken cancellationToken)
     {
         if (!ValidateRequest(request, out var error))
@@ -70,6 +73,7 @@ public class MonitoringEventsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/evaluate")]
+    [RequirePermission(ResourceType.Logs, ActionType.Execute)]
     public async Task<IActionResult> Evaluate(Guid id, CancellationToken cancellationToken)
     {
         var monitoringEvent = await _monitoringEventRepository.GetByIdAsync(id);

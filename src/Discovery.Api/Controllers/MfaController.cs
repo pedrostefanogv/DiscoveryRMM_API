@@ -6,13 +6,13 @@ using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Api.Filters;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/mfa")]
-[Microsoft.AspNetCore.Authorization.AllowAnonymous]
 public class MfaController : ControllerBase
 {
     private readonly IFido2Service _fido2Service;
@@ -62,6 +62,7 @@ public class MfaController : ControllerBase
     /// Pode ser chamado com mfaSetupToken (primeiro setup) ou com sessão completa.
     /// </summary>
     [HttpPost("fido2/register/begin")]
+    [AllowAnonymous]
     [RequireMfaSetupOrFullSession]
     public async Task<IActionResult> BeginFido2Registration()
     {
@@ -81,6 +82,7 @@ public class MfaController : ControllerBase
     /// A chave é persistida e o usuário é marcado como MFA configurado.
     /// </summary>
     [HttpPost("fido2/register/complete")]
+    [AllowAnonymous]
     [RequireMfaSetupOrFullSession]
     public async Task<IActionResult> CompleteFido2Registration([FromBody] CompleteFido2RegistrationDto dto)
     {
@@ -115,6 +117,7 @@ public class MfaController : ControllerBase
     /// Inicia o registro de um autenticador OTP/TOTP.
     /// </summary>
     [HttpPost("totp/register/begin")]
+    [AllowAnonymous]
     [RequireMfaSetupOrFullSession]
     public async Task<IActionResult> BeginTotpRegistration()
     {
@@ -137,6 +140,7 @@ public class MfaController : ControllerBase
     /// Conclui o registro de um autenticador OTP/TOTP.
     /// </summary>
     [HttpPost("totp/register/complete")]
+    [AllowAnonymous]
     [RequireMfaSetupOrFullSession]
     public async Task<IActionResult> CompleteTotpRegistration([FromBody] CompleteTotpRegistrationDto dto)
     {

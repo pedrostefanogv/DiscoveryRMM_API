@@ -1,7 +1,9 @@
 using Discovery.Api.Services;
+using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
@@ -54,6 +56,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] TicketFilterQuery filter)
     {
         var tickets = await _repo.GetAllAsync(filter);
@@ -61,6 +64,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpGet("by-client/{clientId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetByClient(Guid clientId, [FromQuery] Guid? workflowStateId)
     {
         var tickets = await _repo.GetByClientIdAsync(clientId, workflowStateId);
@@ -68,6 +72,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var ticket = await _repo.GetByIdAsync(id);
@@ -75,6 +80,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateTicketRequest request)
     {
         // Buscar estado inicial do workflow (global ou do client)
@@ -161,6 +167,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketRequest request)
     {
         var ticket = await _repo.GetByIdAsync(id);
@@ -207,6 +214,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpPatch("{id:guid}/workflow-state")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> UpdateWorkflowState(Guid id, [FromBody] UpdateWorkflowStateRequest request)
     {
         var ticket = await _repo.GetByIdAsync(id);
@@ -302,6 +310,7 @@ public class TicketsController : ControllerBase
     // --- Comments ---
 
     [HttpGet("{id:guid}/comments")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetComments(Guid id)
     {
         var comments = await _repo.GetCommentsAsync(id);
@@ -309,6 +318,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/comments")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> AddComment(Guid id, [FromBody] AddCommentRequest request)
     {
         var ticket = await _repo.GetByIdAsync(id);
@@ -376,6 +386,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/attachments")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAttachments(Guid id)
     {
         var ticket = await _repo.GetByIdAsync(id);
@@ -387,6 +398,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/attachments/presigned-upload")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> PrepareAttachmentUpload(Guid id, [FromBody] PrepareTicketAttachmentUploadRequest request)
     {
         var ticket = await _repo.GetByIdAsync(id);
@@ -430,6 +442,7 @@ public class TicketsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/attachments/complete-upload")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> CompleteAttachmentUpload(Guid id, [FromBody] CompleteTicketAttachmentUploadRequest request)
     {
         var ticket = await _repo.GetByIdAsync(id);
