@@ -463,6 +463,75 @@ prompt_postgres_password() {
   POSTGRES_PASSWORD="$input"
 }
 
+generate_random_nats_user() {
+  local generated_user
+  generated_user="discovery_nats_$(generate_random_password 10)"
+  generated_user="$(printf '%s' "$generated_user" | tr '[:upper:]' '[:lower:]')"
+  printf '%s' "$generated_user"
+}
+
+prompt_nats_user() {
+  if [[ -n "${NATS_USER:-}" ]]; then
+    NATS_USER_AUTO="${NATS_USER_AUTO:-0}"
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    NATS_USER="$(generate_random_nats_user)"
+    NATS_USER_AUTO=1
+    log "NATS_USER nao informado; gerando usuario aleatorio."
+    return
+  fi
+
+  local generated_user
+  generated_user="$(generate_random_nats_user)"
+
+  echo "Pressione Enter para usar um usuario NATS gerado automaticamente."
+  local input=""
+  read -r -p "Usuario NATS [$generated_user]: " input
+  input="$(printf '%s' "$input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if [[ -z "$input" ]]; then
+    NATS_USER="$generated_user"
+    NATS_USER_AUTO=1
+    log "Usuario NATS nao informado; gerado automaticamente."
+    return
+  fi
+
+  NATS_USER_AUTO=0
+  NATS_USER="$input"
+}
+
+prompt_nats_password() {
+  if [[ -n "${NATS_PASSWORD:-}" ]]; then
+    NATS_PASSWORD_AUTO="${NATS_PASSWORD_AUTO:-0}"
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    NATS_PASSWORD="$(generate_random_password 24)"
+    NATS_PASSWORD_AUTO=1
+    log "NATS_PASSWORD nao informado; gerando senha aleatoria."
+    return
+  fi
+
+  local generated_password
+  generated_password="$(generate_random_password 24)"
+
+  echo "Entrada oculta. Pressione Enter para usar uma senha NATS gerada automaticamente."
+  local input=""
+  read -r -s -p "Senha NATS: " input
+  printf '\n'
+  if [[ -z "$input" ]]; then
+    NATS_PASSWORD="$generated_password"
+    NATS_PASSWORD_AUTO=1
+    log "Senha NATS nao informada; gerada automaticamente."
+    return
+  fi
+
+  NATS_PASSWORD_AUTO=0
+  NATS_PASSWORD="$input"
+}
+
 confirm_installation() {
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
     return
@@ -514,7 +583,16 @@ print_selected_configuration_summary() {
   else
     echo "- PostgreSQL senha: informada"
   fi
-  echo "- NATS user: $NATS_USER"
+  if [[ "${NATS_USER_AUTO:-0}" -eq 1 ]]; then
+    echo "- NATS user: $NATS_USER (gerado automaticamente)"
+  else
+    echo "- NATS user: $NATS_USER"
+  fi
+  if [[ "${NATS_PASSWORD_AUTO:-0}" -eq 1 ]]; then
+    echo "- NATS senha: gerada automaticamente (veja /etc/discovery-api/discovery.env)"
+  else
+    echo "- NATS senha: informada"
+  fi
   echo "- NATS auth user: $NATS_AUTH_USER"
   echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
   if [[ "${TLS_CERT_PROVIDER:-self-signed}" == "zerossl-acme" ]]; then
@@ -1067,10 +1145,11 @@ prompt_nats_configuration() {
   wizard_header "Mensageria (NATS)" "$(wizard_step_label "8/9" "7/8")"
   echo "Configure as credenciais e hosts do NATS local."
   echo "Esses dados sao usados pela API e agentes para mensagens."
+  echo "Se usuario ou senha ficarem em branco, o instalador gera valores aleatorios."
   echo "----------------------------------------"
 
-  prompt_if_empty NATS_USER "Usuario NATS" 0 "discovery_nats"
-  prompt_if_empty NATS_PASSWORD "Senha NATS" 1
+  prompt_nats_user
+  prompt_nats_password
   prompt_if_empty NATS_AUTH_USER "Usuario de bypass da API no NATS (auth_users)" 0 "$NATS_USER"
   prompt_if_empty NATS_AUTH_PASSWORD "Senha de bypass da API no NATS" 1 "$NATS_PASSWORD"
   prompt_if_empty NATS_BIND_HOST "Host de bind do NATS (ex: 0.0.0.0 ou 127.0.0.1)" 0 "0.0.0.0"
