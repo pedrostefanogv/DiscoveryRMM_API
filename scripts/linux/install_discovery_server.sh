@@ -511,6 +511,55 @@ generate_random_password() {
   printf '%s' "$generated"
 }
 
+print_server_installation_data() {
+  wizard_header "Dados do servidor/instalacao" "$(wizard_step_label "2/8" "1/7")"
+  echo "Leitura do ambiente local para consulta e replicacao."
+  echo "----------------------------------------"
+  echo "- Hostname: $(hostname 2>/dev/null || echo desconhecido)"
+  echo "- Kernel: $(uname -sr 2>/dev/null || echo desconhecido)"
+
+  local internal_ip
+  internal_ip="$(detect_internal_ipv4)"
+  if [[ -n "$internal_ip" ]]; then
+    echo "- IP interno detectado: $internal_ip"
+  fi
+
+  echo
+  echo "[discovery.env]"
+  if sudo test -f /etc/discovery-api/discovery.env; then
+    sudo sed 's/^/  /' /etc/discovery-api/discovery.env
+  else
+    echo "  Arquivo /etc/discovery-api/discovery.env nao encontrado."
+  fi
+
+  echo
+  echo "[paths de chaves/certificados]"
+  if sudo test -f /etc/discovery-api/certs/jwt-public.pem; then
+    echo "  JWT public key: /etc/discovery-api/certs/jwt-public.pem"
+  else
+    echo "  JWT public key: ausente"
+  fi
+  if sudo test -f /etc/discovery-api/certs/jwt-private.pem; then
+    echo "  JWT private key: /etc/discovery-api/certs/jwt-private.pem"
+  else
+    echo "  JWT private key: ausente"
+  fi
+  if sudo test -f /etc/discovery-api/certs/api-internal.crt; then
+    echo "  TLS cert: /etc/discovery-api/certs/api-internal.crt"
+  else
+    echo "  TLS cert: ausente"
+  fi
+  if sudo test -f /etc/discovery-api/certs/api-internal.key; then
+    echo "  TLS key: /etc/discovery-api/certs/api-internal.key"
+  else
+    echo "  TLS key: ausente"
+  fi
+
+  echo
+  echo "Pressione Enter para voltar ao menu de modo de operacao..."
+  read -r _
+}
+
 select_operation_mode() {
   if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 || "$UPDATE_STACK_ONLY" -eq 1 ]]; then
     return
@@ -546,34 +595,43 @@ select_operation_mode() {
     return
   fi
 
-  wizard_header "Modo de Operacao" "$(wizard_step_label "2/8" "1/7")"
-  echo "Escolha o que sera executado neste momento:"
-  echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)"
-  echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
-  echo "3) Atualizar instalacao existente (repositorios + rebuild API/portal + restart servicos)"
-  echo "----------------------------------------"
+  while true; do
+    wizard_header "Modo de Operacao" "$(wizard_step_label "2/8" "1/7")"
+    echo "Escolha o que sera executado neste momento:"
+    echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)"
+    echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
+    echo "3) Atualizar instalacao existente (repositorios + rebuild API/portal + restart servicos)"
+    echo "4) Ver dados do servidor (instalacao atual, usuario, senha, chaves e afins)"
+    echo "----------------------------------------"
 
-  local selected_option
-  read -r -p "Opcao [1]: " selected_option
-  selected_option="${selected_option:-1}"
+    local selected_option
+    read -r -p "Opcao [1]: " selected_option
+    selected_option="${selected_option:-1}"
 
-  case "$selected_option" in
-    1)
-      UPDATE_NATS_CONFIG_ONLY=0
-      UPDATE_STACK_ONLY=0
-      ;;
-    2)
-      UPDATE_NATS_CONFIG_ONLY=1
-      UPDATE_STACK_ONLY=0
-      ;;
-    3)
-      UPDATE_NATS_CONFIG_ONLY=0
-      UPDATE_STACK_ONLY=1
-      ;;
-    *)
-      fail "Opcao invalida: $selected_option"
-      ;;
-  esac
+    case "$selected_option" in
+      1)
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=0
+        return
+        ;;
+      2)
+        UPDATE_NATS_CONFIG_ONLY=1
+        UPDATE_STACK_ONLY=0
+        return
+        ;;
+      3)
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=1
+        return
+        ;;
+      4)
+        print_server_installation_data
+        ;;
+      *)
+        echo "Opcao invalida: $selected_option" >&2
+        ;;
+    esac
+  done
 }
 
 apply_stack_update_only() {

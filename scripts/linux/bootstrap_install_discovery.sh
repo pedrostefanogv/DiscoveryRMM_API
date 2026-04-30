@@ -122,10 +122,63 @@ choose_branch_interactive() {
   done
 }
 
+choose_operation_mode_interactive() {
+  while true; do
+    echo >&2
+    echo "========================================" >&2
+    echo " Discovery RMM - Etapa 2/8" >&2
+    echo "----------------------------------------" >&2
+    echo " Modo de Operacao" >&2
+    echo "----------------------------------------" >&2
+    echo "Escolha o que sera executado neste momento:" >&2
+    echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)" >&2
+    echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)" >&2
+    echo "3) Atualizar instalacao existente (repositorios + rebuild API/portal + restart servicos)" >&2
+    echo "4) Ver dados do servidor (instalacao atual, credenciais e chaves)" >&2
+    echo "----------------------------------------" >&2
+
+    local selected_option
+    read -r -p "Opcao [1]: " selected_option
+    selected_option="${selected_option:-1}"
+    selected_option="$(printf '%s' "$selected_option" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+    case "$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]')" in
+      1|full|install|complete)
+        printf 'full'
+        return
+        ;;
+      2|nats|nats-only|update-nats)
+        printf 'nats'
+        return
+        ;;
+      3|update|update-stack|rebuild|upgrade)
+        printf 'update'
+        return
+        ;;
+      4|info|server|dados)
+        echo >&2
+        echo "========== Dados locais (/etc/discovery-api) ==========" >&2
+        if command -v sudo >/dev/null 2>&1 && sudo test -f /etc/discovery-api/discovery.env 2>/dev/null; then
+          sudo sed 's/^/  /' /etc/discovery-api/discovery.env >&2 || true
+        elif [[ -f /etc/discovery-api/discovery.env ]]; then
+          sed 's/^/  /' /etc/discovery-api/discovery.env >&2 || true
+        else
+          echo "  Arquivo /etc/discovery-api/discovery.env nao encontrado." >&2
+        fi
+        echo "=======================================================" >&2
+        ;;
+      *)
+        echo "Opcao invalida: $selected_option. Use 1-4." >&2
+        ;;
+    esac
+  done
+}
+
 BOOTSTRAP_REPO_URL="${DISCOVERY_BOOTSTRAP_REPO_URL:-https://github.com/pedrostefanogv/DiscoveryRMM_API.git}"
 BOOTSTRAP_BRANCH="${DISCOVERY_BOOTSTRAP_BRANCH:-${DISCOVERY_RELEASE_CHANNEL:-${DISCOVERY_GIT_BRANCH:-release}}}"
 BOOTSTRAP_WORKDIR=""
 INSTALLER_RELATIVE_PATH="scripts/linux/install_discovery_server.sh"
+BOOTSTRAP_INSTALL_MODE="${DISCOVERY_INSTALL_MODE:-${INSTALL_MODE:-}}"
 
 INSTALLER_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -173,8 +226,15 @@ if [[ -z "${DISCOVERY_BOOTSTRAP_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}
   done
 
   if [[ "$non_interactive" -eq 0 ]]; then
+    if [[ -z "$BOOTSTRAP_INSTALL_MODE" ]]; then
+      BOOTSTRAP_INSTALL_MODE="$(choose_operation_mode_interactive)"
+    fi
     BOOTSTRAP_BRANCH="$(choose_branch_interactive)"
   fi
+fi
+
+if [[ -n "$BOOTSTRAP_INSTALL_MODE" ]]; then
+  INSTALLER_ARGS=(--mode "$BOOTSTRAP_INSTALL_MODE" "${INSTALLER_ARGS[@]}")
 fi
 
 BOOTSTRAP_BRANCH="$(normalize_branch "$BOOTSTRAP_BRANCH")"
