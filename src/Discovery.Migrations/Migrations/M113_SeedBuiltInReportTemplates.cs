@@ -4,15 +4,12 @@ namespace Discovery.Migrations.Migrations;
 
 /// <summary>
 /// Seeds 17 built-in report templates into report_templates.
-/// Each template has a deterministic GUID (Namespace v5 based on a fixed namespace + template index).
+/// Each template uses gen_random_uuid() — idempotent per name + is_built_in.
 /// These templates serve as starting points for MSPs/users and can be cloned/installed.
 /// </summary>
 [Migration(20260429_113)]
 public class M113_SeedBuiltInReportTemplates : Migration
-{
-    private static readonly Guid NamespaceId = Guid.Parse("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
-
-    public override void Up()
+{    public override void Up()
     {
         InsertTemplate(0, "Inventário Completo de Hardware",
             "Inventário completo de hardware por agente: SO, CPU, RAM, GPU, discos, BIOS.",
@@ -85,22 +82,19 @@ public class M113_SeedBuiltInReportTemplates : Migration
 
     public override void Down()
     {
-        for (var i = 0; i < 17; i++)
-            Delete.FromTable("report_templates")
-                .Row(new { id = GetTemplateId(i) });
+        Execute.Sql("DELETE FROM report_templates WHERE is_built_in = true AND created_by = 'system';");
     }
 
-    private static void InsertTemplate(int index, string name, string description,
+    private void InsertTemplate(int index, string name, string description,
         string? filtersJson, int datasetType, string defaultFormat, int datasetTypeForSchema,
         string layoutJson, string? templateFiltersJson)
     {
-        var id = GetTemplateId(index);
         var now = DateTime.UtcNow;
 
         Insert.IntoTable("report_templates")
             .Row(new
             {
-                id,
+                id = Guid.NewGuid(),
                 client_id = (Guid?)null,
                 name,
                 description,
@@ -119,9 +113,6 @@ public class M113_SeedBuiltInReportTemplates : Migration
                 updated_by = "system"
             });
     }
-
-    private static Guid GetTemplateId(int index) =>
-        Guid.Parse($"00000000-0000-0000-0000-{index + 1000:D12}");
 
     // ═══════════════════════════════════════════════════════════════
     // Layout JSONs for each template (simplified)

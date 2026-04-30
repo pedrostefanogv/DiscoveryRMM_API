@@ -27,28 +27,30 @@ public class M045_CreateMcpToolPolicies : Migration
             .OnColumn("agent_id").Ascending()
             .OnColumn("tool_name").Ascending();
 
-        // Seed padrão: filesystem.read_file habilitada para todos
-        Insert.IntoTable("mcp_tool_policies").Row(new
-        {
-            id = Guid.Parse("00000000-0000-0000-0000-000000000001"),
-            client_id = (Guid?)null,
-            site_id = (Guid?)null,
-            agent_id = (Guid?)null,
-            tool_name = "filesystem.read_file",
-            is_enabled = true,
-            argument_schema_json = @"{
+        // Seed padrão: filesystem.read_file habilitada para todos (idempotente, GUID gerado pelo banco)
+        Execute.Sql(@"
+            INSERT INTO mcp_tool_policies (
+                id, client_id, site_id, agent_id, tool_name, is_enabled,
+                argument_schema_json, max_calls_per_minute, timeout_seconds,
+                created_at, updated_at
+            )
+            SELECT
+                gen_random_uuid(), NULL, NULL, NULL, 'filesystem.read_file', true,
+                '{
   ""type"": ""object"",
   ""properties"": {
     ""path"": { ""type"": ""string"", ""maxLength"": 500 },
     ""maxBytes"": { ""type"": ""integer"", ""maximum"": 10240 }
   },
   ""required"": [""path""]
-}",
-            max_calls_per_minute = 5,
-            timeout_seconds = 10,
-            created_at = DateTime.UtcNow,
-            updated_at = (DateTime?)null
-        });
+}',
+                5, 10, NOW(), NULL
+            WHERE NOT EXISTS (
+                SELECT 1 FROM mcp_tool_policies
+                WHERE tool_name = 'filesystem.read_file'
+                  AND client_id IS NULL AND site_id IS NULL AND agent_id IS NULL
+            );
+        ");
     }
 
     public override void Down()

@@ -1,4 +1,4 @@
-using FluentMigrator;
+﻿using FluentMigrator;
 
 namespace Discovery.Migrations.Migrations;
 
@@ -21,42 +21,43 @@ public class M081_CreateMeshCentralRightsProfiles : Migration
             .OnColumn("name").Ascending()
             .WithOptions().Unique();
 
-        Insert.IntoTable("meshcentral_rights_profiles").Row(new
-        {
-            id = new Guid("35F20A2A-1C48-4A91-9CC2-4D47D50398A6"),
-            name = "viewer",
-            description = "Visualizacao limitada",
-            rights_mask = 8448,
-            is_system = true,
-            created_at = SystemMethods.CurrentUTCDateTime,
-            updated_at = SystemMethods.CurrentUTCDateTime
-        });
+        // Seeds idempotentes com GUID gerado pelo banco (name é unique via ix_meshcentral_rights_profiles_name)
+        Execute.Sql(@"
+            INSERT INTO meshcentral_rights_profiles (id, name, description, rights_mask, is_system, created_at, updated_at)
+            SELECT gen_random_uuid(), 'viewer',   'Visualizacao limitada',      8448,  true, NOW(), NOW()
+            WHERE NOT EXISTS (SELECT 1 FROM meshcentral_rights_profiles WHERE name = 'viewer');
 
-        Insert.IntoTable("meshcentral_rights_profiles").Row(new
-        {
-            id = new Guid("D8143E8A-A280-44E2-A878-24F5B4F29A81"),
-            name = "operator",
-            description = "Operacao remota padrao",
-            rights_mask = 61176,
-            is_system = true,
-            created_at = SystemMethods.CurrentUTCDateTime,
-            updated_at = SystemMethods.CurrentUTCDateTime
-        });
+            INSERT INTO meshcentral_rights_profiles (id, name, description, rights_mask, is_system, created_at, updated_at)
+            SELECT gen_random_uuid(), 'operator', 'Operacao remota padrao',    61176, true, NOW(), NOW()
+            WHERE NOT EXISTS (SELECT 1 FROM meshcentral_rights_profiles WHERE name = 'operator');
 
-        Insert.IntoTable("meshcentral_rights_profiles").Row(new
-        {
-            id = new Guid("B2CE539F-0EA8-4BC0-A845-6189A8A4BF0D"),
-            name = "admin",
-            description = "Administracao completa",
-            rights_mask = -1,
-            is_system = true,
-            created_at = SystemMethods.CurrentUTCDateTime,
-            updated_at = SystemMethods.CurrentUTCDateTime
-        });
+            INSERT INTO meshcentral_rights_profiles (id, name, description, rights_mask, is_system, created_at, updated_at)
+            SELECT gen_random_uuid(), 'admin',    'Administracao completa',       -1, true, NOW(), NOW()
+            WHERE NOT EXISTS (SELECT 1 FROM meshcentral_rights_profiles WHERE name = 'admin');
+        ");
     }
 
     public override void Down()
     {
         Delete.Table("meshcentral_rights_profiles");
+    }
+}
+
+[Migration(20260325_081)]
+public class M081_AddNatsServerUrlInternalExternal : Migration
+{
+    public override void Up()
+    {
+        Alter.Table("server_configurations")
+            .AddColumn("nats_server_host_internal").AsCustom("text").NotNullable().WithDefaultValue("localhost")
+            .AddColumn("nats_server_host_external").AsCustom("text").NotNullable().WithDefaultValue("localhost")
+            .AddColumn("nats_use_wss_external").AsBoolean().NotNullable().WithDefaultValue(false);
+    }
+
+    public override void Down()
+    {
+        Delete.Column("nats_use_wss_external").FromTable("server_configurations");
+        Delete.Column("nats_server_host_external").FromTable("server_configurations");
+        Delete.Column("nats_server_host_internal").FromTable("server_configurations");
     }
 }

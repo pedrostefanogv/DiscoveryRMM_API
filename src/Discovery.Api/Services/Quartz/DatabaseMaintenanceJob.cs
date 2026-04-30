@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Discovery.Core.Configuration;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 using Quartz;
 
 namespace Discovery.Api.Services.Quartz;
@@ -184,7 +185,7 @@ public sealed class DatabaseMaintenanceJob : IJob
 
         try
         {
-            var settings = JsonSerializer.Deserialize<RetentionSettings>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            var settings = JsonSerializer.Deserialize<RetentionSettings>(json, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             return settings?.DatabaseMaintenance;
         }
         catch

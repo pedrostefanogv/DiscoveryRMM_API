@@ -141,6 +141,8 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     // ── Infrastructure (defined in partial files) ─────────────────────────
 
     static partial void ConfigureDateTimeConversion(ModelBuilder modelBuilder);
+    static partial void ConfigureP2pEntities(ModelBuilder modelBuilder);
+    static partial void ConfigureIdentity(ModelBuilder modelBuilder);
     static partial void ConfigureCoreEntities(ModelBuilder modelBuilder);
     static partial void ConfigureInventory(ModelBuilder modelBuilder);
     static partial void ConfigureTickets(ModelBuilder modelBuilder);

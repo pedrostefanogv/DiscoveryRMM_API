@@ -184,7 +184,8 @@ internal static class MaintenanceMode
         await sessions.RevokeAllByUserIdAsync(user.Id);
         await EnsureAdminBindingAsync(db, user.Id);
 
-        PrintResult(user, options, created);
+        // Passa a senha real (resolvida acima) para PrintResult
+        PrintResult(user, options, created, password);
         return 0;
     }
 
@@ -234,23 +235,29 @@ internal static class MaintenanceMode
         return user;
     }
 
-    private static void PrintResult(User user, Options options, bool created)
+    private static void PrintResult(User user, Options options, bool created, string resolvedPassword)
     {
         Console.WriteLine("Admin recovery completed.");
         Console.WriteLine($"Login: {user.Login}");
         Console.WriteLine($"User created: {(created ? "yes" : "no")}");
         Console.WriteLine($"MFA reset: {(options.ResetMfa ? "yes" : "no")}");
         Console.WriteLine("All active sessions for this user were revoked.");
+        Console.WriteLine();
 
         if (options.PasswordFromStdin || !string.IsNullOrWhiteSpace(options.Password))
         {
-            Console.WriteLine("Password source: provided by operator (not echoed).\n");
+            Console.WriteLine("Password source: provided by operator (not echoed).");
         }
         else
         {
-            var tempPassword = options.Password ?? "(auto-generated)";
-            Console.WriteLine($"Temporary password: {tempPassword}");
-            Console.WriteLine("Store it safely. The user must change password on next login.");
+            Console.WriteLine("========================================");
+            Console.WriteLine(" TEMPORARY PASSWORD (auto-generated)");
+            Console.WriteLine("----------------------------------------");
+            Console.WriteLine($" {resolvedPassword}");
+            Console.WriteLine("----------------------------------------");
+            Console.WriteLine("Store it safely. The user MUST change");
+            Console.WriteLine("password and login on first access.");
+            Console.WriteLine("========================================");
         }
     }
 

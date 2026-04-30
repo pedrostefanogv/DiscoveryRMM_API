@@ -5,8 +5,9 @@ namespace Discovery.Migrations.Migrations;
 [Migration(20260317_083)]
 public class M083_HardenInitialAdminSeed : Migration
 {
-    // Migration corretiva para ambientes que ja executaram a M073 legada.
-    // Reforca first-access e vinculos logicos por login/nome, sem depender de IDs fixos.
+    // Migration corretiva para ambientes que já executaram a M073 legada (antes da remoção do seed hardcoded).
+    // Reforça first-access e vínculos lógicos por login/nome, sem depender de IDs fixos.
+    // Segura para novas instalações: será no-op se não houver usuário 'admin'.
     private const string AdminLogin = "admin";
     private const string AdminGroupName = "Administradores";
     private const string AdminRoleName = "Admin";

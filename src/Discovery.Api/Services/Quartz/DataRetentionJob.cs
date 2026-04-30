@@ -101,7 +101,7 @@ public sealed class DataRetentionJob : IJob
         // 7. Automation execution reports
         var autoReportCutoff = now.AddDays(-settings.AutomationReportRetentionDays);
         var autoReportsDeleted = await db.AutomationExecutionReports
-            .Where(r => r.StartedAt.HasValue && r.StartedAt < autoReportCutoff)
+            .Where(r => r.CreatedAt < autoReportCutoff)
             .ExecuteDeleteAsync(ct);
         if (autoReportsDeleted > 0)
             logger.LogInformation("DataRetention: deleted {Count} automation execution reports.", autoReportsDeleted);
@@ -121,7 +121,7 @@ public sealed class DataRetentionJob : IJob
 
         try
         {
-            return JsonSerializer.Deserialize<RetentionSettings>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            return JsonSerializer.Deserialize<RetentionSettings>(json, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                 ?? new RetentionSettings();
         }
         catch

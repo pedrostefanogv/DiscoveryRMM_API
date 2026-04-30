@@ -1,5 +1,7 @@
 using FluentMigrator;
 
+namespace Discovery.Migrations.Migrations;
+
 [Migration(20260324_086)]
 public class M086_DropLegacyNatsServerUrl : Migration
 {

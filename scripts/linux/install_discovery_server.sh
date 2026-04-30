@@ -2060,7 +2060,39 @@ EOF
 }
 
 run_db_migrations() {
-  log "Migracoes sao executadas no startup da API; etapa manual desativada"
+  log "Executando migrations no startup da API (dotnet Discovery.Api)"
+
+  local api_env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  local api_current="${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}"
+
+  if [[ ! -f "$api_current/Discovery.Api" ]]; then
+    warn "Binario da API nao encontrado em $api_current/Discovery.Api"
+    warn "Assegure-se de que publish_api foi executado com sucesso antes."
+    return
+  fi
+
+  log "Rodando migracoes + bootstrap admin via --recover-admin..."
+  set -a
+  if [[ -f "$api_env_file" ]]; then
+    # shellcheck disable=SC1090
+    source "$api_env_file"
+  fi
+  set +a
+
+  # Executa --recover-admin para criar admin com senha aleatoria
+  # As migrations rodam automaticamente antes do recover-admin no Program.cs
+  local output
+  output="$("$api_current/Discovery.Api" --recover-admin 2>&1)" || {
+    local exit_code=$?
+    warn "recover-admin falhou com codigo ${exit_code}:"
+    warn "$output"
+    return
+  }
+
+  log "Admin bootstrap concluido. Credenciais geradas pelo recover-admin."
+
+  # Guarda a saida para exibir no summary
+  ADMIN_RECOVERY_OUTPUT="$output"
 }
 
 show_summary() {
@@ -2084,6 +2116,20 @@ show_summary() {
   fi
   echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
   echo
+
+  # Mostra credenciais do admin geradas pelo --recover-admin
+  if [[ -n "${ADMIN_RECOVERY_OUTPUT:-}" ]]; then
+    echo "========================================"
+    echo " CREDENCIAIS DE PRIMEIRO ACESSO"
+    echo "----------------------------------------"
+    echo "$ADMIN_RECOVERY_OUTPUT"
+    echo "----------------------------------------"
+    echo "Guarde a senha temporaria com seguranca."
+    echo "Obrigatorio alterar login + senha no primeiro acesso."
+    echo "========================================"
+    echo
+  fi
+
   echo "Verificacoes recomendadas:"
   echo "1) sudo systemctl status discovery-api --no-pager"
   echo "2) sudo systemctl status nginx --no-pager"

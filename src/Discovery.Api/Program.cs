@@ -217,6 +217,13 @@ app.Logger.LogInformation(
 
 if (hasMaintenanceMode)
 {
+    // Run migrations first so that recover-admin can bind users to roles/groups
+    using (var migrationScope = app.Services.CreateScope())
+    {
+        var runner = migrationScope.ServiceProvider.GetRequiredService<IMigrationRunner>();
+        runner.MigrateUp();
+    }
+
     var maintenanceExitCode = await MaintenanceMode.ExecuteAsync(app.Services, maintenanceOptions);
     Environment.ExitCode = maintenanceExitCode;
     return;

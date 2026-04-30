@@ -9,8 +9,6 @@ namespace Discovery.Migrations.Migrations;
 [Migration(20260304_024)]
 public class M024_SeedDefaultServerConfiguration : Migration
 {
-    private static readonly Guid SeedServerConfigId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-
     public override void Up()
     {
         if (ServerConfigurationExists())
@@ -19,7 +17,7 @@ public class M024_SeedDefaultServerConfiguration : Migration
         Insert.IntoTable("server_configurations")
             .Row(new Dictionary<string, object>
             {
-                ["id"] = SeedServerConfigId,
+                ["id"] = Guid.NewGuid(),
                 ["recovery_enabled"] = false,
                 ["discovery_enabled"] = false,
                 ["p2p_files_enabled"] = false,
@@ -45,7 +43,7 @@ public class M024_SeedDefaultServerConfiguration : Migration
 
     public override void Down()
     {
-        Delete.FromTable("server_configurations").Row(new { id = SeedServerConfigId });
+        Execute.Sql("DELETE FROM server_configurations;");
     }
 
     private bool ServerConfigurationExists()

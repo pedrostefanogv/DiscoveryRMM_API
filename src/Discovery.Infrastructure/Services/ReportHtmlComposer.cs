@@ -669,10 +669,10 @@ public class ReportHtmlComposer : IReportHtmlComposer
 
     private static string? BuildGaugeConfig(ReportLayoutChartDefinition chart)
     {
-        if (!chart.ValueExpr.HasValue && chart.Thresholds is null)
+        if (string.IsNullOrWhiteSpace(chart.ValueExpr) && chart.Thresholds is null)
             return null;
 
-        var value = chart.ValueExpr ?? 0;
+        var value = chart.ValueExpr ?? "0";
         var thresholds = chart.Thresholds is { Count: > 0 }
             ? string.Join(",", chart.Thresholds.Select(t => $"{{ \"value\": {t.Value}, \"color\": \"{t.Color ?? "#888"}\" }}"))
             : "";

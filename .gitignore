@@ -623,3 +623,4 @@ $RECYCLE.BIN/
 .codebase/
 .vscode/
 .github/
+appsettings.Development.json

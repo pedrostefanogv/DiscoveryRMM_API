@@ -2,7 +2,7 @@ using FluentMigrator;
 
 namespace Discovery.Migrations.Migrations;
 
-[Migration(20260307042)]
+[Migration(20260307_042, "Populate execution_schema_json for existing report templates")]
 public class M042_PopulateExecutionSchemaJsonForTemplates : Migration
 {
     public override void Up()
