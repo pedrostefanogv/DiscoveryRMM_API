@@ -13,8 +13,6 @@ server {
 server {
   listen 443 ssl http2;
   listen [::]:443 ssl http2;
-  listen 8443 ssl http2;
-  listen [::]:8443 ssl http2;
   server_name __SERVER_NAME_LIST__;
 
 __REDIRECT_RULES__
