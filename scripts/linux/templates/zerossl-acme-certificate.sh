@@ -357,12 +357,25 @@ complete_dns_challenge() {
 
 install_certificate() {
   install -d -m 750 -o root -g discovery-api "$(dirname "$ZEROSSL_CERT_KEY_PATH")"
+  local output_file
+  output_file="$(mktemp)"
+  set +e
   "$ZEROSSL_ACME_SH" --home "$ZEROSSL_ACME_HOME" \
     --install-cert \
     -d "$ZEROSSL_CERT_DOMAIN" \
     --key-file "$ZEROSSL_CERT_KEY_PATH" \
     --fullchain-file "$ZEROSSL_CERT_FULLCHAIN_PATH" \
-    --reloadcmd "systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true"
+    --reloadcmd "systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true" \
+    2>&1 | tee "$output_file"
+  local exit_code=${PIPESTATUS[0]}
+  set -e
+
+  if [[ "$exit_code" -ne 0 && ( ! -s "$ZEROSSL_CERT_KEY_PATH" || ! -s "$ZEROSSL_CERT_FULLCHAIN_PATH" ) ]]; then
+    cat "$output_file" >&2
+    rm -f "$output_file"
+    fail "acme.sh falhou ao instalar o certificado (codigo $exit_code)."
+  fi
+  rm -f "$output_file"
 
   chmod 640 "$ZEROSSL_CERT_KEY_PATH"
   chmod 644 "$ZEROSSL_CERT_FULLCHAIN_PATH"

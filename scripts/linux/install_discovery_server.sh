@@ -1384,6 +1384,7 @@ EOF
 websocket {
   port: $nats_ws_port
   host: $nats_ws_host
+  no_tls: true
 }
 EOF
 )
