@@ -1092,16 +1092,31 @@ install_nk_tool() {
   case "$arch" in
     x86_64)  nk_arch="amd64" ;;
     aarch64) nk_arch="arm64" ;;
-    armv7l)  nk_arch="arm"   ;;
+    armv7l)  nk_arch="armv7" ;;
     *)       fail "Arquitetura nao suportada para download do nk: $arch" ;;
   esac
 
   local nk_bin="/usr/local/bin/nk"
-  local nk_url="https://github.com/nats-io/nkeys/releases/latest/download/nk-linux-${nk_arch}"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local nk_zip="$tmp_dir/nkeys.zip"
+  local nk_path=""
+  local release_tag
+  release_tag="$(curl -fsSL "https://api.github.com/repos/nats-io/nkeys/releases/latest" | jq -r '.tag_name')"
+  [[ -n "$release_tag" && "$release_tag" != "null" ]] || fail "Nao foi possivel descobrir a versao mais recente do nkeys."
+
+  local nk_url="https://github.com/nats-io/nkeys/releases/download/${release_tag}/nkeys-${release_tag}-linux-${nk_arch}.zip"
 
   log "Baixando ferramenta nk (geracao de chaves NATS)..."
-  sudo curl -fsSL "$nk_url" -o "$nk_bin"
-  sudo chmod +x "$nk_bin"
+  sudo apt-get install -y unzip >/dev/null
+  curl -fsSL "$nk_url" -o "$nk_zip"
+  unzip -q "$nk_zip" -d "$tmp_dir"
+
+  nk_path="$(find "$tmp_dir" -type f -name nk | head -n 1)"
+  [[ -n "$nk_path" ]] || fail "Nao foi possivel localizar o binario nk no pacote baixado."
+
+  sudo install -m 0755 "$nk_path" "$nk_bin"
+  rm -rf "$tmp_dir"
   log "nk instalado em $nk_bin"
 }
 
@@ -1124,16 +1139,18 @@ generate_nats_account_keys() {
   install_nk_tool
 
   log "Gerando account key NATS..."
-  local account_output
-  account_output="$(nk -gen account)"
-  NATS_ACCOUNT_SEED="$(echo "$account_output" | head -n 1)"
-  NATS_ACCOUNT_PUBLIC_KEY="$(echo "$account_output" | tail -n 1)"
+  local account_seed
+  account_seed="$(nk -gen account | head -n 1 | tr -d '\r')"
+  NATS_ACCOUNT_SEED="$account_seed"
+  NATS_ACCOUNT_PUBLIC_KEY="$(nk -inkey <(printf '%s' "$NATS_ACCOUNT_SEED") -pubout 2>/dev/null || true)"
+  [[ -n "$NATS_ACCOUNT_PUBLIC_KEY" ]] || fail "Falha ao derivar chave publica da conta NATS a partir do seed."
 
   log "Gerando xkey NATS (criptografia do callout)..."
-  local xkey_output
-  xkey_output="$(nk -gen curve)"
-  NATS_XKEY_SEED="$(echo "$xkey_output" | head -n 1)"
-  NATS_XKEY_PUBLIC_KEY="$(echo "$xkey_output" | tail -n 1)"
+  local xkey_seed
+  xkey_seed="$(nk -gen curve | head -n 1 | tr -d '\r')"
+  NATS_XKEY_SEED="$xkey_seed"
+  NATS_XKEY_PUBLIC_KEY="$(nk -inkey <(printf '%s' "$NATS_XKEY_SEED") -pubout 2>/dev/null || true)"
+  [[ -n "$NATS_XKEY_PUBLIC_KEY" ]] || fail "Falha ao derivar chave publica XKey do NATS a partir do seed."
 
   log "Chaves NATS geradas com sucesso. Issuer (account public key): $NATS_ACCOUNT_PUBLIC_KEY"
 }

@@ -4,10 +4,33 @@ set -euo pipefail
 ACTION="${1:-issue}"
 DISCOVERY_ENV_FILE="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
 
-if [[ -f "$DISCOVERY_ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$DISCOVERY_ENV_FILE"
-fi
+load_env_file() {
+  local file_path="$1"
+  [[ -f "$file_path" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" == *"="* ]] || continue
+
+    local key="${line%%=*}"
+    local value="${line#*=}"
+
+    key="$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+
+    if [[ "$value" =~ ^\".*\"$ ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "$value" =~ ^\'.*\'$ ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+
+    export "$key=$value"
+  done < "$file_path"
+}
+
+load_env_file "$DISCOVERY_ENV_FILE"
 
 log() {
   printf '[zerossl] %s\n' "$*"
