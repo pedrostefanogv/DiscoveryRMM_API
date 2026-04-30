@@ -70,7 +70,6 @@ DISCOVERY_API_CURRENT="${DISCOVERY_API_CURRENT:-$DISCOVERY_API_BASE/current}"
 DISCOVERY_API_PROJECT="${DISCOVERY_API_PROJECT:-src/Discovery.Api/Discovery.Api.csproj}"
 DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-}"
 DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-release}"
-DISCOVERY_GIT_TOKEN_FILE="${DISCOVERY_GIT_TOKEN_FILE:-/etc/discovery-api/github.token}"
 DISCOVERY_SITE_GIT_REPO="${DISCOVERY_SITE_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Site}"
 DISCOVERY_SITE_BASE="${DISCOVERY_SITE_BASE:-/opt/discovery-site}"
 DISCOVERY_SITE_SOURCE="${DISCOVERY_SITE_SOURCE:-$DISCOVERY_SITE_BASE/source}"
@@ -93,6 +92,7 @@ if [[ -z "$DISCOVERY_SITE_NATS_URL" ]]; then
 fi
 DISCOVERY_KEEP_RELEASES="${DISCOVERY_KEEP_RELEASES:-5}"
 DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-}"
+DISCOVERY_CLEAN_BUILD="${DISCOVERY_CLEAN_BUILD:-1}"
 
 DETECTED_ARCH="$(detect_system_architecture)"
 if DETECTED_DOTNET_RUNTIME="$(map_arch_to_dotnet_runtime "$DETECTED_ARCH")"; then
@@ -121,37 +121,7 @@ fi
 mkdir -p "$DISCOVERY_API_RELEASES"
 mkdir -p "$DISCOVERY_SITE_RELEASES"
 
-GITHUB_PAT=""
-if [[ -f "$DISCOVERY_GIT_TOKEN_FILE" ]]; then
-  GITHUB_PAT="$(tr -d '\r\n' < "$DISCOVERY_GIT_TOKEN_FILE")"
-fi
-
-ASKPASS_FILE=""
-cleanup() {
-  if [[ -n "$ASKPASS_FILE" ]]; then
-    rm -f "$ASKPASS_FILE"
-  fi
-}
-trap cleanup EXIT
-
-if [[ -n "$GITHUB_PAT" ]]; then
-  ASKPASS_FILE="$(mktemp)"
-  cat > "$ASKPASS_FILE" <<'EOF'
-#!/usr/bin/env sh
-case "$1" in
-  *Username*) printf '%s\n' "x-access-token" ;;
-  *Password*) printf '%s\n' "$GITHUB_PAT" ;;
-  *) printf '\n' ;;
-esac
-EOF
-  chmod 700 "$ASKPASS_FILE"
-  export GIT_ASKPASS="$ASKPASS_FILE"
-  export GIT_TERMINAL_PROMPT=0
-  export GITHUB_PAT
-else
-  log "Token GitHub nao informado; seguindo sem autenticacao (repo publico)"
-  export GIT_TERMINAL_PROMPT=0
-fi
+export GIT_TERMINAL_PROMPT=0
 
 clone_or_fetch_repo() {
   local repo_url="$1"
@@ -179,12 +149,29 @@ cleanup_old_releases() {
   fi
 }
 
+clean_api_build_cache() {
+  if [[ "${DISCOVERY_CLEAN_BUILD:-1}" != "1" ]]; then
+    return
+  fi
+  log "Limpando cache de build da API (obj/ bin/)"
+  find "$DISCOVERY_API_SOURCE" -maxdepth 4 \( -name obj -o -name bin \) -type d -exec rm -rf {} + 2>/dev/null || true
+}
+
+clean_site_build_cache() {
+  if [[ "${DISCOVERY_CLEAN_BUILD:-1}" != "1" ]]; then
+    return
+  fi
+  log "Limpando cache de build do portal web (node_modules/.cache e dist/)"
+  rm -rf "$DISCOVERY_SITE_SOURCE/node_modules/.cache" "$DISCOVERY_SITE_SOURCE/dist" 2>/dev/null || true
+}
+
 publish_api_release() {
   local remote_rev="$1"
   local release_id="$(date +%Y%m%d%H%M%S)-${remote_rev:0:8}"
   local release_dir="$DISCOVERY_API_RELEASES/$release_id"
 
   mkdir -p "$release_dir"
+  clean_api_build_cache
   dotnet publish "$DISCOVERY_API_SOURCE/$DISCOVERY_API_PROJECT" \
     -c Release \
     -r "$DISCOVERY_DOTNET_RUNTIME" \
@@ -206,6 +193,7 @@ publish_site_release() {
   local release_dir="$DISCOVERY_SITE_RELEASES/$release_id"
 
   mkdir -p "$release_dir"
+  clean_site_build_cache
   npm --prefix "$DISCOVERY_SITE_SOURCE" ci
   env \
     VITE_API_URL="$DISCOVERY_SITE_API_URL" \

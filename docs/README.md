@@ -14,6 +14,7 @@
 |---|----------|-------|
 | 1 | [`AUTHENTICATION.md`](AUTHENTICATION.md) | Login, MFA, primeiro acesso, permissões, autorização por escopo |
 | 2 | [`MESHCENTRAL.md`](MESHCENTRAL.md) | Embed, identity sync, group policy, node-link, diagnostics |
+| 3 | [`FRONTEND_API_CONTRACTS.md`](FRONTEND_API_CONTRACTS.md) | Guia de consumo da API para front/site: endpoints, contratos, validações, auth e realtime |
 | 4 | [`MESSAGING_NATS.md`](MESSAGING_NATS.md) | Auth callout, credenciais scoped, subjects canônicos, remote debug dual-channel |
 | 5 | [`OBJECT_STORAGE.md`](OBJECT_STORAGE.md) | S3-compatible, ticket attachments, report download presigned |
 | 6 | [`REPORTING.md`](REPORTING.md) | Datasets, templates, preview, execuções, multi-source layouts |

@@ -73,9 +73,10 @@ DISCOVERY_API_CURRENT="${DISCOVERY_API_CURRENT:-$DISCOVERY_API_BASE/current}"
 DISCOVERY_API_PROJECT="${DISCOVERY_API_PROJECT:-src/Discovery.Api/Discovery.Api.csproj}"
 DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-}"
 DISCOVERY_GIT_BRANCH="${DISCOVERY_GIT_BRANCH:-main}"
-DISCOVERY_GIT_TOKEN_FILE="${DISCOVERY_GIT_TOKEN_FILE:-/etc/discovery-api/github.token}"
+
 DISCOVERY_KEEP_RELEASES="${DISCOVERY_KEEP_RELEASES:-5}"
 DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-}"
+DISCOVERY_CLEAN_BUILD="${DISCOVERY_CLEAN_BUILD:-1}"
 
 DETECTED_ARCH="$(detect_system_architecture)"
 if DETECTED_DOTNET_RUNTIME="$(map_arch_to_dotnet_runtime "$DETECTED_ARCH")"; then
@@ -102,38 +103,15 @@ fi
 
 mkdir -p "$DISCOVERY_API_RELEASES"
 
-GITHUB_PAT=""
-if [[ -f "$DISCOVERY_GIT_TOKEN_FILE" ]]; then
-  GITHUB_PAT="$(tr -d '\r\n' < "$DISCOVERY_GIT_TOKEN_FILE")"
-fi
+export GIT_TERMINAL_PROMPT=0
 
-ASKPASS_FILE=""
-cleanup() {
-  if [[ -n "$ASKPASS_FILE" ]]; then
-    rm -f "$ASKPASS_FILE"
+clean_api_build_cache() {
+  if [[ "${DISCOVERY_CLEAN_BUILD:-1}" != "1" ]]; then
+    return
   fi
+  log "Limpando cache de build da API (obj/ bin/)"
+  find "$DISCOVERY_API_SOURCE" -maxdepth 4 \( -name obj -o -name bin \) -type d -exec rm -rf {} + 2>/dev/null || true
 }
-trap cleanup EXIT
-
-if [[ -n "$GITHUB_PAT" ]]; then
-  ASKPASS_FILE="$(mktemp)"
-  cat > "$ASKPASS_FILE" <<'EOF'
-#!/usr/bin/env sh
-case "$1" in
-  *Username*) printf '%s\n' "x-access-token" ;;
-  *Password*) printf '%s\n' "$GITHUB_PAT" ;;
-  *) printf '\n' ;;
-esac
-EOF
-  chmod 700 "$ASKPASS_FILE"
-
-  export GIT_ASKPASS="$ASKPASS_FILE"
-  export GIT_TERMINAL_PROMPT=0
-  export GITHUB_PAT
-else
-  log "Token GitHub nao informado; seguindo sem autenticacao (repo publico)"
-  export GIT_TERMINAL_PROMPT=0
-fi
 
 if [[ ! -d "$DISCOVERY_API_SOURCE/.git" ]]; then
   log "Repositorio da API nao encontrado. Clonando em $DISCOVERY_API_SOURCE"
@@ -160,6 +138,7 @@ RELEASE_ID="$(date +%Y%m%d%H%M%S)-${REMOTE_REV:0:8}"
 NEW_RELEASE="$DISCOVERY_API_RELEASES/$RELEASE_ID"
 mkdir -p "$NEW_RELEASE"
 
+clean_api_build_cache
 dotnet publish "$DISCOVERY_API_SOURCE/$DISCOVERY_API_PROJECT" \
   -c Release \
   -r "$DISCOVERY_DOTNET_RUNTIME" \

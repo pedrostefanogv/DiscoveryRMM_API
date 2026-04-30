@@ -146,47 +146,6 @@ wizard_header() {
   echo "----------------------------------------"
 }
 
-prompt_required_value() {
-  local var_name="$1"
-  local prompt_text="$2"
-  local secret="${3:-0}"
-  local current_value="${!var_name:-}"
-
-  if [[ -n "$current_value" ]]; then
-    return
-  fi
-
-  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-    fail "Variavel obrigatoria ausente para modo nao interativo: $var_name"
-  fi
-
-  local input=""
-  if [[ "$secret" -eq 1 ]]; then
-    read -r -s -p "$prompt_text: " input
-    printf '\n'
-  else
-    read -r -p "$prompt_text: " input
-  fi
-
-  [[ -n "$input" ]] || fail "Valor obrigatorio nao informado para $var_name"
-  printf -v "$var_name" '%s' "$input"
-}
-
-confirm_root_bootstrap_password() {
-  local password_already_configured="${1:-0}"
-
-  if [[ "$password_already_configured" -eq 1 || "$NON_INTERACTIVE" -eq 1 ]]; then
-    [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]] || fail "Variavel obrigatoria ausente para modo nao interativo: DISCOVERY_INSTALL_USER_PASSWORD"
-    return
-  fi
-
-  local password_confirm=""
-  read -r -s -p "Confirme a senha do usuario instalador: " password_confirm
-  printf '\n'
-
-  [[ "${DISCOVERY_INSTALL_USER_PASSWORD}" == "$password_confirm" ]] || fail "As senhas do usuario instalador nao conferem."
-}
-
 validate_installer_user_name() {
   local user_name="$1"
   [[ "$user_name" =~ ^[a-z_][a-z0-9_-]*\$?$ ]] || fail "Nome de usuario invalido: $user_name"
@@ -235,10 +194,35 @@ bootstrap_root_execution() {
   fi
 
   validate_installer_user_name "$DISCOVERY_INSTALL_USER"
-  local installer_password_already_configured=0
-  [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]] && installer_password_already_configured=1
-  prompt_required_value DISCOVERY_INSTALL_USER_PASSWORD "Senha do usuario instalador (sera usada para sudo)" 1
-  confirm_root_bootstrap_password "$installer_password_already_configured"
+
+  local installer_user_exists=0
+  id -u "$DISCOVERY_INSTALL_USER" >/dev/null 2>&1 && installer_user_exists=1
+
+  if [[ -z "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]]; then
+    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+      fail "Variavel obrigatoria ausente para modo nao interativo: DISCOVERY_INSTALL_USER_PASSWORD"
+    fi
+
+    if [[ "$installer_user_exists" -eq 1 ]]; then
+      echo
+      echo "Usuario '$DISCOVERY_INSTALL_USER' ja existe. Informe a senha atual para continuar."
+      read -r -s -p "Senha atual de $DISCOVERY_INSTALL_USER: " DISCOVERY_INSTALL_USER_PASSWORD
+      printf '\n'
+      [[ -n "$DISCOVERY_INSTALL_USER_PASSWORD" ]] || fail "Senha nao informada."
+    else
+      echo
+      echo "Usuario '$DISCOVERY_INSTALL_USER' nao existe. Defina uma senha para o novo usuario."
+      local pass1="" pass2=""
+      read -r -s -p "Nova senha para $DISCOVERY_INSTALL_USER: " pass1
+      printf '\n'
+      read -r -s -p "Confirme a senha: " pass2
+      printf '\n'
+      [[ -n "$pass1" ]] || fail "Senha nao pode ser vazia."
+      [[ "$pass1" == "$pass2" ]] || fail "As senhas nao conferem."
+      DISCOVERY_INSTALL_USER_PASSWORD="$pass1"
+    fi
+  fi
+
   ensure_installer_user_from_root "$DISCOVERY_INSTALL_USER" "$DISCOVERY_INSTALL_USER_PASSWORD"
 
   local askpass_file
@@ -445,7 +429,7 @@ confirm_installation() {
     return
   fi
 
-  wizard_header "Confirmacao" "$(wizard_step_label "9/9" "8/8")"
+  wizard_header "Confirmacao" "$(wizard_step_label "10/10" "9/9")"
 
   print_selected_configuration_summary
   echo
@@ -622,6 +606,13 @@ apply_stack_update_only() {
   validate_dotnet_runtime "$DISCOVERY_DOTNET_RUNTIME"
 
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
+  if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" ]] && sudo test -f /etc/discovery-api/discovery.env; then
+    DISCOVERY_CLEAN_BUILD="$(sudo awk -F= '/^DISCOVERY_CLEAN_BUILD=/{print substr($0, index($0,$2)); exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+  fi
+  case "${DISCOVERY_CLEAN_BUILD:-1}" in
+    0|1) ;;
+    *) DISCOVERY_CLEAN_BUILD="1" ;;
+  esac
   load_existing_site_realtime_defaults
   normalize_site_realtime_settings
   update_site_realtime_environment_file
@@ -970,7 +961,7 @@ load_existing_nats_defaults() {
 
 prompt_nats_configuration() {
   load_existing_nats_defaults
-  wizard_header "Mensageria (NATS)" "$(wizard_step_label "8/8" "7/7")"
+  wizard_header "Mensageria (NATS)" "$(wizard_step_label "8/9" "7/8")"
   echo "Configure as credenciais e hosts do NATS local."
   echo "Esses dados sao usados pela API e agentes para mensagens."
   echo "----------------------------------------"
@@ -985,6 +976,73 @@ prompt_nats_configuration() {
   prompt_if_empty NATS_AUTH_CALLOUT_SUBJECT "Subject do auth callout" 0 "\$SYS.REQ.USER.AUTH"
 
   # NATS_AUTH_CALLOUT_ISSUER e derivado automaticamente do account seed gerado em generate_nats_account_keys()
+}
+
+prompt_selfupdate_settings() {
+  wizard_header "Self-Update Automatico" "$(wizard_step_label "9/10" "8/9")"
+  echo "O Discovery pode verificar e aplicar atualizacoes automaticamente."
+  echo "O script compara o commit local com o remoto e faz dotnet publish/npm build apenas se houver mudanca."
+  echo "----------------------------------------"
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    SELFUPDATE_ENABLED="${SELFUPDATE_ENABLED:-1}"
+    SELFUPDATE_INTERVAL="${SELFUPDATE_INTERVAL:-24h}"
+    DISCOVERY_CLEAN_BUILD="${DISCOVERY_CLEAN_BUILD:-1}"
+    return
+  fi
+
+  if [[ -z "${SELFUPDATE_ENABLED:-}" ]]; then
+    local selfupdate_choice
+    read -r -p "Ativar self-update automatico? (1=Sim / 0=Nao) [1]: " selfupdate_choice
+    selfupdate_choice="${selfupdate_choice:-1}"
+
+    if [[ "$selfupdate_choice" != "1" ]]; then
+      SELFUPDATE_ENABLED=0
+      SELFUPDATE_INTERVAL=""
+    else
+      SELFUPDATE_ENABLED=1
+    fi
+  fi
+
+  if [[ "${SELFUPDATE_ENABLED:-1}" == "1" && -z "${SELFUPDATE_INTERVAL:-}" ]]; then
+    echo
+    echo "Intervalo de verificacao:"
+    echo "  1) 5 minutos   [dev]"
+    echo "  2) 10 minutos  [dev]"
+    echo "  3) 15 minutos  [dev]"
+    echo "  4) 24 horas    (recomendado para producao)"
+    echo "  5) 48 horas"
+    echo "  6) 72 horas"
+    echo
+    local interval_choice
+    read -r -p "Escolha [4]: " interval_choice
+    interval_choice="${interval_choice:-4}"
+
+    case "$interval_choice" in
+      1) SELFUPDATE_INTERVAL="5min" ;;
+      2) SELFUPDATE_INTERVAL="10min" ;;
+      3) SELFUPDATE_INTERVAL="15min" ;;
+      4) SELFUPDATE_INTERVAL="24h" ;;
+      5) SELFUPDATE_INTERVAL="48h" ;;
+      6) SELFUPDATE_INTERVAL="72h" ;;
+      *) SELFUPDATE_INTERVAL="24h" ;;
+    esac
+    log "Self-update ativado com intervalo: ${SELFUPDATE_INTERVAL}"
+  fi
+
+  if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" ]]; then
+    echo
+    echo "Modo de build para updates (manual e automatico):"
+    echo "  1) Limpo (remove cache antes do build)"
+    echo "  2) Incremental (mais rapido, sem limpeza de cache)"
+    local clean_build_choice
+    read -r -p "Escolha [1]: " clean_build_choice
+    clean_build_choice="${clean_build_choice:-1}"
+    case "$clean_build_choice" in
+      2) DISCOVERY_CLEAN_BUILD="0" ;;
+      *) DISCOVERY_CLEAN_BUILD="1" ;;
+    esac
+  fi
 }
 
 update_nats_environment_file() {
@@ -1866,6 +1924,10 @@ publish_api() {
   local release_dir="$DISCOVERY_API_RELEASES/$release_id"
 
   sudo -u discovery-api mkdir -p "$release_dir"
+  if [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]]; then
+    log "Limpando cache de build da API (obj/ bin/)"
+    sudo -u discovery-api find "$DISCOVERY_API_SOURCE" -maxdepth 4 \( -name obj -o -name bin \) -type d -exec rm -rf {} + 2>/dev/null || true
+  fi
   sudo -u discovery-api dotnet publish "$DISCOVERY_API_SOURCE/src/Discovery.Api/Discovery.Api.csproj" \
     -c Release \
     -r "$DISCOVERY_DOTNET_RUNTIME" \
@@ -1889,6 +1951,10 @@ publish_site() {
   local release_dir="$DISCOVERY_SITE_RELEASES/$release_id"
 
   sudo -u discovery-api mkdir -p "$release_dir"
+  if [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]]; then
+    log "Limpando cache de build do portal web (node_modules/.cache e dist/)"
+    sudo -u discovery-api rm -rf "$DISCOVERY_SITE_SOURCE/node_modules/.cache" "$DISCOVERY_SITE_SOURCE/dist" 2>/dev/null || true
+  fi
   sudo -u discovery-api -H npm --prefix "$DISCOVERY_SITE_SOURCE" ci
   sudo -u discovery-api -H env \
     VITE_API_URL="$DISCOVERY_SITE_API_URL" \
@@ -2005,8 +2071,10 @@ DISCOVERY_API_RELEASES=${DISCOVERY_API_RELEASES}
 DISCOVERY_API_CURRENT=${DISCOVERY_API_CURRENT}
 DISCOVERY_GIT_REPO=${DISCOVERY_GIT_REPO}
 DISCOVERY_GIT_BRANCH=${DISCOVERY_GIT_BRANCH}
-DISCOVERY_GIT_TOKEN_FILE=/etc/discovery-api/github.token
 DISCOVERY_DOTNET_RUNTIME=${DISCOVERY_DOTNET_RUNTIME}
+SELFUPDATE_ENABLED=${SELFUPDATE_ENABLED:-1}
+SELFUPDATE_INTERVAL=${SELFUPDATE_INTERVAL:-24h}
+DISCOVERY_CLEAN_BUILD=${DISCOVERY_CLEAN_BUILD:-1}
 DISCOVERY_SITE_GIT_REPO=${DISCOVERY_SITE_GIT_REPO}
 DISCOVERY_SITE_BASE=${DISCOVERY_SITE_BASE}
 DISCOVERY_SITE_SOURCE=${DISCOVERY_SITE_SOURCE}
@@ -2035,15 +2103,6 @@ EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
   sudo chown root:discovery-api /etc/discovery-api/discovery.env
-
-  sudo tee /etc/discovery-api/github.token >/dev/null <<EOF
-${GITHUB_PAT:-}
-EOF
-  sudo chmod 640 /etc/discovery-api/github.token
-  sudo chown root:discovery-api /etc/discovery-api/github.token
-  if [[ -z "${GITHUB_PAT:-}" ]]; then
-    sudo rm -f /etc/discovery-api/github.token || true
-  fi
 }
 
 install_selfupdate_script() {
@@ -2052,9 +2111,50 @@ install_selfupdate_script() {
   log "Escrevendo script de self-update em $target_script"
   [[ -f "$SELFUPDATE_TEMPLATE_PATH" ]] || fail "Template de self-update nao encontrado: $SELFUPDATE_TEMPLATE_PATH"
   sudo install -m 750 -o discovery-api -g discovery-api "$SELFUPDATE_TEMPLATE_PATH" "$target_script"
-
   sudo chmod 750 "$target_script"
   sudo chown discovery-api:discovery-api "$target_script"
+
+  if [[ "${SELFUPDATE_ENABLED:-1}" != "1" ]]; then
+    log "Self-update automatico desativado; removendo timer se existir"
+    sudo systemctl disable --now discovery-selfupdate.timer >/dev/null 2>&1 || true
+    return
+  fi
+
+  local interval="${SELFUPDATE_INTERVAL:-24h}"
+  log "Configurando timer de self-update (intervalo: ${interval})"
+
+  sudo tee /etc/systemd/system/discovery-selfupdate.service >/dev/null <<EOF
+[Unit]
+Description=Discovery RMM Self-Update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=discovery-api
+Group=discovery-api
+EnvironmentFile=/etc/discovery-api/discovery.env
+ExecStart=${target_script}
+StandardOutput=journal
+StandardError=journal
+EOF
+
+  sudo tee /etc/systemd/system/discovery-selfupdate.timer >/dev/null <<EOF
+[Unit]
+Description=Discovery RMM Self-Update Timer
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=${interval}
+Unit=discovery-selfupdate.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now discovery-selfupdate.timer
+  log "Timer discovery-selfupdate ativo (intervalo: ${interval})"
 }
 
 write_systemd_service() {
@@ -2072,7 +2172,6 @@ User=discovery-api
 Group=discovery-api
 WorkingDirectory=${DISCOVERY_API_CURRENT}
 EnvironmentFile=/etc/discovery-api/discovery.env
-ExecStartPre=${DISCOVERY_OPS_DIR}/selfupdate-discovery-api.sh
 ExecStart=${DISCOVERY_API_CURRENT}/Discovery.Api
 Restart=always
 RestartSec=5
@@ -2270,6 +2369,7 @@ main() {
   prompt_postgres_password
 
   prompt_nats_configuration
+  prompt_selfupdate_settings
 
   validate_security_inputs
   normalize_nats_settings
