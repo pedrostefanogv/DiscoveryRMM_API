@@ -557,6 +557,16 @@ confirm_installation() {
 }
 
 print_selected_configuration_summary() {
+  local internal_portal_host=""
+  local internal_portal_url=""
+  local primary_portal_host=""
+  local primary_portal_url=""
+
+  internal_portal_host="$(resolve_internal_portal_domain)"
+  internal_portal_url="$(build_portal_access_url "$internal_portal_host")"
+  primary_portal_host="$(resolve_fido2_server_domain)"
+  primary_portal_url="$(build_portal_access_url "$primary_portal_host")"
+
   echo "Resumo das configuracoes selecionadas:"
   echo "- Branch: $DISCOVERY_GIT_BRANCH"
   echo "- Repo API: $DISCOVERY_GIT_REPO"
@@ -565,11 +575,19 @@ print_selected_configuration_summary() {
   echo "- Access mode: $ACCESS_MODE"
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo "- Host interno: $INTERNAL_API_HOST"
+    if [[ -n "$internal_portal_url" ]]; then
+      echo "- Portal interno: $internal_portal_url"
+    fi
   fi
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo "- Host externo: $EXTERNAL_API_HOST"
+    echo "- Portal externo: https://$EXTERNAL_API_HOST/"
   fi
-  echo "- Portal web: publicado no mesmo host da API via Nginx"
+  if [[ -n "$primary_portal_url" ]]; then
+    echo "- Portal web principal: $primary_portal_url"
+  else
+    echo "- Portal web: publicado no mesmo host da API via Nginx"
+  fi
   if [[ "${OPENAPI_ENABLED:-0}" == "1" ]]; then
     echo "- OpenAPI: habilitado"
     if [[ "${OPENAPI_SCALAR_ENABLED:-$OPENAPI_ENABLED}" == "1" ]]; then
@@ -1716,10 +1734,32 @@ build_https_origin_from_host() {
   printf 'https://%s' "$host"
 }
 
+build_portal_access_url() {
+  local host="$1"
+  local origin
+
+  origin="$(build_https_origin_from_host "$host")"
+  [[ -n "$origin" ]] || return 0
+  printf '%s/' "$origin"
+}
+
 build_nip_io_host_from_ipv4() {
   local ip="$1"
   [[ -n "$ip" ]] || return 0
   printf '%s.nip.io' "$(printf '%s' "$ip" | tr '.' '-')"
+}
+
+resolve_internal_portal_domain() {
+  local internal_host="${INTERNAL_API_HOST:-}"
+  internal_host="$(normalize_host_without_scheme "$internal_host")"
+  [[ -n "$internal_host" ]] || return 0
+
+  if is_ipv4_address "$internal_host"; then
+    build_nip_io_host_from_ipv4 "$internal_host"
+    return
+  fi
+
+  printf '%s' "$internal_host"
 }
 
 resolve_fido2_server_domain() {
@@ -2385,27 +2425,29 @@ run_db_migrations() {
   local api_current="${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}"
 
   if [[ ! -f "$api_current/Discovery.Api" ]]; then
-    warn "Binario da API nao encontrado em $api_current/Discovery.Api"
-    warn "Assegure-se de que publish_api foi executado com sucesso antes."
-    return
+    fail "Binario da API nao encontrado em $api_current/Discovery.Api. Assegure-se de que publish_api foi executado com sucesso antes."
   fi
 
   log "Rodando migracoes + bootstrap admin via --recover-admin..."
-  set -a
-  if [[ -f "$api_env_file" ]]; then
-    # shellcheck disable=SC1090
-    source "$api_env_file"
-  fi
-  set +a
+  [[ -f "$api_env_file" ]] || fail "Arquivo de ambiente da API nao encontrado: $api_env_file"
 
   # Executa --recover-admin para criar admin com senha aleatoria
   # As migrations rodam automaticamente antes do recover-admin no Program.cs
   local output
-  output="$("$api_current/Discovery.Api" --recover-admin 2>&1)" || {
+  output="$(sudo -u discovery-api env \
+    DISCOVERY_API_MAINTENANCE_ENV_FILE="$api_env_file" \
+    DISCOVERY_API_MAINTENANCE_CURRENT="$api_current" \
+    bash -lc '
+      set -euo pipefail
+      set -a
+      # shellcheck disable=SC1090
+      source "$DISCOVERY_API_MAINTENANCE_ENV_FILE"
+      set +a
+      cd "$DISCOVERY_API_MAINTENANCE_CURRENT"
+      "$DISCOVERY_API_MAINTENANCE_CURRENT/Discovery.Api" --recover-admin
+    ' 2>&1)" || {
     local exit_code=$?
-    warn "recover-admin falhou com codigo ${exit_code}:"
-    warn "$output"
-    return
+    fail "recover-admin falhou com codigo ${exit_code}:\n${output}"
   }
 
   log "Admin bootstrap concluido. Credenciais geradas pelo recover-admin."
@@ -2422,6 +2464,16 @@ run_db_migrations() {
 
 show_summary() {
   log "Instalacao concluida"
+  local internal_portal_host=""
+  local internal_portal_url=""
+  local primary_portal_host=""
+  local primary_portal_url=""
+
+  internal_portal_host="$(resolve_internal_portal_domain)"
+  internal_portal_url="$(build_portal_access_url "$internal_portal_host")"
+  primary_portal_host="$(resolve_fido2_server_domain)"
+  primary_portal_url="$(build_portal_access_url "$primary_portal_host")"
+
   echo
   echo "Resumo:"
   echo "- API base: $DISCOVERY_API_BASE"
@@ -2440,11 +2492,18 @@ show_summary() {
   echo "- Access mode: $ACCESS_MODE"
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo "- Host interno: $INTERNAL_API_HOST"
-    echo "- Portal interno: https://$INTERNAL_API_HOST/"
+    if [[ -n "$internal_portal_url" ]]; then
+      echo "- Portal interno: $internal_portal_url"
+    else
+      echo "- Portal interno: https://$INTERNAL_API_HOST/"
+    fi
   fi
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo "- Host externo: $EXTERNAL_API_HOST"
     echo "- Portal externo: https://$EXTERNAL_API_HOST/"
+  fi
+  if [[ -n "$primary_portal_host" ]]; then
+    echo "- Hostname MFA/portal: $primary_portal_host"
   fi
   echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
   echo
