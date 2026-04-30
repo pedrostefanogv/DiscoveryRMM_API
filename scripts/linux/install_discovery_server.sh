@@ -2365,6 +2365,11 @@ run_db_migrations() {
         export "$line"
       done < "$DISCOVERY_API_MAINTENANCE_ENV_FILE"
       cd "$DISCOVERY_API_MAINTENANCE_CURRENT"
+      # Silencia logs verbosos durante o bootstrap (EF/FluentMigrator)
+      export Logging__LogLevel__Default=Warning
+      export Logging__LogLevel__Microsoft=Warning
+      export Logging__LogLevel__Microsoft__EntityFrameworkCore=Warning
+      export Logging__LogLevel__FluentMigrator=Warning
       "$DISCOVERY_API_MAINTENANCE_CURRENT/Discovery.Api" --recover-admin --login "$DISCOVERY_API_BOOTSTRAP_LOGIN"
     ' 2>&1)" || {
     local exit_code=$?
@@ -2373,8 +2378,14 @@ run_db_migrations() {
 
   log "Admin bootstrap concluido. Credenciais geradas pelo recover-admin."
 
-  # Guarda a saida para exibir no summary
-  ADMIN_RECOVERY_OUTPUT="$output"
+  # Guarda apenas o bloco util da saida (a partir de "Admin recovery completed."),
+  # descartando logs do EF/FluentMigrator caso vazem.
+  local filtered_output
+  filtered_output="$(printf '%s\n' "$output" | sed -n '/^Admin recovery completed\./,$p')"
+  if [[ -z "$filtered_output" ]]; then
+    filtered_output="$output"
+  fi
+  ADMIN_RECOVERY_OUTPUT="$filtered_output"
 
   # Tenta extrair o login exibido pelo recover-admin para incluir no resumo final.
   ADMIN_RECOVERY_LOGIN="$(printf '%s\n' "$output" | sed -nE 's/^[[:space:]]*(Login|Usuario|User(name)?)[[:space:]]*:[[:space:]]*(.+)$/\3/p' | head -n 1)"
