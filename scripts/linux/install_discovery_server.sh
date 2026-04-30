@@ -2352,10 +2352,15 @@ run_db_migrations() {
     DISCOVERY_API_BOOTSTRAP_LOGIN="$bootstrap_login" \
     bash -lc '
       set -euo pipefail
-      set -a
-      # shellcheck disable=SC1090
-      source "$DISCOVERY_API_MAINTENANCE_ENV_FILE"
-      set +a
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'"'"'\r'"'"'}"
+        case "$line" in
+          ""|\#*)
+            continue
+            ;;
+        esac
+        export "$line"
+      done < "$DISCOVERY_API_MAINTENANCE_ENV_FILE"
       cd "$DISCOVERY_API_MAINTENANCE_CURRENT"
       "$DISCOVERY_API_MAINTENANCE_CURRENT/Discovery.Api" --recover-admin --login "$DISCOVERY_API_BOOTSTRAP_LOGIN"
     ' 2>&1)" || {
