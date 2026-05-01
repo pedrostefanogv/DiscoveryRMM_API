@@ -175,7 +175,7 @@ builder.Services.AddSignalR(options =>
 })
 .AddStackExchangeRedis(redisConnString, options =>
 {
-    options.Configuration.ChannelPrefix = "SignalR";
+    options.Configuration.ChannelPrefix = StackExchange.Redis.RedisChannel.Literal("SignalR");
     if (!string.IsNullOrWhiteSpace(redisPassword))
         options.Configuration.Password = redisPassword;
 });

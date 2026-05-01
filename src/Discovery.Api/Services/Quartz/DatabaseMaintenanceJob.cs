@@ -64,7 +64,7 @@ public sealed class DatabaseMaintenanceJob : IJob
                 if (ct.IsCancellationRequested) break;
                 try
                 {
-                    await db.Database.ExecuteSqlRawAsync($"VACUUM FULL \"{table}\"", ct);
+                    await ExecuteMaintenanceCommandAsync(db, $"VACUUM FULL \"{table}\"", ct);
                     results[$"vacuum_{table}"] = 1;
                 }
                 catch (Exception ex)
@@ -83,7 +83,7 @@ public sealed class DatabaseMaintenanceJob : IJob
                 if (ct.IsCancellationRequested) break;
                 try
                 {
-                    await db.Database.ExecuteSqlRawAsync($"REINDEX TABLE \"{table}\"", ct);
+                    await ExecuteMaintenanceCommandAsync(db, $"REINDEX TABLE \"{table}\"", ct);
                     results[$"reindex_{table}"] = 1;
                 }
                 catch (Exception ex)
@@ -102,7 +102,7 @@ public sealed class DatabaseMaintenanceJob : IJob
                 if (ct.IsCancellationRequested) break;
                 try
                 {
-                    await db.Database.ExecuteSqlRawAsync($"ANALYZE \"{table}\"", ct);
+                    await ExecuteMaintenanceCommandAsync(db, $"ANALYZE \"{table}\"", ct);
                     results[$"analyze_{table}"] = 1;
                 }
                 catch (Exception ex)
@@ -121,7 +121,7 @@ public sealed class DatabaseMaintenanceJob : IJob
                 if (ct.IsCancellationRequested) break;
                 try
                 {
-                    await db.Database.ExecuteSqlRawAsync($"VACUUM ANALYZE \"{table}\"", ct);
+                    await ExecuteMaintenanceCommandAsync(db, $"VACUUM ANALYZE \"{table}\"", ct);
                     results[$"vacuum_analyze_{table}"] = 1;
                 }
                 catch (Exception ex)
@@ -176,6 +176,21 @@ public sealed class DatabaseMaintenanceJob : IJob
 
         allTables.RemoveAll(t => string.Equals(t, "VersionInfo", StringComparison.OrdinalIgnoreCase));
         return allTables;
+    }
+
+    /// <summary>
+    /// Executes a maintenance SQL command with a prevalidated identifier.
+    /// Table names are validated by <see cref="SafeIdentifier"/> before composing SQL.
+    /// </summary>
+    private static async Task ExecuteMaintenanceCommandAsync(DiscoveryDbContext db, string sql, CancellationToken ct)
+    {
+        await using var cmd = db.Database.GetDbConnection().CreateCommand();
+        cmd.CommandText = sql;
+
+        if (cmd.Connection?.State != System.Data.ConnectionState.Open)
+            await cmd.Connection!.OpenAsync(ct);
+
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     private static DatabaseMaintenanceSettings? ParseMaintenanceSettings(string? json)
