@@ -19,6 +19,7 @@ public class DepartmentsController : ControllerBase
     /// </summary>
     [HttpGet("global")]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
     public async Task<IActionResult> GetGlobal()
     {
         var departments = await _repo.GetGlobalAsync();
@@ -30,6 +31,7 @@ public class DepartmentsController : ControllerBase
     /// </summary>
     [HttpGet]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
     public async Task<IActionResult> GetByClient([FromQuery] Guid? clientId, [FromQuery] bool includeGlobal = true, [FromQuery] bool activeOnly = true)
     {
         if (clientId.HasValue)

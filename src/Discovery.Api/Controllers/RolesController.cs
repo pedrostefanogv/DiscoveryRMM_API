@@ -29,6 +29,7 @@ public class RolesController : ControllerBase
 
     [HttpGet]
     [RequirePermission(ResourceType.Users, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
     public async Task<IActionResult> GetAll()
     {
         var roles = await _roleRepo.GetAllAsync();
@@ -163,6 +164,7 @@ public class RolesController : ControllerBase
 
     [HttpGet("permissions")]
     [RequirePermission(ResourceType.Users, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
     public async Task<IActionResult> GetAllPermissions()
     {
         var permissions = await _roleRepo.GetAllPermissionsAsync();

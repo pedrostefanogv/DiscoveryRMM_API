@@ -43,6 +43,7 @@ public class AutoTicketRulesController : ControllerBase
 
     [HttpGet]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
     public async Task<IActionResult> GetAll(
         [FromQuery] AutoTicketScopeLevel? scopeLevel,
         [FromQuery] Guid? scopeId,

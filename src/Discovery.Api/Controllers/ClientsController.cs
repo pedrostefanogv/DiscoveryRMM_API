@@ -22,6 +22,7 @@ public class ClientsController : ControllerBase
 
     [HttpGet]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
     public async Task<IActionResult> GetAll([FromQuery] bool includeInactive = false)
     {
         var clients = await _repo.GetAllAsync(includeInactive);

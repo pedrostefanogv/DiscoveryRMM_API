@@ -164,12 +164,20 @@ builder.Services.AddControllers(options =>
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateAgentRequestValidator>();
 
-// SignalR for dashboard real-time
+// SignalR for dashboard real-time with Redis backplane for multi-instance
+var redisConnString = builder.Configuration.GetValue<string>("Redis:Connection") ?? "127.0.0.1:6379";
+var redisPassword = builder.Configuration.GetValue<string>("Redis:Password");
 builder.Services.AddSignalR(options =>
 {
     options.KeepAliveInterval = TimeSpan.FromSeconds(15);
     options.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
     options.HandshakeTimeout = TimeSpan.FromSeconds(15);
+})
+.AddStackExchangeRedis(redisConnString, options =>
+{
+    options.Configuration.ChannelPrefix = "SignalR";
+    if (!string.IsNullOrWhiteSpace(redisPassword))
+        options.Configuration.Password = redisPassword;
 });
 
 // OpenAPI + Scalar

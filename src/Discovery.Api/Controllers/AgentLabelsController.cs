@@ -41,6 +41,7 @@ public class AgentLabelsController : ControllerBase
 
     [HttpGet("agents/{agentId:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Short")]
     public async Task<IActionResult> GetByAgent(Guid agentId)
     {
         var labels = await _labelRepository.GetByAgentIdAsync(agentId);
@@ -68,6 +69,7 @@ public class AgentLabelsController : ControllerBase
 
     [HttpGet("rules")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
     public async Task<IActionResult> GetRules([FromQuery] bool includeDisabled = true)
     {
         var rules = await _ruleRepository.GetAllAsync(includeDisabled);

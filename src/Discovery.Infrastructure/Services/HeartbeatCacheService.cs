@@ -27,6 +27,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private const string KeyPrefix = "heartbeat:agent:";
+    private const string TransportPrefix = "transport:agent:";
     private static readonly TimeSpan DefaultTtl = TimeSpan.FromSeconds(180);
 
     public HeartbeatCacheService(
@@ -39,10 +40,53 @@ public class HeartbeatCacheService : IHeartbeatCacheService
         _logger = logger;
     }
 
-    private IAgentRepository GetAgentRepo()
+    /// <summary>
+    /// Cria um scope com dispose correto para acessar serviços scoped.
+    /// </summary>
+    private async Task<T> UseScopedAsync<T>(Func<IAgentRepository, Task<T>> action)
     {
-        var scope = _scopeFactory.CreateScope();
-        return scope.ServiceProvider.GetRequiredService<IAgentRepository>();
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IAgentRepository>();
+        return await action(repo);
+    }
+
+    private async Task UseScopedAsync(Func<IAgentRepository, Task> action)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var repo = scope.ServiceProvider.GetRequiredService<IAgentRepository>();
+        await action(repo);
+    }
+
+    /// <summary>
+    /// Registra o transporte ativo do agent (signalr ou nats) para roteamento de fallback.
+    /// </summary>
+    public async Task SetTransportAsync(Guid agentId, string transport, CancellationToken ct = default)
+    {
+        if (!_redis.IsConnected) return;
+        try
+        {
+            await _redis.SetAsync($"{TransportPrefix}{agentId:N}", transport, 300);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Erro ao registrar transporte {Transport} para agent {AgentId}", transport, agentId);
+        }
+    }
+
+    /// <summary>
+    /// Retorna o transporte ativo do agent (signalr/nats).
+    /// </summary>
+    public async Task<string?> GetTransportAsync(Guid agentId, CancellationToken ct = default)
+    {
+        if (!_redis.IsConnected) return null;
+        try
+        {
+            return await _redis.GetAsync($"{TransportPrefix}{agentId:N}");
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -53,7 +97,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
         if (!_redis.IsConnected)
         {
             // Fallback: escreve direto no DB quando Redis indisponível
-            try { await GetAgentRepo().UpdateStatusAsync(agentId, status, ipAddress); }
+            try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, status, ipAddress)); }
             catch (Exception ex) { _logger.LogWarning(ex, "Heartbeat DB fallback failed for {AgentId}", agentId); }
             return;
         }
@@ -79,7 +123,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
             {
                 // Transição Offline → Online: escreve no DB e adiciona ao set
                 _logger.LogDebug("Agent {AgentId} transitioned Offline → Online — persisting to DB", agentId);
-                try { await GetAgentRepo().UpdateStatusAsync(agentId, AgentStatus.Online, ipAddress); }
+                try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, AgentStatus.Online, ipAddress)); }
                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to persist Online status for {AgentId}", agentId); }
             }
         }
@@ -155,7 +199,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
     {
         if (!_redis.IsConnected)
         {
-            try { await GetAgentRepo().UpdateStatusAsync(agentId, AgentStatus.Offline, null); }
+            try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, AgentStatus.Offline, null)); }
             catch (Exception ex) { _logger.LogWarning(ex, "Failed to persist Offline status for {AgentId}", agentId); }
             return;
         }
@@ -170,7 +214,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
             {
                 // Transição Online → Offline: persiste no DB
                 _logger.LogDebug("Agent {AgentId} transitioned Online → Offline — persisting to DB", agentId);
-                try { await GetAgentRepo().UpdateStatusAsync(agentId, AgentStatus.Offline, null); }
+                try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, AgentStatus.Offline, null)); }
                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to persist Offline status for {AgentId}", agentId); }
             }
         }

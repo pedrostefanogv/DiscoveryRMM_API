@@ -33,6 +33,7 @@ public class UserGroupsController : ControllerBase
 
     [HttpGet]
     [RequirePermission(ResourceType.Users, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
     public async Task<IActionResult> GetAll()
     {
         var groups = await _groupRepo.GetAllAsync();

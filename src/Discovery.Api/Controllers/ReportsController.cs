@@ -45,6 +45,7 @@ public class ReportsController : ControllerBase
 
     [HttpGet("datasets")]
     [RequirePermission(ResourceType.Reports, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
     public IActionResult GetDatasetCatalog()
     {
         var datasets = DatasetCatalog
@@ -79,6 +80,7 @@ public class ReportsController : ControllerBase
 
     [HttpGet("layout-schema")]
     [RequirePermission(ResourceType.Reports, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
     public IActionResult GetLayoutSchema()
     {
         return Ok(new

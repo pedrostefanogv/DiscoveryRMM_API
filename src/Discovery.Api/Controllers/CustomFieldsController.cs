@@ -20,6 +20,7 @@ public class CustomFieldsController : ControllerBase
 
     [HttpGet("definitions")]
     [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
     public async Task<IActionResult> GetDefinitions(
         [FromQuery] CustomFieldScopeType? scopeType = null,
         [FromQuery] bool includeInactive = false,

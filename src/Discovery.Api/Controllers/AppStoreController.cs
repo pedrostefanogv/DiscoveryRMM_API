@@ -37,6 +37,7 @@ public class AppStoreController : ControllerBase
 
     [HttpGet("catalog")]
     [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
     public async Task<IActionResult> SearchCatalog(
         [FromQuery] AppInstallationType installationType = AppInstallationType.Winget,
         [FromQuery] string? search = null,

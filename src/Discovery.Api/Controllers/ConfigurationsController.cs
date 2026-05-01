@@ -73,6 +73,7 @@ public class ConfigurationsController : ControllerBase
 
     [HttpGet("server")]
     [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
     public async Task<IActionResult> GetServer()
     {
         var config = await _configService.GetServerConfigAsync();
@@ -328,6 +329,7 @@ public class ConfigurationsController : ControllerBase
 
     [HttpGet("server/retention")]
     [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
     public async Task<IActionResult> GetServerRetention()
     {
         var server = await _configService.GetServerConfigAsync();
