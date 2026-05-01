@@ -5,8 +5,8 @@ namespace Discovery.Migrations.Migrations;
 /// <summary>
 /// Cria tabela de auditoria de autenticação (logins, logouts, falhas, lockouts, MFA assertions).
 /// </summary>
-[Migration(20260430_116, "Create AuthAuditLogs table")]
-public class M116_CreateAuthAuditLogs : Migration
+[Migration(20260430_117, "Create AuthAuditLogs table")]
+public class M117_CreateAuthAuditLogs : Migration
 {
     public override void Up()
     {
