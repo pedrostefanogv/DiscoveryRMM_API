@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOCAL_INSTALLER_PATH="$SCRIPT_DIR/install_discovery_server.sh"
+SCRIPT_DIR=""
+LOCAL_INSTALLER_PATH=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  LOCAL_INSTALLER_PATH="$SCRIPT_DIR/install_discovery_server.sh"
+fi
 
 log() {
   printf '[bootstrap] %s\n' "$*"
@@ -318,13 +322,21 @@ if [[ -z "${DISCOVERY_BOOTSTRAP_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}
     if [[ -z "$BOOTSTRAP_INSTALL_MODE" ]]; then
       BOOTSTRAP_INSTALL_MODE="$(choose_operation_mode_interactive)"
     fi
-    if [[ "$BOOTSTRAP_INSTALL_MODE" != "maintenance" ]]; then
+    if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE"; then
+      BOOTSTRAP_BRANCH="dev"
+      log "Modo maintenance: usando branch 'dev' (unica com suporte a manutencao)"
+    else
       BOOTSTRAP_BRANCH="$(choose_branch_interactive)"
     fi
   fi
 fi
 
-if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && [[ -f "$LOCAL_INSTALLER_PATH" ]]; then
+if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && [[ "$BOOTSTRAP_BRANCH" == "release" || "$BOOTSTRAP_BRANCH" == "lts" ]]; then
+  warn "BOOTSTRAP_BRANCH='$BOOTSTRAP_BRANCH' nao possui manutencao; alterando para 'dev'"
+  BOOTSTRAP_BRANCH="dev"
+fi
+
+if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && [[ -n "${LOCAL_INSTALLER_PATH:-}" && -f "$LOCAL_INSTALLER_PATH" ]]; then
   if installer_supports_maintenance "$LOCAL_INSTALLER_PATH"; then
     log "Modo maintenance: usando instalador local em $LOCAL_INSTALLER_PATH"
     exec_installer "$LOCAL_INSTALLER_PATH" --mode "$BOOTSTRAP_INSTALL_MODE" "${INSTALLER_ARGS[@]}"
