@@ -61,6 +61,8 @@ public class AgentHub : Hub
 
     public override async Task OnConnectedAsync()
     {
+        Context.BridgeHttpContextItems();
+
         var isAgent = Context.Items.ContainsKey("AgentId");
         var isUser = Context.Items["UserId"] is Guid;
 

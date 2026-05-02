@@ -13,6 +13,8 @@ public class NotificationHub : Hub
 
     public override async Task OnConnectedAsync()
     {
+        Context.BridgeHttpContextItems();
+
         var userId = Context.Items["UserId"] as Guid?;
 
         if (!userId.HasValue)

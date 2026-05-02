@@ -16,6 +16,12 @@ public class RemoteDebugHub : Hub
         _permissionService = permissionService;
     }
 
+    public override async Task OnConnectedAsync()
+    {
+        Context.BridgeHttpContextItems();
+        await base.OnConnectedAsync();
+    }
+
     public async Task JoinSession(Guid sessionId)
     {
         if (Context.Items["UserId"] is not Guid userId)
