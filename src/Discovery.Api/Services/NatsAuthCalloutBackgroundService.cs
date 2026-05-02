@@ -73,21 +73,21 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         if (!serverConfig.NatsEnabled)
         {
             _logger.LogInformation("NATS auth callout service aguardando — NatsEnabled = false.");
-            await Task.Delay(Timeout.Infinite, ct);
+            await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return;
         }
 
         if (!serverConfig.NatsAuthEnabled)
         {
             _logger.LogInformation("NATS auth callout service aguardando — NatsAuthEnabled = false.");
-            await Task.Delay(Timeout.Infinite, ct);
+            await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return;
         }
 
         if (string.IsNullOrWhiteSpace(_configuration["Nats:AccountSeed"]))
         {
             _logger.LogWarning("NATS auth callout service aguardando — Nats:AccountSeed não configurado.");
-            await Task.Delay(Timeout.Infinite, ct);
+            await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return;
         }
 
