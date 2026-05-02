@@ -75,7 +75,12 @@ update_site() {
 update_agent() {
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
   log "Repositorio do agent atualizado em $DISCOVERY_AGENT_SRC"
-  log "O build do agent (.exe) sera feito sob demanda ou no proximo self-update."
+  if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
+    log "Reiniciando discovery-api para disparar prebuild automatico do agent no startup"
+    sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api apos update do agent"
+  else
+    warn "Servico discovery-api nao encontrado; nao foi possivel disparar prebuild automatico do agent"
+  fi
 }
 
 update_all_components() {
@@ -111,7 +116,7 @@ prompt_update_scope() {
     echo "1) Tudo (API + portal web + agent)" >&2
     echo "2) Somente API (backend .NET)" >&2
     echo "3) Somente portal web (frontend)" >&2
-    echo "4) Somente agent (repositorio do instalador Windows)" >&2
+    echo "4) Somente agent (repositorio do instalador Windows + restart da API para prebuild)" >&2
     echo "----------------------------------------" >&2
 
     local selected_option
@@ -151,7 +156,7 @@ apply_stack_update_only() {
       log "Atualizando somente o portal web (frontend)"
       update_site ;;
     agent)
-      log "Atualizando somente o repositorio do agent"
+      log "Atualizando somente o repositorio do agent (com restart da API)"
       update_agent ;;
     *) fail "Escopo de update invalido: $update_scope" ;;
   esac
