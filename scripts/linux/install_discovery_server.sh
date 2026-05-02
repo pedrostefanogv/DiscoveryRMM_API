@@ -259,6 +259,88 @@ prompt_if_empty() {
   printf -v "$var_name" '%s' "$input"
 }
 
+print_prerequisite_plan_summary() {
+  local -a base_packages=(
+    apt-transport-https
+    ca-certificates
+    curl
+    git
+    gnupg
+    jq
+    lsb-release
+    dnsutils
+    nginx
+    openssl
+    postgresql
+    postgresql-contrib
+    redis-server
+    nats-server
+  )
+  local -a missing_base_packages=()
+  local -a planned_actions=()
+  local pkg
+
+  for pkg in "${base_packages[@]}"; do
+    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+      missing_base_packages+=("$pkg")
+    fi
+  done
+
+  if (( ${#missing_base_packages[@]} > 0 )); then
+    planned_actions+=("Pacotes base via apt: ${missing_base_packages[*]}")
+  fi
+
+  if ! command -v dotnet >/dev/null 2>&1; then
+    planned_actions+=("dotnet SDK 10.0 (apt Microsoft ou fallback dotnet-install.sh)")
+  fi
+
+  local node_needs_install=0
+  local current_node_major=""
+  if command -v node >/dev/null 2>&1; then
+    current_node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+    if [[ ! "$current_node_major" =~ ^[0-9]+$ ]] || (( current_node_major < 20 )); then
+      node_needs_install=1
+    fi
+  else
+    node_needs_install=1
+  fi
+  if (( node_needs_install == 1 )); then
+    planned_actions+=("Node.js 22 + npm")
+  fi
+
+  if ! command -v nk >/dev/null 2>&1; then
+    planned_actions+=("nk para gerar chaves NATS")
+  fi
+
+  if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
+    if ! command -v cloudflared >/dev/null 2>&1; then
+      planned_actions+=("cloudflared para o tunnel externo")
+    fi
+  fi
+
+  local pg_major=""
+  local vector_pkg=""
+  if command -v psql >/dev/null 2>&1; then
+    pg_major="$(psql --version | sed -n 's/.* \([0-9][0-9]*\)\..*/\1/p' | head -n 1)"
+    if [[ -n "$pg_major" ]]; then
+      vector_pkg="postgresql-${pg_major}-pgvector"
+    fi
+  fi
+  if [[ -n "$vector_pkg" ]] && ! dpkg -s "$vector_pkg" >/dev/null 2>&1; then
+    planned_actions+=("Pacote opcional ${vector_pkg} para embeddings")
+  fi
+
+  if (( ${#planned_actions[@]} == 0 )); then
+    echo "- Pre-requisitos ausentes: nenhum detectado"
+    return
+  fi
+
+  echo "- Pre-requisitos ausentes/acoes planejadas:"
+  for pkg in "${planned_actions[@]}"; do
+    echo "  - $pkg"
+  done
+}
+
 is_valid_repo_url() {
   local url="$1"
   if [[ "$url" =~ ^(https?|ssh):// ]]; then
@@ -427,10 +509,11 @@ confirm_installation() {
   wizard_header "Confirmacao" "$(wizard_step_label "10/10" "9/9")"
 
   print_selected_configuration_summary
+  print_prerequisite_plan_summary
   echo
 
   local confirm
-  read -r -p "Confirmar e iniciar instalacao? (s/N): " confirm
+  read -r -p "Confirmar e iniciar instalacao com as acoes acima? (s/N): " confirm
   confirm="$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   case "$confirm" in
     s|sim|y|yes) ;;
@@ -503,6 +586,18 @@ print_selected_configuration_summary() {
   if [[ "${TLS_CERT_PROVIDER:-self-signed}" == "zerossl-acme" ]]; then
     echo "- TLS dominio: ${ZEROSSL_CERT_DOMAIN:-$(resolve_fido2_server_domain)}"
   fi
+  if [[ -n "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
+    if [[ "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN_AUTO:-0}" -eq 1 ]]; then
+      echo "- Admin bootstrap login: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN (gerado automaticamente)"
+    else
+      echo "- Admin bootstrap login: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"
+    fi
+  fi
+  if [[ "${DISCOVERY_BOOTSTRAP_ADMIN_PASSWORD_AUTO:-1}" -eq 1 ]]; then
+    echo "- Admin bootstrap senha: gerada automaticamente pelo recover-admin"
+  else
+    echo "- Admin bootstrap senha: informada pelo operador"
+  fi
 }
 
 detect_internal_ipv4() {
@@ -540,18 +635,56 @@ generate_random_admin_login() {
 }
 
 prepare_bootstrap_admin_login() {
-  if [[ -n "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
-    ADMIN_RECOVERY_LOGIN="$DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"
-    return
+  local existing_login="${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}"
+  local login_input=""
+  local password_input=""
+
+  DISCOVERY_BOOTSTRAP_ADMIN_LOGIN_AUTO=0
+
+  if [[ -z "$existing_login" ]] && sudo test -f /etc/discovery-api/discovery.env; then
+    existing_login="$(sudo awk -F= '/^DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=/{sub("^[^=]*=","""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
   fi
 
-  if sudo test -f /etc/discovery-api/discovery.env; then
-    DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$(sudo awk -F= '/^DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+  if [[ "$NON_INTERACTIVE" -eq 0 && -z "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
+    wizard_header "Primeiro acesso administrativo" "$(wizard_step_label "9/10" "8/9")"
+    echo "Informe o usuario administrador do primeiro acesso."
+    echo "Se deixar em branco, o instalador gera um login temporario automaticamente."
+    echo "A senha tambem pode ficar em branco para ser gerada pelo recover-admin."
+    echo "----------------------------------------"
+
+    if [[ -n "$existing_login" ]]; then
+      read -r -p "Usuario administrador inicial [$existing_login]: " login_input
+      login_input="${login_input:-$existing_login}"
+    else
+      read -r -p "Usuario administrador inicial [gerar automaticamente]: " login_input
+    fi
+
+    read -r -s -p "Senha administrativa inicial [gerar automaticamente]: " password_input
+    printf '\n'
+
+    if [[ -n "$login_input" ]]; then
+      DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$login_input"
+    fi
+
+    if [[ -n "$password_input" ]]; then
+      DISCOVERY_BOOTSTRAP_ADMIN_PASSWORD="$password_input"
+    fi
   fi
 
   if [[ -z "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
-    DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$(generate_random_admin_login)"
-    log "Login do primeiro acesso nao informado; gerando usuario administrador temporario: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"
+    if [[ -n "$existing_login" ]]; then
+      DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$existing_login"
+    else
+      DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$(generate_random_admin_login)"
+      DISCOVERY_BOOTSTRAP_ADMIN_LOGIN_AUTO=1
+      log "Login do primeiro acesso nao informado; gerando usuario administrador temporario: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"
+    fi
+  fi
+
+  if [[ -n "${DISCOVERY_BOOTSTRAP_ADMIN_PASSWORD:-}" ]]; then
+    DISCOVERY_BOOTSTRAP_ADMIN_PASSWORD_AUTO=0
+  else
+    DISCOVERY_BOOTSTRAP_ADMIN_PASSWORD_AUTO=1
   fi
 
   ADMIN_RECOVERY_LOGIN="$DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"
@@ -1231,23 +1364,26 @@ apply_nats_reconfiguration_only() {
 }
 
 install_apt_dependencies() {
-  log "Instalando dependencias de sistema"
-  sudo apt-get update -y
-  sudo apt-get install -y \
-    apt-transport-https \
-    ca-certificates \
-    curl \
-    git \
-    gnupg \
-    jq \
-    lsb-release \
-    dnsutils \
-    nginx \
-    openssl \
-    postgresql \
-    postgresql-contrib \
-    redis-server \
+  local -a packages=(
+    apt-transport-https
+    ca-certificates
+    curl
+    git
+    gnupg
+    jq
+    lsb-release
+    dnsutils
+    nginx
+    openssl
+    postgresql
+    postgresql-contrib
+    redis-server
     nats-server
+  )
+
+  log "Instalando dependencias de sistema via apt: ${packages[*]}"
+  sudo apt-get update -y
+  sudo apt-get install -y "${packages[@]}"
 }
 
 setup_redis() {
@@ -2338,8 +2474,34 @@ EOF
   sudo systemctl restart discovery-api
 }
 
+wait_for_discovery_api_ready() {
+  local max_attempts="${1:-60}"
+  local sleep_seconds="${2:-2}"
+  local attempt
+  local health_url="http://127.0.0.1:8080/health"
+
+  log "Aguardando discovery-api concluir o startup em ${health_url}"
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if sudo systemctl is-active --quiet discovery-api && curl -fsS "$health_url" >/dev/null 2>&1; then
+      log "discovery-api respondeu com sucesso em /health"
+      return 0
+    fi
+
+    if sudo systemctl is-failed --quiet discovery-api; then
+      break
+    fi
+
+    sleep "$sleep_seconds"
+  done
+
+  sudo systemctl status discovery-api --no-pager || true
+  sudo journalctl -u discovery-api -n 50 --no-pager || true
+  fail "discovery-api nao ficou pronta a tempo; bootstrap administrativo abortado."
+}
+
 run_db_migrations() {
-  log "Executando migrations no startup da API (dotnet Discovery.Api)"
+  log "Aguardando startup da API para executar o bootstrap administrativo"
 
   local api_env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
   local api_current="${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}"
@@ -2348,7 +2510,9 @@ run_db_migrations() {
     fail "Binario da API nao encontrado em $api_current/Discovery.Api. Assegure-se de que publish_api foi executado com sucesso antes."
   fi
 
-  log "Rodando migracoes + bootstrap admin via --recover-admin..."
+  wait_for_discovery_api_ready
+
+  log "API pronta; executando bootstrap admin via --recover-admin..."
   if ! sudo -u discovery-api test -r "$api_env_file"; then
     fail "Arquivo de ambiente da API nao encontrado ou sem leitura para discovery-api: $api_env_file"
   fi
@@ -2363,6 +2527,7 @@ run_db_migrations() {
     DISCOVERY_API_MAINTENANCE_ENV_FILE="$api_env_file" \
     DISCOVERY_API_MAINTENANCE_CURRENT="$api_current" \
     DISCOVERY_API_BOOTSTRAP_LOGIN="$bootstrap_login" \
+    DISCOVERY_API_BOOTSTRAP_PASSWORD="${DISCOVERY_BOOTSTRAP_ADMIN_PASSWORD:-}" \
     bash -lc '
       set -euo pipefail
       while IFS= read -r line || [[ -n "$line" ]]; do
@@ -2380,7 +2545,12 @@ run_db_migrations() {
       export Logging__LogLevel__Microsoft=Warning
       export Logging__LogLevel__Microsoft__EntityFrameworkCore=Warning
       export Logging__LogLevel__FluentMigrator=Warning
-      "$DISCOVERY_API_MAINTENANCE_CURRENT/Discovery.Api" --recover-admin --login "$DISCOVERY_API_BOOTSTRAP_LOGIN"
+      recover_args=("$DISCOVERY_API_MAINTENANCE_CURRENT/Discovery.Api" --recover-admin --login "$DISCOVERY_API_BOOTSTRAP_LOGIN")
+      if [[ -n "${DISCOVERY_API_BOOTSTRAP_PASSWORD:-}" ]]; then
+        printf "%s\n" "$DISCOVERY_API_BOOTSTRAP_PASSWORD" | "${recover_args[@]}" --password-stdin
+      else
+        "${recover_args[@]}"
+      fi
     ' 2>&1)" || {
     local exit_code=$?
     fail "recover-admin falhou com codigo ${exit_code}:\n${output}"
