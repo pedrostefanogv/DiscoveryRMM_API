@@ -29,6 +29,8 @@ public partial class DiscoveryDbContext
             e.Property(u => u.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(u => u.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             e.Property(u => u.LastLoginAt).HasColumnName("last_login_at").HasColumnType("timestamptz");
+            e.Property(u => u.FailedLoginAttempts).HasColumnName("failed_login_attempts");
+            e.Property(u => u.LockoutUntil).HasColumnName("lockout_until").HasColumnType("timestamptz");
             e.Property(u => u.MeshCentralUserId).HasColumnName("meshcentral_user_id").HasMaxLength(256);
             e.Property(u => u.MeshCentralUsername).HasColumnName("meshcentral_username").HasMaxLength(100);
             e.Property(u => u.MeshCentralLastSyncedAt).HasColumnName("meshcentral_last_synced_at").HasColumnType("timestamptz");

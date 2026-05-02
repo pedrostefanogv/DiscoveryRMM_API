@@ -317,6 +317,7 @@ prompt_tls_certificate_configuration() {
 # ── Admin bootstrap wizard ─────────────────────────────────────────────────
 
 prepare_bootstrap_admin_login() {
+  local step_label="${1:-$(wizard_step_label "9/10" "8/9")}"
   local existing_login="${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}"
   local login_input=""
   local password_input=""
@@ -328,7 +329,7 @@ prepare_bootstrap_admin_login() {
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 0 && -z "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
-    wizard_header "Primeiro acesso administrativo" "$(wizard_step_label "9/10" "8/9")"
+    wizard_header "Primeiro acesso administrativo" "$step_label"
     echo "Informe o usuario administrador do primeiro acesso."
     echo "Se deixar em branco, o instalador gera um login temporario automaticamente."
     echo "A senha tambem pode ficar em branco para ser gerada pelo recover-admin."
@@ -490,6 +491,8 @@ print_selected_configuration_summary() {
     if [[ "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN_AUTO:-0}" -eq 1 ]]; then
       echo "- Admin bootstrap login: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN (gerado automaticamente)"
     else echo "- Admin bootstrap login: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"; fi
+  elif [[ "$NON_INTERACTIVE" -eq 0 ]]; then
+    echo "- Admin bootstrap login: sera solicitado na etapa final (apos API pronta)"
   fi
   if [[ "${DISCOVERY_BOOTSTRAP_ADMIN_PASSWORD_AUTO:-1}" -eq 1 ]]; then
     echo "- Admin bootstrap senha: gerada automaticamente pelo recover-admin"

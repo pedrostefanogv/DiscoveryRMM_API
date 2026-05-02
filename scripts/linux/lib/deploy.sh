@@ -350,6 +350,27 @@ wait_for_discovery_api_ready() {
   fail "discovery-api nao ficou pronta a tempo; bootstrap administrativo abortado."
 }
 
+persist_bootstrap_admin_login_in_env() {
+  local bootstrap_login="$1"
+  local env_file="${2:-/etc/discovery-api/discovery.env}"
+
+  [[ -n "$bootstrap_login" ]] || return 0
+  bootstrap_login="${bootstrap_login//$'\r'/}"
+  bootstrap_login="${bootstrap_login//$'\n'/}"
+
+  if ! sudo test -f "$env_file"; then
+    warn "Arquivo de ambiente da API nao encontrado para persistir login bootstrap: $env_file"
+    return 0
+  fi
+
+  local tmp_file
+  tmp_file="$(mktemp)"
+  sudo awk '!/^DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=/' "$env_file" > "$tmp_file"
+  printf 'DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=%s\n' "$bootstrap_login" >> "$tmp_file"
+  sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
+  rm -f "$tmp_file"
+}
+
 run_db_migrations() {
   log "Aguardando startup da API para executar o bootstrap administrativo"
 
@@ -361,6 +382,7 @@ run_db_migrations() {
   fi
 
   wait_for_discovery_api_ready
+  prepare_bootstrap_admin_login "final"
 
   log "API pronta; executando bootstrap admin via --recover-admin..."
   if ! sudo -u discovery-api test -r "$api_env_file"; then
@@ -370,6 +392,7 @@ run_db_migrations() {
   local output
   local bootstrap_login="${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-${ADMIN_RECOVERY_LOGIN:-}}"
   [[ -n "$bootstrap_login" ]] || fail "Login do primeiro acesso nao foi preparado antes do bootstrap admin."
+  persist_bootstrap_admin_login_in_env "$bootstrap_login" "$api_env_file"
 
   output="$(sudo -u discovery-api env \
     DISCOVERY_API_MAINTENANCE_ENV_FILE="$api_env_file" \

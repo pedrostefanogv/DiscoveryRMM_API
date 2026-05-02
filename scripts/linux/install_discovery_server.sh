@@ -164,7 +164,6 @@ main() {
   log "Build do Agent permanece Windows x86/x64 nesta fase"
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
   normalize_site_realtime_settings
-  prepare_bootstrap_admin_login
 
   DISCOVERY_API_RELEASES="${DISCOVERY_API_BASE}/releases"
   DISCOVERY_API_SHARED="${DISCOVERY_API_BASE}/shared"
