@@ -13,6 +13,7 @@ NON_INTERACTIVE=0
 CONFIG_FILE=""
 UPDATE_NATS_CONFIG_ONLY=0
 UPDATE_STACK_ONLY=0
+MAINTENANCE_MODE=0
 INSTALL_MODE=""
 SUDO_KEEPALIVE_PID=""
 LOG_CONTEXT="install"
@@ -26,9 +27,10 @@ while [[ $# -gt 0 ]]; do
       shift 2 ;;
     --update-nats-config|--nats-only) UPDATE_NATS_CONFIG_ONLY=1; shift ;;
     --update-stack|--rebuild-only|--upgrade) UPDATE_STACK_ONLY=1; shift ;;
+    --maintenance|--advanced) MAINTENANCE_MODE=1; shift ;;
     --mode)
       INSTALL_MODE="${2:-}"
-      [[ -n "$INSTALL_MODE" ]] || { echo "Parametro --mode exige valor (full|nats|update|upgrade)" >&2; exit 1; }
+      [[ -n "$INSTALL_MODE" ]] || { echo "Parametro --mode exige valor (full|nats|update|upgrade|maintenance)" >&2; exit 1; }
       shift 2 ;;
     *)
       echo "Parametro invalido: $1" >&2; exit 1 ;;
@@ -80,6 +82,7 @@ main() {
 
   if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then apply_nats_reconfiguration_only; return; fi
   if [[ "$UPDATE_STACK_ONLY" -eq 1 ]]; then apply_stack_update_only; return; fi
+  if [[ "$MAINTENANCE_MODE" -eq 1 ]]; then apply_maintenance_mode; return; fi
 
   wizard_header "Repositorios" "$(wizard_step_label "3/8" "2/7")"
   echo "Informe os repositorios Git que serao clonados."

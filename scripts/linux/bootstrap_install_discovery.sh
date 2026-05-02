@@ -183,6 +183,7 @@ choose_operation_mode_interactive() {
     echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)" >&2
     echo "3) Atualizar instalacao existente (repositorios + rebuild API/portal + restart servicos)" >&2
     echo "4) Ver dados do servidor (instalacao atual, usuario, senha, chaves e afins)" >&2
+    echo "5) Manutencao avancada (reset senha/MFA e recovery de usuario admin)" >&2
     echo "----------------------------------------" >&2
 
     local selected_option
@@ -217,8 +218,12 @@ choose_operation_mode_interactive() {
         echo "Pressione Enter para voltar ao menu..." >&2
         read -r _
         ;;
+      5|maintenance|advanced|manutencao)
+        printf 'maintenance'
+        return
+        ;;
       *)
-        echo "Opcao invalida: $selected_option. Use 1-4." >&2
+        echo "Opcao invalida: $selected_option. Use 1-5." >&2
         ;;
     esac
   done
@@ -235,7 +240,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode)
       BOOTSTRAP_INSTALL_MODE="${2:-}"
-      [[ -n "$BOOTSTRAP_INSTALL_MODE" ]] || fail "Parametro --mode exige valor (full|nats|update)"
+      [[ -n "$BOOTSTRAP_INSTALL_MODE" ]] || fail "Parametro --mode exige valor (full|nats|update|maintenance)"
       shift 2
       ;;
     --branch|-b)
@@ -282,7 +287,9 @@ if [[ -z "${DISCOVERY_BOOTSTRAP_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}
     if [[ -z "$BOOTSTRAP_INSTALL_MODE" ]]; then
       BOOTSTRAP_INSTALL_MODE="$(choose_operation_mode_interactive)"
     fi
-    BOOTSTRAP_BRANCH="$(choose_branch_interactive)"
+    if [[ "$BOOTSTRAP_INSTALL_MODE" != "maintenance" ]]; then
+      BOOTSTRAP_BRANCH="$(choose_branch_interactive)"
+    fi
   fi
 fi
 

@@ -182,7 +182,7 @@ select_install_branch() {
 }
 
 select_operation_mode() {
-  if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 || "$UPDATE_STACK_ONLY" -eq 1 ]]; then return; fi
+  if [[ "${UPDATE_NATS_CONFIG_ONLY:-0}" -eq 1 || "${UPDATE_STACK_ONLY:-0}" -eq 1 || "${MAINTENANCE_MODE:-0}" -eq 1 ]]; then return; fi
 
   local requested_mode="${INSTALL_MODE:-}"
   if [[ -z "$requested_mode" && -n "${DISCOVERY_INSTALL_MODE:-}" ]]; then
@@ -192,10 +192,27 @@ select_operation_mode() {
   if [[ -n "$requested_mode" ]]; then
     requested_mode="$(printf '%s' "$requested_mode" | tr '[:upper:]' '[:lower:]')"
     case "$requested_mode" in
-      full|install|complete)     UPDATE_NATS_CONFIG_ONLY=0; return ;;
-      nats|nats-only|update-nats) UPDATE_NATS_CONFIG_ONLY=1; return ;;
-      update|update-stack|rebuild|upgrade) UPDATE_STACK_ONLY=1; return ;;
-      *) fail "Modo invalido: $requested_mode (use full, nats, update ou upgrade)" ;;
+      full|install|complete)
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=0
+        MAINTENANCE_MODE=0
+        return ;;
+      nats|nats-only|update-nats)
+        UPDATE_NATS_CONFIG_ONLY=1
+        UPDATE_STACK_ONLY=0
+        MAINTENANCE_MODE=0
+        return ;;
+      update|update-stack|rebuild|upgrade)
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=1
+        MAINTENANCE_MODE=0
+        return ;;
+      maintenance|advanced|manutencao)
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=0
+        MAINTENANCE_MODE=1
+        return ;;
+      *) fail "Modo invalido: $requested_mode (use full, nats, update, upgrade ou maintenance)" ;;
     esac
   fi
 
@@ -208,16 +225,35 @@ select_operation_mode() {
     echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
     echo "3) Atualizar instalacao existente (repositorios + rebuild API/portal + restart servicos)"
     echo "4) Ver dados do servidor (instalacao atual, usuario, senha, chaves e afins)"
+    echo "5) Manutencao avancada (reset senha/MFA e recovery de usuario admin)"
     echo "----------------------------------------"
 
     local selected_option
     read -r -p "Opcao [1]: " selected_option
     selected_option="${selected_option:-1}"
+    selected_option="$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     case "$selected_option" in
-      1) UPDATE_NATS_CONFIG_ONLY=0; UPDATE_STACK_ONLY=0; return ;;
-      2) UPDATE_NATS_CONFIG_ONLY=1; UPDATE_STACK_ONLY=0; return ;;
-      3) UPDATE_NATS_CONFIG_ONLY=0; UPDATE_STACK_ONLY=1; return ;;
+      1|full|install|complete)
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=0
+        MAINTENANCE_MODE=0
+        return ;;
+      2|nats|nats-only|update-nats)
+        UPDATE_NATS_CONFIG_ONLY=1
+        UPDATE_STACK_ONLY=0
+        MAINTENANCE_MODE=0
+        return ;;
+      3|update|update-stack|rebuild|upgrade)
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=1
+        MAINTENANCE_MODE=0
+        return ;;
       4) print_server_installation_data ;;
+      5|maintenance|advanced|manutencao)
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=0
+        MAINTENANCE_MODE=1
+        return ;;
       *) echo "Opcao invalida: $selected_option" >&2 ;;
     esac
   done

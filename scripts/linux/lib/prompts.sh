@@ -223,13 +223,12 @@ prompt_selfupdate_settings() {
 
   if [[ -z "${SELFUPDATE_ENABLED:-}" ]]; then
     local selfupdate_choice
-    read -r -p "Ativar self-update automatico? (1=Sim / 0=Nao) [1]: " selfupdate_choice
-    selfupdate_choice="${selfupdate_choice:-1}"
-    if [[ "$selfupdate_choice" != "1" ]]; then
-      SELFUPDATE_ENABLED=0; SELFUPDATE_INTERVAL=""
-    else
-      SELFUPDATE_ENABLED=1
-    fi
+    read -r -p "Ativar self-update automatico? (S/n): " selfupdate_choice
+    selfupdate_choice="$(printf '%s' "${selfupdate_choice:-s}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$selfupdate_choice" in
+      s|sim|y|yes|1) SELFUPDATE_ENABLED=1 ;;
+      *) SELFUPDATE_ENABLED=0; SELFUPDATE_INTERVAL="" ;;
+    esac
   fi
 
   if [[ "${SELFUPDATE_ENABLED:-1}" == "1" && -z "${SELFUPDATE_INTERVAL:-}" ]]; then

@@ -252,6 +252,11 @@ initialize_log_context_from_requested_mode() {
   local requested_mode="${INSTALL_MODE:-${DISCOVERY_INSTALL_MODE:-}}"
   requested_mode="$(printf '%s' "$requested_mode" | tr '[:upper:]' '[:lower:]')"
 
+  if [[ "${MAINTENANCE_MODE:-0}" -eq 1 ]]; then
+    set_log_context "maintenance"
+    return
+  fi
+
   if [[ "$UPDATE_STACK_ONLY" -eq 1 ]]; then
     set_log_context "update"
     return
@@ -265,6 +270,7 @@ initialize_log_context_from_requested_mode() {
   case "$requested_mode" in
     update|update-stack|rebuild|upgrade) set_log_context "update"       ;;
     nats|nats-only|update-nats)          set_log_context "update-nats"  ;;
+    maintenance|advanced|manutencao)     set_log_context "maintenance"  ;;
     *)                                   set_log_context "install"      ;;
   esac
 }
