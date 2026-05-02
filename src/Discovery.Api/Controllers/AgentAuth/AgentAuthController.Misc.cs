@@ -9,6 +9,33 @@ namespace Discovery.Api.Controllers;
 /// </summary>
 public partial class AgentAuthController
 {
+    /// <summary>
+    /// Validates agent credentials and returns agent identity info.
+    /// Used by the agent to verify its token is still valid and to resolve
+    /// clientId/siteId for scoped operations (tickets, support, P2P, etc).
+    /// </summary>
+    [HttpGet("me")]
+    public async Task<IActionResult> GetAgentIdentity()
+    {
+        if (!TryGetAuthenticatedAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent not authenticated." });
+
+        var (agent, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: true);
+        if (agent is null)
+            return blocked ?? NotFound(new { error = "Agent not found." });
+
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+
+        return Ok(new
+        {
+            agentId = agent.Id,
+            clientId = site?.ClientId,
+            siteId = agent.SiteId,
+            hostname = agent.Hostname,
+            displayName = agent.DisplayName
+        });
+    }
+
     [HttpGet("me/app-store")]
     public async Task<IActionResult> GetAppStoreEffective(
         [FromQuery] AppInstallationType installationType = AppInstallationType.Winget,

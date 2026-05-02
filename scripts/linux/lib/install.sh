@@ -5,6 +5,7 @@ install_apt_dependencies() {
   local -a packages=(
     apt-transport-https ca-certificates curl git gnupg jq lsb-release
     dnsutils nginx openssl postgresql postgresql-contrib redis-server nats-server
+    golang-go gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 nsis
   )
   log "Instalando dependencias de sistema via apt: ${packages[*]}"
   sudo apt-get update -y

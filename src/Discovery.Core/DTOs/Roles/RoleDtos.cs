@@ -27,6 +27,7 @@ public class RoleDto
     public string? Description { get; set; }
     public RoleType Type { get; set; }
     public bool IsSystem { get; set; }
+    public bool IsActive { get; set; } = true;
     public RoleMfaRequirement MfaRequirement { get; set; }
     public int? MeshRightsMask { get; set; }
     public string? MeshRightsProfile { get; set; }
