@@ -27,7 +27,18 @@ public class SecurityHeadersMiddleware
 
             if (!isDocsPath && configuration.GetValue("Security:Headers:EnableCsp", true))
             {
-                context.Response.Headers["Content-Security-Policy"] = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
+                var nonce = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
+                context.Items["CspNonce"] = nonce;
+                context.Response.Headers["Content-Security-Policy"] =
+                    "default-src 'none';" +
+                    " base-uri 'none';" +
+                    " frame-ancestors 'none';" +
+                    " form-action 'none';" +
+                    " connect-src 'self' ws: wss:;" +
+                    $" script-src 'nonce-{nonce}';" +
+                    " style-src 'self' 'unsafe-inline';" +
+                    " img-src 'self' data: blob:;" +
+                    " font-src 'self';";
             }
 
             context.Response.Headers.Remove("Server");

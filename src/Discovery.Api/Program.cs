@@ -289,6 +289,11 @@ if (builder.Configuration.GetValue("Security:Https:Enforce", !app.Environment.Is
     app.UseHttpsRedirection();
 }
 
+app.UseWebSockets(new WebSocketOptions
+{
+    KeepAliveInterval = TimeSpan.FromSeconds(30)
+});
+
 app.UseRateLimiter();
 app.UseOutputCache();
 app.UseCors("DefaultApi");

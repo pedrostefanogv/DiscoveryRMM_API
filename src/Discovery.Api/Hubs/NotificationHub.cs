@@ -4,6 +4,42 @@ namespace Discovery.Api.Hubs;
 
 public class NotificationHub : Hub
 {
+    private readonly ILogger<NotificationHub> _logger;
+
+    public NotificationHub(ILogger<NotificationHub> logger)
+    {
+        _logger = logger;
+    }
+
+    public override async Task OnConnectedAsync()
+    {
+        var userId = Context.Items["UserId"] as Guid?;
+
+        if (!userId.HasValue)
+        {
+            _logger.LogWarning(
+                "NotificationHub: conexao anonima rejeitada. ConnectionId={ConnectionId}",
+                Context.ConnectionId);
+            Context.Abort();
+            return;
+        }
+
+        _logger.LogInformation(
+            "NotificationHub: usuario conectado. UserId={UserId}, ConnectionId={ConnectionId}",
+            userId, Context.ConnectionId);
+
+        await base.OnConnectedAsync();
+    }
+
+    public override async Task OnDisconnectedAsync(Exception? exception)
+    {
+        var userId = Context.Items["UserId"] as Guid?;
+        _logger.LogInformation(
+            "NotificationHub: usuario desconectado. UserId={UserId}, ConnectionId={ConnectionId}",
+            userId, Context.ConnectionId);
+        await base.OnDisconnectedAsync(exception);
+    }
+
     public Task SubscribeAll()
         => Groups.AddToGroupAsync(Context.ConnectionId, "notifications:all");
 
