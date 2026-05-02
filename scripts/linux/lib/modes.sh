@@ -103,16 +103,16 @@ prompt_update_scope() {
   fi
 
   while true; do
-    echo
-    echo "----------------------------------------"
-    echo " Escopo do update"
-    echo "----------------------------------------"
-    echo "Escolha quais componentes atualizar:"
-    echo "1) Tudo (API + portal web + agent)"
-    echo "2) Somente API (backend .NET)"
-    echo "3) Somente portal web (frontend)"
-    echo "4) Somente agent (repositorio do instalador Windows)"
-    echo "----------------------------------------"
+    echo >&2
+    echo "----------------------------------------" >&2
+    echo " Escopo do update" >&2
+    echo "----------------------------------------" >&2
+    echo "Escolha quais componentes atualizar:" >&2
+    echo "1) Tudo (API + portal web + agent)" >&2
+    echo "2) Somente API (backend .NET)" >&2
+    echo "3) Somente portal web (frontend)" >&2
+    echo "4) Somente agent (repositorio do instalador Windows)" >&2
+    echo "----------------------------------------" >&2
 
     local selected_option
     read -r -p "Opcao [1]: " selected_option
@@ -212,7 +212,7 @@ prompt_maintenance_login() {
 prompt_maintenance_password_optional() {
   local password_input
   read -r -s -p "Nova senha (Enter = gerar automaticamente): " password_input
-  echo
+  echo >&2
   printf '%s' "$password_input"
 }
 
