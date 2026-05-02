@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_INSTALLER_PATH="$SCRIPT_DIR/install_discovery_server.sh"
+
 log() {
   printf '[bootstrap] %s\n' "$*"
 }
@@ -108,6 +111,34 @@ normalize_branch() {
 
   [[ "$raw" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Branch invalida: $raw"
   printf '%s' "$raw"
+}
+
+is_maintenance_mode() {
+  local mode_raw="${1:-}"
+  local mode
+  mode="$(printf '%s' "$mode_raw" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$mode" in
+    maintenance|advanced|manutencao) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+installer_supports_maintenance() {
+  local installer_path="$1"
+  [[ -f "$installer_path" ]] || return 1
+  grep -Eq 'apply_maintenance_mode|--maintenance|maintenance|manutencao' "$installer_path"
+}
+
+exec_installer() {
+  local installer_path="$1"
+  shift
+
+  log "Executando instalador"
+  exec env \
+    DISCOVERY_DOTNET_RUNTIME="$DISCOVERY_DOTNET_RUNTIME" \
+    DISCOVERY_GIT_BRANCH="$BOOTSTRAP_BRANCH" \
+    DISCOVERY_RELEASE_CHANNEL="$BOOTSTRAP_BRANCH" \
+    bash "$installer_path" "$@"
 }
 
 bootstrap_header() {
@@ -293,6 +324,14 @@ if [[ -z "${DISCOVERY_BOOTSTRAP_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}
   fi
 fi
 
+if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && [[ -f "$LOCAL_INSTALLER_PATH" ]]; then
+  if installer_supports_maintenance "$LOCAL_INSTALLER_PATH"; then
+    log "Modo maintenance: usando instalador local em $LOCAL_INSTALLER_PATH"
+    exec_installer "$LOCAL_INSTALLER_PATH" --mode "$BOOTSTRAP_INSTALL_MODE" "${INSTALLER_ARGS[@]}"
+  fi
+  warn "Instalador local nao possui suporte ao modo maintenance; tentando clone remoto."
+fi
+
 if [[ -n "$BOOTSTRAP_INSTALL_MODE" ]]; then
   INSTALLER_ARGS=(--mode "$BOOTSTRAP_INSTALL_MODE" "${INSTALLER_ARGS[@]}")
 fi
@@ -351,9 +390,8 @@ if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
   log "Fallback aplicado: solicitado '$BOOTSTRAP_BRANCH', usando '$CLONED_BRANCH'"
 fi
 
-log "Executando instalador"
-exec env \
-  DISCOVERY_DOTNET_RUNTIME="$DISCOVERY_DOTNET_RUNTIME" \
-  DISCOVERY_GIT_BRANCH="$BOOTSTRAP_BRANCH" \
-  DISCOVERY_RELEASE_CHANNEL="$BOOTSTRAP_BRANCH" \
-  bash "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"
+if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && ! installer_supports_maintenance "$INSTALLER_PATH"; then
+  fail "A branch '$CLONED_BRANCH' nao possui suporte ao modo maintenance. Informe --branch dev/beta (com suporte) ou execute scripts/linux/install_discovery_server.sh --mode maintenance em um checkout atualizado."
+fi
+
+exec_installer "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"
