@@ -21,6 +21,7 @@ internal static class MaintenanceMode
         bool PasswordFromStdin,
         bool CreateIfMissing,
         bool ResetMfa,
+        bool ResetMfaOnly,
         bool ReactivateUser)
     {
         public static Options Default => new(
@@ -31,6 +32,7 @@ internal static class MaintenanceMode
             PasswordFromStdin: false,
             CreateIfMissing: true,
             ResetMfa: true,
+            ResetMfaOnly: false,
             ReactivateUser: true);
     }
 
@@ -87,6 +89,9 @@ internal static class MaintenanceMode
                 case "--keep-mfa":
                     options = options with { ResetMfa = false };
                     break;
+                case "--reset-mfa-only":
+                    options = options with { ResetMfaOnly = true };
+                    break;
                 case "--reactivate":
                     options = options with { ReactivateUser = true };
                     break;
@@ -124,6 +129,7 @@ internal static class MaintenanceMode
         Console.WriteLine("  --no-create-if-missing      Fail if login does not exist");
         Console.WriteLine("  --reset-mfa                 Deactivate MFA keys and require new enrollment (default)");
         Console.WriteLine("  --keep-mfa                  Keep current MFA keys");
+        Console.WriteLine("  --reset-mfa-only            Reset MFA keys only (no password change, no user creation)");
         Console.WriteLine("  --reactivate                Re-enable user if inactive (default)");
         Console.WriteLine("  --no-reactivate             Keep current IsActive status");
         Console.WriteLine("  --recover-admin-help        Show this help");
@@ -141,6 +147,33 @@ internal static class MaintenanceMode
         var passwordService = scope.ServiceProvider.GetRequiredService<IPasswordService>();
         var db = scope.ServiceProvider.GetRequiredService<DiscoveryDbContext>();
 
+        var login = options.Login.Trim();
+        var user = await users.GetByLoginAsync(login);
+
+        // --reset-mfa-only: apenas reseta MFA, sem alterar senha, sem criar usuario
+        if (options.ResetMfaOnly)
+        {
+            if (user is null)
+            {
+                Console.Error.WriteLine($"User '{login}' not found. Use --recover-admin to create it first.");
+                return 1;
+            }
+
+            await mfaKeys.DeactivateAllByUserIdAsync(user.Id);
+            user.MfaConfigured = false;
+            user.UpdatedAt = DateTime.UtcNow;
+            user = await users.UpdateAsync(user);
+            await sessions.RevokeAllByUserIdAsync(user.Id);
+            await EnsureAdminBindingAsync(db, user.Id);
+
+            Console.WriteLine("MFA-only reset completed.");
+            Console.WriteLine($"Login: {user.Login}");
+            Console.WriteLine("MFA reset: yes");
+            Console.WriteLine("Password: unchanged");
+            Console.WriteLine("All active sessions for this user were revoked.");
+            return 0;
+        }
+
         var password = ResolvePassword(options);
         if (password is null)
         {
@@ -155,8 +188,6 @@ internal static class MaintenanceMode
             return 2;
         }
 
-        var login = options.Login.Trim();
-        var user = await users.GetByLoginAsync(login);
         var created = false;
 
         if (user is null)

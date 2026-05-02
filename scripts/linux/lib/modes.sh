@@ -1,10 +1,9 @@
 # Discovery RMM installer – operation modes (update-stack, update-nats, maintenance)
 # Requires: common.sh, install.sh, services.sh, deploy.sh, prompts.sh, normalize.sh, certs.sh
 
-apply_stack_update_only() {
-  set_log_context "update"
-  log "Modo de update da stack: atualizando repositorios e rebuildando API/portal"
+# ── Update: shared defaults loader ────────────────────────────────────────
 
+load_update_defaults() {
   DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_API}"
   DISCOVERY_AGENT_GIT_REPO="${DISCOVERY_AGENT_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Agent}"
   DISCOVERY_SITE_GIT_REPO="${DISCOVERY_SITE_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Site}"
@@ -51,23 +50,113 @@ apply_stack_update_only() {
 
   trap cleanup_on_exit EXIT
   setup_git_askpass
-  clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
-  clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
-  clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
+}
 
+# ── Update: individual component updaters ──────────────────────────────────
+
+update_api() {
+  clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
+  publish_api
+  install_selfupdate_script
+  write_site_proxy_config
+  if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
+    sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api"
+  else warn "Servico discovery-api nao encontrado; pulando restart"; fi
+}
+
+update_site() {
+  clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
+  publish_site
+  if sudo systemctl list-unit-files nginx.service >/dev/null 2>&1; then
+    sudo systemctl restart nginx || warn "Falha ao reiniciar nginx"
+  fi
+}
+
+update_agent() {
+  clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
+  log "Repositorio do agent atualizado em $DISCOVERY_AGENT_SRC"
+  log "O build do agent (.exe) sera feito sob demanda ou no proximo self-update."
+}
+
+update_all_components() {
+  clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
+  clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
+  clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
   publish_api
   publish_site
   install_selfupdate_script
   write_site_proxy_config
-
   if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
     sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api"
   else warn "Servico discovery-api nao encontrado; pulando restart"; fi
   if sudo systemctl list-unit-files nginx.service >/dev/null 2>&1; then
     sudo systemctl restart nginx || warn "Falha ao reiniciar nginx"
   fi
+}
 
-  log "Update da stack concluido"
+# ── Update: scope selector ────────────────────────────────────────────────
+
+prompt_update_scope() {
+  if [[ "${NON_INTERACTIVE:-0}" -eq 1 ]]; then
+    printf 'all'
+    return
+  fi
+
+  while true; do
+    echo
+    echo "----------------------------------------"
+    echo " Escopo do update"
+    echo "----------------------------------------"
+    echo "Escolha quais componentes atualizar:"
+    echo "1) Tudo (API + portal web + agent)"
+    echo "2) Somente API (backend .NET)"
+    echo "3) Somente portal web (frontend)"
+    echo "4) Somente agent (repositorio do instalador Windows)"
+    echo "----------------------------------------"
+
+    local selected_option
+    read -r -p "Opcao [1]: " selected_option
+    selected_option="${selected_option:-1}"
+    selected_option="$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+    case "$selected_option" in
+      1|all|tudo)         printf 'all';   return ;;
+      2|api|backend)      printf 'api';   return ;;
+      3|site|portal|web)  printf 'site';  return ;;
+      4|agent)            printf 'agent'; return ;;
+      *) echo "Opcao invalida: $selected_option. Use 1-4." >&2 ;;
+    esac
+  done
+}
+
+# ── Update: main entry point ──────────────────────────────────────────────
+
+apply_stack_update_only() {
+  set_log_context "update"
+  log "Modo de update da stack"
+
+  load_update_defaults
+
+  local update_scope
+  update_scope="$(prompt_update_scope)"
+
+  case "$update_scope" in
+    all)
+      log "Atualizando todos os componentes (API + portal + agent)"
+      update_all_components ;;
+    api)
+      log "Atualizando somente a API (backend .NET)"
+      update_api ;;
+    site)
+      log "Atualizando somente o portal web (frontend)"
+      update_site ;;
+    agent)
+      log "Atualizando somente o repositorio do agent"
+      update_agent ;;
+    *) fail "Escopo de update invalido: $update_scope" ;;
+  esac
+
+  log "Update da stack concluido (escopo: ${update_scope})"
 }
 
 apply_nats_reconfiguration_only() {
@@ -185,6 +274,62 @@ run_recover_admin_maintenance() {
   printf '%s\n' "$output"
 }
 
+run_reset_mfa_only() {
+  local target_login="$1"
+  local api_env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  local api_current="${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}"
+
+  [[ -n "$target_login" ]] || fail "Login alvo nao informado para reset MFA."
+  if ! sudo -u discovery-api test -x "$api_current/Discovery.Api"; then
+    fail "Binario da API nao encontrado em $api_current/Discovery.Api"
+  fi
+  if ! sudo -u discovery-api test -r "$api_env_file"; then
+    fail "Arquivo de ambiente da API nao encontrado ou sem leitura para discovery-api: $api_env_file"
+  fi
+
+  local confirm
+  read -r -p "Confirmar reset SOMENTE do MFA de '$target_login'? A senha NAO sera alterada. (S/n): " confirm
+  confirm="$(printf '%s' "${confirm:-s}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$confirm" in
+    s|sim|y|yes|1) ;;
+    *) echo "Reset de MFA cancelado."; return 0 ;;
+  esac
+
+  log "Executando reset MFA-only para '$target_login' (senha inalterada)..."
+
+  local output
+  output="$(sudo -u discovery-api env \
+    DISCOVERY_API_MAINTENANCE_ENV_FILE="$api_env_file" \
+    DISCOVERY_API_MAINTENANCE_CURRENT="$api_current" \
+    DISCOVERY_API_BOOTSTRAP_LOGIN="$target_login" \
+    bash -lc '
+      set -euo pipefail
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'"'"'\r'"'"'}"
+        case "$line" in ""|\#*) continue ;; esac
+        export "$line"
+      done < "$DISCOVERY_API_MAINTENANCE_ENV_FILE"
+      cd "$DISCOVERY_API_MAINTENANCE_CURRENT"
+      export Logging__LogLevel__Default=Warning
+      export Logging__LogLevel__Microsoft=Warning
+      export Logging__LogLevel__Microsoft__EntityFrameworkCore=Warning
+      export Logging__LogLevel__FluentMigrator=Warning
+      "$DISCOVERY_API_MAINTENANCE_CURRENT/Discovery.Api" --recover-admin --login "$DISCOVERY_API_BOOTSTRAP_LOGIN" --reset-mfa-only
+    ' 2>&1)" || {
+    local exit_code=$?
+    echo
+    echo "Output do recover-admin:"
+    printf '%s\n' "$output"
+    echo
+    if (( exit_code == 1 )); then
+      log "O usuario '$target_login' nao foi encontrado. Para criar, use as opcoes 1, 2 ou 4 do menu."
+    fi
+    return "$exit_code"
+  }
+
+  printf '%s\n' "$output"
+}
+
 print_recover_admin_help() {
   local api_env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
   local api_current="${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}"
@@ -235,8 +380,9 @@ apply_maintenance_mode() {
     echo "Escolha a acao administrativa desejada:"
     echo "1) Resetar senha + MFA de um usuario (reativa e cria se ausente)"
     echo "2) Resetar senha mantendo MFA (reativa e cria se ausente)"
-    echo "3) Recriar/garantir admin padrao (login admin, senha automatica, reset MFA)"
-    echo "4) Ver ajuda completa do recover-admin"
+    echo "3) Resetar SOMENTE o MFA (senha inalterada, usuario deve existir)"
+    echo "4) Recriar/garantir admin padrao (login admin, senha automatica, reset MFA)"
+    echo "5) Ver ajuda completa do recover-admin"
     echo "0) Sair"
     echo "----------------------------------------"
 
@@ -261,10 +407,15 @@ apply_maintenance_mode() {
         run_recover_admin_maintenance "$keep_login" "$keep_password" "0" "1" "1"
         pause_maintenance_menu ;;
       3)
+        local mfa_login
+        mfa_login="$(prompt_maintenance_login "Login alvo [admin]: " "admin")"
+        run_reset_mfa_only "$mfa_login" || true
+        pause_maintenance_menu ;;
+      4)
         log "Executando recover-admin para login admin (cria se ausente)"
         run_recover_admin_maintenance "admin" "" "1" "1" "1"
         pause_maintenance_menu ;;
-      4)
+      5)
         print_recover_admin_help
         pause_maintenance_menu ;;
       0|sair|exit|q|quit)
