@@ -236,10 +236,29 @@ public class AgentPackageService : IAgentPackageService
 
         await PrebuildBaseBinaryAsync();
 
-        return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken, activeProfile, publicApiBaseUrl);
+        return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken, activeProfile, publicApiBaseUrl, includeBootstrapDefaults: true);
     }
 
-    private async Task<(byte[] Content, string FileName)> BuildInstallerWithNsisAsync(string projectPath, string rawDeployToken, string activeProfile, string? publicApiBaseUrl)
+    public async Task<(byte[] Content, string FileName)> BuildUpdateInstallerAsync()
+    {
+        var activeProfile = GetActiveProfileName();
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+
+        if (!Directory.Exists(projectPath))
+            throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
+
+        await PrebuildBaseBinaryAsync();
+
+        return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken: null, activeProfile, publicApiBaseUrl: null, includeBootstrapDefaults: false);
+    }
+
+    private async Task<(byte[] Content, string FileName)> BuildInstallerWithNsisAsync(
+        string projectPath,
+        string? rawDeployToken,
+        string activeProfile,
+        string? publicApiBaseUrl,
+        bool includeBootstrapDefaults)
     {
         var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
             ?? Path.Combine("src", "build", "windows", "installer");
@@ -250,37 +269,45 @@ public class AgentPackageService : IAgentPackageService
 
         var makensisPath = ResolveMakensisPath();
 
-        var publicApiUrl = ResolveInstallerServerUrl(publicApiBaseUrl);
-
-        var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
-        var defaultMinimal = (_config["AgentPackage:InstallerDefaults:MinimalDefault"] ?? "1") == "0" ? "0" : "1";
         var outputName = GetAgentPackageSetting("InstallerOutputName") ?? "discovery-agent-install.exe";
 
         _logger.LogInformation(
-            "Agent installer build with profile={Profile}, installerDir={InstallerDir}",
+            "Agent installer build with profile={Profile}, installerDir={InstallerDir}, embedBootstrapDefaults={EmbedBootstrapDefaults}",
             activeProfile,
-            installerDir);
+            installerDir,
+            includeBootstrapDefaults);
 
         // WebView2 bootstrapper is embedded by the NSIS script (wails_tools.nsh).
         await EnsureWebView2BootstrapperAsync(installerDir);
 
         var binaryPath = GetBinaryPath();
 
+        var arguments = new List<string>
+        {
+            "-V3",
+            "-INPUTCHARSET", "UTF8",
+            $"-DARG_WAILS_AMD64_BINARY={binaryPath}",
+            $"-DARG_OUTFILE_NAME={outputName}"
+        };
+
+        if (includeBootstrapDefaults)
+        {
+            var publicApiUrl = ResolveInstallerServerUrl(publicApiBaseUrl);
+            var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
+            var defaultMinimal = (_config["AgentPackage:InstallerDefaults:MinimalDefault"] ?? "1") == "0" ? "0" : "1";
+
+            arguments.Add($"-DARG_DEFAULT_URL={publicApiUrl}");
+            arguments.Add($"-DARG_DEFAULT_KEY={rawDeployToken ?? string.Empty}");
+            arguments.Add($"-DARG_DEFAULT_DISCOVERY={defaultDiscovery}");
+            arguments.Add($"-DARG_DEFAULT_MINIMAL={defaultMinimal}");
+        }
+
+        arguments.Add("project.nsi");
+
         await RunProcessAsync(
             fileName: makensisPath,
             workingDirectory: installerDir,
-            arguments:
-            [
-                "-V3",
-                "-INPUTCHARSET", "UTF8",
-                $"-DARG_WAILS_AMD64_BINARY={binaryPath}",
-                $"-DARG_DEFAULT_URL={publicApiUrl}",
-                $"-DARG_DEFAULT_KEY={rawDeployToken}",
-                $"-DARG_DEFAULT_DISCOVERY={defaultDiscovery}",
-                $"-DARG_DEFAULT_MINIMAL={defaultMinimal}",
-                $"-DARG_OUTFILE_NAME={outputName}",
-                "project.nsi"
-            ]);
+            arguments: arguments.ToArray());
 
         var binDir = Path.Combine(projectPath, "src", "build", "bin");
         if (!Directory.Exists(binDir))

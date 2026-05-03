@@ -56,6 +56,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<AgentRelease> AgentReleases => Set<AgentRelease>();
     public DbSet<AgentReleaseArtifact> AgentReleaseArtifacts => Set<AgentReleaseArtifact>();
     public DbSet<AgentUpdateEvent> AgentUpdateEvents => Set<AgentUpdateEvent>();
+    public DbSet<AgentUpdateBuild> AgentUpdateBuilds => Set<AgentUpdateBuild>();
     public DbSet<AppPackage> AppPackages => Set<AppPackage>();
     public DbSet<ChocolateyPackage> ChocolateyPackages => Set<ChocolateyPackage>();
     public DbSet<WingetPackage> WingetPackages => Set<WingetPackage>();

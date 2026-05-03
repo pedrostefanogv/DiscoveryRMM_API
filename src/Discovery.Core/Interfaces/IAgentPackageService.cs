@@ -23,6 +23,13 @@ public interface IAgentPackageService
     Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null);
 
     /// <summary>
+    /// Builds a NSIS installer executable for agent self-update flow.
+    /// This variant does not embed bootstrap defaults (URL/token/discovery/minimal)
+    /// so an existing agent configuration is preserved during /S /UPDATE runs.
+    /// </summary>
+    Task<(byte[] Content, string FileName)> BuildUpdateInstallerAsync();
+
+    /// <summary>
     /// Synchronizes the agent source repository with the configured branch.
     /// Executes git fetch + git reset --hard to the target branch on origin.
     /// Only allows branches from the configured safe list (dev, release, beta, lts).

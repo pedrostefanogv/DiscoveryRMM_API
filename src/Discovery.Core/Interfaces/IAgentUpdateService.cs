@@ -6,12 +6,30 @@ namespace Discovery.Core.Interfaces;
 
 public interface IAgentUpdateService
 {
+    Task<AgentUpdateBuild?> GetCurrentBuildAsync(
+        string? platform = null,
+        string? architecture = null,
+        AgentReleaseArtifactType? artifactType = null,
+        CancellationToken cancellationToken = default);
+
+    Task<AgentUpdateBuild> RefreshCurrentBuildAsync(
+        string version,
+        string platform,
+        string architecture,
+        AgentReleaseArtifactType artifactType,
+        string fileName,
+        string contentType,
+        Stream content,
+        string? signatureThumbprint = null,
+        string? actor = null,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<AgentRelease>> ListReleasesAsync(bool includeInactive = false, string? channel = null, CancellationToken cancellationToken = default);
     Task<AgentRelease?> GetReleaseAsync(Guid releaseId, CancellationToken cancellationToken = default);
     Task<AgentRelease> CreateReleaseAsync(AgentReleaseWriteRequest request, string? actor = null, CancellationToken cancellationToken = default);
     Task<AgentRelease> UpdateReleaseAsync(Guid releaseId, AgentReleaseWriteRequest request, string? actor = null, CancellationToken cancellationToken = default);
     Task<AgentRelease> PromoteReleaseAsync(Guid releaseId, PromoteAgentReleaseRequest request, string? actor = null, CancellationToken cancellationToken = default);
-    Task<AgentCommand> TriggerForceCheckAsync(Guid agentId, ForceAgentUpdateCheckRequest request, string? actor = null, CancellationToken cancellationToken = default);
+    Task<AgentCommand> TriggerForceUpdateAsync(Guid agentId, ForceAgentUpdateRequest request, string? actor = null, CancellationToken cancellationToken = default);
     Task DeleteReleaseAsync(Guid releaseId, CancellationToken cancellationToken = default);
     Task<AgentReleaseArtifact> UploadArtifactAsync(
         Guid releaseId,

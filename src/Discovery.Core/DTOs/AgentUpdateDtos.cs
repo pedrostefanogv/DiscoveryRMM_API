@@ -89,10 +89,7 @@ public sealed record PromoteAgentReleaseRequest(
     string? TargetChannel = "stable",
     bool IsActive = true);
 
-public sealed record ForceAgentUpdateCheckRequest(
-    string? Channel = null,
-    string? TargetVersion = null,
-    AgentReleaseArtifactType? ArtifactType = null,
+public sealed record ForceAgentUpdateRequest(
     string? Reason = null);
 
 public sealed record AgentUpdateRolloutAgentSnapshotDto(

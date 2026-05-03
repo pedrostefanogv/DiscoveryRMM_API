@@ -15,12 +15,111 @@ public class AgentUpdateService(
     IAgentRepository agentRepository,
     IConfigurationResolver configurationResolver,
     IAgentReleaseRepository agentReleaseRepository,
+    IAgentUpdateBuildRepository agentUpdateBuildRepository,
     IAgentUpdateEventRepository agentUpdateEventRepository,
     IAgentCommandDispatcher agentCommandDispatcher,
     IObjectStorageProviderFactory storageProviderFactory,
     ILogger<AgentUpdateService> logger) : IAgentUpdateService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public async Task<AgentUpdateBuild?> GetCurrentBuildAsync(
+        string? platform = null,
+        string? architecture = null,
+        AgentReleaseArtifactType? artifactType = null,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedPlatform = NormalizePlatform(platform);
+        var normalizedArchitecture = NormalizeArchitecture(architecture);
+        var normalizedArtifactType = artifactType ?? AgentReleaseArtifactType.Installer;
+
+        return await agentUpdateBuildRepository.GetCurrentAsync(
+            normalizedPlatform,
+            normalizedArchitecture,
+            normalizedArtifactType,
+            cancellationToken);
+    }
+
+    public async Task<AgentUpdateBuild> RefreshCurrentBuildAsync(
+        string version,
+        string platform,
+        string architecture,
+        AgentReleaseArtifactType artifactType,
+        string fileName,
+        string contentType,
+        Stream content,
+        string? signatureThumbprint = null,
+        string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedVersion = NormalizeAndValidateVersion(version, nameof(version));
+        var normalizedPlatform = NormalizePlatform(platform);
+        var normalizedArchitecture = NormalizeArchitecture(architecture);
+        var safeFileName = Path.GetFileName(fileName);
+        if (string.IsNullOrWhiteSpace(safeFileName))
+            throw new InvalidOperationException("Build fileName is required.");
+
+        await using var buffer = new MemoryStream();
+        await content.CopyToAsync(buffer, cancellationToken);
+        var bytes = buffer.ToArray();
+        var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+        var previousBuild = await agentUpdateBuildRepository.GetCurrentAsync(
+            normalizedPlatform,
+            normalizedArchitecture,
+            artifactType,
+            cancellationToken);
+
+        var objectKey = BuildCurrentBuildObjectKey(
+            normalizedVersion,
+            normalizedPlatform,
+            normalizedArchitecture,
+            artifactType,
+            safeFileName);
+
+        var storage = await storageProviderFactory.CreateObjectStorageServiceAsync(cancellationToken);
+        await using var uploadStream = new MemoryStream(bytes, writable: false);
+        var storageObject = await storage.UploadAsync(
+            objectKey,
+            uploadStream,
+            string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType,
+            cancellationToken);
+
+        var created = await agentUpdateBuildRepository.CreateAsync(new AgentUpdateBuild
+        {
+            Version = normalizedVersion,
+            Platform = normalizedPlatform,
+            Architecture = normalizedArchitecture,
+            ArtifactType = artifactType,
+            FileName = safeFileName,
+            ContentType = string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType,
+            StorageObjectKey = storageObject.ObjectKey,
+            StorageBucket = storageObject.Bucket,
+            StorageProviderType = (int)storageObject.StorageProvider,
+            Sha256 = sha256,
+            SizeBytes = storageObject.SizeBytes,
+            SignatureThumbprint = string.IsNullOrWhiteSpace(signatureThumbprint) ? null : signatureThumbprint.Trim(),
+            IsActive = true,
+            CreatedBy = actor,
+            UpdatedBy = actor
+        }, cancellationToken);
+
+        await agentUpdateBuildRepository.DeactivateCurrentAsync(
+            normalizedPlatform,
+            normalizedArchitecture,
+            artifactType,
+            created.Id,
+            cancellationToken);
+
+        if (previousBuild is not null &&
+            !string.IsNullOrWhiteSpace(previousBuild.StorageObjectKey) &&
+            !string.Equals(previousBuild.StorageObjectKey, created.StorageObjectKey, StringComparison.Ordinal))
+        {
+            await storage.DeleteAsync(previousBuild.StorageObjectKey, cancellationToken);
+        }
+
+        return created;
+    }
 
     public Task<IReadOnlyList<AgentRelease>> ListReleasesAsync(bool includeInactive = false, string? channel = null, CancellationToken cancellationToken = default)
         => agentReleaseRepository.ListAsync(includeInactive, NormalizeChannel(channel), cancellationToken);
@@ -274,53 +373,53 @@ public class AgentUpdateService(
         var artifactType = request.ArtifactType ?? policy.PreferredArtifactType;
         var currentVersionValid = SemanticVersion.TryParse(currentVersionRaw, out var currentVersion);
 
-        var selected = await SelectReleaseAsync(policy, normalizedPlatform, normalizedArchitecture, artifactType, cancellationToken);
-        var release = selected.Release;
-        var artifact = selected.Artifact;
-        var minimumRequiredVersion = MaxVersion(policy.MinimumRequiredVersion, release?.MinimumSupportedVersion);
-        var mandatory = IsMandatory(currentVersionValid, currentVersion, minimumRequiredVersion, release);
-        var rolloutEligible = mandatory || IsAgentEligibleForRollout(agentId, policy.RolloutPercentage);
-        var updateAvailable = release is not null
-            && (!currentVersionValid || currentVersion.CompareTo(selected.Version) < 0);
+        var build = await agentUpdateBuildRepository.GetCurrentAsync(
+            normalizedPlatform,
+            normalizedArchitecture,
+            artifactType,
+            cancellationToken);
 
-        var revision = ComputeRevision(policy, release, artifact);
+        var minimumRequiredVersion = NormalizeOptionalVersion(policy.MinimumRequiredVersion, nameof(policy.MinimumRequiredVersion));
+        var mandatory = IsMandatory(currentVersionValid, currentVersion, minimumRequiredVersion, releaseMandatory: false);
+        var rolloutEligible = policy.Enabled;
+        var updateAvailable = IsBuildUpdateAvailable(build?.Version, currentVersionRaw, currentVersionValid, currentVersion);
+
+        var revision = ComputeRevision(policy, build);
 
         return new AgentUpdateManifestDto
         {
-            ReleaseId = release?.Id,
+            ReleaseId = null,
             Revision = revision,
             Enabled = policy.Enabled,
-            Channel = policy.Channel,
+            Channel = "current",
             CurrentVersion = currentVersionRaw,
             CurrentVersionValid = currentVersionValid,
-            LatestVersion = release?.Version,
-            MinimumRequiredVersion = policy.MinimumRequiredVersion,
-            MinimumSupportedVersion = release?.MinimumSupportedVersion,
+            LatestVersion = build?.Version,
+            MinimumRequiredVersion = minimumRequiredVersion,
+            MinimumSupportedVersion = null,
             UpdateAvailable = updateAvailable,
             Mandatory = mandatory,
             RolloutEligible = rolloutEligible,
-            DirectUpdateSupported = policy.Enabled && updateAvailable && rolloutEligible && artifact is not null,
-            Platform = artifact?.Platform ?? normalizedPlatform,
-            Architecture = artifact?.Architecture ?? normalizedArchitecture,
-            ArtifactType = artifact?.ArtifactType ?? artifactType,
-            FileName = artifact?.FileName,
-            ContentType = artifact?.ContentType,
-            Sha256 = artifact?.Sha256,
-            SizeBytes = artifact?.SizeBytes,
-            SignatureThumbprint = artifact?.SignatureThumbprint,
-            PublishedAtUtc = release?.PublishedAtUtc,
-            ReleaseNotes = release?.ReleaseNotes,
-            Message = BuildManifestMessage(policy, release, updateAvailable, rolloutEligible, currentVersionValid)
+            DirectUpdateSupported = policy.Enabled && updateAvailable && rolloutEligible && build is not null,
+            Platform = build?.Platform ?? normalizedPlatform,
+            Architecture = build?.Architecture ?? normalizedArchitecture,
+            ArtifactType = build?.ArtifactType ?? artifactType,
+            FileName = build?.FileName,
+            ContentType = build?.ContentType,
+            Sha256 = build?.Sha256,
+            SizeBytes = build?.SizeBytes,
+            SignatureThumbprint = build?.SignatureThumbprint,
+            PublishedAtUtc = build?.UpdatedAt,
+            ReleaseNotes = null,
+            Message = BuildManifestMessage(policy, build, updateAvailable, rolloutEligible, currentVersionValid)
         };
     }
 
-    public async Task<AgentCommand> TriggerForceCheckAsync(Guid agentId, ForceAgentUpdateCheckRequest request, string? actor = null, CancellationToken cancellationToken = default)
+    public async Task<AgentCommand> TriggerForceUpdateAsync(Guid agentId, ForceAgentUpdateRequest request, string? actor = null, CancellationToken cancellationToken = default)
     {
         _ = await agentRepository.GetByIdAsync(agentId)
             ?? throw new KeyNotFoundException($"Agent {agentId} not found.");
 
-        var channel = string.IsNullOrWhiteSpace(request.Channel) ? null : NormalizeChannel(request.Channel);
-        var targetVersion = NormalizeOptionalVersion(request.TargetVersion, nameof(request.TargetVersion), allowNullWhenEmpty: true);
         var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
         if (reason is { Length: > 200 })
             throw new InvalidOperationException("Reason cannot exceed 200 characters.");
@@ -328,13 +427,10 @@ public class AgentUpdateService(
         var requestedAtUtc = DateTime.UtcNow;
         var payload = JsonSerializer.Serialize(new
         {
-            action = "check-update",
+            action = "force-update",
             force = true,
             requestedAtUtc,
             requestedBy = string.IsNullOrWhiteSpace(actor) ? "api" : actor.Trim(),
-            channel,
-            targetVersion,
-            artifactType = request.ArtifactType?.ToString(),
             reason
         }, JsonOptions);
 
@@ -356,39 +452,35 @@ public class AgentUpdateService(
                 ArtifactType: request.ArtifactType),
             cancellationToken);
 
-        if (!manifest.DirectUpdateSupported || !manifest.ReleaseId.HasValue)
-            return null;
-
-        if (request.ReleaseId.HasValue && request.ReleaseId.Value != manifest.ReleaseId.Value)
+        if (!manifest.DirectUpdateSupported)
             return null;
 
         if (!string.IsNullOrWhiteSpace(request.Version) &&
             !string.Equals(NormalizeOptionalVersion(request.Version, nameof(request.Version)), manifest.LatestVersion, StringComparison.Ordinal))
             return null;
 
-        var artifact = await agentReleaseRepository.GetArtifactAsync(
-            manifest.ReleaseId.Value,
+        var build = await agentUpdateBuildRepository.GetCurrentAsync(
             NormalizePlatform(request.Platform ?? manifest.Platform),
             NormalizeArchitecture(request.Architecture ?? manifest.Architecture),
-            request.ArtifactType ?? manifest.ArtifactType ?? AgentReleaseArtifactType.Portable,
+            request.ArtifactType ?? manifest.ArtifactType ?? AgentReleaseArtifactType.Installer,
             cancellationToken);
 
-        if (artifact is null)
+        if (build is null)
             return null;
 
         var storage = await storageProviderFactory.CreateObjectStorageServiceAsync(cancellationToken);
-        var downloadUrl = await storage.GetPresignedDownloadUrlAsync(artifact.StorageObjectKey, ttlHours: 1, cancellationToken);
+        var downloadUrl = await storage.GetPresignedDownloadUrlAsync(build.StorageObjectKey, ttlHours: 1, cancellationToken);
 
         return new AgentUpdateRedirectPayload
         {
             DownloadUrl = downloadUrl,
-            FileName = artifact.FileName,
-            ContentType = artifact.ContentType,
-            Sha256 = artifact.Sha256,
-            SizeBytes = artifact.SizeBytes,
-            Platform = artifact.Platform,
-            Architecture = artifact.Architecture,
-            ArtifactType = artifact.ArtifactType
+            FileName = build.FileName,
+            ContentType = build.ContentType,
+            Sha256 = build.Sha256,
+            SizeBytes = build.SizeBytes,
+            Platform = build.Platform,
+            Architecture = build.Architecture,
+            ArtifactType = build.ArtifactType
         };
     }
 
@@ -471,9 +563,9 @@ public class AgentUpdateService(
         return (selected.Release, selected.Artifact, selected.ParsedVersion);
     }
 
-    private static bool IsMandatory(bool currentVersionValid, SemanticVersion currentVersion, string? minimumRequiredVersion, AgentRelease? release)
+    private static bool IsMandatory(bool currentVersionValid, SemanticVersion currentVersion, string? minimumRequiredVersion, bool releaseMandatory)
     {
-        if (release?.Mandatory == true)
+        if (releaseMandatory)
             return true;
 
         if (string.IsNullOrWhiteSpace(minimumRequiredVersion))
@@ -486,6 +578,39 @@ public class AgentUpdateService(
             return true;
 
         return currentVersion.CompareTo(minimumVersion) < 0;
+    }
+
+    private static bool IsBuildUpdateAvailable(
+        string? buildVersion,
+        string? currentVersionRaw,
+        bool currentVersionValid,
+        SemanticVersion currentVersion)
+    {
+        if (string.IsNullOrWhiteSpace(buildVersion))
+            return false;
+
+        if (SemanticVersion.TryParse(buildVersion, out var parsedBuildVersion))
+            return !currentVersionValid || currentVersion.CompareTo(parsedBuildVersion) < 0;
+
+        var normalizedCurrent = NormalizeVersionToken(currentVersionRaw);
+        var normalizedBuild = NormalizeVersionToken(buildVersion);
+
+        if (string.IsNullOrWhiteSpace(normalizedCurrent))
+            return true;
+
+        return !string.Equals(normalizedCurrent, normalizedBuild, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeVersionToken(string? rawVersion)
+    {
+        if (string.IsNullOrWhiteSpace(rawVersion))
+            return string.Empty;
+
+        var normalized = rawVersion.Trim();
+        if (normalized.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[1..];
+
+        return normalized;
     }
 
     private static bool IsAgentEligibleForRollout(Guid agentId, int rolloutPercentage)
@@ -561,33 +686,30 @@ public class AgentUpdateService(
         };
     }
 
-    private static string ComputeRevision(AgentUpdatePolicy policy, AgentRelease? release, AgentReleaseArtifact? artifact)
+    private static string ComputeRevision(AgentUpdatePolicy policy, AgentUpdateBuild? build)
     {
         var payload = string.Join("|",
             policy.Enabled,
-            policy.Channel,
-            policy.TargetVersion ?? string.Empty,
             policy.MinimumRequiredVersion ?? string.Empty,
             policy.PreferredArtifactType,
-            policy.RolloutPercentage,
-            release?.Id.ToString("N") ?? string.Empty,
-            release?.Version ?? string.Empty,
-            release?.Mandatory ?? false,
-            release?.MinimumSupportedVersion ?? string.Empty,
-            artifact?.Id.ToString("N") ?? string.Empty,
-            artifact?.Sha256 ?? string.Empty);
+            build?.Id.ToString("N") ?? string.Empty,
+            build?.Version ?? string.Empty,
+            build?.Platform ?? string.Empty,
+            build?.Architecture ?? string.Empty,
+            build?.ArtifactType.ToString() ?? string.Empty,
+            build?.Sha256 ?? string.Empty);
 
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
         return $"agent-update:{Convert.ToHexString(hash).ToLowerInvariant()}";
     }
 
-    private static string BuildManifestMessage(AgentUpdatePolicy policy, AgentRelease? release, bool updateAvailable, bool rolloutEligible, bool currentVersionValid)
+    private static string BuildManifestMessage(AgentUpdatePolicy policy, AgentUpdateBuild? build, bool updateAvailable, bool rolloutEligible, bool currentVersionValid)
     {
         if (!policy.Enabled)
             return "Agent self-update is disabled by policy.";
 
-        if (release is null)
-            return "No published release matches the requested platform, architecture and channel.";
+        if (build is null)
+            return "No active agent build is available for the requested platform and architecture.";
 
         if (!currentVersionValid)
             return "Current agent version is missing or invalid; update should be evaluated carefully.";
@@ -599,6 +721,17 @@ public class AgentUpdateService(
             return "A newer version exists, but this agent is outside the current rollout window.";
 
         return "A newer agent version is available for download.";
+    }
+
+    private static string BuildCurrentBuildObjectKey(
+        string version,
+        string platform,
+        string architecture,
+        AgentReleaseArtifactType artifactType,
+        string fileName)
+    {
+        var safeFileName = Path.GetFileName(fileName);
+        return $"agent-updates/current/{version}/{platform}/{architecture}/{artifactType.ToString().ToLowerInvariant()}/{Guid.NewGuid():N}/{safeFileName}";
     }
 
     private static string BuildArtifactObjectKey(AgentRelease release, string platform, string architecture, AgentReleaseArtifactType artifactType, string fileName)

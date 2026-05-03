@@ -1,5 +1,4 @@
 using Discovery.Core.DTOs;
-using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
@@ -20,139 +19,67 @@ public class AgentUpdatesController(
     {
         "dev", "release", "beta", "lts"
     };
-    [HttpGet("releases")]
+
+    [HttpGet("build/current")]
     [RequirePermission(ResourceType.Deployment, ActionType.View)]
-    public async Task<IActionResult> ListReleases([FromQuery] bool includeInactive = false, [FromQuery] string? channel = null, CancellationToken cancellationToken = default)
+    public async Task<IActionResult> GetCurrentBuild(
+        [FromQuery] string? platform = null,
+        [FromQuery] string? architecture = null,
+        [FromQuery] AgentReleaseArtifactType? artifactType = null,
+        CancellationToken cancellationToken = default)
     {
-        var releases = await agentUpdateService.ListReleasesAsync(includeInactive, channel, cancellationToken);
-        return Ok(releases);
+        var build = await agentUpdateService.GetCurrentBuildAsync(platform, architecture, artifactType, cancellationToken);
+        return build is null ? NotFound(new { error = "No active build is available for the requested target." }) : Ok(build);
     }
 
-    [HttpGet("releases/{releaseId:guid}")]
-    [RequirePermission(ResourceType.Deployment, ActionType.View)]
-    public async Task<IActionResult> GetRelease(Guid releaseId, CancellationToken cancellationToken = default)
-    {
-        var release = await agentUpdateService.GetReleaseAsync(releaseId, cancellationToken);
-        return release is null ? NotFound() : Ok(release);
-    }
-
-    [HttpPost("releases")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Create)]
-    public async Task<IActionResult> CreateRelease([FromBody] AgentReleaseWriteRequest request, CancellationToken cancellationToken = default)
-    {
-        var release = await agentUpdateService.CreateReleaseAsync(
-            request,
-            HttpContext.Items["Username"] as string ?? "api",
-            cancellationToken);
-
-        await syncInvalidationPublisher.PublishGlobalAsync(
-            SyncResourceType.AgentUpdate,
-            "agent-release-created",
-            cancellationToken: cancellationToken);
-
-        return CreatedAtAction(nameof(GetRelease), new { releaseId = release.Id }, release);
-    }
-
-    [HttpPut("releases/{releaseId:guid}")]
+    [HttpPost("build/refresh")]
     [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
-    public async Task<IActionResult> UpdateRelease(Guid releaseId, [FromBody] AgentReleaseWriteRequest request, CancellationToken cancellationToken = default)
-    {
-        var release = await agentUpdateService.UpdateReleaseAsync(
-            releaseId,
-            request,
-            HttpContext.Items["Username"] as string ?? "api",
-            cancellationToken);
-
-        await syncInvalidationPublisher.PublishGlobalAsync(
-            SyncResourceType.AgentUpdate,
-            "agent-release-updated",
-            cancellationToken: cancellationToken);
-
-        return Ok(release);
-    }
-
-    [HttpDelete("releases/{releaseId:guid}")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Delete)]
-    public async Task<IActionResult> DeleteRelease(Guid releaseId, CancellationToken cancellationToken = default)
-    {
-        await agentUpdateService.DeleteReleaseAsync(releaseId, cancellationToken);
-        await syncInvalidationPublisher.PublishGlobalAsync(
-            SyncResourceType.AgentUpdate,
-            "agent-release-deleted",
-            cancellationToken: cancellationToken);
-        return NoContent();
-    }
-
-    [HttpPost("releases/{releaseId:guid}/promote")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
-    public async Task<IActionResult> PromoteRelease(
-        Guid releaseId,
-        [FromBody] PromoteAgentReleaseRequest request,
+    public async Task<IActionResult> RefreshBuild(
+        [FromBody] RefreshAgentBuildRequest request,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            var release = await agentUpdateService.PromoteReleaseAsync(
-                releaseId,
-                request,
-                HttpContext.Items["Username"] as string ?? "api",
-                cancellationToken);
+            if (request.ForceRebuild)
+                await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
+
+            var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync();
+
+            var contentType = configuration["AgentPackage:InstallerContentType"]
+                ?? "application/x-msdownload";
+
+            var platform = string.IsNullOrWhiteSpace(request.Platform) ? "windows" : request.Platform.Trim().ToLowerInvariant();
+            var architecture = string.IsNullOrWhiteSpace(request.Architecture) ? "amd64" : request.Architecture.Trim().ToLowerInvariant();
+            var artifactType = request.ArtifactType ?? AgentReleaseArtifactType.Installer;
+
+            await using var stream = new MemoryStream(content, writable: false);
+            var build = await agentUpdateService.RefreshCurrentBuildAsync(
+                request.Version,
+                platform,
+                architecture,
+                artifactType,
+                fileName,
+                contentType,
+                stream,
+                signatureThumbprint: null,
+                actor: HttpContext.Items["Username"] as string ?? "api",
+                cancellationToken: cancellationToken);
 
             await syncInvalidationPublisher.PublishGlobalAsync(
                 SyncResourceType.AgentUpdate,
-                "agent-release-promoted",
+                "agent-build-refreshed",
                 cancellationToken: cancellationToken);
 
-            return Ok(release);
+            return Ok(build);
         }
-        catch (KeyNotFoundException ex)
+        catch (FileNotFoundException ex)
         {
-            return NotFound(new { error = ex.Message });
+            return BadRequest(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
-    }
-
-    [HttpPost("releases/{releaseId:guid}/artifacts")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
-    [Consumes("multipart/form-data")]
-    public async Task<IActionResult> UploadArtifact(Guid releaseId, [FromForm] UploadAgentReleaseArtifactRequest request, CancellationToken cancellationToken = default)
-    {
-        if (request.File is null || request.File.Length == 0)
-            return BadRequest(new { error = "Artifact file is required." });
-
-        await using var stream = request.File.OpenReadStream();
-        var artifact = await agentUpdateService.UploadArtifactAsync(
-            releaseId,
-            request.Platform,
-            request.Architecture,
-            request.ArtifactType,
-            request.File.FileName,
-            request.File.ContentType,
-            stream,
-            request.SignatureThumbprint,
-            cancellationToken);
-
-        await syncInvalidationPublisher.PublishGlobalAsync(
-            SyncResourceType.AgentUpdate,
-            "agent-release-artifact-uploaded",
-            cancellationToken: cancellationToken);
-
-        return Ok(artifact);
-    }
-
-    [HttpDelete("artifacts/{artifactId:guid}")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Delete)]
-    public async Task<IActionResult> DeleteArtifact(Guid artifactId, CancellationToken cancellationToken = default)
-    {
-        await agentUpdateService.DeleteArtifactAsync(artifactId, cancellationToken);
-        await syncInvalidationPublisher.PublishGlobalAsync(
-            SyncResourceType.AgentUpdate,
-            "agent-release-artifact-deleted",
-            cancellationToken: cancellationToken);
-        return NoContent();
     }
 
     [HttpGet("agents/{agentId:guid}/events")]
@@ -175,15 +102,15 @@ public class AgentUpdatesController(
         return Ok(dashboard);
     }
 
-    [HttpPost("agents/{agentId:guid}/force-check")]
+    [HttpPost("agents/{agentId:guid}/force-update")]
     [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
-    public async Task<IActionResult> ForceCheck(Guid agentId, [FromBody] ForceAgentUpdateCheckRequest? request, CancellationToken cancellationToken = default)
+    public async Task<IActionResult> ForceUpdate(Guid agentId, [FromBody] ForceAgentUpdateRequest? request, CancellationToken cancellationToken = default)
     {
         try
         {
-            var command = await agentUpdateService.TriggerForceCheckAsync(
+            var command = await agentUpdateService.TriggerForceUpdateAsync(
                 agentId,
-                request ?? new ForceAgentUpdateCheckRequest(),
+                request ?? new ForceAgentUpdateRequest(),
                 HttpContext.Items["Username"] as string ?? "api",
                 cancellationToken);
 
@@ -192,63 +119,6 @@ public class AgentUpdatesController(
         catch (KeyNotFoundException ex)
         {
             return NotFound(new { error = ex.Message });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-    }
-
-    /// <summary>
-    /// Builds the agent installer from the pre-compiled binary and registers it as an artifact
-    /// for the specified release. Safe to call multiple times — re-uploads replace the previous artifact.
-    /// </summary>
-    [HttpPost("releases/{releaseId:guid}/build-artifact")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
-    public async Task<IActionResult> BuildArtifact(
-        Guid releaseId,
-        [FromBody] BuildAgentReleaseArtifactRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            if (request.ForceRebuild)
-                await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
-
-            var (content, fileName) = await agentPackageService.BuildInstallerAsync(string.Empty, ResolvePublicApiBaseUrl(Request));
-
-            var contentType = configuration["AgentPackage:InstallerContentType"]
-                ?? "application/x-msdownload";
-
-            var platform = string.IsNullOrWhiteSpace(request.Platform) ? "windows" : request.Platform.Trim().ToLowerInvariant();
-            var architecture = string.IsNullOrWhiteSpace(request.Architecture) ? "amd64" : request.Architecture.Trim().ToLowerInvariant();
-
-            using var stream = new MemoryStream(content, writable: false);
-            var artifact = await agentUpdateService.UploadArtifactAsync(
-                releaseId,
-                platform,
-                architecture,
-                AgentReleaseArtifactType.Installer,
-                fileName,
-                contentType,
-                stream,
-                signatureThumbprint: null,
-                cancellationToken);
-
-            await syncInvalidationPublisher.PublishGlobalAsync(
-                SyncResourceType.AgentUpdate,
-                "agent-release-artifact-built",
-                cancellationToken: cancellationToken);
-
-            return Ok(artifact);
-        }
-        catch (KeyNotFoundException ex)
-        {
-            return NotFound(new { error = ex.Message });
-        }
-        catch (FileNotFoundException ex)
-        {
-            return BadRequest(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -331,8 +201,7 @@ public class AgentUpdatesController(
             // Force rebuild after sync
             await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
 
-            var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
-            var (content, fileName) = await agentPackageService.BuildInstallerAsync(string.Empty, publicApiBaseUrl);
+            var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync();
 
             var syncInfo = new
             {
@@ -343,12 +212,6 @@ public class AgentUpdatesController(
                 syncResult.GitMessage
             };
 
-            // If there's a latest active release, auto-register the artifact
-            try
-            {
-                // Try to get the latest active release for the current channel
-                // The release admin should create releases manually; we won't auto-create.
-                // But if a release exists, we'll note the installer was rebuilt.
                 return Ok(new
                 {
                     synced = true,
@@ -358,21 +221,9 @@ public class AgentUpdatesController(
                     {
                         fileName,
                         sizeBytes = content.Length,
-                        message = "Installer rebuilt successfully. Use POST /releases/{releaseId}/build-artifact to register the artifact with a specific release."
+                        message = "Installer rebuilt successfully. Use POST /build/refresh to publish this build as the current self-update target."
                     }
                 });
-            }
-            catch (Exception ex)
-            {
-                return Ok(new
-                {
-                    synced = true,
-                    rebuilt = true,
-                    sync = syncInfo,
-                    build = new { fileName, sizeBytes = content.Length },
-                    warning = ex.Message
-                });
-            }
         }
         catch (InvalidOperationException ex)
         {
@@ -380,20 +231,13 @@ public class AgentUpdatesController(
         }
     }
 
-    private static string ResolvePublicApiBaseUrl(HttpRequest request)
-        => $"{request.Scheme}://{request.Host}{request.PathBase}/api/";
 }
 
-public sealed record UploadAgentReleaseArtifactRequest(
-    string Platform,
-    string Architecture,
-    AgentReleaseArtifactType ArtifactType,
-    IFormFile File,
-    string? SignatureThumbprint);
-
-public sealed record BuildAgentReleaseArtifactRequest(
+public sealed record RefreshAgentBuildRequest(
+    string Version,
     string? Platform,
     string? Architecture,
+    AgentReleaseArtifactType? ArtifactType = AgentReleaseArtifactType.Installer,
     bool ForceRebuild = false);
 
 public sealed record SyncAgentRepositoryRequest(

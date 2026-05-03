@@ -198,7 +198,7 @@ public class AgentUpdateServiceTests
     }
 
     [Test]
-    public async Task TriggerForceCheckAsync_ShouldDispatchUpdateCommandWithNormalizedPayload()
+    public async Task TriggerForceUpdateAsync_ShouldDispatchUpdateCommandWithNormalizedPayload()
     {
         var agent = CreateAgent(version: "1.0.0");
         var release = CreateRelease("1.2.0");
@@ -206,9 +206,9 @@ public class AgentUpdateServiceTests
         var commandDispatcher = new FakeAgentCommandDispatcher();
         var service = CreateService(agent, policy, [release], commandDispatcher: commandDispatcher);
 
-        var command = await service.TriggerForceCheckAsync(
+        var command = await service.TriggerForceUpdateAsync(
             agent.Id,
-            new ForceAgentUpdateCheckRequest(" Beta ", " v1.2.0 ", AgentReleaseArtifactType.Installer, "  manual-trigger  "),
+            new ForceAgentUpdateRequest("  manual-trigger  "),
             "tester",
             CancellationToken.None);
 
@@ -224,27 +224,24 @@ public class AgentUpdateServiceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(root.GetProperty("action").GetString(), Is.EqualTo("check-update"));
+            Assert.That(root.GetProperty("action").GetString(), Is.EqualTo("force-update"));
             Assert.That(root.GetProperty("force").GetBoolean(), Is.True);
             Assert.That(root.GetProperty("requestedBy").GetString(), Is.EqualTo("tester"));
-            Assert.That(root.GetProperty("channel").GetString(), Is.EqualTo("beta"));
-            Assert.That(root.GetProperty("targetVersion").GetString(), Is.EqualTo("1.2.0"));
-            Assert.That(root.GetProperty("artifactType").GetString(), Is.EqualTo("Installer"));
             Assert.That(root.GetProperty("reason").GetString(), Is.EqualTo("manual-trigger"));
         });
     }
 
     [Test]
-    public void TriggerForceCheckAsync_ShouldRejectUnknownAgent()
+    public void TriggerForceUpdateAsync_ShouldRejectUnknownAgent()
     {
         var agent = CreateAgent(version: "1.0.0");
         var release = CreateRelease("1.2.0");
         var policy = CreatePolicy(rolloutPercentage: 100);
         var service = CreateService(agent, policy, [release]);
 
-        Assert.That(async () => await service.TriggerForceCheckAsync(
+        Assert.That(async () => await service.TriggerForceUpdateAsync(
                 Guid.NewGuid(),
-                new ForceAgentUpdateCheckRequest(),
+                new ForceAgentUpdateRequest(),
                 "tester",
                 CancellationToken.None),
             Throws.TypeOf<KeyNotFoundException>());
@@ -343,12 +340,37 @@ public class AgentUpdateServiceTests
         FakeAgentUpdateEventRepository? eventRepository = null,
         FakeObjectStorageProviderFactory? storageFactory = null,
         FakeAgentReleaseRepository? releaseRepository = null,
+        FakeAgentUpdateBuildRepository? buildRepository = null,
         FakeAgentCommandDispatcher? commandDispatcher = null)
     {
+        var seededBuildRepository = buildRepository ?? new FakeAgentUpdateBuildRepository(
+            releases
+                .SelectMany(release => release.Artifacts.Select(artifact => new AgentUpdateBuild
+                {
+                    Id = Guid.NewGuid(),
+                    Version = release.Version,
+                    Platform = artifact.Platform,
+                    Architecture = artifact.Architecture,
+                    ArtifactType = artifact.ArtifactType,
+                    FileName = artifact.FileName,
+                    ContentType = artifact.ContentType,
+                    StorageObjectKey = artifact.StorageObjectKey,
+                    StorageBucket = artifact.StorageBucket,
+                    StorageProviderType = artifact.StorageProviderType,
+                    Sha256 = artifact.Sha256,
+                    SizeBytes = artifact.SizeBytes,
+                    SignatureThumbprint = artifact.SignatureThumbprint,
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = release.PublishedAtUtc
+                }))
+                .ToList());
+
         return new AgentUpdateService(
             agentRepository ?? new FakeAgentRepository(agent),
             new FakeConfigurationResolver(policy, agent.SiteId),
             releaseRepository ?? new FakeAgentReleaseRepository(releases),
+            seededBuildRepository,
             eventRepository ?? new FakeAgentUpdateEventRepository(),
             commandDispatcher ?? new FakeAgentCommandDispatcher(),
             storageFactory ?? new FakeObjectStorageProviderFactory(),
@@ -609,6 +631,52 @@ public class AgentUpdateServiceTests
                 .ToList();
 
             return Task.FromResult(result);
+        }
+    }
+
+    private sealed class FakeAgentUpdateBuildRepository : IAgentUpdateBuildRepository
+    {
+        private readonly List<AgentUpdateBuild> _builds;
+
+        public FakeAgentUpdateBuildRepository(IReadOnlyList<AgentUpdateBuild> builds)
+        {
+            _builds = builds.ToList();
+        }
+
+        public Task<AgentUpdateBuild?> GetCurrentAsync(string platform, string architecture, AgentReleaseArtifactType artifactType, CancellationToken cancellationToken = default)
+        {
+            var build = _builds
+                .Where(item => item.IsActive)
+                .Where(item => item.Platform == platform)
+                .Where(item => item.Architecture == architecture)
+                .Where(item => item.ArtifactType == artifactType)
+                .OrderByDescending(item => item.UpdatedAt)
+                .ThenByDescending(item => item.CreatedAt)
+                .FirstOrDefault();
+
+            return Task.FromResult(build);
+        }
+
+        public Task<AgentUpdateBuild> CreateAsync(AgentUpdateBuild build, CancellationToken cancellationToken = default)
+        {
+            if (build.Id == Guid.Empty)
+                build.Id = Guid.NewGuid();
+
+            build.CreatedAt = DateTime.UtcNow;
+            build.UpdatedAt = build.CreatedAt;
+            _builds.Add(build);
+            return Task.FromResult(build);
+        }
+
+        public Task DeactivateCurrentAsync(string platform, string architecture, AgentReleaseArtifactType artifactType, Guid keepActiveBuildId, CancellationToken cancellationToken = default)
+        {
+            foreach (var build in _builds.Where(item => item.Platform == platform && item.Architecture == architecture && item.ArtifactType == artifactType && item.Id != keepActiveBuildId))
+            {
+                build.IsActive = false;
+                build.UpdatedAt = DateTime.UtcNow;
+            }
+
+            return Task.CompletedTask;
         }
     }
 

@@ -3,8 +3,8 @@ using Discovery.Core.Interfaces;
 namespace Discovery.Api.Services;
 
 /// <summary>
-/// Warmup service that prebuilds Discovery base binary on API startup.
-/// This reduces latency for the first installer generation request.
+/// Warmup service that prebuilds Discovery base binary and update installer on API startup.
+/// This reduces latency for the first self-update build/refresh request.
 /// </summary>
 public sealed class AgentPackagePrebuildHostedService : IHostedService
 {
@@ -43,9 +43,16 @@ public sealed class AgentPackagePrebuildHostedService : IHostedService
         {
             using var scope = _serviceProvider.CreateScope();
             var service = scope.ServiceProvider.GetRequiredService<IAgentPackageService>();
-            _logger.LogInformation("Agent prebuild: starting clean build...");
+            _logger.LogInformation("Agent prebuild: starting clean base binary build...");
             await service.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
-            _logger.LogInformation("Agent prebuild on startup finished successfully.");
+
+            _logger.LogInformation("Agent prebuild: generating update installer artifact...");
+            var (content, fileName) = await service.BuildUpdateInstallerAsync();
+
+            _logger.LogInformation(
+                "Agent prebuild on startup finished successfully. Update installer generated: {FileName} ({SizeBytes} bytes)",
+                fileName,
+                content.Length);
         }
         catch (Exception ex)
         {
