@@ -20,6 +20,7 @@ using Discovery.Infrastructure.Repositories;
 using Discovery.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.SignalR;
 using Scalar.AspNetCore;
 
 var hasMaintenanceMode = MaintenanceMode.TryParse(args, out var maintenanceOptions, out var parseError);
@@ -179,6 +180,10 @@ builder.Services.AddSignalR(options =>
     if (!string.IsNullOrWhiteSpace(redisPassword))
         options.Configuration.Password = redisPassword;
 });
+
+// Filtro de autorização global do SignalR — equivalente ao default_permissions do NATS
+// Agents só podem chamar métodos do próprio escopo; usuários não chamam métodos de agent
+builder.Services.AddSingleton<IHubFilter, AgentHubAuthorizationFilter>();
 
 // OpenAPI + Scalar
 builder.Services.AddOpenApi();

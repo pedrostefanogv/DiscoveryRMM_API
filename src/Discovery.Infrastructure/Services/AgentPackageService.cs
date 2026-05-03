@@ -168,7 +168,16 @@ public class AgentPackageService : IAgentPackageService
         var natsHost = !string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
             ? serverConfig.NatsServerHostExternal
             : serverConfig.NatsServerHostInternal;
-        var natsUrl = string.IsNullOrWhiteSpace(natsHost) ? null : natsHost;
+
+        string? natsUrl = null;
+        if (!string.IsNullOrWhiteSpace(natsHost))
+        {
+            var useWss = serverConfig.NatsUseWssExternal
+                && !string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal);
+            var scheme = useWss ? "wss" : "nats";
+            var port = useWss ? 443 : 4222;
+            natsUrl = $"{scheme}://{natsHost}:{port}";
+        }
 
         if (!File.Exists(binaryPath))
             throw new FileNotFoundException($"Agent binary not found at path: {binaryPath}", binaryPath);

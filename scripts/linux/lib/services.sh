@@ -232,6 +232,10 @@ authorization {
     issuer: "$NATS_ACCOUNT_PUBLIC_KEY"
     auth_users: [ "$NATS_AUTH_USER" ]${xkey_line}
   }
+  default_permissions {
+    publish = ["\$SYS.>"]
+    subscribe = ["\$SYS.>"]
+  }
 }
 EOF
 )
@@ -251,6 +255,9 @@ EOF
 listen: ${NATS_BIND_HOST}:4222
 http: ${NATS_MONITOR_HOST}:8222
 server_name: discovery-nats
+max_payload: 4194304
+max_connections: 5000
+write_deadline: 5s
 ${auth_block}${ws_block}
 EOF
 
