@@ -57,8 +57,11 @@ load_update_defaults() {
 update_api() {
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   publish_api
-  install_selfupdate_script
-  write_site_proxy_config
+  if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-0}" == "1" ]]; then
+    log "Atualizando tambem infraestrutura auxiliar (self-update + Nginx) por solicitacao explicita"
+    install_selfupdate_script
+    write_site_proxy_config
+  fi
   if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
     sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api"
   else warn "Servico discovery-api nao encontrado; pulando restart"; fi
@@ -89,8 +92,11 @@ update_all_components() {
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
   publish_api
   publish_site
-  install_selfupdate_script
-  write_site_proxy_config
+  if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-0}" == "1" ]]; then
+    log "Atualizando tambem infraestrutura auxiliar (self-update + Nginx) por solicitacao explicita"
+    install_selfupdate_script
+    write_site_proxy_config
+  fi
   if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
     sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api"
   else warn "Servico discovery-api nao encontrado; pulando restart"; fi
