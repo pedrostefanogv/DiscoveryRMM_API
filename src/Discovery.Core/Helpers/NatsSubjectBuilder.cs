@@ -17,4 +17,11 @@ public static class NatsSubjectBuilder
 
         throw new InvalidOperationException("Dashboard subject requires at least client scope.");
     }
+
+    /// <summary>
+    /// Subject de descoberta P2P por site — todos os agents do site assinam.
+    /// Apenas o servidor publica neste subject.
+    /// </summary>
+    public static string P2pSiteDiscoverySubject(Guid clientId, Guid siteId)
+        => $"tenant.{clientId}.site.{siteId}.p2p.discovery";
 }

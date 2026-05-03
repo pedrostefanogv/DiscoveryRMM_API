@@ -7,6 +7,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -51,6 +52,9 @@ public partial class AgentAuthController : ControllerBase
     private readonly IMonitoringEventNormalizationService _monitoringEventNormalizationService;
     private readonly ICustomFieldService _customFieldService;
     private readonly IDeployTokenService _deployTokenService;
+
+    // ── P2P Discovery ────────────────────────────────────────────────────
+    private readonly P2pDiscoveryService _p2pDiscoveryService;
 
     // ── Configuration & Infrastructure ────────────────────────────────────
     private readonly IConfigurationResolver _configResolver;
@@ -102,7 +106,8 @@ public partial class AgentAuthController : ControllerBase
         IOptions<MeshCentralOptions> meshCentralOptions,
         IAgentTlsCertificateProbe tlsCertProbe,
         IConfiguration configuration,
-        ILogger<AgentAuthController> logger)
+        ILogger<AgentAuthController> logger,
+        P2pDiscoveryService p2pDiscoveryService)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -141,6 +146,7 @@ public partial class AgentAuthController : ControllerBase
         _tlsCertProbe = tlsCertProbe;
         _configuration = configuration;
         _logger = logger;
+        _p2pDiscoveryService = p2pDiscoveryService;
     }
 
     // ── Shared Auth Helpers ───────────────────────────────────────────────

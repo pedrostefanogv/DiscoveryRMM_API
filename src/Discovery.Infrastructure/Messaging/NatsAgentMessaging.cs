@@ -17,6 +17,7 @@ namespace Discovery.Infrastructure.Messaging;
 ///   tenant.{clientId}.site.{siteId}.agent.{agentId}.result    → Agent → Servidor (resultado de comando)
 ///   tenant.{clientId}.site.{siteId}.agent.{agentId}.hardware  → Agent → Servidor (hw report)
 ///   tenant.{clientId}.dashboard.events e tenant.{clientId}.site.{siteId}.dashboard.events → Servidor → Dashboard
+///   tenant.{clientId}.site.{siteId}.p2p.discovery → Servidor → Agents (snapshot de descoberta P2P)
 /// </summary>
 public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 {
@@ -100,6 +101,14 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             agentId,
             ping.Resource,
             ping.Revision);
+    }
+
+    public async Task PublishP2pDiscoverySnapshotAsync(Guid clientId, Guid siteId, string payload, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        var subject = NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId);
+        await _connection.PublishAsync(subject, payload);
+        _logger.LogDebug("P2P discovery snapshot published to site {SiteId} (client {ClientId})", siteId, clientId);
     }
 
     public async Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken)

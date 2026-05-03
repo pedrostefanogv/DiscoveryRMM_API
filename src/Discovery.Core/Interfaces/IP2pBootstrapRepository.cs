@@ -26,4 +26,13 @@ public interface IP2pBootstrapRepository
         Guid excludeAgentId,
         int count,
         DateTime onlineCutoff);
+
+    /// <summary>
+    /// Retorna todos os peers ativos de um site para montar snapshot de descoberta.
+    /// Inclui apenas agents com bootstrap registrado e LastSeenAt >= onlineCutoff.
+    /// </summary>
+    Task<IReadOnlyList<AgentP2pBootstrap>> GetSitePeersAsync(
+        Guid siteId,
+        DateTime onlineCutoff,
+        int maxPeers);
 }

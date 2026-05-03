@@ -125,6 +125,13 @@ builder.Services.Configure<AutoTicketOptions>(
 builder.Services.Configure<SecretEncryptionOptions>(
     builder.Configuration.GetSection(SecretEncryptionOptions.SectionName));
 
+// P2p Discovery options
+builder.Services.Configure<P2pOptions>(
+    builder.Configuration.GetSection(P2pOptions.SectionName));
+
+// P2p Discovery service (singleton porque gerencia timers de debounce)
+builder.Services.AddSingleton<P2pDiscoveryService>();
+
 // IMemoryCache (para ConfigurationResolver)
 builder.Services.AddMemoryCache();
 

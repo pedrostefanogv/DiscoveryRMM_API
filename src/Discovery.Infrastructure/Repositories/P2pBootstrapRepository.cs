@@ -56,4 +56,25 @@ public class P2pBootstrapRepository : IP2pBootstrapRepository
 
         return peers;
     }
+
+    public async Task<IReadOnlyList<AgentP2pBootstrap>> GetSitePeersAsync(
+        Guid siteId,
+        DateTime onlineCutoff,
+        int maxPeers)
+    {
+        var peers = await _db.AgentP2pBootstraps
+            .AsNoTracking()
+            .Join(
+                _db.Agents.Where(a => a.SiteId == siteId
+                    && a.LastSeenAt != null
+                    && a.LastSeenAt >= onlineCutoff),
+                b => b.AgentId,
+                a => a.Id,
+                (b, _) => b)
+            .OrderByDescending(b => b.LastHeartbeatAt)
+            .Take(maxPeers)
+            .ToListAsync();
+
+        return peers;
+    }
 }

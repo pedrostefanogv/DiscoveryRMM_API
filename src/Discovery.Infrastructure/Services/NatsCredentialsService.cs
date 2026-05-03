@@ -18,6 +18,7 @@ public class NatsCredentialsService : INatsCredentialsService
     private const string PublishRemoteDebugLog = "remote-debug.log";
     private const string SubscribeCommand = "command";
     private const string SubscribeSyncPing = "sync.ping";
+    private const string SubscribeP2pDiscovery = "p2p.discovery";
 
     private readonly IAgentRepository _agentRepository;
     private readonly ISiteRepository _siteRepository;
@@ -222,6 +223,7 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishRemoteDebugLog));
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeCommand));
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeSyncPing));
+        subscribeSubjects.Add(NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId));
 
         return (publishSubjects, subscribeSubjects);
     }

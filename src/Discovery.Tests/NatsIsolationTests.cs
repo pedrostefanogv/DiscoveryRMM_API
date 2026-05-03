@@ -59,14 +59,14 @@ public class NatsIsolationTests
     }
 
     [Test]
-    public void AgentSubjects_ContainExactlySix_FourPublishTwoSubscribe()
+    public void AgentSubjects_ContainExactlySeven_FourPublishThreeSubscribe()
     {
         var (pub, sub) = BuildAgentSubjectLists(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
         Assert.That(pub, Has.Count.EqualTo(4),
             "Agente deve publicar exatamente em 4 subjects: heartbeat, result, hardware, remote-debug.log.");
-        Assert.That(sub, Has.Count.EqualTo(2),
-            "Agente deve assinar exatamente 2 subjects: command, sync.ping.");
+        Assert.That(sub, Has.Count.EqualTo(3),
+            "Agente deve assinar exatamente 3 subjects: command, sync.ping, p2p.discovery.");
     }
 
     [Test]
@@ -344,6 +344,7 @@ public class NatsIsolationTests
             [
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "command"),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
+                NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
             ]);
     }
 
@@ -406,6 +407,7 @@ public class NatsIsolationTests
         public Task UpdateStatusAsync(Guid id, Core.Enums.AgentStatus status, string? ipAddress) => throw new NotImplementedException();
         public Task ApproveZeroTouchAsync(Guid agentId) => throw new NotImplementedException();
         public Task DeleteAsync(Guid id) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private sealed class StubSiteRepository(Site site) : ISiteRepository

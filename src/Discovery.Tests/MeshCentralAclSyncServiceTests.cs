@@ -199,6 +199,9 @@ public class MeshCentralAclSyncServiceTests
 
         public Task DeleteAsync(Guid id)
             => throw new NotImplementedException();
+
+        public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default)
+            => throw new NotImplementedException();
     }
 
     private sealed class RecordingMeshCentralApiService : IMeshCentralApiService

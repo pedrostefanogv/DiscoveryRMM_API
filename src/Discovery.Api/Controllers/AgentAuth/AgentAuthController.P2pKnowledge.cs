@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Infrastructure.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -35,6 +36,9 @@ public partial class AgentAuthController
         };
 
         await _p2pBootstrapRepo.UpsertAsync(entry);
+
+        // Agenda publicação de snapshot de descoberta P2P para o site (com debounce)
+        _p2pDiscoveryService.SchedulePublish(agent!.SiteId);
 
         var onlineCutoff = DateTime.UtcNow - P2pPeerOnlineWindow;
         var peers = await _p2pBootstrapRepo.GetRandomPeersAsync(site.ClientId, agentId, count: 3, onlineCutoff);

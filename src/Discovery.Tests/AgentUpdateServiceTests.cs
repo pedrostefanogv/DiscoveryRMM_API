@@ -436,6 +436,7 @@ public class AgentUpdateServiceTests
         public Task UpdateStatusAsync(Guid id, AgentStatus status, string? ipAddress) => throw new NotSupportedException();
         public Task ApproveZeroTouchAsync(Guid agentId) => throw new NotSupportedException();
         public Task DeleteAsync(Guid id) => throw new NotSupportedException();
+        public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private sealed class FakeConfigurationResolver : IConfigurationResolver

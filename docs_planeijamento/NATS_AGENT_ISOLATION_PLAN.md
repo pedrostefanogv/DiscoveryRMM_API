@@ -1,7 +1,7 @@
 # Diagnóstico e Plano de Melhoria — Isolamento de Agents no NATS
 
 **Criado em:** 02/05/2026
-**Última atualização:** 02/05/2026
+**Última atualização:** 03/05/2026
 **Status:** Implementação parcial (P1-P2 concluídos)
 **Branch:** dev
 
@@ -225,6 +225,84 @@ Nenhuma alteração necessária.
 
 ---
 
+### 🆕 Endpoint Dedicado: `GET /api/v1/agent-auth/me/realtime/status` ✅ IMPLEMENTADO
+
+**Arquivo:** `src/Discovery.Api/Controllers/AgentAuth/AgentAuthController.Status.cs` (novo)
+
+**Problema detectado:** O agent estava tentando consultar `GET /api/v1/realtime/status`, que exige autenticação JWT de usuário (filtro global `RequireUserAuthAttribute`). O token `mdz_` do agent não é um JWT, resultando em **401 Unauthorized**.
+
+**Solução:** Criamos um endpoint específico para o agent dentro da rota `/api/v1/agent-auth/me/`, que já é protegida pelo `AgentAuthMiddleware` (valida tokens `mdz_`).
+
+```csharp
+[HttpGet("me/realtime/status")]
+public IActionResult GetAgentRealtimeStatus()
+{
+    if (!TryGetAuthenticatedAgentId(out var agentId))
+        return Unauthorized(new { error = "Agent not authenticated." });
+
+    var messaging = HttpContext.RequestServices.GetService<IAgentMessaging>();
+    var natsConnected = messaging?.IsConnected == true;
+    var redisConnected = _redisService.IsConnected;
+
+    return Ok(new
+    {
+        agentId,
+        serverTimeUtc = DateTime.UtcNow,
+        natsConnected,
+        signalrConnectedAgents = AgentHub.ConnectedAgentCount,
+        redisConnected,
+        healthy = natsConnected && redisConnected,
+        checkedAtUtc = DateTime.UtcNow
+    });
+}
+```
+
+**Fluxo de autenticação do novo endpoint:**
+
+| Passo | Middleware | Resultado |
+|-------|-----------|-----------|
+| 1 | `AgentAuthMiddleware` | ✅ Valida token `mdz_`, define `AgentId` no context |
+| 2 | `ApiTokenAuthMiddleware` | ✅ Ignora (sem header `X-Api-Key`) |
+| 3 | `UserAuthMiddleware` | ✅ Ignora (token `mdz_` não é JWT) |
+| 4 | `RequireUserAuthAttribute` | ✅ Ignora porque `AgentAuthController` tem `[AllowAnonymous]` |
+
+**O que o agent DEVE chamar:**
+
+```bash
+# ✅ Correto — endpoint do agent
+GET /api/v1/agent-auth/me/realtime/status
+Header: Authorization: Bearer mdz_{token}
+Header: X-Agent-ID: {agentId}
+
+# ❌ INCORRETO — endpoint de usuário (não funciona com token mdz_)
+GET /api/v1/realtime/status
+```
+
+---
+
+### ❌ Problema Adicional: Connection Refused na Porta 443
+
+**Erro observado:**
+```
+dial tcp 192.168.1.142:443: connectex: No connection could be made because the target machine actively refused it.
+```
+
+**Causa provável:** A API Discovery está rodando em uma porta diferente de 443 (ex: porta 5000 HTTP, ou outra configurada no `appsettings.json`/`Kestrel`). O agent está configurado para conectar em `https://tngplacas.com.br` que resolve para `192.168.1.142:443`, mas:
+
+1. **Nenhum serviço escutando na 443** — A API pode estar rodando em outra porta (ex: 5000, 8080)
+2. **Proxy reverso ausente** — Se a API roda em porta interna, o esperado é ter nginx/apache/Caddy na 443 fazendo proxy
+3. **Firewall bloqueando** — Ou o firewall está bloqueando a porta 443
+
+**Verificações necessárias:**
+- `netstat -ano | findstr :443` — há processo escutando?
+- `Get-Process -Id (pid)` — qual processo?
+- Qual porta o Kestrel está configurado para escutar?
+- Há um proxy reverso configurado?
+
+**Correção imediata:** configurar o agent para apontar para a URL/porta correta da API Discovery, não necessariamente 443.
+
+---
+
 ### 🎯 Plano de Ação (Prioridades)
 
 | Prioridade | Tarefa | Onde | Status |
@@ -233,9 +311,10 @@ Nenhuma alteração necessária.
 | 🔴 P1 | Configurar WebSocket com TLS para agents externos | Servidor NATS + DNS | ⏳ Pendente (configurar certificados) |
 | 🟡 P2 | Ajustar `AgentPackageService` para usar scheme/porta corretos | Infra/Services | ✅ **Concluído** |
 | 🟡 P2 | Centralizar configs NATS no appsettings.json | Api/appsettings.json | ✅ **Concluído** |
-| � P2 | Criar filtro de autorização SignalR (anti-spoofing agents) | Api/Hubs | ✅ **Concluído** |
-| �🟢 P3 | Revisar `RealtimeController` para consistência WSS | Api/Controllers | ⏳ Pendente |
-| 🟢 P3 | Documentar fluxo de conexão para agents Go/Windows | Docs | ⏳ Pendente |
+| 🟡 P2 | Criar filtro de autorização SignalR (anti-spoofing agents) | Api/Hubs | ✅ **Concluído** |
+| 🔴 P1 | Criar endpoint dedicado para agent consultar status do servidor | Api/AgentAuth | ✅ **Concluído** |
+| 🟢 P3 | Revisar `RealtimeController` para consistência WSS | Api/Controllers | 🔄 Migrado para endpoint agent-dedicado |
+| 🟢 P3 | Documentar fluxo de conexão para agents Go/Windows | Docs | ✅ **Concluído** |
 
 ---
 
@@ -337,4 +416,169 @@ builder.Services.AddSingleton<IHubFilter, AgentHubAuthorizationFilter>();
 ```
 
 > **Nota:** O filtro é aplicado globalmente, mas as regras são seletivas — só métodos específicos de `AgentHub` são verificados. Hubs como `NotificationHub` e `RemoteDebugHub` não são afetados.
+
+---
+
+## 🚀 Plano de Implementação — P2P Discovery por Site
+
+### 🎯 Objetivo da mudança
+
+Adotar subject de descoberta por **site** para reduzir processamento no servidor e evitar fan-out por agent:
+
+```
+tenant.{clientId}.site.{siteId}.p2p.discovery
+```
+
+Com esse modelo, o servidor publica **uma vez por site** e todos os agents daquele site consomem o mesmo evento.
+
+---
+
+### 🧱 Modelo operacional proposto
+
+| Item | Modelo atual (por agent) | Modelo novo (por site) |
+|------|---------------------------|-------------------------|
+| Subject de discovery | `tenant.{c}.site.{s}.agent.{a}.p2p.discovery` | `tenant.{c}.site.{s}.p2p.discovery` |
+| Publicações do servidor | 1 publish por agent destino | 1 publish por site |
+| Carga no servidor | Maior em sites grandes | Menor e previsível |
+| Carga no agent | Menor parse por mensagem | Parse local da lista do site |
+
+---
+
+### 🔐 ACL/JWT (NATS) recomendada
+
+Adicionar apenas a assinatura do subject de discovery por site para cada agent:
+
+```
+# Agent ASSINA
+tenant.{clientId}.site.{siteId}.p2p.discovery
+```
+
+Permissões de publish do agent continuam iguais (sem publish em discovery):
+
+```
+tenant.{clientId}.site.{siteId}.agent.{agentId}.heartbeat
+tenant.{clientId}.site.{siteId}.agent.{agentId}.result
+tenant.{clientId}.site.{siteId}.agent.{agentId}.hardware
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote-debug.log
+```
+
+Isso mantém isolamento por tenant/site e evita spoofing de descoberta.
+
+---
+
+### 📦 Contrato de evento NATS (proposto)
+
+```json
+{
+  "version": 1,
+  "clientId": "f5a4a2c0-...",
+  "siteId": "a7d8f3e1-...",
+  "generatedAtUtc": "2026-05-03T12:34:56.000Z",
+  "ttlSeconds": 120,
+  "sequence": 184,
+  "peers": [
+    {
+      "agentId": "2d8e...",
+      "peerId": "12D3KooW...",
+      "addrs": ["10.10.2.14", "192.168.1.50"],
+      "port": 41080,
+      "lastHeartbeatAtUtc": "2026-05-03T12:34:40.000Z"
+    }
+  ]
+}
+```
+
+Observações:
+- O agent filtra localmente o próprio `agentId` da lista.
+- `ttlSeconds` orienta invalidação local de cache.
+- `sequence` evita aplicar mensagens antigas fora de ordem.
+
+---
+
+### ⚙️ Estratégia para reduzir processamento no servidor
+
+1. **Debounce por site (coalescing):** ao invés de publicar a cada evento bruto, agrupar eventos em janela curta (ex.: 1-2s).
+2. **Publish apenas quando houver mudança real:** comparar hash do snapshot anterior e pular publish quando não mudou.
+3. **Uma consulta por site por janela:** montar snapshot único por site.
+4. **TTL de peers online:** reaproveitar janela já usada no bootstrap (ex.: 10 min online cutoff).
+5. **Limite de payload configurável:** limitar peers no snapshot com fallback para ordenação estável.
+
+---
+
+### 🛠️ Plano técnico por etapa
+
+#### Etapa 1 — Subject e ACL no emissor de JWT
+
+- Alterar `NatsCredentialsService.BuildAgentSubjects` para incluir subscribe em `tenant.{clientId}.site.{siteId}.p2p.discovery`.
+- Não adicionar publish de discovery para agent.
+
+Arquivos alvo:
+- `src/Discovery.Infrastructure/Services/NatsCredentialsService.cs`
+- `src/Discovery.Tests/NatsIsolationTests.cs`
+
+#### Etapa 2 — Builder de subject P2P por site
+
+- Adicionar helper dedicado no `NatsSubjectBuilder` para evitar strings hardcoded.
+
+Arquivo alvo:
+- `src/Discovery.Core/Helpers/NatsSubjectBuilder.cs`
+
+#### Etapa 3 — Publicador de discovery por site
+
+- Criar método em mensageria para publicar snapshot no subject do site.
+- Implementar debounce e deduplicação por hash em memória/Redis.
+
+Arquivos alvo:
+- `src/Discovery.Core/Interfaces/IAgentMessaging.cs`
+- `src/Discovery.Infrastructure/Messaging/NatsAgentMessaging.cs`
+
+#### Etapa 4 — Gatilhos de publicação
+
+- Publicar discovery quando ocorrer upsert no bootstrap P2P.
+- Publicar também em transições relevantes de online/offline (com debounce).
+
+Arquivos alvo:
+- `src/Discovery.Api/Controllers/AgentAuth/AgentAuthController.P2pKnowledge.cs`
+- (opcional) serviço de heartbeat/status para gatilhos adicionais.
+
+#### Etapa 5 — Compatibilidade e rollout
+
+- Manter `POST /api/v{version:apiVersion}/agent-auth/me/p2p/bootstrap` como fallback durante transição.
+- Ativar por feature flag e rollout gradual por ambiente/site.
+
+---
+
+### 🚩 Feature flags sugeridas
+
+```json
+"P2p": {
+  "Discovery": {
+    "UseSiteSubject": true,
+    "PublishDebounceMs": 1500,
+    "TtlSeconds": 120,
+    "MaxPeersPerSnapshot": 500,
+    "SkipPublishIfUnchanged": true
+  }
+}
+```
+
+---
+
+### 🧪 Plano de testes
+
+1. **Unitário (subjects):** valida formato canônico do novo subject por site.
+2. **Unitário (ACL):** agent recebe subscribe de `p2p.discovery` no site correto e não em outros sites.
+3. **Integração (site com N agents):** 1 evento de entrada gera 1 publish por site (não N).
+4. **Resiliência:** com reconnect de vários agents, debounce evita tempestade de publish.
+5. **Compatibilidade:** bootstrap HTTP continua funcional durante rollout.
+
+---
+
+### ✅ Critérios de aceite
+
+- Servidor publica discovery em `tenant.{clientId}.site.{siteId}.p2p.discovery`.
+- Não existe fan-out por agent para discovery.
+- Cada agent assina apenas o subject do próprio site.
+- Bootstrap HTTP continua ativo como fallback.
+- Métricas mostram redução de publishes em sites com alta cardinalidade de agents.
 

@@ -20,6 +20,12 @@ public interface IAgentMessaging
     /// <summary>Registra handler para mensagens de agents (heartbeat, command result, hardware report).</summary>
     Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Publica snapshot de descoberta P2P no subject do site.
+    /// Apenas o servidor publica; agents assinam o subject do próprio site.
+    /// </summary>
+    Task PublishP2pDiscoverySnapshotAsync(Guid clientId, Guid siteId, string payload, CancellationToken cancellationToken = default);
+
     /// <summary>Verifica se o serviço de mensageria está conectado.</summary>
     bool IsConnected { get; }
 }
