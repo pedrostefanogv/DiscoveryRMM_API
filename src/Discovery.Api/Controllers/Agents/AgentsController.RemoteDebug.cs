@@ -23,7 +23,7 @@ public partial class AgentsController
         if (!await _permissionService.HasPermissionAsync(userId, ResourceType.RemoteDebug, ActionType.Execute, ScopeLevel.Site, agent.SiteId, site.ClientId))
             return Forbid();
 
-        var session = _remoteDebugSessionManager.StartSession(id, userId, site.ClientId, agent.SiteId, request?.LogLevel, request?.TtlMinutes);
+        var session = _remoteDebugSessionManager.StartSession(id, userId, site.ClientId, agent.SiteId, request?.LogLevel, request?.TtlMinutes, request?.PreferredTransport);
         var payload = JsonSerializer.Serialize(new { action = "start", sessionId = session.SessionId, logLevel = session.LogLevel, startedAtUtc = session.StartedAtUtc, expiresAtUtc = session.ExpiresAtUtc, stream = new { preferredTransport = session.PreferredTransport, fallbackTransport = session.FallbackTransport, natsSubject = session.NatsSubject, signalRMethod = session.SignalRMethod } });
         var command = new AgentCommand { AgentId = id, CommandType = CommandType.RemoteDebug, Payload = payload };
         var created = await _commandDispatcher.DispatchAsync(command);

@@ -17,7 +17,8 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
         Guid clientId,
         Guid siteId,
         string? logLevel,
-        int? ttlMinutes)
+        int? ttlMinutes,
+        string? preferredTransport = null)
     {
         var now = DateTime.UtcNow;
         var ttl = ResolveTtl(ttlMinutes);
@@ -33,6 +34,7 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
 
         var sessionId = Guid.NewGuid();
         var normalizedLevel = NormalizeLogLevel(logLevel);
+        var normalizedTransport = NormalizePreferredTransport(preferredTransport);
 
         var state = new RemoteDebugSessionState
         {
@@ -45,8 +47,10 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
             StartedAtUtc = now,
             LastActivityAtUtc = now,
             ExpiresAtUtc = now.Add(ttl),
-            PreferredTransport = RemoteDebugTransportNames.Nats,
-            FallbackTransport = RemoteDebugTransportNames.SignalR,
+            PreferredTransport = normalizedTransport,
+            FallbackTransport = normalizedTransport == RemoteDebugTransportNames.Nats
+                ? RemoteDebugTransportNames.SignalR
+                : RemoteDebugTransportNames.Nats,
             NatsSubject = NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "remote-debug.log")
         };
 
@@ -184,5 +188,16 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
         return normalized is "trace" or "debug" or "info" or "warn" or "error"
             ? normalized
             : "info";
+    }
+
+    private static string NormalizePreferredTransport(string? preferredTransport)
+    {
+        if (string.IsNullOrWhiteSpace(preferredTransport))
+            return RemoteDebugTransportNames.Nats;
+
+        var normalized = preferredTransport.Trim().ToLowerInvariant();
+        return normalized is RemoteDebugTransportNames.Nats or RemoteDebugTransportNames.SignalR
+            ? normalized
+            : RemoteDebugTransportNames.Nats;
     }
 }

@@ -19,7 +19,8 @@ public interface IRemoteDebugSessionManager
         Guid clientId,
         Guid siteId,
         string? logLevel,
-        int? ttlMinutes);
+        int? ttlMinutes,
+        string? preferredTransport = null);
 
     bool TryGetSessionForUser(Guid sessionId, Guid userId, out RemoteDebugSessionState? session);
 

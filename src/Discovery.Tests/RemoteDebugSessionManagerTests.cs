@@ -90,4 +90,22 @@ public class RemoteDebugSessionManagerTests
         Assert.That(session.FallbackTransport, Is.EqualTo(RemoteDebugTransportNames.SignalR));
         Assert.That(session.SignalRMethod, Is.EqualTo(RemoteDebugSignalRMethods.PushLog));
     }
+
+    [Test]
+    public void StartSession_WithSignalRPreferredTransport_ShouldSwapTransportOrder()
+    {
+        var manager = new RemoteDebugSessionManager();
+
+        var session = manager.StartSession(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "info",
+            10,
+            RemoteDebugTransportNames.SignalR);
+
+        Assert.That(session.PreferredTransport, Is.EqualTo(RemoteDebugTransportNames.SignalR));
+        Assert.That(session.FallbackTransport, Is.EqualTo(RemoteDebugTransportNames.Nats));
+    }
 }
