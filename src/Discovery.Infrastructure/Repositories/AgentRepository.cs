@@ -54,6 +54,7 @@ public class AgentRepository : IAgentRepository
         agent.Id = IdGenerator.NewId();
         agent.CreatedAt = DateTime.UtcNow;
         agent.UpdatedAt = DateTime.UtcNow;
+        agent.DeletedAt = null;
 
         _db.Agents.Add(agent);
         await _db.SaveChangesAsync();
@@ -142,8 +143,12 @@ public class AgentRepository : IAgentRepository
 
     public async Task DeleteAsync(Guid id)
     {
+        var now = DateTime.UtcNow;
+
         await _db.Agents
             .Where(agent => agent.Id == id)
-            .ExecuteDeleteAsync();
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(agent => agent.DeletedAt, _ => now)
+                .SetProperty(agent => agent.UpdatedAt, _ => now));
     }
 }

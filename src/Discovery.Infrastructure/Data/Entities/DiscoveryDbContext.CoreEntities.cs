@@ -76,6 +76,9 @@ public partial class DiscoveryDbContext
                 .HasDatabaseName("ix_agents_hostname");
             entity.HasIndex(agent => agent.MeshCentralNodeId)
                 .HasDatabaseName("ix_agents_meshcentral_node_id");
+            entity.HasIndex(agent => agent.DeletedAt)
+                .HasDatabaseName("ix_agents_deleted_at");
+            entity.HasQueryFilter(agent => agent.DeletedAt == null);
 
             entity.Property(agent => agent.Id)
                 .HasColumnName("id")
@@ -117,6 +120,9 @@ public partial class DiscoveryDbContext
                 .HasColumnType("timestamptz");
             entity.Property(agent => agent.UpdatedAt)
                 .HasColumnName("updated_at")
+                .HasColumnType("timestamptz");
+            entity.Property(agent => agent.DeletedAt)
+                .HasColumnName("deleted_at")
                 .HasColumnType("timestamptz");
             entity.Property(agent => agent.ZeroTouchPending)
                 .HasColumnName("zero_touch_pending")

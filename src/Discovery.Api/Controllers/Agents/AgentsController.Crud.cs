@@ -87,6 +87,7 @@ public partial class AgentsController
             try { await _meshCentralApiService.RemoveDeviceAsync(agent.MeshCentralNodeId, HttpContext.RequestAborted); }
             catch (Exception ex) { _logger.LogWarning(ex, "MeshCentral cleanup failed for agent {AgentId} node {NodeId}", id, agent.MeshCentralNodeId); }
         }
+        await _authService.RevokeAllTokensAsync(id);
         await _agentRepo.DeleteAsync(id);
         if (agent is not null) await InvalidateAgentScopeCachesAsync(agent.SiteId, null, id);
         return NoContent();

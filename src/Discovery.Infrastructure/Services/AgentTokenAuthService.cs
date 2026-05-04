@@ -90,6 +90,15 @@ public class AgentTokenAuthService : IAgentAuthService
             return null;
         }
 
+        // Agents soft-deleted in the system must not authenticate with stale tokens.
+        var agent = await _agentRepo.GetByIdAsync(token.AgentId);
+        if (agent is null)
+        {
+            await _tokenRepo.RevokeAsync(token.Id);
+            await _redisService.DeleteAsync(cacheKey);
+            return null;
+        }
+
         await _tokenRepo.UpdateLastUsedAsync(token.Id);
         token.LastUsedAt = DateTime.UtcNow;
         await CacheTokenAsync(token);
