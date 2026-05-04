@@ -132,16 +132,46 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 _logger.LogWarning("NATS: heartbeat rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
                                 continue;
                             }
-                            var heartbeat = JsonSerializer.Deserialize<HeartbeatMessage>(msg.Data ?? "", JsonOptions);
-                            // Cache no Redis (write-behind evita escrita direta no PostgreSQL)
-                            await _heartbeatCache.SetHeartbeatAsync(agentId.Value, AgentStatus.Online, heartbeat?.IpAddress);
-                            _logger.LogDebug("Heartbeat processed from agent {AgentId} (IP: {IpAddress})", agentId.Value, heartbeat?.IpAddress);
+                            var heartbeat = JsonSerializer.Deserialize<AgentHeartbeat>(msg.Data ?? "", JsonOptions);
+                            if (heartbeat is null)
+                            {
+                                _logger.LogWarning("NATS: heartbeat inválido (deserialização falhou) de {Subject}", msg.Subject);
+                                continue;
+                            }
 
-                            // Propaga status para dashboards via NATS → SignalR bridge
+                            // Garante que o AgentId do subject é usado (não confia no payload)
+                            heartbeat = heartbeat with { AgentId = agentId.Value };
+
+                            // Cache no Redis com métricas (write-behind evita escrita direta no PostgreSQL)
+                            await _heartbeatCache.SetHeartbeatAsync(heartbeat, AgentStatus.Online);
+                            _logger.LogDebug("Heartbeat processed from agent {AgentId} (IP: {IpAddress}, CPU:{Cpu}%, Mem:{Mem}%, Disk:{Disk}%, P2P:{P2p})",
+                                agentId.Value, heartbeat.IpAddress,
+                                heartbeat.CpuPercent, heartbeat.MemoryPercent,
+                                heartbeat.DiskPercent, heartbeat.P2pPeers);
+
+                            // Propaga heartbeat completo para dashboards via NATS → SignalR bridge
                             await PublishDashboardEventForAgentAsync(
                                 agentId.Value,
-                                "AgentStatusChanged",
-                                new { AgentId = agentId.Value, Status = "Online", IpAddress = heartbeat?.IpAddress },
+                                "AgentHeartbeat",
+                                new
+                                {
+                                    AgentId = agentId.Value,
+                                    Status = "Online",
+                                    heartbeat.IpAddress,
+                                    heartbeat.Hostname,
+                                    heartbeat.AgentVersion,
+                                    heartbeat.TimestampUtc,
+                                    heartbeat.CpuPercent,
+                                    heartbeat.MemoryPercent,
+                                    heartbeat.MemoryTotalGb,
+                                    heartbeat.MemoryUsedGb,
+                                    heartbeat.DiskPercent,
+                                    heartbeat.DiskTotalGb,
+                                    heartbeat.DiskUsedGb,
+                                    heartbeat.P2pPeers,
+                                    heartbeat.UptimeSeconds,
+                                    heartbeat.ProcessCount
+                                },
                                 CancellationToken.None);
                         }
                     }
@@ -303,6 +333,5 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         await PublishDashboardEventAsync(message, cancellationToken);
     }
 
-    private record HeartbeatMessage(string? IpAddress, string? AgentVersion);
     private record CommandResultMessage(Guid CommandId, int ExitCode, string? Output, string? ErrorMessage);
 }

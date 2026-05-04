@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Discovery.Api.Services;
 using Discovery.Core.DTOs;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
@@ -281,7 +282,7 @@ public class AgentHub : Hub
     }
 
     /// <summary>
-    /// Agent envia heartbeat periodico.
+    /// [Compatibilidade] Agent envia heartbeat periodico (formato legado, sem métricas).
     /// O agentId do parametro e ignorado — a identidade vem do token autenticado.
     /// </summary>
     public async Task Heartbeat(Guid agentId, string? ipAddress)
@@ -305,13 +306,72 @@ public class AgentHub : Hub
 
         try
         {
-            // Cache no Redis (write-behind evita escrita direta no PostgreSQL)
-            await _heartbeatCache.SetHeartbeatAsync(authenticatedId, AgentStatus.Online, ipAddress);
+            // Converte para o formato padronizado (mínimo, sem métricas)
+            var hb = new AgentHeartbeat(
+                AgentId: authenticatedId,
+                IpAddress: ipAddress);
+
+            // Cache no Redis com métricas
+            await _heartbeatCache.SetHeartbeatAsync(hb, AgentStatus.Online);
+
+            // Propaga para dashboard via NATS
+            await PublishHeartbeatToDashboardAsync(authenticatedId, hb);
+
             LastPersistedHeartbeat[authenticatedId] = new HeartbeatState(now, ipAddress);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Heartbeat cache update failed for agent {AgentId}.", authenticatedId);
+        }
+    }
+
+    /// <summary>
+    /// Agent envia heartbeat periodico com métricas de saúde (CPU, memória, disco, P2P).
+    /// Formato padronizado compatível com NATS e SignalR.
+    /// O agentId dentro do heartbeat é ignorado — a identidade vem do token autenticado.
+    /// </summary>
+    public async Task HeartbeatV2(AgentHeartbeat heartbeat)
+    {
+        if (Context.Items["AgentId"] is not Guid authenticatedId)
+            throw new HubException("Not authenticated as agent.");
+
+        RequireHandshake();
+
+        await EnsureConnectionMappedAsync(authenticatedId);
+
+        // Garante que o AgentId autenticado é usado
+        heartbeat = heartbeat with { AgentId = authenticatedId };
+
+        var now = DateTime.UtcNow;
+
+        // Throttle em memória: só propaga se passou o intervalo mínimo ou IP mudou
+        if (LastPersistedHeartbeat.TryGetValue(authenticatedId, out var state)
+            && now - state.LastPersistedAt < HeartbeatWriteInterval
+            && string.Equals(state.LastIpAddress, heartbeat.IpAddress, StringComparison.OrdinalIgnoreCase)
+            && heartbeat.CpuPercent is null
+            && heartbeat.MemoryPercent is null
+            && heartbeat.DiskPercent is null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Cache no Redis com métricas completas
+            await _heartbeatCache.SetHeartbeatAsync(heartbeat, AgentStatus.Online);
+
+            // Propaga heartbeat completo para dashboards via SignalR
+            await PublishHeartbeatToDashboardAsync(authenticatedId, heartbeat);
+
+            LastPersistedHeartbeat[authenticatedId] = new HeartbeatState(now, heartbeat.IpAddress);
+
+            _logger.LogDebug("HeartbeatV2 from agent {AgentId} — CPU:{Cpu}% Mem:{Mem}% Disk:{Disk}% P2P:{P2p}",
+                authenticatedId, heartbeat.CpuPercent, heartbeat.MemoryPercent,
+                heartbeat.DiskPercent, heartbeat.P2pPeers);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "HeartbeatV2 cache update failed for agent {AgentId}.", authenticatedId);
         }
     }
 
@@ -418,4 +478,56 @@ public class AgentHub : Hub
     }
 
     private readonly record struct HeartbeatState(DateTime LastPersistedAt, string? LastIpAddress);
+
+    /// <summary>
+    /// Propaga heartbeat para os dashboards conectados via SignalR.
+    /// Chamado tanto pelo método Heartbeat (legado) quanto HeartbeatV2.
+    /// </summary>
+    private async Task PublishHeartbeatToDashboardAsync(Guid agentId, AgentHeartbeat heartbeat)
+    {
+        try
+        {
+            // Busca agent para obter clientId/siteId
+            var agent = await _agentRepo.GetByIdAsync(agentId);
+            if (agent is null) return;
+
+            Guid? clientId = null;
+            Guid? siteId = agent.SiteId == Guid.Empty ? null : agent.SiteId;
+            if (siteId.HasValue)
+            {
+                var site = await _siteRepo.GetByIdAsync(siteId.Value);
+                clientId = site?.ClientId;
+            }
+
+            // Dispara evento no SignalR para dashboards inscritos
+            await _messaging.PublishDashboardEventAsync(
+                DashboardEventMessage.Create(
+                    "AgentHeartbeat",
+                    new
+                    {
+                        AgentId = agentId,
+                        Status = "Online",
+                        heartbeat.IpAddress,
+                        heartbeat.Hostname,
+                        heartbeat.AgentVersion,
+                        heartbeat.TimestampUtc,
+                        heartbeat.CpuPercent,
+                        heartbeat.MemoryPercent,
+                        heartbeat.MemoryTotalGb,
+                        heartbeat.MemoryUsedGb,
+                        heartbeat.DiskPercent,
+                        heartbeat.DiskTotalGb,
+                        heartbeat.DiskUsedGb,
+                        heartbeat.P2pPeers,
+                        heartbeat.UptimeSeconds,
+                        heartbeat.ProcessCount
+                    },
+                    clientId,
+                    siteId));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to propagate heartbeat to dashboard for agent {AgentId}", agentId);
+        }
+    }
 }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -90,14 +91,16 @@ public class HeartbeatCacheService : IHeartbeatCacheService
     }
 
     /// <summary>
-    /// Registra heartbeat no Redis. Só escreve no DB se o agente passou de Offline → Online.
+    /// Registra heartbeat no Redis com métricas opcionais. Só escreve no DB se o agente passou de Offline → Online.
     /// </summary>
-    public async Task SetHeartbeatAsync(Guid agentId, AgentStatus status, string? ipAddress, CancellationToken ct = default)
+    public async Task SetHeartbeatAsync(AgentHeartbeat heartbeat, AgentStatus status, CancellationToken ct = default)
     {
+        var agentId = heartbeat.AgentId;
+
         if (!_redis.IsConnected)
         {
             // Fallback: escreve direto no DB quando Redis indisponível
-            try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, status, ipAddress)); }
+            try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, status, heartbeat.IpAddress)); }
             catch (Exception ex) { _logger.LogWarning(ex, "Heartbeat DB fallback failed for {AgentId}", agentId); }
             return;
         }
@@ -108,8 +111,20 @@ public class HeartbeatCacheService : IHeartbeatCacheService
             {
                 AgentId = agentId,
                 Status = status,
-                IpAddress = ipAddress,
-                LastHeartbeatAt = DateTime.UtcNow
+                IpAddress = heartbeat.IpAddress,
+                Hostname = heartbeat.Hostname,
+                AgentVersion = heartbeat.AgentVersion,
+                LastHeartbeatAt = heartbeat.TimestampUtc ?? DateTime.UtcNow,
+                CpuPercent = heartbeat.CpuPercent,
+                MemoryPercent = heartbeat.MemoryPercent,
+                MemoryTotalGb = heartbeat.MemoryTotalGb,
+                MemoryUsedGb = heartbeat.MemoryUsedGb,
+                DiskPercent = heartbeat.DiskPercent,
+                DiskTotalGb = heartbeat.DiskTotalGb,
+                DiskUsedGb = heartbeat.DiskUsedGb,
+                P2pPeers = heartbeat.P2pPeers,
+                UptimeSeconds = heartbeat.UptimeSeconds,
+                ProcessCount = heartbeat.ProcessCount
             };
 
             var json = JsonSerializer.Serialize(entry, JsonOptions);
@@ -123,7 +138,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
             {
                 // Transição Offline → Online: escreve no DB e adiciona ao set
                 _logger.LogDebug("Agent {AgentId} transitioned Offline → Online — persisting to DB", agentId);
-                try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, AgentStatus.Online, ipAddress)); }
+                try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, AgentStatus.Online, heartbeat.IpAddress)); }
                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to persist Online status for {AgentId}", agentId); }
             }
         }

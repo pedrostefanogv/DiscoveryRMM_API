@@ -1,3 +1,4 @@
+using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 
 namespace Discovery.Core.Interfaces;
@@ -13,7 +14,7 @@ namespace Discovery.Core.Interfaces;
 public interface IHeartbeatCacheService
 {
     /// <summary>Registra heartbeat no Redis. Só escreve no DB na transição Offline→Online.</summary>
-    Task SetHeartbeatAsync(Guid agentId, AgentStatus status, string? ipAddress, CancellationToken ct = default);
+    Task SetHeartbeatAsync(AgentHeartbeat heartbeat, AgentStatus status, CancellationToken ct = default);
 
     /// <summary>Lê o estado atual do cache. Se não existir, o agente está offline.</summary>
     Task<HeartbeatCacheEntry?> GetHeartbeatAsync(Guid agentId, CancellationToken ct = default);
@@ -49,10 +50,27 @@ public interface IHeartbeatCacheService
 /// <summary>
 /// Entrada de heartbeat no cache Redis.
 /// </summary>
+/// <summary>
+/// Entrada de heartbeat no cache Redis com métricas opcionais de saúde do agent.
+/// </summary>
 public class HeartbeatCacheEntry
 {
     public Guid AgentId { get; init; }
     public AgentStatus Status { get; init; }
     public string? IpAddress { get; init; }
+    public string? Hostname { get; init; }
+    public string? AgentVersion { get; init; }
     public DateTime LastHeartbeatAt { get; init; }
+
+    // Métricas de saúde (opcionais)
+    public double? CpuPercent { get; init; }
+    public double? MemoryPercent { get; init; }
+    public double? MemoryTotalGb { get; init; }
+    public double? MemoryUsedGb { get; init; }
+    public double? DiskPercent { get; init; }
+    public double? DiskTotalGb { get; init; }
+    public double? DiskUsedGb { get; init; }
+    public int? P2pPeers { get; init; }
+    public long? UptimeSeconds { get; init; }
+    public int? ProcessCount { get; init; }
 }
