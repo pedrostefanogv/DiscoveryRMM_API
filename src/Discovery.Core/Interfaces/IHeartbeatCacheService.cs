@@ -48,9 +48,6 @@ public interface IHeartbeatCacheService
 }
 
 /// <summary>
-/// Entrada de heartbeat no cache Redis.
-/// </summary>
-/// <summary>
 /// Entrada de heartbeat no cache Redis com métricas opcionais de saúde do agent.
 /// </summary>
 public class HeartbeatCacheEntry

@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Discovery.Api.Services;
 using Discovery.Core.DTOs;
-using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
@@ -17,6 +16,7 @@ public class AgentHub : Hub
 {
     private static readonly ConcurrentDictionary<string, Guid> ConnectedAgents = new();
     private static readonly ConcurrentDictionary<Guid, HeartbeatState> LastPersistedHeartbeat = new();
+    private static readonly ConcurrentDictionary<Guid, (Guid SiteId, Guid ClientId)> AgentTenantCache = new();
     private static readonly TimeSpan HeartbeatWriteInterval = TimeSpan.FromSeconds(15);
 
     // Nonce de desafio por connectionId para o handshake secundário.
@@ -344,13 +344,10 @@ public class AgentHub : Hub
 
         var now = DateTime.UtcNow;
 
-        // Throttle em memória: só propaga se passou o intervalo mínimo ou IP mudou
+        // Throttle em memória: sempre aplica (15s), independente de ter métricas ou não.
+        // Métricas chegam a cada heartbeat, manter o throttle evita saturar Redis.
         if (LastPersistedHeartbeat.TryGetValue(authenticatedId, out var state)
-            && now - state.LastPersistedAt < HeartbeatWriteInterval
-            && string.Equals(state.LastIpAddress, heartbeat.IpAddress, StringComparison.OrdinalIgnoreCase)
-            && heartbeat.CpuPercent is null
-            && heartbeat.MemoryPercent is null
-            && heartbeat.DiskPercent is null)
+            && now - state.LastPersistedAt < HeartbeatWriteInterval)
         {
             return;
         }
@@ -480,24 +477,44 @@ public class AgentHub : Hub
     private readonly record struct HeartbeatState(DateTime LastPersistedAt, string? LastIpAddress);
 
     /// <summary>
+    /// Obtém o ClientId e SiteId do agent, com cache em memória para evitar DB queries a cada heartbeat.
+    /// O cache é populado sob demanda e compartilhado entre Heartbeat e HeartbeatV2.
+    /// </summary>
+    private async Task<(Guid SiteId, Guid ClientId)?> GetAgentTenantAsync(Guid agentId)
+    {
+        if (AgentTenantCache.TryGetValue(agentId, out var cached))
+            return cached;
+
+        var agent = await _agentRepo.GetByIdAsync(agentId);
+        if (agent is null) return null;
+
+        var siteId = agent.SiteId == Guid.Empty ? Guid.Empty : agent.SiteId;
+        var clientId = Guid.Empty;
+
+        if (siteId != Guid.Empty)
+        {
+            var site = await _siteRepo.GetByIdAsync(siteId);
+            clientId = site?.ClientId ?? Guid.Empty;
+        }
+
+        var entry = (siteId, clientId);
+        AgentTenantCache[agentId] = entry;
+        return entry;
+    }
+
+    /// <summary>
     /// Propaga heartbeat para os dashboards conectados via SignalR.
+    /// Usa cache de tenant para evitar DB queries repetidas.
     /// Chamado tanto pelo método Heartbeat (legado) quanto HeartbeatV2.
     /// </summary>
     private async Task PublishHeartbeatToDashboardAsync(Guid agentId, AgentHeartbeat heartbeat)
     {
         try
         {
-            // Busca agent para obter clientId/siteId
-            var agent = await _agentRepo.GetByIdAsync(agentId);
-            if (agent is null) return;
+            var tenant = await GetAgentTenantAsync(agentId);
+            if (tenant is null) return;
 
-            Guid? clientId = null;
-            Guid? siteId = agent.SiteId == Guid.Empty ? null : agent.SiteId;
-            if (siteId.HasValue)
-            {
-                var site = await _siteRepo.GetByIdAsync(siteId.Value);
-                clientId = site?.ClientId;
-            }
+            var (siteId, clientId) = tenant.Value;
 
             // Dispara evento no SignalR para dashboards inscritos
             await _messaging.PublishDashboardEventAsync(
@@ -522,8 +539,8 @@ public class AgentHub : Hub
                         heartbeat.UptimeSeconds,
                         heartbeat.ProcessCount
                     },
-                    clientId,
-                    siteId));
+                    clientId == Guid.Empty ? null : clientId,
+                    siteId == Guid.Empty ? null : siteId));
         }
         catch (Exception ex)
         {
