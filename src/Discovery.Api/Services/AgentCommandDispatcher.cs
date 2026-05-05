@@ -1,6 +1,7 @@
 using Discovery.Api.Hubs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.SignalR;
 
@@ -10,21 +11,35 @@ public class AgentCommandDispatcher(
     ICommandRepository commandRepository,
     IAgentMessaging messaging,
     IHubContext<AgentHub> hubContext,
+    SpecialCommandPayloadValidator specialCommandPayloadValidator,
     ILogger<AgentCommandDispatcher> logger) : IAgentCommandDispatcher
 {
     public async Task<AgentCommand> DispatchAsync(AgentCommand command, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
 
+        if (!specialCommandPayloadValidator.TryNormalize(
+                command.CommandType,
+                command.Payload,
+                out var normalizedPayload,
+                out var validationError))
+        {
+            throw new InvalidOperationException(
+                $"Invalid payload for commandType '{CommandTypeWireMapper.ToWireValue(command.CommandType)}': {validationError}");
+        }
+
+        command.Payload = normalizedPayload;
+
         var created = await commandRepository.CreateAsync(command);
         var sent = false;
         DateTime? sentAtUtc = null;
+        var wireCommandType = CommandTypeWireMapper.ToWireValue(created.CommandType);
 
         if (messaging.IsConnected)
         {
             try
             {
-                await messaging.SendCommandAsync(created.AgentId, created.Id, created.CommandType.ToString(), created.Payload);
+                await messaging.SendCommandAsync(created.AgentId, created.Id, wireCommandType, created.Payload);
                 sent = true;
                 sentAtUtc = DateTime.UtcNow;
             }
@@ -41,7 +56,7 @@ public class AgentCommandDispatcher(
         if (!sent && AgentHub.IsAgentConnected(created.AgentId))
         {
             await hubContext.Clients.Group($"agent-{created.AgentId}")
-                .SendAsync("ExecuteCommand", created.Id, created.CommandType.ToString(), created.Payload, cancellationToken);
+                .SendAsync("ExecuteCommand", created.Id, wireCommandType, created.Payload, cancellationToken);
 
             sent = true;
             sentAtUtc = DateTime.UtcNow;

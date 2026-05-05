@@ -10,6 +10,7 @@ namespace Discovery.Api.Services;
 public class NotificationService : INotificationService
 {
     private readonly INotificationRepository _repository;
+    private readonly IAgentCommandDispatcher _commandDispatcher;
     private readonly IHubContext<NotificationHub> _notificationHubContext;
     private readonly IRedisService _redis;
     private readonly ILogger<NotificationService> _logger;
@@ -22,11 +23,13 @@ public class NotificationService : INotificationService
 
     public NotificationService(
         INotificationRepository repository,
+        IAgentCommandDispatcher commandDispatcher,
         IHubContext<NotificationHub> notificationHubContext,
         IRedisService redis,
         ILogger<NotificationService> logger)
     {
         _repository = repository;
+        _commandDispatcher = commandDispatcher;
         _notificationHubContext = notificationHubContext;
         _redis = redis;
         _logger = logger;
@@ -51,6 +54,9 @@ public class NotificationService : INotificationService
 
         var created = await _repository.CreateAsync(notification);
 
+        if (created.RecipientAgentId.HasValue)
+            await DispatchAgentNotificationCommandAsync(created, cancellationToken);
+
         var dto = new
         {
             created.Id,
@@ -73,9 +79,78 @@ public class NotificationService : INotificationService
         await BroadcastViaRedisAsync(dto);
 
         // Send locally via SignalR
-        await SendLocalSignalRAsync(dto, created.Topic, created.RecipientUserId, created.RecipientAgentId, created.RecipientKey, cancellationToken);
+        await SendLocalSignalRAsync(dto, created.Topic, created.RecipientUserId, created.RecipientKey, cancellationToken);
 
         return created;
+    }
+
+    private async Task DispatchAgentNotificationCommandAsync(AppNotification notification, CancellationToken cancellationToken)
+    {
+        if (!notification.RecipientAgentId.HasValue)
+            return;
+
+        object metadata = new Dictionary<string, object?>
+        {
+            ["topic"] = notification.Topic,
+            ["createdBy"] = notification.CreatedBy
+        };
+
+        if (!string.IsNullOrWhiteSpace(notification.PayloadJson))
+        {
+            try
+            {
+                var payload = JsonSerializer.Deserialize<JsonElement>(notification.PayloadJson, JsonOptions);
+                metadata = new Dictionary<string, object?>
+                {
+                    ["topic"] = notification.Topic,
+                    ["createdBy"] = notification.CreatedBy,
+                    ["payload"] = payload
+                };
+            }
+            catch (JsonException)
+            {
+                metadata = new Dictionary<string, object?>
+                {
+                    ["topic"] = notification.Topic,
+                    ["createdBy"] = notification.CreatedBy,
+                    ["payloadRaw"] = notification.PayloadJson
+                };
+            }
+        }
+
+        var payloadJson = JsonSerializer.Serialize(new
+        {
+            notificationId = notification.Id.ToString("N"),
+            idempotencyKey = $"{notification.Id:N}:{notification.RecipientAgentId.Value:N}",
+            title = notification.Title,
+            message = notification.Message,
+            mode = string.IsNullOrWhiteSpace(notification.Message) ? "interactive" : "notify_only",
+            severity = MapNotificationSeverity(notification.Severity),
+            eventType = notification.EventType,
+            layout = "toast",
+            timeoutSeconds = 8,
+            metadata
+        }, JsonOptions);
+
+        await _commandDispatcher.DispatchAsync(
+            new AgentCommand
+            {
+                AgentId = notification.RecipientAgentId.Value,
+                CommandType = CommandType.Notification,
+                Payload = payloadJson
+            },
+            cancellationToken);
+    }
+
+    private static string MapNotificationSeverity(NotificationSeverity severity)
+    {
+        return severity switch
+        {
+            NotificationSeverity.Informational => "low",
+            NotificationSeverity.Warning => "high",
+            NotificationSeverity.Critical => "critical",
+            _ => "medium"
+        };
     }
 
     /// <summary>
@@ -120,12 +195,10 @@ public class NotificationService : INotificationService
                     ? topicEl.GetString() : null;
                 Guid? recipientUserId = dto.TryGetProperty("recipientUserId", out var uidEl) && uidEl.ValueKind != JsonValueKind.Null
                     ? uidEl.GetGuid() : null;
-                Guid? recipientAgentId = dto.TryGetProperty("recipientAgentId", out var aidEl) && aidEl.ValueKind != JsonValueKind.Null
-                    ? aidEl.GetGuid() : null;
                 string? recipientKey = dto.TryGetProperty("recipientKey", out var rkEl) && rkEl.ValueKind != JsonValueKind.Null
                     ? rkEl.GetString() : null;
 
-                await SendLocalSignalRAsync(dto, topic, recipientUserId, recipientAgentId, recipientKey, CancellationToken.None);
+                await SendLocalSignalRAsync(dto, topic, recipientUserId, recipientKey, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -138,7 +211,6 @@ public class NotificationService : INotificationService
         object dto,
         string? topic,
         Guid? recipientUserId,
-        Guid? recipientAgentId,
         string? recipientKey,
         CancellationToken cancellationToken)
     {
@@ -149,12 +221,6 @@ public class NotificationService : INotificationService
         if (recipientUserId.HasValue)
             await _notificationHubContext.Clients.Group($"notifications:user:{recipientUserId}")
                 .SendAsync("NotificationReceived", dto, cancellationToken);
-
-        if (recipientAgentId.HasValue)
-        {
-            await _notificationHubContext.Clients.Group($"notifications:agent:{recipientAgentId}")
-                .SendAsync("NotificationReceived", dto, cancellationToken);
-        }
 
         if (!string.IsNullOrWhiteSpace(recipientKey))
             await _notificationHubContext.Clients.Group($"notifications:key:{recipientKey}")

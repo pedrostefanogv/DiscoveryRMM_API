@@ -11,5 +11,6 @@ public enum CommandType
     Shutdown = 6,
     Update = 7,
     RemoteDebug = 8,
-    ShowPsadtAlert = 9
+    ShowPsadtAlert = 9,
+    Notification = 10
 }

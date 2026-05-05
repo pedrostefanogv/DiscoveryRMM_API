@@ -126,6 +126,8 @@ public class AlertDispatchService
 
     private static string BuildPayloadJson(AgentAlertDefinition alert)
     {
+        var icon = NormalizeIcon(alert.Icon);
+
         object payload = alert.AlertType == PsadtAlertType.Toast
             ? new
             {
@@ -133,8 +135,8 @@ public class AlertDispatchService
                 type = "toast",
                 title = alert.Title,
                 message = alert.Message,
-                timeoutSeconds = alert.TimeoutSeconds ?? 15,
-                icon = alert.Icon
+                timeoutSeconds = alert.TimeoutSeconds ?? 120,
+                icon
             }
             : new
             {
@@ -142,13 +144,31 @@ public class AlertDispatchService
                 type = "modal",
                 title = alert.Title,
                 message = alert.Message,
+                timeoutSeconds = alert.TimeoutSeconds ?? 120,
                 actions = alert.ActionsJson != null
                     ? JsonSerializer.Deserialize<object>(alert.ActionsJson, JsonOptions)
                     : null,
                 defaultAction = alert.DefaultAction,
-                icon = alert.Icon
+                icon
             };
 
         return JsonSerializer.Serialize(payload, JsonOptions);
+    }
+
+    private static string NormalizeIcon(string? icon)
+    {
+        if (string.IsNullOrWhiteSpace(icon))
+            return "info";
+
+        return icon.Trim().ToLowerInvariant() switch
+        {
+            "warn" => "warning",
+            "information" => "info",
+            "question" => "question",
+            "warning" => "warning",
+            "error" => "error",
+            "info" => "info",
+            _ => "info"
+        };
     }
 }

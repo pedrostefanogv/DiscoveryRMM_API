@@ -87,9 +87,12 @@ builder.Services.AddScoped<IReportRenderer, MarkdownReportRenderer>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IAgentCommandDispatcher, AgentCommandDispatcher>();
 builder.Services.AddScoped<ISyncInvalidationPublisher, SyncInvalidationPublisher>();
+builder.Services.AddSingleton<SpecialCommandPayloadValidator>();
+builder.Services.AddSingleton<DashboardEventContractNormalizer>();
 builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
 builder.Services.AddSingleton<IRemoteDebugLogRelay, RemoteDebugLogRelayService>();
+builder.Services.AddSingleton(TimeProvider.System);
 
 // PDF rendering using Playwright.NET (embedded, no external service required, zero vulnerabilities)
 if (builder.Configuration.GetValue<bool>("Reporting:EnablePdf"))
@@ -142,6 +145,9 @@ builder.Services.Configure<AutomaticLoggingOptions>(
 // Configuração de reporting
 builder.Services.Configure<ReportingOptions>(
     builder.Configuration.GetSection("Reporting"));
+
+builder.Services.Configure<RealtimeContractOptions>(
+    builder.Configuration.GetSection(RealtimeContractOptions.SectionName));
 
 builder.Services.AddDiscoveryNats(builder.Configuration);
 builder.Services.AddDiscoveryRedis(builder.Configuration);

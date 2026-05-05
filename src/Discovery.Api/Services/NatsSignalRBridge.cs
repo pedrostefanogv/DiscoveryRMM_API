@@ -1,6 +1,4 @@
-using System.Text.Json;
 using Discovery.Api.Hubs;
-using Discovery.Core.DTOs;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.SignalR;
@@ -17,18 +15,20 @@ public class NatsSignalRBridge : BackgroundService
     private readonly NatsConnection _natsConnection;
     private readonly IHubContext<AgentHub> _hubContext;
     private readonly IRedisService _redisService;
+    private readonly DashboardEventContractNormalizer _contractNormalizer;
     private readonly ILogger<NatsSignalRBridge> _logger;
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public NatsSignalRBridge(
         NatsConnection natsConnection,
         IHubContext<AgentHub> hubContext,
         IRedisService redisService,
+        DashboardEventContractNormalizer contractNormalizer,
         ILogger<NatsSignalRBridge> logger)
     {
         _natsConnection = natsConnection;
         _hubContext = hubContext;
         _redisService = redisService;
+        _contractNormalizer = contractNormalizer;
         _logger = logger;
     }
 
@@ -84,26 +84,27 @@ public class NatsSignalRBridge : BackgroundService
         {
             try
             {
-                var eventData = JsonSerializer.Deserialize<DashboardEventMessage>(msg.Data ?? "", JsonOptions);
-                if (eventData is null)
+                if (!_contractNormalizer.TryNormalize(msg.Data, "nats", out var eventData) || eventData is null)
                     continue;
 
                 _logger.LogDebug("Dashboard event received on {Subject}: {EventType}", msg.Subject, eventData.EventType);
                 await InvalidateDashboardCacheAsync(eventData.ClientId, eventData.SiteId);
 
+                object? signalRData = eventData.Data.HasValue ? eventData.Data.Value : null;
+
                 await _hubContext.Clients.Group(DashboardGroupNames.Global)
-                    .SendAsync("DashboardEvent", eventData.EventType, eventData.Data, eventData.TimestampUtc, cancellationToken: stoppingToken);
+                    .SendAsync("DashboardEvent", eventData.EventType, signalRData, eventData.TimestampUtc, cancellationToken: stoppingToken);
 
                 if (eventData.ClientId.HasValue)
                 {
                     await _hubContext.Clients.Group(DashboardGroupNames.ForClient(eventData.ClientId.Value))
-                        .SendAsync("DashboardEvent", eventData.EventType, eventData.Data, eventData.TimestampUtc, cancellationToken: stoppingToken);
+                        .SendAsync("DashboardEvent", eventData.EventType, signalRData, eventData.TimestampUtc, cancellationToken: stoppingToken);
                 }
 
                 if (eventData.SiteId.HasValue)
                 {
                     await _hubContext.Clients.Group(DashboardGroupNames.ForSite(eventData.SiteId.Value))
-                        .SendAsync("DashboardEvent", eventData.EventType, eventData.Data, eventData.TimestampUtc, cancellationToken: stoppingToken);
+                        .SendAsync("DashboardEvent", eventData.EventType, signalRData, eventData.TimestampUtc, cancellationToken: stoppingToken);
                 }
             }
             catch (Exception ex)

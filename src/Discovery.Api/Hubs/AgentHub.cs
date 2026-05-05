@@ -5,6 +5,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using Microsoft.AspNetCore.SignalR;
@@ -15,6 +16,7 @@ namespace Discovery.Api.Hubs;
 public class AgentHub : Hub
 {
     private static readonly ConcurrentDictionary<string, Guid> ConnectedAgents = new();
+    private static readonly ConcurrentDictionary<string, Guid> RegisteredAgentConnections = new();
     private static readonly ConcurrentDictionary<Guid, HeartbeatState> LastPersistedHeartbeat = new();
     private static readonly ConcurrentDictionary<Guid, (Guid SiteId, Guid ClientId)> AgentTenantCache = new();
     private static readonly TimeSpan HeartbeatWriteInterval = TimeSpan.FromSeconds(15);
@@ -102,6 +104,7 @@ public class AgentHub : Hub
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         PendingChallenges.TryRemove(Context.ConnectionId, out _);
+        RegisteredAgentConnections.TryRemove(Context.ConnectionId, out _);
 
         if (ConnectedAgents.TryRemove(Context.ConnectionId, out var agentId))
         {
@@ -204,6 +207,7 @@ public class AgentHub : Hub
 
         // Usa o ID autenticado pelo middleware, ignora o parametro (nao confiavel)
         await EnsureConnectionMappedAsync(authenticatedId);
+        RegisteredAgentConnections[Context.ConnectionId] = authenticatedId;
         await _agentRepo.UpdateStatusAsync(authenticatedId, AgentStatus.Online, ipAddress);
         LastPersistedHeartbeat[authenticatedId] = new HeartbeatState(DateTime.UtcNow, ipAddress);
         var agent = await _agentRepo.GetByIdAsync(authenticatedId) ?? new Agent { Id = authenticatedId };
@@ -213,7 +217,7 @@ public class AgentHub : Hub
         var pendingCommands = await _commandRepo.GetPendingByAgentIdAsync(authenticatedId);
         foreach (var cmd in pendingCommands)
         {
-            await Clients.Caller.SendAsync("ExecuteCommand", cmd.Id, cmd.CommandType.ToString(), cmd.Payload);
+            await Clients.Caller.SendAsync("ExecuteCommand", cmd.Id, CommandTypeWireMapper.ToWireValue(cmd.CommandType), cmd.Payload);
             await _commandRepo.UpdateStatusAsync(cmd.Id, CommandStatus.Sent, null, null, null);
         }
     }
@@ -293,6 +297,7 @@ public class AgentHub : Hub
         RequireHandshake();
 
         await EnsureConnectionMappedAsync(authenticatedId);
+        RequireRegisterAgentCalled(authenticatedId);
 
         var now = DateTime.UtcNow;
 
@@ -338,6 +343,7 @@ public class AgentHub : Hub
         RequireHandshake();
 
         await EnsureConnectionMappedAsync(authenticatedId);
+        RequireRegisterAgentCalled(authenticatedId);
 
         // Garante que o AgentId autenticado é usado
         heartbeat = heartbeat with { AgentId = authenticatedId };
@@ -453,6 +459,21 @@ public class AgentHub : Hub
 
         ConnectedAgents[Context.ConnectionId] = agentId;
         await Groups.AddToGroupAsync(Context.ConnectionId, $"agent-{agentId}");
+    }
+
+    private void RequireRegisterAgentCalled(Guid authenticatedId)
+    {
+        if (RegisteredAgentConnections.TryGetValue(Context.ConnectionId, out var registeredAgentId)
+            && registeredAgentId == authenticatedId)
+        {
+            return;
+        }
+
+        _logger.LogWarning(
+            "[CONTRACT_VIOLATION] component=Server field=RegisterAgent expected=called_before_heartbeat received=missing source=signalr eventType=AgentHeartbeat agentId={AgentId}",
+            authenticatedId);
+
+        throw new HubException("RegisterAgent must be called before Heartbeat/HeartbeatV2.");
     }
 
     private async Task PublishAgentStatusChangedAsync(Agent agent, AgentStatus status)

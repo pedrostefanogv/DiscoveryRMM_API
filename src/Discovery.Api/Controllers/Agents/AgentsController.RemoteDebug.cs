@@ -24,7 +24,19 @@ public partial class AgentsController
             return Forbid();
 
         var session = _remoteDebugSessionManager.StartSession(id, userId, site.ClientId, agent.SiteId, request?.LogLevel, request?.TtlMinutes, request?.PreferredTransport);
-        var payload = JsonSerializer.Serialize(new { action = "start", sessionId = session.SessionId, logLevel = session.LogLevel, startedAtUtc = session.StartedAtUtc, expiresAtUtc = session.ExpiresAtUtc, stream = new { preferredTransport = session.PreferredTransport, fallbackTransport = session.FallbackTransport, natsSubject = session.NatsSubject, signalRMethod = session.SignalRMethod } });
+        var payload = JsonSerializer.Serialize(new
+        {
+            action = "start",
+            sessionId = session.SessionId,
+            logLevel = session.LogLevel,
+            expiresAtUtc = session.ExpiresAtUtc,
+            stream = new
+            {
+                signalRHub = "/hubs/remote-debug",
+                signalRMethod = session.SignalRMethod,
+                natsSubject = session.NatsSubject
+            }
+        });
         var command = new AgentCommand { AgentId = id, CommandType = CommandType.RemoteDebug, Payload = payload };
         var created = await _commandDispatcher.DispatchAsync(command);
 
@@ -47,7 +59,17 @@ public partial class AgentsController
             return NotFound(new { error = "Remote debug session not found." });
         if (session.AgentId != id) return BadRequest(new { error = "Session does not belong to this agent." });
 
-        var payload = JsonSerializer.Serialize(new { action = "stop", sessionId, stoppedAtUtc = DateTime.UtcNow });
+        var payload = JsonSerializer.Serialize(new
+        {
+            action = "stop",
+            sessionId,
+            stream = new
+            {
+                signalRHub = "/hubs/remote-debug",
+                signalRMethod = session.SignalRMethod,
+                natsSubject = session.NatsSubject
+            }
+        });
         var command = new AgentCommand { AgentId = id, CommandType = CommandType.RemoteDebug, Payload = payload };
         var created = await _commandDispatcher.DispatchAsync(command);
         _remoteDebugSessionManager.CloseSession(sessionId, "stopped-by-user", userId);

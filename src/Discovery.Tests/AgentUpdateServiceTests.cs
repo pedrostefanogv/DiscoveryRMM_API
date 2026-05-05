@@ -224,10 +224,9 @@ public class AgentUpdateServiceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(root.GetProperty("action").GetString(), Is.EqualTo("force-update"));
-            Assert.That(root.GetProperty("force").GetBoolean(), Is.True);
-            Assert.That(root.GetProperty("requestedBy").GetString(), Is.EqualTo("tester"));
-            Assert.That(root.GetProperty("reason").GetString(), Is.EqualTo("manual-trigger"));
+            Assert.That(root.GetProperty("action").GetString(), Is.EqualTo("install"));
+            Assert.That(root.GetProperty("version").GetString(), Is.EqualTo("1.2.0"));
+            Assert.That(root.GetProperty("url").GetString(), Is.EqualTo("https://example.invalid/download"));
         });
     }
 

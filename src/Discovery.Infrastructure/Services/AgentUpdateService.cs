@@ -417,21 +417,54 @@ public class AgentUpdateService(
 
     public async Task<AgentCommand> TriggerForceUpdateAsync(Guid agentId, ForceAgentUpdateRequest request, string? actor = null, CancellationToken cancellationToken = default)
     {
-        _ = await agentRepository.GetByIdAsync(agentId)
+        var agent = await agentRepository.GetByIdAsync(agentId)
             ?? throw new KeyNotFoundException($"Agent {agentId} not found.");
 
         var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
         if (reason is { Length: > 200 })
             throw new InvalidOperationException("Reason cannot exceed 200 characters.");
 
-        var requestedAtUtc = DateTime.UtcNow;
+        var action = "check-update";
+        string? version = null;
+        string? url = null;
+
+        var manifest = await GetManifestAsync(
+            agentId,
+            new AgentUpdateManifestRequest(agent.AgentVersion, null, null, null),
+            cancellationToken);
+
+        if (manifest.DirectUpdateSupported && !string.IsNullOrWhiteSpace(manifest.LatestVersion))
+        {
+            var redirect = await GetPresignedDownloadUrlAsync(
+                agentId,
+                new AgentUpdateDownloadRequest(
+                    ReleaseId: null,
+                    Version: manifest.LatestVersion,
+                    Platform: manifest.Platform,
+                    Architecture: manifest.Architecture,
+                    ArtifactType: manifest.ArtifactType),
+                cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(redirect?.DownloadUrl))
+            {
+                action = "install";
+                version = manifest.LatestVersion;
+                url = redirect.DownloadUrl;
+            }
+        }
+
+        logger.LogInformation(
+            "Force update request translated to update action {Action} for agent {AgentId} (actor={Actor}, reason={Reason})",
+            action,
+            agentId,
+            LogSanitizer.Sanitize(string.IsNullOrWhiteSpace(actor) ? "api" : actor.Trim()),
+            LogSanitizer.Sanitize(reason));
+
         var payload = JsonSerializer.Serialize(new
         {
-            action = "force-update",
-            force = true,
-            requestedAtUtc,
-            requestedBy = string.IsNullOrWhiteSpace(actor) ? "api" : actor.Trim(),
-            reason
+            action,
+            version,
+            url
         }, JsonOptions);
 
         return await agentCommandDispatcher.DispatchAsync(new AgentCommand
