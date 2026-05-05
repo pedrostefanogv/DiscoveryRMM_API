@@ -41,7 +41,7 @@ public class AgentCommandDispatcher(
         if (!sent && AgentHub.IsAgentConnected(created.AgentId))
         {
             await hubContext.Clients.Group($"agent-{created.AgentId}")
-                .SendAsync("ExecuteCommand", created.Id, created.CommandType, created.Payload, cancellationToken);
+                .SendAsync("ExecuteCommand", created.Id, created.CommandType.ToString(), created.Payload, cancellationToken);
 
             sent = true;
             sentAtUtc = DateTime.UtcNow;

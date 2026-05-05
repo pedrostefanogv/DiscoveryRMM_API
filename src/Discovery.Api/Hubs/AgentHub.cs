@@ -213,7 +213,7 @@ public class AgentHub : Hub
         var pendingCommands = await _commandRepo.GetPendingByAgentIdAsync(authenticatedId);
         foreach (var cmd in pendingCommands)
         {
-            await Clients.Caller.SendAsync("ExecuteCommand", cmd.Id, cmd.CommandType, cmd.Payload);
+            await Clients.Caller.SendAsync("ExecuteCommand", cmd.Id, cmd.CommandType.ToString(), cmd.Payload);
             await _commandRepo.UpdateStatusAsync(cmd.Id, CommandStatus.Sent, null, null, null);
         }
     }

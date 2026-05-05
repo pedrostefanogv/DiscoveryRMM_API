@@ -11,7 +11,6 @@ public class NotificationService : INotificationService
 {
     private readonly INotificationRepository _repository;
     private readonly IHubContext<NotificationHub> _notificationHubContext;
-    private readonly IHubContext<AgentHub> _agentHubContext;
     private readonly IRedisService _redis;
     private readonly ILogger<NotificationService> _logger;
 
@@ -24,13 +23,11 @@ public class NotificationService : INotificationService
     public NotificationService(
         INotificationRepository repository,
         IHubContext<NotificationHub> notificationHubContext,
-        IHubContext<AgentHub> agentHubContext,
         IRedisService redis,
         ILogger<NotificationService> logger)
     {
         _repository = repository;
         _notificationHubContext = notificationHubContext;
-        _agentHubContext = agentHubContext;
         _redis = redis;
         _logger = logger;
     }
@@ -156,9 +153,6 @@ public class NotificationService : INotificationService
         if (recipientAgentId.HasValue)
         {
             await _notificationHubContext.Clients.Group($"notifications:agent:{recipientAgentId}")
-                .SendAsync("NotificationReceived", dto, cancellationToken);
-
-            await _agentHubContext.Clients.Group($"agent-{recipientAgentId}")
                 .SendAsync("NotificationReceived", dto, cancellationToken);
         }
 
