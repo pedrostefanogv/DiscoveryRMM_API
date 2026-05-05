@@ -22,6 +22,7 @@ public class AgentHubAuthorizationFilter : IHubFilter
     [
         nameof(AgentHub.RegisterAgent),
         nameof(AgentHub.Heartbeat),
+        nameof(AgentHub.HeartbeatV2),
         nameof(AgentHub.CommandResult),
         nameof(AgentHub.SecureHandshakeAsync),
         nameof(AgentHub.PushRemoteDebugLog),

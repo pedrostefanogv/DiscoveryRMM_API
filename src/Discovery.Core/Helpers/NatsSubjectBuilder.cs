@@ -8,6 +8,12 @@ public static class NatsSubjectBuilder
     public static string AgentSubject(Guid clientId, Guid siteId, Guid agentId, string messageType)
         => $"{AgentBase(clientId, siteId, agentId)}.{messageType}";
 
+    /// <summary>
+    /// Subject de eventos para o dashboard.
+    /// Com clientId+siteId: tenant.{c}.site.{s}.dashboard.events
+    /// Com clientId apenas: tenant.{c}.dashboard.events
+    /// Sem tenant (agentes orfaos): tenant.unscoped.dashboard.events (fallback global)
+    /// </summary>
     public static string DashboardSubject(Guid? clientId, Guid? siteId)
     {
         if (clientId.HasValue && siteId.HasValue)
@@ -15,7 +21,9 @@ public static class NatsSubjectBuilder
         if (clientId.HasValue)
             return $"tenant.{clientId}.dashboard.events";
 
-        throw new InvalidOperationException("Dashboard subject requires at least client scope.");
+        // Agentes sem tenant: usa subject global de fallback.
+        // O NatsSignalRBridge escuta este subject e faz broadcast para dashboard:global.
+        return "tenant.unscoped.dashboard.events";
     }
 
     /// <summary>

@@ -46,10 +46,11 @@ public class NatsSignalRBridge : BackgroundService
             {
                 _logger.LogInformation("Starting NATS dashboard bridge subscription...");
 
+                var unscopedTask = RelayDashboardSubjectAsync("tenant.unscoped.dashboard.events", stoppingToken);
                 var clientTask = RelayDashboardSubjectAsync("tenant.*.dashboard.events", stoppingToken);
                 var siteTask = RelayDashboardSubjectAsync("tenant.*.site.*.dashboard.events", stoppingToken);
 
-                await Task.WhenAll(clientTask, siteTask);
+                await Task.WhenAll(unscopedTask, clientTask, siteTask);
 
                 retryCount = 0;
                 _logger.LogInformation("NATS-SignalR bridge subscription ended");

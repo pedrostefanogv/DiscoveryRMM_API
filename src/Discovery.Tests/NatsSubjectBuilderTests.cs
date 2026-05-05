@@ -39,8 +39,10 @@ public class NatsSubjectBuilderTests
     }
 
     [Test]
-    public void DashboardSubject_WithoutClientScope_ShouldThrow()
+    public void DashboardSubject_WithoutClientScope_ShouldReturnUnscopedFallback()
     {
-        Assert.Throws<InvalidOperationException>(() => NatsSubjectBuilder.DashboardSubject(null, null));
+        var subject = NatsSubjectBuilder.DashboardSubject(null, null);
+
+        Assert.That(subject, Is.EqualTo("tenant.unscoped.dashboard.events"));
     }
 }

@@ -81,9 +81,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     public async Task PublishDashboardEventAsync(DashboardEventMessage message, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
-        if (!message.ClientId.HasValue)
-            throw new InvalidOperationException("Dashboard events require client-scoped subject.");
-
+        // Agentes sem clientId (orfãos) usam subject global de fallback — não é mais erro.
         var payload = JsonSerializer.Serialize(message, JsonOptions);
         var subject = NatsSubjectBuilder.DashboardSubject(message.ClientId, message.SiteId);
 
