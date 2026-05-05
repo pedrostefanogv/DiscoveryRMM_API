@@ -318,12 +318,22 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
         if (agentId.HasValue)
         {
-            var agent = await _agentRepo.GetByIdAsync(agentId.Value);
-            if (agent is not null)
+            try
             {
-                siteId = agent.SiteId;
-                var site = await _siteRepo.GetByIdAsync(agent.SiteId);
-                clientId = site?.ClientId;
+                var agent = await _agentRepo.GetByIdAsync(agentId.Value);
+                if (agent is not null)
+                {
+                    siteId = agent.SiteId;
+                    var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+                    clientId = site?.ClientId;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "PublishDashboardEventForAgentAsync: erro ao resolver tenant do agent {AgentId} — propagando sem tenant.",
+                    agentId.Value);
+                // clientId e siteId permanecem null — evento propaga via subject de fallback.
             }
         }
 

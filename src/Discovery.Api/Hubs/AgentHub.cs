@@ -479,42 +479,58 @@ public class AgentHub : Hub
     /// <summary>
     /// Obtém o ClientId e SiteId do agent, com cache em memória para evitar DB queries a cada heartbeat.
     /// O cache é populado sob demanda e compartilhado entre Heartbeat e HeartbeatV2.
+    /// Nunca retorna null — agentes sem tenant retornam (Guid.Empty, Guid.Empty),
+    /// permitindo que eventos ainda propaguem via subject de fallback.
     /// </summary>
-    private async Task<(Guid SiteId, Guid ClientId)?> GetAgentTenantAsync(Guid agentId)
+    private async Task<(Guid SiteId, Guid ClientId)> GetAgentTenantAsync(Guid agentId)
     {
         if (AgentTenantCache.TryGetValue(agentId, out var cached))
             return cached;
 
-        var agent = await _agentRepo.GetByIdAsync(agentId);
-        if (agent is null) return null;
-
-        var siteId = agent.SiteId == Guid.Empty ? Guid.Empty : agent.SiteId;
-        var clientId = Guid.Empty;
-
-        if (siteId != Guid.Empty)
+        try
         {
-            var site = await _siteRepo.GetByIdAsync(siteId);
-            clientId = site?.ClientId ?? Guid.Empty;
-        }
+            var agent = await _agentRepo.GetByIdAsync(agentId);
+            if (agent is null)
+            {
+                _logger.LogWarning("GetAgentTenantAsync: agent {AgentId} not found in DB — usando fallback sem tenant.", agentId);
+                var fallback = (Guid.Empty, Guid.Empty);
+                AgentTenantCache[agentId] = fallback;
+                return fallback;
+            }
 
-        var entry = (siteId, clientId);
-        AgentTenantCache[agentId] = entry;
-        return entry;
+            var siteId = agent.SiteId == Guid.Empty ? Guid.Empty : agent.SiteId;
+            var clientId = Guid.Empty;
+
+            if (siteId != Guid.Empty)
+            {
+                var site = await _siteRepo.GetByIdAsync(siteId);
+                clientId = site?.ClientId ?? Guid.Empty;
+            }
+
+            var entry = (siteId, clientId);
+            AgentTenantCache[agentId] = entry;
+            return entry;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "GetAgentTenantAsync: erro ao resolver tenant do agent {AgentId} — usando fallback.", agentId);
+            var fallback = (Guid.Empty, Guid.Empty);
+            AgentTenantCache[agentId] = fallback;
+            return fallback;
+        }
     }
 
     /// <summary>
     /// Propaga heartbeat para os dashboards conectados via SignalR.
     /// Usa cache de tenant para evitar DB queries repetidas.
     /// Chamado tanto pelo método Heartbeat (legado) quanto HeartbeatV2.
+    /// Agentes sem tenant usam subject de fallback — o evento sempre propaga.
     /// </summary>
     private async Task PublishHeartbeatToDashboardAsync(Guid agentId, AgentHeartbeat heartbeat)
     {
         try
         {
-            var tenant = await GetAgentTenantAsync(agentId);
-            if (tenant is null) return;
-
-            var (siteId, clientId) = tenant.Value;
+            var (siteId, clientId) = await GetAgentTenantAsync(agentId);
 
             // Dispara evento no SignalR para dashboards inscritos
             await _messaging.PublishDashboardEventAsync(
