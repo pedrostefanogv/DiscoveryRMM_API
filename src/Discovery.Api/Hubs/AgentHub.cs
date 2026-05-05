@@ -522,15 +522,30 @@ public class AgentHub : Hub
 
     /// <summary>
     /// Propaga heartbeat para os dashboards conectados via SignalR.
-    /// Usa cache de tenant para evitar DB queries repetidas.
-    /// Chamado tanto pelo método Heartbeat (legado) quanto HeartbeatV2.
+    /// Usa ClientId/SiteId do heartbeat sempre que disponiveis (enviados pelo agent),
+    /// com fallback para cache de tenant em memória apenas quando o agent não os enviar.
     /// Agentes sem tenant usam subject de fallback — o evento sempre propaga.
     /// </summary>
     private async Task PublishHeartbeatToDashboardAsync(Guid agentId, AgentHeartbeat heartbeat)
     {
         try
         {
-            var (siteId, clientId) = await GetAgentTenantAsync(agentId);
+            // Prioridade 1: usar ClientId/SiteId enviados pelo agent no heartbeat
+            // Prioridade 2: fallback para cache em memória (agentes legados ou NATS sem tenant)
+            Guid? clientId;
+            Guid? siteId;
+
+            if (heartbeat.ClientId.HasValue && heartbeat.SiteId.HasValue)
+            {
+                clientId = heartbeat.ClientId;
+                siteId = heartbeat.SiteId;
+            }
+            else
+            {
+                var (resolvedSiteId, resolvedClientId) = await GetAgentTenantAsync(agentId);
+                clientId = resolvedClientId == Guid.Empty ? null : resolvedClientId;
+                siteId = resolvedSiteId == Guid.Empty ? null : resolvedSiteId;
+            }
 
             // Dispara evento no SignalR para dashboards inscritos
             await _messaging.PublishDashboardEventAsync(
@@ -540,6 +555,8 @@ public class AgentHub : Hub
                     {
                         AgentId = agentId,
                         Status = "Online",
+                        ClientId = clientId,
+                        SiteId = siteId,
                         heartbeat.IpAddress,
                         heartbeat.Hostname,
                         heartbeat.AgentVersion,
@@ -555,8 +572,8 @@ public class AgentHub : Hub
                         heartbeat.UptimeSeconds,
                         heartbeat.ProcessCount
                     },
-                    clientId == Guid.Empty ? null : clientId,
-                    siteId == Guid.Empty ? null : siteId));
+                    clientId,
+                    siteId));
         }
         catch (Exception ex)
         {

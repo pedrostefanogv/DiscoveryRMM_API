@@ -6,6 +6,8 @@ namespace Discovery.Core.DTOs;
 /// </summary>
 public record AgentHeartbeat(
     Guid AgentId,
+    Guid? ClientId = null,
+    Guid? SiteId = null,
     string? IpAddress = null,
     string? Hostname = null,
     string? AgentVersion = null,

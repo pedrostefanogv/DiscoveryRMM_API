@@ -147,30 +147,34 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 heartbeat.CpuPercent, heartbeat.MemoryPercent,
                                 heartbeat.DiskPercent, heartbeat.P2pPeers);
 
-                            // Propaga heartbeat completo para dashboards via NATS → SignalR bridge
-                            await PublishDashboardEventForAgentAsync(
-                                agentId.Value,
-                                "AgentHeartbeat",
-                                new
-                                {
-                                    AgentId = agentId.Value,
-                                    Status = "Online",
-                                    heartbeat.IpAddress,
-                                    heartbeat.Hostname,
-                                    heartbeat.AgentVersion,
-                                    heartbeat.TimestampUtc,
-                                    heartbeat.CpuPercent,
-                                    heartbeat.MemoryPercent,
-                                    heartbeat.MemoryTotalGb,
-                                    heartbeat.MemoryUsedGb,
-                                    heartbeat.DiskPercent,
-                                    heartbeat.DiskTotalGb,
-                                    heartbeat.DiskUsedGb,
-                                    heartbeat.P2pPeers,
-                                    heartbeat.UptimeSeconds,
-                                    heartbeat.ProcessCount
-                                },
-                                CancellationToken.None);
+                            // Propaga heartbeat completo para dashboards via NATS → SignalR bridge.
+                            // Usa ClientId/SiteId do heartbeat (enviado pelo agent) em vez de DB lookup.
+                            var eventPayload = new
+                            {
+                                AgentId = agentId.Value,
+                                Status = "Online",
+                                ClientId = heartbeat.ClientId,
+                                SiteId = heartbeat.SiteId,
+                                heartbeat.IpAddress,
+                                heartbeat.Hostname,
+                                heartbeat.AgentVersion,
+                                heartbeat.TimestampUtc,
+                                heartbeat.CpuPercent,
+                                heartbeat.MemoryPercent,
+                                heartbeat.MemoryTotalGb,
+                                heartbeat.MemoryUsedGb,
+                                heartbeat.DiskPercent,
+                                heartbeat.DiskTotalGb,
+                                heartbeat.DiskUsedGb,
+                                heartbeat.P2pPeers,
+                                heartbeat.UptimeSeconds,
+                                heartbeat.ProcessCount
+                            };
+
+                            var dashboardMessage = DashboardEventMessage.Create(
+                                "AgentHeartbeat", eventPayload,
+                                heartbeat.ClientId, heartbeat.SiteId);
+                            await PublishDashboardEventAsync(dashboardMessage, CancellationToken.None);
                         }
                     }
                     catch (Exception ex)
