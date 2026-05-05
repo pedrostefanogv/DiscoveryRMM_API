@@ -1,9 +1,7 @@
 using System.Text.Json;
-using Discovery.Api.Hubs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
-using Microsoft.AspNetCore.SignalR;
 
 namespace Discovery.Api.Services;
 
@@ -11,7 +9,6 @@ public class NotificationService : INotificationService
 {
     private readonly INotificationRepository _repository;
     private readonly IAgentCommandDispatcher _commandDispatcher;
-    private readonly IHubContext<NotificationHub> _notificationHubContext;
     private readonly IRedisService _redis;
     private readonly ILogger<NotificationService> _logger;
 
@@ -24,13 +21,11 @@ public class NotificationService : INotificationService
     public NotificationService(
         INotificationRepository repository,
         IAgentCommandDispatcher commandDispatcher,
-        IHubContext<NotificationHub> notificationHubContext,
         IRedisService redis,
         ILogger<NotificationService> logger)
     {
         _repository = repository;
         _commandDispatcher = commandDispatcher;
-        _notificationHubContext = notificationHubContext;
         _redis = redis;
         _logger = logger;
     }
@@ -75,11 +70,8 @@ public class NotificationService : INotificationService
             created.CreatedBy
         };
 
-        // Broadcast via Redis Pub/Sub for multi-instance
+        // Broadcast via Redis Pub/Sub for multi-instance consumers.
         await BroadcastViaRedisAsync(dto);
-
-        // Send locally via SignalR
-        await SendLocalSignalRAsync(dto, created.Topic, created.RecipientUserId, created.RecipientKey, cancellationToken);
 
         return created;
     }
@@ -155,7 +147,6 @@ public class NotificationService : INotificationService
 
     /// <summary>
     /// Broadcasts notification to all API instances via Redis Pub/Sub.
-    /// Each instance picks up the message and relays to its local SignalR clients.
     /// </summary>
     private async Task BroadcastViaRedisAsync(object dto)
     {
@@ -170,61 +161,6 @@ public class NotificationService : INotificationService
         {
             _logger.LogWarning(ex, "Failed to broadcast notification via Redis");
         }
-    }
-
-    /// <summary>
-    /// Receives notification from Redis broadcast and relays to local SignalR clients.
-    /// </summary>
-    public async Task StartRedisListenerAsync(CancellationToken cancellationToken)
-    {
-        if (!_redis.IsConnected)
-        {
-            _logger.LogWarning("Redis not connected — notification broadcast listener disabled");
-            return;
-        }
-
-        await _redis.SubscribeAsync(BroadcastChannel, async (channel, message) =>
-        {
-            try
-            {
-                var dto = JsonSerializer.Deserialize<JsonElement>(message, JsonOptions);
-                if (dto.ValueKind != JsonValueKind.Object) return;
-
-                // Only relay from other instances (local delivery already handled in PublishAsync)
-                var topic = dto.TryGetProperty("topic", out var topicEl)
-                    ? topicEl.GetString() : null;
-                Guid? recipientUserId = dto.TryGetProperty("recipientUserId", out var uidEl) && uidEl.ValueKind != JsonValueKind.Null
-                    ? uidEl.GetGuid() : null;
-                string? recipientKey = dto.TryGetProperty("recipientKey", out var rkEl) && rkEl.ValueKind != JsonValueKind.Null
-                    ? rkEl.GetString() : null;
-
-                await SendLocalSignalRAsync(dto, topic, recipientUserId, recipientKey, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error relaying Redis broadcast notification");
-            }
-        });
-    }
-
-    private async Task SendLocalSignalRAsync(
-        object dto,
-        string? topic,
-        Guid? recipientUserId,
-        string? recipientKey,
-        CancellationToken cancellationToken)
-    {
-        await _notificationHubContext.Clients.Group("notifications:all").SendAsync("NotificationReceived", dto, cancellationToken);
-        if (!string.IsNullOrWhiteSpace(topic))
-            await _notificationHubContext.Clients.Group($"notifications:topic:{topic}").SendAsync("NotificationReceived", dto, cancellationToken);
-
-        if (recipientUserId.HasValue)
-            await _notificationHubContext.Clients.Group($"notifications:user:{recipientUserId}")
-                .SendAsync("NotificationReceived", dto, cancellationToken);
-
-        if (!string.IsNullOrWhiteSpace(recipientKey))
-            await _notificationHubContext.Clients.Group($"notifications:key:{recipientKey}")
-                .SendAsync("NotificationReceived", dto, cancellationToken);
     }
 
     public Task<IReadOnlyList<AppNotification>> GetRecentAsync(Guid? recipientUserId = null, Guid? recipientAgentId = null, string? recipientKey = null, string? topic = null, NotificationSeverity? severity = null, bool? isRead = null, int limit = 50)

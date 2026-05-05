@@ -147,7 +147,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 heartbeat.CpuPercent, heartbeat.MemoryPercent,
                                 heartbeat.DiskPercent, heartbeat.P2pPeers);
 
-                            // Propaga heartbeat completo para dashboards via NATS → SignalR bridge.
+                            // Propaga heartbeat completo para dashboards via NATS dashboard.events.
                             // Usa ClientId/SiteId do heartbeat (enviado pelo agent) em vez de DB lookup.
                             var eventPayload = new
                             {
@@ -255,7 +255,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 continue;
                             }
                             _logger.LogDebug("Hardware report received from agent {AgentId}", agentId.Value);
-                            // Propaga para dashboards via NATS → SignalR bridge
+                            // Propaga para dashboards via NATS dashboard.events
                             await PublishDashboardEventForAgentAsync(
                                 agentId.Value,
                                 "AgentHardwareReported",

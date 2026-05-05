@@ -359,6 +359,7 @@ public class CustomFieldServiceTests
             new TestAgentRepository(db),
             new TestSiteRepository(db),
             new TestAgentAutoLabelingService(),
+            new TestLogRepository(),
             NullLogger<CustomFieldService>.Instance);
 
         return new CustomFieldFixture(db, client, site, agent, service);
@@ -500,5 +501,17 @@ public class CustomFieldServiceTests
         public Task<bool> HasEnabledRulesAsync(CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<AgentLabelRuleDryRunResponse> DryRunAsync(AgentLabelRuleDryRunRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    private sealed class TestLogRepository : ILogRepository
+    {
+        public Task<LogEntry> CreateAsync(LogEntry entry)
+            => Task.FromResult(entry);
+
+        public Task<IEnumerable<LogEntry>> QueryAsync(LogQuery query)
+            => Task.FromResult<IEnumerable<LogEntry>>([]);
+
+        public Task<int> PurgeAsync(DateTime cutoff)
+            => Task.FromResult(0);
     }
 }

@@ -202,7 +202,6 @@ public static class BackgroundServiceCategoryMap
     {
         // Messaging
         ["NatsBackgroundService"] = BackgroundServiceCategories.Messaging,
-        ["NatsSignalRBridge"] = BackgroundServiceCategories.Messaging,
         ["NatsAuthCalloutBackgroundService"] = BackgroundServiceCategories.Messaging,
         // Knowledge — migrated to Quartz (KnowledgeEmbeddingJob)
         // Alerts
@@ -215,7 +214,6 @@ public static class BackgroundServiceCategoryMap
         ["MeshCentralIdentityReconciliationBackgroundService"] = BackgroundServiceCategories.Reconciliation,
         ["MeshCentralGroupPolicyReconciliationBackgroundService"] = BackgroundServiceCategories.Reconciliation,
         // Remote debug
-        ["RemoteDebugNatsBridgeService"] = BackgroundServiceCategories.RemoteDebug,
         ["RemoteDebugSessionCleanupService"] = BackgroundServiceCategories.RemoteDebug,
         // Sync
         ["SyncPingDispatchBackgroundService"] = BackgroundServiceCategories.Sync,

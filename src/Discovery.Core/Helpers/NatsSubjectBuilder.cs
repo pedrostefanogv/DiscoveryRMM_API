@@ -21,8 +21,8 @@ public static class NatsSubjectBuilder
         if (clientId.HasValue)
             return $"tenant.{clientId}.dashboard.events";
 
-        // Agentes sem tenant: usa subject global de fallback.
-        // O NatsSignalRBridge escuta este subject e faz broadcast para dashboard:global.
+        // Agents sem tenant: usa subject global de fallback.
+        // O servidor escuta este subject e faz broadcast para dashboard via NATS WS.
         return "tenant.unscoped.dashboard.events";
     }
 

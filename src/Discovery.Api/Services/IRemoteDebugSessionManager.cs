@@ -3,12 +3,7 @@ namespace Discovery.Api.Services;
 public static class RemoteDebugTransportNames
 {
     public const string Nats = "nats";
-    public const string SignalR = "signalr";
-}
-
-public static class RemoteDebugSignalRMethods
-{
-    public const string PushLog = "PushRemoteDebugLog";
+    public const string NatsWs = "nats_ws";
 }
 
 public interface IRemoteDebugSessionManager
@@ -53,9 +48,7 @@ public sealed class RemoteDebugSessionState
     public Guid? ClosedByUserId { get; set; }
     public long SequenceCounter;
     public string PreferredTransport { get; init; } = RemoteDebugTransportNames.Nats;
-    public string FallbackTransport { get; init; } = RemoteDebugTransportNames.SignalR;
     public string NatsSubject { get; init; } = string.Empty;
-    public string SignalRMethod { get; init; } = RemoteDebugSignalRMethods.PushLog;
 
     public bool IsClosed => EndedAtUtc.HasValue;
 }

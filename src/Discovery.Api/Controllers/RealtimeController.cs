@@ -1,4 +1,3 @@
-using Discovery.Api.Hubs;
 using Discovery.Api.Services;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -52,7 +51,6 @@ public class RealtimeController : ControllerBase
         return Ok(new
         {
             natsConnected = _messaging.IsConnected,
-            signalrConnectedAgents = AgentHub.ConnectedAgentCount,
             redisConnected = _redisService.IsConnected,
             checkedAtUtc = DateTime.UtcNow
         });
@@ -89,7 +87,6 @@ public class RealtimeController : ControllerBase
             },
             realtime = new
             {
-                signalrConnectedAgents = AgentHub.ConnectedAgentCount,
                 natsConnected = _messaging.IsConnected,
                 natsConnectionState = _natsConnection.ConnectionState.ToString(),
                 natsTcpReachable,

@@ -1,7 +1,7 @@
 namespace Discovery.Core.DTOs;
 
 /// <summary>
-/// Heartbeat padronizado enviado pelo agent, aceito tanto via SignalR quanto NATS.
+/// Heartbeat padronizado enviado pelo agent via NATS.
 /// Todos os campos de métrica são opcionais — o servidor aceita heartbeats parciais.
 /// </summary>
 public record AgentHeartbeat(

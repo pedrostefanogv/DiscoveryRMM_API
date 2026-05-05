@@ -3,9 +3,9 @@ using Discovery.Core.Entities;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
-using Discovery.Core.Interfaces.Security;
 using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Services;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using NATS.NKeys;
 
@@ -353,12 +353,18 @@ public class NatsIsolationTests
     {
         var agent = new Agent { Id = agentId, SiteId = siteId };
         var site = new Site { Id = siteId, ClientId = clientId };
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nats:AccountSeed"] = TestAccountSeed
+            })
+            .Build();
 
         return new NatsCredentialsService(
             agentRepository: new StubAgentRepository(agent),
             siteRepository: new StubSiteRepository(site),
             configurationService: new StubConfigurationService(),
-            secretProtector: new PassthroughSecretProtector(),
+            configuration: configuration,
             logger: NullLogger<NatsCredentialsService>.Instance);
     }
 
@@ -370,7 +376,6 @@ public class NatsIsolationTests
             Task.FromResult(new ServerConfiguration
             {
                 NatsAuthEnabled = true,
-                NatsAccountSeed = TestAccountSeed,
                 NatsAgentJwtTtlMinutes = 60,
                 NatsUserJwtTtlMinutes = 60,
             });
@@ -421,12 +426,4 @@ public class NatsIsolationTests
         public Task DeleteAsync(Guid id) => throw new NotImplementedException();
     }
 
-    private sealed class PassthroughSecretProtector : ISecretProtector
-    {
-        public bool IsEnabled => false;
-        public bool IsProtected(string? value) => false;
-        public string Protect(string plaintext) => plaintext;
-        public string Unprotect(string protectedValue) => protectedValue;
-        public string UnprotectOrSelf(string? value) => value ?? string.Empty;
-    }
 }

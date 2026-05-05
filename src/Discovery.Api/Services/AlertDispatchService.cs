@@ -7,7 +7,7 @@ namespace Discovery.Api.Services;
 
 /// <summary>
 /// Resolve o escopo de um AgentAlertDefinition em uma lista de agents,
-/// cria o AgentCommand correspondente para cada um e os entrega via NATS + SignalR.
+/// cria o AgentCommand correspondente para cada um e os entrega via NATS.
 /// </summary>
 public class AlertDispatchService
 {

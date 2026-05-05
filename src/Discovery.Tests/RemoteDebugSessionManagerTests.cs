@@ -87,12 +87,10 @@ public class RemoteDebugSessionManagerTests
         Assert.That(session.NatsSubject, Does.StartWith("tenant."));
         Assert.That(session.NatsSubject, Does.EndWith("remote-debug.log"));
         Assert.That(session.PreferredTransport, Is.EqualTo(RemoteDebugTransportNames.Nats));
-        Assert.That(session.FallbackTransport, Is.EqualTo(RemoteDebugTransportNames.SignalR));
-        Assert.That(session.SignalRMethod, Is.EqualTo(RemoteDebugSignalRMethods.PushLog));
     }
 
     [Test]
-    public void StartSession_WithSignalRPreferredTransport_ShouldSwapTransportOrder()
+    public void StartSession_WithNatsWsPreferredTransport_ShouldUseNatsWs()
     {
         var manager = new RemoteDebugSessionManager();
 
@@ -103,9 +101,8 @@ public class RemoteDebugSessionManagerTests
             Guid.NewGuid(),
             "info",
             10,
-            RemoteDebugTransportNames.SignalR);
+            RemoteDebugTransportNames.NatsWs);
 
-        Assert.That(session.PreferredTransport, Is.EqualTo(RemoteDebugTransportNames.SignalR));
-        Assert.That(session.FallbackTransport, Is.EqualTo(RemoteDebugTransportNames.Nats));
+        Assert.That(session.PreferredTransport, Is.EqualTo(RemoteDebugTransportNames.NatsWs));
     }
 }

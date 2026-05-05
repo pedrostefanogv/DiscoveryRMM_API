@@ -49,7 +49,7 @@ public record CreateAgentRequest(Guid SiteId, string Hostname, string? DisplayNa
 public record UpdateAgentRequest(Guid SiteId, string Hostname, string? DisplayName);
 public record SendCommandRequest(CommandType CommandType, string Payload);
 public record StartRemoteDebugRequest(string? LogLevel = "info", int? TtlMinutes = 20, string? PreferredTransport = null);
-public record RemoteDebugStartResponse(Guid SessionId, Guid CommandId, Guid AgentId, string LogLevel, DateTime StartedAtUtc, DateTime ExpiresAtUtc, string PreferredTransport, string FallbackTransport, string NatsSubject, string SignalRMethod);
+public record RemoteDebugStartResponse(Guid SessionId, Guid CommandId, Guid AgentId, string LogLevel, DateTime StartedAtUtc, DateTime ExpiresAtUtc, string PreferredTransport, string NatsSubject);
 public record HardwareReportRequest(string? Hostname, string? DisplayName, string? MeshCentralNodeId, AgentStatus? Status, string? OperatingSystem, string? OsVersion, string? AgentVersion, string? LastIpAddress, string? MacAddress, AgentHardwareInfo? Hardware, HardwareComponentsPayload? Components, JsonElement? InventoryRaw, string? InventorySchemaVersion, DateTime? InventoryCollectedAt);
 public record HardwareComponentsPayload(List<DiskInfo>? Disks, List<NetworkAdapterInfo>? NetworkAdapters, List<MemoryModuleInfo>? MemoryModules, List<PrinterInfo>? Printers, List<ListeningPortInfo>? ListeningPorts, List<OpenSocketInfo>? OpenSockets);
 public record CreateTokenRequest(string? Description);

@@ -80,7 +80,7 @@ public class SpecialCommandPayloadValidatorTests
     }
 
     [Test]
-    public void RemoteDebugStart_ShouldRequireCanonicalStreamFields()
+        public void RemoteDebugStart_ShouldAcceptNatsOnlyStreamFields()
     {
         var validator = new SpecialCommandPayloadValidator();
 
@@ -90,15 +90,16 @@ public class SpecialCommandPayloadValidatorTests
               "sessionId": "26d6bd85-39f5-4ac6-bb11-c3cba9cfc6f6",
               "expiresAtUtc": "2026-05-05T10:00:00Z",
               "stream": {
-                "signalRMethod": "PushRemoteDebugLog",
                 "natsSubject": "tenant.c.site.s.agent.a.remote-debug.log"
               }
             }
             """;
 
-        var ok = validator.TryNormalize(CommandType.RemoteDebug, payload, out _, out var error);
+                var ok = validator.TryNormalize(CommandType.RemoteDebug, payload, out var normalizedPayload, out var error);
 
-        Assert.That(ok, Is.False);
-        Assert.That(error, Does.Contain("signalRHub"));
+                Assert.That(ok, Is.True, error);
+
+                using var json = JsonDocument.Parse(normalizedPayload);
+                Assert.That(json.RootElement.GetProperty("stream").GetProperty("encoding").GetString(), Is.EqualTo("json"));
     }
 }

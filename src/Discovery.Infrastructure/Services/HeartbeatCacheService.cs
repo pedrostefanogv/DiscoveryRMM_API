@@ -59,7 +59,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
     }
 
     /// <summary>
-    /// Registra o transporte ativo do agent (signalr ou nats) para roteamento de fallback.
+    /// Registra o transporte ativo do agent (nats/nats_ws) para roteamento.
     /// </summary>
     public async Task SetTransportAsync(Guid agentId, string transport, CancellationToken ct = default)
     {
@@ -75,7 +75,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
     }
 
     /// <summary>
-    /// Retorna o transporte ativo do agent (signalr/nats).
+    /// Retorna o transporte ativo do agent (nats/nats_ws).
     /// </summary>
     public async Task<string?> GetTransportAsync(Guid agentId, CancellationToken ct = default)
     {

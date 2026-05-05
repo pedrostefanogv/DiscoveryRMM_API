@@ -11,7 +11,7 @@ namespace Discovery.Api.Controllers;
 /// <summary>
 /// Admin dashboard for every long-running process in the API:
 /// <list type="bullet">
-///   <item><c>IHostedService</c> instances (NATS bridge, SignalR bridge, embeddings, reconciliations, etc.)</item>
+///   <item><c>IHostedService</c> instances (NATS services, embeddings, reconciliations, etc.)</item>
 ///   <item>Quartz.NET scheduled jobs (purge, retention, P2P maintenance)</item>
 /// </list>
 ///

@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Cors.Infrastructure;
 namespace Discovery.Api.DependencyInjection;
 
 /// <summary>
-/// Registers CORS policies for the API and SignalR hubs.
+/// Registers CORS policy for the API.
 /// </summary>
 public static class CorsServiceCollectionExtensions
 {
@@ -24,9 +24,6 @@ public static class CorsServiceCollectionExtensions
         {
             options.AddPolicy("DefaultApi", policy =>
                 ApplyApiCorsPolicy(policy, isDevelopment, allowWildcardCorsInDevelopment, allowedOrigins));
-
-            options.AddPolicy("SignalR", policy =>
-                ApplySignalRCorsPolicy(policy, isDevelopment, allowWildcardCorsInDevelopment, allowedOrigins));
         });
 
         return services;
@@ -50,21 +47,4 @@ public static class CorsServiceCollectionExtensions
         }
     }
 
-    private static void ApplySignalRCorsPolicy(
-        CorsPolicyBuilder policy,
-        bool isDevelopment,
-        bool allowWildcardCorsInDevelopment,
-        string[] allowedOrigins)
-    {
-        if (isDevelopment && allowWildcardCorsInDevelopment)
-        {
-            policy.AllowAnyMethod().AllowAnyHeader().SetIsOriginAllowed(_ => true).AllowCredentials();
-            return;
-        }
-
-        if (allowedOrigins.Length > 0)
-        {
-            policy.WithOrigins(allowedOrigins).AllowAnyMethod().AllowAnyHeader().AllowCredentials();
-        }
-    }
 }

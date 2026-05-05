@@ -5,7 +5,7 @@ using NATS.Client.Core;
 namespace Discovery.Api.DependencyInjection;
 
 /// <summary>
-/// Registers NATS messaging infrastructure: connection, background services, and bridges.
+/// Registers NATS messaging infrastructure: connection and background services.
 /// </summary>
 public static class NatsServiceCollectionExtensions
 {
@@ -28,8 +28,6 @@ public static class NatsServiceCollectionExtensions
         });
 
         services.AddHostedService<NatsBackgroundService>();
-        services.AddHostedService<NatsSignalRBridge>();
-        services.AddHostedService<RemoteDebugNatsBridgeService>();
         services.AddHostedService<RemoteDebugSessionCleanupService>();
 
         services.AddSingleton<IAiChatJobQueue, AiChatJobBackgroundService>();

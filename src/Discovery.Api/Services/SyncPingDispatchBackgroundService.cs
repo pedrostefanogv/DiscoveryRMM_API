@@ -1,9 +1,7 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
-using Discovery.Api.Hubs;
 using Discovery.Core.DTOs;
 using Discovery.Core.Interfaces;
-using Microsoft.AspNetCore.SignalR;
 
 namespace Discovery.Api.Services;
 
@@ -12,17 +10,14 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
     private readonly Channel<SyncInvalidationPingDto> _queue = Channel.CreateUnbounded<SyncInvalidationPingDto>();
     private readonly ConcurrentDictionary<string, PendingPing> _pending = new(StringComparer.OrdinalIgnoreCase);
     private readonly IServiceProvider _serviceProvider;
-    private readonly IHubContext<AgentHub> _agentHub;
     private readonly ILogger<SyncPingDispatchBackgroundService> _logger;
     private static readonly TimeSpan DebounceWindow = TimeSpan.FromMilliseconds(1200);
 
     public SyncPingDispatchBackgroundService(
         IServiceProvider serviceProvider,
-        IHubContext<AgentHub> agentHub,
         ILogger<SyncPingDispatchBackgroundService> logger)
     {
         _serviceProvider = serviceProvider;
-        _agentHub = agentHub;
         _logger = logger;
     }
 
@@ -153,7 +148,6 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
         var messaging = scope.ServiceProvider.GetRequiredService<IAgentMessaging>();
         var deliveryRepo = scope.ServiceProvider.GetRequiredService<ISyncPingDeliveryRepository>();
         var outboundPing = SyncInvalidationPingMessage.FromDto(ping);
-        var natsPublished = false;
 
         try
         {
@@ -173,53 +167,23 @@ public class SyncPingDispatchBackgroundService : BackgroundService, ISyncPingDis
             try
             {
                 await messaging.PublishSyncPingAsync(ping.AgentId, outboundPing, cancellationToken);
-                natsPublished = true;
+                _logger.LogDebug(
+                    "Sync ping delivered via NATS. AgentId={AgentId}, Resource={Resource}",
+                    ping.AgentId,
+                    ping.Resource);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "NATS publish failed for sync ping. Falling back to SignalR. AgentId={AgentId}, Resource={Resource}",
+                    "NATS publish failed for sync ping. AgentId={AgentId}, Resource={Resource}",
                     ping.AgentId,
                     ping.Resource);
             }
         }
-
-        if (!AgentHub.IsAgentConnected(ping.AgentId))
-        {
-            if (natsPublished)
-            {
-                _logger.LogDebug(
-                    "Sync ping delivered via NATS only (agent without SignalR session). AgentId={AgentId}, Resource={Resource}",
-                    ping.AgentId,
-                    ping.Resource);
-            }
-
-            _logger.LogDebug(
-                "Skipping SignalR sync ping: agent not connected. AgentId={AgentId}, Resource={Resource}",
-                ping.AgentId,
-                ping.Resource);
-            return;
-        }
-
-        var connectionId = AgentHub.GetConnectionId(ping.AgentId);
-        if (string.IsNullOrWhiteSpace(connectionId))
+        else
         {
             _logger.LogDebug(
-                "Skipping SignalR sync ping: connection id not found. AgentId={AgentId}, Resource={Resource}",
-                ping.AgentId,
-                ping.Resource);
-            return;
-        }
-
-        try
-        {
-            await _agentHub.Clients.Client(connectionId)
-                .SendAsync("SyncPing", outboundPing, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "SignalR fallback publish failed for sync ping. AgentId={AgentId}, Resource={Resource}",
+                "Skipping sync ping: NATS not connected. AgentId={AgentId}, Resource={Resource}",
                 ping.AgentId,
                 ping.Resource);
         }

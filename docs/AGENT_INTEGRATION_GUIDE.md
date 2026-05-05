@@ -14,13 +14,12 @@
    - 2.4 [Credenciais NATS (agent-auth/me/nats-credentials)](#24-credenciais-nats)
    - 2.5 [Sync Manifest (agent-auth/me/sync-manifest)](#25-sync-manifest)
 3. [Autenticação](#3-autenticação)
-4. [SignalR AgentHub](#4-signalr)
-5. [NATS — Subjects e ACLs](#5-nats)
-   - 5.1 [Subjects publicados pelo agent](#51-publish-agent)
-   - 5.2 [Subjects assinados pelo agent](#52-subscribe-agent)
-   - 5.3 [Discovery P2P por Site](#53-discovery)
-6. [Formatos das Mensagens](#6-formatos)
-7. [Tabela de Resumo dos Canais](#7-resumo)
+4. [NATS — Subjects e ACLs](#4-nats)
+   - 4.1 [Subjects publicados pelo agent](#41-publish-agent)
+   - 4.2 [Subjects assinados pelo agent](#42-subscribe-agent)
+   - 4.3 [Discovery P2P por Site](#43-discovery)
+5. [Formatos das Mensagens](#5-formatos)
+6. [Tabela de Resumo dos Canais](#6-resumo)
 
 ---
 
@@ -69,9 +68,9 @@ Agent                          Discovery API                  NATS Server
  ├── 9. PUB heartbeat (a cada N seg) ────────────────────────────►│
  │     tenant.{c}.site.{s}.agent.{a}.heartbeat                    │
  │                                    │                            │
- ├── 10. Connect SignalR AgentHub ───►                             │
- │      wss://host/hubs/agent?access_token=mdz_{token}             │
- │      Invoke RegisterAgent(agentId, ipAddress)                   │
+ ├── 10. SUB command / sync.ping ◄────────────────────────────────┤
+ │      tenant.{c}.site.{s}.agent.{a}.command                     │
+ │      tenant.{c}.site.{s}.agent.{a}.sync.ping                   │
 ```
 
 ---
@@ -265,41 +264,9 @@ O middleware rejeita:
 
 ---
 
-## 4. SignalR AgentHub
+## 4. NATS — Subjects e ACLs
 
-**Hub URL:** `/hubs/agent?access_token=mdz_{token}`
-
-### Handshake Inicial (OnConnectedAsync)
-Se `Security:AgentConnection:HandshakeEnabled` estiver ativo:
-1. Servidor envia `HandshakeChallenge(nonce, expectedTlsHash)`
-2. Agent responde invocando `SecureHandshakeAsync(agentObservedTlsHash)`
-3. Servidor valida o TLS hash e responde `HandshakeAck(success, message)`
-
-Se desabilitado, a conexão já pode chamar métodos imediatamente.
-
-### Métodos que o Agent INVOCA (client → server)
-
-| Método | Parâmetros | Frequência | Descrição |
-|--------|-----------|-----------|-----------|
-| `RegisterAgent(agentId, ipAddress)` | `Guid agentId`, `string? ipAddress` | Ao conectar | Registra agent online, dispara envio de comandos pendentes |
-| `Heartbeat(agentId, ipAddress)` | `Guid agentId`, `string? ipAddress` | A cada N segundos (configurável) | Mantém status online (cache em Redis com write-behind) |
-| `CommandResult(commandId, exitCode, output, errorMessage)` | `Guid commandId`, `int exitCode`, `string? output`, `string? errorMessage` | Ao concluir comando | Reporta execução de comando |
-| `PushRemoteDebugLog(sessionId, level, message, timestampUtc, sequence)` | `Guid sessionId`, `string? level`, `string? message`, `DateTime? timestampUtc`, `long? sequence` | Durante sessão debug | Stream de logs de debug remoto |
-| `SecureHandshakeAsync(agentObservedTlsHash)` | `string agentObservedTlsHash` | Uma vez (se habilitado) | Handshake secundário anti-MITM |
-
-### Eventos que o Agent ESCUTA (server → client)
-
-| Evento | Payload | Descrição |
-|--------|---------|-----------|
-| `ExecuteCommand` | `(Guid commandId, string commandType, string payload)` | Comando a ser executado pelo agent |
-| `HandshakeChallenge` | `(string nonce, string expectedTlsHash)` | Desafio do handshake secundário |
-| `HandshakeAck` | `(bool success, string message)` | Confirmação do handshake |
-
----
-
-## 5. NATS — Subjects e ACLs
-
-### 5.1 Subjects que o AGENT PUBLICA
+### 4.1 Subjects que o AGENT PUBLICA
 
 ```
 tenant.{clientId}.site.{siteId}.agent.{agentId}.heartbeat
@@ -308,15 +275,15 @@ tenant.{clientId}.site.{siteId}.agent.{agentId}.hardware
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote-debug.log
 ```
 
-### 5.2 Subjects que o AGENT ASSINA
+### 4.2 Subjects que o AGENT ASSINA
 
 ```
 tenant.{clientId}.site.{siteId}.agent.{agentId}.command
 tenant.{clientId}.site.{siteId}.agent.{agentId}.sync.ping
-tenant.{clientId}.site.{siteId}.p2p.discovery    ← NOVO
+tenant.{clientId}.site.{siteId}.p2p.discovery
 ```
 
-### 5.3 Discovery P2P por Site
+### 4.3 Discovery P2P por Site
 
 **Subject:** `tenant.{clientId}.site.{siteId}.p2p.discovery`
 
@@ -366,7 +333,7 @@ tenant.{clientId}.site.{siteId}.p2p.discovery    ← NOVO
 
 ---
 
-## 6. Formatos das Mensagens
+## 5. Formatos das Mensagens
 
 ### Heartbeat (NATS)
 
@@ -378,9 +345,9 @@ Agent → Servidor em `tenant.{c}.site.{s}.agent.{a}.heartbeat`:
 }
 ```
 
-### Command Result (NATS ou SignalR)
+### Command Result (NATS)
 
-Agent → Servidor:
+Agent → Servidor em `tenant.{c}.site.{s}.agent.{a}.result`:
 ```json
 {
   "commandId": "uuid",
@@ -390,14 +357,10 @@ Agent → Servidor:
 }
 ```
 
-### Comando Recebido (SignalR)
+### Comando Recebido (NATS)
 
-Servidor → Agent via evento `ExecuteCommand`:
-```csharp
-// Assinatura do evento:
-// (Guid commandId, string commandType, string payload)
-
-// Exemplo recebido:
+Servidor → Agent via subject `tenant.{c}.site.{s}.agent.{a}.command`:
+```json
 {
   "commandId": "uuid",
   "commandType": "PowerShell",
@@ -417,14 +380,13 @@ Agent → Servidor em `tenant.{c}.site.{s}.agent.{a}.hardware`:
 
 ---
 
-## 7. Tabela de Resumo dos Canais
+## 6. Tabela de Resumo dos Canais
 
 | Canal | URL | Auth | Propósito |
-|-------|-----|------|-----------|
+|-------|-----|------|----------|
 | HTTP API | `https://{host}/api/v1/...` | Bearer mdz_ + X-Agent-ID | Registro, config, bootstrap, credentials, sync |
-| NATS TCP | `nats://{host}:4222` | Auth Callback mdz_ → JWT | Mensageria real-time (heartbeat, result, hardware, discovery) |
-| NATS WSS | `wss://{host}:443` | Auth Callback mdz_ → JWT | Conexão externa (agents fora da LAN) |
-| SignalR | `wss://{host}/hubs/agent?access_token=mdz_...` | Query param | Comandos, heartbeat alternativo, remote debug |
+| NATS TCP | `nats://{host}:4222` | Auth Callback mdz_ → JWT | Mensageria real-time nativa (heartbeat, command, result, hardware, discovery, remote-debug) |
+| NATS WSS | `wss://{host}:443` | Auth Callback mdz_ → JWT | Conexão externa via WebSocket NATS (agents fora da LAN e dashboard) |
 
 ---
 

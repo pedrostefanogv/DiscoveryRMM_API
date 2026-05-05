@@ -5,7 +5,6 @@ using Discovery.Api;
 using Discovery.Api.Filters;
 using Discovery.Api.Validators;
 using FluentMigrator.Runner;
-using Discovery.Api.Hubs;
 using Discovery.Api.Middleware;
 using Discovery.Api.Services;
 using Discovery.Api.DependencyInjection;
@@ -20,7 +19,6 @@ using Discovery.Infrastructure.Repositories;
 using Discovery.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.AspNetCore.SignalR;
 using Scalar.AspNetCore;
 
 var hasMaintenanceMode = MaintenanceMode.TryParse(args, out var maintenanceOptions, out var parseError);
@@ -91,7 +89,6 @@ builder.Services.AddSingleton<SpecialCommandPayloadValidator>();
 builder.Services.AddSingleton<DashboardEventContractNormalizer>();
 builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
-builder.Services.AddSingleton<IRemoteDebugLogRelay, RemoteDebugLogRelayService>();
 builder.Services.AddSingleton(TimeProvider.System);
 
 // PDF rendering using Playwright.NET (embedded, no external service required, zero vulnerabilities)
@@ -177,26 +174,6 @@ builder.Services.AddControllers(options =>
 
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateAgentRequestValidator>();
-
-// SignalR for dashboard real-time with Redis backplane for multi-instance
-var redisConnString = builder.Configuration.GetValue<string>("Redis:Connection") ?? "127.0.0.1:6379";
-var redisPassword = builder.Configuration.GetValue<string>("Redis:Password");
-builder.Services.AddSignalR(options =>
-{
-    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
-    options.ClientTimeoutInterval = TimeSpan.FromSeconds(60);
-    options.HandshakeTimeout = TimeSpan.FromSeconds(15);
-})
-.AddStackExchangeRedis(redisConnString, options =>
-{
-    options.Configuration.ChannelPrefix = StackExchange.Redis.RedisChannel.Literal("SignalR");
-    if (!string.IsNullOrWhiteSpace(redisPassword))
-        options.Configuration.Password = redisPassword;
-});
-
-// Filtro de autorização global do SignalR — equivalente ao default_permissions do NATS
-// Agents só podem chamar métodos do próprio escopo; usuários não chamam métodos de agent
-builder.Services.AddSingleton<IHubFilter, AgentHubAuthorizationFilter>();
 
 // OpenAPI + Scalar
 builder.Services.AddOpenApi();
@@ -329,22 +306,4 @@ app.UseUserAuth();
 
 app.MapControllers();
 app.MapHealthChecks("/health").AllowAnonymous();
-app.MapHub<AgentHub>("/hubs/agent", options =>
-{
-    options.AllowStatefulReconnects = true;
-    options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;
-}).RequireCors("SignalR");
-
-app.MapHub<NotificationHub>("/hubs/notifications", options =>
-{
-    options.AllowStatefulReconnects = true;
-    options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;
-}).RequireCors("SignalR");
-
-app.MapHub<RemoteDebugHub>("/hubs/remote-debug", options =>
-{
-    options.AllowStatefulReconnects = true;
-    options.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.WebSockets;
-}).RequireCors("SignalR");
-
 app.Run();

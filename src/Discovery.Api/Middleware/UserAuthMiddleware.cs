@@ -35,14 +35,12 @@ public class UserAuthMiddleware
             return;
         }
 
-        var isHubPath = context.Request.Path.Value?.StartsWith("/hubs/", StringComparison.OrdinalIgnoreCase) == true;
-        var isNatsPath = context.Request.Path.Value?.StartsWith("/nats", StringComparison.OrdinalIgnoreCase) == true;
+        var isNatsWebSocketPath = context.Request.Path.Value?.StartsWith("/nats", StringComparison.OrdinalIgnoreCase) == true;
 
         var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
 
-        // Para SignalR WebSocket, o cliente pode não conseguir enviar header Authorization.
-        // O padrão é passar access_token na query string (apenas tokens JWT de usuário).
-        if (string.IsNullOrEmpty(authHeader))
+        // Para NATS WS, o cliente pode enviar JWT em access_token na query string.
+        if (string.IsNullOrEmpty(authHeader) && isNatsWebSocketPath)
         {
             var queryToken = context.Request.Query["access_token"].FirstOrDefault();
             if (!string.IsNullOrEmpty(queryToken))
@@ -59,15 +57,6 @@ public class UserAuthMiddleware
                     authHeader = $"Bearer {queryToken}";
                 }
             }
-        }
-
-        if (string.IsNullOrEmpty(authHeader) && isHubPath)
-        {
-            _logger.LogWarning(
-                "UserAuthMiddleware: hub SignalR sem token na query nem header. " +
-                "Path={Path}, QueryKeys=[{QueryKeys}]",
-                context.Request.Path.Value,
-                string.Join(",", context.Request.Query.Keys));
         }
 
         if (!string.IsNullOrEmpty(authHeader) &&
@@ -104,10 +93,10 @@ public class UserAuthMiddleware
                         userIdClaim, context.Request.Path.Value);
                 }
             }
-            else if (isHubPath)
+            else if (isNatsWebSocketPath)
             {
                 _logger.LogWarning(
-                    "UserAuthMiddleware: JWT invalido/expirado em conexao SignalR. " +
+                    "UserAuthMiddleware: JWT invalido/expirado em conexao NATS WS. " +
                     "Path={Path}, TokenPrefix={TokenPrefix}...",
                     context.Request.Path.Value,
                     token.Length > 20 ? token[..20] : token);

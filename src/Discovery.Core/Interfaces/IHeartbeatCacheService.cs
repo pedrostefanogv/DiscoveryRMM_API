@@ -35,14 +35,12 @@ public interface IHeartbeatCacheService
     Task<IReadOnlyList<Guid>> DetectExpiredAsync(IReadOnlyList<Guid> knownOnlineAgentIds, CancellationToken ct = default);
 
     /// <summary>
-    /// Registra o transporte ativo do agent (signalr/nats) para roteamento de fallback.
-    /// Usado pelo AgentHub e NatsAgentMessaging para indicar qual canal está ativo.
+    /// Registra o transporte ativo do agent (nats/nats_ws) para roteamento.
     /// </summary>
     Task SetTransportAsync(Guid agentId, string transport, CancellationToken ct = default);
 
     /// <summary>
-    /// Retorna o transporte ativo do agent (signalr/nats/null).
-    /// Usado para decidir rota de fallback ao enviar comandos.
+    /// Retorna o transporte ativo do agent (nats/nats_ws/null).
     /// </summary>
     Task<string?> GetTransportAsync(Guid agentId, CancellationToken ct = default);
 }

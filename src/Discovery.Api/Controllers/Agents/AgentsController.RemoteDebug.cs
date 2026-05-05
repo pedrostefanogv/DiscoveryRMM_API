@@ -32,15 +32,13 @@ public partial class AgentsController
             expiresAtUtc = session.ExpiresAtUtc,
             stream = new
             {
-                signalRHub = "/hubs/remote-debug",
-                signalRMethod = session.SignalRMethod,
                 natsSubject = session.NatsSubject
             }
         });
         var command = new AgentCommand { AgentId = id, CommandType = CommandType.RemoteDebug, Payload = payload };
         var created = await _commandDispatcher.DispatchAsync(command);
 
-        return Ok(new RemoteDebugStartResponse(session.SessionId, created.Id, session.AgentId, session.LogLevel, session.StartedAtUtc, session.ExpiresAtUtc, session.PreferredTransport, session.FallbackTransport, session.NatsSubject, session.SignalRMethod));
+        return Ok(new RemoteDebugStartResponse(session.SessionId, created.Id, session.AgentId, session.LogLevel, session.StartedAtUtc, session.ExpiresAtUtc, session.PreferredTransport, session.NatsSubject));
     }
 
     [HttpPost("{id:guid}/remote-debug/{sessionId:guid}/stop")]
@@ -65,8 +63,6 @@ public partial class AgentsController
             sessionId,
             stream = new
             {
-                signalRHub = "/hubs/remote-debug",
-                signalRMethod = session.SignalRMethod,
                 natsSubject = session.NatsSubject
             }
         });

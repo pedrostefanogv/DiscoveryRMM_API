@@ -166,24 +166,6 @@ public sealed class SpecialCommandPayloadValidator
             return false;
         }
 
-        if (!TryGetRequiredString(stream, "signalRHub", out var signalRHub, out validationError))
-            return false;
-
-        if (!string.Equals(signalRHub, "/hubs/remote-debug", StringComparison.Ordinal))
-        {
-            validationError = "field 'stream.signalRHub' must be '/hubs/remote-debug'.";
-            return false;
-        }
-
-        if (!TryGetRequiredString(stream, "signalRMethod", out var signalRMethod, out validationError))
-            return false;
-
-        if (!string.Equals(signalRMethod, "PushRemoteDebugLog", StringComparison.Ordinal))
-        {
-            validationError = "field 'stream.signalRMethod' must be 'PushRemoteDebugLog'.";
-            return false;
-        }
-
         if (!TryGetRequiredString(stream, "natsSubject", out var natsSubject, out validationError))
             return false;
 
@@ -213,6 +195,23 @@ public sealed class SpecialCommandPayloadValidator
             natsWssUrl = candidateUrl;
         }
 
+        var encoding = "json";
+        if (stream.TryGetProperty("encoding", out var encodingElement) && encodingElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(encodingElement, out var candidateEncoding))
+            {
+                validationError = "field 'stream.encoding' must be a string.";
+                return false;
+            }
+
+            encoding = candidateEncoding.ToLowerInvariant();
+            if (!string.Equals(encoding, "json", StringComparison.Ordinal))
+            {
+                validationError = "field 'stream.encoding' must be 'json'.";
+                return false;
+            }
+        }
+
         string? expiresAtUtc = null;
         if (action == "start")
         {
@@ -240,10 +239,9 @@ public sealed class SpecialCommandPayloadValidator
 
         var streamPayload = new Dictionary<string, object?>
         {
-            ["signalRHub"] = signalRHub,
-            ["signalRMethod"] = signalRMethod,
             ["natsSubject"] = natsSubject,
-            ["natsWssUrl"] = natsWssUrl
+            ["natsWssUrl"] = natsWssUrl,
+            ["encoding"] = encoding
         };
 
         var normalized = new Dictionary<string, object?>

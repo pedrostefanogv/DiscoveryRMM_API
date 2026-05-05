@@ -1,4 +1,3 @@
-using Discovery.Api.Hubs;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,7 +32,6 @@ public partial class AgentAuthController
             agentId,
             serverTimeUtc = DateTime.UtcNow,
             natsConnected,
-            signalrConnectedAgents = AgentHub.ConnectedAgentCount,
             redisConnected,
             healthy = natsConnected && redisConnected,
             checkedAtUtc = DateTime.UtcNow

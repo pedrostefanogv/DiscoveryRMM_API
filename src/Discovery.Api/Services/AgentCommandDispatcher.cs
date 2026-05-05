@@ -1,16 +1,13 @@
-using Discovery.Api.Hubs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
-using Microsoft.AspNetCore.SignalR;
 
 namespace Discovery.Api.Services;
 
 public class AgentCommandDispatcher(
     ICommandRepository commandRepository,
     IAgentMessaging messaging,
-    IHubContext<AgentHub> hubContext,
     SpecialCommandPayloadValidator specialCommandPayloadValidator,
     ILogger<AgentCommandDispatcher> logger) : IAgentCommandDispatcher
 {
@@ -47,20 +44,12 @@ public class AgentCommandDispatcher(
             {
                 logger.LogWarning(
                     ex,
-                    "Realtime command dispatch via NATS failed for agent {AgentId}, command {CommandId}. Falling back to SignalR if available.",
+                        "Realtime command dispatch via NATS failed for agent {AgentId}, command {CommandId}.",
                     created.AgentId,
                     created.Id);
             }
         }
 
-        if (!sent && AgentHub.IsAgentConnected(created.AgentId))
-        {
-            await hubContext.Clients.Group($"agent-{created.AgentId}")
-                .SendAsync("ExecuteCommand", created.Id, wireCommandType, created.Payload, cancellationToken);
-
-            sent = true;
-            sentAtUtc = DateTime.UtcNow;
-        }
 
         if (sent)
         {

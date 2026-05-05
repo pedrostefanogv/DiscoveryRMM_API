@@ -48,9 +48,6 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
             LastActivityAtUtc = now,
             ExpiresAtUtc = now.Add(ttl),
             PreferredTransport = normalizedTransport,
-            FallbackTransport = normalizedTransport == RemoteDebugTransportNames.Nats
-                ? RemoteDebugTransportNames.SignalR
-                : RemoteDebugTransportNames.Nats,
             NatsSubject = NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "remote-debug.log")
         };
 
@@ -196,7 +193,7 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
             return RemoteDebugTransportNames.Nats;
 
         var normalized = preferredTransport.Trim().ToLowerInvariant();
-        return normalized is RemoteDebugTransportNames.Nats or RemoteDebugTransportNames.SignalR
+        return normalized is RemoteDebugTransportNames.Nats or RemoteDebugTransportNames.NatsWs
             ? normalized
             : RemoteDebugTransportNames.Nats;
     }
