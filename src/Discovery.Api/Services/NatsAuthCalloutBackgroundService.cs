@@ -214,6 +214,8 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             return await BuildErrorResponseAsync("Missing auth token.", request.Nats.UserNkey, serverId, configurationService, ct);
         }
 
+        token = NormalizeAuthToken(token);
+
         if (token.StartsWith("mdz_", StringComparison.OrdinalIgnoreCase))
         {
             var agentToken = await agentAuthService.ValidateTokenAsync(token);
@@ -235,7 +237,13 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
         var principal = jwtService.ValidateToken(token);
         if (principal is null)
+        {
+            _logger.LogWarning(
+                "Auth callout failed to validate token as API JWT or pre-issued NATS JWT. UserNkey={UserNkey}, TokenLength={TokenLength}",
+                request.Nats.UserNkey,
+                token.Length);
             return await BuildErrorResponseAsync("Invalid user token.", request.Nats.UserNkey, serverId, configurationService, ct);
+        }
 
         var userIdValue = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
                           ?? principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -383,6 +391,20 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         }
 
         return null;
+    }
+
+    private static string NormalizeAuthToken(string token)
+    {
+        var normalized = token.Trim();
+        const string bearerPrefix = "Bearer ";
+
+        if (normalized.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[bearerPrefix.Length..].Trim();
+
+        if (normalized.Length > 1 && normalized[0] == '"' && normalized[^1] == '"')
+            normalized = normalized[1..^1].Trim();
+
+        return normalized;
     }
 
     private sealed class AuthorizationRequest

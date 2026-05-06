@@ -233,29 +233,50 @@ public class NatsIsolationTests
         var service = BuildCredentialsService(Guid.NewGuid(), Guid.NewGuid(), ownClientId);
         var creds = await service.IssueForUserAsync(Guid.NewGuid(), scope, ownClientId, null);
 
-        Assert.That(creds.SubscribeSubjects, Has.Count.EqualTo(1));
-        Assert.That(creds.SubscribeSubjects[0], Does.Contain(ownClientId.ToString()),
-            "Subject do usuário deve conter o clientId correto.");
-        Assert.That(creds.SubscribeSubjects[0], Does.Not.Contain(otherClientId.ToString()),
-            "Subject do usuário não deve conter clientId de outro tenant.");
+        Assert.That(creds.SubscribeSubjects, Has.Count.EqualTo(2));
+        Assert.That(creds.SubscribeSubjects, Does.Contain($"tenant.{ownClientId}.site.*.dashboard.events"),
+            "Credencial de client deve permitir assinatura de todos os sites do cliente.");
+        Assert.That(creds.SubscribeSubjects, Does.Contain($"tenant.{ownClientId}.dashboard.events"),
+            "Credencial de client deve manter o fallback por cliente.");
+        Assert.That(creds.SubscribeSubjects.Any(s => s.Contains(otherClientId.ToString())), Is.False,
+            "Subjects do usuário não devem conter clientId de outro tenant.");
     }
 
     [Test]
-    public async Task UserCredentials_GlobalAccess_SubjectsAreWildcardOnly()
+    public async Task UserCredentials_SiteRequested_WithClientScope_IsAllowed()
+    {
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+
+        var scope = new UserScopeAccess
+        {
+            HasGlobalAccess = false,
+            AllowedClientIds = [clientId],
+        };
+
+        var service = BuildCredentialsService(Guid.NewGuid(), siteId, clientId);
+        var creds = await service.IssueForUserAsync(Guid.NewGuid(), scope, clientId, siteId);
+
+        Assert.That(creds.SubscribeSubjects, Is.EquivalentTo(new[]
+        {
+            $"tenant.{clientId}.site.{siteId}.dashboard.events"
+        }));
+    }
+
+    [Test]
+    public async Task UserCredentials_GlobalAccess_SubjectsIncludeWildcardAndUnscoped()
     {
         var scope = new UserScopeAccess { HasGlobalAccess = true };
 
         var service = BuildCredentialsService(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
         var creds = await service.IssueForUserAsync(Guid.NewGuid(), scope, null, null);
 
-        Assert.That(creds.SubscribeSubjects, Is.Not.Empty);
-        foreach (var s in creds.SubscribeSubjects)
+        Assert.That(creds.SubscribeSubjects, Is.EquivalentTo(new[]
         {
-            Assert.That(s, Does.Contain("*"),
-                $"Subject de usuário global '{s}' deveria ser wildcard — mas é específico de tenant.");
-            Assert.That(s, Does.StartWith("tenant."),
-                $"Subject global '{s}' deve usar o prefixo 'tenant.'.");
-        }
+            "tenant.*.site.*.dashboard.events",
+            "tenant.*.dashboard.events",
+            "tenant.unscoped.dashboard.events"
+        }));
     }
 
     [Test]

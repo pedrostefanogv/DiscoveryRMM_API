@@ -113,11 +113,22 @@ public class NatsCredentialsService : INatsCredentialsService
         var resolvedClientId = clientId;
         var resolvedSiteId = siteId;
 
+        if (resolvedSiteId.HasValue && !resolvedClientId.HasValue)
+        {
+            var site = await _siteRepository.GetByIdAsync(resolvedSiteId.Value);
+            if (site is not null)
+                resolvedClientId = site.ClientId;
+        }
+
         if (!scopeAccess.HasGlobalAccess)
         {
             if (resolvedSiteId.HasValue)
             {
-                if (!scopeAccess.AllowedSiteIds.Contains(resolvedSiteId.Value))
+                var hasSiteAccess = scopeAccess.AllowedSiteIds.Contains(resolvedSiteId.Value);
+                var hasClientAccess = resolvedClientId.HasValue
+                    && scopeAccess.AllowedClientIds.Contains(resolvedClientId.Value);
+
+                if (!hasSiteAccess && !hasClientAccess)
                     throw new InvalidOperationException("User does not have access to the requested site.");
             }
             else if (resolvedClientId.HasValue)
@@ -257,6 +268,7 @@ public class NatsCredentialsService : INatsCredentialsService
         {
             subjects.Add("tenant.*.site.*.dashboard.events");
             subjects.Add("tenant.*.dashboard.events");
+            subjects.Add("tenant.unscoped.dashboard.events");
             return subjects;
         }
 
@@ -268,12 +280,14 @@ public class NatsCredentialsService : INatsCredentialsService
 
         if (clientId.HasValue)
         {
+            subjects.Add($"tenant.{clientId}.site.*.dashboard.events");
             subjects.Add(NatsSubjectBuilder.DashboardSubject(clientId, null));
             return subjects;
         }
 
         foreach (var allowedClientId in scopeAccess.AllowedClientIds)
         {
+            subjects.Add($"tenant.{allowedClientId}.site.*.dashboard.events");
             subjects.Add(NatsSubjectBuilder.DashboardSubject(allowedClientId, null));
         }
 
