@@ -42,6 +42,8 @@ public class NatsIsolationTests
 
         Assert.That(overlap, Is.EquivalentTo(new[]
         {
+            "$JS.API.STREAM.NAMES",
+            "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
         }),
@@ -57,6 +59,9 @@ public class NatsIsolationTests
 
         foreach (var subject in AgentSubjectSet(clientId, siteId, agentId))
         {
+            if (subject.StartsWith("$JS.", StringComparison.Ordinal) || subject.StartsWith("_INBOX.", StringComparison.Ordinal))
+                continue;
+
             // O formato legado era "agent.{id}.*" — sem prefixo "tenant."
             Assert.That(subject, Does.StartWith("tenant."),
                 $"Subject '{subject}' não segue o formato canônico tenant-scoped.");
@@ -64,14 +69,14 @@ public class NatsIsolationTests
     }
 
     [Test]
-    public void AgentSubjects_ContainEleven_FourPublishSevenSubscribe()
+    public void AgentSubjects_ContainInfraSubjects_FivePublishEightSubscribe()
     {
         var (pub, sub) = BuildAgentSubjectLists(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
-        Assert.That(pub, Has.Count.EqualTo(4),
-            "Agente deve publicar exatamente em 4 subjects: heartbeat, result, hardware, remote-debug.log.");
-        Assert.That(sub, Has.Count.EqualTo(7),
-            "Agente deve assinar exatamente 7 subjects: command unicast + fan-out site/client/global + pong global + sync.ping + p2p.discovery.");
+        Assert.That(pub, Has.Count.EqualTo(5),
+            "Agente deve publicar em 5 subjects: 4 telemetrias canônicas + lookup de stream JetStream.");
+        Assert.That(sub, Has.Count.EqualTo(8),
+            "Agente deve assinar em 8 subjects: 7 canônicos + inbox para respostas de request/reply.");
     }
 
     [Test]
@@ -92,6 +97,7 @@ public class NatsIsolationTests
                 expectedPrefix + "result",
                 expectedPrefix + "hardware",
                 expectedPrefix + "remote-debug.log",
+                "$JS.API.STREAM.NAMES",
             }),
             "Publish subjects devem conter somente os message types canônicos.");
 
@@ -106,6 +112,7 @@ public class NatsIsolationTests
                 "tenant.global.pong",
                 expectedPrefix + "sync.ping",
                 NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
+                "_INBOX.>",
             }),
             "Subscribe subjects devem conter somente os message types canônicos.");
     }
@@ -136,6 +143,8 @@ public class NatsIsolationTests
 
         Assert.That(overlap, Is.EquivalentTo(new[]
         {
+            "$JS.API.STREAM.NAMES",
+            "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
         }),
@@ -159,6 +168,9 @@ public class NatsIsolationTests
         Assert.That(creds.PublishSubjects, Is.Not.Empty);
         foreach (var s in creds.PublishSubjects)
         {
+            if (s.StartsWith("$JS.", StringComparison.Ordinal))
+                continue;
+
             Assert.That(s, Does.Contain(agentId.ToString()),
                 $"Publish subject '{s}' não contém o agentId correto.");
             Assert.That(s, Does.Contain(clientId.ToString()),
@@ -197,6 +209,10 @@ public class NatsIsolationTests
         {
             Assert.That(s, Does.Not.StartWith($"agent.{agentId}"),
                 $"Subject legado 'agent.{{agentId}}' encontrado: '{s}'.");
+
+            if (s.StartsWith("$JS.", StringComparison.Ordinal) || s.StartsWith("_INBOX.", StringComparison.Ordinal))
+                continue;
+
             Assert.That(s, Does.StartWith("tenant."),
                 $"Subject não canônico sem prefixo 'tenant.': '{s}'.");
         }
@@ -352,6 +368,7 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "result"),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "hardware"),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "remote-debug.log"),
+                "$JS.API.STREAM.NAMES",
             ],
             Subscribe:
             [
@@ -362,6 +379,7 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.ServerPongSubject(),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
                 NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
+                "_INBOX.>",
             ]);
     }
 

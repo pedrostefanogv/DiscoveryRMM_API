@@ -155,10 +155,12 @@ public class NatsCredentialsService : INatsCredentialsService
 
         var now = DateTime.UtcNow;
         var expiresAtUtc = now.AddMinutes(ttlMinutes);
+        var targetAccount = ResolveAuthCalloutTargetAccount();
 
         var claims = NatsJwt.NewUserClaims(userKeyPair.GetPublicKey());
         claims.Name = traceLabel;
         claims.Expires = new DateTimeOffset(expiresAtUtc);
+        claims.Audience = targetAccount;
 
         if (publishSubjects.Count > 0)
             claims.User.Pub.Allow = publishSubjects.ToList();
@@ -193,10 +195,12 @@ public class NatsCredentialsService : INatsCredentialsService
 
         var now = DateTime.UtcNow;
         var expiresAtUtc = now.AddMinutes(Math.Max(1, ttlMinutes));
+        var targetAccount = ResolveAuthCalloutTargetAccount();
 
         var claims = NatsJwt.NewUserClaims(userPublicKey);
         claims.Name = traceLabel;
         claims.Expires = new DateTimeOffset(expiresAtUtc);
+        claims.Audience = targetAccount;
 
         if (publishSubjects.Count > 0)
             claims.User.Pub.Allow = publishSubjects.ToList();
@@ -221,6 +225,7 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishResult));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishHardware));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishRemoteDebugLog));
+        publishSubjects.Add("$JS.API.STREAM.NAMES");
 
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeCommand));
         subscribeSubjects.Add(NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId));
@@ -229,8 +234,15 @@ public class NatsCredentialsService : INatsCredentialsService
         subscribeSubjects.Add(NatsSubjectBuilder.ServerPongSubject());
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeSyncPing));
         subscribeSubjects.Add(NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId));
+        subscribeSubjects.Add("_INBOX.>");
 
         return (publishSubjects, subscribeSubjects);
+    }
+
+    private string ResolveAuthCalloutTargetAccount()
+    {
+        var account = _configuration["Nats:AuthCallout:Account"];
+        return string.IsNullOrWhiteSpace(account) ? "$G" : account.Trim();
     }
 
     private async Task<IReadOnlyList<string>> BuildDashboardSubjectsAsync(

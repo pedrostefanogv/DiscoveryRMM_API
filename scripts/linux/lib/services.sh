@@ -401,7 +401,7 @@ EOF
 authorization {
   timeout: 1
   users = [
-    { user: "$NATS_AUTH_USER", password: "$NATS_AUTH_PASSWORD" }
+    { user: "$NATS_AUTH_USER", password: "$NATS_AUTH_PASSWORD", permissions: { publish: [">"], subscribe: [">"] } }
   ]
   auth_callout {
     issuer: "$NATS_ACCOUNT_PUBLIC_KEY"

@@ -6,28 +6,49 @@ namespace Discovery.Api.Services;
 /// Warmup service that prebuilds Discovery base binary and update installer on API startup.
 /// This reduces latency for the first self-update build/refresh request.
 /// </summary>
-public sealed class AgentPackagePrebuildHostedService : IHostedService
+public sealed class AgentPackagePrebuildHostedService : BackgroundService
 {
+    private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(5);
+
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
+    private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILogger<AgentPackagePrebuildHostedService> _logger;
 
     public AgentPackagePrebuildHostedService(
         IServiceProvider serviceProvider,
         IConfiguration configuration,
+        IHostApplicationLifetime hostApplicationLifetime,
         ILogger<AgentPackagePrebuildHostedService> logger)
     {
         _serviceProvider = serviceProvider;
         _configuration = configuration;
+        _hostApplicationLifetime = hostApplicationLifetime;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var enabled = _configuration.GetValue<bool?>("AgentPackage:PrebuildOnStartup") ?? true;
         if (!enabled)
         {
             _logger.LogInformation("Agent prebuild on startup is disabled by config.");
+            return;
+        }
+
+        await WaitForApplicationStartedAsync(stoppingToken);
+
+        _logger.LogInformation(
+            "Agent prebuild startup scheduled after application started. Delay={DelaySeconds}s",
+            StartupDelay.TotalSeconds);
+
+        try
+        {
+            await Task.Delay(StartupDelay, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("Agent prebuild on startup canceled before delay completed.");
             return;
         }
 
@@ -44,7 +65,7 @@ public sealed class AgentPackagePrebuildHostedService : IHostedService
             using var scope = _serviceProvider.CreateScope();
             var service = scope.ServiceProvider.GetRequiredService<IAgentPackageService>();
             _logger.LogInformation("Agent prebuild: starting clean base binary build...");
-            await service.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
+            await service.PrebuildBaseBinaryAsync(forceRebuild: true, stoppingToken);
 
             _logger.LogInformation("Agent prebuild: generating update installer artifact...");
             var (content, fileName) = await service.BuildUpdateInstallerAsync();
@@ -54,6 +75,10 @@ public sealed class AgentPackagePrebuildHostedService : IHostedService
                 fileName,
                 content.Length);
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("Agent prebuild on startup canceled during host shutdown.");
+        }
         catch (Exception ex)
         {
             // Do not fail API startup because of prebuild; installer endpoint can still retry later.
@@ -61,7 +86,19 @@ public sealed class AgentPackagePrebuildHostedService : IHostedService
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    private async Task WaitForApplicationStartedAsync(CancellationToken cancellationToken)
+    {
+        if (_hostApplicationLifetime.ApplicationStarted.IsCancellationRequested)
+            return;
+
+        var startedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var startedRegistration = _hostApplicationLifetime.ApplicationStarted.Register(
+            () => startedTcs.TrySetResult());
+        using var cancellationRegistration = cancellationToken.Register(
+            () => startedTcs.TrySetCanceled(cancellationToken));
+
+        await startedTcs.Task;
+    }
 
     private string ResolveActiveProfile()
     {
