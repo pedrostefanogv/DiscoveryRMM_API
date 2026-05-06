@@ -202,6 +202,7 @@ public static class BackgroundServiceCategoryMap
     {
         // Messaging
         ["NatsBackgroundService"] = BackgroundServiceCategories.Messaging,
+        ["NatsFanoutStreamBootstrapService"] = BackgroundServiceCategories.Messaging,
         ["NatsAuthCalloutBackgroundService"] = BackgroundServiceCategories.Messaging,
         // Knowledge — migrated to Quartz (KnowledgeEmbeddingJob)
         // Alerts

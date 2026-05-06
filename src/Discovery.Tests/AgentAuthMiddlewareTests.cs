@@ -24,7 +24,7 @@ public class AgentAuthMiddlewareTests
             return Task.CompletedTask;
         });
 
-        var context = CreateAgentApiContext("/api/agent-auth/me/hardware", "mdz_valid");
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
 
         await middleware.InvokeAsync(context, authService, configuration, tlsProbe);
 
@@ -41,7 +41,7 @@ public class AgentAuthMiddlewareTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
 
         var middleware = new AgentAuthMiddleware(_ => Task.CompletedTask);
-        var context = CreateAgentApiContext("/api/agent-auth/me/hardware", "mdz_valid");
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
         context.Request.Headers.Append("X-Agent-ID", "not-a-guid");
 
         await middleware.InvokeAsync(context, authService, configuration, tlsProbe);
@@ -58,7 +58,7 @@ public class AgentAuthMiddlewareTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
 
         var middleware = new AgentAuthMiddleware(_ => Task.CompletedTask);
-        var context = CreateAgentApiContext("/api/agent-auth/me/hardware", "mdz_valid");
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
         context.Request.Headers.Append("X-Agent-ID", Guid.NewGuid().ToString());
 
         await middleware.InvokeAsync(context, authService, configuration, tlsProbe);
@@ -81,7 +81,7 @@ public class AgentAuthMiddlewareTests
             return Task.CompletedTask;
         });
 
-        var context = CreateAgentApiContext("/api/agent-auth/me/hardware", "mdz_valid");
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
         context.Request.Headers.Append("X-Agent-ID", token.AgentId.ToString());
 
         await middleware.InvokeAsync(context, authService, configuration, tlsProbe);

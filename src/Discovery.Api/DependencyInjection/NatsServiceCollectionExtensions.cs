@@ -1,4 +1,5 @@
 using Discovery.Api.Services;
+using Discovery.Core.Configuration;
 using Discovery.Core.Interfaces;
 using NATS.Client.Core;
 
@@ -27,7 +28,14 @@ public static class NatsServiceCollectionExtensions
             return new NatsConnection(opts);
         });
 
+        services.Configure<NatsFanoutStreamOptions>(
+            configuration.GetSection(NatsFanoutStreamOptions.SectionName));
+
+        services.Configure<NatsGlobalPongOptions>(
+            configuration.GetSection(NatsGlobalPongOptions.SectionName));
+
         services.AddHostedService<NatsBackgroundService>();
+        services.AddHostedService<NatsFanoutStreamBootstrapService>();
         services.AddHostedService<RemoteDebugSessionCleanupService>();
 
         services.AddSingleton<IAiChatJobQueue, AiChatJobBackgroundService>();

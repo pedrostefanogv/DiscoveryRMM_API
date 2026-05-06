@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Pgvector.EntityFrameworkCore;
 
 namespace Discovery.Tests;
 
@@ -13,7 +14,9 @@ public class DbContextNamingConventionsTests
     public void All_mapped_tables_and_columns_should_use_snake_case_names()
     {
         var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
-            .UseInMemoryDatabase($"dbctx-naming-{Guid.NewGuid():N}")
+            .UseNpgsql(
+                "Host=localhost;Database=discovery_test;Username=postgres;Password=postgres",
+                npgsqlOptions => npgsqlOptions.UseVector())
             .Options;
 
         using var db = new DiscoveryDbContext(options);

@@ -93,9 +93,12 @@ public class AgentHardwareInventoryParsingTests
 
     private static AgentHardwareComponents? InvokeTryBuildComponents(string inventoryRaw, Guid agentId, DateTime collectedAt)
     {
-        var method = typeof(AgentAuthController).GetMethod(
-            "TryBuildComponentsFromInventoryRaw",
-            BindingFlags.NonPublic | BindingFlags.Static);
+        var parserType = typeof(AgentAuthController).Assembly.GetType("Discovery.Api.Controllers.HardwareInventoryParser");
+        Assert.That(parserType, Is.Not.Null, "Could not find HardwareInventoryParser type.");
+
+        var method = parserType!.GetMethod(
+            "TryBuildFromInventoryRaw",
+            BindingFlags.Public | BindingFlags.Static);
 
         Assert.That(method, Is.Not.Null, "Could not find private parser method.");
 

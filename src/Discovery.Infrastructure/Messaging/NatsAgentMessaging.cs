@@ -1,10 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Discovery.Core.Configuration;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NATS.Client.Core;
 
 namespace Discovery.Infrastructure.Messaging;
@@ -13,6 +15,9 @@ namespace Discovery.Infrastructure.Messaging;
 /// Implementação NATS para comunicação em tempo real com agents.
 /// Subjects:
 ///   tenant.{clientId}.site.{siteId}.agent.{agentId}.command   → Servidor → Agent (enviar comando)
+///   tenant.{clientId}.site.{siteId}.agents.command            → Servidor → Agents do site (fan-out)
+///   tenant.{clientId}.agents.command                          → Servidor → Agents do cliente (fan-out)
+///   tenant.global.agents.command                              → Servidor → Agents globais (fan-out)
 ///   tenant.{clientId}.site.{siteId}.agent.{agentId}.heartbeat → Agent → Servidor (heartbeat)
 ///   tenant.{clientId}.site.{siteId}.agent.{agentId}.result    → Agent → Servidor (resultado de comando)
 ///   tenant.{clientId}.site.{siteId}.agent.{agentId}.hardware  → Agent → Servidor (hw report)
@@ -28,6 +33,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private readonly IAgentAuthService _agentAuthService;
     private readonly IHeartbeatCacheService _heartbeatCache;
     private readonly ILogger<NatsAgentMessaging> _logger;
+    private readonly IOptionsMonitor<NatsGlobalPongOptions> _globalPongOptions;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -41,6 +47,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         ISiteRepository siteRepo,
         IAgentAuthService agentAuthService,
         IHeartbeatCacheService heartbeatCache,
+        IOptionsMonitor<NatsGlobalPongOptions> globalPongOptions,
         ILogger<NatsAgentMessaging> logger)
     {
         _connection = connection;
@@ -49,6 +56,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         _siteRepo = siteRepo;
         _agentAuthService = agentAuthService;
         _heartbeatCache = heartbeatCache;
+        _globalPongOptions = globalPongOptions;
         _logger = logger;
     }
 
@@ -76,6 +84,45 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
         await _connection.PublishAsync(subject, message);
         _logger.LogDebug("Command {CommandId} sent to agent {AgentId} via NATS", commandId, agentId);
+    }
+
+    public async Task PublishSiteFanoutCommandAsync(Guid clientId, Guid siteId, CommandDispatchEnvelope envelope, CancellationToken cancellationToken = default)
+    {
+        var subject = NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId);
+        var normalized = envelope with
+        {
+            TargetScope = "site",
+            TargetClientId = clientId,
+            TargetSiteId = siteId
+        };
+
+        await PublishFanoutCommandAsync(subject, normalized, cancellationToken);
+    }
+
+    public async Task PublishClientFanoutCommandAsync(Guid clientId, CommandDispatchEnvelope envelope, CancellationToken cancellationToken = default)
+    {
+        var subject = NatsSubjectBuilder.ClientAgentsCommandSubject(clientId);
+        var normalized = envelope with
+        {
+            TargetScope = "client",
+            TargetClientId = clientId,
+            TargetSiteId = null
+        };
+
+        await PublishFanoutCommandAsync(subject, normalized, cancellationToken);
+    }
+
+    public async Task PublishGlobalFanoutCommandAsync(CommandDispatchEnvelope envelope, CancellationToken cancellationToken = default)
+    {
+        var subject = NatsSubjectBuilder.GlobalAgentsCommandSubject();
+        var normalized = envelope with
+        {
+            TargetScope = "global",
+            TargetClientId = null,
+            TargetSiteId = null
+        };
+
+        await PublishFanoutCommandAsync(subject, normalized, cancellationToken);
     }
 
     public async Task PublishDashboardEventAsync(DashboardEventMessage message, CancellationToken cancellationToken = default)
@@ -142,6 +189,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
                             // Cache no Redis com métricas (write-behind evita escrita direta no PostgreSQL)
                             await _heartbeatCache.SetHeartbeatAsync(heartbeat, AgentStatus.Online);
+
                             _logger.LogDebug("Heartbeat processed from agent {AgentId} (IP: {IpAddress}, CPU:{Cpu}%, Mem:{Mem}%, Disk:{Disk}%, P2P:{P2p})",
                                 agentId.Value, heartbeat.IpAddress,
                                 heartbeat.CpuPercent, heartbeat.MemoryPercent,
@@ -279,10 +327,46 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             }
         }, cancellationToken);
 
+        // Publicador periodico de pong global (independente do fluxo de heartbeat de agents).
+        var globalPongTask = Task.Run(async () =>
+        {
+            try
+            {
+                _logger.LogInformation("Global pong periodic publisher started.");
+
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await PublishServerPongAsync(cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Global pong periodic publish failed; retrying on next interval.");
+                    }
+
+                    var interval = ResolveGlobalPongInterval();
+                    await Task.Delay(interval, cancellationToken);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("Global pong periodic publisher cancelled.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Fatal error in global pong periodic publisher");
+            }
+        }, cancellationToken);
+
         _logger.LogInformation("NATS agent message subscriptions started successfully");
 
         // Mantém o método ativo enquanto as subscriptions estiverem vivas.
-        await Task.WhenAll(heartbeatTask, resultTask, hardwareTask);
+        await Task.WhenAll(heartbeatTask, resultTask, hardwareTask, globalPongTask);
     }
 
     private static Guid? ExtractAgentId(string subject)
@@ -309,6 +393,120 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     {
         // NatsConnection é singleton no DI e não deve ser descartada por este serviço scoped.
         await ValueTask.CompletedTask;
+    }
+
+    private async Task PublishFanoutCommandAsync(string subject, CommandDispatchEnvelope envelope, CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.Serialize(envelope, JsonOptions);
+
+        var headers = new NatsHeaders
+        {
+            ["Nats-Msg-Id"] = envelope.IdempotencyKey,
+        };
+
+        await _connection.PublishAsync(subject, payload, headers: headers, cancellationToken: cancellationToken);
+        _logger.LogInformation(
+            "Fan-out command dispatch {DispatchId} published to {Subject} (scope={TargetScope})",
+            envelope.DispatchId,
+            subject,
+            envelope.TargetScope);
+    }
+
+    private async Task PublishServerPongAsync(CancellationToken cancellationToken)
+    {
+        var serverOverloaded = ResolveServerOverloadedFlag();
+
+        var pong = new GlobalPongMessage
+        {
+            ServerTimeUtc = DateTime.UtcNow,
+            ServerOverloaded = serverOverloaded,
+        };
+
+        var subject = NatsSubjectBuilder.ServerPongSubject();
+        var payload = JsonSerializer.Serialize(pong, JsonOptions);
+        await _connection.PublishAsync(subject, payload, cancellationToken: cancellationToken);
+
+        _logger.LogDebug("Global pong published to {Subject} (serverOverloaded={ServerOverloaded})", subject, pong.ServerOverloaded);
+    }
+
+    private TimeSpan ResolveGlobalPongInterval()
+    {
+        var configuredSeconds = _globalPongOptions.CurrentValue.PublishIntervalSeconds;
+        if (configuredSeconds <= 0)
+        {
+            _logger.LogWarning(
+                "Invalid Nats:GlobalPong:PublishIntervalSeconds value '{Seconds}'. Falling back to 60 seconds.",
+                configuredSeconds);
+            configuredSeconds = 60;
+        }
+
+        return TimeSpan.FromSeconds(configuredSeconds);
+    }
+
+    private bool? ResolveServerOverloadedFlag()
+    {
+        var options = _globalPongOptions.CurrentValue;
+        var mode = options.OverloadMode?.Trim().ToLowerInvariant();
+
+        return mode switch
+        {
+            "" or "disabled" => null,
+            "forced" => options.ForcedValue,
+            "auto" => EvaluateAutoOverload(options),
+            _ => HandleUnknownOverloadMode(mode),
+        };
+    }
+
+    private bool EvaluateAutoOverload(NatsGlobalPongOptions options)
+    {
+        var workerThreshold = Math.Clamp(options.WorkerThreadUsageThresholdPercent, 0, 100);
+        var memoryThreshold = Math.Clamp(options.ManagedMemoryUsageThresholdPercent, 0, 100);
+
+        ThreadPool.GetAvailableThreads(out var availableWorkerThreads, out _);
+        ThreadPool.GetMaxThreads(out var maxWorkerThreads, out _);
+
+        var workerUsagePercent = maxWorkerThreads > 0
+            ? (1d - ((double)availableWorkerThreads / maxWorkerThreads)) * 100d
+            : 0d;
+        var workerOverloaded = workerUsagePercent >= workerThreshold;
+
+        var memoryUsagePercent = 0d;
+        var memoryOverloaded = false;
+        try
+        {
+            var gcInfo = GC.GetGCMemoryInfo();
+            var totalAvailableMemoryBytes = gcInfo.TotalAvailableMemoryBytes;
+            if (totalAvailableMemoryBytes > 0)
+            {
+                var managedUsedBytes = GC.GetTotalMemory(forceFullCollection: false);
+                memoryUsagePercent = (double)managedUsedBytes / totalAvailableMemoryBytes * 100d;
+                memoryOverloaded = memoryUsagePercent >= memoryThreshold;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Unable to evaluate managed memory usage for global pong overload flag.");
+        }
+
+        var overloaded = workerOverloaded || memoryOverloaded;
+
+        _logger.LogDebug(
+            "Global pong overload auto-evaluation: overloaded={Overloaded}, workerUsage={WorkerUsage:F1}% (threshold={WorkerThreshold:F1}%), memoryUsage={MemoryUsage:F1}% (threshold={MemoryThreshold:F1}%)",
+            overloaded,
+            workerUsagePercent,
+            workerThreshold,
+            memoryUsagePercent,
+            memoryThreshold);
+
+        return overloaded;
+    }
+
+    private bool? HandleUnknownOverloadMode(string? mode)
+    {
+        _logger.LogWarning(
+            "Unknown Nats:GlobalPong:OverloadMode value '{Mode}'. Falling back to disabled mode (serverOverloaded omitted).",
+            mode);
+        return null;
     }
 
     private async Task PublishDashboardEventForAgentAsync(

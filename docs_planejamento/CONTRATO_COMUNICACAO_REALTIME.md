@@ -1,6 +1,6 @@
 # Contrato de Comunicacao em Tempo Real - DiscoveryRMM API
 
-> Versao: 4.0.0 | Data: 2026-05-05
+> Versao: 4.2.0 | Data: 2026-05-05
 > Publico: Servidor (C# - C:\Projetos\DiscoveryRMM_API), Agent (Go - C:\Projetos\Discovery), Frontend (JS/TS - C:\Projetos\DiscoveryRMM_Site)
 > Proposito: Especificacao canonica executavel. Todos os componentes DEVEM validar entrada e saida contra este documento.
 > Status: periodo de transicao ate 2026-06-01. Durante a transicao, formato legado gera warning. Apos essa data, mensagem nao conforme eh rejeitada.
@@ -11,6 +11,8 @@
 
 | Versao | Data | Mudancas |
 |---|---|---|
+| 4.2.0 | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`) com subjects dedicados (`*.agents.command`), envelope de dispatch, regras de idempotencia e diretrizes de ACL para alto volume. |
+| 4.1.0 | 2026-05-05 | Padronizacao detalhada de subjects (publish/subscribe), regra explicita de matching NATS, inclusao do subject por cliente (`tenant.{clientId}.dashboard.events`), secao de ACL por perfil e alinhamento com a implementacao de credenciais NATS. |
 | 4.0.0 | 2026-05-05 | Contrato consolidado em NATS de ponta a ponta (nativo e WebSocket), remocao do fluxo de hub legado, secao dedicada de conexao browser via NATS WS, checklist e plano de acao revisados para canal unico por subjects. |
 | 3.0.0 | 2026-05-05 | Consolidacao de envelope canonico, tabelas de equivalencia e plano de convergencia. |
 | 2.0.0 | 2026-05-05 | Contrato executavel com validacao por componente e checklist. |
@@ -39,6 +41,11 @@
 | 14 | Nenhum componente pode criar canal paralelo fora do NATS para eventos de dashboard. |
 | 15 | Durante a transicao, normalizacao temporaria e permitida com warning. |
 | 16 | Apos 2026-06-01, modo estrito: mensagem nao conforme deve ser descartada. |
+| 17 | Assinar `tenant.{clientId}.site.{siteId}.dashboard.events` nao inclui subjects mais especificos; matching NATS exige subject exato ou wildcard explicito. |
+| 18 | Subject canonico de dashboard para UI e por site; `tenant.{clientId}.dashboard.events` e `tenant.unscoped.dashboard.events` sao fallbacks controlados de roteamento. |
+| 19 | Comando em massa deve usar subjects dedicados `*.agents.command` por escopo, evitando loop unicast agente-a-agente no servidor. |
+| 20 | Todo comando em massa deve carregar `dispatchId` e `idempotencyKey` para execucao idempotente no agent. |
+| 21 | Resultado de comando em massa deve incluir `dispatchId` para consolidacao de campanha por agent. |
 
 ---
 
@@ -47,11 +54,32 @@
 ### Nomenclatura
 
 ```text
-tenant.{clientId}.site.{siteId}.agent.{agentId}.{messageType}
+tenant.{clientId}.site.{siteId}.agent.{agentId}.heartbeat
+tenant.{clientId}.site.{siteId}.agent.{agentId}.command
+tenant.{clientId}.site.{siteId}.agents.command
+tenant.{clientId}.agents.command
+tenant.global.agents.command
+tenant.global.pong
+tenant.{clientId}.site.{siteId}.agent.{agentId}.result
+tenant.{clientId}.site.{siteId}.agent.{agentId}.sync.ping
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote-debug.log
+tenant.{clientId}.site.{siteId}.agent.{agentId}.hardware
 tenant.{clientId}.site.{siteId}.p2p.discovery
 tenant.{clientId}.site.{siteId}.dashboard.events
+tenant.{clientId}.dashboard.events
 tenant.unscoped.dashboard.events
 ```
+
+### 2.0 Regra de matching e roteamento
+
+1. O broker NATS nao faz heranca entre subjects: assinatura em `tenant.{clientId}.site.{siteId}.dashboard.events` NAO recebe `tenant.{clientId}.site.{siteId}.agent.{agentId}.dashboard.events`.
+2. Para consumo de UI, o canal canonico e `tenant.{clientId}.site.{siteId}.dashboard.events`.
+3. Quando houver `clientId` sem `siteId`, o fallback permitido e `tenant.{clientId}.dashboard.events`.
+4. Quando nao houver escopo de tenant, o fallback permitido e `tenant.unscoped.dashboard.events`.
+5. Subject de dashboard por agent (`...agent.{agentId}.dashboard.events`) e legado/transitorio e NAO deve ser canal final de consumo do frontend.
+6. Comando em massa por site deve usar `tenant.{clientId}.site.{siteId}.agents.command`.
+7. Comando em massa por cliente/global deve usar `tenant.{clientId}.agents.command` e `tenant.global.agents.command`.
+8. Liveness do servidor para agents deve usar `tenant.global.pong` (broadcast efemero, sem replay).
 
 ### 2.1 Heartbeat
 
@@ -81,7 +109,7 @@ tenant.unscoped.dashboard.events
 | `uptimeSeconds` | `long?` | nao |
 | `processCount` | `int?` | nao |
 
-### 2.2 Comando
+### 2.2 Comando (unicast)
 
 | Propriedade | Valor |
 |---|---|
@@ -92,6 +120,68 @@ tenant.unscoped.dashboard.events
 { "commandId": "Guid", "commandType": "string", "payload": "{\"command\":\"Get-Date\",\"timeoutSec\":30}" }
 ```
 
+### 2.2.1 Comando em massa (fan-out)
+
+| Propriedade | Valor |
+|---|---|
+| Subject por site | `tenant.{clientId}.site.{siteId}.agents.command` |
+| Subject por cliente | `tenant.{clientId}.agents.command` |
+| Subject global | `tenant.global.agents.command` |
+| Direcao | Servidor -> Agents |
+
+Envelope recomendado:
+
+```json
+{
+  "dispatchId": "Guid",
+  "commandId": "Guid?",
+  "commandType": "string",
+  "targetScope": "agent|site|client|global",
+  "targetClientId": "Guid?",
+  "targetSiteId": "Guid?",
+  "issuedAtUtc": "ISO8601",
+  "expiresAtUtc": "ISO8601?",
+  "idempotencyKey": "string",
+  "payload": "{\"action\":\"install\",\"version\":\"1.2.3\"}"
+}
+```
+
+Regras minimas:
+
+1. `dispatchId` obrigatorio para rastreio de campanha.
+2. `idempotencyKey` obrigatorio para dedupe no agent.
+3. `targetScope` deve ser consistente com o subject usado.
+4. Para lotes grandes, preferir fan-out por escopo ao loop de envios unicast.
+
+### 2.2.2 Pong global (liveness do servidor)
+
+| Propriedade | Valor |
+|---|---|
+| Subject | `tenant.global.pong` |
+| Direcao | Servidor -> Agents |
+| Persistencia | nao persistir para replay |
+
+Payload recomendado:
+
+```json
+{
+  "eventType": "pong",
+  "serverTimeUtc": "2026-05-05T10:00:00Z",
+  "serverOverloaded": "true|false|null"
+}
+```
+
+Regras:
+
+1. O canal e global e compartilhado entre tenants por design.
+2. O agent deve tratar como sinalizacao de disponibilidade do servidor.
+3. Mensagem nao participa do stream de fan-out de comandos.
+4. Quando `serverOverloaded=true`, o agent deve reduzir/adiar trafego nao essencial (ex.: backoff de envios volumetricos).
+5. O servidor deve publicar pong global em intervalo periodico fixo, independente do recebimento de heartbeats de agents.
+6. Intervalo padrao de publicacao: 60 segundos.
+7. A ativacao operacional da sinalizacao no servidor deve ser controlada por configuracao `Nats:GlobalPong:OverloadMode` (`disabled`, `forced`, `auto`).
+8. O intervalo deve ser configuravel por `Nats:GlobalPong:PublishIntervalSeconds` (em segundos).
+
 ### 2.3 Resultado
 
 | Propriedade | Valor |
@@ -100,8 +190,12 @@ tenant.unscoped.dashboard.events
 | Direcao | Agent -> Servidor |
 
 ```json
-{ "commandId": "Guid", "exitCode": 0, "output": "string", "errorMessage": "string" }
+{ "dispatchId": "Guid?", "commandId": "Guid?", "agentId": "Guid", "exitCode": 0, "output": "string", "errorMessage": "string" }
 ```
+
+Regra:
+
+1. Em execucao fan-out, `dispatchId` deve estar presente para agregacao de progresso por campanha.
 
 ### 2.4 Sync Ping
 
@@ -160,8 +254,9 @@ tenant.unscoped.dashboard.events
 
 | Propriedade | Valor |
 |---|---|
-| Subject principal | `tenant.{clientId}.site.{siteId}.dashboard.events` |
-| Subject sem tenant | `tenant.unscoped.dashboard.events` |
+| Subject principal (site) | `tenant.{clientId}.site.{siteId}.dashboard.events` |
+| Subject por cliente (fallback) | `tenant.{clientId}.dashboard.events` |
+| Subject sem tenant/site (fallback) | `tenant.unscoped.dashboard.events` |
 | Publishers | Servidor (C#) e Agent (Go) |
 | Subscribers | Dashboard (NATS WS) e consumidores internos (NATS nativo) |
 | Consumidor final de UI | Apenas NATS WS assinando `dashboard.events` |
@@ -188,6 +283,13 @@ tenant.unscoped.dashboard.events
 | `AgentDisconnected` | Agent | Auditoria de desconexao no broker | `AgentConnectionAuditData` |
 
 Valores legados como `agent_connected`, `agent_disconnected`, `command_result`, `timestamp`, `id` e similares sao transitorios e entram em regra de normalizacao da secao 10.
+
+#### 2.7.3 Regra de roteamento de dashboard
+
+1. Evento recebido em subject operacional (`heartbeat`, `result`, `hardware`) deve ser convertido e publicado no subject de dashboard por site.
+2. Se nao houver `siteId`, o servidor pode publicar no fallback por cliente (`tenant.{clientId}.dashboard.events`).
+3. Se nao houver `clientId`, o servidor pode publicar no fallback global (`tenant.unscoped.dashboard.events`).
+4. O frontend NAO deve depender de subject de dashboard por agent para renderizacao de tela.
 
 ### 2.8 Payloads canonicos de DashboardEvent
 
@@ -263,7 +365,9 @@ interface DashboardEvent<T = unknown> {
 
 | Subject | Status | Observacao |
 |---|---|---|
+| `tenant.{clientId}.dashboard.events` | fallback ativo | usado quando existe `clientId` e `siteId` nao esta disponivel no evento |
 | `tenant.{clientId}.site.{siteId}.agent.{agentId}.hardware` | ingestao ativa no servidor | servidor converte para `AgentHardwareReported` em `dashboard.events` |
+| `tenant.{clientId}.site.{siteId}.agent.{agentId}.dashboard.events` | legado/transicao | nao e canal canonico de UI; deve convergir para `tenant.{clientId}.site.{siteId}.dashboard.events` |
 
 ### 2.10 Equivalencia canonica de campos (transitoria)
 
@@ -321,8 +425,8 @@ interface DashboardEvent<T = unknown> {
 
 | Escopo | Subject sugerido |
 |---|---|
-| Global | `tenant.*.site.*.dashboard.events` |
-| Cliente | `tenant.{clientId}.site.*.dashboard.events` |
+| Global | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` |
+| Cliente | `tenant.{clientId}.site.*.dashboard.events`, `tenant.{clientId}.dashboard.events` |
 | Site | `tenant.{clientId}.site.{siteId}.dashboard.events` |
 | Sem tenant | `tenant.unscoped.dashboard.events` |
 
@@ -364,6 +468,36 @@ O frontend DEVE:
 3. Rejeitar evento nao conforme com `console.warn('[CONTRACT_VIOLATION]', detalhes)`.
 4. Usar nomes de campo exatos (`agentId`, `cpuPercent`, `hostname`, `timestampUtc`).
 5. Ignorar `eventType` fora do enum canonico.
+
+### 3.6 Projeto de ACL para consumo NATS WS
+
+| Perfil | Subscribe allow | Publish allow | Observacao |
+|---|---|---|---|
+| SiteUser | `tenant.{clientId}.site.{siteId}.dashboard.events` | nenhum | ve todos os eventos de dashboard do site |
+| ClientManager | `tenant.{clientId}.site.*.dashboard.events`, `tenant.{clientId}.dashboard.events` | nenhum | ve todos os sites do cliente e fallback por cliente |
+| GlobalAdmin | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` | nenhum | visao global multi-tenant |
+| InternalDashboardConsumer | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` | opcional (somente servico interno) | nao expor publish para browser |
+
+### 3.7 Regras de seguranca de ACL
+
+1. Browser/dashboard deve receber somente permissao de subscribe.
+2. Subscribe fora do escopo do JWT deve ser negado imediatamente pelo gateway/broker.
+3. Claims globais DEVEM incluir os tres escopos de dashboard (site, client fallback e unscoped).
+4. Subjects operacionais (`.command`, `.heartbeat`, `.result`, `.sync.ping`, `.remote-debug.log`, `.hardware`, `.p2p.discovery`) nao devem ser assinados diretamente pelo frontend.
+
+### 3.8 ACL para comando em massa (NATS nativo)
+
+| Perfil tecnico | Subscribe allow | Publish allow |
+|---|---|---|
+| AgentIdentity | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.site.{s}.p2p.discovery` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` |
+| ServerCommandPublisher | `tenant.*.site.*.agent.*.result` | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command` |
+
+Regras:
+
+1. Credencial de comando em massa deve ser exclusiva do backend.
+2. UI nao deve publicar em subjects de comando.
+3. Agent deve ignorar dispatch expirado (`expiresAtUtc`) e deduplicar por `dispatchId`/`idempotencyKey`.
+4. `tenant.global.pong` deve ser somente subscribe para agent; publish restrito ao servidor.
 
 ---
 
@@ -467,6 +601,11 @@ Validacao minima de payload:
 | 6 | Cada componente valida mensagens recebidas e emitidas. |
 | 7 | Violacao de contrato deve registrar `[CONTRACT_VIOLATION]` com `source=<nats|nats_ws>`. |
 | 8 | E proibido criar caminho de evento fora do NATS para atualizar dashboard. |
+| 9 | Comando em massa por site deve ser publicado em `tenant.{clientId}.site.{siteId}.agents.command`. |
+| 10 | Comando em massa por cliente/global deve usar `tenant.{clientId}.agents.command` e `tenant.global.agents.command`. |
+| 11 | Agent deve executar comando em massa de forma idempotente (dedupe por `dispatchId`/`idempotencyKey`). |
+| 12 | Resultado de comando em massa deve incluir `dispatchId` para consolidacao de campanha no servidor. |
+| 13 | Pong global do servidor deve usar `tenant.global.pong` e nao deve ser persistido/replayado. |
 
 ---
 
@@ -482,6 +621,9 @@ Validacao minima de payload:
 | 6.1.4 | `runtime_nats.go` | Promover `clientId` e `siteId` para raiz do envelope | P0 |
 | 6.1.5 | `runtime_nats.go` | Validacao de saida contra enum de `eventType` | P1 |
 | 6.1.6 | `runtime_nats.go` | Garantir `processCount` no heartbeat | P2 |
+| 6.1.7 | `runtime_nats.go` | Assinar `*.agents.command` por escopo (site/client/global) | P0 |
+| 6.1.8 | `runtime_nats.go` | Dedupe local por `dispatchId`/`idempotencyKey` com TTL | P0 |
+| 6.1.9 | `runtime_nats.go` | Assinar `tenant.global.pong` e atualizar liveness do servidor | P1 |
 
 ### 6.2 Servidor (C#) - C:\Projetos\DiscoveryRMM_API
 
@@ -493,6 +635,9 @@ Validacao minima de payload:
 | 6.2.4 | Pipeline de normalizacao | extrair `clientId`/`siteId` de `data` quando ausentes (temporario) | P1 |
 | 6.2.5 | Publicador de dashboard events | publicar somente envelope canonico em `dashboard.events` | P0 |
 | 6.2.6 | Gateway NATS WS | reforcar auth por claim/subject no subscribe | P1 |
+| 6.2.7 | Command dispatcher | publicar fan-out em `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command` | P0 |
+| 6.2.8 | Orquestrador de campanhas | persistir `dispatchId`, alvo e status por agent (success/fail/pending) | P0 |
+| 6.2.9 | Pipeline de heartbeat/mensageria | publicar `tenant.global.pong` como broadcast efemero (sem replay) | P1 |
 
 ### 6.3 Dashboard (Frontend) - C:\Projetos\DiscoveryRMM_Site
 
@@ -555,6 +700,16 @@ Validacao minima de payload:
 [CONTRACT_VIOLATION] component=<Agent|Server|Dashboard> field=<nome> expected=<valor> received=<valor> source=<nats|nats_ws>
 ```
 
+### 7.7 Comando em massa
+
+| Regra | Acao em violacao |
+|---|---|
+| `dispatchId` obrigatorio em `*.agents.command` | descartar |
+| `idempotencyKey` obrigatorio em `*.agents.command` | descartar |
+| `targetScope` consistente com subject | descartar |
+| dispatch expirado (`expiresAtUtc`) | descartar |
+| resultado fan-out sem `dispatchId` | warning + marcar como nao consolidavel |
+
 ---
 
 ## 8. Plano de Convergencia em 3 Fases
@@ -565,7 +720,7 @@ Objetivo: toda violacao fica visivel em log.
 
 | Acao | Responsavel |
 |---|---|
-| Publicar contrato 4.0.0 | Servidor |
+| Publicar contrato 4.2.0 | Servidor |
 | Adicionar warning de contrato no dashboard | Frontend |
 | Adicionar warning de contrato no agent | Agent |
 | Mapear divergencias como issues | Todos |
@@ -605,6 +760,9 @@ Objetivo: modo estrito ativo, rejeitando nao conformidade.
 | `clientId`/`siteId` na raiz do envelope |
 | `processCount` presente no heartbeat |
 | Log `[CONTRACT_VIOLATION]` na borda de saida |
+| Assina subjects `*.agents.command` do proprio escopo |
+| Assina `tenant.global.pong` para liveness do servidor |
+| Dedupe por `dispatchId`/`idempotencyKey` com TTL |
 
 ### 9.2 Servidor
 
@@ -615,6 +773,8 @@ Objetivo: modo estrito ativo, rejeitando nao conformidade.
 | Eventos invalidos sao descartados |
 | Publicacao do dashboard usa envelope canonico |
 | Gateway NATS WS valida autenticacao/autorizacao por subject |
+| Dispatcher publica comando em massa em subjects por escopo |
+| Campanha de comando rastreada por `dispatchId` |
 
 ### 9.3 Dashboard
 
@@ -679,13 +839,19 @@ Regra de ouro: o dashboard recebe eventos exclusivamente por assinatura NATS WS 
 |---|---|---|
 | `tenant.{c}.site.{s}.agent.{a}.heartbeat` | Agent -> Servidor | `AgentHeartbeat` |
 | `tenant.{c}.site.{s}.agent.{a}.command` | Servidor -> Agent | comando |
-| `tenant.{c}.site.{s}.agent.{a}.result` | Agent -> Servidor | resultado de comando |
+| `tenant.{c}.site.{s}.agents.command` | Servidor -> Agents | comando em massa por site |
+| `tenant.{c}.agents.command` | Servidor -> Agents | comando em massa por cliente |
+| `tenant.global.agents.command` | Servidor -> Agents | comando em massa global |
+| `tenant.global.pong` | Servidor -> Agents | sinalizacao global de liveness do servidor (efemera) |
+| `tenant.{c}.site.{s}.agent.{a}.result` | Agent -> Servidor | resultado de comando (`dispatchId?`) |
 | `tenant.{c}.site.{s}.agent.{a}.sync.ping` | Servidor -> Agent | `SyncInvalidationPingMessage` |
 | `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` | Agent -> Servidor | log de sessao |
 | `tenant.{c}.site.{s}.agent.{a}.hardware` | Agent -> Servidor | hardware report |
 | `tenant.{c}.site.{s}.p2p.discovery` | Servidor -> Agent | descoberta p2p |
 | `tenant.{c}.site.{s}.dashboard.events` | Agent/Servidor -> Consumidores | `DashboardEvent` |
+| `tenant.{c}.dashboard.events` | Servidor -> Consumidores | `DashboardEvent` (fallback por cliente) |
 | `tenant.unscoped.dashboard.events` | Servidor -> Consumidores | `DashboardEvent` |
+| `tenant.{c}.site.{s}.agent.{a}.dashboard.events` | legado/transicao | nao usar para consumo final de UI |
 
 ---
 
@@ -699,22 +865,28 @@ Regra de ouro: o dashboard recebe eventos exclusivamente por assinatura NATS WS 
 | 2 | Corrigir `eventType` legado -> canonico no agent | Agent |
 | 3 | Promover `clientId`/`siteId` para raiz do envelope | Agent |
 | 4 | Remover `command_result` de `dashboard.events` | Agent |
+| 5 | Adicionar subscribe de `*.agents.command` por escopo no agent | Agent |
+| 6 | Implementar dedupe por `dispatchId`/`idempotencyKey` no agent | Agent |
 
 ### Alta prioridade
 
 | # | Acao | Quem |
 |---|---|---|
-| 5 | Implementar `normalizeDashboardEvent()` estrito | Frontend |
-| 6 | Consolidar cliente realtime em NATS WS | Frontend |
-| 7 | Adicionar validacao `[CONTRACT_VIOLATION]` no servidor | Servidor |
-| 8 | Endurecer auth de subscribe por subject no gateway WS | Servidor |
+| 7 | Implementar `normalizeDashboardEvent()` estrito | Frontend |
+| 8 | Consolidar cliente realtime em NATS WS | Frontend |
+| 9 | Adicionar validacao `[CONTRACT_VIOLATION]` no servidor | Servidor |
+| 10 | Endurecer auth de subscribe por subject no gateway WS | Servidor |
+| 11 | Criar dispatcher de fan-out (`site/client/global`) no servidor | Servidor |
+| 12 | Persistir campanha por `dispatchId` com status por agent | Servidor |
 
 ### Media prioridade
 
 | # | Acao | Quem |
 |---|---|---|
-| 9 | Remover todos os fallbacks temporarios apos prazo | Servidor |
-| 10 | Teste de integracao fim-a-fim heartbeat -> dashboard.events -> UI | QA/Todos |
+| 13 | Remover todos os fallbacks temporarios apos prazo | Servidor |
+| 14 | Teste de integracao fim-a-fim heartbeat -> dashboard.events -> UI | QA/Todos |
+| 15 | Garantir que JWT global inclua tambem `tenant.unscoped.dashboard.events` | Servidor |
+| 16 | Teste de carga de fan-out sem loop unicast (site/client/global) | QA/Servidor |
 
 ---
 
@@ -725,7 +897,9 @@ Regra de ouro: o dashboard recebe eventos exclusivamente por assinatura NATS WS 
 3. Automatizar validacao de contrato em CI (schema + testes de integracao).
 4. Garantir autorizacao por subject no NATS WS para evitar vazamento cross-tenant.
 5. Fazer deploy coordenado de agent, servidor e dashboard na virada para modo estrito.
+6. Eliminar dependencia de subject legado por agent para dashboard e manter somente roteamento canonico por site/cliente/unscoped.
+7. Para comandos em massa, usar sempre fan-out por escopo com `dispatchId` e consolidacao por campanha no servidor.
 
 ---
 
-Fim do documento. Versao 4.0.0 - 2026-05-05.
+Fim do documento. Versao 4.2.0 - 2026-05-05.

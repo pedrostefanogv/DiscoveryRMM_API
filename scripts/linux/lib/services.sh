@@ -1,4 +1,4 @@
-# Discovery RMM installer – service provisioning (Postgres, Redis, NATS)
+# Discovery RMM installer – service provisioning (Postgres, Redis, NATS, JetStream)
 # Requires: common.sh (log, warn, fail, resolve_nats_conf_path)
 
 setup_redis() {
@@ -84,6 +84,44 @@ install_nk_tool() {
   log "nk instalado em $nk_bin"
 }
 
+install_nats_cli() {
+  if command -v nats &>/dev/null; then return 0; fi
+
+  local arch; arch="$(uname -m)"
+  local nats_arch
+  case "$arch" in
+    x86_64)  nats_arch="amd64" ;;
+    aarch64) nats_arch="arm64" ;;
+    armv7l)  nats_arch="arm7" ;;
+    *)       fail "Arquitetura nao suportada para download do nats CLI: $arch" ;;
+  esac
+
+  local tmp_dir; tmp_dir="$(mktemp -d)"
+  local nats_zip="$tmp_dir/natscli.zip"
+  local nats_bin="/usr/local/bin/nats"
+  local release_json asset_url nats_path
+
+  release_json="$(curl -fsSL "https://api.github.com/repos/nats-io/natscli/releases/latest")"
+  asset_url="$(printf '%s' "$release_json" | jq -r --arg arch "$nats_arch" '.assets[]?.browser_download_url | select(test("linux-" + $arch + "\\.zip$"))' | head -n 1)"
+
+  [[ -n "$asset_url" && "$asset_url" != "null" ]] || fail "Nao foi possivel localizar asset Linux do nats CLI para arquitetura $nats_arch."
+
+  log "Baixando nats CLI para bootstrap de streams JetStream..."
+  sudo apt-get install -y unzip >/dev/null
+  curl -fsSL "$asset_url" -o "$nats_zip"
+  unzip -q "$nats_zip" -d "$tmp_dir"
+
+  nats_path="$(cd "$tmp_dir" && find . -type f -name nats | head -n 1)"
+  nats_path="${nats_path#./}"
+  nats_path="$tmp_dir/$nats_path"
+
+  [[ -f "$nats_path" ]] || fail "Nao foi possivel localizar o binario nats no pacote baixado."
+
+  sudo install -m 0755 "$nats_path" "$nats_bin"
+  rm -rf "$tmp_dir"
+  log "nats CLI instalado em $nats_bin"
+}
+
 generate_nats_account_keys() {
   if [[ -n "${NATS_ACCOUNT_SEED:-}" && -n "${NATS_ACCOUNT_PUBLIC_KEY:-}" ]]; then
     log "Seeds NATS ja existentes – reutilizando (sem regenerar)"
@@ -154,12 +192,29 @@ load_existing_nats_defaults() {
     NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(sudo awk -F= '/^NATS_WS_TLS_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
     NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$(sudo awk -F= '/^Nats__AccountSeed=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
     NATS_XKEY_SEED="${NATS_XKEY_SEED:-$(sudo awk -F= '/^Nats__XKeySeed=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_ENABLED="${NATS_JS_ENABLED:-$(sudo awk -F= '/^NATS_JS_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_STORE_DIR="${NATS_JS_STORE_DIR:-$(sudo awk -F= '/^NATS_JS_STORE_DIR=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_MAX_MEMORY_STORE="${NATS_JS_MAX_MEMORY_STORE:-$(sudo awk -F= '/^NATS_JS_MAX_MEMORY_STORE=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_MAX_FILE_STORE="${NATS_JS_MAX_FILE_STORE:-$(sudo awk -F= '/^NATS_JS_MAX_FILE_STORE=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_FANOUT_STREAM_ENABLED="${NATS_JS_FANOUT_STREAM_ENABLED:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_FANOUT_STREAM_NAME="${NATS_JS_FANOUT_STREAM_NAME:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_NAME=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_FANOUT_STREAM_SUBJECTS="${NATS_JS_FANOUT_STREAM_SUBJECTS:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_SUBJECTS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_FANOUT_STREAM_MAX_AGE="${NATS_JS_FANOUT_STREAM_MAX_AGE:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_MAX_AGE=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_FANOUT_STREAM_MAX_BYTES="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_MAX_BYTES=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_JS_FANOUT_STREAM_DUPE_WINDOW="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_DUPE_WINDOW=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
   fi
 
   if sudo test -f "$nats_conf"; then
     NATS_BIND_HOST="${NATS_BIND_HOST:-$(sudo sed -n 's/^listen:[[:space:]]*\([^:]*\):[0-9][0-9]*.*/\1/p' "$nats_conf" | head -n 1)}"
     NATS_MONITOR_HOST="${NATS_MONITOR_HOST:-$(sudo sed -n 's/^http:[[:space:]]*\([^:]*\):[0-9][0-9]*.*/\1/p' "$nats_conf" | head -n 1)}"
     NATS_AUTH_CALLOUT_ISSUER="${NATS_AUTH_CALLOUT_ISSUER:-$(sudo sed -n 's/^[[:space:]]*issuer:[[:space:]]*"\([^"]*\)".*/\1/p' "$nats_conf" | head -n 1)}"
+    if [[ -z "${NATS_JS_ENABLED:-}" ]]; then
+      if sudo grep -Eq '^[[:space:]]*jetstream[[:space:]]*\{' "$nats_conf"; then NATS_JS_ENABLED="1"
+      else NATS_JS_ENABLED="0"; fi
+    fi
+    NATS_JS_STORE_DIR="${NATS_JS_STORE_DIR:-$(sudo sed -n 's/^[[:space:]]*store_dir:[[:space:]]*"\([^"]*\)".*/\1/p' "$nats_conf" | head -n 1)}"
+    NATS_JS_MAX_MEMORY_STORE="${NATS_JS_MAX_MEMORY_STORE:-$(sudo sed -n 's/^[[:space:]]*max_memory_store:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$nats_conf" | head -n 1)}"
+    NATS_JS_MAX_FILE_STORE="${NATS_JS_MAX_FILE_STORE:-$(sudo sed -n 's/^[[:space:]]*max_file_store:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$nats_conf" | head -n 1)}"
   fi
   NATS_USER="${NATS_USER:-${NATS_AUTH_USER:-discovery_nats}}"
   NATS_PASSWORD="${NATS_PASSWORD:-${NATS_AUTH_PASSWORD:-}}"
@@ -177,6 +232,90 @@ load_existing_site_realtime_defaults() {
   Authentication__Fido2__ServerDomain="${Authentication__Fido2__ServerDomain:-$(sudo awk -F= '/^Authentication__Fido2__ServerDomain=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
 }
 
+detect_nats_service_user() {
+  local nats_user
+  nats_user="$(systemctl show -p User --value nats-server 2>/dev/null | tr -d '[:space:]')"
+  if [[ -z "$nats_user" ]]; then
+    if id -u nats >/dev/null 2>&1; then nats_user="nats"
+    else nats_user="root"; fi
+  fi
+  printf '%s' "$nats_user"
+}
+
+detect_nats_service_group() {
+  local nats_user="$1"
+  local nats_group
+  nats_group="$(systemctl show -p Group --value nats-server 2>/dev/null | tr -d '[:space:]')"
+  if [[ -z "$nats_group" ]]; then
+    nats_group="$(id -gn "$nats_user" 2>/dev/null || true)"
+  fi
+  if [[ -z "$nats_group" ]]; then
+    if getent group nats >/dev/null 2>&1; then nats_group="nats"
+    else nats_group="root"; fi
+  fi
+  printf '%s' "$nats_group"
+}
+
+ensure_nats_fanout_stream() {
+  if [[ "${NATS_JS_ENABLED:-1}" != "1" ]]; then
+    log "JetStream desativado; pulando bootstrap do stream de fan-out."
+    return
+  fi
+
+  if [[ "${NATS_JS_FANOUT_STREAM_ENABLED:-1}" != "1" ]]; then
+    log "Bootstrap automatico do stream de fan-out desativado por configuracao."
+    return
+  fi
+
+  install_nats_cli
+
+  local stream_name="${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}"
+  local stream_subjects="${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*.agents.command,tenant.*.agents.command,tenant.global.agents.command}"
+  local stream_max_age="${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}"
+  local stream_max_bytes="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}"
+  local stream_dupe_window="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}"
+  local -a nats_cmd=(
+    nats
+    --server "nats://127.0.0.1:4222"
+    --user "$NATS_AUTH_USER"
+    --password "$NATS_AUTH_PASSWORD"
+  )
+
+  local attempt
+  for attempt in {1..10}; do
+    if "${nats_cmd[@]}" stream info "$stream_name" >/dev/null 2>&1; then
+      if "${nats_cmd[@]}" stream update "$stream_name" \
+        --subjects "$stream_subjects" \
+        --storage file \
+        --retention limits \
+        --discard old \
+        --max-age "$stream_max_age" \
+        --max-bytes "$stream_max_bytes" \
+        --dupe-window "$stream_dupe_window" \
+        --defaults >/dev/null 2>&1; then
+        log "Stream JetStream '$stream_name' atualizado para fan-out de comandos."
+        return
+      fi
+    else
+      if "${nats_cmd[@]}" stream add "$stream_name" \
+        --subjects "$stream_subjects" \
+        --storage file \
+        --retention limits \
+        --discard old \
+        --max-age "$stream_max_age" \
+        --max-bytes "$stream_max_bytes" \
+        --dupe-window "$stream_dupe_window" \
+        --defaults >/dev/null 2>&1; then
+        log "Stream JetStream '$stream_name' criado para fan-out de comandos."
+        return
+      fi
+    fi
+    sleep 2
+  done
+
+  fail "Nao foi possivel criar/atualizar o stream JetStream de fan-out ('${stream_name}')."
+}
+
 # ── NATS server configuration ──────────────────────────────────────────────
 
 setup_nats() {
@@ -187,6 +326,42 @@ setup_nats() {
   local nats_ws_port="${NATS_WS_PORT:-8081}"
   local nats_ws_host="${NATS_WS_HOST:-127.0.0.1}"
   local nats_ws_tls="${NATS_WS_TLS_ENABLED:-false}"
+  local nats_js_enabled="${NATS_JS_ENABLED:-1}"
+  local nats_js_store_dir="${NATS_JS_STORE_DIR:-${DISCOVERY_OPS_DIR:-/opt/discovery-ops}/nats/jetstream}"
+  local nats_js_max_memory_store="${NATS_JS_MAX_MEMORY_STORE:-64M}"
+  local nats_js_max_file_store="${NATS_JS_MAX_FILE_STORE:-512M}"
+
+  local jetstream_block=""
+  if [[ "$nats_js_enabled" == "1" ]]; then
+    local nats_service_user nats_service_group
+    nats_service_user="$(detect_nats_service_user)"
+    nats_service_group="$(detect_nats_service_group "$nats_service_user")"
+
+    if [[ -n "${DISCOVERY_OPS_DIR:-}" && "$nats_js_store_dir" == "${DISCOVERY_OPS_DIR}"* ]]; then
+      if sudo test -d "$DISCOVERY_OPS_DIR"; then
+        sudo chmod 751 "$DISCOVERY_OPS_DIR"
+      else
+        if id -u discovery-api >/dev/null 2>&1; then
+          sudo install -d -m 751 -o discovery-api -g discovery-api "$DISCOVERY_OPS_DIR"
+        else
+          sudo install -d -m 751 -o root -g root "$DISCOVERY_OPS_DIR"
+        fi
+      fi
+    fi
+
+    sudo install -d -m 750 -o "$nats_service_user" -g "$nats_service_group" "$(dirname "$nats_js_store_dir")"
+    sudo install -d -m 750 -o "$nats_service_user" -g "$nats_service_group" "$nats_js_store_dir"
+
+    jetstream_block=$(cat <<EOF
+
+jetstream {
+  store_dir: "$nats_js_store_dir"
+  max_memory_store: $nats_js_max_memory_store
+  max_file_store: $nats_js_max_file_store
+}
+EOF
+)
+  fi
 
   local ws_block=""
   if [[ "$nats_ws_tls" == "true" ]]; then
@@ -258,7 +433,7 @@ server_name: discovery-nats
 max_payload: 4194304
 max_connections: 5000
 write_deadline: 5s
-${auth_block}${ws_block}
+${jetstream_block}${auth_block}${ws_block}
 EOF
 
   sudo chmod 640 "$nats_conf"

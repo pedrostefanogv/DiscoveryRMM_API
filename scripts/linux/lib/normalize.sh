@@ -52,6 +52,42 @@ normalize_nats_settings() {
   NATS_WS_PORT="${NATS_WS_PORT:-8081}"
   NATS_WS_HOST="${NATS_WS_HOST:-127.0.0.1}"
   NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-false}"
+  NATS_JS_ENABLED="${NATS_JS_ENABLED:-1}"
+  NATS_JS_STORE_DIR="${NATS_JS_STORE_DIR:-${DISCOVERY_OPS_DIR:-/opt/discovery-ops}/nats/jetstream}"
+  NATS_JS_MAX_MEMORY_STORE="${NATS_JS_MAX_MEMORY_STORE:-64M}"
+  NATS_JS_MAX_FILE_STORE="${NATS_JS_MAX_FILE_STORE:-512M}"
+  NATS_JS_FANOUT_STREAM_ENABLED="${NATS_JS_FANOUT_STREAM_ENABLED:-1}"
+  NATS_JS_FANOUT_STREAM_NAME="${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}"
+  NATS_JS_FANOUT_STREAM_SUBJECTS="${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*.agents.command,tenant.*.agents.command,tenant.global.agents.command}"
+  NATS_JS_FANOUT_STREAM_MAX_AGE="${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}"
+  NATS_JS_FANOUT_STREAM_MAX_BYTES="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}"
+  NATS_JS_FANOUT_STREAM_DUPE_WINDOW="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}"
+
+  local normalized_js_enabled
+  normalized_js_enabled="$(printf '%s' "$NATS_JS_ENABLED" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$normalized_js_enabled" in
+    1|true|yes|y|sim|s) NATS_JS_ENABLED="1" ;;
+    0|false|no|n|nao) NATS_JS_ENABLED="0" ;;
+    *) fail "NATS_JS_ENABLED invalido: ${NATS_JS_ENABLED}. Use 1/0 (ou sim/nao)." ;;
+  esac
+
+  local normalized_stream_enabled
+  normalized_stream_enabled="$(printf '%s' "$NATS_JS_FANOUT_STREAM_ENABLED" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$normalized_stream_enabled" in
+    1|true|yes|y|sim|s) NATS_JS_FANOUT_STREAM_ENABLED="1" ;;
+    0|false|no|n|nao) NATS_JS_FANOUT_STREAM_ENABLED="0" ;;
+    *) fail "NATS_JS_FANOUT_STREAM_ENABLED invalido: ${NATS_JS_FANOUT_STREAM_ENABLED}. Use 1/0 (ou sim/nao)." ;;
+  esac
+
+  NATS_JS_MAX_MEMORY_STORE="$(printf '%s' "$NATS_JS_MAX_MEMORY_STORE" | tr '[:lower:]' '[:upper:]')"
+  NATS_JS_MAX_FILE_STORE="$(printf '%s' "$NATS_JS_MAX_FILE_STORE" | tr '[:lower:]' '[:upper:]')"
+
+  [[ "$NATS_JS_STORE_DIR" = /* ]] || fail "NATS_JS_STORE_DIR deve ser caminho absoluto: ${NATS_JS_STORE_DIR}"
+  [[ "$NATS_JS_FANOUT_STREAM_MAX_BYTES" =~ ^[0-9]+$ ]] || fail "NATS_JS_FANOUT_STREAM_MAX_BYTES deve ser inteiro em bytes: ${NATS_JS_FANOUT_STREAM_MAX_BYTES}"
+
+  if [[ "$NATS_JS_FANOUT_STREAM_ENABLED" == "1" && "$NATS_JS_ENABLED" != "1" ]]; then
+    fail "NATS_JS_FANOUT_STREAM_ENABLED=1 exige NATS_JS_ENABLED=1"
+  fi
 
   if [[ "$NATS_AUTH_CALLOUT_ENABLED" != "0" && -z "${NATS_AUTH_CALLOUT_ISSUER:-}" ]]; then
     NATS_AUTH_CALLOUT_ISSUER=""

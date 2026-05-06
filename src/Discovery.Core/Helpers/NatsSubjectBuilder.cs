@@ -2,6 +2,11 @@ namespace Discovery.Core.Helpers;
 
 public static class NatsSubjectBuilder
 {
+    public const string SiteAgentsCommandStreamSubject = "tenant.*.site.*.agents.command";
+    public const string ClientAgentsCommandStreamSubject = "tenant.*.agents.command";
+    public const string GlobalAgentsCommandStreamSubject = "tenant.global.agents.command";
+    public const string GlobalPongSubject = "tenant.global.pong";
+
     public static string AgentBase(Guid clientId, Guid siteId, Guid agentId)
         => $"tenant.{clientId}.site.{siteId}.agent.{agentId}";
 
@@ -32,4 +37,28 @@ public static class NatsSubjectBuilder
     /// </summary>
     public static string P2pSiteDiscoverySubject(Guid clientId, Guid siteId)
         => $"tenant.{clientId}.site.{siteId}.p2p.discovery";
+
+    /// <summary>
+    /// Subject de comando fan-out por site.
+    /// </summary>
+    public static string SiteAgentsCommandSubject(Guid clientId, Guid siteId)
+        => $"tenant.{clientId}.site.{siteId}.agents.command";
+
+    /// <summary>
+    /// Subject de comando fan-out por cliente.
+    /// </summary>
+    public static string ClientAgentsCommandSubject(Guid clientId)
+        => $"tenant.{clientId}.agents.command";
+
+    /// <summary>
+    /// Subject de comando fan-out global.
+    /// </summary>
+    public static string GlobalAgentsCommandSubject()
+        => GlobalAgentsCommandStreamSubject;
+
+    /// <summary>
+    /// Subject global de pong do servidor para os agents.
+    /// </summary>
+    public static string ServerPongSubject()
+        => GlobalPongSubject;
 }

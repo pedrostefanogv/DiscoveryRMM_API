@@ -45,4 +45,41 @@ public class NatsSubjectBuilderTests
 
         Assert.That(subject, Is.EqualTo("tenant.unscoped.dashboard.events"));
     }
+
+    [Test]
+    public void SiteAgentsCommandSubject_ShouldUseCanonicalTenantScopedFormat()
+    {
+        var clientId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var siteId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+
+        var subject = NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId);
+
+        Assert.That(subject, Is.EqualTo($"tenant.{clientId}.site.{siteId}.agents.command"));
+    }
+
+    [Test]
+    public void ClientAgentsCommandSubject_ShouldUseCanonicalTenantScopedFormat()
+    {
+        var clientId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+
+        var subject = NatsSubjectBuilder.ClientAgentsCommandSubject(clientId);
+
+        Assert.That(subject, Is.EqualTo($"tenant.{clientId}.agents.command"));
+    }
+
+    [Test]
+    public void GlobalAgentsCommandSubject_ShouldUseCanonicalGlobalFormat()
+    {
+        var subject = NatsSubjectBuilder.GlobalAgentsCommandSubject();
+
+        Assert.That(subject, Is.EqualTo("tenant.global.agents.command"));
+    }
+
+    [Test]
+    public void ServerPongSubject_ShouldUseCanonicalGlobalFormat()
+    {
+        var subject = NatsSubjectBuilder.ServerPongSubject();
+
+        Assert.That(subject, Is.EqualTo("tenant.global.pong"));
+    }
 }

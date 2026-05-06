@@ -221,7 +221,12 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishResult));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishHardware));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishRemoteDebugLog));
+
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeCommand));
+        subscribeSubjects.Add(NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId));
+        subscribeSubjects.Add(NatsSubjectBuilder.ClientAgentsCommandSubject(clientId));
+        subscribeSubjects.Add(NatsSubjectBuilder.GlobalAgentsCommandSubject());
+        subscribeSubjects.Add(NatsSubjectBuilder.ServerPongSubject());
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeSyncPing));
         subscribeSubjects.Add(NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId));
 

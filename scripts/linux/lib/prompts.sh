@@ -194,6 +194,8 @@ prompt_nats_configuration() {
   echo "Configure as credenciais e hosts do NATS local."
   echo "Esses dados sao usados pela API e agentes para mensagens."
   echo "Se usuario ou senha ficarem em branco, o instalador gera valores aleatorios."
+  echo "JetStream para replay de comandos fan-out e configurado automaticamente."
+  echo "Para ajustar TTL/limites, use as variaveis NATS_JS_* no arquivo de config."
   echo "----------------------------------------"
 
   prompt_nats_user

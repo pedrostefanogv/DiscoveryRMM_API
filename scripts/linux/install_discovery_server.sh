@@ -49,7 +49,7 @@ if [[ -z "${GITHUB_PAT:-}" && -n "${GITHUB_TOKEN:-}" ]]; then
 fi
 GITHUB_PAT="${GITHUB_PAT:-}"
 
-# ── Source library modules in dependency order ─────────────────────────────
+# â”€â”€ Source library modules in dependency order â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # shellcheck source=lib/common.sh
 source "$LIB_DIR/common.sh"
 # shellcheck source=lib/normalize.sh
@@ -67,14 +67,14 @@ source "$LIB_DIR/deploy.sh"
 # shellcheck source=lib/modes.sh
 source "$LIB_DIR/modes.sh"
 
-# ── Bootstrap ──────────────────────────────────────────────────────────────
+# â”€â”€ Bootstrap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 initialize_log_context_from_requested_mode
 require_cmd sudo
 start_sudo_keepalive
 trap cleanup_sudo_keepalive EXIT
 
-# ── Full installation wizard ──────────────────────────────────────────────
+# â”€â”€ Full installation wizard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 main() {
   initialize_log_context_from_requested_mode
@@ -206,6 +206,7 @@ main() {
   write_systemd_service
   write_site_proxy_config
   run_db_migrations
+  ensure_nats_fanout_stream
   show_summary
 }
 

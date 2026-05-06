@@ -381,7 +381,7 @@ public class AgentUpdateService(
 
         var minimumRequiredVersion = NormalizeOptionalVersion(policy.MinimumRequiredVersion, nameof(policy.MinimumRequiredVersion));
         var mandatory = IsMandatory(currentVersionValid, currentVersion, minimumRequiredVersion, releaseMandatory: false);
-        var rolloutEligible = policy.Enabled;
+        var rolloutEligible = policy.Enabled && IsAgentEligibleForRollout(agent.Id, policy.RolloutPercentage);
         var updateAvailable = IsBuildUpdateAvailable(build?.Version, currentVersionRaw, currentVersionValid, currentVersion);
 
         var revision = ComputeRevision(policy, build);

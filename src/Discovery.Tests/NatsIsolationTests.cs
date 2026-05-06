@@ -38,9 +38,14 @@ public class NatsIsolationTests
 
         var subjectsA = AgentSubjectSet(clientA, siteA, agentA);
         var subjectsB = AgentSubjectSet(clientB, siteB, agentB);
+        var overlap = subjectsA.Intersect(subjectsB).ToArray();
 
-        Assert.That(subjectsA.Intersect(subjectsB), Is.Empty,
-            "Subjects de agentes de tenants distintos não devem se sobrepor.");
+        Assert.That(overlap, Is.EquivalentTo(new[]
+        {
+            NatsSubjectBuilder.GlobalAgentsCommandSubject(),
+            NatsSubjectBuilder.ServerPongSubject(),
+        }),
+            "Subjects de tenants distintos nao devem se sobrepor, exceto o canal global de fan-out.");
     }
 
     [Test]
@@ -59,14 +64,14 @@ public class NatsIsolationTests
     }
 
     [Test]
-    public void AgentSubjects_ContainExactlySeven_FourPublishThreeSubscribe()
+    public void AgentSubjects_ContainEleven_FourPublishSevenSubscribe()
     {
         var (pub, sub) = BuildAgentSubjectLists(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
         Assert.That(pub, Has.Count.EqualTo(4),
             "Agente deve publicar exatamente em 4 subjects: heartbeat, result, hardware, remote-debug.log.");
-        Assert.That(sub, Has.Count.EqualTo(3),
-            "Agente deve assinar exatamente 3 subjects: command, sync.ping, p2p.discovery.");
+        Assert.That(sub, Has.Count.EqualTo(7),
+            "Agente deve assinar exatamente 7 subjects: command unicast + fan-out site/client/global + pong global + sync.ping + p2p.discovery.");
     }
 
     [Test]
@@ -95,7 +100,12 @@ public class NatsIsolationTests
             Is.EquivalentTo(new[]
             {
                 expectedPrefix + "command",
+                $"tenant.{clientId}.site.{siteId}.agents.command",
+                $"tenant.{clientId}.agents.command",
+                "tenant.global.agents.command",
+                "tenant.global.pong",
                 expectedPrefix + "sync.ping",
+                NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
             }),
             "Subscribe subjects devem conter somente os message types canônicos.");
     }
@@ -122,9 +132,14 @@ public class NatsIsolationTests
 
         var subjectsA = AgentSubjectSet(clientA, siteA, sharedAgentId);
         var subjectsB = AgentSubjectSet(clientB, siteB, sharedAgentId);
+        var overlap = subjectsA.Intersect(subjectsB).ToArray();
 
-        Assert.That(subjectsA.Intersect(subjectsB), Is.Empty,
-            "Mesmo agentId com clientes diferentes deve produzir subjects distintos.");
+        Assert.That(overlap, Is.EquivalentTo(new[]
+        {
+            NatsSubjectBuilder.GlobalAgentsCommandSubject(),
+            NatsSubjectBuilder.ServerPongSubject(),
+        }),
+            "Mesmo agentId em tenants distintos deve manter isolamento, exceto o canal global de fan-out.");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -161,12 +176,10 @@ public class NatsIsolationTests
         var service = BuildCredentialsService(agentId, siteId, clientId);
         var creds = await service.IssueForAgentAsync(agentId);
 
-        Assert.That(creds.SubscribeSubjects, Is.Not.Empty);
-        foreach (var s in creds.SubscribeSubjects)
-        {
-            Assert.That(s, Does.Contain(agentId.ToString()),
-                $"Subscribe subject '{s}' não contém o agentId correto.");
-        }
+        var (_, expectedSubscribe) = BuildAgentSubjectLists(clientId, siteId, agentId);
+
+        Assert.That(creds.SubscribeSubjects, Is.EquivalentTo(expectedSubscribe),
+            "Subscribe subjects do JWT de agente devem refletir exatamente o conjunto canônico do próprio escopo.");
     }
 
     [Test]
@@ -343,6 +356,10 @@ public class NatsIsolationTests
             Subscribe:
             [
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "command"),
+                NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId),
+                NatsSubjectBuilder.ClientAgentsCommandSubject(clientId),
+                NatsSubjectBuilder.GlobalAgentsCommandSubject(),
+                NatsSubjectBuilder.ServerPongSubject(),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
                 NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
             ]);

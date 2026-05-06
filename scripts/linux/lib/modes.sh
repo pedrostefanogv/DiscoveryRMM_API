@@ -185,10 +185,13 @@ apply_nats_reconfiguration_only() {
   update_nats_environment_file
   update_site_realtime_environment_file
 
-  if sudo systemctl is-active --quiet discovery-api; then
+  if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
     log "Reiniciando discovery-api para aplicar novas configuracoes NATS"
     sudo systemctl restart discovery-api
+    wait_for_discovery_api_ready
   fi
+
+  ensure_nats_fanout_stream
 
   log "Atualizacao de configuracao NATS concluida"
 }

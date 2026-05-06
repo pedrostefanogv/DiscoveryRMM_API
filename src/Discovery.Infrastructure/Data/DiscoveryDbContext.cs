@@ -1,8 +1,10 @@
 using Discovery.Core.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Pgvector.EntityFrameworkCore;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Entities.Security;
+using System.Text;
 
 namespace Discovery.Infrastructure.Data;
 
@@ -138,6 +140,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
 
         // Attachments
         ConfigureAttachments(modelBuilder);
+
+        // Fallback convention: ensure any entity/column not explicitly mapped also uses snake_case.
+        ApplySnakeCaseFallback(modelBuilder);
     }
 
     // ── Infrastructure (defined in partial files) ─────────────────────────
@@ -155,4 +160,73 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureCustomFields(ModelBuilder modelBuilder);
     static partial void ConfigureAiChat(ModelBuilder modelBuilder);
     static partial void ConfigureAttachments(ModelBuilder modelBuilder);
+
+    private static void ApplySnakeCaseFallback(ModelBuilder modelBuilder)
+    {
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            var tableName = entityType.GetTableName();
+            if (string.IsNullOrWhiteSpace(tableName))
+                continue;
+
+            var snakeTableName = ToSnakeCase(tableName);
+            if (!string.Equals(tableName, snakeTableName, StringComparison.Ordinal))
+                entityType.SetTableName(snakeTableName);
+
+            var tableIdentifier = StoreObjectIdentifier.Table(entityType.GetTableName()!, entityType.GetSchema());
+            foreach (var property in entityType.GetProperties())
+            {
+                var columnName = property.GetColumnName(tableIdentifier);
+                if (string.IsNullOrWhiteSpace(columnName))
+                    continue;
+
+                var snakeColumnName = ToSnakeCase(columnName);
+                if (!string.Equals(columnName, snakeColumnName, StringComparison.Ordinal))
+                    property.SetColumnName(snakeColumnName);
+            }
+        }
+    }
+
+    private static string ToSnakeCase(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return value;
+
+        var sb = new StringBuilder(value.Length + 8);
+
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+
+            if (c == '-' || c == ' ')
+            {
+                sb.Append('_');
+                continue;
+            }
+
+            if (!char.IsUpper(c))
+            {
+                sb.Append(c);
+                continue;
+            }
+
+            if (i > 0)
+            {
+                var previous = value[i - 1];
+                var hasNext = i + 1 < value.Length;
+                var next = hasNext ? value[i + 1] : '\0';
+
+                var shouldInsertUnderscore =
+                    previous != '_' &&
+                    (char.IsLower(previous) || char.IsDigit(previous) || (hasNext && char.IsLower(next)));
+
+                if (shouldInsertUnderscore)
+                    sb.Append('_');
+            }
+
+            sb.Append(char.ToLowerInvariant(c));
+        }
+
+        return sb.ToString();
+    }
 }
