@@ -32,6 +32,7 @@ public partial class AgentAuthController
             resolved.AIIntegration.ApiKey = null;
 
         var serverConfig = await _configService.GetServerConfigAsync();
+        var natsAuthCalloutEnabled = _configuration.GetValue<bool?>("Nats:AuthCallout:Enabled") ?? false;
 
         var enforceTls = _configuration.GetValue<bool>("Security:AgentConnection:EnforceTlsHashValidation");
         var handshakeEnabled = _configuration.GetValue<bool>("Security:AgentConnection:HandshakeEnabled");
@@ -67,6 +68,8 @@ public partial class AgentAuthController
             resolved.ResolvedAt,
             NatsServerHost = natsHost,
             NatsUseWssExternal = natsUseWssExternal,
+            NatsAuthMode = natsAuthCalloutEnabled ? "agent_token" : "jwt_credentials",
+            NatsAuthCalloutEnabled = natsAuthCalloutEnabled,
             EnforceTlsHashValidation = enforceTls,
             HandshakeEnabled = handshakeEnabled,
             ApiTlsCertHash = apiTlsCertHash,
@@ -156,29 +159,5 @@ public partial class AgentAuthController
         };
 
         return Ok(manifest);
-    }
-
-    /// <summary>
-    /// Issues NATS credentials for the authenticated agent.
-    /// </summary>
-    [HttpPost("me/nats-credentials")]
-    public async Task<IActionResult> IssueNatsCredentials(CancellationToken ct)
-    {
-        if (!TryGetAuthenticatedAgentId(out var agentId))
-            return Unauthorized(new { error = "Agent not authenticated." });
-
-        var (_, blocked) = await GetAgentOrBlockPendingAsync(agentId, allowPending: true);
-        if (blocked is not null)
-            return blocked;
-
-        try
-        {
-            var credentials = await _natsCredentialsService.IssueForAgentAsync(agentId, ct);
-            return Ok(credentials);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return StatusCode(503, new { error = ex.Message });
-        }
     }
 }

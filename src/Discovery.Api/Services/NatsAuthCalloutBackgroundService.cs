@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NATS.Client.Core;
 using NATS.Jwt;
+using NATS.Jwt.Models;
 using NATS.NKeys;
 
 namespace Discovery.Api.Services;
@@ -16,6 +17,7 @@ namespace Discovery.Api.Services;
 public class NatsAuthCalloutBackgroundService : BackgroundService
 {
     private const string ServerXKeyHeader = "Nats-Server-Xkey";
+    private static readonly TimeSpan JwtClockSkew = TimeSpan.FromSeconds(30);
 
     private readonly NatsConnection _natsConnection;
     private readonly IConfiguration _configuration;
@@ -120,20 +122,28 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                     // xkey habilitado: decripta payload usando DH curve25519
                     if (msg.Headers == null || !msg.Headers.TryGetValue(ServerXKeyHeader, out var xkeyValue))
                     {
-                        _logger.LogWarning("xkey configurado mas header {Header} ausente na requisicao.", ServerXKeyHeader);
-                        continue;
+                        _logger.LogWarning(
+                            "xkey configurado mas header {Header} ausente na requisicao. Fallback para payload sem criptografia; verifique auth_callout.xkey no nats-server.",
+                            ServerXKeyHeader);
+                        requestJwt = Encoding.UTF8.GetString(rawData);
                     }
-
-                    serverXKey = xkeyValue.ToString();
-                    if (string.IsNullOrWhiteSpace(serverXKey))
+                    else
                     {
-                        _logger.LogWarning("xkey configurado mas header {Header} esta vazio.", ServerXKeyHeader);
-                        continue;
+                        serverXKey = xkeyValue.ToString();
+                        if (string.IsNullOrWhiteSpace(serverXKey))
+                        {
+                            _logger.LogWarning(
+                                "xkey configurado mas header {Header} esta vazio na requisicao. Fallback para payload sem criptografia.",
+                                ServerXKeyHeader);
+                            requestJwt = Encoding.UTF8.GetString(rawData);
+                        }
+                        else
+                        {
+                            using var xKeyPair = KeyPair.FromSeed(xKeySeedPlain);
+                            var decrypted = xKeyPair.Open(rawData, serverXKey);
+                            requestJwt = Encoding.UTF8.GetString(decrypted);
+                        }
                     }
-
-                    using var xKeyPair = KeyPair.FromSeed(xKeySeedPlain);
-                    var decrypted = xKeyPair.Open(rawData, serverXKey);
-                    requestJwt = Encoding.UTF8.GetString(decrypted);
                 }
                 else
                 {
@@ -190,11 +200,19 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         if (string.IsNullOrWhiteSpace(request.Nats.UserNkey))
             return await BuildErrorResponseAsync("Missing user nkey.", null, serverId, configurationService, ct);
 
-        var token = request.Nats.ConnectOptions.AuthToken
-            ?? request.Nats.ConnectOptions.Token
-            ?? request.Nats.ConnectOptions.Jwt;
+        var token = FirstNonEmpty(
+            request.Nats.ConnectOptions.AuthToken,
+            request.Nats.ConnectOptions.Token,
+            request.Nats.ConnectOptions.Jwt);
         if (string.IsNullOrWhiteSpace(token))
+        {
+            _logger.LogWarning(
+                "Auth callout request sem token aproveitavel (auth_token={HasAuthToken}, token={HasToken}, jwt={HasJwt}).",
+                !string.IsNullOrWhiteSpace(request.Nats.ConnectOptions.AuthToken),
+                !string.IsNullOrWhiteSpace(request.Nats.ConnectOptions.Token),
+                !string.IsNullOrWhiteSpace(request.Nats.ConnectOptions.Jwt));
             return await BuildErrorResponseAsync("Missing auth token.", request.Nats.UserNkey, serverId, configurationService, ct);
+        }
 
         if (token.StartsWith("mdz_", StringComparison.OrdinalIgnoreCase))
         {
@@ -209,6 +227,11 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
             return await BuildSuccessResponseAsync(request, jwt.Jwt, jwt.ExpiresAtUtc, configurationService, ct);
         }
+
+        // Compatibilidade transitória: aceita JWT NATS já emitido pela API para o user_nkey da conexão.
+        // Continua estrito por assinatura, issuer (account) e validade temporal.
+        if (TryValidatePreIssuedNatsUserJwt(token, request.Nats.UserNkey, out var preIssuedExpiresAtUtc))
+            return await BuildSuccessResponseAsync(request, token, preIssuedExpiresAtUtc, configurationService, ct);
 
         var principal = jwtService.ValidateToken(token);
         if (principal is null)
@@ -228,6 +251,72 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
         var userJwt = await credentialsService.IssueUserJwtForUserAsync(request.Nats.UserNkey, userId, scopeAccess, ct);
         return await BuildSuccessResponseAsync(request, userJwt.Jwt, userJwt.ExpiresAtUtc, configurationService, ct);
+    }
+
+    private bool TryValidatePreIssuedNatsUserJwt(string token, string expectedUserNkey, out DateTime expiresAtUtc)
+    {
+        expiresAtUtc = default;
+
+        NatsUserClaims claims;
+        try
+        {
+            claims = NatsJwt.DecodeUserClaims(token);
+        }
+        catch (NatsJwtException)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(claims.Subject)
+            || !string.Equals(claims.Subject, expectedUserNkey, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Rejected pre-issued NATS JWT due to subject mismatch. Expected={Expected}, Actual={Actual}",
+                expectedUserNkey,
+                claims.Subject);
+            return false;
+        }
+
+        var accountSeed = _configuration["Nats:AccountSeed"];
+        if (string.IsNullOrWhiteSpace(accountSeed))
+            return false;
+
+        var expectedIssuer = KeyPair.FromSeed(accountSeed).GetPublicKey();
+        if (string.IsNullOrWhiteSpace(claims.Issuer)
+            || !string.Equals(claims.Issuer, expectedIssuer, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Rejected pre-issued NATS JWT due to issuer mismatch. Expected={Expected}, Actual={Actual}",
+                expectedIssuer,
+                claims.Issuer);
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (claims.NotBefore.HasValue && claims.NotBefore.Value > now.Add(JwtClockSkew))
+        {
+            _logger.LogWarning("Rejected pre-issued NATS JWT due to not-before in the future. Nbf={NbfUtc}", claims.NotBefore);
+            return false;
+        }
+
+        if (!claims.Expires.HasValue)
+        {
+            _logger.LogWarning("Rejected pre-issued NATS JWT without expiration.");
+            return false;
+        }
+
+        if (claims.Expires.Value <= now.Subtract(JwtClockSkew))
+        {
+            _logger.LogWarning("Rejected pre-issued NATS JWT due to expiration. Exp={ExpUtc}", claims.Expires);
+            return false;
+        }
+
+        expiresAtUtc = claims.Expires.Value.UtcDateTime;
+        return true;
     }
 
     private static AuthorizationRequest? ParseAuthRequest(string jwt)
@@ -283,6 +372,17 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             throw new InvalidOperationException("NATS account seed is not configured (Nats:AccountSeed).");
 
         return Task.FromResult(KeyPair.FromSeed(seed));
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
     }
 
     private sealed class AuthorizationRequest

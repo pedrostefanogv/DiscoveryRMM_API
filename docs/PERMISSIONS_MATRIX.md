@@ -1,6 +1,6 @@
 # Matriz de Permissões — DiscoveryRMM API
 
-**Gerado em:** 30/04/2026
+**Gerado em:** 05/05/2026
 **Branch:** dev
 
 > Esta matriz documenta todos os endpoints da API com seus requisitos de permissão.
@@ -33,6 +33,34 @@
 ---
 
 ## Endpoints × Permissões
+
+### Agent Install (token de deploy)
+| Endpoint | Auth | Permissão |
+|---|---|---|
+| `POST /api/v1/agent-install/register` | `Bearer {deploy_token}` (escopo client/site) | — (sem RBAC; validação por deploy token) |
+| `POST /api/v1/agent-install/{agentId}/token` | `Bearer {deploy_token}` (escopo client/site) | — (sem RBAC; validação por deploy token) |
+
+### Agent Auth (token mdz_)
+| Endpoint | Auth | Permissão |
+|---|---|---|
+| `GET /api/v1/agent-auth/me/configuration` | `Bearer mdz_{token}` + `X-Agent-ID` | — (identidade do agent) |
+| `POST /api/v1/agent-auth/me/p2p/bootstrap` | `Bearer mdz_{token}` + `X-Agent-ID` | — (identidade do agent) |
+| `GET /api/v1/agent-auth/me/sync-manifest` | `Bearer mdz_{token}` + `X-Agent-ID` | — (identidade do agent) |
+
+### NATS Auth (usuário dashboard)
+| Endpoint | Auth | Permissão |
+|---|---|---|
+| `POST /api/v1/nats-auth/user/credentials` | `[RequireUserAuth]` | `Dashboard.View` (escopo resolvido por `IPermissionService`) |
+
+### NATS ACL (perfil técnico)
+| Perfil | Subscribe Allow | Publish Allow |
+|---|---|---|
+| `AgentIdentity` | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.site.{s}.p2p.discovery` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` |
+
+### Endpoints Legados Removidos
+| Endpoint | Status |
+|---|---|
+| `POST /api/v1/agent-auth/me/nats-credentials` | **Removido** (fluxo atual: `agent_token` via auth callout) |
 
 ### Auth (público)
 | Endpoint | Auth | Permissão |

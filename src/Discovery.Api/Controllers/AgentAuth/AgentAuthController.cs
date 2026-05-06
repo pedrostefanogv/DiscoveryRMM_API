@@ -60,7 +60,6 @@ public partial class AgentAuthController : ControllerBase
     private readonly IConfigurationResolver _configResolver;
     private readonly IConfigurationService _configService;
     private readonly IRedisService _redisService;
-    private readonly INatsCredentialsService _natsCredentialsService;
     private readonly IMeshCentralEmbeddingService _meshCentralEmbeddingService;
     private readonly IMeshCentralApiService _meshCentralApiService;
     private readonly IMeshCentralProvisioningService _meshCentralProvisioningService;
@@ -93,7 +92,6 @@ public partial class AgentAuthController : ControllerBase
         IAutoTicketOrchestratorService autoTicketOrchestratorService,
         IMonitoringEventNormalizationService monitoringEventNormalizationService,
         ISyncPingDeliveryRepository syncPingDeliveryRepository,
-        INatsCredentialsService natsCredentialsService,
         IMeshCentralEmbeddingService meshCentralEmbeddingService,
         IMeshCentralApiService meshCentralApiService,
         IMeshCentralProvisioningService meshCentralProvisioningService,
@@ -132,7 +130,6 @@ public partial class AgentAuthController : ControllerBase
         _autoTicketOrchestratorService = autoTicketOrchestratorService;
         _monitoringEventNormalizationService = monitoringEventNormalizationService;
         _syncPingDeliveryRepository = syncPingDeliveryRepository;
-        _natsCredentialsService = natsCredentialsService;
         _meshCentralEmbeddingService = meshCentralEmbeddingService;
         _meshCentralApiService = meshCentralApiService;
         _meshCentralProvisioningService = meshCentralProvisioningService;

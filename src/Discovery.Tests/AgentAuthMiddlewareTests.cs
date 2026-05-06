@@ -1,9 +1,7 @@
 using Discovery.Api.Middleware;
-using Discovery.Api.Services;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Configuration;
 
 namespace Discovery.Tests;
 
@@ -14,8 +12,6 @@ public class AgentAuthMiddlewareTests
     {
         var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
         var authService = new FakeAgentAuthService(token);
-        var tlsProbe = new FakeAgentTlsCertificateProbe();
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
 
         var nextCalled = false;
         var middleware = new AgentAuthMiddleware(_ =>
@@ -26,7 +22,7 @@ public class AgentAuthMiddlewareTests
 
         var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
 
-        await middleware.InvokeAsync(context, authService, configuration, tlsProbe);
+        await middleware.InvokeAsync(context, authService);
 
         Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
         Assert.That(nextCalled, Is.False);
@@ -37,14 +33,12 @@ public class AgentAuthMiddlewareTests
     {
         var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
         var authService = new FakeAgentAuthService(token);
-        var tlsProbe = new FakeAgentTlsCertificateProbe();
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
 
         var middleware = new AgentAuthMiddleware(_ => Task.CompletedTask);
         var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
         context.Request.Headers.Append("X-Agent-ID", "not-a-guid");
 
-        await middleware.InvokeAsync(context, authService, configuration, tlsProbe);
+        await middleware.InvokeAsync(context, authService);
 
         Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
     }
@@ -54,14 +48,12 @@ public class AgentAuthMiddlewareTests
     {
         var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
         var authService = new FakeAgentAuthService(token);
-        var tlsProbe = new FakeAgentTlsCertificateProbe();
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
 
         var middleware = new AgentAuthMiddleware(_ => Task.CompletedTask);
         var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
         context.Request.Headers.Append("X-Agent-ID", Guid.NewGuid().ToString());
 
-        await middleware.InvokeAsync(context, authService, configuration, tlsProbe);
+        await middleware.InvokeAsync(context, authService);
 
         Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
     }
@@ -71,8 +63,6 @@ public class AgentAuthMiddlewareTests
     {
         var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
         var authService = new FakeAgentAuthService(token);
-        var tlsProbe = new FakeAgentTlsCertificateProbe();
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
 
         var nextCalled = false;
         var middleware = new AgentAuthMiddleware(_ =>
@@ -84,7 +74,7 @@ public class AgentAuthMiddlewareTests
         var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
         context.Request.Headers.Append("X-Agent-ID", token.AgentId.ToString());
 
-        await middleware.InvokeAsync(context, authService, configuration, tlsProbe);
+        await middleware.InvokeAsync(context, authService);
 
         Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
         Assert.That(nextCalled, Is.True);
@@ -124,16 +114,4 @@ public class AgentAuthMiddlewareTests
             => Task.FromResult<IEnumerable<AgentToken>>(_token is null ? [] : [_token]);
     }
 
-    private sealed class FakeAgentTlsCertificateProbe : IAgentTlsCertificateProbe
-    {
-        public Task<string?> GetExpectedTlsCertHashAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<string?>(null);
-
-        public Task<string?> GetExpectedTlsCertHashAsync(string probeUrl, string cacheKey, CancellationToken cancellationToken = default)
-            => Task.FromResult<string?>(null);
-
-        public void InvalidateCache(string cacheKey)
-        {
-        }
-    }
 }
