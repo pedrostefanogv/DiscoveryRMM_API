@@ -21,6 +21,7 @@ public partial class AgentsController : ControllerBase
 {
     private static readonly JsonSerializerOptions CacheJsonOptions = new(JsonSerializerDefaults.Web);
     private const int AgentCacheTtlSeconds = 30;
+    private const int MinimumLiveMetricsGraceSeconds = 60;
 
     private readonly IAgentRepository _agentRepo;
     private readonly IAgentHardwareRepository _hardwareRepo;
@@ -34,6 +35,7 @@ public partial class AgentsController : ControllerBase
     private readonly IAgentMessaging _messaging;
     private readonly ISiteRepository _siteRepository;
     private readonly IRedisService _redisService;
+    private readonly IHeartbeatCacheService _heartbeatCache;
     private readonly IConfigurationResolver _configurationResolver;
     private readonly IMeshCentralApiService _meshCentralApiService;
     private readonly IPermissionService _permissionService;
@@ -54,6 +56,7 @@ public partial class AgentsController : ControllerBase
         IAgentMessaging messaging,
         ISiteRepository siteRepository,
         IRedisService redisService,
+        IHeartbeatCacheService heartbeatCache,
         IConfigurationResolver configurationResolver,
         IMeshCentralApiService meshCentralApiService,
         IPermissionService permissionService,
@@ -73,6 +76,7 @@ public partial class AgentsController : ControllerBase
         _messaging = messaging;
         _siteRepository = siteRepository;
         _redisService = redisService;
+        _heartbeatCache = heartbeatCache;
         _configurationResolver = configurationResolver;
         _meshCentralApiService = meshCentralApiService;
         _permissionService = permissionService;
@@ -134,18 +138,44 @@ public partial class AgentsController : ControllerBase
 
     // ── Online Grace Helpers ──────────────────────────────────────────────
 
+    private static int NormalizeOnlineGraceSeconds(int onlineGraceSeconds)
+        => Math.Max(MinimumLiveMetricsGraceSeconds, onlineGraceSeconds);
+
+    private static void ApplyRealtimeHeartbeat(Agent agent, HeartbeatCacheEntry? heartbeat)
+    {
+        if (heartbeat is null)
+            return;
+
+        agent.Status = AgentStatus.Online;
+        agent.LastSeenAt = heartbeat.LastHeartbeatAt;
+    }
+
+    private async Task<Dictionary<Guid, HeartbeatCacheEntry>> GetHeartbeatSnapshotAsync(IEnumerable<Guid> agentIds)
+    {
+        var ids = agentIds.Distinct().ToArray();
+        if (ids.Length == 0)
+            return [];
+
+        var tasks = ids.Select(async id => new { AgentId = id, Entry = await _heartbeatCache.GetHeartbeatAsync(id) });
+        var results = await Task.WhenAll(tasks);
+
+        return results
+            .Where(item => item.Entry is not null)
+            .ToDictionary(item => item.AgentId, item => item.Entry!);
+    }
+
     private static void ApplyEffectiveStatus(Agent agent, int onlineGraceSeconds)
     {
         if (agent.Status != AgentStatus.Online) return;
-        var cutoffUtc = DateTime.UtcNow.AddSeconds(-onlineGraceSeconds);
+        var cutoffUtc = DateTime.UtcNow.AddSeconds(-NormalizeOnlineGraceSeconds(onlineGraceSeconds));
         if (!agent.LastSeenAt.HasValue || agent.LastSeenAt.Value < cutoffUtc)
             agent.Status = AgentStatus.Offline;
     }
 
     private async Task<int> GetOnlineGraceSecondsForSiteAsync(Guid siteId)
     {
-        try { var r = await _configurationResolver.ResolveForSiteAsync(siteId); return r.AgentOnlineGraceSeconds; }
-        catch { return 120; }
+        try { var r = await _configurationResolver.ResolveForSiteAsync(siteId); return NormalizeOnlineGraceSeconds(r.AgentOnlineGraceSeconds); }
+        catch { return MinimumLiveMetricsGraceSeconds; }
     }
 
     private async Task<Dictionary<Guid, int>> GetOnlineGraceSecondsBySiteAsync(IEnumerable<Guid> siteIds)
@@ -153,8 +183,8 @@ public partial class AgentsController : ControllerBase
         var ids = siteIds.Distinct().ToList();
         var tasks = ids.Select(async siteId =>
         {
-            try { var r = await _configurationResolver.ResolveForSiteAsync(siteId); return (siteId, grace: r.AgentOnlineGraceSeconds); }
-            catch { return (siteId, grace: 120); }
+            try { var r = await _configurationResolver.ResolveForSiteAsync(siteId); return (siteId, grace: NormalizeOnlineGraceSeconds(r.AgentOnlineGraceSeconds)); }
+            catch { return (siteId, grace: MinimumLiveMetricsGraceSeconds); }
         });
         return (await Task.WhenAll(tasks)).ToDictionary(e => e.siteId, e => e.grace);
     }

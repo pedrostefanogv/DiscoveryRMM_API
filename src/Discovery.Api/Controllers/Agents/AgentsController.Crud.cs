@@ -33,8 +33,13 @@ public partial class AgentsController
     {
         var cacheKey = $"agents:by-site:{siteId:N}";
         var agents = await GetOrSetCacheAsync(cacheKey, async () => (await _agentRepo.GetBySiteIdAsync(siteId)).ToList()) ?? [];
+        var heartbeatByAgent = await GetHeartbeatSnapshotAsync(agents.Select(agent => agent.Id));
         var onlineGraceSeconds = await GetOnlineGraceSecondsForSiteAsync(siteId);
-        foreach (var agent in agents) ApplyEffectiveStatus(agent, onlineGraceSeconds);
+        foreach (var agent in agents)
+        {
+            ApplyRealtimeHeartbeat(agent, heartbeatByAgent.GetValueOrDefault(agent.Id));
+            ApplyEffectiveStatus(agent, onlineGraceSeconds);
+        }
         return Ok(agents);
     }
 
@@ -43,8 +48,13 @@ public partial class AgentsController
     {
         var cacheKey = $"agents:by-client:{clientId:N}";
         var agents = await GetOrSetCacheAsync(cacheKey, async () => (await _agentRepo.GetByClientIdAsync(clientId)).ToList()) ?? [];
+        var heartbeatByAgent = await GetHeartbeatSnapshotAsync(agents.Select(agent => agent.Id));
         var graceBySite = await GetOnlineGraceSecondsBySiteAsync(agents.Select(a => a.SiteId).Distinct());
-        foreach (var agent in agents) ApplyEffectiveStatus(agent, graceBySite.GetValueOrDefault(agent.SiteId, 120));
+        foreach (var agent in agents)
+        {
+            ApplyRealtimeHeartbeat(agent, heartbeatByAgent.GetValueOrDefault(agent.Id));
+            ApplyEffectiveStatus(agent, graceBySite.GetValueOrDefault(agent.SiteId, 60));
+        }
         return Ok(agents);
     }
 
@@ -53,7 +63,13 @@ public partial class AgentsController
     {
         var cacheKey = $"agents:single:{id:N}";
         var agent = await GetOrSetCacheAsync(cacheKey, () => _agentRepo.GetByIdAsync(id));
-        if (agent is not null) { var g = await GetOnlineGraceSecondsForSiteAsync(agent.SiteId); ApplyEffectiveStatus(agent, g); }
+        if (agent is not null)
+        {
+            var heartbeat = await _heartbeatCache.GetHeartbeatAsync(agent.Id);
+            ApplyRealtimeHeartbeat(agent, heartbeat);
+            var g = await GetOnlineGraceSecondsForSiteAsync(agent.SiteId);
+            ApplyEffectiveStatus(agent, g);
+        }
         return agent is null ? NotFound() : Ok(agent);
     }
 
