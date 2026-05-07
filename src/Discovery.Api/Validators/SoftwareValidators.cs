@@ -23,5 +23,7 @@ public class SoftwareInventoryItemRequestValidator : AbstractValidator<SoftwareI
         RuleFor(x => x.InstallId).MaximumLength(1000);
         RuleFor(x => x.Serial).MaximumLength(1000);
         RuleFor(x => x.Source).MaximumLength(120);
+        RuleFor(x => x.InstallDate).MaximumLength(64);
+        RuleFor(x => x.InstallSource).MaximumLength(2000);
     }
 }

@@ -73,6 +73,12 @@ public partial class DiscoveryDbContext
             entity.Property(inventory => inventory.Version)
                 .HasColumnName("version")
                 .HasMaxLength(120);
+            entity.Property(inventory => inventory.InstallDate)
+                .HasColumnName("install_date")
+                .HasColumnType("timestamptz");
+            entity.Property(inventory => inventory.InstallSource)
+                .HasColumnName("install_source")
+                .HasMaxLength(2000);
             entity.Property(inventory => inventory.IsPresent)
                 .HasColumnName("is_present");
             entity.Property(inventory => inventory.CreatedAt)

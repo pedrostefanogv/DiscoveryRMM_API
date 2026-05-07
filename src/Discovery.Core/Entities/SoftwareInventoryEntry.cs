@@ -8,4 +8,6 @@ public class SoftwareInventoryEntry
     public string? InstallId { get; set; }
     public string? Serial { get; set; }
     public string? Source { get; set; }
+    public DateTime? InstallDate { get; set; }
+    public string? InstallSource { get; set; }
 }

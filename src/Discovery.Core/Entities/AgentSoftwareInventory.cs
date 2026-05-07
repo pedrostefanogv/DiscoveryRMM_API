@@ -9,6 +9,8 @@ public class AgentSoftwareInventory
     public DateTime FirstSeenAt { get; set; }
     public DateTime LastSeenAt { get; set; }
     public string? Version { get; set; }
+    public DateTime? InstallDate { get; set; }
+    public string? InstallSource { get; set; }
     public bool IsPresent { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

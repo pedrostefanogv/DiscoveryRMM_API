@@ -32,6 +32,8 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 InstallId = catalog.InstallId,
                 Serial = catalog.Serial,
                 Source = catalog.Source,
+                InstallDate = inv.InstallDate,
+                InstallSource = inv.InstallSource,
                 CollectedAt = inv.CollectedAt,
                 FirstSeenAt = inv.FirstSeenAt,
                 LastSeenAt = inv.LastSeenAt
@@ -65,6 +67,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         {
             query = query.Where(x =>
                 (x.inv.Version != null && EF.Functions.ILike(x.inv.Version, pattern)) ||
+                (x.inv.InstallSource != null && EF.Functions.ILike(x.inv.InstallSource, pattern)) ||
                 EF.Functions.ILike(x.catalog.Name, pattern) ||
                 (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, pattern)) ||
                 (x.catalog.InstallId != null && EF.Functions.ILike(x.catalog.InstallId, pattern)) ||
@@ -89,6 +92,8 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 InstallId = x.catalog.InstallId,
                 Serial = x.catalog.Serial,
                 Source = x.catalog.Source,
+                InstallDate = x.inv.InstallDate,
+                InstallSource = x.inv.InstallSource,
                 CollectedAt = x.inv.CollectedAt,
                 FirstSeenAt = x.inv.FirstSeenAt,
                 LastSeenAt = x.inv.LastSeenAt
@@ -193,7 +198,9 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 Publisher = TrimOrNull(entry.Publisher),
                 InstallId = TrimOrNull(entry.InstallId),
                 Serial = TrimOrNull(entry.Serial),
-                Source = TrimOrNull(entry.Source)
+                Source = TrimOrNull(entry.Source),
+                InstallDate = NormalizeInstallDate(entry.InstallDate),
+                InstallSource = TrimOrNull(entry.InstallSource)
             })
             .ToList();
 
@@ -261,6 +268,8 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                     FirstSeenAt = collectedAt,
                     LastSeenAt = collectedAt,
                     Version = row.Item.Version,
+                    InstallDate = row.Item.InstallDate,
+                    InstallSource = row.Item.InstallSource,
                     IsPresent = true,
                     CreatedAt = now,
                     UpdatedAt = now
@@ -272,6 +281,8 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             inventory.CollectedAt = collectedAt;
             inventory.LastSeenAt = collectedAt;
             inventory.Version = row.Item.Version;
+            inventory.InstallDate = row.Item.InstallDate;
+            inventory.InstallSource = row.Item.InstallSource;
             inventory.IsPresent = true;
             inventory.UpdatedAt = now;
         }
@@ -316,6 +327,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         {
             query = query.Where(x =>
                 (x.inv.Version != null && EF.Functions.ILike(x.inv.Version, pattern)) ||
+                (x.inv.InstallSource != null && EF.Functions.ILike(x.inv.InstallSource, pattern)) ||
                 EF.Functions.ILike(x.catalog.Name, pattern) ||
                 (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, pattern)) ||
                 (x.catalog.InstallId != null && EF.Functions.ILike(x.catalog.InstallId, pattern)) ||
@@ -346,6 +358,8 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 InstallId = x.catalog.InstallId,
                 Serial = x.catalog.Serial,
                 Source = x.catalog.Source,
+                InstallDate = x.inv.InstallDate,
+                InstallSource = x.inv.InstallSource,
                 Hostname = x.agent.Hostname,
                 AgentDisplayName = x.agent.DisplayName,
                 SiteName = x.site.Name,
@@ -492,6 +506,20 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             return null;
 
         return value.Trim();
+    }
+
+    private static DateTime? NormalizeInstallDate(DateTime? value)
+    {
+        if (!value.HasValue)
+            return null;
+
+        var normalized = value.Value;
+        if (normalized.Kind == DateTimeKind.Local)
+            normalized = normalized.ToUniversalTime();
+        else if (normalized.Kind == DateTimeKind.Unspecified)
+            normalized = DateTime.SpecifyKind(normalized, DateTimeKind.Utc);
+
+        return DateTime.SpecifyKind(normalized.Date, DateTimeKind.Utc);
     }
 
     private static string BuildFingerprint(SoftwareInventoryEntry item)

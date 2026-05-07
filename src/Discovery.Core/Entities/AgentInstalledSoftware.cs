@@ -11,6 +11,8 @@ public class AgentInstalledSoftware
     public string? InstallId { get; set; }
     public string? Serial { get; set; }
     public string? Source { get; set; }
+    public DateTime? InstallDate { get; set; }
+    public string? InstallSource { get; set; }
     public DateTime CollectedAt { get; set; }
     public DateTime FirstSeenAt { get; set; }
     public DateTime LastSeenAt { get; set; }

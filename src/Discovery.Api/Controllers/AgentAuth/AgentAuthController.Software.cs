@@ -42,15 +42,7 @@ public partial class AgentAuthController
         var collectedAt = request.CollectedAt ?? DateTime.UtcNow;
         var software = (request.Software ?? [])
             .Where(x => !string.IsNullOrWhiteSpace(x.Name))
-            .Select(x => new SoftwareInventoryEntry
-            {
-                Name = x.Name,
-                Version = x.Version,
-                Publisher = x.Publisher,
-                InstallId = x.InstallId,
-                Serial = x.Serial,
-                Source = x.Source
-            });
+            .Select(SoftwareInventoryParser.ToEntry);
 
         await _softwareRepo.ReplaceInventoryAsync(agentId, collectedAt, software);
         await InvalidateAgentInventoryCachesAsync(agentId);

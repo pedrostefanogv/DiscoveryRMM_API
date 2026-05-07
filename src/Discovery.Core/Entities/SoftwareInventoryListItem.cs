@@ -13,6 +13,8 @@ public class SoftwareInventoryListItem
     public string? InstallId { get; set; }
     public string? Serial { get; set; }
     public string? Source { get; set; }
+    public DateTime? InstallDate { get; set; }
+    public string? InstallSource { get; set; }
     public string Hostname { get; set; } = string.Empty;
     public string? AgentDisplayName { get; set; }
     public string SiteName { get; set; } = string.Empty;
