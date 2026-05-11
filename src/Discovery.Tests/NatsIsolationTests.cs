@@ -233,11 +233,13 @@ public class NatsIsolationTests
         var service = BuildCredentialsService(Guid.NewGuid(), Guid.NewGuid(), ownClientId);
         var creds = await service.IssueForUserAsync(Guid.NewGuid(), scope, ownClientId, null);
 
-        Assert.That(creds.SubscribeSubjects, Has.Count.EqualTo(2));
+        Assert.That(creds.SubscribeSubjects, Has.Count.EqualTo(3));
         Assert.That(creds.SubscribeSubjects, Does.Contain($"tenant.{ownClientId}.site.*.dashboard.events"),
             "Credencial de client deve permitir assinatura de todos os sites do cliente.");
         Assert.That(creds.SubscribeSubjects, Does.Contain($"tenant.{ownClientId}.dashboard.events"),
             "Credencial de client deve manter o fallback por cliente.");
+        Assert.That(creds.SubscribeSubjects, Does.Contain(NatsSubjectBuilder.ServerPongSubject()),
+            "Credencial de usuário deve permitir receber o pong global do servidor.");
         Assert.That(creds.SubscribeSubjects.Any(s => s.Contains(otherClientId.ToString())), Is.False,
             "Subjects do usuário não devem conter clientId de outro tenant.");
     }
@@ -259,7 +261,8 @@ public class NatsIsolationTests
 
         Assert.That(creds.SubscribeSubjects, Is.EquivalentTo(new[]
         {
-            $"tenant.{clientId}.site.{siteId}.dashboard.events"
+            $"tenant.{clientId}.site.{siteId}.dashboard.events",
+            NatsSubjectBuilder.ServerPongSubject(),
         }));
     }
 
@@ -275,7 +278,8 @@ public class NatsIsolationTests
         {
             "tenant.*.site.*.dashboard.events",
             "tenant.*.dashboard.events",
-            "tenant.unscoped.dashboard.events"
+            "tenant.unscoped.dashboard.events",
+            NatsSubjectBuilder.ServerPongSubject(),
         }));
     }
 

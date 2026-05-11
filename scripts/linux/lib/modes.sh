@@ -174,6 +174,8 @@ apply_nats_reconfiguration_only() {
   set_log_context "update-nats"
   log "Modo de atualizacao NATS: reconfigurando NATS e variaveis da API"
 
+  DISCOVERY_OPS_DIR="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"
+
   prompt_nats_configuration
   validate_security_inputs
   normalize_nats_settings

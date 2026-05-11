@@ -330,6 +330,7 @@ setup_nats() {
   local nats_js_store_dir="${NATS_JS_STORE_DIR:-${DISCOVERY_OPS_DIR:-/opt/discovery-ops}/nats/jetstream}"
   local nats_js_max_memory_store="${NATS_JS_MAX_MEMORY_STORE:-64M}"
   local nats_js_max_file_store="${NATS_JS_MAX_FILE_STORE:-512M}"
+  local discovery_ops_dir_effective="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"
 
   local jetstream_block=""
   if [[ "$nats_js_enabled" == "1" ]]; then
@@ -337,20 +338,31 @@ setup_nats() {
     nats_service_user="$(detect_nats_service_user)"
     nats_service_group="$(detect_nats_service_group "$nats_service_user")"
 
-    if [[ -n "${DISCOVERY_OPS_DIR:-}" && "$nats_js_store_dir" == "${DISCOVERY_OPS_DIR}"* ]]; then
-      if sudo test -d "$DISCOVERY_OPS_DIR"; then
-        sudo chmod 751 "$DISCOVERY_OPS_DIR"
+    if [[ "$nats_js_store_dir" == "${discovery_ops_dir_effective}"* ]]; then
+      if sudo test -d "$discovery_ops_dir_effective"; then
+        sudo chmod 751 "$discovery_ops_dir_effective"
       else
         if id -u discovery-api >/dev/null 2>&1; then
-          sudo install -d -m 751 -o discovery-api -g discovery-api "$DISCOVERY_OPS_DIR"
+          sudo install -d -m 751 -o discovery-api -g discovery-api "$discovery_ops_dir_effective"
         else
-          sudo install -d -m 751 -o root -g root "$DISCOVERY_OPS_DIR"
+          sudo install -d -m 751 -o root -g root "$discovery_ops_dir_effective"
         fi
       fi
     fi
 
     sudo install -d -m 750 -o "$nats_service_user" -g "$nats_service_group" "$(dirname "$nats_js_store_dir")"
     sudo install -d -m 750 -o "$nats_service_user" -g "$nats_service_group" "$nats_js_store_dir"
+
+    # Garante que o usuario de servico do NATS consegue atravessar o path do store_dir.
+    if ! sudo -u "$nats_service_user" test -d "$nats_js_store_dir" >/dev/null 2>&1; then
+      if [[ "$nats_js_store_dir" == "${discovery_ops_dir_effective}"* ]] && sudo test -d "$discovery_ops_dir_effective"; then
+        sudo chmod 751 "$discovery_ops_dir_effective" || true
+      fi
+    fi
+
+    if ! sudo -u "$nats_service_user" test -d "$nats_js_store_dir" >/dev/null 2>&1; then
+      fail "Usuario de servico do NATS ($nats_service_user) sem acesso ao NATS_JS_STORE_DIR: $nats_js_store_dir"
+    fi
 
     jetstream_block=$(cat <<EOF
 

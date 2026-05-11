@@ -269,35 +269,35 @@ public class NatsCredentialsService : INatsCredentialsService
             subjects.Add("tenant.*.site.*.dashboard.events");
             subjects.Add("tenant.*.dashboard.events");
             subjects.Add("tenant.unscoped.dashboard.events");
-            return subjects;
         }
-
-        if (siteId.HasValue && clientId.HasValue)
+        else if (siteId.HasValue && clientId.HasValue)
         {
             subjects.Add(NatsSubjectBuilder.DashboardSubject(clientId, siteId));
-            return subjects;
         }
-
-        if (clientId.HasValue)
+        else if (clientId.HasValue)
         {
             subjects.Add($"tenant.{clientId}.site.*.dashboard.events");
             subjects.Add(NatsSubjectBuilder.DashboardSubject(clientId, null));
-            return subjects;
+        }
+        else
+        {
+            foreach (var allowedClientId in scopeAccess.AllowedClientIds)
+            {
+                subjects.Add($"tenant.{allowedClientId}.site.*.dashboard.events");
+                subjects.Add(NatsSubjectBuilder.DashboardSubject(allowedClientId, null));
+            }
+
+            foreach (var allowedSiteId in scopeAccess.AllowedSiteIds)
+            {
+                var site = await _siteRepository.GetByIdAsync(allowedSiteId);
+                if (site is null)
+                    continue;
+                subjects.Add(NatsSubjectBuilder.DashboardSubject(site.ClientId, site.Id));
+            }
         }
 
-        foreach (var allowedClientId in scopeAccess.AllowedClientIds)
-        {
-            subjects.Add($"tenant.{allowedClientId}.site.*.dashboard.events");
-            subjects.Add(NatsSubjectBuilder.DashboardSubject(allowedClientId, null));
-        }
-
-        foreach (var allowedSiteId in scopeAccess.AllowedSiteIds)
-        {
-            var site = await _siteRepository.GetByIdAsync(allowedSiteId);
-            if (site is null)
-                continue;
-            subjects.Add(NatsSubjectBuilder.DashboardSubject(site.ClientId, site.Id));
-        }
+        if (subjects.Count > 0)
+            subjects.Add(NatsSubjectBuilder.ServerPongSubject());
 
         return subjects;
     }
