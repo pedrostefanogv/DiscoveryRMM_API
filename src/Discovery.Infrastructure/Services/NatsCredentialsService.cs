@@ -83,18 +83,18 @@ public class NatsCredentialsService : INatsCredentialsService
         string userPublicKey,
         Guid userId,
         UserScopeAccess scopeAccess,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        UserScopeAccess? remoteDebugScopeAccess = null)
     {
-        _ = ct;
         var config = await _configurationService.GetServerConfigAsync();
         EnsureEnabled(config);
 
-        var subscribeSubjects = await BuildDashboardSubjectsAsync(scopeAccess, null, null, ct);
+        var subscribeSubjects = await BuildDashboardSubjectsAsync(scopeAccess, null, null, remoteDebugScopeAccess, ct);
         return IssueUserJwtForPublicKey(
             userPublicKey,
             config.NatsUserJwtTtlMinutes,
             Array.Empty<string>(),
-            subscribeSubjects,
+            subscribeSubjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             $"user:{userId}");
     }
 
@@ -103,10 +103,9 @@ public class NatsCredentialsService : INatsCredentialsService
         UserScopeAccess scopeAccess,
         Guid? clientId,
         Guid? siteId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        UserScopeAccess? remoteDebugScopeAccess = null)
     {
-        _ = ct;
-
         var config = await _configurationService.GetServerConfigAsync();
         EnsureEnabled(config);
 
@@ -141,7 +140,7 @@ public class NatsCredentialsService : INatsCredentialsService
         }
 
         var publishSubjects = Array.Empty<string>();
-        var subscribeSubjects = await BuildDashboardSubjectsAsync(scopeAccess, resolvedClientId, resolvedSiteId, ct);
+        var subscribeSubjects = await BuildDashboardSubjectsAsync(scopeAccess, resolvedClientId, resolvedSiteId, remoteDebugScopeAccess, ct);
         var ttlMinutes = Math.Max(1, config.NatsUserJwtTtlMinutes);
 
         return IssueCredentials(
@@ -260,6 +259,7 @@ public class NatsCredentialsService : INatsCredentialsService
         UserScopeAccess scopeAccess,
         Guid? clientId,
         Guid? siteId,
+        UserScopeAccess? remoteDebugScopeAccess,
         CancellationToken ct)
     {
         var subjects = new List<string>();
@@ -296,11 +296,69 @@ public class NatsCredentialsService : INatsCredentialsService
             }
         }
 
+        if (remoteDebugScopeAccess is not null)
+            await AddRemoteDebugSubjectsAsync(subjects, remoteDebugScopeAccess, clientId, siteId, ct);
+
         if (subjects.Count > 0)
             subjects.Add(NatsSubjectBuilder.ServerPongSubject());
 
         return subjects;
     }
+
+    private async Task AddRemoteDebugSubjectsAsync(
+        List<string> subjects,
+        UserScopeAccess remoteDebugScopeAccess,
+        Guid? clientId,
+        Guid? siteId,
+        CancellationToken ct)
+    {
+        if (remoteDebugScopeAccess.HasGlobalAccess)
+        {
+            subjects.Add(BuildGlobalRemoteDebugSubject());
+            return;
+        }
+
+        if (siteId.HasValue && clientId.HasValue)
+        {
+            var hasSiteAccess = remoteDebugScopeAccess.AllowedSiteIds.Contains(siteId.Value);
+            var hasClientAccess = remoteDebugScopeAccess.AllowedClientIds.Contains(clientId.Value);
+
+            if (hasSiteAccess || hasClientAccess)
+                subjects.Add(BuildSiteRemoteDebugSubject(clientId.Value, siteId.Value));
+
+            return;
+        }
+
+        if (clientId.HasValue)
+        {
+            if (remoteDebugScopeAccess.AllowedClientIds.Contains(clientId.Value))
+                subjects.Add(BuildClientRemoteDebugSubject(clientId.Value));
+
+            return;
+        }
+
+        foreach (var allowedClientId in remoteDebugScopeAccess.AllowedClientIds)
+            subjects.Add(BuildClientRemoteDebugSubject(allowedClientId));
+
+        foreach (var allowedSiteId in remoteDebugScopeAccess.AllowedSiteIds)
+        {
+            ct.ThrowIfCancellationRequested();
+            var site = await _siteRepository.GetByIdAsync(allowedSiteId);
+            if (site is null)
+                continue;
+
+            subjects.Add(BuildSiteRemoteDebugSubject(site.ClientId, site.Id));
+        }
+    }
+
+    private static string BuildGlobalRemoteDebugSubject()
+        => $"tenant.*.site.*.agent.*.{PublishRemoteDebugLog}";
+
+    private static string BuildClientRemoteDebugSubject(Guid clientId)
+        => $"tenant.{clientId}.site.*.agent.*.{PublishRemoteDebugLog}";
+
+    private static string BuildSiteRemoteDebugSubject(Guid clientId, Guid siteId)
+        => $"tenant.{clientId}.site.{siteId}.agent.*.{PublishRemoteDebugLog}";
 
     private static void EnsureEnabled(ServerConfiguration config)
     {

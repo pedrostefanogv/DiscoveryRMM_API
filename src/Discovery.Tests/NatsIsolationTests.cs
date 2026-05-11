@@ -284,6 +284,45 @@ public class NatsIsolationTests
     }
 
     [Test]
+    public async Task UserCredentials_GlobalRemoteDebugScope_IncludesRemoteDebugWildcard()
+    {
+        var dashboardScope = new UserScopeAccess { HasGlobalAccess = true };
+        var remoteDebugScope = new UserScopeAccess { HasGlobalAccess = true };
+
+        var service = BuildCredentialsService(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var creds = await service.IssueForUserAsync(Guid.NewGuid(), dashboardScope, null, null, default, remoteDebugScope);
+
+        Assert.That(creds.SubscribeSubjects, Does.Contain("tenant.*.site.*.agent.*.remote-debug.log"));
+        Assert.That(creds.PublishSubjects, Is.Empty,
+            "Credencial de usuário deve permanecer somente subscribe mesmo com escopo de remote debug.");
+    }
+
+    [Test]
+    public async Task UserCredentials_SiteRequested_WithRemoteDebugSiteScope_IncludesSiteRemoteDebugSubject()
+    {
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+
+        var dashboardScope = new UserScopeAccess
+        {
+            HasGlobalAccess = false,
+            AllowedClientIds = [clientId],
+        };
+        var remoteDebugScope = new UserScopeAccess
+        {
+            HasGlobalAccess = false,
+            AllowedSiteIds = [siteId],
+        };
+
+        var service = BuildCredentialsService(Guid.NewGuid(), siteId, clientId);
+        var creds = await service.IssueForUserAsync(Guid.NewGuid(), dashboardScope, clientId, siteId, default, remoteDebugScope);
+
+        Assert.That(creds.SubscribeSubjects, Does.Contain($"tenant.{clientId}.site.{siteId}.dashboard.events"));
+        Assert.That(creds.SubscribeSubjects, Does.Contain($"tenant.{clientId}.site.{siteId}.agent.*.remote-debug.log"));
+        Assert.That(creds.SubscribeSubjects, Does.Contain(NatsSubjectBuilder.ServerPongSubject()));
+    }
+
+    [Test]
     public async Task UserCredentials_TwoClients_BothSubjectsPresent_NoCrossContamination()
     {
         var clientA = Guid.NewGuid();

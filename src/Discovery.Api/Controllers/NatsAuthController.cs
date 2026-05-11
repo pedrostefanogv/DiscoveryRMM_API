@@ -35,6 +35,9 @@ public class NatsAuthController : ControllerBase
         var scopeAccess = await _permissionService.GetScopeAccessAsync(userId, ResourceType.Dashboard, ActionType.View);
         if (!scopeAccess.HasGlobalAccess && scopeAccess.AllowedClientIds.Count == 0 && scopeAccess.AllowedSiteIds.Count == 0)
             return Forbid();
+
+        var remoteDebugScopeAccess = await _permissionService.GetScopeAccessAsync(userId, ResourceType.RemoteDebug, ActionType.Execute);
+
         var clientId = request?.ClientId;
         var siteId = request?.SiteId;
 
@@ -52,7 +55,7 @@ public class NatsAuthController : ControllerBase
 
         try
         {
-            var credentials = await _credentialsService.IssueForUserAsync(userId, scopeAccess, clientId, siteId, ct);
+            var credentials = await _credentialsService.IssueForUserAsync(userId, scopeAccess, clientId, siteId, ct, remoteDebugScopeAccess);
             return Ok(credentials);
         }
         catch (InvalidOperationException ex)

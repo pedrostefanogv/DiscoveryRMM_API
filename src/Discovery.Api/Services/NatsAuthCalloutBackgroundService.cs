@@ -257,7 +257,17 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         if (!scopeAccess.HasGlobalAccess && scopeAccess.AllowedClientIds.Count == 0 && scopeAccess.AllowedSiteIds.Count == 0)
             return await BuildErrorResponseAsync("User has no dashboard access.", request.Nats.UserNkey, serverId, configurationService, ct);
 
-        var userJwt = await credentialsService.IssueUserJwtForUserAsync(request.Nats.UserNkey, userId, scopeAccess, ct);
+        var remoteDebugScopeAccess = await permissionService.GetScopeAccessAsync(
+            userId,
+            Discovery.Core.Enums.Identity.ResourceType.RemoteDebug,
+            Discovery.Core.Enums.Identity.ActionType.Execute);
+
+        var userJwt = await credentialsService.IssueUserJwtForUserAsync(
+            request.Nats.UserNkey,
+            userId,
+            scopeAccess,
+            ct,
+            remoteDebugScopeAccess);
         return await BuildSuccessResponseAsync(request, userJwt.Jwt, userJwt.ExpiresAtUtc, configurationService, ct);
     }
 
