@@ -100,6 +100,6 @@ public class SpecialCommandPayloadValidatorTests
                 Assert.That(ok, Is.True, error);
 
                 using var json = JsonDocument.Parse(normalizedPayload);
-                Assert.That(json.RootElement.GetProperty("stream").GetProperty("encoding").GetString(), Is.EqualTo("json"));
+                Assert.That(json.RootElement.GetProperty("stream").GetProperty("natsSubject").GetString(), Is.EqualTo("tenant.c.site.s.agent.a.remote-debug.log"));
     }
 }

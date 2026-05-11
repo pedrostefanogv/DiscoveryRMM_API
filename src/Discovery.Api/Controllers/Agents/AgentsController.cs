@@ -40,6 +40,7 @@ public partial class AgentsController : ControllerBase
     private readonly IMeshCentralApiService _meshCentralApiService;
     private readonly IPermissionService _permissionService;
     private readonly IRemoteDebugSessionManager _remoteDebugSessionManager;
+    private readonly SpecialCommandPayloadValidator _remoteDebugPayloadValidator;
     private readonly ICustomFieldService _customFieldService;
     private readonly ILogger<AgentsController> _logger;
 
@@ -61,6 +62,7 @@ public partial class AgentsController : ControllerBase
         IMeshCentralApiService meshCentralApiService,
         IPermissionService permissionService,
         IRemoteDebugSessionManager remoteDebugSessionManager,
+        SpecialCommandPayloadValidator remoteDebugPayloadValidator,
         ICustomFieldService customFieldService,
         ILogger<AgentsController> logger)
     {
@@ -81,6 +83,7 @@ public partial class AgentsController : ControllerBase
         _meshCentralApiService = meshCentralApiService;
         _permissionService = permissionService;
         _remoteDebugSessionManager = remoteDebugSessionManager;
+        _remoteDebugPayloadValidator = remoteDebugPayloadValidator;
         _customFieldService = customFieldService;
         _logger = logger;
     }

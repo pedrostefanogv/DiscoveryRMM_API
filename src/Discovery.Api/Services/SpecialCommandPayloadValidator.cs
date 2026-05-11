@@ -22,6 +22,7 @@ public sealed class SpecialCommandPayloadValidator
 
     private static readonly HashSet<string> RemoteDebugLogLevels = new(StringComparer.Ordinal)
     {
+        "trace",
         "info",
         "debug",
         "warn",
@@ -176,42 +177,6 @@ public sealed class SpecialCommandPayloadValidator
             return false;
         }
 
-        string? natsWssUrl = null;
-        if (stream.TryGetProperty("natsWssUrl", out var natsWssElement) && natsWssElement.ValueKind != JsonValueKind.Null)
-        {
-            if (!TryReadString(natsWssElement, out var candidateUrl))
-            {
-                validationError = "field 'stream.natsWssUrl' must be a string URL.";
-                return false;
-            }
-
-            if (!Uri.TryCreate(candidateUrl, UriKind.Absolute, out var uri) ||
-                (uri.Scheme != Uri.UriSchemeWs && uri.Scheme != Uri.UriSchemeWss))
-            {
-                validationError = "field 'stream.natsWssUrl' must be an absolute ws/wss URL.";
-                return false;
-            }
-
-            natsWssUrl = candidateUrl;
-        }
-
-        var encoding = "json";
-        if (stream.TryGetProperty("encoding", out var encodingElement) && encodingElement.ValueKind != JsonValueKind.Null)
-        {
-            if (!TryReadString(encodingElement, out var candidateEncoding))
-            {
-                validationError = "field 'stream.encoding' must be a string.";
-                return false;
-            }
-
-            encoding = candidateEncoding.ToLowerInvariant();
-            if (!string.Equals(encoding, "json", StringComparison.Ordinal))
-            {
-                validationError = "field 'stream.encoding' must be 'json'.";
-                return false;
-            }
-        }
-
         string? expiresAtUtc = null;
         if (action == "start")
         {
@@ -239,9 +204,7 @@ public sealed class SpecialCommandPayloadValidator
 
         var streamPayload = new Dictionary<string, object?>
         {
-            ["natsSubject"] = natsSubject,
-            ["natsWssUrl"] = natsWssUrl,
-            ["encoding"] = encoding
+            ["natsSubject"] = natsSubject
         };
 
         var normalized = new Dictionary<string, object?>

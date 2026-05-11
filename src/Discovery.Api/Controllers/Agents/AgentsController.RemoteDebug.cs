@@ -21,7 +21,7 @@ public partial class AgentsController
         if (site is null) return NotFound(new { error = "Site not found." });
 
         if (!await _permissionService.HasPermissionAsync(userId, ResourceType.RemoteDebug, ActionType.Execute, ScopeLevel.Site, agent.SiteId, site.ClientId))
-            return Forbid();
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Acesso negado para remote debug." });
 
         var session = _remoteDebugSessionManager.StartSession(id, userId, site.ClientId, agent.SiteId, request?.LogLevel, request?.TtlMinutes, request?.PreferredTransport);
         var payload = JsonSerializer.Serialize(new
@@ -35,7 +35,11 @@ public partial class AgentsController
                 natsSubject = session.NatsSubject
             }
         });
-        var command = new AgentCommand { AgentId = id, CommandType = CommandType.RemoteDebug, Payload = payload };
+
+        if (!_remoteDebugPayloadValidator.TryNormalize(CommandType.RemoteDebug, payload, out var normalizedPayload, out var validationError))
+            return BadRequest(new { error = validationError });
+
+        var command = new AgentCommand { AgentId = id, CommandType = CommandType.RemoteDebug, Payload = normalizedPayload };
         var created = await _commandDispatcher.DispatchAsync(command);
 
         return Ok(new RemoteDebugStartResponse(session.SessionId, created.Id, session.AgentId, session.LogLevel, session.StartedAtUtc, session.ExpiresAtUtc, session.PreferredTransport, session.NatsSubject));
@@ -51,7 +55,7 @@ public partial class AgentsController
         if (site is null) return NotFound(new { error = "Site not found." });
 
         if (!await _permissionService.HasPermissionAsync(userId, ResourceType.RemoteDebug, ActionType.Execute, ScopeLevel.Site, agent.SiteId, site.ClientId))
-            return Forbid();
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Acesso negado para remote debug." });
 
         if (!_remoteDebugSessionManager.TryGetSessionForUser(sessionId, userId, out var session) || session is null)
             return NotFound(new { error = "Remote debug session not found." });
@@ -66,7 +70,11 @@ public partial class AgentsController
                 natsSubject = session.NatsSubject
             }
         });
-        var command = new AgentCommand { AgentId = id, CommandType = CommandType.RemoteDebug, Payload = payload };
+
+        if (!_remoteDebugPayloadValidator.TryNormalize(CommandType.RemoteDebug, payload, out var normalizedPayload, out var validationError))
+            return BadRequest(new { error = validationError });
+
+        var command = new AgentCommand { AgentId = id, CommandType = CommandType.RemoteDebug, Payload = normalizedPayload };
         var created = await _commandDispatcher.DispatchAsync(command);
         _remoteDebugSessionManager.CloseSession(sessionId, "stopped-by-user", userId);
         return Ok(new { sessionId, commandId = created.Id, stoppedAtUtc = DateTime.UtcNow });
