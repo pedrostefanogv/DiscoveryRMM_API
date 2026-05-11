@@ -1,6 +1,8 @@
+using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -11,6 +13,7 @@ namespace Discovery.Api.Controllers;
 public partial class AgentsController
 {
     [HttpPost("{agentId:guid}/approve-zero-touch")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
     public async Task<IActionResult> ApproveZeroTouch(Guid agentId, CancellationToken cancellationToken = default)
     {
         var agent = await _agentRepo.GetByIdAsync(agentId);
@@ -29,6 +32,7 @@ public partial class AgentsController
     }
 
     [HttpGet("by-site/{siteId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetBySite(Guid siteId)
     {
         var cacheKey = $"agents:by-site:{siteId:N}";
@@ -44,6 +48,7 @@ public partial class AgentsController
     }
 
     [HttpGet("by-client/{clientId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetByClient(Guid clientId)
     {
         var cacheKey = $"agents:by-client:{clientId:N}";
@@ -59,6 +64,7 @@ public partial class AgentsController
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var cacheKey = $"agents:single:{id:N}";
@@ -74,6 +80,7 @@ public partial class AgentsController
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Agents, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateAgentRequest request)
     {
         var agent = new Agent { SiteId = request.SiteId, Hostname = request.Hostname, DisplayName = request.DisplayName, OperatingSystem = request.OperatingSystem, OsVersion = request.OsVersion, AgentVersion = request.AgentVersion };
@@ -83,6 +90,7 @@ public partial class AgentsController
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAgentRequest request)
     {
         var agent = await _agentRepo.GetByIdAsync(id);
@@ -95,6 +103,7 @@ public partial class AgentsController
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var agent = await _agentRepo.GetByIdAsync(id);
@@ -110,6 +119,7 @@ public partial class AgentsController
     }
 
     [HttpGet("{id:guid}/custom-fields")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, CancellationToken ct = default)
     {
         var agent = await _agentRepo.GetByIdAsync(id);
@@ -118,6 +128,7 @@ public partial class AgentsController
     }
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomFieldValue(Guid id, Guid definitionId, [FromBody] UpsertAgentCustomFieldValueRequest request, CancellationToken ct = default)
     {
         var agent = await _agentRepo.GetByIdAsync(id);

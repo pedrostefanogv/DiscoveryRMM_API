@@ -19,6 +19,13 @@ public interface IUserGroupRepository
     // Role assignments
     Task<IEnumerable<UserGroupRole>> GetRolesForGroupAsync(Guid groupId);
     Task<IEnumerable<UserGroupRole>> GetRolesForUserAsync(Guid userId);
+
+    /// <summary>
+    /// Retorna todas as atribuicoes de role do usuario com as permissoes ja incluidas,
+    /// em uma unica query. Elimina o N+1 tradicional.
+    /// </summary>
+    Task<IReadOnlyList<Discovery.Core.DTOs.Identity.RoleAssignmentWithPermissions>> GetRolesWithPermissionsForUserAsync(Guid userId);
+
     Task AssignRoleAsync(UserGroupRole assignment);
     Task RemoveRoleAssignmentAsync(Guid assignmentId);
 }

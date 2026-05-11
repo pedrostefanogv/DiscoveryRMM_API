@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -23,6 +25,7 @@ public class KnowledgeController(
     /// Lista artigos respeitando herança: site → client → global
     /// </summary>
     [HttpGet]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<ActionResult<List<ArticleListItem>>> List(
         [FromQuery] Guid? clientId,
         [FromQuery] Guid? siteId,
@@ -36,6 +39,7 @@ public class KnowledgeController(
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<ActionResult<ArticleResponse>> GetById(Guid id, CancellationToken ct = default)
     {
         var article = await articleRepository.GetByIdAsync(id, ct);
@@ -44,6 +48,7 @@ public class KnowledgeController(
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Create)]
     public async Task<ActionResult<ArticleResponse>> Create(
         [FromBody] CreateArticleRequest request,
         CancellationToken ct = default)
@@ -75,6 +80,7 @@ public class KnowledgeController(
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<ActionResult<ArticleResponse>> Update(
         Guid id,
         [FromBody] UpdateArticleRequest request,
@@ -98,6 +104,7 @@ public class KnowledgeController(
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct = default)
     {
         var article = await articleRepository.GetByIdAsync(id, ct);
@@ -109,6 +116,7 @@ public class KnowledgeController(
     // ─── Publicação ───────────────────────────────────────────────────
 
     [HttpPost("{id:guid}/publish")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<ActionResult<ArticleResponse>> Publish(Guid id, CancellationToken ct = default)
     {
         var article = await articleRepository.GetByIdAsync(id, ct);
@@ -125,6 +133,7 @@ public class KnowledgeController(
     }
 
     [HttpPost("{id:guid}/unpublish")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<ActionResult<ArticleResponse>> Unpublish(Guid id, CancellationToken ct = default)
     {
         var article = await articleRepository.GetByIdAsync(id, ct);
@@ -141,6 +150,7 @@ public class KnowledgeController(
     /// Busca unificada: semantic (pgvector), keyword (ILIKE) ou hybrid (ambos)
     /// </summary>
     [HttpGet("search")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<ActionResult<List<KbSearchResult>>> Search(
         [FromQuery] string q,
         [FromQuery] Guid? clientId,
@@ -211,6 +221,7 @@ public class KnowledgeController(
     // ─── Vínculo Ticket ↔ KB (montado em /api/v1/tickets/{ticketId}/knowledge) ──
 
     [HttpGet("/api/v1/tickets/{ticketId:guid}/knowledge")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<ActionResult<List<TicketKnowledgeLinkResponse>>> GetTicketKnowledge(
         Guid ticketId, CancellationToken ct = default)
     {
@@ -228,6 +239,7 @@ public class KnowledgeController(
     }
 
     [HttpPost("/api/v1/tickets/{ticketId:guid}/knowledge")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<ActionResult<TicketKnowledgeLinkResponse>> LinkToTicket(
         Guid ticketId,
         [FromBody] LinkTicketRequest request,
@@ -251,6 +263,7 @@ public class KnowledgeController(
     }
 
     [HttpDelete("/api/v1/tickets/{ticketId:guid}/knowledge/{articleId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> UnlinkFromTicket(
         Guid ticketId, Guid articleId, CancellationToken ct = default)
     {
@@ -264,6 +277,7 @@ public class KnowledgeController(
     /// Sugere artigos relevantes para um ticket via busca semântica no título+descrição
     /// </summary>
     [HttpGet("/api/v1/tickets/{ticketId:guid}/knowledge/suggest")]
+    [RequirePermission(ResourceType.AiChat, ActionType.View)]
     public async Task<ActionResult<List<KbSearchResult>>> SuggestForTicket(
         Guid ticketId,
         [FromQuery] string q,
@@ -305,6 +319,7 @@ public class KnowledgeController(
     /// Registra feedback (útil / não útil) para um artigo vinculado a um ticket.
     /// </summary>
     [HttpPost("/api/v1/tickets/{ticketId:guid}/knowledge/{articleId:guid}/feedback")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> SetKbLinkFeedback(
         Guid ticketId,
         Guid articleId,

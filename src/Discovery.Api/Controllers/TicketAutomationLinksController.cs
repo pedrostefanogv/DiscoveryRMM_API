@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -30,6 +32,7 @@ public class TicketAutomationLinksController : ControllerBase
     /// Lista todos os vínculos com automação para um ticket.
     /// </summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> List(Guid ticketId, CancellationToken ct)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -56,6 +59,7 @@ public class TicketAutomationLinksController : ControllerBase
     /// Cria um vínculo entre o ticket e uma tarefa de automação (solicita execução).
     /// </summary>
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> Create(
         Guid ticketId,
         [FromBody] CreateAutomationLinkRequest request,
@@ -91,6 +95,7 @@ public class TicketAutomationLinksController : ControllerBase
     /// Aprova a execução da automação vinculada ao ticket.
     /// </summary>
     [HttpPatch("{linkId:guid}/approve")]
+    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
     public async Task<IActionResult> Approve(
         Guid ticketId,
         Guid linkId,
@@ -124,6 +129,7 @@ public class TicketAutomationLinksController : ControllerBase
     /// Rejeita a execução da automação vinculada ao ticket.
     /// </summary>
     [HttpPatch("{linkId:guid}/reject")]
+    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
     public async Task<IActionResult> Reject(
         Guid ticketId,
         Guid linkId,

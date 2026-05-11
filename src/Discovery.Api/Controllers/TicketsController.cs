@@ -5,6 +5,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
 
@@ -26,6 +27,7 @@ public class TicketsController : ControllerBase
     private readonly AlertDispatchService _alertDispatchService;
     private readonly INotificationService _notificationService;
     private readonly ITicketWatcherRepository _watcherRepo;
+    private readonly IScopeContext _scopeContext;
 
     public TicketsController(
         ITicketRepository repo,
@@ -39,7 +41,8 @@ public class TicketsController : ControllerBase
         ITicketAlertRuleRepository ticketAlertRuleRepo,
         AlertDispatchService alertDispatchService,
         INotificationService notificationService,
-        ITicketWatcherRepository watcherRepo)
+        ITicketWatcherRepository watcherRepo,
+        IScopeContext scopeContext)
     {
         _repo = repo;
         _workflowRepo = workflowRepo;
@@ -53,13 +56,23 @@ public class TicketsController : ControllerBase
         _alertDispatchService = alertDispatchService;
         _notificationService = notificationService;
         _watcherRepo = watcherRepo;
+        _scopeContext = scopeContext;
     }
 
     [HttpGet]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] TicketFilterQuery filter)
     {
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
         var tickets = await _repo.GetAllAsync(filter);
+        if (!scope.HasGlobalAccess)
+        {
+            var allowedClientIds = scope.AllowedClientIds.ToHashSet();
+            var allowedSiteIds = scope.AllowedSiteIds.ToHashSet();
+            tickets = tickets.Where(t =>
+                allowedClientIds.Contains(t.ClientId) ||
+                (t.SiteId.HasValue && allowedSiteIds.Contains(t.SiteId.Value)));
+        }
         return Ok(tickets);
     }
 

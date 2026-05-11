@@ -2,6 +2,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,11 +14,13 @@ public class ClientsController : ControllerBase
 {
     private readonly IClientRepository _repo;
     private readonly ICustomFieldService _customFieldService;
+    private readonly IScopeContext _scopeContext;
 
-    public ClientsController(IClientRepository repo, ICustomFieldService customFieldService)
+    public ClientsController(IClientRepository repo, ICustomFieldService customFieldService, IScopeContext scopeContext)
     {
         _repo = repo;
         _customFieldService = customFieldService;
+        _scopeContext = scopeContext;
     }
 
     [HttpGet]
@@ -25,7 +28,10 @@ public class ClientsController : ControllerBase
     [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
     public async Task<IActionResult> GetAll([FromQuery] bool includeInactive = false)
     {
-        var clients = await _repo.GetAllAsync(includeInactive);
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View);
+        var clients = scope.HasGlobalAccess
+            ? await _repo.GetAllAsync(includeInactive)
+            : (await _repo.GetAllAsync(includeInactive)).Where(c => scope.AllowedClientIds.Contains(c.Id));
         return Ok(clients);
     }
 

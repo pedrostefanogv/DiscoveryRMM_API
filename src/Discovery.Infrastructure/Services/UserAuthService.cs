@@ -188,15 +188,11 @@ public class UserAuthService : IUserAuthService
         var assignments = await _userGroups.GetRolesForUserAsync(userId);
         var roleIds = assignments.Select(a => a.RoleId).Distinct().ToList();
 
-        var requirements = new List<RoleMfaRequirement>();
-        foreach (var roleId in roleIds)
-        {
-            var role = await _roles.GetByIdAsync(roleId);
-            if (role is null)
-                continue;
+        if (roleIds.Count == 0)
+            return RoleMfaRequirement.None;
 
-            requirements.Add(role.MfaRequirement);
-        }
+        var roles = await _roles.GetByIdsAsync(roleIds);
+        var requirements = roles.Select(r => r.MfaRequirement).ToList();
 
         if (requirements.Contains(RoleMfaRequirement.Fido2))
             return RoleMfaRequirement.Fido2;
@@ -205,6 +201,33 @@ public class UserAuthService : IUserAuthService
             return RoleMfaRequirement.Totp;
 
         return RoleMfaRequirement.None;
+    }
+
+    public async Task<(bool CanUse, string? Reason)> CanUseApiTokensAsync(Guid userId)
+    {
+        var user = await _users.GetByIdAsync(userId);
+        if (user is null)
+            return (false, "Usuario nao encontrado.");
+
+        if (!user.IsActive)
+            return (false, "Usuario inativo.");
+
+        var requirement = await GetEffectiveMfaRequirementAsync(user.Id);
+        if (requirement == RoleMfaRequirement.None)
+            return (true, null);
+
+        var mfaKeys = (await _mfaKeys.GetActiveByUserIdAsync(user.Id)).ToList();
+        var configured = requirement switch
+        {
+            RoleMfaRequirement.Totp => mfaKeys.Any(k => k.KeyType == MfaKeyType.Totp),
+            RoleMfaRequirement.Fido2 => mfaKeys.Any(k => k.KeyType == MfaKeyType.Fido2),
+            _ => true
+        };
+
+        if (!configured)
+            return (false, "MFA exigido pelas roles do usuario, mas nao configurado. Configure o MFA para usar API tokens.");
+
+        return (true, null);
     }
 
     public async Task CompleteFirstAccessAsync(Guid userId, CompleteFirstAccessRequestDto dto)

@@ -1,6 +1,8 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 
 namespace Discovery.Api.Controllers;
 
@@ -16,6 +18,7 @@ public class NotificationsController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
     public async Task<IActionResult> GetRecent(
         [FromQuery] Guid? recipientUserId,
         [FromQuery] Guid? recipientAgentId,
@@ -30,6 +33,7 @@ public class NotificationsController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Dashboard, ActionType.Create)]
     public async Task<IActionResult> Publish([FromBody] PublishNotificationRequest request, CancellationToken cancellationToken)
     {
         var notification = await _notificationService.PublishAsync(new NotificationPublishRequest(
@@ -49,6 +53,7 @@ public class NotificationsController : ControllerBase
     }
 
     [HttpPatch("{id:guid}/read")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.Edit)]
     public async Task<IActionResult> MarkAsRead(Guid id, [FromQuery] Guid? recipientUserId, [FromQuery] Guid? recipientAgentId, [FromQuery] string? recipientKey)
     {
         var marked = await _notificationService.MarkAsReadAsync(id, recipientUserId, recipientAgentId, recipientKey);

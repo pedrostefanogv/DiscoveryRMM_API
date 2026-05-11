@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
@@ -27,6 +29,7 @@ public class TicketCustomFieldsController : ControllerBase
 
     /// <summary>Retorna todos os valores de campos customizados do ticket.</summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> Get(Guid ticketId, CancellationToken cancellationToken)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -40,6 +43,7 @@ public class TicketCustomFieldsController : ControllerBase
 
     /// <summary>Cria ou atualiza o valor de um campo customizado do ticket.</summary>
     [HttpPut("{definitionId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Upsert(
         Guid ticketId,
         Guid definitionId,

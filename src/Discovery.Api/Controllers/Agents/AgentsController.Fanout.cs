@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -11,6 +13,7 @@ namespace Discovery.Api.Controllers;
 /// </summary>
 public partial class AgentsController
 {
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     [HttpPost("commands/fanout/site/{siteId:guid}")]
     public async Task<IActionResult> SendFanoutCommandToSite(Guid siteId, [FromBody] SendFanoutCommandRequest request, CancellationToken cancellationToken = default)
     {
@@ -50,6 +53,7 @@ public partial class AgentsController
             IdempotencyKey: envelope.IdempotencyKey));
     }
 
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     [HttpPost("commands/fanout/client/{clientId:guid}")]
     public async Task<IActionResult> SendFanoutCommandToClient(Guid clientId, [FromBody] SendFanoutCommandRequest request, CancellationToken cancellationToken = default)
     {
@@ -85,6 +89,7 @@ public partial class AgentsController
             IdempotencyKey: envelope.IdempotencyKey));
     }
 
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     [HttpPost("commands/fanout/global")]
     public async Task<IActionResult> SendFanoutCommandGlobal([FromBody] SendFanoutCommandRequest request, CancellationToken cancellationToken = default)
     {

@@ -1,7 +1,9 @@
 using System.Text.Json;
+using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -13,6 +15,7 @@ public partial class AgentsController
 {
     private enum PackageCommandOperation { Install, Update, Remove, UpdateOrInstall }
 
+    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
     [HttpPost("{id:guid}/automation/tasks/{taskId:guid}/run-now")]
     public async Task<IActionResult> RunAutomationTaskNow(Guid id, Guid taskId, CancellationToken ct = default)
     {
@@ -27,6 +30,7 @@ public partial class AgentsController
         return CreatedAtAction(nameof(GetCommands), new { id }, new { command = created, automationTaskId = task.Id, actionType = task.ActionType.ToString() });
     }
 
+    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
     [HttpPost("{id:guid}/automation/scripts/{scriptId:guid}/run-now")]
     public async Task<IActionResult> RunAutomationScriptNow(Guid id, Guid scriptId, CancellationToken ct = default)
     {
@@ -41,6 +45,7 @@ public partial class AgentsController
         return CreatedAtAction(nameof(GetCommands), new { id }, new { command = created, automationScriptId = script.Id, scriptVersion = script.Version, contentHash = script.ContentHashSha256 });
     }
 
+    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
     [HttpPost("{id:guid}/automation/force-sync")]
     public async Task<IActionResult> ForceAutomationSync(Guid id, [FromBody] ForceAutomationSyncRequest? request)
     {
@@ -54,6 +59,7 @@ public partial class AgentsController
         return CreatedAtAction(nameof(GetCommands), new { id }, new { command = created, sync = normalized });
     }
 
+    [RequirePermission(ResourceType.Automation, ActionType.View)]
     [HttpGet("{id:guid}/automation/executions")]
     public async Task<IActionResult> GetAutomationExecutionHistory(Guid id, [FromQuery] int limit = 50)
     {

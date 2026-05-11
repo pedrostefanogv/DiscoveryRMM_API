@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Entities;
 using Microsoft.AspNetCore.Mvc;
@@ -37,6 +39,7 @@ public class TicketAiController : ControllerBase
     /// Sugere categoria, prioridade e departamento para o ticket.
     /// </summary>
     [HttpPost("triage")]
+    [RequirePermission(ResourceType.AiChat, ActionType.Execute)]
     public async Task<IActionResult> Triage(Guid id, CancellationToken ct)
     {
         var ticket = await _ticketRepo.GetByIdAsync(id);
@@ -78,6 +81,7 @@ public class TicketAiController : ControllerBase
     /// Gera um resumo executivo do ticket com base no histórico de comentários.
     /// </summary>
     [HttpPost("summarize")]
+    [RequirePermission(ResourceType.AiChat, ActionType.Execute)]
     public async Task<IActionResult> Summarize(Guid id, CancellationToken ct)
     {
         var ticket = await _ticketRepo.GetByIdAsync(id);
@@ -122,6 +126,7 @@ public class TicketAiController : ControllerBase
     /// Sugere a próxima resposta ao usuário com base no histórico do ticket.
     /// </summary>
     [HttpPost("suggest-reply")]
+    [RequirePermission(ResourceType.AiChat, ActionType.Execute)]
     public async Task<IActionResult> SuggestReply(Guid id, CancellationToken ct)
     {
         var ticket = await _ticketRepo.GetByIdAsync(id);
@@ -169,6 +174,7 @@ public class TicketAiController : ControllerBase
     /// O artigo é criado como rascunho (IsPublished=false) e o vínculo é registrado.
     /// </summary>
     [HttpPost("draft-kb-article")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Create)]
     public async Task<IActionResult> DraftKbArticle(Guid id, [FromBody] DraftKbArticleRequest? req, CancellationToken ct)
     {
         var ticket = await _ticketRepo.GetByIdAsync(id);

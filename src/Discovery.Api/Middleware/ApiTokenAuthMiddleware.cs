@@ -7,6 +7,7 @@ namespace Discovery.Api.Middleware;
 /// Novo formato recomendado: X-Api-Key: {tokenIdPublic} + X-Api-Secret: {accessKey}.
 /// Formato legado suportado: Authorization: ApiKey {tokenIdPublic}.{accessKey}.
 /// Quando bem-sucedido, define HttpContext.Items["UserId"] e HttpContext.Items["IsApiTokenAuth"] = true.
+/// Verifica se o usuario tem MFA configurado (quando exigido pelas roles).
 /// Executa antes do UserAuthMiddleware não sobrescrever o UserId (ApiKey tem prioridade se presente).
 /// </summary>
 public class ApiTokenAuthMiddleware
@@ -18,7 +19,7 @@ public class ApiTokenAuthMiddleware
 
     public ApiTokenAuthMiddleware(RequestDelegate next) => _next = next;
 
-    public async Task InvokeAsync(HttpContext context, IApiTokenService tokenService)
+    public async Task InvokeAsync(HttpContext context, IApiTokenService tokenService, IUserAuthService userAuthService)
     {
         var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
 
@@ -52,6 +53,14 @@ public class ApiTokenAuthMiddleware
             var userId = await tokenService.AuthenticateAsync(rawKey);
             if (userId.HasValue)
             {
+                var (canUse, reason) = await userAuthService.CanUseApiTokensAsync(userId.Value);
+                if (!canUse)
+                {
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    await context.Response.WriteAsJsonAsync(new { error = reason ?? "API token access denied." });
+                    return;
+                }
+
                 context.Items["UserId"] = userId.Value;
                 context.Items["IsApiTokenAuth"] = true;
             }

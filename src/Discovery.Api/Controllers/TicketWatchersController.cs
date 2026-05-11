@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -25,6 +27,7 @@ public class TicketWatchersController : ControllerBase
 
     /// <summary>Lista todos os watchers do ticket.</summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> List(Guid ticketId)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -43,6 +46,7 @@ public class TicketWatchersController : ControllerBase
 
     /// <summary>Adiciona um watcher ao ticket.</summary>
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> Add(Guid ticketId, [FromBody] AddTicketWatcherRequest req)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -63,6 +67,7 @@ public class TicketWatchersController : ControllerBase
 
     /// <summary>Remove um watcher do ticket.</summary>
     [HttpDelete("{userId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> Remove(Guid ticketId, Guid userId)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);

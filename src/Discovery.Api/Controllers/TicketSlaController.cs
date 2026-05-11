@@ -1,3 +1,5 @@
+using Discovery.Api.Filters;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,6 +25,7 @@ public class TicketSlaController : ControllerBase
     /// Retorna: horasRestantes, percentualUsado, expirado
     /// </summary>
     [HttpGet("status")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetSlaStatus(Guid ticketId)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -50,6 +53,7 @@ public class TicketSlaController : ControllerBase
     /// Obtém informações detalhadas de SLA do ticket, incluindo FRT e estado de pausa.
     /// </summary>
     [HttpGet("details")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetSlaDetails(Guid ticketId)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);

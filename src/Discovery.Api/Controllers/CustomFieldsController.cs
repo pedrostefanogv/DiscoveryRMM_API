@@ -129,6 +129,7 @@ public class CustomFieldsController : ControllerBase
     }
 
     [HttpPut("values/{definitionId:guid}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> UpsertValue(
         Guid definitionId,
         [FromBody] UpsertCustomFieldValueRequest request,

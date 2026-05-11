@@ -1,3 +1,5 @@
+using Discovery.Api.Filters;
+using Discovery.Core.Enums.Identity;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -7,6 +9,7 @@ namespace Discovery.Api.Controllers;
 /// </summary>
 public partial class AgentsController
 {
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     [HttpGet("{id:guid}/hardware")]
     public async Task<IActionResult> GetHardware(Guid id)
     {
@@ -21,6 +24,7 @@ public partial class AgentsController
         return Ok(new { Hardware = payload.Hardware, Disks = payload.Disks, NetworkAdapters = payload.NetworkAdapters, MemoryModules = payload.MemoryModules, Printers = payload.Printers, ListeningPorts = payload.ListeningPorts, OpenSockets = payload.OpenSockets });
     }
 
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     [HttpGet("{id:guid}/software")]
     public async Task<IActionResult> GetSoftware(Guid id, [FromQuery] Guid? cursor = null, [FromQuery] int limit = 100, [FromQuery] string? search = null, [FromQuery] string order = "asc")
     {
@@ -42,6 +46,7 @@ public partial class AgentsController
         return Ok(new { items, count = items.Count, cursor, nextCursor, hasMore, limit = normalizedLimit, search = normalizedSearch, order = normalizedOrder });
     }
 
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     [HttpGet("{id:guid}/software/snapshot")]
     public async Task<IActionResult> GetSoftwareSnapshot(Guid id)
     {

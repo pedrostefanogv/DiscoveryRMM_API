@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -24,6 +26,7 @@ public class WorkflowProfilesController : ControllerBase
     /// Obtém perfis de workflow globais.
     /// </summary>
     [HttpGet("global")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetGlobal()
     {
         var profiles = await _repo.GetGlobalAsync();
@@ -34,6 +37,7 @@ public class WorkflowProfilesController : ControllerBase
     /// Obtém perfis de workflow de um cliente (incluindo globais por padrão).
     /// </summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetByClient([FromQuery] Guid? clientId, [FromQuery] bool includeGlobal = true)
     {
         var profiles = await _repo.GetByClientAsync(clientId, includeGlobal);
@@ -44,6 +48,7 @@ public class WorkflowProfilesController : ControllerBase
     /// Obtém perfis de um departamento específico.
     /// </summary>
     [HttpGet("by-department/{departmentId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetByDepartment(Guid departmentId)
     {
         var profiles = await _repo.GetByDepartmentAsync(departmentId);
@@ -54,6 +59,7 @@ public class WorkflowProfilesController : ControllerBase
     /// Obtém um perfil de workflow específico pelo ID.
     /// </summary>
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var profile = await _repo.GetByIdAsync(id);
@@ -64,6 +70,7 @@ public class WorkflowProfilesController : ControllerBase
     /// Cria um novo perfil de workflow.
     /// </summary>
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateWorkflowProfileRequest request)
     {
         // Validar departamento
@@ -90,6 +97,7 @@ public class WorkflowProfilesController : ControllerBase
     /// Atualiza um perfil de workflow existente.
     /// </summary>
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateWorkflowProfileRequest request)
     {
         var profile = await _repo.GetByIdAsync(id);
@@ -117,6 +125,7 @@ public class WorkflowProfilesController : ControllerBase
     /// Deleta (soft delete) um perfil de workflow.
     /// </summary>
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var profile = await _repo.GetByIdAsync(id);

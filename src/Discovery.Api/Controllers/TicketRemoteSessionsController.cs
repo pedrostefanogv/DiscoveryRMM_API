@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -32,6 +34,7 @@ public class TicketRemoteSessionsController : ControllerBase
 
     /// <summary>Lista todas as sessões remotas do ticket.</summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> List(Guid ticketId, CancellationToken ct)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -46,6 +49,7 @@ public class TicketRemoteSessionsController : ControllerBase
     /// Retorna a sessão criada com o ID que pode ser usado para encerrar depois.
     /// </summary>
     [HttpPost]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> Start(
         Guid ticketId,
         [FromBody] StartRemoteSessionRequest req,
@@ -91,6 +95,7 @@ public class TicketRemoteSessionsController : ControllerBase
     /// Encerra uma sessão remota, registrando duração e nota final.
     /// </summary>
     [HttpPatch("{sessionId:guid}/end")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> End(
         Guid ticketId,
         Guid sessionId,

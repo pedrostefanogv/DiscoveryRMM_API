@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -20,6 +22,7 @@ public class TicketAlertRulesController : ControllerBase
         => _repo = repo;
 
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAll()
     {
         var rules = await _repo.GetAllAsync();
@@ -27,6 +30,7 @@ public class TicketAlertRulesController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var rule = await _repo.GetByIdAsync(id);
@@ -34,6 +38,7 @@ public class TicketAlertRulesController : ControllerBase
     }
 
     [HttpGet("by-workflow-state/{workflowStateId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetByWorkflowState(Guid workflowStateId)
     {
         var rules = await _repo.GetByWorkflowStateIdAsync(workflowStateId);
@@ -41,6 +46,7 @@ public class TicketAlertRulesController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] UpsertTicketAlertRuleRequest request)
     {
         if (!ValidateRequest(request, out var error))
@@ -65,6 +71,7 @@ public class TicketAlertRulesController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpsertTicketAlertRuleRequest request)
     {
         if (!ValidateRequest(request, out var error))
@@ -89,6 +96,7 @@ public class TicketAlertRulesController : ControllerBase
     }
 
     [HttpPatch("{id:guid}/toggle")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Toggle(Guid id)
     {
         var rule = await _repo.GetByIdAsync(id);
@@ -100,6 +108,7 @@ public class TicketAlertRulesController : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var deleted = await _repo.DeleteAsync(id);

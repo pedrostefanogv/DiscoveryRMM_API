@@ -16,13 +16,16 @@ public class RolesController : ControllerBase
 {
     private readonly IRoleRepository _roleRepo;
     private readonly IMeshCentralRightsProfileRepository _meshCentralRightsProfileRepository;
+    private readonly IRedisService _redis;
 
     public RolesController(
         IRoleRepository roleRepo,
-        IMeshCentralRightsProfileRepository meshCentralRightsProfileRepository)
+        IMeshCentralRightsProfileRepository meshCentralRightsProfileRepository,
+        IRedisService redis)
     {
         _roleRepo = roleRepo;
         _meshCentralRightsProfileRepository = meshCentralRightsProfileRepository;
+        _redis = redis;
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────────
@@ -133,6 +136,7 @@ public class RolesController : ControllerBase
         }
         role.UpdatedAt = DateTime.UtcNow;
         await _roleRepo.UpdateAsync(role);
+        await _redis.DeleteByPrefixAsync("perm:");
         return NoContent();
     }
 
@@ -145,6 +149,7 @@ public class RolesController : ControllerBase
         if (role.IsSystem)
             return BadRequest(new { message = "Roles de sistema não podem ser excluídas." });
         await _roleRepo.DeleteAsync(id);
+        await _redis.DeleteByPrefixAsync("perm:");
         return NoContent();
     }
 
@@ -189,6 +194,7 @@ public class RolesController : ControllerBase
             return BadRequest(new { message = "Não é possível modificar permissões de roles de sistema." });
 
         await _roleRepo.AddPermissionToRoleAsync(id, dto.PermissionId);
+        await _redis.DeleteByPrefixAsync("perm:");
         return NoContent();
     }
 
@@ -202,6 +208,7 @@ public class RolesController : ControllerBase
             return BadRequest(new { message = "Não é possível modificar permissões de roles de sistema." });
 
         await _roleRepo.RemovePermissionFromRoleAsync(id, permissionId);
+        await _redis.DeleteByPrefixAsync("perm:");
         return NoContent();
     }
 }

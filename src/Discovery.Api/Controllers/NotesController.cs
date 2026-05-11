@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -28,6 +30,7 @@ public class NotesController : ControllerBase
     // ============ Client notes ============
 
     [HttpGet("clients/{clientId:guid}/notes")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetClientNotes(Guid clientId)
     {
         var client = await _clients.GetByIdAsync(clientId);
@@ -38,6 +41,7 @@ public class NotesController : ControllerBase
     }
 
     [HttpPost("clients/{clientId:guid}/notes")]
+    [RequirePermission(ResourceType.Clients, ActionType.Create)]
     public async Task<IActionResult> CreateClientNote(Guid clientId, [FromBody] CreateNoteRequest request)
     {
         var client = await _clients.GetByIdAsync(clientId);
@@ -61,6 +65,7 @@ public class NotesController : ControllerBase
     // ============ Site notes ============
 
     [HttpGet("sites/{siteId:guid}/notes")]
+    [RequirePermission(ResourceType.Sites, ActionType.View)]
     public async Task<IActionResult> GetSiteNotes(Guid siteId)
     {
         var site = await _sites.GetByIdAsync(siteId);
@@ -71,6 +76,7 @@ public class NotesController : ControllerBase
     }
 
     [HttpPost("sites/{siteId:guid}/notes")]
+    [RequirePermission(ResourceType.Sites, ActionType.Create)]
     public async Task<IActionResult> CreateSiteNote(Guid siteId, [FromBody] CreateNoteRequest request)
     {
         var site = await _sites.GetByIdAsync(siteId);
@@ -94,6 +100,7 @@ public class NotesController : ControllerBase
     // ============ Agent notes ============
 
     [HttpGet("agents/{agentId:guid}/notes")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetAgentNotes(Guid agentId)
     {
         var agent = await _agents.GetByIdAsync(agentId);
@@ -104,6 +111,7 @@ public class NotesController : ControllerBase
     }
 
     [HttpPost("agents/{agentId:guid}/notes")]
+    [RequirePermission(ResourceType.Agents, ActionType.Create)]
     public async Task<IActionResult> CreateAgentNote(Guid agentId, [FromBody] CreateNoteRequest request)
     {
         var agent = await _agents.GetByIdAsync(agentId);
@@ -127,6 +135,7 @@ public class NotesController : ControllerBase
     // ============ Shared note operations ============
 
     [HttpGet("notes/{id:guid}")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var note = await _notes.GetByIdAsync(id);
@@ -134,6 +143,7 @@ public class NotesController : ControllerBase
     }
 
     [HttpPut("notes/{id:guid}")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateNoteRequest request)
     {
         var note = await _notes.GetByIdAsync(id);
@@ -151,6 +161,7 @@ public class NotesController : ControllerBase
     }
 
     [HttpDelete("notes/{id:guid}")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var note = await _notes.GetByIdAsync(id);

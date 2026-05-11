@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,14 +15,17 @@ public class EscalationRulesController : ControllerBase
     public EscalationRulesController(ITicketEscalationRuleRepository repo) => _repo = repo;
 
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAll() =>
         Ok(await _repo.GetAllActiveAsync());
 
     [HttpGet("by-profile/{workflowProfileId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetByProfile(Guid workflowProfileId) =>
         Ok(await _repo.GetByWorkflowProfileIdAsync(workflowProfileId));
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var rule = await _repo.GetByIdAsync(id);
@@ -28,6 +33,7 @@ public class EscalationRulesController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateEscalationRuleRequest request)
     {
         var rule = new TicketEscalationRule
@@ -48,6 +54,7 @@ public class EscalationRulesController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateEscalationRuleRequest request)
     {
         var rule = await _repo.GetByIdAsync(id);
@@ -67,6 +74,7 @@ public class EscalationRulesController : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var rule = await _repo.GetByIdAsync(id);

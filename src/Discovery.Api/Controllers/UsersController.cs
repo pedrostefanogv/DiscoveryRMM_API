@@ -23,19 +23,22 @@ public class UsersController : ControllerBase
     private readonly IUserAuthService _userAuthService;
     private readonly IUserMfaKeyRepository _userMfaKeyRepository;
     private readonly MeshCentralIdentitySyncTriggerService _meshCentralSyncTrigger;
+    private readonly IUserGroupRepository _userGroupRepo;
 
     public UsersController(
         IUserRepository userRepo,
         IPasswordService passwordService,
         IUserAuthService userAuthService,
         IUserMfaKeyRepository userMfaKeyRepository,
-        MeshCentralIdentitySyncTriggerService meshCentralSyncTrigger)
+        MeshCentralIdentitySyncTriggerService meshCentralSyncTrigger,
+        IUserGroupRepository userGroupRepo)
     {
         _userRepo = userRepo;
         _passwordService = passwordService;
         _userAuthService = userAuthService;
         _userMfaKeyRepository = userMfaKeyRepository;
         _meshCentralSyncTrigger = meshCentralSyncTrigger;
+        _userGroupRepo = userGroupRepo;
     }
 
     [HttpGet]
@@ -62,6 +65,8 @@ public class UsersController : ControllerBase
         var user = await _userRepo.GetByIdAsync(id);
         if (user is null) return NotFound();
 
+        var groupIds = await _userGroupRepo.GetGroupIdsForUserAsync(user.Id);
+
         return Ok(new UserDto
         {
             Id = user.Id,
@@ -72,7 +77,8 @@ public class UsersController : ControllerBase
             MfaRequired = user.MfaRequired,
             MfaConfigured = user.MfaConfigured,
             CreatedAt = user.CreatedAt,
-            LastLoginAt = user.LastLoginAt
+            LastLoginAt = user.LastLoginAt,
+            Groups = groupIds.Select(gid => new UserGroupSummaryDto { Id = gid, Name = string.Empty })
         });
     }
 
@@ -83,6 +89,8 @@ public class UsersController : ControllerBase
         var user = await _userRepo.GetByIdAsync(userId);
         if (user is null) return NotFound();
 
+        var groupIds = await _userGroupRepo.GetGroupIdsForUserAsync(user.Id);
+
         return Ok(new UserDto
         {
             Id = user.Id,
@@ -93,7 +101,8 @@ public class UsersController : ControllerBase
             MfaRequired = user.MfaRequired,
             MfaConfigured = user.MfaConfigured,
             CreatedAt = user.CreatedAt,
-            LastLoginAt = user.LastLoginAt
+            LastLoginAt = user.LastLoginAt,
+            Groups = groupIds.Select(gid => new UserGroupSummaryDto { Id = gid, Name = string.Empty })
         });
     }
 
@@ -350,6 +359,52 @@ public class UsersController : ControllerBase
 
         await _userAuthService.UnlockAsync(id);
         return NoContent();
+    }
+
+    // ── Effective Permissions ──────────────────────────────────────────────
+
+    [HttpGet("me/permissions")]
+    public async Task<IActionResult> GetMyPermissions()
+    {
+        var userId = (Guid)HttpContext.Items["UserId"]!;
+        return await GetUserEffectivePermissions(userId);
+    }
+
+    [HttpGet("{id:guid}/effective-permissions")]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
+    public async Task<IActionResult> GetEffectivePermissions(Guid id)
+    {
+        var user = await _userRepo.GetByIdAsync(id);
+        if (user is null) return NotFound();
+        return await GetUserEffectivePermissions(id);
+    }
+
+    private async Task<IActionResult> GetUserEffectivePermissions(Guid userId)
+    {
+        var assignments = await _userGroupRepo.GetRolesWithPermissionsForUserAsync(userId);
+        var result = assignments
+            .SelectMany(a => a.Permissions.Select(p => new
+            {
+                Permission = $"{p.ResourceType}:{p.ActionType}",
+                RoleId = a.Assignment.RoleId,
+                ScopeLevel = a.Assignment.ScopeLevel.ToString(),
+                ScopeId = a.Assignment.ScopeId
+            }))
+            .GroupBy(x => x.Permission)
+            .Select(g => new
+            {
+                Permission = g.Key,
+                Assignments = g.Select(x => new
+                {
+                    x.RoleId,
+                    x.ScopeLevel,
+                    x.ScopeId
+                }).Distinct().ToList()
+            })
+            .OrderBy(x => x.Permission)
+            .ToList();
+
+        return Ok(result);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Api.Services;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc;
@@ -46,6 +48,7 @@ public class RealtimeController : ControllerBase
     }
 
     [HttpGet("status")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
     public IActionResult GetStatus()
     {
         return Ok(new
@@ -57,6 +60,7 @@ public class RealtimeController : ControllerBase
     }
 
     [HttpGet("stats")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
     public async Task<IActionResult> GetStats(CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;

@@ -5,7 +5,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 
 namespace Discovery.Api.Filters;
-
 /// <summary>
 /// Garante que a requisição possui uma sessão de usuário válida
 /// (JWT de sessão completa OU autenticação via API token).
@@ -186,13 +185,15 @@ public class RequirePermissionAttribute : Attribute, IFilterFactory
     public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
     {
         var permissionService = serviceProvider.GetRequiredService<IPermissionService>();
-        return new RequirePermissionFilter(permissionService, _resource, _action, _scopeSource);
+        var scopeContext = serviceProvider.GetRequiredService<IScopeContext>();
+        return new RequirePermissionFilter(permissionService, scopeContext, _resource, _action, _scopeSource);
     }
 }
 
 internal class RequirePermissionFilter : IAsyncActionFilter
 {
     private readonly IPermissionService _permissionService;
+    private readonly IScopeContext _scopeContext;
     private readonly ResourceType _resource;
     private readonly ActionType _action;
     private readonly ScopeSource _scopeSource;
@@ -211,9 +212,10 @@ internal class RequirePermissionFilter : IAsyncActionFilter
         "siteId"
     };
 
-    public RequirePermissionFilter(IPermissionService permissionService, ResourceType resource, ActionType action, ScopeSource scopeSource = ScopeSource.Global)
+    public RequirePermissionFilter(IPermissionService permissionService, IScopeContext scopeContext, ResourceType resource, ActionType action, ScopeSource scopeSource = ScopeSource.Global)
     {
         _permissionService = permissionService;
+        _scopeContext = scopeContext;
         _resource = resource;
         _action = action;
         _scopeSource = scopeSource;
@@ -240,6 +242,8 @@ internal class RequirePermissionFilter : IAsyncActionFilter
                 };
                 return;
             }
+
+            _scopeContext.SetUserId(userId);
         }
         else // ScopeSource.FromRoute
         {
@@ -259,6 +263,11 @@ internal class RequirePermissionFilter : IAsyncActionFilter
             // Popula HttpContext.Items para uso futuro (ex.: queries filtradas)
             context.HttpContext.Items["ClientId"] = scopeLevel == ScopeLevel.Client ? scopeId : parentScopeId;
             context.HttpContext.Items["SiteId"] = scopeLevel == ScopeLevel.Site ? scopeId : null;
+
+            // Popula IScopeContext para row-level security nos controllers
+            _scopeContext.SetUserId(userId);
+            _scopeContext.ResolvedClientId = scopeLevel == ScopeLevel.Client ? scopeId : parentScopeId;
+            _scopeContext.ResolvedSiteId = scopeLevel == ScopeLevel.Site ? scopeId : null;
         }
 
         await next();
@@ -300,7 +309,8 @@ internal class RequirePermissionFilter : IAsyncActionFilter
         var controllerTypeName = context.Controller.GetType().Name;
         if (TryGetRouteGuid(routeValues, EntityIdKeys, out var entityId))
         {
-            if (controllerTypeName.EndsWith("ClientsController", StringComparison.OrdinalIgnoreCase))
+            if (controllerTypeName.EndsWith("ClientsController", StringComparison.OrdinalIgnoreCase) ||
+                controllerTypeName.EndsWith("SitesController", StringComparison.OrdinalIgnoreCase))
             {
                 return (ScopeLevel.Client, entityId, null);
             }

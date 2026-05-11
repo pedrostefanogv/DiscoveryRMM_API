@@ -91,6 +91,9 @@ builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
 builder.Services.AddSingleton(TimeProvider.System);
 
+// Scoped scope context (cache de escopo intra-request para queries filtradas)
+builder.Services.AddScoped<Discovery.Core.Interfaces.Auth.IScopeContext, Discovery.Infrastructure.Services.ScopeContext>();
+
 // PDF rendering using Playwright.NET (embedded, no external service required, zero vulnerabilities)
 if (builder.Configuration.GetValue<bool>("Reporting:EnablePdf"))
 {

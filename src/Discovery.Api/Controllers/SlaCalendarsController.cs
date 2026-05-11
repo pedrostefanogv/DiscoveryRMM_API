@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -20,6 +22,7 @@ public class SlaCalendarsController : ControllerBase
     /// Lista todos os calendários (opcionalmente filtrado por clientId).
     /// </summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> List([FromQuery] Guid? clientId, CancellationToken ct)
     {
         var calendars = await _calendarRepo.GetAllAsync(clientId, ct);
@@ -40,6 +43,7 @@ public class SlaCalendarsController : ControllerBase
     /// Obtém um calendário pelo Id, incluindo feriados.
     /// </summary>
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> Get(Guid id, CancellationToken ct)
     {
         var calendar = await _calendarRepo.GetByIdAsync(id, ct);
@@ -63,6 +67,7 @@ public class SlaCalendarsController : ControllerBase
     /// Cria um novo calendário de horas úteis.
     /// </summary>
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateSlaCalendarRequest request, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.Name))
@@ -85,6 +90,7 @@ public class SlaCalendarsController : ControllerBase
     /// Atualiza configurações do calendário.
     /// </summary>
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSlaCalendarRequest request, CancellationToken ct)
     {
         var calendar = await _calendarRepo.GetByIdAsync(id, ct);
@@ -105,6 +111,7 @@ public class SlaCalendarsController : ControllerBase
     /// Remove um calendário.
     /// </summary>
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         await _calendarRepo.DeleteAsync(id, ct);
@@ -115,6 +122,7 @@ public class SlaCalendarsController : ControllerBase
     /// Adiciona um feriado ao calendário.
     /// </summary>
     [HttpPost("{id:guid}/holidays")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> AddHoliday(Guid id, [FromBody] AddHolidayRequest request, CancellationToken ct)
     {
         var calendar = await _calendarRepo.GetByIdAsync(id, ct);
@@ -138,6 +146,7 @@ public class SlaCalendarsController : ControllerBase
     /// Remove um feriado do calendário.
     /// </summary>
     [HttpDelete("{id:guid}/holidays/{holidayId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> DeleteHoliday(Guid id, Guid holidayId, CancellationToken ct)
     {
         await _calendarRepo.DeleteHolidayAsync(holidayId, ct);

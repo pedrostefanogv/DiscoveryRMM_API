@@ -1,3 +1,5 @@
+using Discovery.Api.Filters;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -16,6 +18,7 @@ public class TicketKpiController : ControllerBase
     /// Parâmetros de filtro opcionais: clientId, departmentId, since (ISO 8601).
     /// </summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
     public async Task<IActionResult> GetKpi(
         [FromQuery] Guid? clientId,
         [FromQuery] Guid? departmentId,

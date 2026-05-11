@@ -14,6 +14,17 @@ public class RoleRepository : IRoleRepository
     public Task<Role?> GetByIdAsync(Guid id)
         => _db.Roles.AsNoTracking().SingleOrDefaultAsync(r => r.Id == id);
 
+    public async Task<IEnumerable<Role>> GetByIdsAsync(IEnumerable<Guid> ids)
+    {
+        var idSet = ids.Where(id => id != Guid.Empty).Distinct().ToHashSet();
+        if (idSet.Count == 0)
+            return [];
+
+        return await _db.Roles.AsNoTracking()
+            .Where(r => idSet.Contains(r.Id))
+            .ToListAsync();
+    }
+
     public async Task<IEnumerable<Role>> GetAllAsync()
         => await _db.Roles.AsNoTracking().OrderBy(r => r.Name).ToListAsync();
 

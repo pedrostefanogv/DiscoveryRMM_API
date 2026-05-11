@@ -25,6 +25,12 @@ public class ApiToken
     public DateTime? LastUsedAt { get; set; }
     public DateTime? ExpiresAt { get; set; }
 
+    /// <summary>Restricao opcional de escopo (Global, Client, Site).</summary>
+    public string? ScopeLevel { get; set; }
+
+    /// <summary>ID do escopo quando ScopeLevel for Client ou Site.</summary>
+    public Guid? ScopeId { get; set; }
+
     public bool IsExpired => ExpiresAt.HasValue && DateTime.UtcNow > ExpiresAt.Value;
     public bool IsValid => IsActive && !IsExpired;
 }

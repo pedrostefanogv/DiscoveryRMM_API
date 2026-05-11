@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Discovery.Api.Filters;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -29,6 +31,7 @@ public class SoftwareInventoryController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetGlobal(
         [FromQuery] Guid? cursor = null,
         [FromQuery] int limit = 100,
@@ -52,6 +55,7 @@ public class SoftwareInventoryController : ControllerBase
     }
 
     [HttpGet("snapshot")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetGlobalSnapshot()
     {
         var snapshot = await GetOrSetCacheAsync("software-inventory:global:snapshot", () => _softwareRepo.GetInventoryGlobalSnapshotAsync());
@@ -59,6 +63,7 @@ public class SoftwareInventoryController : ControllerBase
     }
 
     [HttpGet("top")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetGlobalTop([FromQuery] int limit = 20)
     {
         var normalizedLimit = Math.Clamp(limit, 1, 200);
@@ -73,6 +78,7 @@ public class SoftwareInventoryController : ControllerBase
     }
 
     [HttpGet("by-client/{clientId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetByClient(
         Guid clientId,
         [FromQuery] Guid? cursor = null,
@@ -100,6 +106,7 @@ public class SoftwareInventoryController : ControllerBase
     }
 
     [HttpGet("by-client/{clientId:guid}/snapshot")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetByClientSnapshot(Guid clientId)
     {
         var client = await _clientRepo.GetByIdAsync(clientId);
@@ -112,6 +119,7 @@ public class SoftwareInventoryController : ControllerBase
     }
 
     [HttpGet("by-site/{siteId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetBySite(
         Guid siteId,
         [FromQuery] Guid? cursor = null,
@@ -138,6 +146,7 @@ public class SoftwareInventoryController : ControllerBase
     }
 
     [HttpGet("by-site/{siteId:guid}/snapshot")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetBySiteSnapshot(Guid siteId)
     {
         var site = await _siteRepo.GetByIdAsync(siteId);
@@ -150,6 +159,7 @@ public class SoftwareInventoryController : ControllerBase
     }
 
     [HttpGet("by-site/{siteId:guid}/top")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetBySiteTop(Guid siteId, [FromQuery] int limit = 20)
     {
         var site = await _siteRepo.GetByIdAsync(siteId);

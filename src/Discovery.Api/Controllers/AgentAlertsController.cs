@@ -1,6 +1,8 @@
+using Discovery.Api.Filters;
 using Discovery.Api.Services;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
@@ -41,6 +43,7 @@ public class AgentAlertsController : ControllerBase
     /// Lista alertas com filtros opcionais.
     /// </summary>
     [HttpGet]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetAll(
         [FromQuery] AlertDefinitionStatus? status,
         [FromQuery] AlertScopeType? scopeType,
@@ -59,6 +62,7 @@ public class AgentAlertsController : ControllerBase
     /// Retorna um alerta por ID.
     /// </summary>
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var alert = await _alertService.GetByIdAsync(id);
@@ -71,6 +75,7 @@ public class AgentAlertsController : ControllerBase
     /// Se ScheduledAt for definido, o scheduler enviará no momento correto.
     /// </summary>
     [HttpPost]
+    [RequirePermission(ResourceType.Agents, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateAlertRequest request, CancellationToken cancellationToken)
     {
         if (!ValidateRequest(request, out var validationError))
@@ -109,6 +114,7 @@ public class AgentAlertsController : ControllerBase
     /// Despacha manualmente um alerta existente (re-envio ou disparo de rascunho).
     /// </summary>
     [HttpPost("{id:guid}/dispatch")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> Dispatch(Guid id, CancellationToken cancellationToken)
     {
         var alert = await _alertService.GetByIdAsync(id);
@@ -132,6 +138,7 @@ public class AgentAlertsController : ControllerBase
     /// Se o alerta já tiver TicketId, retorna o ticket existente sem criar novo.
     /// </summary>
     [HttpPost("{id:guid}/create-ticket")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> CreateTicket(
         Guid id,
         [FromBody] CreateTicketFromAlertRequest request,
@@ -159,6 +166,7 @@ public class AgentAlertsController : ControllerBase
     /// Cancela um alerta que ainda não foi despachado.
     /// </summary>
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
     public async Task<IActionResult> Cancel(Guid id)
     {
         var cancelled = await _alertService.CancelAsync(id);
@@ -173,6 +181,7 @@ public class AgentAlertsController : ControllerBase
     /// lista de agents, sites, clients e labels distintas.
     /// </summary>
     [HttpGet("scope-options")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetScopeOptions()
     {
         var agents = (await _agentRepo.GetAllAsync())
@@ -193,6 +202,7 @@ public class AgentAlertsController : ControllerBase
     /// O agent de destino é obrigatório (testAgentId).
     /// </summary>
     [HttpPost("test-dispatch")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> TestDispatch([FromBody] TestDispatchRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Title))

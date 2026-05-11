@@ -1,18 +1,29 @@
+using System.Text.Json;
+using Discovery.Core.DTOs.Identity;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
+
 namespace Discovery.Infrastructure.Services;
 
 /// <inheritdoc />
 public class PermissionService : IPermissionService
 {
     private readonly IUserGroupRepository _groups;
-    private readonly IRoleRepository _roles;
+    private readonly IRedisService _redis;
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+    };
 
-    public PermissionService(IUserGroupRepository groups, IRoleRepository roles)
+    private const string CachePrefix = "perm:user:";
+    private const int CacheTtl = 300;
+
+    public PermissionService(IUserGroupRepository groups, IRedisService redis)
     {
         _groups = groups;
-        _roles = roles;
+        _redis = redis;
     }
 
     public async Task<bool> HasPermissionAsync(
@@ -23,20 +34,14 @@ public class PermissionService : IPermissionService
         Guid? scopeId = null,
         Guid? parentScopeId = null)
     {
-        // Carrega todas as atribuições de role do usuário (via grupos)
-        var assignments = (await _groups.GetRolesForUserAsync(userId)).ToList();
+        var assignments = await GetUserRolesAsync(userId);
 
         foreach (var assignment in assignments)
         {
-            // Verifica se o escopo é compatível com a solicitação
-            if (!IsScopeMatch(assignment.ScopeLevel, assignment.ScopeId, scopeLevel, scopeId, parentScopeId))
+            if (!IsScopeMatch(assignment.Assignment.ScopeLevel, assignment.Assignment.ScopeId, scopeLevel, scopeId, parentScopeId))
                 continue;
 
-            // Verifica se a role tem a permissão requisitada
-            // Nota: as permissões da role precisam ser carregadas via IRoleRepository.
-            // Para não carregar individualmente, usamos o IUserGroupRepository que já
-            // pode retornar as permissões como parte do query otimizado.
-            if (await HasRolePermissionAsync(assignment.RoleId, resource, action))
+            if (assignment.Permissions.Any(p => p.ResourceType == resource && p.ActionType == action))
                 return true;
         }
 
@@ -45,7 +50,7 @@ public class PermissionService : IPermissionService
 
     public async Task<UserScopeAccess> GetScopeAccessAsync(Guid userId, ResourceType resource, ActionType action)
     {
-        var assignments = (await _groups.GetRolesForUserAsync(userId)).ToList();
+        var assignments = await GetUserRolesAsync(userId);
 
         var hasGlobal = false;
         var clientIds = new List<Guid>();
@@ -53,19 +58,19 @@ public class PermissionService : IPermissionService
 
         foreach (var assignment in assignments)
         {
-            if (!await HasRolePermissionAsync(assignment.RoleId, resource, action))
+            if (!assignment.Permissions.Any(p => p.ResourceType == resource && p.ActionType == action))
                 continue;
 
-            switch (assignment.ScopeLevel)
+            switch (assignment.Assignment.ScopeLevel)
             {
                 case ScopeLevel.Global:
                     hasGlobal = true;
                     break;
-                case ScopeLevel.Client when assignment.ScopeId.HasValue:
-                    clientIds.Add(assignment.ScopeId.Value);
+                case ScopeLevel.Client when assignment.Assignment.ScopeId.HasValue:
+                    clientIds.Add(assignment.Assignment.ScopeId.Value);
                     break;
-                case ScopeLevel.Site when assignment.ScopeId.HasValue:
-                    siteIds.Add(assignment.ScopeId.Value);
+                case ScopeLevel.Site when assignment.Assignment.ScopeId.HasValue:
+                    siteIds.Add(assignment.Assignment.ScopeId.Value);
                     break;
             }
         }
@@ -78,6 +83,90 @@ public class PermissionService : IPermissionService
         };
     }
 
+    private readonly Dictionary<Guid, IReadOnlyList<RoleAssignmentWithPermissions>> _userRoleCache = new();
+
+    private async Task<IReadOnlyList<RoleAssignmentWithPermissions>> GetUserRolesAsync(Guid userId)
+    {
+        if (_userRoleCache.TryGetValue(userId, out var roles))
+            return roles;
+
+        roles = await TryLoadFromRedisAsync(userId);
+        if (roles is not null)
+        {
+            _userRoleCache[userId] = roles;
+            return roles;
+        }
+
+        roles = (await _groups.GetRolesWithPermissionsForUserAsync(userId)).ToList();
+        _userRoleCache[userId] = roles;
+
+        _ = SaveToRedisAsync(userId, roles);
+
+        return roles;
+    }
+
+    private async Task<IReadOnlyList<RoleAssignmentWithPermissions>?> TryLoadFromRedisAsync(Guid userId)
+    {
+        try
+        {
+            var cached = await _redis.GetAsync($"{CachePrefix}{userId:N}");
+            if (cached is null) return null;
+
+            var flat = JsonSerializer.Deserialize<List<CachedPermissionEntry>>(cached, _jsonOptions);
+            if (flat is null || flat.Count == 0) return null;
+
+            var grouped = flat
+                .GroupBy(e => new { e.RoleId, e.ScopeLevel, e.ScopeId })
+                .Select(g =>
+                {
+                    var first = g.First();
+                    var sl = Enum.TryParse<ScopeLevel>(first.ScopeLevel, out var parsed) ? parsed : ScopeLevel.Global;
+                    return new RoleAssignmentWithPermissions(
+                        new Core.Entities.Identity.UserGroupRole
+                        {
+                            RoleId = first.RoleId,
+                            ScopeLevel = sl,
+                            ScopeId = first.ScopeId
+                        },
+                        g.Select(e => new Core.Entities.Identity.Permission
+                        {
+                            ResourceType = Enum.TryParse<ResourceType>(e.ResourceType, out var r) ? r : default,
+                            ActionType = Enum.TryParse<ActionType>(e.ActionType, out var a) ? a : default
+                        }).ToList());
+                })
+                .ToList();
+
+            return grouped;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task SaveToRedisAsync(Guid userId, IReadOnlyList<RoleAssignmentWithPermissions> roles)
+    {
+        try
+        {
+            var flat = roles.SelectMany(r =>
+                r.Permissions.Select(p => new CachedPermissionEntry(
+                    r.Assignment.RoleId,
+                    r.Assignment.ScopeLevel.ToString(),
+                    r.Assignment.ScopeId,
+                    p.ResourceType.ToString(),
+                    p.ActionType.ToString())))
+                .Distinct()
+                .ToList();
+
+            var json = JsonSerializer.Serialize(flat, _jsonOptions);
+            await _redis.SetAsync($"{CachePrefix}{userId:N}", json, CacheTtl);
+        }
+        catch
+        {
+            // Redis indisponivel — cache salta silenciosamente
+        }
+    }
+
     private bool IsScopeMatch(
         ScopeLevel assignmentScope,
         Guid? assignmentScopeId,
@@ -85,21 +174,17 @@ public class PermissionService : IPermissionService
         Guid? requestedScopeId,
         Guid? parentScopeId)
     {
-        // Global assignment cobre qualquer scope
         if (assignmentScope == ScopeLevel.Global)
             return true;
 
-        // Client assignment cobre o mesmo client ou sites desse client
         if (assignmentScope == ScopeLevel.Client && assignmentScopeId.HasValue)
         {
             if (requestedScope == ScopeLevel.Client && requestedScopeId == assignmentScopeId)
                 return true;
-            // Site dentro do cliente (parentScopeId = clientId do site)
             if (requestedScope == ScopeLevel.Site && parentScopeId == assignmentScopeId)
                 return true;
         }
 
-        // Site assignment cobre exatamente o mesmo site
         if (assignmentScope == ScopeLevel.Site && assignmentScopeId.HasValue)
         {
             if (requestedScope == ScopeLevel.Site && requestedScopeId == assignmentScopeId)
@@ -107,28 +192,5 @@ public class PermissionService : IPermissionService
         }
 
         return false;
-    }
-
-    // Cache simples por request para evitar N+1: usado via Lazy loading futuro
-    private readonly Dictionary<Guid, HashSet<(ResourceType, ActionType)>> _permissionCache = new();
-
-    private async Task<bool> HasRolePermissionAsync(Guid roleId, ResourceType resource, ActionType action)
-    {
-        if (!_permissionCache.TryGetValue(roleId, out var perms))
-        {
-            var permissions = await _roles.GetPermissionsForRoleAsync(roleId);
-            perms = permissions.Select(p => (p.ResourceType, p.ActionType)).ToHashSet();
-            _permissionCache[roleId] = perms;
-        }
-        return perms.Contains((resource, action));
-    }
-
-    private async Task<HashSet<(ResourceType, ActionType)>> LoadRolePermissionsAsync(Guid roleId)
-    {
-        // Implementação mínima - será expandida via IRoleRepository
-        // Retorna empty set; a implementação real em UserGroupRepository pode
-        // retornar permissions junto com as assignments via JOIN.
-        await Task.CompletedTask;
-        return [];
     }
 }

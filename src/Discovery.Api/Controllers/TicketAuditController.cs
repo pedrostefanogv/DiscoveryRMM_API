@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,6 +25,7 @@ public class TicketAuditController : ControllerBase
     /// Timeline unificada: combina atividades e comentários em ordem cronológica.
     /// </summary>
     [HttpGet("timeline/unified")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetUnifiedTimeline(Guid ticketId)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -71,6 +74,7 @@ public class TicketAuditController : ControllerBase
     /// Obtém o histórico completo (timeline) de um ticket.
     /// </summary>
     [HttpGet("timeline")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetTimeline(Guid ticketId)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -85,6 +89,7 @@ public class TicketAuditController : ControllerBase
     /// Obtém atividades filtrando por tipo.
     /// </summary>
     [HttpGet("timeline/activity-type/{activityType}")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetByActivityType(Guid ticketId, string activityType)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -102,6 +107,7 @@ public class TicketAuditController : ControllerBase
     /// Obtém atividades filtrando por usuário.
     /// </summary>
     [HttpGet("timeline/user/{userId:guid}")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetByUser(Guid ticketId, Guid userId)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -116,6 +122,7 @@ public class TicketAuditController : ControllerBase
     /// Obtém histórico filtrado por data.
     /// </summary>
     [HttpGet("timeline/date-range")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetByDateRange(
         Guid ticketId,
         [FromQuery] DateTime from,
@@ -136,6 +143,7 @@ public class TicketAuditController : ControllerBase
     /// Obtém a última atividade registrada no ticket.
     /// </summary>
     [HttpGet("timeline/last")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetLastActivity(Guid ticketId)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);
@@ -150,6 +158,7 @@ public class TicketAuditController : ControllerBase
     /// Obtém estatísticas de atividade do ticket.
     /// </summary>
     [HttpGet("statistics")]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> GetStatistics(Guid ticketId)
     {
         var ticket = await _ticketRepo.GetByIdAsync(ticketId);

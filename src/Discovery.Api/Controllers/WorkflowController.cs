@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -15,6 +17,7 @@ public class WorkflowController : ControllerBase
     // --- States ---
 
     [HttpGet("states")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetStates([FromQuery] Guid? clientId)
     {
         var states = await _repo.GetStatesAsync(clientId);
@@ -22,6 +25,7 @@ public class WorkflowController : ControllerBase
     }
 
     [HttpGet("states/{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetState(Guid id)
     {
         var state = await _repo.GetStateByIdAsync(id);
@@ -29,6 +33,7 @@ public class WorkflowController : ControllerBase
     }
 
     [HttpPost("states")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> CreateState([FromBody] CreateWorkflowStateRequest request)
     {
         var state = new WorkflowState
@@ -45,6 +50,7 @@ public class WorkflowController : ControllerBase
     }
 
     [HttpPut("states/{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> UpdateState(Guid id, [FromBody] UpdateStateRequest request)
     {
         var state = await _repo.GetStateByIdAsync(id);
@@ -61,6 +67,7 @@ public class WorkflowController : ControllerBase
     }
 
     [HttpDelete("states/{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> DeleteState(Guid id)
     {
         await _repo.DeleteStateAsync(id);
@@ -70,6 +77,7 @@ public class WorkflowController : ControllerBase
     // --- Transitions ---
 
     [HttpGet("transitions")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetTransitions([FromQuery] Guid? clientId)
     {
         var transitions = await _repo.GetTransitionsAsync(clientId);
@@ -77,6 +85,7 @@ public class WorkflowController : ControllerBase
     }
 
     [HttpGet("transitions/from/{fromStateId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetTransitionsFromState(Guid fromStateId, [FromQuery] Guid? clientId)
     {
         var transitions = await _repo.GetTransitionsFromStateAsync(fromStateId, clientId);
@@ -84,6 +93,7 @@ public class WorkflowController : ControllerBase
     }
 
     [HttpPost("transitions")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> CreateTransition([FromBody] CreateWorkflowTransitionRequest request)
     {
         var transition = new WorkflowTransition
@@ -98,6 +108,7 @@ public class WorkflowController : ControllerBase
     }
 
     [HttpDelete("transitions/{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> DeleteTransition(Guid id)
     {
         await _repo.DeleteTransitionAsync(id);

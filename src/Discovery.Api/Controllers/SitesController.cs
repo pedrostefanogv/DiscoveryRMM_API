@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -19,6 +21,7 @@ public class SitesController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetByClient(Guid clientId, [FromQuery] bool includeInactive = false)
     {
         var sites = await _repo.GetByClientIdAsync(clientId, includeInactive);
@@ -26,6 +29,7 @@ public class SitesController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetById(Guid clientId, Guid id)
     {
         var site = await _repo.GetByIdAsync(id);
@@ -34,6 +38,7 @@ public class SitesController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Sites, ActionType.Create, ScopeSource.FromRoute)]
     public async Task<IActionResult> Create(Guid clientId, [FromBody] CreateSiteRequest request)
     {
         var site = new Site
@@ -47,6 +52,7 @@ public class SitesController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Sites, ActionType.Edit, ScopeSource.FromRoute)]
     public async Task<IActionResult> Update(Guid clientId, Guid id, [FromBody] UpdateSiteRequest request)
     {
         var site = await _repo.GetByIdAsync(id);
@@ -61,6 +67,7 @@ public class SitesController : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Sites, ActionType.Delete, ScopeSource.FromRoute)]
     public async Task<IActionResult> Delete(Guid clientId, Guid id)
     {
         var site = await _repo.GetByIdAsync(id);
@@ -70,6 +77,7 @@ public class SitesController : ControllerBase
     }
 
     [HttpGet("{id:guid}/custom-fields")]
+    [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetCustomFieldValues(
         Guid clientId,
         Guid id,
@@ -85,6 +93,7 @@ public class SitesController : ControllerBase
     }
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
+    [RequirePermission(ResourceType.Sites, ActionType.Edit, ScopeSource.FromRoute)]
     public async Task<IActionResult> UpsertCustomFieldValue(
         Guid clientId,
         Guid id,

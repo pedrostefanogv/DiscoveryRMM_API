@@ -5,6 +5,7 @@ namespace Discovery.Core.Interfaces.Identity;
 public interface IRoleRepository
 {
     Task<Role?> GetByIdAsync(Guid id);
+    Task<IEnumerable<Role>> GetByIdsAsync(IEnumerable<Guid> ids);
     Task<IEnumerable<Role>> GetAllAsync();
     Task<Role> CreateAsync(Role role);
     Task<Role> UpdateAsync(Role role);

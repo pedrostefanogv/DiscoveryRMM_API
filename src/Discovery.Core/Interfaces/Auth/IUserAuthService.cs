@@ -43,6 +43,12 @@ public interface IUserAuthService
     Task<RoleMfaRequirement> GetEffectiveMfaRequirementAsync(Guid userId);
 
     /// <summary>
+    /// Verifica se o usuario pode usar API tokens.
+    /// Requer MFA configurado se as roles do usuario exigirem MFA.
+    /// </summary>
+    Task<(bool CanUse, string? Reason)> CanUseApiTokensAsync(Guid userId);
+
+    /// <summary>
     /// Desbloqueia manualmente uma conta (reset de lockout). Ex.: admin desbloqueia usuário após lockout temporário.
     /// </summary>
     Task UnlockAsync(Guid userId);

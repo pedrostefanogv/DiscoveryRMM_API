@@ -43,6 +43,14 @@ public class UserGroupRepository : IUserGroupRepository
 
     public async Task AddMemberAsync(Guid groupId, Guid userId)
     {
+        var group = await _db.UserGroups.FindAsync(groupId);
+        if (group is null || !group.IsActive)
+            throw new InvalidOperationException("Grupo nao encontrado ou inativo.");
+
+        var user = await _db.Users.FindAsync(userId);
+        if (user is null || !user.IsActive)
+            throw new InvalidOperationException("Usuario nao encontrado ou inativo.");
+
         var exists = await _db.UserGroupMemberships
             .AnyAsync(m => m.GroupId == groupId && m.UserId == userId);
         if (exists) return;
@@ -58,9 +66,12 @@ public class UserGroupRepository : IUserGroupRepository
 
     public async Task RemoveMemberAsync(Guid groupId, Guid userId)
     {
-        await _db.UserGroupMemberships
+        var rows = await _db.UserGroupMemberships
             .Where(m => m.GroupId == groupId && m.UserId == userId)
             .ExecuteDeleteAsync();
+
+        if (rows == 0)
+            throw new InvalidOperationException("Usuario nao pertence ao grupo.");
     }
 
     public async Task<IEnumerable<Guid>> GetMemberIdsAsync(Guid groupId)
@@ -86,6 +97,24 @@ public class UserGroupRepository : IUserGroupRepository
             .Join(_db.UserGroupRoles, m => m.GroupId, r => r.GroupId, (m, r) => r)
             .AsNoTracking()
             .ToListAsync();
+
+    public async Task<IReadOnlyList<Discovery.Core.DTOs.Identity.RoleAssignmentWithPermissions>> GetRolesWithPermissionsForUserAsync(Guid userId)
+    {
+        var flat = await _db.UserGroupMemberships
+            .Where(m => m.UserId == userId)
+            .Join(_db.UserGroupRoles, m => m.GroupId, r => r.GroupId, (m, r) => r)
+            .Join(_db.RolePermissions, r => r.RoleId, rp => rp.RoleId, (r, rp) => new { Assignment = r, PermissionId = rp.PermissionId })
+            .Join(_db.Permissions, x => x.PermissionId, p => p.Id, (x, p) => new { x.Assignment, Permission = p })
+            .AsNoTracking()
+            .ToListAsync();
+
+        return flat
+            .GroupBy(x => x.Assignment.Id)
+            .Select(g => new Discovery.Core.DTOs.Identity.RoleAssignmentWithPermissions(
+                g.First().Assignment,
+                g.Select(x => x.Permission).DistinctBy(p => p.Id).ToList()))
+            .ToList();
+    }
 
     public async Task AssignRoleAsync(UserGroupRole assignment)
     {

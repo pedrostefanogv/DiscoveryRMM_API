@@ -74,6 +74,7 @@ public class UserAuthMiddleware
                     context.Items["UserId"] = userId;
                     context.Items["MfaPending"] = principal.FindFirstValue("mfa_pending") == "true";
                     context.Items["MfaSetup"] = principal.FindFirstValue("mfa_setup") == "true";
+                    context.Items["MfaVerified"] = principal.FindFirstValue("mfa_verified") == "true";
 
                     var jti = principal.FindFirstValue("jti");
                     if (!string.IsNullOrEmpty(jti))

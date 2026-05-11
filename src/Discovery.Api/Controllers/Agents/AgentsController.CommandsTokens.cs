@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -10,10 +12,12 @@ namespace Discovery.Api.Controllers;
 /// </summary>
 public partial class AgentsController
 {
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     [HttpGet("{id:guid}/commands")]
     public async Task<IActionResult> GetCommands(Guid id, [FromQuery] int limit = 50)
         => Ok(await _commandRepo.GetByAgentIdAsync(id, limit));
 
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     [HttpPost("{id:guid}/commands")]
     public async Task<IActionResult> SendCommand(Guid id, [FromBody] SendCommandRequest request)
     {
@@ -24,9 +28,11 @@ public partial class AgentsController
         return CreatedAtAction(nameof(GetCommands), new { id }, created);
     }
 
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     [HttpGet("{id:guid}/tokens")]
     public async Task<IActionResult> GetTokens(Guid id) => Ok(await _authService.GetTokensByAgentIdAsync(id));
 
+    [RequirePermission(ResourceType.Agents, ActionType.Create)]
     [HttpPost("{id:guid}/tokens")]
     public async Task<IActionResult> CreateToken(Guid id, [FromBody] CreateTokenRequest request)
     {
@@ -36,9 +42,11 @@ public partial class AgentsController
         return Ok(new { Token = rawToken, Id = token.Id, ExpiresAt = token.ExpiresAt });
     }
 
+    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
     [HttpDelete("{id:guid}/tokens/{tokenId:guid}")]
     public async Task<IActionResult> RevokeToken(Guid id, Guid tokenId) { await _authService.RevokeTokenAsync(tokenId); return NoContent(); }
 
+    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
     [HttpDelete("{id:guid}/tokens")]
     public async Task<IActionResult> RevokeAllTokens(Guid id) { await _authService.RevokeAllTokensAsync(id); return NoContent(); }
 }

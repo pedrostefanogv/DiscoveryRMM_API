@@ -18,15 +18,18 @@ public class UserGroupsController : ControllerBase
     private readonly IUserGroupRepository _groupRepo;
     private readonly IRoleRepository _roleRepo;
     private readonly MeshCentralIdentitySyncTriggerService _meshCentralSyncTrigger;
+    private readonly IRedisService _redis;
 
     public UserGroupsController(
         IUserGroupRepository groupRepo,
         IRoleRepository roleRepo,
-        MeshCentralIdentitySyncTriggerService meshCentralSyncTrigger)
+        MeshCentralIdentitySyncTriggerService meshCentralSyncTrigger,
+        IRedisService redis)
     {
         _groupRepo = groupRepo;
         _roleRepo = roleRepo;
         _meshCentralSyncTrigger = meshCentralSyncTrigger;
+        _redis = redis;
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────────
@@ -98,17 +101,18 @@ public class UserGroupsController : ControllerBase
         group.IsActive = dto.IsActive ?? group.IsActive;
         group.UpdatedAt = DateTime.UtcNow;
         await _groupRepo.UpdateAsync(group);
+        await _redis.DeleteByPrefixAsync("perm:");
         return NoContent();
     }
 
     [HttpDelete("{id:guid}")]
-
     [RequirePermission(ResourceType.Users, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var group = await _groupRepo.GetByIdAsync(id);
         if (group is null) return NotFound();
         await _groupRepo.DeleteAsync(id);
+        await _redis.DeleteByPrefixAsync("perm:");
         return NoContent();
     }
 
@@ -124,22 +128,22 @@ public class UserGroupsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/members")]
-
     [RequirePermission(ResourceType.Users, ActionType.Edit)]
     public async Task<IActionResult> AddMember(Guid id, [FromBody] AddGroupMemberDto dto)
     {
         await _groupRepo.AddMemberAsync(id, dto.UserId);
         await _meshCentralSyncTrigger.OnUserScopesChangedBestEffortAsync(dto.UserId, HttpContext.RequestAborted);
+        await _redis.DeleteAsync($"perm:user:{dto.UserId:N}");
         return NoContent();
     }
 
     [HttpDelete("{id:guid}/members/{userId:guid}")]
-
     [RequirePermission(ResourceType.Users, ActionType.Edit)]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
     {
         await _groupRepo.RemoveMemberAsync(id, userId);
         await _meshCentralSyncTrigger.OnUserScopesChangedBestEffortAsync(userId, HttpContext.RequestAborted);
+        await _redis.DeleteAsync($"perm:user:{userId:N}");
         return NoContent();
     }
 
@@ -171,12 +175,12 @@ public class UserGroupsController : ControllerBase
 
         var memberIds = await _groupRepo.GetMemberIdsAsync(id);
         await _meshCentralSyncTrigger.OnUsersScopesChangedBestEffortAsync(memberIds, HttpContext.RequestAborted);
+        await _redis.DeleteByPrefixAsync("perm:");
 
         return NoContent();
     }
 
     [HttpDelete("{id:guid}/roles/{assignmentId:guid}")]
-
     [RequirePermission(ResourceType.Users, ActionType.Edit)]
     public async Task<IActionResult> RemoveRoleAssignment(Guid id, Guid assignmentId)
     {
@@ -188,6 +192,7 @@ public class UserGroupsController : ControllerBase
 
         var memberIds = await _groupRepo.GetMemberIdsAsync(id);
         await _meshCentralSyncTrigger.OnUsersScopesChangedBestEffortAsync(memberIds, HttpContext.RequestAborted);
+        await _redis.DeleteByPrefixAsync("perm:");
 
         return NoContent();
     }

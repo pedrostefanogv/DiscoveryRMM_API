@@ -1,7 +1,9 @@
 using System.Text.Json;
+using Discovery.Api.Filters;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using CoreLogLevel = Discovery.Core.Enums.LogLevel;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,6 +25,7 @@ public class LogsController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ResourceType.Logs, ActionType.View)]
     public async Task<IActionResult> Query(
         [FromQuery] Guid? clientId,
         [FromQuery] Guid? siteId,
@@ -54,6 +57,7 @@ public class LogsController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Logs, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateLogRequest request)
     {
         if (request.AgentId is null && request.SiteId is null && request.ClientId is null)

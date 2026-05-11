@@ -160,6 +160,8 @@ public partial class DiscoveryDbContext
             e.Property(t => t.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(t => t.LastUsedAt).HasColumnName("last_used_at").HasColumnType("timestamptz");
             e.Property(t => t.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
+            e.Property(t => t.ScopeLevel).HasColumnName("scope_level").HasConversion<string>().HasMaxLength(32);
+            e.Property(t => t.ScopeId).HasColumnName("scope_id");
             e.HasIndex(t => t.TokenIdPublic).IsUnique().HasDatabaseName("ix_api_tokens_token_id_public");
             e.HasIndex(t => t.UserId).HasDatabaseName("ix_api_tokens_user_id");
         });
