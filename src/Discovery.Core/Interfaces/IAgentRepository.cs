@@ -13,5 +13,6 @@ public interface IAgentRepository
     Task UpdateStatusAsync(Guid id, Enums.AgentStatus status, string? ipAddress);
     Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default);
     Task ApproveZeroTouchAsync(Guid agentId);
+    Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId);
     Task DeleteAsync(Guid id);
 }

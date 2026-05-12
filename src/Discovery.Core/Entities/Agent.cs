@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Discovery.Core.Enums;
 
 namespace Discovery.Core.Entities;
@@ -8,7 +9,6 @@ public class Agent
     public Guid SiteId { get; set; }
     public string Hostname { get; set; } = string.Empty;
     public string? DisplayName { get; set; }
-    /// <summary>Identificador tecnico do node no MeshCentral.</summary>
     public string? MeshCentralNodeId { get; set; }
     public AgentStatus Status { get; set; } = AgentStatus.Offline;
     public string? OperatingSystem { get; set; }
@@ -20,6 +20,13 @@ public class Agent
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public DateTime? DeletedAt { get; set; }
-    /// <summary>Indica que o agent foi registrado via zero-touch (discovery) e aguarda aprovação manual.</summary>
     public bool ZeroTouchPending { get; set; }
+
+    public bool MaintenanceEnabled { get; set; }
+    public string? MaintenanceReason { get; set; }
+    public DateTime? MaintenanceChangedAt { get; set; }
+    public Guid? MaintenanceChangedByUserId { get; set; }
+
+    [JsonIgnore]
+    public AgentStatus EffectiveStatus => MaintenanceEnabled ? AgentStatus.Maintenance : Status;
 }

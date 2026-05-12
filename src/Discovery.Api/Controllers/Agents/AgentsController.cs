@@ -149,6 +149,9 @@ public partial class AgentsController : ControllerBase
         if (heartbeat is null)
             return;
 
+        if (agent.MaintenanceEnabled)
+            return;
+
         agent.Status = AgentStatus.Online;
         agent.LastSeenAt = heartbeat.LastHeartbeatAt;
     }
@@ -169,6 +172,11 @@ public partial class AgentsController : ControllerBase
 
     private static void ApplyEffectiveStatus(Agent agent, int onlineGraceSeconds)
     {
+        if (agent.MaintenanceEnabled)
+        {
+            agent.Status = AgentStatus.Maintenance;
+            return;
+        }
         if (agent.Status != AgentStatus.Online) return;
         var cutoffUtc = DateTime.UtcNow.AddSeconds(-NormalizeOnlineGraceSeconds(onlineGraceSeconds));
         if (!agent.LastSeenAt.HasValue || agent.LastSeenAt.Value < cutoffUtc)

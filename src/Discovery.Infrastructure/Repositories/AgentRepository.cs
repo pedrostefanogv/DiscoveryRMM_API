@@ -79,6 +79,10 @@ public class AgentRepository : IAgentRepository
         existingAgent.MacAddress = agent.MacAddress;
         existingAgent.LastSeenAt = agent.LastSeenAt;
         existingAgent.ZeroTouchPending = agent.ZeroTouchPending;
+        existingAgent.MaintenanceEnabled = agent.MaintenanceEnabled;
+        existingAgent.MaintenanceReason = agent.MaintenanceReason;
+        existingAgent.MaintenanceChangedAt = agent.MaintenanceChangedAt;
+        existingAgent.MaintenanceChangedByUserId = agent.MaintenanceChangedByUserId;
         existingAgent.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
@@ -91,6 +95,19 @@ public class AgentRepository : IAgentRepository
             .Where(agent => agent.Id == agentId)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(agent => agent.ZeroTouchPending, _ => false)
+                .SetProperty(agent => agent.UpdatedAt, _ => now));
+    }
+
+    public async Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId)
+    {
+        var now = DateTime.UtcNow;
+        await _db.Agents
+            .Where(agent => agent.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(agent => agent.MaintenanceEnabled, _ => enabled)
+                .SetProperty(agent => agent.MaintenanceReason, _ => reason)
+                .SetProperty(agent => agent.MaintenanceChangedAt, _ => now)
+                .SetProperty(agent => agent.MaintenanceChangedByUserId, _ => changedByUserId)
                 .SetProperty(agent => agent.UpdatedAt, _ => now));
     }
 

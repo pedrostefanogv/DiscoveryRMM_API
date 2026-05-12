@@ -128,6 +128,20 @@ public partial class DiscoveryDbContext
                 .HasColumnName("zero_touch_pending")
                 .HasDefaultValue(false);
 
+            entity.Property(agent => agent.MaintenanceEnabled)
+                .HasColumnName("maintenance_enabled")
+                .HasDefaultValue(false);
+            entity.Property(agent => agent.MaintenanceReason)
+                .HasColumnName("maintenance_reason")
+                .HasMaxLength(500);
+            entity.Property(agent => agent.MaintenanceChangedAt)
+                .HasColumnName("maintenance_changed_at")
+                .HasColumnType("timestamptz");
+            entity.Property(agent => agent.MaintenanceChangedByUserId)
+                .HasColumnName("maintenance_changed_by_user_id");
+
+            entity.Ignore(agent => agent.EffectiveStatus);
+
             entity.HasOne<Site>()
                 .WithMany()
                 .HasForeignKey(agent => agent.SiteId)
