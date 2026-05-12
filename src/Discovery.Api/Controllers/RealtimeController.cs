@@ -20,6 +20,7 @@ public class RealtimeController : ControllerBase
 {
     private readonly IAgentMessaging _messaging;
     private readonly IRedisService _redisService;
+    private readonly IHeartbeatCacheService _heartbeatCache;
     private readonly NatsConnection _natsConnection;
     private readonly IConnectionMultiplexer _redisConnection;
     private readonly DiscoveryDbContext _dbContext;
@@ -30,6 +31,7 @@ public class RealtimeController : ControllerBase
     public RealtimeController(
         IAgentMessaging messaging,
         IRedisService redisService,
+        IHeartbeatCacheService heartbeatCache,
         NatsConnection natsConnection,
         IConnectionMultiplexer redisConnection,
         DiscoveryDbContext dbContext,
@@ -39,6 +41,7 @@ public class RealtimeController : ControllerBase
     {
         _messaging = messaging;
         _redisService = redisService;
+        _heartbeatCache = heartbeatCache;
         _natsConnection = natsConnection;
         _redisConnection = redisConnection;
         _dbContext = dbContext;
@@ -181,10 +184,11 @@ public class RealtimeController : ControllerBase
             var serverConfig = await _configurationResolver.GetServerAsync();
             var onlineGraceSeconds = serverConfig.AgentOnlineGraceSeconds;
             var agents = await _dbContext.Agents.AsNoTracking()
-                .Select(agent => new AgentStatusProjection(agent.SiteId, agent.Status, agent.LastSeenAt))
+                .Select(agent => new AgentStatusProjection(agent.Id, agent.SiteId, agent.Status, agent.LastSeenAt))
                 .ToListAsync(cancellationToken);
 
             var graceBySite = await ResolveGraceBySiteAsync(agents.Select(agent => agent.SiteId));
+            var heartbeatByAgent = await GetHeartbeatSnapshotAsync(agents.Select(agent => agent.Id), cancellationToken);
 
             var totalClients = await _dbContext.Clients.AsNoTracking().CountAsync(cancellationToken);
             var totalSites = await _dbContext.Sites.AsNoTracking().CountAsync(cancellationToken);
@@ -198,13 +202,22 @@ public class RealtimeController : ControllerBase
             var now = DateTime.UtcNow;
             foreach (var agent in agents)
             {
-                switch (agent.Status)
+                var effectiveStatus = agent.Status;
+                var effectiveLastSeenAt = agent.LastSeenAt;
+
+                if (heartbeatByAgent.TryGetValue(agent.Id, out var heartbeat))
+                {
+                    effectiveStatus = AgentStatus.Online;
+                    effectiveLastSeenAt = heartbeat.LastHeartbeatAt;
+                }
+
+                switch (effectiveStatus)
                 {
                     case AgentStatus.Online:
                     {
                         var graceSeconds = graceBySite.GetValueOrDefault(agent.SiteId, 120);
                         var cutoffUtc = now.AddSeconds(-graceSeconds);
-                        if (agent.LastSeenAt.HasValue && agent.LastSeenAt.Value >= cutoffUtc)
+                        if (effectiveLastSeenAt.HasValue && effectiveLastSeenAt.Value >= cutoffUtc)
                             agentsOnline++;
                         else
                             agentsStale++;
@@ -312,7 +325,27 @@ public class RealtimeController : ControllerBase
         return values.ToDictionary(item => item.siteId, item => item.grace);
     }
 
-    private readonly record struct AgentStatusProjection(Guid SiteId, AgentStatus Status, DateTime? LastSeenAt);
+    private async Task<Dictionary<Guid, HeartbeatCacheEntry>> GetHeartbeatSnapshotAsync(
+        IEnumerable<Guid> agentIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = agentIds.Distinct().ToArray();
+        if (ids.Length == 0)
+            return [];
+
+        var tasks = ids.Select(async id => new
+        {
+            AgentId = id,
+            Entry = await _heartbeatCache.GetHeartbeatAsync(id, cancellationToken)
+        });
+
+        var results = await Task.WhenAll(tasks);
+        return results
+            .Where(item => item.Entry is not null)
+            .ToDictionary(item => item.AgentId, item => item.Entry!);
+    }
+
+    private readonly record struct AgentStatusProjection(Guid Id, Guid SiteId, AgentStatus Status, DateTime? LastSeenAt);
 
     private static int GetAvailableWorkers()
     {

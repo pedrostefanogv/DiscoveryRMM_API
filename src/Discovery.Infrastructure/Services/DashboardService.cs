@@ -18,15 +18,18 @@ public class DashboardService : IDashboardService
     private readonly DiscoveryDbContext _db;
     private readonly IRedisService _redisService;
     private readonly IConfigurationResolver _configurationResolver;
+    private readonly IHeartbeatCacheService _heartbeatCache;
 
     public DashboardService(
         DiscoveryDbContext db,
         IRedisService redisService,
-        IConfigurationResolver configurationResolver)
+        IConfigurationResolver configurationResolver,
+        IHeartbeatCacheService heartbeatCache)
     {
         _db = db;
         _redisService = redisService;
         _configurationResolver = configurationResolver;
+        _heartbeatCache = heartbeatCache;
     }
 
     public Task<DashboardSummaryDto> GetGlobalSummaryAsync(TimeSpan window, CancellationToken cancellationToken = default)
@@ -62,8 +65,12 @@ public class DashboardService : IDashboardService
         var scopedLogsWindow = BuildScopedLogsWindowQuery(level, clientId, siteId, windowStartUtc);
 
         var agentSummaries = await scopedAgents
-            .Select(a => new AgentStatusProjection(a.SiteId, a.Status, a.LastSeenAt))
+            .Select(a => new AgentStatusProjection(a.Id, a.SiteId, a.Status, a.LastSeenAt))
             .ToListAsync(cancellationToken);
+
+        var heartbeatByAgent = await GetHeartbeatSnapshotAsync(
+            agentSummaries.Select(agent => agent.Id),
+            cancellationToken);
 
         var graceBySite = await ResolveGraceBySiteAsync(agentSummaries.Select(agent => agent.SiteId));
 
@@ -76,13 +83,22 @@ public class DashboardService : IDashboardService
 
         foreach (var agent in agentSummaries)
         {
-            switch (agent.Status)
+            var effectiveStatus = agent.Status;
+            var effectiveLastSeenAt = agent.LastSeenAt;
+
+            if (heartbeatByAgent.TryGetValue(agent.Id, out var heartbeat))
+            {
+                effectiveStatus = AgentStatus.Online;
+                effectiveLastSeenAt = heartbeat.LastHeartbeatAt;
+            }
+
+            switch (effectiveStatus)
             {
                 case AgentStatus.Online:
                 {
                     var graceSeconds = graceBySite.GetValueOrDefault(agent.SiteId, DefaultOnlineGraceSeconds);
                     var cutoffUtc = now.AddSeconds(-graceSeconds);
-                    if (agent.LastSeenAt.HasValue && agent.LastSeenAt.Value >= cutoffUtc)
+                    if (effectiveLastSeenAt.HasValue && effectiveLastSeenAt.Value >= cutoffUtc)
                         agentsOnline++;
                     else
                         agentsStale++;
@@ -210,6 +226,26 @@ public class DashboardService : IDashboardService
 
         var values = await Task.WhenAll(tasks);
         return values.ToDictionary(item => item.siteId, item => item.grace);
+    }
+
+    private async Task<Dictionary<Guid, HeartbeatCacheEntry>> GetHeartbeatSnapshotAsync(
+        IEnumerable<Guid> agentIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = agentIds.Distinct().ToArray();
+        if (ids.Length == 0)
+            return [];
+
+        var tasks = ids.Select(async id => new
+        {
+            AgentId = id,
+            Entry = await _heartbeatCache.GetHeartbeatAsync(id, cancellationToken)
+        });
+
+        var results = await Task.WhenAll(tasks);
+        return results
+            .Where(item => item.Entry is not null)
+            .ToDictionary(item => item.AgentId, item => item.Entry!);
     }
 
     private async Task<int> ResolveReportedGraceSecondsAsync(
@@ -387,7 +423,7 @@ public class DashboardService : IDashboardService
     private static int ToWindowHours(TimeSpan window)
         => (int)Math.Clamp(Math.Round(window.TotalHours), 1, 168);
 
-    private readonly record struct AgentStatusProjection(Guid SiteId, AgentStatus Status, DateTime? LastSeenAt);
+    private readonly record struct AgentStatusProjection(Guid Id, Guid SiteId, AgentStatus Status, DateTime? LastSeenAt);
 
     private enum DashboardScopeLevel
     {
