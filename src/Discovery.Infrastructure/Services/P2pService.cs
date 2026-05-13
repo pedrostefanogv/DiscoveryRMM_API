@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -206,7 +207,7 @@ public class P2pService : IP2pService
 
     public async Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusAsync(
         Guid agentId,
-        string? artifactId,
+        Guid? artifactId,
         int limit,
         int offset,
         CancellationToken ct = default)
@@ -227,7 +228,7 @@ public class P2pService : IP2pService
 
     public async Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusPageAsync(
         Guid agentId,
-        string? artifactId,
+        Guid? artifactId,
         string? cursor,
         int limit,
         CancellationToken ct = default)
@@ -400,7 +401,7 @@ public class P2pService : IP2pService
         string scope,
         Guid? tenantId,
         Guid? siteId,
-        string? artifactId,
+        Guid? artifactId,
         int limit,
         int offset,
         CancellationToken ct = default)
@@ -420,7 +421,7 @@ public class P2pService : IP2pService
         string scope,
         Guid? tenantId,
         Guid? siteId,
-        string? artifactId,
+        Guid? artifactId,
         string? cursor,
         int limit,
         CancellationToken ct = default)
@@ -691,7 +692,7 @@ public class P2pService : IP2pService
         Guid? siteId,
         Guid? clientId,
         bool global,
-        string? artifactId,
+        Guid? artifactId,
         int limit,
         int offset,
         string? cursor,
@@ -699,59 +700,89 @@ public class P2pService : IP2pService
     {
         var presenceCutoff = DateTime.UtcNow.AddHours(-2);
 
-        var query = _db.P2pArtifactPresences
+        var baseQuery = _db.P2pArtifactPresences
             .AsNoTracking()
             .Where(p => p.LastSeenAt >= presenceCutoff);
 
         if (!global)
         {
             if (siteId.HasValue)
-                query = query.Where(p => p.SiteId == siteId.Value);
+                baseQuery = baseQuery.Where(p => p.SiteId == siteId.Value);
             else if (clientId.HasValue)
-                query = query.Where(p => p.ClientId == clientId.Value);
+                baseQuery = baseQuery.Where(p => p.ClientId == clientId.Value);
         }
 
-        if (!string.IsNullOrWhiteSpace(artifactId))
-            query = query.Where(p => p.ArtifactId == artifactId);
+        if (artifactId.HasValue)
+            baseQuery = baseQuery.Where(p => p.ArtifactId == artifactId.Value);
 
-        // Agrupar por ArtifactId
-        var grouped = await query
+        // ── Fase 1: GROUP BY no banco com keyset Type A ──────────────────
+        var aggQuery = baseQuery
             .GroupBy(p => new { p.ArtifactId, p.ArtifactName })
             .Select(g => new
             {
                 g.Key.ArtifactId,
                 g.Key.ArtifactName,
                 PeerCount = g.Count(),
-                AgentIds = g.Select(p => p.AgentId.ToString()).ToList(),
                 LastUpdatedUtc = g.Max(p => p.LastSeenAt)
-            })
-            .ToListAsync(ct);
+            });
 
-        var total = grouped.Count;
-
-        int effectiveOffset;
+        // Keyset filter (Type A: DateTime desc + Guid desc)
         if (!string.IsNullOrWhiteSpace(cursor))
         {
-            effectiveOffset = DecodeOffsetCursor(cursor);
+            if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorTs, out var cursorId))
+            {
+                aggQuery = aggQuery.Where(a =>
+                    a.LastUpdatedUtc < cursorTs ||
+                    (a.LastUpdatedUtc == cursorTs && a.ArtifactId.CompareTo(cursorId) < 0));
+            }
+        }
+
+        int effectiveOffset = 0;
+        if (string.IsNullOrWhiteSpace(cursor) && offset > 0)
+            effectiveOffset = Math.Max(0, offset);
+
+        var total = await aggQuery.CountAsync(ct);
+
+        var pageRows = effectiveOffset > 0
+            ? await aggQuery
+                .OrderByDescending(a => a.LastUpdatedUtc)
+                .ThenByDescending(a => a.ArtifactId)
+                .Skip(effectiveOffset)
+                .Take(limit)
+                .ToListAsync(ct)
+            : await aggQuery
+                .OrderByDescending(a => a.LastUpdatedUtc)
+                .ThenByDescending(a => a.ArtifactId)
+                .Take(limit)
+                .ToListAsync(ct);
+
+        // ── Fase 2: AgentIds apenas para a fatia visível ──────────────────
+        var artifactIds = pageRows.Select(a => a.ArtifactId).Distinct().ToList();
+        Dictionary<Guid, List<string>> agentIdsMap;
+        if (artifactIds.Count > 0)
+        {
+            var rawAgentIds = await _db.P2pArtifactPresences
+                .AsNoTracking()
+                .Where(p => artifactIds.Contains(p.ArtifactId) && p.LastSeenAt >= presenceCutoff)
+                .Select(p => new { p.ArtifactId, p.AgentId })
+                .ToListAsync(ct);
+
+            agentIdsMap = rawAgentIds
+                .GroupBy(x => x.ArtifactId)
+                .ToDictionary(g => g.Key, g => g.Select(x => x.AgentId.ToString()).ToList());
         }
         else
         {
-            effectiveOffset = Math.Max(0, offset);
+            agentIdsMap = new();
         }
 
-        var page = grouped
-            .OrderByDescending(g => g.LastUpdatedUtc)
-            .Skip(effectiveOffset)
-            .Take(limit)
-            .ToList();
-
-        var items = page.Select(g => new P2pDistributionStatusItem
+        var items = pageRows.Select(a => new P2pDistributionStatusItem
         {
-            ArtifactId = g.ArtifactId,
-            ArtifactName = g.ArtifactName,
-            PeerCount = g.PeerCount,
-            PeerAgentIds = g.PeerCount <= 500 ? g.AgentIds : null,
-            LastUpdatedUtc = g.LastUpdatedUtc.ToString("O")
+            ArtifactId = a.ArtifactId,
+            ArtifactName = a.ArtifactName,
+            PeerCount = a.PeerCount,
+            PeerAgentIds = agentIdsMap.TryGetValue(a.ArtifactId, out var ids) && ids.Count <= 500 ? ids : null,
+            LastUpdatedUtc = a.LastUpdatedUtc.ToString("O")
         }).ToList();
 
         return (items, total);
@@ -816,22 +847,6 @@ public class P2pService : IP2pService
         <= 168 => "7d",
         _ => $"{(int)window.TotalHours}h"
     };
-
-    private static string EncodeOffsetCursor(int offset)
-        => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"p2p:{offset}"));
-
-    private static int DecodeOffsetCursor(string? cursor)
-    {
-        if (string.IsNullOrWhiteSpace(cursor)) return 0;
-        try
-        {
-            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
-            if (raw.StartsWith("p2p:") && int.TryParse(raw[4..], out var offset))
-                return Math.Max(0, offset);
-        }
-        catch { }
-        return 0;
-    }
 
     private static string DetermineHealth(double failureRate, double queuePressure)
     {

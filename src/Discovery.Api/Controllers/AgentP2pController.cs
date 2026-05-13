@@ -107,7 +107,7 @@ public class AgentP2pController : ControllerBase
     /// </summary>
     [HttpGet("me/p2p-distribution-status")]
     public async Task<IActionResult> GetDistributionStatus(
-        [FromQuery] string? artifactId = null,
+        [FromQuery] Guid? artifactId = null,
         [FromQuery] int limit = 100,
         [FromQuery] int offset = 0,
         CancellationToken ct = default)
@@ -131,7 +131,7 @@ public class AgentP2pController : ControllerBase
 
     [HttpGet("me/p2p-distribution-status/page")]
     public async Task<IActionResult> GetDistributionStatusPage(
-        [FromQuery] string? artifactId = null,
+        [FromQuery] Guid? artifactId = null,
         [FromQuery] string? cursor = null,
         [FromQuery] int limit = 100,
         CancellationToken ct = default)
@@ -148,7 +148,10 @@ public class AgentP2pController : ControllerBase
 
         var (items, _) = await _p2p.GetDistributionStatusPageAsync(agentId, artifactId, cursor, limit, ct);
         var slice = CursorPaginationHelper.SlicePage(items, Math.Clamp(limit, 1, 500));
-        var nextCursor = slice.HasMore ? Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"p2p:{limit}")) : null;
+        var nextCursor = slice.HasMore && slice.LastItem is not null
+            ? CursorPaginationHelper.EncodeCreatedAtCursor(
+                DateTime.Parse(slice.LastItem.LastUpdatedUtc), slice.LastItem.ArtifactId)
+            : null;
         return Ok(new CursorPageDto<P2pDistributionStatusItem>(slice.Page, slice.Page.Count, cursor, nextCursor, slice.HasMore, Math.Clamp(limit, 1, 500)));
     }
 

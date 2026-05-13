@@ -47,7 +47,7 @@ public partial class DiscoveryDbContext
         {
             e.ToTable("p2p_artifact_presence");
             e.HasKey(p => new { p.ArtifactId, p.AgentId });
-            e.Property(p => p.ArtifactId).HasColumnName("artifact_id").HasMaxLength(512);
+            e.Property(p => p.ArtifactId).HasColumnName("artifact_id");
             e.Property(p => p.AgentId).HasColumnName("agent_id");
             e.Property(p => p.SiteId).HasColumnName("site_id");
             e.Property(p => p.ClientId).HasColumnName("client_id");

@@ -50,7 +50,7 @@ public class P2pMetricsDto
 
 public class P2pDistributionStatusItem
 {
-    public string ArtifactId { get; set; } = string.Empty;
+    public Guid ArtifactId { get; set; }
     public string? ArtifactName { get; set; }
     public int PeerCount { get; set; }
     /// <summary>Omitido quando PeerCount > 500.</summary>

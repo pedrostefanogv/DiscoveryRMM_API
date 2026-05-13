@@ -32,14 +32,14 @@ public interface IP2pService
     /// </summary>
     Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusAsync(
         Guid agentId,
-        string? artifactId,
+        Guid? artifactId,
         int limit,
         int offset,
         CancellationToken ct = default);
 
     Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusPageAsync(
         Guid agentId,
-        string? artifactId,
+        Guid? artifactId,
         string? cursor,
         int limit,
         CancellationToken ct = default);
@@ -78,7 +78,7 @@ public interface IP2pService
         string scope,
         Guid? tenantId,
         Guid? siteId,
-        string? artifactId,
+        Guid? artifactId,
         int limit,
         int offset,
         CancellationToken ct = default);
@@ -86,7 +86,7 @@ public interface IP2pService
         string scope,
         Guid? tenantId,
         Guid? siteId,
-        string? artifactId,
+        Guid? artifactId,
         string? cursor,
         int limit,
         CancellationToken ct = default);
