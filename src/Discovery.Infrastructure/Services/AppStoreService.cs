@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Infrastructure.Services;
@@ -48,19 +49,21 @@ public class AppStoreService : IAppStoreService
         var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
         var normalizedArch = string.IsNullOrWhiteSpace(architecture) ? null : architecture.Trim();
         var normalizedCursor = string.IsNullOrWhiteSpace(cursor) ? null : cursor.Trim();
-        var offset = DecodeUnifiedCursor(normalizedCursor);
 
-        var (items, total) = await _appPackageRepo.SearchAsync(
+        var (items, total) = await _appPackageRepo.SearchPageAsync(
             installationType,
             normalizedSearch,
             normalizedArch,
+            normalizedCursor,
             normalizedLimit + 1,
-            offset,
             cancellationToken);
 
         var hasMore = items.Count > normalizedLimit;
         var page = hasMore ? items.Take(normalizedLimit).ToList() : items.ToList();
-        var nextCursor = hasMore ? EncodeUnifiedCursor(offset + normalizedLimit) : null;
+        var lastItem = hasMore ? page[^1] : null;
+        var nextCursor = hasMore && lastItem is not null
+            ? CursorPaginationHelper.EncodeNameCursor(lastItem.Name, lastItem.Id)
+            : null;
 
         return new AppCatalogSearchResultDto
         {
@@ -676,18 +679,20 @@ public class AppStoreService : IAppStoreService
         string? cursor,
         CancellationToken cancellationToken)
     {
-        var offset = DecodeUnifiedCursor(cursor);
-        var (items, _) = await _appPackageRepo.SearchAsync(
+        var (items, _) = await _appPackageRepo.SearchPageAsync(
             installationType,
             search,
             null,
+            cursor,
             limit + 1,
-            offset,
             cancellationToken);
 
         var hasMore = items.Count > limit;
         var page = hasMore ? items.Take(limit).ToList() : items.ToList();
-        var nextCursor = hasMore ? EncodeUnifiedCursor(offset + limit) : null;
+        var lastItem = hasMore ? page[^1] : null;
+        var nextCursor = hasMore && lastItem is not null
+            ? CursorPaginationHelper.EncodeNameCursor(lastItem.Name, lastItem.Id)
+            : null;
 
         return new EffectiveApprovedAppPageDto
         {
@@ -715,18 +720,20 @@ public class AppStoreService : IAppStoreService
         string? cursor,
         CancellationToken cancellationToken)
     {
-        var offset = DecodeUnifiedCursor(cursor);
-        var (items, _) = await _appPackageRepo.SearchAsync(
+        var (items, _) = await _appPackageRepo.SearchPageAsync(
             installationType,
             search,
             null,
+            cursor,
             limit + 1,
-            offset,
             cancellationToken);
 
         var hasMore = items.Count > limit;
         var page = hasMore ? items.Take(limit).ToList() : items.ToList();
-        var nextCursor = hasMore ? EncodeUnifiedCursor(offset + limit) : null;
+        var lastItem = hasMore ? page[^1] : null;
+        var nextCursor = hasMore && lastItem is not null
+            ? CursorPaginationHelper.EncodeNameCursor(lastItem.Name, lastItem.Id)
+            : null;
 
         var diffItems = page
             .Select(x =>
@@ -1075,32 +1082,6 @@ public class AppStoreService : IAppStoreService
         };
     }
 
-    private static string? EncodeUnifiedCursor(int offset)
-    {
-        if (offset <= 0)
-            return null;
-
-        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"app:{offset}"));
-    }
-
-    private static int DecodeUnifiedCursor(string? cursor)
-    {
-        if (string.IsNullOrWhiteSpace(cursor))
-            return 0;
-
-        try
-        {
-            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
-            if (raw.StartsWith("app:") && int.TryParse(raw[4..], out var offset))
-                return offset;
-        }
-        catch (FormatException)
-        {
-        }
-
-        return 0;
-    }
-
     // ── Winget helpers ───────────────────────────────────────────────────────
 
     private async Task<AppCatalogSearchResultDto> SearchWingetCatalogAsync(
@@ -1110,12 +1091,14 @@ public class AppStoreService : IAppStoreService
         string? cursor,
         CancellationToken cancellationToken)
     {
-        var offset = DecodeWingetCursor(cursor);
-        var (items, total) = await _wingetRepo.SearchAsync(search, architecture, limit + 1, offset, cancellationToken);
+        var (items, total) = await _wingetRepo.SearchPageAsync(search, architecture, cursor, limit + 1, cancellationToken);
 
         var hasMore = items.Count > limit;
         var page = hasMore ? items.Take(limit).ToList() : (IReadOnlyList<Discovery.Core.Entities.WingetPackage>)items;
-        var nextCursor = hasMore ? EncodeWingetCursor(offset + limit) : null;
+        var lastItem = hasMore ? page[^1] : null;
+        var nextCursor = hasMore && lastItem is not null
+            ? CursorPaginationHelper.EncodeNameCursor(lastItem.Name, lastItem.Id)
+            : null;
 
         return new AppCatalogSearchResultDto
         {
@@ -1181,25 +1164,6 @@ public class AppStoreService : IAppStoreService
         };
     }
 
-    private static string? EncodeWingetCursor(int offset)
-    {
-        if (offset <= 0) return null;
-        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"winget:{offset}"));
-    }
-
-    private static int DecodeWingetCursor(string? cursor)
-    {
-        if (string.IsNullOrWhiteSpace(cursor)) return 0;
-        try
-        {
-            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
-            if (raw.StartsWith("winget:") && int.TryParse(raw[7..], out var offset))
-                return offset;
-        }
-        catch (FormatException) { }
-        return 0;
-    }
-
     // ── Chocolatey helpers ───────────────────────────────────────────────────
 
     private async Task<AppCatalogSearchResultDto> SearchChocolateyCatalogAsync(
@@ -1208,12 +1172,14 @@ public class AppStoreService : IAppStoreService
         string? cursor,
         CancellationToken cancellationToken)
     {
-        var offset = DecodeChocolateyCursor(cursor);
-        var (items, total) = await _chocolateyRepo.SearchAsync(search, limit + 1, offset, cancellationToken);
+        var (items, total) = await _chocolateyRepo.SearchPageAsync(search, cursor, limit + 1, cancellationToken);
 
         var hasMore = items.Count > limit;
         var page = hasMore ? items.Take(limit).ToList() : (IReadOnlyList<Discovery.Core.Entities.ChocolateyPackage>)items;
-        var nextCursor = hasMore ? EncodeChocolateyCursor(offset + limit) : null;
+        var lastItem = hasMore ? page[^1] : null;
+        var nextCursor = hasMore && lastItem is not null
+            ? CursorPaginationHelper.EncodeLongCountCursor(lastItem.DownloadCount, lastItem.Id)
+            : null;
 
         return new AppCatalogSearchResultDto
         {
@@ -1269,25 +1235,6 @@ public class AppStoreService : IAppStoreService
             Tags = pkg.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
             InstallerUrlsByArch = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         };
-    }
-
-    private static string? EncodeChocolateyCursor(int offset)
-    {
-        if (offset <= 0) return null;
-        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"choco:{offset}"));
-    }
-
-    private static int DecodeChocolateyCursor(string? cursor)
-    {
-        if (string.IsNullOrWhiteSpace(cursor)) return 0;
-        try
-        {
-            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
-            if (raw.StartsWith("choco:") && int.TryParse(raw[6..], out var offset))
-                return offset;
-        }
-        catch (FormatException) { }
-        return 0;
     }
 
     private static bool MatchesDiffSearch(string packageId, AppCatalogPackageDto? package, string? search)
