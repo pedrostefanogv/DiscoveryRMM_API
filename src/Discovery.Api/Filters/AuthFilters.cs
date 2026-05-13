@@ -245,6 +245,24 @@ internal class RequirePermissionFilter : IAsyncActionFilter
 
             _scopeContext.SetUserId(userId);
         }
+        else if (_scopeSource == ScopeSource.AccessList)
+        {
+            _scopeContext.SetUserId(userId);
+
+            var access = await _scopeContext.GetAccessAsync(_resource, _action);
+            var hasPermission = access.HasGlobalAccess
+                || access.AllowedClientIds.Count > 0
+                || access.AllowedSiteIds.Count > 0;
+
+            if (!hasPermission)
+            {
+                context.Result = new ObjectResult(new { message = "Permissão insuficiente." })
+                {
+                    StatusCode = StatusCodes.Status403Forbidden
+                };
+                return;
+            }
+        }
         else // ScopeSource.FromRoute
         {
             var (scopeLevel, scopeId, parentScopeId) = ResolveScopeFromRoute(context);

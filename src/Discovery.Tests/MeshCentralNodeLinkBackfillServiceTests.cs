@@ -177,6 +177,12 @@ public class MeshCentralNodeLinkBackfillServiceTests
         public Task ApproveZeroTouchAsync(Guid agentId)
             => throw new NotImplementedException();
 
+        public Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId)
+            => throw new NotImplementedException();
+
+        public Task TransferSiteAsync(Guid agentId, Guid newSiteId)
+            => throw new NotImplementedException();
+
         public Task DeleteAsync(Guid id)
             => throw new NotImplementedException();
 

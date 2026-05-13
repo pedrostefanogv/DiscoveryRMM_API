@@ -4,6 +4,7 @@ using Discovery.Core.Interfaces;
 using LogLevelEnum = Discovery.Core.Enums.LogLevel;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Routing;
 
 namespace Discovery.Api.Filters;
 
@@ -298,7 +299,23 @@ public class LoggingActionFilter : IAsyncActionFilter
         if (string.IsNullOrEmpty(agentId))
         {
             agentId = context.Request.Query["agentId"].FirstOrDefault() ??
+                      TryGetRouteValue(context.Request.RouteValues, "agentId") ??
                       context.Request.Query["id"].FirstOrDefault();
         }
+
+        if (string.IsNullOrEmpty(siteId))
+        {
+            siteId = context.Request.Query["siteId"].FirstOrDefault() ??
+                     TryGetRouteValue(context.Request.RouteValues, "siteId");
+        }
+
+        if (string.IsNullOrEmpty(clientId))
+        {
+            clientId = context.Request.Query["clientId"].FirstOrDefault() ??
+                       TryGetRouteValue(context.Request.RouteValues, "clientId");
+        }
     }
+
+    private static string? TryGetRouteValue(RouteValueDictionary values, string key)
+        => values.TryGetValue(key, out var value) ? value?.ToString() : null;
 }

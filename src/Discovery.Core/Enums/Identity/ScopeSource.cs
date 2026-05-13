@@ -9,5 +9,11 @@ public enum ScopeSource
     Global,
 
     /// <summary>Resolve clientId e siteId automaticamente dos parâmetros da rota.</summary>
-    FromRoute
+    FromRoute,
+
+    /// <summary>
+    /// Permite acesso quando o usuário possui qualquer escopo válido para o recurso,
+    /// deixando a filtragem fina para a query/controller.
+    /// </summary>
+    AccessList
 }
