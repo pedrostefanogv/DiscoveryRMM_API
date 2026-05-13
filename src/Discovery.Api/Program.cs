@@ -89,6 +89,7 @@ builder.Services.AddSingleton<SpecialCommandPayloadValidator>();
 builder.Services.AddSingleton<DashboardEventContractNormalizer>();
 builder.Services.AddScoped<MeshCentralIdentitySyncTriggerService>();
 builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
+builder.Services.AddScoped<IAgentTransferService, AgentTransferService>();
 builder.Services.AddSingleton(TimeProvider.System);
 
 // Scoped scope context (cache de escopo intra-request para queries filtradas)

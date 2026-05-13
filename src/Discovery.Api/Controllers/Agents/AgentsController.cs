@@ -42,6 +42,7 @@ public partial class AgentsController : ControllerBase
     private readonly IRemoteDebugSessionManager _remoteDebugSessionManager;
     private readonly SpecialCommandPayloadValidator _remoteDebugPayloadValidator;
     private readonly ICustomFieldService _customFieldService;
+    private readonly IAgentTransferService _agentTransferService;
     private readonly ILogger<AgentsController> _logger;
 
     public AgentsController(
@@ -64,6 +65,7 @@ public partial class AgentsController : ControllerBase
         IRemoteDebugSessionManager remoteDebugSessionManager,
         SpecialCommandPayloadValidator remoteDebugPayloadValidator,
         ICustomFieldService customFieldService,
+        IAgentTransferService agentTransferService,
         ILogger<AgentsController> logger)
     {
         _agentRepo = agentRepo;
@@ -85,6 +87,7 @@ public partial class AgentsController : ControllerBase
         _remoteDebugSessionManager = remoteDebugSessionManager;
         _remoteDebugPayloadValidator = remoteDebugPayloadValidator;
         _customFieldService = customFieldService;
+        _agentTransferService = agentTransferService;
         _logger = logger;
     }
 

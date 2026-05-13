@@ -14,5 +14,6 @@ public interface IAgentRepository
     Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default);
     Task ApproveZeroTouchAsync(Guid agentId);
     Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId);
+    Task TransferSiteAsync(Guid agentId, Guid newSiteId);
     Task DeleteAsync(Guid id);
 }

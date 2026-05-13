@@ -58,44 +58,33 @@ public class SearchService : ISearchService
         // Define o UserId no ScopeContext
         _scopeContext.SetUserId(userId);
 
-        // Resolve escopos de acesso em paralelo
-        var accessTasks = new Dictionary<string, Task<UserScopeAccess>>
-        {
-            ["agents"] = _scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View),
-            ["clients"] = _scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View),
-            ["sites"] = _scopeContext.GetAccessAsync(ResourceType.Sites, ActionType.View),
-            ["tickets"] = _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View),
-        };
+        // Evita concorrencia no mesmo DbContext scoped durante a resolucao de escopo.
+        var agentAccess = await _scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        var clientAccess = await _scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View);
+        var siteAccess = await _scopeContext.GetAccessAsync(ResourceType.Sites, ActionType.View);
+        var ticketAccess = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
 
-        await Task.WhenAll(accessTasks.Values);
-
-        var agentAccess = accessTasks["agents"].Result;
-        var clientAccess = accessTasks["clients"].Result;
-        var siteAccess = accessTasks["sites"].Result;
-        var ticketAccess = accessTasks["tickets"].Result;
-
-        // Dispara consultas em paralelo com timeout parcial
+        // Executa consultas em sequencia com timeout parcial
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(SearchTimeoutMs);
 
-        var searchTasks = new List<Task<SearchResultGroup?>>
+        var searchSteps = new Func<CancellationToken, Task<SearchResultGroup?>>[]
         {
-            SearchAgentsAsync(query, agentAccess, maxResults, timeoutCts.Token),
-            SearchClientsAsync(query, clientAccess, maxResults, timeoutCts.Token),
-            SearchSitesAsync(query, clientAccess, siteAccess, maxResults, timeoutCts.Token),
-            SearchTicketsAsync(query, ticketAccess, maxResults, timeoutCts.Token),
-            SearchSoftwareAsync(query, agentAccess, maxResults, timeoutCts.Token),
+            token => SearchAgentsAsync(query, agentAccess, maxResults, token),
+            token => SearchClientsAsync(query, clientAccess, maxResults, token),
+            token => SearchSitesAsync(query, clientAccess, siteAccess, maxResults, token),
+            token => SearchTicketsAsync(query, ticketAccess, maxResults, token),
+            token => SearchSoftwareAsync(query, agentAccess, maxResults, token),
         };
 
         var completedGroups = new List<SearchResultGroup>();
 
-        while (searchTasks.Count > 0)
+        foreach (var searchStep in searchSteps)
         {
             try
             {
-                var done = await Task.WhenAny(searchTasks);
-                searchTasks.Remove(done);
-                var group = await done;
+                // Evita concorrencia de consultas no mesmo DbContext scoped.
+                var group = await searchStep(timeoutCts.Token);
                 if (group?.Items.Count > 0)
                     completedGroups.Add(group);
             }

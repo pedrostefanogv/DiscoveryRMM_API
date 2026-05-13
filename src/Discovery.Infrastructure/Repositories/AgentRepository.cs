@@ -111,6 +111,16 @@ public class AgentRepository : IAgentRepository
                 .SetProperty(agent => agent.UpdatedAt, _ => now));
     }
 
+    public async Task TransferSiteAsync(Guid agentId, Guid newSiteId)
+    {
+        var now = DateTime.UtcNow;
+        await _db.Agents
+            .Where(agent => agent.Id == agentId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(agent => agent.SiteId, _ => newSiteId)
+                .SetProperty(agent => agent.UpdatedAt, _ => now));
+    }
+
     public async Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default)
     {
         return await _db.Agents
