@@ -10,6 +10,7 @@ public interface IUserRepository
     /// <summary>Busca por login OU email (para o fluxo de login).</summary>
     Task<User?> GetByLoginOrEmailAsync(string loginOrEmail);
     Task<IEnumerable<User>> GetAllAsync(int skip = 0, int take = 50);
+    Task<IReadOnlyList<User>> GetAllPageAsync(string? cursor, int take = 50);
     Task<User> CreateAsync(User user);
     Task<User> UpdateAsync(User user);
     Task<bool> SetMfaConfiguredAsync(Guid userId, bool configured);

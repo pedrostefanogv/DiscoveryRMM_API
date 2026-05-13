@@ -274,6 +274,94 @@ public class LogsBackendTests
         Assert.That(result, Is.TypeOf<BadRequestObjectResult>());
     }
 
+    [Test]
+    public async Task QuerySummary_ShouldReturnFacetCountsInsideScope()
+    {
+        await using var db = CreateDbContext();
+
+        var clientA = CreateClient("Client A");
+        var clientB = CreateClient("Client B");
+        var siteA = CreateSite(clientA.Id, "Site A");
+        var siteB = CreateSite(clientB.Id, "Site B");
+        var agentA = CreateAgent(siteA.Id, "agent-a");
+
+        db.Clients.AddRange(clientA, clientB);
+        db.Sites.AddRange(siteA, siteB);
+        db.Agents.Add(agentA);
+        db.Logs.AddRange(
+            new LogEntry
+            {
+                Id = Guid.NewGuid(),
+                ClientId = clientA.Id,
+                SiteId = siteA.Id,
+                AgentId = agentA.Id,
+                Type = LogType.System,
+                Level = LogLevel.Error,
+                Source = LogSource.Api,
+                Message = "first",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-1)
+            },
+            new LogEntry
+            {
+                Id = Guid.NewGuid(),
+                ClientId = clientA.Id,
+                SiteId = siteA.Id,
+                AgentId = agentA.Id,
+                Type = LogType.System,
+                Level = LogLevel.Warn,
+                Source = LogSource.Api,
+                Message = "second",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-2)
+            },
+            new LogEntry
+            {
+                Id = Guid.NewGuid(),
+                ClientId = clientB.Id,
+                SiteId = siteB.Id,
+                Type = LogType.Auth,
+                Level = LogLevel.Fatal,
+                Source = LogSource.Nats,
+                Message = "blocked",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-3)
+            });
+        await db.SaveChangesAsync();
+
+        var controller = CreateController(
+            db,
+            new LogRepository(db, new FakeAgentMessaging()),
+            new FakeScopeContext(new UserScopeAccess
+            {
+                HasGlobalAccess = false,
+                AllowedClientIds = [clientA.Id],
+                AllowedSiteIds = []
+            }));
+
+        var result = await controller.QuerySummary(
+            clientId: null,
+            siteId: null,
+            agentId: null,
+            type: null,
+            level: null,
+            source: null,
+            search: null,
+            traceId: null,
+            correlationId: null,
+            requestPath: null,
+            statusCode: null,
+            period: null,
+            from: null,
+            to: null);
+
+        Assert.That(result, Is.TypeOf<OkObjectResult>());
+        var summary = (LogSummaryDto)((OkObjectResult)result).Value!;
+        Assert.That(summary.Total, Is.EqualTo(2));
+        Assert.That(summary.Levels.Single(item => item.Key == nameof(LogLevel.Error)).Count, Is.EqualTo(1));
+        Assert.That(summary.Levels.Single(item => item.Key == nameof(LogLevel.Warn)).Count, Is.EqualTo(1));
+        Assert.That(summary.Clients.Single().Name, Is.EqualTo("Client A"));
+        Assert.That(summary.Sites.Single().Name, Is.EqualTo("Site A"));
+        Assert.That(summary.Agents.Single().Name, Is.EqualTo(agentA.DisplayName));
+    }
+
     private static LogsController CreateController(DiscoveryDbContext db, IScopeContext scopeContext)
         => new(
             new FakeLogRepository(),
@@ -414,6 +502,9 @@ public class LogsBackendTests
 
         public Task<IReadOnlyList<LogEntry>> QueryPageAsync(LogQuery query)
             => Task.FromResult<IReadOnlyList<LogEntry>>([]);
+
+        public Task<LogSummaryRawDto> GetSummaryAsync(LogQuery query)
+            => Task.FromResult(new LogSummaryRawDto(0, [], [], [], [], [], []));
 
         public Task<int> PurgeAsync(DateTime cutoff)
             => Task.FromResult(0);

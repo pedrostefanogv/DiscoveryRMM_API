@@ -5,6 +5,7 @@
 @siteId = 019cc533-2967-72d9-8702-e545dd6ca794
 @agentId = 019cc554-3703-7519-bd64-de415f110d31
 @ticketId = 019cc56d-decf-7579-860b-e0c84004e7d6
+@cursor = 
 
 ###
 # Clients
@@ -98,6 +99,33 @@ Content-Type: application/json
   "category": "Network",
   "assignedToUserId": null
 }
+
+###
+
+# ===== LOGS =====
+
+# Logs - Scope Options
+
+GET {{Discovery.Api_HostAddress}}/api/v1/logs/scope-options
+Accept: application/json
+
+###
+# Logs - Offset Query (compatibilidade)
+
+GET {{Discovery.Api_HostAddress}}/api/v1/logs?clientId={{clientId}}&search=erro&period=24h&limit=50&offset=0
+Accept: application/json
+
+###
+# Logs - Cursor Query
+
+GET {{Discovery.Api_HostAddress}}/api/v1/logs/page?clientId={{clientId}}&siteId={{siteId}}&traceId=trace-123&requestPath=/api/v1/auth/refresh&period=24h&limit=50&cursor={{cursor}}
+Accept: application/json
+
+###
+# Logs - Summary / Facets
+
+GET {{Discovery.Api_HostAddress}}/api/v1/logs/summary?clientId={{clientId}}&period=24h&search=erro
+Accept: application/json
 
 ###
 # Tickets - Update Workflow State (transição de estados)

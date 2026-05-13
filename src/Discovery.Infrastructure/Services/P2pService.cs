@@ -221,6 +221,28 @@ public class P2pService : IP2pService
             artifactId: artifactId,
             limit: limit,
             offset: offset,
+            cursor: null,
+            ct: ct);
+    }
+
+    public async Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusPageAsync(
+        Guid agentId,
+        string? artifactId,
+        string? cursor,
+        int limit,
+        CancellationToken ct = default)
+    {
+        var agent = await _agentRepo.GetByIdAsync(agentId)
+            ?? throw new InvalidOperationException("Agent not found");
+
+        return await QueryDistributionByScope(
+            siteId: agent.SiteId,
+            clientId: null,
+            global: false,
+            artifactId: artifactId,
+            limit: limit,
+            offset: 0,
+            cursor: cursor,
             ct: ct);
     }
 
@@ -390,6 +412,27 @@ public class P2pService : IP2pService
             artifactId: artifactId,
             limit: limit,
             offset: offset,
+            cursor: null,
+            ct: ct);
+    }
+
+    public async Task<(List<P2pDistributionStatusItem> Items, int Total)> GetArtifactDistributionPageOpsAsync(
+        string scope,
+        Guid? tenantId,
+        Guid? siteId,
+        string? artifactId,
+        string? cursor,
+        int limit,
+        CancellationToken ct = default)
+    {
+        return await QueryDistributionByScope(
+            siteId: scope == "site" ? siteId : null,
+            clientId: scope == "tenant" ? tenantId : null,
+            global: scope == "global",
+            artifactId: artifactId,
+            limit: limit,
+            offset: 0,
+            cursor: cursor,
             ct: ct);
     }
 
@@ -651,6 +694,7 @@ public class P2pService : IP2pService
         string? artifactId,
         int limit,
         int offset,
+        string? cursor,
         CancellationToken ct)
     {
         var presenceCutoff = DateTime.UtcNow.AddHours(-2);
@@ -684,9 +728,20 @@ public class P2pService : IP2pService
             .ToListAsync(ct);
 
         var total = grouped.Count;
+
+        int effectiveOffset;
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            effectiveOffset = DecodeOffsetCursor(cursor);
+        }
+        else
+        {
+            effectiveOffset = Math.Max(0, offset);
+        }
+
         var page = grouped
             .OrderByDescending(g => g.LastUpdatedUtc)
-            .Skip(offset)
+            .Skip(effectiveOffset)
             .Take(limit)
             .ToList();
 
@@ -761,6 +816,22 @@ public class P2pService : IP2pService
         <= 168 => "7d",
         _ => $"{(int)window.TotalHours}h"
     };
+
+    private static string EncodeOffsetCursor(int offset)
+        => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"p2p:{offset}"));
+
+    private static int DecodeOffsetCursor(string? cursor)
+    {
+        if (string.IsNullOrWhiteSpace(cursor)) return 0;
+        try
+        {
+            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            if (raw.StartsWith("p2p:") && int.TryParse(raw[4..], out var offset))
+                return Math.Max(0, offset);
+        }
+        catch { }
+        return 0;
+    }
 
     private static string DetermineHealth(double failureRate, double queuePressure)
     {

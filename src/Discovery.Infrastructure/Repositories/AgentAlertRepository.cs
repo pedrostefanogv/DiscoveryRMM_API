@@ -1,5 +1,6 @@
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -50,8 +51,55 @@ public class AgentAlertRepository : IAgentAlertRepository
 
         return await query
             .OrderByDescending(a => a.CreatedAt)
+            .ThenByDescending(a => a.Id)
             .Skip(safeOffset)
             .Take(safeLimit)
+            .ToListAsync();
+    }
+
+    public async Task<IReadOnlyList<AgentAlertDefinition>> GetByFiltersPageAsync(
+        AlertDefinitionStatus? status = null,
+        AlertScopeType? scopeType = null,
+        Guid? scopeClientId = null,
+        Guid? scopeSiteId = null,
+        Guid? scopeAgentId = null,
+        Guid? ticketId = null,
+        string? cursor = null,
+        int limit = 100)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+
+        var query = _db.AgentAlertDefinitions.AsNoTracking().AsQueryable();
+
+        if (status.HasValue)
+            query = query.Where(a => a.Status == status.Value);
+
+        if (scopeType.HasValue)
+            query = query.Where(a => a.ScopeType == scopeType.Value);
+
+        if (scopeClientId.HasValue)
+            query = query.Where(a => a.ScopeClientId == scopeClientId.Value);
+
+        if (scopeSiteId.HasValue)
+            query = query.Where(a => a.ScopeSiteId == scopeSiteId.Value);
+
+        if (scopeAgentId.HasValue)
+            query = query.Where(a => a.ScopeAgentId == scopeAgentId.Value);
+
+        if (ticketId.HasValue)
+            query = query.Where(a => a.TicketId == ticketId.Value);
+
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorCreatedAtUtc, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyCreatedAtCursor(
+                query, cursorCreatedAtUtc, cursorId,
+                alert => alert.CreatedAt, alert => alert.Id);
+        }
+
+        return await query
+            .OrderByDescending(a => a.CreatedAt)
+            .ThenByDescending(a => a.Id)
+            .Take(safeLimit + 1)
             .ToListAsync();
     }
 

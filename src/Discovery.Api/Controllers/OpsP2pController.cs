@@ -1,5 +1,6 @@
 using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -118,6 +119,25 @@ public class OpsP2pController : ControllerBase
             offset,
             items
         });
+    }
+
+    [HttpGet("artifacts/distribution/page")]
+    public async Task<IActionResult> GetArtifactDistributionPage(
+        [FromQuery] string scope = "global",
+        [FromQuery] Guid? tenantId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] string? artifactId = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 100,
+        CancellationToken ct = default)
+    {
+        if (limit < 1 || limit > 500)
+            return BadRequest(new { error = "limit deve estar entre 1 e 500." });
+
+        var (items, total) = await _p2p.GetArtifactDistributionPageOpsAsync(scope, tenantId, siteId, artifactId, cursor, limit, ct);
+        var slice = CursorPaginationHelper.SlicePage(items, Math.Clamp(limit, 1, 500));
+        var nextCursor = slice.HasMore ? Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"p2p:{limit}")) : null;
+        return Ok(new CursorPageDto<P2pDistributionStatusItem>(slice.Page, slice.Page.Count, cursor, nextCursor, slice.HasMore, Math.Clamp(limit, 1, 500)));
     }
 
     // ─────────────────────────────────────────────────────────────────────

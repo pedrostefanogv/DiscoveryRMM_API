@@ -4,6 +4,7 @@ using System.Text;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Infrastructure.Services;
@@ -139,6 +140,53 @@ public class AutomationTaskService : IAutomationTaskService
             Total = total,
             Limit = safeLimit,
             Offset = safeOffset
+        };
+    }
+
+    public async Task<AutomationTaskPageDto> GetListPageAsync(
+        AppApprovalScopeType? scopeType,
+        Guid? scopeId,
+        bool activeOnly,
+        bool deletedOnly,
+        bool includeDeleted,
+        string? search,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        IReadOnlyList<string>? labels,
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        var safeLimit = Math.Clamp(limit, 1, 200);
+
+        var items = await _taskRepository.GetListPageAsync(
+            scopeType, scopeId, activeOnly, deletedOnly, includeDeleted,
+            search, clientId, siteId, agentId, scopeTypes, actionTypes, cursor, safeLimit);
+        var total = await _taskRepository.CountAsync(
+            scopeType, scopeId, activeOnly, deletedOnly, includeDeleted,
+            search, clientId, siteId, agentId, scopeTypes, actionTypes);
+
+        var filteredItems = labels is { Count: > 0 }
+            ? items.Where(task => MatchesTaskLabels(task, labels)).ToList()
+            : (IReadOnlyList<AutomationTaskDefinition>)items;
+
+        var slice = CursorPaginationHelper.SlicePage(filteredItems, safeLimit);
+
+        return new AutomationTaskPageDto
+        {
+            Items = slice.Page.Select(ToSummaryDto).ToList(),
+            Count = slice.Page.Count,
+            Total = total,
+            Cursor = cursor,
+            NextCursor = slice.HasMore && slice.LastItem is not null
+                ? CursorPaginationHelper.EncodeCreatedAtCursor(slice.LastItem.UpdatedAt, slice.LastItem.Id)
+                : null,
+            HasMore = slice.HasMore,
+            Limit = safeLimit
         };
     }
 

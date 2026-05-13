@@ -14,6 +14,7 @@ public record TicketFilterQuery(
     bool? SlaBreached = null,
     bool? IsClosed = null,
     string? Text = null,
+    string? Cursor = null,
     int Limit = 100,
     int Offset = 0
 );

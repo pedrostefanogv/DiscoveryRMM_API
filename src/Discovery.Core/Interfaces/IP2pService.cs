@@ -37,6 +37,13 @@ public interface IP2pService
         int offset,
         CancellationToken ct = default);
 
+    Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusPageAsync(
+        Guid agentId,
+        string? artifactId,
+        string? cursor,
+        int limit,
+        CancellationToken ct = default);
+
     // ─── Ops / Dashboard endpoints ───────────────────────────────────────────
 
     /// <summary>
@@ -75,7 +82,14 @@ public interface IP2pService
         int limit,
         int offset,
         CancellationToken ct = default);
-
+    Task<(List<P2pDistributionStatusItem> Items, int Total)> GetArtifactDistributionPageOpsAsync(
+        string scope,
+        Guid? tenantId,
+        Guid? siteId,
+        string? artifactId,
+        string? cursor,
+        int limit,
+        CancellationToken ct = default);
     /// <summary>
     /// Ranking de agentes por métricas de saúde P2P.
     /// </summary>

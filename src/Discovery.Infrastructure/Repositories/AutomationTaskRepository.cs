@@ -97,9 +97,83 @@ public class AutomationTaskRepository : IAutomationTaskRepository
 
         return await query
             .OrderByDescending(t => t.UpdatedAt)
+            .ThenByDescending(t => t.Id)
             .Skip(safeOffset)
             .Take(safeLimit)
             .ToListAsync();
+    }
+
+    public async Task<IReadOnlyList<AutomationTaskDefinition>> GetListPageAsync(
+        AppApprovalScopeType? scopeType,
+        Guid? scopeId,
+        bool activeOnly,
+        bool deletedOnly,
+        bool includeDeleted,
+        string? search,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        string? cursor,
+        int limit)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var query = BuildTaskQuery(scopeType, scopeId, activeOnly, deletedOnly, includeDeleted, search, clientId, siteId, agentId, scopeTypes, actionTypes);
+
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorUpdatedAtUtc, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyCreatedAtCursor(
+                query, cursorUpdatedAtUtc, cursorId,
+                task => task.UpdatedAt, task => task.Id);
+        }
+
+        return await query
+            .OrderByDescending(t => t.UpdatedAt)
+            .ThenByDescending(t => t.Id)
+            .Take(safeLimit + 1)
+            .ToListAsync();
+    }
+
+    private IQueryable<AutomationTaskDefinition> BuildTaskQuery(
+        AppApprovalScopeType? scopeType,
+        Guid? scopeId,
+        bool activeOnly,
+        bool deletedOnly,
+        bool includeDeleted,
+        string? search,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
+        IReadOnlyList<AutomationTaskActionType>? actionTypes)
+    {
+        var query = _db.AutomationTaskDefinitions.AsNoTracking().AsQueryable();
+
+        if (deletedOnly)
+            query = query.Where(t => t.DeletedAt != null);
+        else if (!includeDeleted)
+            query = query.Where(t => t.DeletedAt == null);
+
+        if (scopeType.HasValue)
+        {
+            query = query.Where(t => t.ScopeType == scopeType.Value);
+            if (scopeId.HasValue)
+            {
+                query = scopeType.Value switch
+                {
+                    AppApprovalScopeType.Client => query.Where(t => t.ClientId == scopeId.Value),
+                    AppApprovalScopeType.Site => query.Where(t => t.SiteId == scopeId.Value),
+                    AppApprovalScopeType.Agent => query.Where(t => t.AgentId == scopeId.Value),
+                    _ => query
+                };
+            }
+        }
+
+        if (activeOnly)
+            query = query.Where(t => t.IsActive);
+
+        return ApplyAdvancedFilters(query, search, clientId, siteId, agentId, scopeTypes, actionTypes);
     }
 
     public async Task<int> CountAsync(

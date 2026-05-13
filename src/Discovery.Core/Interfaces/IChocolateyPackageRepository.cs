@@ -12,6 +12,12 @@ public interface IChocolateyPackageRepository
         int offset,
         CancellationToken cancellationToken = default);
 
+    Task<(IReadOnlyList<ChocolateyPackage> Items, int TotalCount)> SearchPageAsync(
+        string? search,
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken = default);
+
     Task BulkUpsertAsync(
         IReadOnlyList<ChocolateyPackage> packages,
         CancellationToken cancellationToken = default);

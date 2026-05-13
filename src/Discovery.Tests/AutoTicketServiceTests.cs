@@ -417,6 +417,9 @@ public class AutoTicketServiceTests
         public Task<IEnumerable<Ticket>> GetAllAsync(TicketFilterQuery filter)
             => Task.FromResult<IEnumerable<Ticket>>(_tickets.Values.ToList());
 
+        public Task<IReadOnlyList<Ticket>> GetAllPageAsync(TicketFilterQuery filter)
+            => Task.FromResult<IReadOnlyList<Ticket>>(_tickets.Values.ToList().AsReadOnly());
+
         public Task<Ticket> CreateAsync(Ticket ticket)
         {
             _tickets[ticket.Id] = ticket;
@@ -676,6 +679,17 @@ public class AutoTicketServiceTests
             Guid? ticketId = null,
             int limit = 100,
             int offset = 0)
+            => Task.FromResult<IReadOnlyList<AgentAlertDefinition>>([]);
+
+        public Task<IReadOnlyList<AgentAlertDefinition>> GetByFiltersPageAsync(
+            AlertDefinitionStatus? status = null,
+            AlertScopeType? scopeType = null,
+            Guid? scopeClientId = null,
+            Guid? scopeSiteId = null,
+            Guid? scopeAgentId = null,
+            Guid? ticketId = null,
+            string? cursor = null,
+            int limit = 100)
             => Task.FromResult<IReadOnlyList<AgentAlertDefinition>>([]);
 
         public Task<IReadOnlyList<AgentAlertDefinition>> GetPendingScheduledAsync(DateTime utcNow)

@@ -4,6 +4,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.ValueObjects;
@@ -74,6 +75,37 @@ public class TicketsController : ControllerBase
                 (t.SiteId.HasValue && allowedSiteIds.Contains(t.SiteId.Value)));
         }
         return Ok(tickets);
+    }
+
+    [HttpGet("page")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> GetPage([FromQuery] TicketFilterQuery filter)
+    {
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
+        var items = await _repo.GetAllPageAsync(filter);
+        var responseItems = new List<Ticket>();
+        foreach (var ticket in items)
+        {
+            if (scope.HasGlobalAccess ||
+                scope.AllowedClientIds.Contains(ticket.ClientId) ||
+                (ticket.SiteId.HasValue && scope.AllowedSiteIds.Contains(ticket.SiteId.Value)))
+            {
+                responseItems.Add(ticket);
+            }
+        }
+
+        var slice = CursorPaginationHelper.SlicePage(responseItems, Math.Clamp(filter.Limit, 1, 500));
+        var nextCursor = slice.HasMore && slice.LastItem is not null
+            ? CursorPaginationHelper.EncodeCreatedAtCursor(slice.LastItem.CreatedAt, slice.LastItem.Id)
+            : null;
+
+        return Ok(new CursorPageDto<Ticket>(
+            slice.Page,
+            slice.Page.Count,
+            filter.Cursor,
+            nextCursor,
+            slice.HasMore,
+            Math.Clamp(filter.Limit, 1, 500)));
     }
 
     [HttpGet("by-client/{clientId:guid}")]

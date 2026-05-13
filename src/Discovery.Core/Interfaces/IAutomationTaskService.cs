@@ -21,6 +21,23 @@ public interface IAutomationTaskService
         int limit,
         int offset,
         CancellationToken cancellationToken = default);
+
+    Task<AutomationTaskPageDto> GetListPageAsync(
+        AppApprovalScopeType? scopeType,
+        Guid? scopeId,
+        bool activeOnly,
+        bool deletedOnly,
+        bool includeDeleted,
+        string? search,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        IReadOnlyList<string>? labels,
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken = default);
     Task<AutomationTaskDetailDto?> GetByIdAsync(Guid id, bool includeInactive = false, CancellationToken cancellationToken = default);
     Task<AutomationTaskDetailDto> CreateAsync(CreateAutomationTaskRequest request, string? changedBy, string? ipAddress, string correlationId, CancellationToken cancellationToken = default);
     Task<AutomationTaskDetailDto?> UpdateAsync(Guid id, UpdateAutomationTaskRequest request, string? changedBy, string? ipAddress, string correlationId, CancellationToken cancellationToken = default);

@@ -9,6 +9,7 @@ public interface ITicketRepository
     Task<IEnumerable<Ticket>> GetByClientIdAsync(Guid clientId, Guid? workflowStateId = null);
     Task<IEnumerable<Ticket>> GetByAgentIdAsync(Guid agentId, Guid? workflowStateId = null);
     Task<IEnumerable<Ticket>> GetAllAsync(TicketFilterQuery filter);
+    Task<IReadOnlyList<Ticket>> GetAllPageAsync(TicketFilterQuery filter);
     Task<Ticket> CreateAsync(Ticket ticket);
     Task UpdateAsync(Ticket ticket);
     Task DeleteAsync(Guid id);

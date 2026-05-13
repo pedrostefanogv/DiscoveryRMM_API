@@ -15,6 +15,14 @@ public interface IAppPackageRepository
         int offset,
         CancellationToken cancellationToken = default);
 
+    Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchPageAsync(
+        AppInstallationType installationType,
+        string? search,
+        string? architecture,
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<AppPackage>> GetAllByInstallationTypeAsync(
         AppInstallationType installationType,
         CancellationToken cancellationToken = default);

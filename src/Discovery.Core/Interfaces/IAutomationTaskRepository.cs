@@ -22,6 +22,21 @@ public interface IAutomationTaskRepository
         IReadOnlyList<AutomationTaskActionType>? actionTypes,
         int limit,
         int offset);
+
+    Task<IReadOnlyList<AutomationTaskDefinition>> GetListPageAsync(
+        AppApprovalScopeType? scopeType,
+        Guid? scopeId,
+        bool activeOnly,
+        bool deletedOnly,
+        bool includeDeleted,
+        string? search,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        string? cursor,
+        int limit);
     Task<int> CountAsync(
         AppApprovalScopeType? scopeType,
         Guid? scopeId,

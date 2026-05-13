@@ -200,6 +200,81 @@ public class LogsController : ControllerBase
             to));
     }
 
+    [HttpGet("summary")]
+    [RequirePermission(ResourceType.Logs, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> QuerySummary(
+        [FromQuery] Guid? clientId,
+        [FromQuery] Guid? siteId,
+        [FromQuery] Guid? agentId,
+        [FromQuery] LogType? type,
+        [FromQuery] CoreLogLevel? level,
+        [FromQuery] LogSource? source,
+        [FromQuery] string? search,
+        [FromQuery] string? traceId,
+        [FromQuery] string? correlationId,
+        [FromQuery] string? requestPath,
+        [FromQuery] int? statusCode,
+        [FromQuery] string? period,
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to)
+    {
+        if (!TryResolvePeriod(period, from, to, out from, out to, out var periodError))
+            return BadRequest(periodError);
+
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Logs, ActionType.View);
+        var scopeValidation = await ValidateAndResolveScopeAsync(scope, clientId, siteId, agentId);
+        if (scopeValidation.ErrorResult is not null)
+            return scopeValidation.ErrorResult;
+
+        var query = new LogQuery
+        {
+            ClientId = scopeValidation.ClientId,
+            SiteId = scopeValidation.SiteId,
+            AgentId = scopeValidation.AgentId,
+            Type = type,
+            Level = level,
+            Source = source,
+            SearchText = search,
+            TraceId = traceId,
+            CorrelationId = correlationId,
+            RequestPath = requestPath,
+            StatusCode = statusCode,
+            PeriodPreset = period,
+            From = from,
+            To = to,
+            HasGlobalAccess = scope.HasGlobalAccess,
+            AllowedClientIds = scope.AllowedClientIds,
+            AllowedSiteIds = scope.AllowedSiteIds
+        };
+
+        var summary = await _logRepo.GetSummaryAsync(query);
+        var clients = (await _clientRepo.GetAllAsync(includeInactive: true)).ToDictionary(item => item.Id, item => item.Name);
+
+        var allSites = new List<Site>();
+        foreach (var currentClientId in clients.Keys)
+            allSites.AddRange(await _siteRepo.GetByClientIdAsync(currentClientId, includeInactive: true));
+        var sites = allSites.GroupBy(item => item.Id).Select(group => group.First()).ToDictionary(item => item.Id, item => item.Name);
+
+        var agents = (await _agentRepo.GetAllAsync()).ToDictionary(item => item.Id, item => item.DisplayName ?? item.Hostname);
+
+        return Ok(new LogSummaryDto(
+            summary.Total,
+            search,
+            traceId,
+            correlationId,
+            requestPath,
+            statusCode,
+            period,
+            from,
+            to,
+            summary.Levels,
+            summary.Sources,
+            summary.Types,
+            summary.Clients.Select(item => new LogScopeFacetCountDto(item.Id, clients.GetValueOrDefault(item.Id), item.Count)).ToList(),
+            summary.Sites.Select(item => new LogScopeFacetCountDto(item.Id, sites.GetValueOrDefault(item.Id), item.Count)).ToList(),
+            summary.Agents.Select(item => new LogScopeFacetCountDto(item.Id, agents.GetValueOrDefault(item.Id), item.Count)).ToList()));
+    }
+
     [HttpGet("scope-options")]
     [RequirePermission(ResourceType.Logs, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetScopeOptions()

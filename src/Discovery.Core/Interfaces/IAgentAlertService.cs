@@ -16,6 +16,16 @@ public interface IAgentAlertService
         Guid? ticketId = null,
         int limit = 100,
         int offset = 0);
+
+    Task<IReadOnlyList<AgentAlertDefinition>> GetAllPageAsync(
+        AlertDefinitionStatus? status = null,
+        AlertScopeType? scopeType = null,
+        Guid? scopeClientId = null,
+        Guid? scopeSiteId = null,
+        Guid? scopeAgentId = null,
+        Guid? ticketId = null,
+        string? cursor = null,
+        int limit = 100);
     Task<bool> CancelAsync(Guid id);
 }
 

@@ -1,5 +1,6 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -34,6 +35,24 @@ public class AutomationScriptsController : ControllerBase
             return Forbid();
 
         var page = await _service.GetListAsync(clientId, activeOnly, limit, offset, cancellationToken);
+        return Ok(page);
+    }
+
+    [HttpGet("page")]
+    public async Task<IActionResult> GetListPage(
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] bool activeOnly = true,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        CancellationToken cancellationToken = default)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        if (!await HasAutomationPermissionAsync(userId, ActionType.View, clientId))
+            return Forbid();
+
+        var page = await _service.GetListPageAsync(clientId, activeOnly, cursor, limit, cancellationToken);
         return Ok(page);
     }
 

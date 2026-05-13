@@ -17,6 +17,16 @@ public interface IAgentAlertRepository
         int limit = 100,
         int offset = 0);
 
+    Task<IReadOnlyList<AgentAlertDefinition>> GetByFiltersPageAsync(
+        AlertDefinitionStatus? status = null,
+        AlertScopeType? scopeType = null,
+        Guid? scopeClientId = null,
+        Guid? scopeSiteId = null,
+        Guid? scopeAgentId = null,
+        Guid? ticketId = null,
+        string? cursor = null,
+        int limit = 100);
+
     /// <summary>
     /// Retorna alertas com status Scheduled cujo ScheduledAt &lt;= utcNow.
     /// Usado pelo background scheduler para disparar despachos.

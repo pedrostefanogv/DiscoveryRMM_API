@@ -27,6 +27,18 @@ public class UserRepository : IUserRepository
     public async Task<IEnumerable<User>> GetAllAsync(int skip = 0, int take = 50)
         => await _db.Users.AsNoTracking().OrderBy(u => u.FullName).Skip(skip).Take(take).ToListAsync();
 
+    public async Task<IReadOnlyList<User>> GetAllPageAsync(string? cursor, int take = 50)
+    {
+        var query = _db.Users.AsNoTracking().OrderBy(u => u.FullName);
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorCreatedAtUtc, out var cursorId))
+        {
+            query = (IOrderedQueryable<User>)CursorPaginationHelper.ApplyCreatedAtCursor(
+                query, cursorCreatedAtUtc, cursorId, u => u.CreatedAt, u => u.Id);
+        }
+        var safeTake = Math.Clamp(take, 1, 200);
+        return await query.Take(safeTake + 1).ToListAsync();
+    }
+
     public async Task<User> CreateAsync(User user)
     {
         if (user.Id == Guid.Empty) user.Id = IdGenerator.NewId();

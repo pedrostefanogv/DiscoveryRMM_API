@@ -80,6 +80,70 @@ public class LogRepository : ILogRepository
             .ToListAsync();
     }
 
+    public async Task<LogSummaryRawDto> GetSummaryAsync(LogQuery query)
+    {
+        var logQuery = BuildFilteredQuery(query);
+
+        var total = await logQuery.CountAsync();
+
+        var levelsRaw = await logQuery
+            .GroupBy(log => log.Level)
+            .Select(group => new { Key = group.Key, Count = group.Count() })
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Key)
+            .ToListAsync();
+
+        var sourcesRaw = await logQuery
+            .GroupBy(log => log.Source)
+            .Select(group => new { Key = group.Key, Count = group.Count() })
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Key)
+            .ToListAsync();
+
+        var typesRaw = await logQuery
+            .GroupBy(log => log.Type)
+            .Select(group => new { Key = group.Key, Count = group.Count() })
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Key)
+            .ToListAsync();
+
+        var clients = await logQuery
+            .Where(log => log.ClientId.HasValue)
+            .GroupBy(log => log.ClientId!.Value)
+            .Select(group => new { Id = group.Key, Count = group.Count() })
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Id)
+            .Take(10)
+            .ToListAsync();
+
+        var sites = await logQuery
+            .Where(log => log.SiteId.HasValue)
+            .GroupBy(log => log.SiteId!.Value)
+            .Select(group => new { Id = group.Key, Count = group.Count() })
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Id)
+            .Take(10)
+            .ToListAsync();
+
+        var agents = await logQuery
+            .Where(log => log.AgentId.HasValue)
+            .GroupBy(log => log.AgentId!.Value)
+            .Select(group => new { Id = group.Key, Count = group.Count() })
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Id)
+            .Take(10)
+            .ToListAsync();
+
+        return new LogSummaryRawDto(
+            total,
+            levelsRaw.Select(item => new LogFacetCountDto(item.Key.ToString(), item.Count)).ToList(),
+            sourcesRaw.Select(item => new LogFacetCountDto(item.Key.ToString(), item.Count)).ToList(),
+            typesRaw.Select(item => new LogFacetCountDto(item.Key.ToString(), item.Count)).ToList(),
+            clients.Select(item => (item.Id, item.Count)).ToList(),
+            sites.Select(item => (item.Id, item.Count)).ToList(),
+            agents.Select(item => (item.Id, item.Count)).ToList());
+    }
+
     public async Task<int> PurgeAsync(DateTime cutoff)
     {
         return await _db.Logs

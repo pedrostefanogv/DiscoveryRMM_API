@@ -516,6 +516,9 @@ public class CustomFieldServiceTests
         public Task<IReadOnlyList<LogEntry>> QueryPageAsync(LogQuery query)
             => Task.FromResult<IReadOnlyList<LogEntry>>([]);
 
+        public Task<LogSummaryRawDto> GetSummaryAsync(LogQuery query)
+            => Task.FromResult(new LogSummaryRawDto(0, [], [], [], [], [], []));
+
         public Task<int> PurgeAsync(DateTime cutoff)
             => Task.FromResult(0);
     }

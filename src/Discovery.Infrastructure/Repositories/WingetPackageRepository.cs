@@ -3,6 +3,7 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using System.Text;
 
 namespace Discovery.Infrastructure.Repositories;
 
@@ -56,6 +57,30 @@ public class WingetPackageRepository : IWingetPackageRepository
             .ToListAsync(cancellationToken);
 
         return (items, total);
+    }
+
+    public async Task<(IReadOnlyList<WingetPackage> Items, int TotalCount)> SearchPageAsync(
+        string? search,
+        string? architecture,
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var offset = DecodeOffsetCursor(cursor);
+        return await SearchAsync(search, architecture, limit, offset, cancellationToken);
+    }
+
+    private static int DecodeOffsetCursor(string? cursorValue)
+    {
+        if (string.IsNullOrWhiteSpace(cursorValue)) return 0;
+        try
+        {
+            var raw = Encoding.UTF8.GetString(Convert.FromBase64String(cursorValue));
+            if (raw.StartsWith("winget:") && int.TryParse(raw[7..], out var offset))
+                return Math.Max(0, offset);
+        }
+        catch { }
+        return 0;
     }
 
     public async Task BulkUpsertAsync(

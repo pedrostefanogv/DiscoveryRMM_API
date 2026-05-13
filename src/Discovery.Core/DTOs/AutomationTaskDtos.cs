@@ -41,6 +41,9 @@ public class AutomationTaskPageDto
     public int Total { get; set; }
     public int Limit { get; set; }
     public int Offset { get; set; }
+    public string? Cursor { get; set; }
+    public string? NextCursor { get; set; }
+    public bool HasMore { get; set; }
 }
 
 public class AutomationTaskAuditDto

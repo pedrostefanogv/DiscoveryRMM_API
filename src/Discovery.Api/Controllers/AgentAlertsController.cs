@@ -1,8 +1,10 @@
 using Discovery.Api.Filters;
 using Discovery.Api.Services;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
@@ -56,6 +58,26 @@ public class AgentAlertsController : ControllerBase
     {
         var items = await _alertService.GetAllAsync(status, scopeType, scopeClientId, scopeSiteId, scopeAgentId, ticketId, limit, offset);
         return Ok(items);
+    }
+
+    [HttpGet("page")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetPage(
+        [FromQuery] AlertDefinitionStatus? status,
+        [FromQuery] AlertScopeType? scopeType,
+        [FromQuery] Guid? scopeClientId,
+        [FromQuery] Guid? scopeSiteId,
+        [FromQuery] Guid? scopeAgentId,
+        [FromQuery] Guid? ticketId,
+        [FromQuery] string? cursor,
+        [FromQuery] int limit = 100)
+    {
+        var items = await _alertService.GetAllPageAsync(status, scopeType, scopeClientId, scopeSiteId, scopeAgentId, ticketId, cursor, limit);
+        var slice = CursorPaginationHelper.SlicePage(items, Math.Clamp(limit, 1, 500));
+        var nextCursor = slice.HasMore && slice.LastItem is not null
+            ? CursorPaginationHelper.EncodeCreatedAtCursor(slice.LastItem.CreatedAt, slice.LastItem.Id)
+            : null;
+        return Ok(new CursorPageDto<AgentAlertDefinition>(slice.Page, slice.Page.Count, cursor, nextCursor, slice.HasMore, Math.Clamp(limit, 1, 500)));
     }
 
     /// <summary>

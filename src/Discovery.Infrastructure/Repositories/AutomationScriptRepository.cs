@@ -39,6 +39,37 @@ public class AutomationScriptRepository : IAutomationScriptRepository
         var safeLimit = Math.Clamp(limit, 1, 500);
         var safeOffset = Math.Max(0, offset);
 
+        var query = BuildScriptQuery(clientId, activeOnly);
+
+        return await query
+            .OrderByDescending(script => script.UpdatedAt)
+            .ThenByDescending(script => script.Id)
+            .Skip(safeOffset)
+            .Take(safeLimit)
+            .ToListAsync();
+    }
+
+    public async Task<IReadOnlyList<AutomationScriptDefinition>> GetListPageAsync(Guid? clientId, bool activeOnly, string? cursor, int limit)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var query = BuildScriptQuery(clientId, activeOnly);
+
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorUpdatedAtUtc, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyCreatedAtCursor(
+                query, cursorUpdatedAtUtc, cursorId,
+                script => script.UpdatedAt, script => script.Id);
+        }
+
+        return await query
+            .OrderByDescending(script => script.UpdatedAt)
+            .ThenByDescending(script => script.Id)
+            .Take(safeLimit + 1)
+            .ToListAsync();
+    }
+
+    private IQueryable<AutomationScriptDefinition> BuildScriptQuery(Guid? clientId, bool activeOnly)
+    {
         var query = _db.AutomationScriptDefinitions.AsNoTracking().AsQueryable();
 
         if (clientId.HasValue)
@@ -47,11 +78,7 @@ public class AutomationScriptRepository : IAutomationScriptRepository
         if (activeOnly)
             query = query.Where(script => script.IsActive);
 
-        return await query
-            .OrderByDescending(script => script.UpdatedAt)
-            .Skip(safeOffset)
-            .Take(safeLimit)
-            .ToListAsync();
+        return query;
     }
 
     public async Task<int> CountAsync(Guid? clientId, bool activeOnly)

@@ -1,5 +1,6 @@
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -61,6 +62,17 @@ public class AgentAlertService : IAgentAlertService
         int limit = 100,
         int offset = 0)
         => _repo.GetByFiltersAsync(status, scopeType, scopeClientId, scopeSiteId, scopeAgentId, ticketId, limit, offset);
+
+    public Task<IReadOnlyList<AgentAlertDefinition>> GetAllPageAsync(
+        AlertDefinitionStatus? status = null,
+        AlertScopeType? scopeType = null,
+        Guid? scopeClientId = null,
+        Guid? scopeSiteId = null,
+        Guid? scopeAgentId = null,
+        Guid? ticketId = null,
+        string? cursor = null,
+        int limit = 100)
+        => _repo.GetByFiltersPageAsync(status, scopeType, scopeClientId, scopeSiteId, scopeAgentId, ticketId, cursor, limit);
 
     public async Task<bool> CancelAsync(Guid id)
     {

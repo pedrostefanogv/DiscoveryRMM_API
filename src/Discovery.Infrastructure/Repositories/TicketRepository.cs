@@ -56,6 +56,44 @@ public class TicketRepository : ITicketRepository
 
     public async Task<IEnumerable<Ticket>> GetAllAsync(TicketFilterQuery filter)
     {
+        var query = BuildFilteredTicketQuery(filter);
+
+        var safeLimit = Math.Clamp(filter.Limit, 1, 500);
+        var safeOffset = Math.Max(0, filter.Offset);
+
+        return await query
+            .OrderByDescending(ticket => ticket.CreatedAt)
+            .ThenByDescending(ticket => ticket.Id)
+            .Skip(safeOffset)
+            .Take(safeLimit)
+            .ToListAsync();
+    }
+
+    public async Task<IReadOnlyList<Ticket>> GetAllPageAsync(TicketFilterQuery filter)
+    {
+        var query = BuildFilteredTicketQuery(filter);
+
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(filter.Cursor, out var cursorCreatedAtUtc, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyCreatedAtCursor(
+                query,
+                cursorCreatedAtUtc,
+                cursorId,
+                ticket => ticket.CreatedAt,
+                ticket => ticket.Id);
+        }
+
+        var safeLimit = Math.Clamp(filter.Limit, 1, 500);
+
+        return await query
+            .OrderByDescending(ticket => ticket.CreatedAt)
+            .ThenByDescending(ticket => ticket.Id)
+            .Take(safeLimit + 1)
+            .ToListAsync();
+    }
+
+    private IQueryable<Ticket> BuildFilteredTicketQuery(TicketFilterQuery filter)
+    {
         IQueryable<Ticket> query = _db.Tickets
             .AsNoTracking()
             .Where(ticket => ticket.DeletedAt == null);
@@ -101,14 +139,7 @@ public class TicketRepository : ITicketRepository
                 (t.Category != null && EF.Functions.ILike(t.Category, pattern)));
         }
 
-        var safeLimit = Math.Clamp(filter.Limit, 1, 500);
-        var safeOffset = Math.Max(0, filter.Offset);
-
-        return await query
-            .OrderByDescending(ticket => ticket.CreatedAt)
-            .Skip(safeOffset)
-            .Take(safeLimit)
-            .ToListAsync();
+        return query;
     }
 
     public async Task<Ticket> CreateAsync(Ticket ticket)

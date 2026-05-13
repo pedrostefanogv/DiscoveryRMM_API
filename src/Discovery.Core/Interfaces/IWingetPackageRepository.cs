@@ -13,6 +13,13 @@ public interface IWingetPackageRepository
         int offset,
         CancellationToken cancellationToken = default);
 
+    Task<(IReadOnlyList<WingetPackage> Items, int TotalCount)> SearchPageAsync(
+        string? search,
+        string? architecture,
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken = default);
+
     Task BulkUpsertAsync(
         IReadOnlyList<WingetPackage> packages,
         CancellationToken cancellationToken = default);

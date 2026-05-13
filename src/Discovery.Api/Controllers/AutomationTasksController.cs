@@ -1,6 +1,7 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -78,6 +79,60 @@ public class AutomationTasksController : ControllerBase
             labels,
             limit,
             offset,
+            cancellationToken);
+        return Ok(page);
+    }
+
+    [HttpGet("page")]
+    public async Task<IActionResult> GetListPage(
+        [FromQuery] AppApprovalScopeType? scopeType = null,
+        [FromQuery] Guid? scopeId = null,
+        [FromQuery] bool activeOnly = true,
+        [FromQuery] bool deletedOnly = false,
+        [FromQuery] bool includeDeleted = false,
+        [FromQuery] string? search = null,
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] Guid? agentId = null,
+        [FromQuery] List<AppApprovalScopeType>? scopeTypes = null,
+        [FromQuery] List<AutomationTaskActionType>? actionTypes = null,
+        [FromQuery] List<string>? labels = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        CancellationToken cancellationToken = default)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var permissionAction = ActionType.View;
+        var permissionCheck = await ResolveAndCheckPermissionAsync(
+            userId,
+            permissionAction,
+            scopeType,
+            scopeId,
+            clientId,
+            siteId,
+            agentId,
+            cancellationToken);
+
+        if (permissionCheck is not null)
+            return permissionCheck;
+
+        var page = await _service.GetListPageAsync(
+            scopeType,
+            scopeId,
+            activeOnly,
+            deletedOnly,
+            includeDeleted,
+            search,
+            clientId,
+            siteId,
+            agentId,
+            scopeTypes,
+            actionTypes,
+            labels,
+            cursor,
+            limit,
             cancellationToken);
         return Ok(page);
     }
