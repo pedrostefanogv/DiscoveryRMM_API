@@ -3,7 +3,6 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
-using System.Text;
 
 namespace Discovery.Infrastructure.Repositories;
 
@@ -27,19 +26,7 @@ public class ChocolateyPackageRepository : IChocolateyPackageRepository
         int offset,
         CancellationToken cancellationToken = default)
     {
-        var query = _db.ChocolateyPackages.AsNoTracking();
-
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            var term = search.Trim().ToLower();
-            query = query.Where(x =>
-                x.PackageId.ToLower().Contains(term) ||
-                x.Name.ToLower().Contains(term) ||
-                x.Publisher.ToLower().Contains(term) ||
-                x.Description.ToLower().Contains(term) ||
-                x.Tags.ToLower().Contains(term));
-        }
-
+        var query = ApplyFilters(_db.ChocolateyPackages.AsNoTracking(), search);
         var total = await query.CountAsync(cancellationToken);
 
         var items = await query
@@ -58,21 +45,40 @@ public class ChocolateyPackageRepository : IChocolateyPackageRepository
         int limit,
         CancellationToken cancellationToken = default)
     {
-        var offset = DecodeOffsetCursor(cursor);
-        return await SearchAsync(search, limit, offset, cancellationToken);
+        var query = ApplyFilters(_db.ChocolateyPackages.AsNoTracking(), search);
+
+        if (CursorPaginationHelper.TryDecodeLongCountCursor(cursor, out var cursorCount, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyLongCountCursor(query, cursorCount, cursorId,
+                x => x.DownloadCount, x => x.Id);
+        }
+
+        var items = await query
+            .OrderByDescending(x => x.DownloadCount)
+            .ThenBy(x => x.PackageId)
+            .Take(limit + 1)
+            .ToListAsync(cancellationToken);
+
+        var total = await ApplyFilters(_db.ChocolateyPackages.AsNoTracking(), search)
+            .CountAsync(cancellationToken);
+
+        return (items, total);
     }
 
-    private static int DecodeOffsetCursor(string? cursorValue)
+    private static IQueryable<ChocolateyPackage> ApplyFilters(IQueryable<ChocolateyPackage> query, string? search)
     {
-        if (string.IsNullOrWhiteSpace(cursorValue)) return 0;
-        try
+        if (!string.IsNullOrWhiteSpace(search))
         {
-            var raw = Encoding.UTF8.GetString(Convert.FromBase64String(cursorValue));
-            if (raw.StartsWith("choco:") && int.TryParse(raw[6..], out var offset))
-                return Math.Max(0, offset);
+            var term = search.Trim().ToLower();
+            query = query.Where(x =>
+                x.PackageId.ToLower().Contains(term) ||
+                x.Name.ToLower().Contains(term) ||
+                x.Publisher.ToLower().Contains(term) ||
+                x.Description.ToLower().Contains(term) ||
+                x.Tags.ToLower().Contains(term));
         }
-        catch { }
-        return 0;
+
+        return query;
     }
 
     public async Task BulkUpsertAsync(

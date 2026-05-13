@@ -4,7 +4,6 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
-using System.Text;
 
 namespace Discovery.Infrastructure.Repositories;
 
@@ -38,27 +37,7 @@ public class AppPackageRepository : IAppPackageRepository
         int offset,
         CancellationToken cancellationToken = default)
     {
-        var query = _db.AppPackages
-            .AsNoTracking()
-            .Where(x => x.InstallationType == installationType);
-
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            var term = search.Trim();
-            var pattern = $"%{term}%";
-            query = query.Where(x =>
-                EF.Functions.ILike(x.PackageId, pattern) ||
-                EF.Functions.ILike(x.Name, pattern) ||
-                (x.Publisher != null && EF.Functions.ILike(x.Publisher, pattern)) ||
-                (x.Description != null && EF.Functions.ILike(x.Description, pattern)));
-        }
-
-        if (installationType == AppInstallationType.Winget && !string.IsNullOrWhiteSpace(architecture))
-        {
-            // metadata_json is mapped as jsonb, so string functions like lower()/contains can fail in PostgreSQL.
-            // For now, ignore architecture at SQL level to avoid breaking catalog queries.
-            _ = architecture;
-        }
+        var query = ApplyFilters(_db.AppPackages.AsNoTracking(), installationType, search, architecture);
 
         var total = await query.CountAsync(cancellationToken);
 
@@ -80,21 +59,53 @@ public class AppPackageRepository : IAppPackageRepository
         int limit,
         CancellationToken cancellationToken = default)
     {
-        var offset = DecodeOffsetCursor(cursor);
-        return await SearchAsync(installationType, search, architecture, limit, offset, cancellationToken);
+        var query = ApplyFilters(_db.AppPackages.AsNoTracking(), installationType, search, architecture);
+
+        if (CursorPaginationHelper.TryDecodeNameCursor(cursor, out var cursorName, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyNameCursor(query, cursorName, cursorId,
+                x => x.Name, x => x.Id);
+        }
+
+        var items = await query
+            .OrderBy(x => x.Name)
+            .ThenBy(x => x.PackageId)
+            .Take(limit + 1)
+            .ToListAsync(cancellationToken);
+
+        var total = await ApplyFilters(_db.AppPackages.AsNoTracking(), installationType, search, architecture)
+            .CountAsync(cancellationToken);
+
+        return (items, total);
     }
 
-    private static int DecodeOffsetCursor(string? cursorValue)
+    private static IQueryable<AppPackage> ApplyFilters(
+        IQueryable<AppPackage> query,
+        AppInstallationType installationType,
+        string? search,
+        string? architecture)
     {
-        if (string.IsNullOrWhiteSpace(cursorValue)) return 0;
-        try
+        query = query.Where(x => x.InstallationType == installationType);
+
+        if (!string.IsNullOrWhiteSpace(search))
         {
-            var raw = Encoding.UTF8.GetString(Convert.FromBase64String(cursorValue));
-            if (raw.StartsWith("app:") && int.TryParse(raw[4..], out var offset))
-                return Math.Max(0, offset);
+            var term = search.Trim();
+            var pattern = $"%{term}%";
+            query = query.Where(x =>
+                EF.Functions.ILike(x.PackageId, pattern) ||
+                EF.Functions.ILike(x.Name, pattern) ||
+                (x.Publisher != null && EF.Functions.ILike(x.Publisher, pattern)) ||
+                (x.Description != null && EF.Functions.ILike(x.Description, pattern)));
         }
-        catch { }
-        return 0;
+
+        if (installationType == AppInstallationType.Winget && !string.IsNullOrWhiteSpace(architecture))
+        {
+            // metadata_json is mapped as jsonb, so string functions like lower()/contains can fail in PostgreSQL.
+            // For now, ignore architecture at SQL level to avoid breaking catalog queries.
+            _ = architecture;
+        }
+
+        return query;
     }
 
     public async Task<IReadOnlyList<AppPackage>> GetAllByInstallationTypeAsync(

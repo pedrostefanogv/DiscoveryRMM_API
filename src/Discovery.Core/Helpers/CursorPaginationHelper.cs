@@ -4,10 +4,12 @@ namespace Discovery.Core.Helpers;
 
 /// <summary>
 /// Helpers reutilizáveis para paginação por cursor (keyset).
-/// Dois padrões suportados:
+/// Padrões suportados:
 ///   Type A — cursor composto por CreatedAt (ticks) + Id (Guid) → "ticks|guidN"
 ///   Type B — cursor por Id (Guid) → "guidN"
-/// Ambos codificados em Base64 URL-safe.
+///   Type C — cursor composto por Name (string) + Id (Guid) → "name|guidN"
+///   Type D — cursor composto por long (DownloadCount) + Id (Guid) → "count|guidN"
+/// Todos codificados em Base64.
 /// </summary>
 public static class CursorPaginationHelper
 {
@@ -65,6 +67,109 @@ public static class CursorPaginationHelper
         {
             return false;
         }
+    }
+
+    // ── Type C: Name (string) + Id (Guid) — para Winget/AppPackage ──────────
+
+    /// <summary>Codifica cursor Type C (Name asc + PackageId asc).</summary>
+    public static string EncodeNameCursor(string name, Guid id)
+    {
+        var payload = $"{name}|{id:N}";
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(payload));
+    }
+
+    /// <summary>Decodifica cursor Type C.</summary>
+    public static bool TryDecodeNameCursor(string? cursor, out string name, out Guid id)
+    {
+        name = string.Empty;
+        id = default;
+
+        if (string.IsNullOrWhiteSpace(cursor)) return false;
+
+        try
+        {
+            var raw = Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            // name pode conter |, então pegamos só o último |
+            var lastPipe = raw.LastIndexOf('|');
+            if (lastPipe < 0) return false;
+            name = raw[..lastPipe];
+            if (!Guid.TryParseExact(raw[(lastPipe + 1)..], "N", out id)) return false;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Aplica cláusula WHERE para cursor tipo Name + Id (Name asc, Id asc).</summary>
+    public static IQueryable<T> ApplyNameCursor<T>(
+        IQueryable<T> query,
+        string? cursorName,
+        Guid? cursorId,
+        Func<T, string> nameSelector,
+        Func<T, Guid> idSelector) where T : class
+    {
+        if (string.IsNullOrEmpty(cursorName) || !cursorId.HasValue)
+            return query;
+
+        var targetName = cursorName;
+        var targetId = cursorId.Value;
+
+        return query.Where(item =>
+            string.Compare(nameSelector(item), targetName, StringComparison.OrdinalIgnoreCase) > 0 ||
+            (string.Equals(nameSelector(item), targetName, StringComparison.OrdinalIgnoreCase) && idSelector(item).CompareTo(targetId) > 0));
+    }
+
+    // ── Type D: long (DownloadCount) + Id (Guid) — para Chocolatey ──────────
+
+    /// <summary>Codifica cursor Type D (DownloadCount desc + PackageId asc).</summary>
+    public static string EncodeLongCountCursor(long count, Guid id)
+    {
+        var payload = $"{count}|{id:N}";
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(payload));
+    }
+
+    /// <summary>Decodifica cursor Type D.</summary>
+    public static bool TryDecodeLongCountCursor(string? cursor, out long count, out Guid id)
+    {
+        count = 0;
+        id = default;
+
+        if (string.IsNullOrWhiteSpace(cursor)) return false;
+
+        try
+        {
+            var raw = Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            var parts = raw.Split('|', 2);
+            if (parts.Length != 2) return false;
+            if (!long.TryParse(parts[0], out count)) return false;
+            if (!Guid.TryParseExact(parts[1], "N", out id)) return false;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Aplica cláusula WHERE para cursor tipo long + Id (long desc, Id asc).</summary>
+    public static IQueryable<T> ApplyLongCountCursor<T>(
+        IQueryable<T> query,
+        long? cursorCount,
+        Guid? cursorId,
+        Func<T, long> countSelector,
+        Func<T, Guid> idSelector) where T : class
+    {
+        if (!cursorCount.HasValue || !cursorId.HasValue)
+            return query;
+
+        var targetCount = cursorCount.Value;
+        var targetId = cursorId.Value;
+
+        return query.Where(item =>
+            countSelector(item) < targetCount ||
+            (countSelector(item) == targetCount && idSelector(item).CompareTo(targetId) > 0));
     }
 
     /// <summary>

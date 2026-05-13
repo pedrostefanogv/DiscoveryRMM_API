@@ -3,7 +3,6 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
-using System.Text;
 
 namespace Discovery.Infrastructure.Repositories;
 
@@ -28,25 +27,7 @@ public class WingetPackageRepository : IWingetPackageRepository
         int offset,
         CancellationToken cancellationToken = default)
     {
-        var query = _db.WingetPackages.AsNoTracking();
-
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            var term = search.Trim().ToLower();
-            query = query.Where(x =>
-                x.PackageId.ToLower().Contains(term) ||
-                x.Name.ToLower().Contains(term) ||
-                x.Publisher.ToLower().Contains(term) ||
-                x.Description.ToLower().Contains(term) ||
-                x.Tags.ToLower().Contains(term));
-        }
-
-        if (!string.IsNullOrWhiteSpace(architecture))
-        {
-            var arch = architecture.Trim().ToLower();
-            query = query.Where(x => x.InstallerUrlsJson.ToLower().Contains($"\"{arch}\""));
-        }
-
+        var query = ApplyFilters(_db.WingetPackages.AsNoTracking(), search, architecture);
         var total = await query.CountAsync(cancellationToken);
 
         var items = await query
@@ -66,21 +47,46 @@ public class WingetPackageRepository : IWingetPackageRepository
         int limit,
         CancellationToken cancellationToken = default)
     {
-        var offset = DecodeOffsetCursor(cursor);
-        return await SearchAsync(search, architecture, limit, offset, cancellationToken);
+        var query = ApplyFilters(_db.WingetPackages.AsNoTracking(), search, architecture);
+
+        if (CursorPaginationHelper.TryDecodeNameCursor(cursor, out var cursorName, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyNameCursor(query, cursorName, cursorId,
+                x => x.Name, x => x.Id);
+        }
+
+        var items = await query
+            .OrderBy(x => x.Name)
+            .ThenBy(x => x.PackageId)
+            .Take(limit + 1)
+            .ToListAsync(cancellationToken);
+
+        var total = await ApplyFilters(_db.WingetPackages.AsNoTracking(), search, architecture)
+            .CountAsync(cancellationToken);
+
+        return (items, total);
     }
 
-    private static int DecodeOffsetCursor(string? cursorValue)
+    private static IQueryable<WingetPackage> ApplyFilters(IQueryable<WingetPackage> query, string? search, string? architecture)
     {
-        if (string.IsNullOrWhiteSpace(cursorValue)) return 0;
-        try
+        if (!string.IsNullOrWhiteSpace(search))
         {
-            var raw = Encoding.UTF8.GetString(Convert.FromBase64String(cursorValue));
-            if (raw.StartsWith("winget:") && int.TryParse(raw[7..], out var offset))
-                return Math.Max(0, offset);
+            var term = search.Trim().ToLower();
+            query = query.Where(x =>
+                x.PackageId.ToLower().Contains(term) ||
+                x.Name.ToLower().Contains(term) ||
+                x.Publisher.ToLower().Contains(term) ||
+                x.Description.ToLower().Contains(term) ||
+                x.Tags.ToLower().Contains(term));
         }
-        catch { }
-        return 0;
+
+        if (!string.IsNullOrWhiteSpace(architecture))
+        {
+            var arch = architecture.Trim().ToLower();
+            query = query.Where(x => x.InstallerUrlsJson.ToLower().Contains($"\"{arch}\""));
+        }
+
+        return query;
     }
 
     public async Task BulkUpsertAsync(
