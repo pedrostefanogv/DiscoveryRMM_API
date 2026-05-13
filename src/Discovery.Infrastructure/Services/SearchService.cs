@@ -384,9 +384,10 @@ public class SearchService : ISearchService
                          select a;
         }
 
+        // Evita join com colecao em memoria (catalogMatches), que nao e traduzivel em SQL.
         var scopedSoftware = from inv in agentSoftwareQuery
                              join a in agentQuery on inv.AgentId equals a.Id
-                             join sw in catalogMatches on inv.SoftwareId equals sw.Id
+                             join sw in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals sw.Id
                              select new
                              {
                                  sw.Name,
