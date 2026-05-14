@@ -243,7 +243,6 @@ public class NatsCredentialsService : INatsCredentialsService
         subscribeSubjects.Add(NatsSubjectBuilder.GlobalAgentsCommandSubject());
         subscribeSubjects.Add(NatsSubjectBuilder.ServerPongSubject());
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeSyncPing));
-        subscribeSubjects.Add(NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId));
         subscribeSubjects.Add(NatsSubjectBuilder.P2pClientEventsSubject(clientId));
         subscribeSubjects.Add("_INBOX.>");
 

@@ -148,14 +148,6 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             ping.Revision);
     }
 
-    public async Task PublishP2pDiscoverySnapshotAsync(Guid clientId, Guid siteId, string payload, CancellationToken cancellationToken = default)
-    {
-        _ = cancellationToken;
-        var subject = NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId);
-        await _connection.PublishAsync(subject, payload);
-        _logger.LogDebug("P2P discovery snapshot published to site {SiteId} (client {ClientId})", siteId, clientId);
-    }
-
     public async Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("NATS subscription tasks starting...");

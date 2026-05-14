@@ -32,13 +32,6 @@ public static class NatsSubjectBuilder
     }
 
     /// <summary>
-    /// Subject de descoberta P2P por site — todos os agents do site assinam.
-    /// Apenas o servidor publica neste subject.
-    /// </summary>
-    public static string P2pSiteDiscoverySubject(Guid clientId, Guid siteId)
-        => $"tenant.{clientId}.site.{siteId}.p2p.discovery";
-
-    /// <summary>
     /// Subject de comando fan-out por site.
     /// </summary>
     public static string SiteAgentsCommandSubject(Guid clientId, Guid siteId)

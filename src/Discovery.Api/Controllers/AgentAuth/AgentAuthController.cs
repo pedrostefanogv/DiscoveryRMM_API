@@ -7,7 +7,6 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
-using Discovery.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -34,7 +33,6 @@ public partial class AgentAuthController : ControllerBase
     private readonly IWorkflowRepository _workflowRepo;
     private readonly IWorkflowProfileRepository _workflowProfileRepo;
     private readonly IKnowledgeArticleRepository _knowledgeRepo;
-    private readonly IP2pBootstrapRepository _p2pBootstrapRepo;
     private readonly ISyncPingDeliveryRepository _syncPingDeliveryRepository;
     private readonly IAutomationExecutionReportRepository _automationExecutionReportRepository;
     private readonly IAgentMonitoringEventRepository _monitoringEventRepository;
@@ -54,7 +52,6 @@ public partial class AgentAuthController : ControllerBase
     private readonly IDeployTokenService _deployTokenService;
 
     // ── P2P Discovery ────────────────────────────────────────────────────
-    private readonly P2pDiscoveryService _p2pDiscoveryService;
 
     // ── Configuration & Infrastructure ────────────────────────────────────
     private readonly IConfigurationResolver _configResolver;
@@ -98,14 +95,12 @@ public partial class AgentAuthController : ControllerBase
         IClientRepository clientRepo,
         IDeployTokenService deployTokenService,
         IRedisService redisService,
-        IP2pBootstrapRepository p2pBootstrapRepo,
         IAgentUpdateService agentUpdateService,
         ICustomFieldService customFieldService,
         IOptions<MeshCentralOptions> meshCentralOptions,
         IAgentTlsCertificateProbe tlsCertProbe,
         IConfiguration configuration,
-        ILogger<AgentAuthController> logger,
-        P2pDiscoveryService p2pDiscoveryService)
+        ILogger<AgentAuthController> logger)
     {
         _agentRepo = agentRepo;
         _hardwareRepo = hardwareRepo;
@@ -136,14 +131,12 @@ public partial class AgentAuthController : ControllerBase
         _clientRepo = clientRepo;
         _deployTokenService = deployTokenService;
         _redisService = redisService;
-        _p2pBootstrapRepo = p2pBootstrapRepo;
         _agentUpdateService = agentUpdateService;
         _customFieldService = customFieldService;
         _meshCentralOptions = meshCentralOptions.Value;
         _tlsCertProbe = tlsCertProbe;
         _configuration = configuration;
         _logger = logger;
-        _p2pDiscoveryService = p2pDiscoveryService;
     }
 
     // ── Shared Auth Helpers ───────────────────────────────────────────────

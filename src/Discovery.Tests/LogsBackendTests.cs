@@ -523,9 +523,6 @@ public class LogsBackendTests
         public Task PublishGlobalFanoutCommandAsync(CommandDispatchEnvelope envelope, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
-        public Task PublishP2pDiscoverySnapshotAsync(Guid clientId, Guid siteId, string payload, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
         public Task PublishSiteFanoutCommandAsync(Guid clientId, Guid siteId, CommandDispatchEnvelope envelope, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 

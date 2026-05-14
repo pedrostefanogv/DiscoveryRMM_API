@@ -81,19 +81,6 @@ public partial class DiscoveryDbContext
             e.HasIndex(p => p.ClientId).HasDatabaseName("ix_p2p_seed_plan_client");
         });
 
-        modelBuilder.Entity<AgentP2pBootstrap>(e =>
-        {
-            e.ToTable("agent_p2p_bootstraps");
-            e.HasKey(b => b.AgentId);
-            e.Property(b => b.AgentId).HasColumnName("agent_id").ValueGeneratedNever();
-            e.Property(b => b.ClientId).HasColumnName("client_id");
-            e.Property(b => b.PeerId).HasColumnName("peer_id").HasMaxLength(128);
-            e.Property(b => b.AddrsJson).HasColumnName("addrs_json").HasMaxLength(1024);
-            e.Property(b => b.Port).HasColumnName("port");
-            e.Property(b => b.LastHeartbeatAt).HasColumnName("last_heartbeat_at").HasColumnType("timestamptz");
-            e.HasIndex(b => b.ClientId).HasDatabaseName("ix_agent_p2p_bootstraps_client_id");
-        });
-
         modelBuilder.Entity<P2pArtifactManifest>(e =>
         {
             e.ToTable("p2p_artifact_manifest");
