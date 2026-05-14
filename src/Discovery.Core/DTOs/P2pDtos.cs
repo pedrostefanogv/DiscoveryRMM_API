@@ -28,6 +28,40 @@ public class P2pTelemetryRequest
 
     public P2pMetricsDto? Metrics { get; set; }
     public P2pSeedPlanDto? CurrentSeedPlan { get; set; }
+
+    // ── NOVOS: Telemetria enriquecida (Fase 5) ──
+
+    /// <summary>Artifacts presentes no cache do agent. Máx. 500 itens.</summary>
+    public List<P2pArtifactPresenceDto>? Artifacts { get; set; }
+
+    /// <summary>Carga do host (CPU, RAM, disco).</summary>
+    public P2pHostLoadDto? HostLoad { get; set; }
+
+    /// <summary>Total de peers conhecidos via libp2p.</summary>
+    public int KnownPeers { get; set; }
+
+    /// <summary>Total de peers com conexão ativa.</summary>
+    public int ConnectedPeers { get; set; }
+}
+
+public class P2pArtifactPresenceDto
+{
+    public Guid ArtifactId { get; set; }
+    public string ArtifactName { get; set; } = string.Empty;
+    public string Sha256 { get; set; } = string.Empty;
+    public long SizeBytes { get; set; }
+
+    /// <summary>RFC3339 — quando o artifact foi armazenado em cache localmente.</summary>
+    public string? CachedAtUtc { get; set; }
+}
+
+public class P2pHostLoadDto
+{
+    public int CpuCores { get; set; }
+    public double RamGB { get; set; }
+    public double CpuPercent { get; set; }
+    public double MemoryPercent { get; set; }
+    public double DiskBusyPercent { get; set; }
 }
 
 public class P2pMetricsDto

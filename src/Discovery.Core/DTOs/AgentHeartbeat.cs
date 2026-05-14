@@ -21,5 +21,10 @@ public record AgentHeartbeat(
     double? DiskUsedGb = null,
     int? P2pPeers = null,
     long? UptimeSeconds = null,
-    int? ProcessCount = null
+    int? ProcessCount = null,
+
+    // ── NOVOS: dados de descoberta P2P ──
+    string? PeerId = null,
+    IReadOnlyList<string>? Addrs = null,
+    int? Port = null
 );

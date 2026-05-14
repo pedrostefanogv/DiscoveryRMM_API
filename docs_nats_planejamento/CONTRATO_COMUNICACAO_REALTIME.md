@@ -1,6 +1,6 @@
 # Contrato de Comunicacao em Tempo Real - DiscoveryRMM API
 
-> Versao: 4.2.0 | Data: 2026-05-05
+> Versao: 4.4.0 | Data: 2026-05-13
 > Publico: Servidor (C# - C:\Projetos\DiscoveryRMM_API), Agent (Go - C:\Projetos\Discovery), Frontend (JS/TS - C:\Projetos\DiscoveryRMM_Site)
 > Proposito: Especificacao canonica executavel. Todos os componentes DEVEM validar entrada e saida contra este documento.
 > Status: periodo de transicao ate 2026-06-01. Durante a transicao, formato legado gera warning. Apos essa data, mensagem nao conforme eh rejeitada.
@@ -11,6 +11,7 @@
 
 | Versao | Data | Mudancas |
 |---|---|---|
+| 4.4.0 | 2026-05-13 | Descoberta P2P movida para o heartbeat: `AgentHeartbeat` enriquecido com `peerId`/`addrs`/`port`; `POST /p2p/bootstrap` removido; evento `peer.online` publicado em `tenant.{c}.p2p.events` na transicao Offline->Online detectada pelo `HeartbeatCacheService` |
 | 4.2.0 | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`) com subjects dedicados (`*.agents.command`), envelope de dispatch, regras de idempotencia e diretrizes de ACL para alto volume. |
 | 4.1.0 | 2026-05-05 | Padronizacao detalhada de subjects (publish/subscribe), regra explicita de matching NATS, inclusao do subject por cliente (`tenant.{clientId}.dashboard.events`), secao de ACL por perfil e alinhamento com a implementacao de credenciais NATS. |
 | 4.0.0 | 2026-05-05 | Contrato consolidado em NATS de ponta a ponta (nativo e WebSocket), remocao do fluxo de hub legado, secao dedicada de conexao browser via NATS WS, checklist e plano de acao revisados para canal unico por subjects. |
@@ -64,7 +65,7 @@ tenant.{clientId}.site.{siteId}.agent.{agentId}.result
 tenant.{clientId}.site.{siteId}.agent.{agentId}.sync.ping
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote-debug.log
 tenant.{clientId}.site.{siteId}.agent.{agentId}.hardware
-tenant.{clientId}.site.{siteId}.p2p.discovery
+tenant.{clientId}.p2p.events
 tenant.{clientId}.site.{siteId}.dashboard.events
 tenant.{clientId}.dashboard.events
 tenant.unscoped.dashboard.events
@@ -80,6 +81,7 @@ tenant.unscoped.dashboard.events
 6. Comando em massa por site deve usar `tenant.{clientId}.site.{siteId}.agents.command`.
 7. Comando em massa por cliente/global deve usar `tenant.{clientId}.agents.command` e `tenant.global.agents.command`.
 8. Liveness do servidor para agents deve usar `tenant.global.pong` (broadcast efemero, sem replay).
+9. Descoberta P2P por evento deve usar `tenant.{clientId}.p2p.events`; `tenant.{clientId}.site.{siteId}.p2p.discovery` esta descontinuado.
 
 ### 2.1 Heartbeat
 
@@ -88,26 +90,30 @@ tenant.unscoped.dashboard.events
 | Subject | `tenant.{clientId}.site.{siteId}.agent.{agentId}.heartbeat` |
 | Direcao | Agent -> Servidor |
 | DTO | `AgentHeartbeat` |
+| Nota | Fonte de verdade para descoberta P2P: `peer.online` e disparado quando o servidor detecta transicao Offline->Online no heartbeat |
 
-| Campo | Tipo C# | Obrigatorio |
-|---|---|---|
-| `agentId` | `Guid` | sim |
-| `clientId` | `Guid?` | nao |
-| `siteId` | `Guid?` | nao |
-| `ipAddress` | `string?` | nao |
-| `hostname` | `string?` | nao |
-| `agentVersion` | `string?` | nao |
-| `timestampUtc` | `DateTime?` | nao |
-| `cpuPercent` | `double?` | nao |
-| `memoryPercent` | `double?` | nao |
-| `memoryTotalGb` | `double?` | nao |
-| `memoryUsedGb` | `double?` | nao |
-| `diskPercent` | `double?` | nao |
-| `diskTotalGb` | `double?` | nao |
-| `diskUsedGb` | `double?` | nao |
-| `p2pPeers` | `int?` | nao |
-| `uptimeSeconds` | `long?` | nao |
-| `processCount` | `int?` | nao |
+| Campo | Tipo C# | Obrigatorio | Descricao P2P |
+|---|---|---|---|
+| `agentId` | `Guid` | sim | |
+| `clientId` | `Guid?` | nao | |
+| `siteId` | `Guid?` | nao | |
+| `ipAddress` | `string?` | nao | |
+| `hostname` | `string?` | nao | |
+| `agentVersion` | `string?` | nao | |
+| `timestampUtc` | `DateTime?` | nao | |
+| `cpuPercent` | `double?` | nao | |
+| `memoryPercent` | `double?` | nao | |
+| `memoryTotalGb` | `double?` | nao | |
+| `memoryUsedGb` | `double?` | nao | |
+| `diskPercent` | `double?` | nao | |
+| `diskTotalGb` | `double?` | nao | |
+| `diskUsedGb` | `double?` | nao | |
+| `p2pPeers` | `int?` | nao | |
+| `uptimeSeconds` | `long?` | nao | |
+| `processCount` | `int?` | nao | |
+| `peerId` | `string?` | nao (sim se P2P habilitado) | Peer ID libp2p (12D3KooW...) |
+| `addrs` | `string[]?` | nao (sim se P2P habilitado) | IPs IPv4 roteaveis |
+| `port` | `int?` | nao (sim se P2P habilitado) | Porta TCP/QUIC libp2p |
 
 ### 2.2 Comando (unicast)
 
@@ -234,21 +240,38 @@ Regra:
 | `timestampUtc` | `DateTime?` | nao |
 | `sequence` | `long?` | nao |
 
-### 2.6 P2P Discovery
+### 2.6 P2P Events
 
 | Propriedade | Valor |
 |---|---|
-| Subject | `tenant.{clientId}.site.{siteId}.p2p.discovery` |
+| Subject | `tenant.{clientId}.p2p.events` |
 | Direcao | Servidor -> Agents |
 
 | Campo | Tipo |
 |---|---|
+| `eventType` | `string` (`peer.online`) |
+| `clientId` | `Guid` |
+| `siteId` | `Guid` |
+| `agentId` | `Guid` |
+| `peerId` | `string` |
+| `addrs` | `string[]` |
+| `port` | `int` |
 | `sequence` | `int` |
-| `ttlSeconds` | `int` |
-| `peers[].agentId` | `string` |
-| `peers[].peerId` | `string` |
-| `peers[].addrs` | `string[]` |
-| `peers[].port` | `int` |
+| `generatedAtUtc` | `DateTime` |
+
+Regras:
+
+1. `eventType` deve ser `peer.online` para subida/retorno de offline.
+2. `sequence` deve ser monotonicamente crescente por cliente.
+3. Agent subscriber deve ignorar evento do proprio `agentId`.
+
+### 2.6.1 Subject legado descontinuado
+
+| Propriedade | Valor |
+|---|---|
+| Subject | `tenant.{clientId}.site.{siteId}.p2p.discovery` |
+| Status | descontinuado |
+| Politica | nao publicar/assinar em novas implementacoes |
 
 ### 2.7 Dashboard Events
 
@@ -483,13 +506,13 @@ O frontend DEVE:
 1. Browser/dashboard deve receber somente permissao de subscribe.
 2. Subscribe fora do escopo do JWT deve ser negado imediatamente pelo gateway/broker.
 3. Claims globais DEVEM incluir os tres escopos de dashboard (site, client fallback e unscoped).
-4. Subjects operacionais (`.command`, `.heartbeat`, `.result`, `.sync.ping`, `.remote-debug.log`, `.hardware`, `.p2p.discovery`) nao devem ser assinados diretamente pelo frontend.
+4. Subjects operacionais (`.command`, `.heartbeat`, `.result`, `.sync.ping`, `.remote-debug.log`, `.hardware`, `.p2p.events`) nao devem ser assinados diretamente pelo frontend.
 
 ### 3.8 ACL para comando em massa (NATS nativo)
 
 | Perfil tecnico | Subscribe allow | Publish allow |
 |---|---|---|
-| AgentIdentity | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.site.{s}.p2p.discovery` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` |
+| AgentIdentity | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.p2p.events` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` |
 | ServerCommandPublisher | `tenant.*.site.*.agent.*.result` | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command` |
 
 Regras:
@@ -606,6 +629,7 @@ Validacao minima de payload:
 | 11 | Agent deve executar comando em massa de forma idempotente (dedupe por `dispatchId`/`idempotencyKey`). |
 | 12 | Resultado de comando em massa deve incluir `dispatchId` para consolidacao de campanha no servidor. |
 | 13 | Pong global do servidor deve usar `tenant.global.pong` e nao deve ser persistido/replayado. |
+| 14 | Descoberta P2P deve usar `tenant.{clientId}.p2p.events`; `tenant.{clientId}.site.{siteId}.p2p.discovery` esta descontinuado. |
 
 ---
 
@@ -624,6 +648,7 @@ Validacao minima de payload:
 | 6.1.7 | `runtime_nats.go` | Assinar `*.agents.command` por escopo (site/client/global) | P0 |
 | 6.1.8 | `runtime_nats.go` | Dedupe local por `dispatchId`/`idempotencyKey` com TTL | P0 |
 | 6.1.9 | `runtime_nats.go` | Assinar `tenant.global.pong` e atualizar liveness do servidor | P1 |
+| 6.1.10 | `runtime_nats.go` | Assinar `tenant.{clientId}.p2p.events` e filtrar `eventType = peer.online` | P0 |
 
 ### 6.2 Servidor (C#) - C:\Projetos\DiscoveryRMM_API
 
@@ -638,6 +663,7 @@ Validacao minima de payload:
 | 6.2.7 | Command dispatcher | publicar fan-out em `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command` | P0 |
 | 6.2.8 | Orquestrador de campanhas | persistir `dispatchId`, alvo e status por agent (success/fail/pending) | P0 |
 | 6.2.9 | Pipeline de heartbeat/mensageria | publicar `tenant.global.pong` como broadcast efemero (sem replay) | P1 |
+| 6.2.10 | P2P discovery publisher | publicar eventos em `tenant.{clientId}.p2p.events` e descontinuar `tenant.{clientId}.site.{siteId}.p2p.discovery` | P0 |
 
 ### 6.3 Dashboard (Frontend) - C:\Projetos\DiscoveryRMM_Site
 
@@ -847,7 +873,8 @@ Regra de ouro: o dashboard recebe eventos exclusivamente por assinatura NATS WS 
 | `tenant.{c}.site.{s}.agent.{a}.sync.ping` | Servidor -> Agent | `SyncInvalidationPingMessage` |
 | `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` | Agent -> Servidor | log de sessao |
 | `tenant.{c}.site.{s}.agent.{a}.hardware` | Agent -> Servidor | hardware report |
-| `tenant.{c}.site.{s}.p2p.discovery` | Servidor -> Agent | descoberta p2p |
+| `tenant.{c}.p2p.events` | Servidor -> Agent | eventos p2p por cliente (`peer.online`) |
+| `tenant.{c}.site.{s}.p2p.discovery` | descontinuado | legado/transicao |
 | `tenant.{c}.site.{s}.dashboard.events` | Agent/Servidor -> Consumidores | `DashboardEvent` |
 | `tenant.{c}.dashboard.events` | Servidor -> Consumidores | `DashboardEvent` (fallback por cliente) |
 | `tenant.unscoped.dashboard.events` | Servidor -> Consumidores | `DashboardEvent` |
@@ -902,4 +929,4 @@ Regra de ouro: o dashboard recebe eventos exclusivamente por assinatura NATS WS 
 
 ---
 
-Fim do documento. Versao 4.2.0 - 2026-05-05.
+Fim do documento. Versao 4.3.0 - 2026-05-13.

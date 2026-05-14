@@ -169,6 +169,7 @@ public class P2pService : IP2pService
         var collectedAt = DateTime.Parse(request.CollectedAtUtc!, null, System.Globalization.DateTimeStyles.RoundtripKind);
         var metrics = request.Metrics!;
         var plan = request.CurrentSeedPlan!;
+        var hostLoad = request.HostLoad;
 
         var snapshot = new P2pAgentTelemetry
         {
@@ -193,10 +194,51 @@ public class P2pService : IP2pService
             PlanConfiguredPercent = plan.ConfiguredPercent,
             PlanMinSeeds = plan.MinSeeds,
             PlanSelectedSeeds = plan.SelectedSeeds,
+            // ── Telemetria enriquecida ──
+            KnownPeers = request.KnownPeers,
+            ConnectedPeers = request.ConnectedPeers,
+            HostCpuPercent = hostLoad?.CpuPercent,
+            HostMemoryPercent = hostLoad?.MemoryPercent,
+            HostDiskBusyPercent = hostLoad?.DiskBusyPercent,
+            HostCpuCores = hostLoad?.CpuCores ?? 0,
+            HostRamGB = hostLoad?.RamGB ?? 0,
         };
 
         _db.P2pAgentTelemetries.Add(snapshot);
         await _db.SaveChangesAsync(ct);
+
+        // ── Upsert de P2pArtifactPresence a partir de Artifacts[] ──
+        if (request.Artifacts is { Count: > 0 })
+        {
+            var now = DateTime.UtcNow;
+            foreach (var artifact in request.Artifacts)
+            {
+                if (artifact.ArtifactId == Guid.Empty) continue;
+
+                var existing = await _db.P2pArtifactPresences
+                    .FirstOrDefaultAsync(p => p.ArtifactId == artifact.ArtifactId && p.AgentId == agentId, ct);
+
+                if (existing is not null)
+                {
+                    existing.LastSeenAt = now;
+                    existing.ArtifactName = artifact.ArtifactName;
+                }
+                else
+                {
+                    _db.P2pArtifactPresences.Add(new P2pArtifactPresence
+                    {
+                        ArtifactId = artifact.ArtifactId,
+                        ArtifactName = artifact.ArtifactName,
+                        AgentId = agentId,
+                        SiteId = agent.SiteId,
+                        ClientId = clientId,
+                        LastSeenAt = now,
+                    });
+                }
+            }
+
+            await _db.SaveChangesAsync(ct);
+        }
 
         return errors;
     }
@@ -602,6 +644,46 @@ public class P2pService : IP2pService
         else
         {
             ValidateSeedPlan(req.CurrentSeedPlan, errors);
+        }
+
+        // ── Validações de telemetria enriquecida ──
+        if (req.Artifacts is { Count: > 500 })
+        {
+            errors.Add(new P2pErrorDetail
+            {
+                Field = "artifacts",
+                Code = "TOO_MANY_ITEMS",
+                Message = "artifacts excede 500 itens. O agent deve truncar antes de enviar."
+            });
+        }
+
+        if (req.HostLoad is not null)
+        {
+            if (req.HostLoad.CpuPercent is < 0 or > 100)
+                errors.Add(new P2pErrorDetail { Field = "hostLoad.cpuPercent", Code = "OUT_OF_RANGE", Message = "cpuPercent deve estar entre 0 e 100" });
+
+            if (req.HostLoad.MemoryPercent is < 0 or > 100)
+                errors.Add(new P2pErrorDetail { Field = "hostLoad.memoryPercent", Code = "OUT_OF_RANGE", Message = "memoryPercent deve estar entre 0 e 100" });
+
+            if (req.HostLoad.DiskBusyPercent is < 0 or > 100)
+                errors.Add(new P2pErrorDetail { Field = "hostLoad.diskBusyPercent", Code = "OUT_OF_RANGE", Message = "diskBusyPercent deve estar entre 0 e 100" });
+
+            if (req.HostLoad.CpuCores < 1)
+                errors.Add(new P2pErrorDetail { Field = "hostLoad.cpuCores", Code = "INVALID_VALUE", Message = "cpuCores deve ser ≥ 1" });
+
+            if (req.HostLoad.RamGB < 0.1)
+                errors.Add(new P2pErrorDetail { Field = "hostLoad.ramGB", Code = "INVALID_VALUE", Message = "ramGB deve ser ≥ 0.1" });
+        }
+
+        // KnownPeers >= ConnectedPeers (warning, não rejeição)
+        if (req.KnownPeers < req.ConnectedPeers && req.ConnectedPeers > 0)
+        {
+            errors.Add(new P2pErrorDetail
+            {
+                Field = "knownPeers",
+                Code = "INCONSISTENT",
+                Message = $"knownPeers ({req.KnownPeers}) é menor que connectedPeers ({req.ConnectedPeers})"
+            });
         }
 
         return errors;

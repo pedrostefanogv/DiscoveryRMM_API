@@ -13,8 +13,11 @@ namespace Discovery.Core.Interfaces;
 /// </summary>
 public interface IHeartbeatCacheService
 {
-    /// <summary>Registra heartbeat no Redis. Só escreve no DB na transição Offline→Online.</summary>
-    Task SetHeartbeatAsync(AgentHeartbeat heartbeat, AgentStatus status, CancellationToken ct = default);
+    /// <summary>
+    /// Registra heartbeat no Redis. Só escreve no DB na transição Offline→Online.
+    /// Retorna true se houve transição Offline→Online (chave não existia antes).
+    /// </summary>
+    Task<bool> SetHeartbeatAsync(AgentHeartbeat heartbeat, AgentStatus status, CancellationToken ct = default);
 
     /// <summary>Lê o estado atual do cache. Se não existir, o agente está offline.</summary>
     Task<HeartbeatCacheEntry?> GetHeartbeatAsync(Guid agentId, CancellationToken ct = default);
@@ -68,4 +71,9 @@ public class HeartbeatCacheEntry
     public int? P2pPeers { get; init; }
     public long? UptimeSeconds { get; init; }
     public int? ProcessCount { get; init; }
+
+    // ── NOVOS para descoberta P2P ──
+    public string? PeerId { get; init; }
+    public IReadOnlyList<string>? Addrs { get; init; }
+    public int? Port { get; init; }
 }

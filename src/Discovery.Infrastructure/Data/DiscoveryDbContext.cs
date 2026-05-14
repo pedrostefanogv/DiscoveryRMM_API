@@ -115,6 +115,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<P2pArtifactPresence> P2pArtifactPresences => Set<P2pArtifactPresence>();
     public DbSet<P2pSeedPlan> P2pSeedPlans => Set<P2pSeedPlan>();
     public DbSet<AgentP2pBootstrap> AgentP2pBootstraps => Set<AgentP2pBootstrap>();
+    public DbSet<P2pArtifactManifest> P2pArtifactManifests => Set<P2pArtifactManifest>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

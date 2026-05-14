@@ -1,6 +1,6 @@
 # NATS Subjects + ACL - Padrao Operacional DiscoveryRMM
 
-> Versao: 1.1.0 | Data: 2026-05-05
+> Versao: 1.2.0 | Data: 2026-05-13
 > Escopo: Servidor (C#), Agent (Go), Frontend (JS/TS)
 > Fonte de verdade complementar: CONTRATO_COMUNICACAO_REALTIME.md (v4.2.0)
 
@@ -10,6 +10,7 @@
 
 | Versao | Data | Mudancas |
 |---|---|---|
+| 1.2.0 | 2026-05-13 | Priorizacao de `tenant.{c}.p2p.events` para descoberta P2P por cliente; permissao de subscribe para AgentIdentity; `tenant.{c}.site.{s}.p2p.discovery` marcado como descontinuado. |
 | 1.1.0 | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`), envelope de dispatch com idempotencia e ACL dedicada para fan-out sem loop agente-a-agente. |
 | 1.0.0 | 2026-05-05 | Versao inicial consolidada de subjects e ACL. |
 
@@ -40,7 +41,8 @@ Este documento consolida:
 | `tenant.{c}.site.{s}.agent.{a}.sync.ping` | Servidor -> Agent | Servidor | Agent | `SyncInvalidationPingMessage` |
 | `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` | Agent -> Servidor | Agent | Servidor | `RemoteDebugLogEntry` |
 | `tenant.{c}.site.{s}.agent.{a}.hardware` | Agent -> Servidor | Agent | Servidor | `HardwareReport` |
-| `tenant.{c}.site.{s}.p2p.discovery` | Servidor -> Agents | Servidor | Agents do site | `P2pDiscoverySnapshot` |
+| `tenant.{c}.p2p.events` | Servidor -> Agents do cliente | Servidor | Agents do cliente | `P2pPeerOnlineEvent` |
+| `tenant.{c}.site.{s}.p2p.discovery` | descontinuado | legado | nao usar | legado/transicao |
 | `tenant.{c}.site.{s}.dashboard.events` | Servidor/Agent -> Consumidores | Servidor e Agent | Frontend (WS) e consumidores internos | `DashboardEvent<T>` |
 | `tenant.{c}.dashboard.events` | Servidor -> Consumidores | Servidor | Frontend (WS) e consumidores internos | `DashboardEvent<T>` (fallback por cliente) |
 | `tenant.unscoped.dashboard.events` | Servidor -> Consumidores | Servidor | Frontend (WS) e consumidores internos | `DashboardEvent<T>` (fallback sem tenant) |
@@ -163,27 +165,39 @@ Campos:
 }
 ```
 
-### 3.6 P2P discovery (`tenant.{c}.site.{s}.p2p.discovery`)
+### 3.6 P2P events (`tenant.{c}.p2p.events`)
 
 ```json
 {
-	"version": 1,
+	"eventType": "peer.online",
 	"clientId": "11111111-1111-1111-1111-111111111111",
 	"siteId": "22222222-2222-2222-2222-222222222222",
+	"agentId": "d2719a7d-43bb-4e7e-bbe6-18dce7bf1db7",
+	"peerId": "12D3KooW...",
+	"addrs": ["10.0.0.10"],
+	"port": 41090,
 	"generatedAtUtc": "2026-05-05T10:00:00Z",
-	"ttlSeconds": 300,
-	"sequence": 10,
-	"peers": [
-		{
-			"agentId": "d2719a7d-43bb-4e7e-bbe6-18dce7bf1db7",
-			"peerId": "peer-01",
-			"addrs": ["10.0.0.10"],
-			"port": 4222,
-			"lastHeartbeatAtUtc": "2026-05-05T09:59:58Z"
-		}
-	]
+	"sequence": 10
 }
 ```
+
+Regras:
+
+1. `eventType` deve ser `peer.online` para evento de subida/retorno de offline.
+2. `clientId` e obrigatorio e deve casar com o subject.
+3. `agentId` e `peerId` obrigatorios para dedupe e conexao no agent subscriber.
+4. `sequence` deve ser monotonicamente crescente por cliente para descarte de eventos antigos.
+5. Publicacao recomendada somente na primeira transicao para online (ou retorno de offline).
+
+### 3.6.1 P2P discovery por site (`tenant.{c}.site.{s}.p2p.discovery`) - descontinuado
+
+Este subject foi substituido por `tenant.{c}.p2p.events`.
+
+Regras de transicao:
+
+1. Novas implementacoes nao devem publicar nem assinar `tenant.{c}.site.{s}.p2p.discovery`.
+2. ACL de AgentIdentity deve priorizar `tenant.{c}.p2p.events`.
+3. Qualquer uso legado deve ser removido em rollout controlado.
 
 ### 3.7 Dashboard events (`*.dashboard.events`)
 
@@ -245,6 +259,7 @@ Ativacao da logica de sobrecarga (servidor):
 5. Fan-out operacional de comando deve usar `*.agents.command` por escopo, evitando loop publish unicast N vezes.
 6. Agents devem deduplicar execucao por `dispatchId`/`idempotencyKey` dentro de janela TTL.
 7. `tenant.global.pong` e broadcast efemero de liveness do servidor e nao faz parte de replay JetStream.
+8. Para descoberta P2P por evento, usar `tenant.{c}.p2p.events`; `tenant.{c}.site.{s}.p2p.discovery` esta descontinuado.
 
 ---
 
@@ -257,7 +272,7 @@ Ativacao da logica de sobrecarga (servidor):
 | SiteUser | `tenant.{c}.site.{s}.dashboard.events` | nenhum | qualquer wildcard fora do site, subjects operacionais |
 | ClientManager | `tenant.{c}.site.*.dashboard.events`, `tenant.{c}.dashboard.events` | nenhum | outros clientes, subjects operacionais |
 | GlobalAdmin | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` | nenhum | publish pelo browser |
-| AgentIdentity | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.site.{s}.p2p.discovery` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` | bloquear subscribe/publish fora do escopo do tenant/site/agent |
+| AgentIdentity | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.p2p.events` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` | bloquear subscribe/publish fora do escopo do tenant/site/agent |
 | ServerCommandPublisher | `tenant.*.site.*.agent.*.result` | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command` | nao expor credencial no browser |
 | BackendInternal | conforme servico | opcional e restrito | nao reutilizar token de backend no browser |
 
@@ -332,7 +347,7 @@ Ativacao da logica de sobrecarga (servidor):
 ### Agent (Go)
 
 - Publica apenas: `heartbeat`, `result`, `hardware`, `remote-debug.log`.
-- Assina: `command` unicast + `*.agents.command` por escopo + `tenant.global.pong` + `sync.ping` + `p2p.discovery`.
+- Assina: `command` unicast + `*.agents.command` por escopo + `tenant.global.pong` + `sync.ping` + `tenant.{c}.p2p.events`.
 - Heartbeat com `timestampUtc` e `processCount`.
 - Dedupe local por `dispatchId`/`idempotencyKey` para nao executar campanha duplicada.
 
@@ -359,4 +374,4 @@ Ativacao da logica de sobrecarga (servidor):
 
 ---
 
-Fim do documento. Versao 1.1.0 - 2026-05-05.
+Fim do documento. Versao 1.2.0 - 2026-05-13.

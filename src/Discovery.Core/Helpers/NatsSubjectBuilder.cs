@@ -61,4 +61,11 @@ public static class NatsSubjectBuilder
     /// </summary>
     public static string ServerPongSubject()
         => GlobalPongSubject;
+
+    /// <summary>
+    /// Subject de eventos P2P por cliente (peer.online, peer.offline).
+    /// Agents assinam este subject para descobrir peers em tempo real.
+    /// </summary>
+    public static string P2pClientEventsSubject(Guid clientId)
+        => $"tenant.{clientId}.p2p.events";
 }

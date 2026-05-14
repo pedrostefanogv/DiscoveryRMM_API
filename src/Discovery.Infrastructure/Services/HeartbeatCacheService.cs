@@ -92,8 +92,9 @@ public class HeartbeatCacheService : IHeartbeatCacheService
 
     /// <summary>
     /// Registra heartbeat no Redis com métricas opcionais. Só escreve no DB se o agente passou de Offline → Online.
+    /// Retorna true se houve transição Offline → Online.
     /// </summary>
-    public async Task SetHeartbeatAsync(AgentHeartbeat heartbeat, AgentStatus status, CancellationToken ct = default)
+    public async Task<bool> SetHeartbeatAsync(AgentHeartbeat heartbeat, AgentStatus status, CancellationToken ct = default)
     {
         var agentId = heartbeat.AgentId;
 
@@ -102,7 +103,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
             // Fallback: escreve direto no DB quando Redis indisponível
             try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, status, heartbeat.IpAddress)); }
             catch (Exception ex) { _logger.LogWarning(ex, "Heartbeat DB fallback failed for {AgentId}", agentId); }
-            return;
+            return false;
         }
 
         try
@@ -124,7 +125,11 @@ public class HeartbeatCacheService : IHeartbeatCacheService
                 DiskUsedGb = heartbeat.DiskUsedGb,
                 P2pPeers = heartbeat.P2pPeers,
                 UptimeSeconds = heartbeat.UptimeSeconds,
-                ProcessCount = heartbeat.ProcessCount
+                ProcessCount = heartbeat.ProcessCount,
+                // ── Dados de descoberta P2P ──
+                PeerId = heartbeat.PeerId,
+                Addrs = heartbeat.Addrs,
+                Port = heartbeat.Port
             };
 
             var json = JsonSerializer.Serialize(entry, JsonOptions);
@@ -140,12 +145,17 @@ public class HeartbeatCacheService : IHeartbeatCacheService
                 _logger.LogDebug("Agent {AgentId} transitioned Offline → Online — persisting to DB", agentId);
                 try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, AgentStatus.Online, heartbeat.IpAddress)); }
                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to persist Online status for {AgentId}", agentId); }
+                return true;
             }
+
+            return false;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Erro ao cachear heartbeat {AgentId} no Redis", agentId);
         }
+
+        return false;
     }
 
     /// <summary>Verifica se o agente está online pelo Redis.</summary>

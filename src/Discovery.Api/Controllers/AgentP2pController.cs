@@ -13,15 +13,32 @@ namespace Discovery.Api.Controllers;
 [ApiController]
 [Route("api/v{version:apiVersion}/agent-auth")]
 [AllowAnonymous]
-public class AgentP2pController : ControllerBase
+public partial class AgentP2pController : ControllerBase
 {
     private readonly IP2pService _p2p;
     private readonly IAgentRepository _agentRepo;
+    private readonly IP2pArtifactManifestRepository _manifestRepo;
+    private readonly IWingetPackageRepository _wingetRepo;
+    private readonly IAppPackageRepository _appPackageRepo;
+    private readonly ISiteRepository _siteRepo;
+    private readonly IRedisService _redis;
 
-    public AgentP2pController(IP2pService p2p, IAgentRepository agentRepo)
+    public AgentP2pController(
+        IP2pService p2p,
+        IAgentRepository agentRepo,
+        IP2pArtifactManifestRepository manifestRepo,
+        IWingetPackageRepository wingetRepo,
+        IAppPackageRepository appPackageRepo,
+        ISiteRepository siteRepo,
+        IRedisService redis)
     {
         _p2p = p2p;
         _agentRepo = agentRepo;
+        _manifestRepo = manifestRepo;
+        _wingetRepo = wingetRepo;
+        _appPackageRepo = appPackageRepo;
+        _siteRepo = siteRepo;
+        _redis = redis;
     }
 
     // ─────────────────────────────────────────────────────────────────────

@@ -36,4 +36,13 @@ public class P2pAgentTelemetry
     public int PlanConfiguredPercent { get; set; }
     public int PlanMinSeeds { get; set; }
     public int PlanSelectedSeeds { get; set; }
+
+    // ── NOVOS: Telemetria enriquecida (host load, peers) ──
+    public double? HostCpuPercent { get; set; }
+    public double? HostMemoryPercent { get; set; }
+    public double? HostDiskBusyPercent { get; set; }
+    public int HostCpuCores { get; set; }
+    public double HostRamGB { get; set; }
+    public int KnownPeers { get; set; }
+    public int ConnectedPeers { get; set; }
 }

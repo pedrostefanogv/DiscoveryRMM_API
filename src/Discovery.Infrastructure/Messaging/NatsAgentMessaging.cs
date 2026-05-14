@@ -188,12 +188,40 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                             heartbeat = heartbeat with { AgentId = agentId.Value };
 
                             // Cache no Redis com métricas (write-behind evita escrita direta no PostgreSQL)
-                            await _heartbeatCache.SetHeartbeatAsync(heartbeat, AgentStatus.Online);
+                            var wasTransition = await _heartbeatCache.SetHeartbeatAsync(heartbeat, AgentStatus.Online);
 
                             _logger.LogDebug("Heartbeat processed from agent {AgentId} (IP: {IpAddress}, CPU:{Cpu}%, Mem:{Mem}%, Disk:{Disk}%, P2P:{P2p})",
                                 agentId.Value, heartbeat.IpAddress,
                                 heartbeat.CpuPercent, heartbeat.MemoryPercent,
                                 heartbeat.DiskPercent, heartbeat.P2pPeers);
+
+                            // Se houve transição Offline→Online e o agent tem PeerId, publica peer.online
+                            if (wasTransition && !string.IsNullOrWhiteSpace(heartbeat.PeerId))
+                            {
+                                try
+                                {
+                                    var onlineEvent = new P2pPeerOnlineEvent
+                                    {
+                                        EventType = "peer.online",
+                                        ClientId = heartbeat.ClientId ?? Guid.Empty,
+                                        SiteId = heartbeat.SiteId,
+                                        AgentId = agentId.Value,
+                                        PeerId = heartbeat.PeerId!,
+                                        Addrs = heartbeat.Addrs ?? Array.Empty<string>(),
+                                        Port = heartbeat.Port ?? 0,
+                                        GeneratedAtUtc = DateTime.UtcNow
+                                    };
+
+                                    var eventJson = JsonSerializer.Serialize(onlineEvent, JsonOptions);
+                                    var subject = NatsSubjectBuilder.P2pClientEventsSubject(heartbeat.ClientId ?? Guid.Empty);
+                                    await _connection.PublishAsync(subject, eventJson);
+                                    _logger.LogInformation("Published peer.online for agent {AgentId} (PeerId: {PeerId})", agentId.Value, heartbeat.PeerId);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "Failed to publish peer.online for agent {AgentId}", agentId.Value);
+                                }
+                            }
 
                             // Propaga heartbeat completo para dashboards via NATS dashboard.events.
                             // Usa ClientId/SiteId do heartbeat (enviado pelo agent) em vez de DB lookup.

@@ -38,6 +38,14 @@ public partial class DiscoveryDbContext
             e.Property(t => t.PlanConfiguredPercent).HasColumnName("plan_configured_percent");
             e.Property(t => t.PlanMinSeeds).HasColumnName("plan_min_seeds");
             e.Property(t => t.PlanSelectedSeeds).HasColumnName("plan_selected_seeds");
+            // ── Colunas de telemetria enriquecida ──
+            e.Property(t => t.HostCpuPercent).HasColumnName("host_cpu_percent");
+            e.Property(t => t.HostMemoryPercent).HasColumnName("host_memory_percent");
+            e.Property(t => t.HostDiskBusyPercent).HasColumnName("host_disk_busy_percent");
+            e.Property(t => t.HostCpuCores).HasColumnName("host_cpu_cores");
+            e.Property(t => t.HostRamGB).HasColumnName("host_ram_gb");
+            e.Property(t => t.KnownPeers).HasColumnName("known_peers");
+            e.Property(t => t.ConnectedPeers).HasColumnName("connected_peers");
             e.HasIndex(t => new { t.AgentId, t.CollectedAt }).HasDatabaseName("ix_p2p_telemetry_agent_time");
             e.HasIndex(t => new { t.SiteId, t.CollectedAt }).HasDatabaseName("ix_p2p_telemetry_site_time");
             e.HasIndex(t => new { t.ClientId, t.CollectedAt }).HasDatabaseName("ix_p2p_telemetry_client_time");
@@ -84,6 +92,23 @@ public partial class DiscoveryDbContext
             e.Property(b => b.Port).HasColumnName("port");
             e.Property(b => b.LastHeartbeatAt).HasColumnName("last_heartbeat_at").HasColumnType("timestamptz");
             e.HasIndex(b => b.ClientId).HasDatabaseName("ix_agent_p2p_bootstraps_client_id");
+        });
+
+        modelBuilder.Entity<P2pArtifactManifest>(e =>
+        {
+            e.ToTable("p2p_artifact_manifest");
+            e.HasKey(m => m.ArtifactId);
+            e.Property(m => m.ArtifactId).HasColumnName("artifact_id").ValueGeneratedNever();
+            e.Property(m => m.ClientId).HasColumnName("client_id");
+            e.Property(m => m.ManifestJson).HasColumnName("manifest_json").HasColumnType("text");
+            e.Property(m => m.Sha256).HasColumnName("sha256").HasMaxLength(64);
+            e.Property(m => m.TotalSize).HasColumnName("total_size");
+            e.Property(m => m.ChunkSize).HasColumnName("chunk_size");
+            e.Property(m => m.TotalChunks).HasColumnName("total_chunks");
+            e.Property(m => m.GeneratedBy).HasColumnName("generated_by");
+            e.Property(m => m.GeneratedAt).HasColumnName("generated_at").HasColumnType("timestamptz");
+            e.Property(m => m.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            e.HasIndex(m => m.ClientId).HasDatabaseName("ix_p2p_manifest_client");
         });
 
         // ── Auto Ticket Rules ────────────────────────────────────────────────
