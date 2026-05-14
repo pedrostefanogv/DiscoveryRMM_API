@@ -86,6 +86,38 @@ create_directories() {
   sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_OPS_DIR"
   sudo install -d -m 750 -o root -g discovery-api /etc/discovery-api
   sudo install -d -m 750 -o root -g discovery-api /etc/discovery-api/certs
+
+  cleanup_pipe_prefixed_artifacts "/root"
+  cleanup_pipe_prefixed_artifacts "$DISCOVERY_API_BASE"
+}
+
+cleanup_pipe_prefixed_artifacts() {
+  local scan_dir="$1"
+  [[ -n "$scan_dir" && -d "$scan_dir" ]] || return 0
+
+  local artifact_list
+  artifact_list="$(sudo find "$scan_dir" -maxdepth 1 -type f -name '|*' -print 2>/dev/null || true)"
+  [[ -n "$artifact_list" ]] || return 0
+
+  warn "Encontrados arquivos com prefixo '|' em $scan_dir (provavel erro de quoting/pipeline). Removendo artefatos."
+  local artifact
+  while IFS= read -r artifact; do
+    [[ -n "$artifact" ]] || continue
+    warn "Removendo artefato: $artifact"
+    sudo rm -f -- "$artifact" || rm -f -- "$artifact" || true
+  done <<< "$artifact_list"
+}
+
+ensure_repo_git_ownership() {
+  local repo_dir="$1"
+  if ! sudo test -d "$repo_dir/.git"; then return 0; fi
+
+  local mismatch_path
+  mismatch_path="$(sudo find "$repo_dir/.git" -not -user discovery-api -print -quit 2>/dev/null || true)"
+  [[ -n "$mismatch_path" ]] || return 0
+
+  warn "Ownership inconsistente em $repo_dir/.git detectado ($mismatch_path). Corrigindo para discovery-api."
+  sudo chown -R discovery-api:discovery-api "$repo_dir/.git"
 }
 
 setup_git_askpass() {
@@ -136,6 +168,7 @@ clone_or_update_repo() {
     log "Clonando repositorio: $repo_url"
     sudo -u discovery-api "${git_env[@]}" git clone --branch "$DISCOVERY_GIT_BRANCH" "$repo_url" "$repo_dir"
   else
+    ensure_repo_git_ownership "$repo_dir"
     log "Atualizando repositorio existente: $repo_dir"
     sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" fetch origin "$DISCOVERY_GIT_BRANCH"
     sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" checkout "$DISCOVERY_GIT_BRANCH"
