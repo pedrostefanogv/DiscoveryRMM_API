@@ -339,6 +339,11 @@ public partial class DiscoveryDbContext
             entity.Property(h => h.CalendarId).HasColumnName("calendar_id");
             entity.Property(h => h.Date).HasColumnName("date").HasColumnType("date");
             entity.Property(h => h.Name).HasColumnName("name").HasMaxLength(255);
+            entity.Property(h => h.HolidayTypeValue).HasColumnName("holiday_type").HasDefaultValue(0);
+            entity.Property(h => h.RelativeMonth).HasColumnName("relative_month");
+            entity.Property(h => h.RelativeDayOfWeek).HasColumnName("relative_day_of_week");
+            entity.Property(h => h.RelativeOccurrence).HasColumnName("relative_occurrence");
+            entity.Property(h => h.RelativeMethodValue).HasColumnName("relative_method");
             entity.HasIndex(h => h.CalendarId).HasDatabaseName("ix_sla_calendar_holidays_calendar_id");
         });
     }

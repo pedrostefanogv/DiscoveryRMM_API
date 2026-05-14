@@ -60,6 +60,15 @@ public class SlaCalendarRepository : ISlaCalendarRepository
         return holiday;
     }
 
+    public async Task UpdateHolidayAsync(SlaCalendarHoliday holiday, CancellationToken ct = default)
+    {
+        holiday.Date = holiday.Date.Kind == DateTimeKind.Utc
+            ? DateTime.SpecifyKind(holiday.Date, DateTimeKind.Unspecified)
+            : holiday.Date;
+        _db.SlaCalendarHolidays.Update(holiday);
+        await _db.SaveChangesAsync(ct);
+    }
+
     public async Task DeleteHolidayAsync(Guid holidayId, CancellationToken ct = default)
     {
         var h = await _db.SlaCalendarHolidays.FirstOrDefaultAsync(h => h.Id == holidayId, ct);

@@ -59,7 +59,17 @@ public class SlaCalendarsController : ControllerBase
             calendar.WorkDayStartHour,
             calendar.WorkDayEndHour,
             calendar.WorkDaysJson,
-            Holidays = calendar.Holidays.Select(h => new { h.Id, h.Date, h.Name })
+            Holidays = calendar.Holidays.Select(h => new
+            {
+                h.Id,
+                h.Date,
+                h.Name,
+                holidayType = h.HolidayTypeValue,
+                relativeMonth = h.RelativeMonth,
+                relativeDayOfWeek = h.RelativeDayOfWeek,
+                relativeOccurrence = h.RelativeOccurrence,
+                relativeMethod = h.RelativeMethodValue,
+            })
         });
     }
 
@@ -120,6 +130,9 @@ public class SlaCalendarsController : ControllerBase
 
     /// <summary>
     /// Adiciona um feriado ao calendário.
+    /// holidayType: 0=Fixed, 1=Yearly, 2=Relative.
+    /// Para Relative, informe relativeMonth (1-12), relativeDayOfWeek (0=Dom..6=Sab),
+    /// relativeOccurrence (1-5, 5=ultima), relativeMethod (0=DayOfWeekOccurrence, 1=NthBusinessDay).
     /// </summary>
     [HttpPost("{id:guid}/holidays")]
     [RequirePermission(ResourceType.Tickets, ActionType.Create)]
@@ -136,10 +149,66 @@ public class SlaCalendarsController : ControllerBase
         {
             CalendarId = id,
             Date = request.Date,
-            Name = request.Name
+            Name = request.Name,
+            HolidayTypeValue = request.HolidayType,
+            RelativeMonth = request.RelativeMonth,
+            RelativeDayOfWeek = request.RelativeDayOfWeek,
+            RelativeOccurrence = request.RelativeOccurrence,
+            RelativeMethodValue = request.RelativeMethod,
         }, ct);
 
-        return Ok(new { holiday.Id, holiday.Date, holiday.Name });
+        return Ok(new
+        {
+            holiday.Id,
+            holiday.Date,
+            holiday.Name,
+            holidayType = holiday.HolidayTypeValue,
+            relativeMonth = holiday.RelativeMonth,
+            relativeDayOfWeek = holiday.RelativeDayOfWeek,
+            relativeOccurrence = holiday.RelativeOccurrence,
+            relativeMethod = holiday.RelativeMethodValue,
+        });
+    }
+
+    /// <summary>
+    /// Atualiza um feriado existente.
+    /// </summary>
+    [HttpPut("{id:guid}/holidays/{holidayId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> UpdateHoliday(Guid id, Guid holidayId, [FromBody] AddHolidayRequest request, CancellationToken ct)
+    {
+        var calendar = await _calendarRepo.GetByIdAsync(id, ct);
+        if (calendar is null)
+            return NotFound(new { error = "Calendário não encontrado." });
+
+        var holiday = calendar.Holidays.FirstOrDefault(h => h.Id == holidayId);
+        if (holiday is null)
+            return NotFound(new { error = "Feriado não encontrado." });
+
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest(new { error = "Name é obrigatório." });
+
+        holiday.Name = request.Name;
+        holiday.Date = request.Date;
+        holiday.HolidayTypeValue = request.HolidayType;
+        holiday.RelativeMonth = request.RelativeMonth;
+        holiday.RelativeDayOfWeek = request.RelativeDayOfWeek;
+        holiday.RelativeOccurrence = request.RelativeOccurrence;
+        holiday.RelativeMethodValue = request.RelativeMethod;
+
+        await _calendarRepo.UpdateHolidayAsync(holiday, ct);
+
+        return Ok(new
+        {
+            holiday.Id,
+            holiday.Date,
+            holiday.Name,
+            holidayType = holiday.HolidayTypeValue,
+            relativeMonth = holiday.RelativeMonth,
+            relativeDayOfWeek = holiday.RelativeDayOfWeek,
+            relativeOccurrence = holiday.RelativeOccurrence,
+            relativeMethod = holiday.RelativeMethodValue,
+        });
     }
 
     /// <summary>
@@ -173,4 +242,9 @@ public record UpdateSlaCalendarRequest(
 
 public record AddHolidayRequest(
     DateTime Date,
-    string Name);
+    string Name,
+    int HolidayType = 0,
+    int? RelativeMonth = null,
+    int? RelativeDayOfWeek = null,
+    int? RelativeOccurrence = null,
+    int? RelativeMethod = null);

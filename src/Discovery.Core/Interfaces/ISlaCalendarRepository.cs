@@ -10,5 +10,6 @@ public interface ISlaCalendarRepository
     Task UpdateAsync(SlaCalendar calendar, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
     Task<SlaCalendarHoliday> AddHolidayAsync(SlaCalendarHoliday holiday, CancellationToken ct = default);
+    Task UpdateHolidayAsync(SlaCalendarHoliday holiday, CancellationToken ct = default);
     Task DeleteHolidayAsync(Guid holidayId, CancellationToken ct = default);
 }
