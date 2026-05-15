@@ -1,5 +1,6 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 
 namespace Discovery.Core.Interfaces;
 

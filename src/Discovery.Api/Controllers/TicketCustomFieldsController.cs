@@ -4,6 +4,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 
@@ -129,7 +130,7 @@ public class TicketCustomFieldsController : ControllerBase
             var scope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
             // Se tem acesso global ou permissão de edição, é staff
             // Também verifica se o ticket está atribuído ao usuário atual
-            return scope.HasGlobalAccess || scope.Permissions.Any();
+            return scope.HasGlobalAccess || scope.AllowedClientIds.Any() || scope.AllowedSiteIds.Any();
         }
         catch
         {
