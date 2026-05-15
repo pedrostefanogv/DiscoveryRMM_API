@@ -15,6 +15,18 @@ public enum AgentLabelField
     Processor = 10,
     TotalMemoryBytes = 11,
     TotalDisksCount = 12,
+    ProcessorCores = 13,
+    ProcessorThreads = 14,
+    GpuModel = 15,
+    GpuMemoryBytes = 16,
+
+    // Disk fields — valid only inside a DiskGroup node
+    DiskDriveLetter = 17,
+    DiskFreeSpaceBytes = 18,
+    DiskTotalSpaceBytes = 19,
+    DiskFreeSpacePercent = 20,
+    DiskFileSystem = 21,
+    DiskMediaType = 22,
 
     // Custom field references — DefinitionId must be set on the expression node
     AgentCustomField = 100,

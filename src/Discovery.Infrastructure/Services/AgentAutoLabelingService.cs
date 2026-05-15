@@ -117,7 +117,11 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             ? await LoadCustomFieldValuesForAgentAsync(request.AgentId, agent.SiteId, cancellationToken)
             : null;
 
-        var matched = EvaluateNode(request.Expression, agent, hardware, software, customFieldValues);
+        var disks = HasDiskConditions(request.Expression)
+            ? (await _hardwareRepository.GetComponentsAsync(request.AgentId)).Disks
+            : null;
+
+        var matched = EvaluateNode(request.Expression, agent, hardware, software, customFieldValues, disks);
 
         var automaticLabels = await _db.AgentLabels
             .AsNoTracking()
@@ -162,6 +166,11 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             ? await LoadCustomFieldValuesForAgentAsync(agentId, agent.SiteId, cancellationToken)
             : null;
 
+        var needsDisks = rules.Any(rule => HasDiskConditions(rule.Expression));
+        var disks = needsDisks
+            ? (await _hardwareRepository.GetComponentsAsync(agentId)).Disks
+            : null;
+
         var ruleIds = rules.Select(rule => rule.RuleId).ToList();
         var existingMatches = await _db.AgentLabelRuleMatches
             .Where(match => match.AgentId == agentId && ruleIds.Contains(match.RuleId))
@@ -172,7 +181,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
 
         foreach (var rule in rules)
         {
-            var matched = EvaluateNode(rule.Expression, agent, hardware, software, customFieldValues);
+            var matched = EvaluateNode(rule.Expression, agent, hardware, software, customFieldValues, disks);
             var hasExistingMatch = existingMatches.TryGetValue(rule.RuleId, out var existing);
 
             if (matched)
@@ -351,19 +360,35 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         Agent agent,
         AgentHardwareInfo? hardware,
         IReadOnlyCollection<AgentInstalledSoftware> software,
-        IReadOnlyDictionary<Guid, CustomFieldEntry>? customFieldValues)
+        IReadOnlyDictionary<Guid, CustomFieldEntry>? customFieldValues,
+        IReadOnlyCollection<DiskInfo>? disks = null,
+        DiskInfo? currentDisk = null)
     {
         if (node.NodeType == AgentLabelNodeType.Condition)
-            return EvaluateCondition(node, agent, hardware, software, customFieldValues);
+            return EvaluateCondition(node, agent, hardware, software, customFieldValues, currentDisk);
+
+        if (node.NodeType == AgentLabelNodeType.DiskGroup)
+        {
+            if (disks is null || disks.Count == 0)
+                return false;
+
+            var logicalOperator = node.LogicalOperator ?? AgentLabelLogicalOperator.And;
+
+            return logicalOperator == AgentLabelLogicalOperator.And
+                ? disks.All(dk => node.Children.All(child =>
+                    EvaluateNode(child, agent, hardware, software, customFieldValues, disks, dk)))
+                : disks.Any(dk => node.Children.All(child =>
+                    EvaluateNode(child, agent, hardware, software, customFieldValues, disks, dk)));
+        }
 
         if (node.Children.Count == 0)
             return false;
 
-        var logicalOperator = node.LogicalOperator ?? AgentLabelLogicalOperator.And;
+        var logicalOp = node.LogicalOperator ?? AgentLabelLogicalOperator.And;
 
-        return logicalOperator == AgentLabelLogicalOperator.And
-            ? node.Children.All(child => EvaluateNode(child, agent, hardware, software, customFieldValues))
-            : node.Children.Any(child => EvaluateNode(child, agent, hardware, software, customFieldValues));
+        return logicalOp == AgentLabelLogicalOperator.And
+            ? node.Children.All(child => EvaluateNode(child, agent, hardware, software, customFieldValues, disks, currentDisk))
+            : node.Children.Any(child => EvaluateNode(child, agent, hardware, software, customFieldValues, disks, currentDisk));
     }
 
     private static bool EvaluateCondition(
@@ -371,7 +396,8 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         Agent agent,
         AgentHardwareInfo? hardware,
         IReadOnlyCollection<AgentInstalledSoftware> software,
-        IReadOnlyDictionary<Guid, CustomFieldEntry>? customFieldValues)
+        IReadOnlyDictionary<Guid, CustomFieldEntry>? customFieldValues,
+        DiskInfo? currentDisk)
     {
         if (!node.Field.HasValue || !node.Operator.HasValue)
             return false;
@@ -394,6 +420,16 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             AgentLabelField.Processor => EvaluateText(hardware?.Processor, op, expected),
             AgentLabelField.TotalMemoryBytes => EvaluateNumber(hardware?.TotalMemoryBytes, op, expected),
             AgentLabelField.TotalDisksCount => EvaluateNumber(hardware?.TotalDisksCount, op, expected),
+            AgentLabelField.ProcessorCores => EvaluateNumber(hardware?.ProcessorCores, op, expected),
+            AgentLabelField.ProcessorThreads => EvaluateNumber(hardware?.ProcessorThreads, op, expected),
+            AgentLabelField.GpuModel => EvaluateText(hardware?.GpuModel, op, expected),
+            AgentLabelField.GpuMemoryBytes => EvaluateNumber(hardware?.GpuMemoryBytes, op, expected),
+            AgentLabelField.DiskDriveLetter => EvaluateText(currentDisk?.DriveLetter, op, expected),
+            AgentLabelField.DiskFreeSpaceBytes => EvaluateNumber(currentDisk?.FreeSpaceBytes, op, expected),
+            AgentLabelField.DiskTotalSpaceBytes => EvaluateNumber(currentDisk?.TotalSizeBytes, op, expected),
+            AgentLabelField.DiskFreeSpacePercent => EvaluateNumber(CalculateDiskFreePercent(currentDisk), op, expected),
+            AgentLabelField.DiskFileSystem => EvaluateText(currentDisk?.FileSystem, op, expected),
+            AgentLabelField.DiskMediaType => EvaluateText(currentDisk?.MediaType, op, expected),
             AgentLabelField.AgentCustomField
                 or AgentLabelField.ClientCustomField
                 or AgentLabelField.SiteCustomField
@@ -577,6 +613,23 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         return node.Children.Any(HasCustomFieldConditions);
     }
 
+    private static bool HasDiskConditions(AgentLabelRuleExpressionNodeDto node)
+    {
+        return node.NodeType switch
+        {
+            AgentLabelNodeType.DiskGroup => true,
+            AgentLabelNodeType.Condition => false,
+            _ => node.Children.Any(HasDiskConditions)
+        };
+    }
+
+    private static decimal? CalculateDiskFreePercent(DiskInfo? disk)
+    {
+        if (disk is null || disk.TotalSizeBytes == 0)
+            return null;
+        return (decimal)disk.FreeSpaceBytes / (decimal)disk.TotalSizeBytes * 100m;
+    }
+
     private static bool EvaluateRegex(string current, string pattern)
     {
         if (string.IsNullOrWhiteSpace(pattern))
@@ -627,5 +680,13 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             AgentLabelComparisonOperator.LessThanOrEqual => current <= expectedValue,
             _ => false
         };
+    }
+
+    private static bool EvaluateNumber(decimal? current, AgentLabelComparisonOperator op, string expected)
+    {
+        if (!current.HasValue)
+            return false;
+
+        return EvaluateNumber(current.Value, op, expected);
     }
 }

@@ -28,14 +28,24 @@ public static class AgentLabelExpressionValidator
         AgentLabelField.SoftwareName,
         AgentLabelField.SoftwarePublisher,
         AgentLabelField.SoftwareVersion,
-        AgentLabelField.Processor
+        AgentLabelField.Processor,
+        AgentLabelField.GpuModel,
+        AgentLabelField.DiskDriveLetter,
+        AgentLabelField.DiskFileSystem,
+        AgentLabelField.DiskMediaType
     ];
 
     private static readonly HashSet<AgentLabelField> NumericFields =
     [
         AgentLabelField.SoftwareCount,
         AgentLabelField.TotalMemoryBytes,
-        AgentLabelField.TotalDisksCount
+        AgentLabelField.TotalDisksCount,
+        AgentLabelField.ProcessorCores,
+        AgentLabelField.ProcessorThreads,
+        AgentLabelField.GpuMemoryBytes,
+        AgentLabelField.DiskFreeSpaceBytes,
+        AgentLabelField.DiskTotalSpaceBytes,
+        AgentLabelField.DiskFreeSpacePercent
     ];
 
     private static readonly HashSet<AgentLabelField> CustomFields =
@@ -98,19 +108,19 @@ public static class AgentLabelExpressionValidator
         if (nodeCount > MaxNodes)
             errors.Add($"expression node count exceeds maximum of {MaxNodes}.");
 
-        if (node.NodeType == AgentLabelNodeType.Group)
+        if (node.NodeType == AgentLabelNodeType.Group || node.NodeType == AgentLabelNodeType.DiskGroup)
         {
             if (!node.LogicalOperator.HasValue)
-                errors.Add($"{path}: group node requires LogicalOperator.");
+                errors.Add($"{path}: {node.NodeType} node requires LogicalOperator.");
 
             if (node.Field.HasValue || node.Operator.HasValue || node.Value is not null)
-                errors.Add($"{path}: group node cannot define Field/Operator/Value.");
+                errors.Add($"{path}: {node.NodeType} node cannot define Field/Operator/Value.");
 
             if (node.Children.Count == 0)
-                errors.Add($"{path}: group node must have at least one child.");
+                errors.Add($"{path}: {node.NodeType} node must have at least one child.");
 
             if (node.Children.Count > MaxChildrenPerGroup)
-                errors.Add($"{path}: group node exceeds maximum of {MaxChildrenPerGroup} children.");
+                errors.Add($"{path}: {node.NodeType} node exceeds maximum of {MaxChildrenPerGroup} children.");
 
             for (var i = 0; i < node.Children.Count; i++)
             {
