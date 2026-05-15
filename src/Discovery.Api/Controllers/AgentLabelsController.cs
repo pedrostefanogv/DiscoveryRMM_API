@@ -198,6 +198,56 @@ public class AgentLabelsController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPost("manual")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> AddManualLabel([FromBody] AddManualLabelRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Label))
+            return BadRequest(new { Error = "Label is required." });
+
+        if (request.Label.Length > 120)
+            return BadRequest(new { Error = "Label exceeds maximum length of 120." });
+
+        var existing = await _labelRepository.GetByAgentIdAsync(request.AgentId);
+        if (existing.Any(l => l.Label.Equals(request.Label, StringComparison.OrdinalIgnoreCase)))
+            return Conflict(new { Error = "This agent already has this label." });
+
+        var now = DateTime.UtcNow;
+        var label = await _labelRepository.AddAsync(new AgentLabel
+        {
+            Id = IdGenerator.NewId(),
+            AgentId = request.AgentId,
+            Label = request.Label.Trim(),
+            SourceType = AgentLabelSourceType.Manual,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+
+        return Ok(new ManualLabelResponse
+        {
+            Id = label.Id,
+            AgentId = label.AgentId,
+            Label = label.Label,
+            CreatedAt = label.CreatedAt,
+            UpdatedAt = label.UpdatedAt
+        });
+    }
+
+    [HttpDelete("manual/{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> RemoveManualLabel(Guid id)
+    {
+        var label = await _labelRepository.GetByIdAsync(id);
+        if (label is null)
+            return NotFound(new { Error = "Label not found." });
+
+        if (label.SourceType != AgentLabelSourceType.Manual)
+            return BadRequest(new { Error = "Only manual labels can be removed through this endpoint." });
+
+        await _labelRepository.DeleteAsync(id);
+        return NoContent();
+    }
+
     private static AgentLabelRuleResponse MapRule(AgentLabelRule rule)
     {
         var expression = DeserializeExpression(rule.ExpressionJson);

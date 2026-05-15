@@ -17,7 +17,8 @@ public class AgentLabelRepository : IAgentLabelRepository
         return await _db.AgentLabels
             .AsNoTracking()
             .Where(label => label.AgentId == agentId)
-            .OrderBy(label => label.Label)
+            .OrderBy(label => label.SourceType)
+            .ThenBy(label => label.Label)
             .ToListAsync();
     }
 
@@ -60,5 +61,27 @@ public class AgentLabelRepository : IAgentLabelRepository
             .Distinct()
             .OrderBy(l => l)
             .ToListAsync();
+    }
+
+    public async Task<AgentLabel?> GetByIdAsync(Guid id)
+    {
+        return await _db.AgentLabels.FindAsync(id);
+    }
+
+    public async Task<AgentLabel> AddAsync(AgentLabel label)
+    {
+        _db.AgentLabels.Add(label);
+        await _db.SaveChangesAsync();
+        return label;
+    }
+
+    public async Task DeleteAsync(Guid id)
+    {
+        var label = await _db.AgentLabels.FindAsync(id);
+        if (label is not null)
+        {
+            _db.AgentLabels.Remove(label);
+            await _db.SaveChangesAsync();
+        }
     }
 }

@@ -74,6 +74,21 @@ public class AgentLabelRuleAgentResponse
     public DateTime LastEvaluatedAt { get; set; }
 }
 
+public class AddManualLabelRequest
+{
+    public Guid AgentId { get; set; }
+    public string Label { get; set; } = string.Empty;
+}
+
+public class ManualLabelResponse
+{
+    public Guid Id { get; set; }
+    public Guid AgentId { get; set; }
+    public string Label { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
 /// <summary>Summary of a custom field definition usable as a label rule condition.</summary>
 public class LabelRuleCustomFieldSummaryDto
 {

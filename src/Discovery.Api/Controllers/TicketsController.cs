@@ -220,18 +220,49 @@ public class TicketsController : ControllerBase
 
         var oldPriority = ticket.Priority;
         var oldAssignedTo = ticket.AssignedToUserId;
+        var oldDepartmentId = ticket.DepartmentId;
 
         ticket.Title = request.Title;
         ticket.Description = request.Description;
         ticket.Category = request.Category;
 
-        // Atualizar prioridade se changing
+        // Atualizar prioridade se mudou
         if (request.Priority != oldPriority)
         {
             ticket.Priority = request.Priority;
             await _activityLogService.LogPriorityChangeAsync(
                 id, null, oldPriority.ToString(), request.Priority.ToString()
             );
+        }
+
+        // Atualizar departamento se mudou
+        if (request.DepartmentId != oldDepartmentId)
+        {
+            var oldDeptName = oldDepartmentId.HasValue
+                ? (await _departmentRepo.GetByIdAsync(oldDepartmentId.Value))?.Name ?? "unknown"
+                : "none";
+            var newDeptName = request.DepartmentId.HasValue
+                ? (await _departmentRepo.GetByIdAsync(request.DepartmentId.Value))?.Name ?? "unknown"
+                : "none";
+
+            ticket.DepartmentId = request.DepartmentId;
+            await _activityLogService.LogDepartmentChangeAsync(id, null, oldDeptName, newDeptName);
+
+            // Recalcular workflow profile e SLA se mudou de departamento
+            if (request.DepartmentId.HasValue)
+            {
+                var defaultProfile = await _workflowProfileRepo.GetDefaultByDepartmentAsync(request.DepartmentId.Value);
+                if (defaultProfile is not null)
+                {
+                    ticket.WorkflowProfileId = defaultProfile.Id;
+                    ticket.SlaExpiresAt = await _slaService.CalculateSlaExpiryAsync(defaultProfile.Id, DateTime.UtcNow);
+                }
+            }
+            else
+            {
+                ticket.WorkflowProfileId = null;
+                ticket.SlaExpiresAt = null;
+            }
         }
 
         // Atualizar atribuição se mudou
@@ -607,7 +638,8 @@ public record UpdateTicketRequest(
     string Description,
     TicketPriority Priority,
     Guid? AssignedToUserId,
-    string? Category);
+    string? Category,
+    Guid? DepartmentId);
 
 public record UpdateWorkflowStateRequest(Guid WorkflowStateId);
 

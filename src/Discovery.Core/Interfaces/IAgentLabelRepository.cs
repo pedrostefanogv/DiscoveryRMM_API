@@ -9,4 +9,7 @@ public interface IAgentLabelRepository
     Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds);
     Task<IReadOnlyList<AgentLabelRuleAgentResponse>> GetAgentsByRuleIdAsync(Guid ruleId);
     Task<IReadOnlyList<string>> GetDistinctLabelsAsync();
+    Task<AgentLabel?> GetByIdAsync(Guid id);
+    Task<AgentLabel> AddAsync(AgentLabel label);
+    Task DeleteAsync(Guid id);
 }
