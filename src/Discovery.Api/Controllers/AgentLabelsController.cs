@@ -48,6 +48,15 @@ public class AgentLabelsController : ControllerBase
         return Ok(labels);
     }
 
+    [HttpGet("distinct")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
+    public async Task<IActionResult> GetDistinctLabels()
+    {
+        var labels = await _labelRepository.GetDistinctLabelsAsync();
+        return Ok(labels);
+    }
+
     [HttpGet("rules/{ruleId:guid}/agents")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetAgentsByRule(Guid ruleId)

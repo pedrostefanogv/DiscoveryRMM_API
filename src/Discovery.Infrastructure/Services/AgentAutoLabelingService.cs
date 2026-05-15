@@ -245,6 +245,10 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         var prepared = new List<PreparedRule>(rules.Count);
         foreach (var rule in rules)
         {
+            // Skip manual-mode rules — they are not processed automatically
+            if (rule.ApplyMode == AgentLabelApplyMode.Manual)
+                continue;
+
             var expression = TryDeserializeExpression(rule.ExpressionJson);
             if (expression is null)
             {
