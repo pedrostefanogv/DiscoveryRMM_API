@@ -41,7 +41,7 @@ public class SlaService : ISlaService
                 return AddWorkingHours(createdAt, profile.SlaHours, calendar);
         }
 
-        return createdAt.AddHours(profile.SlaHours);
+        return DateTime.SpecifyKind(createdAt.AddHours(profile.SlaHours), DateTimeKind.Utc);
     }
 
     public async Task<DateTime> CalculateFirstResponseExpiryAsync(Guid workflowProfileId, DateTime createdAt)
@@ -57,7 +57,7 @@ public class SlaService : ISlaService
                 return AddWorkingHours(createdAt, profile.FirstResponseSlaHours, calendar);
         }
 
-        return createdAt.AddHours(profile.FirstResponseSlaHours);
+        return DateTime.SpecifyKind(createdAt.AddHours(profile.FirstResponseSlaHours), DateTimeKind.Utc);
     }
 
     /// <summary>
@@ -278,7 +278,9 @@ public class SlaService : ISlaService
         if (ticket.SlaHoldStartedAt.HasValue)
             totalPausedSeconds += (int)(DateTime.UtcNow - ticket.SlaHoldStartedAt.Value).TotalSeconds;
 
-        return ticket.SlaExpiresAt.Value.AddSeconds(totalPausedSeconds);
+        // Garante que o retorno seja UTC (o banco agora armazena timestamptz)
+        var expiry = ticket.SlaExpiresAt.Value.AddSeconds(totalPausedSeconds);
+        return expiry.Kind == DateTimeKind.Utc ? expiry : DateTime.SpecifyKind(expiry, DateTimeKind.Utc);
     }
 
     public async Task<(int HoursRemaining, double PercentUsed, bool Breached)> GetSlaStatusAsync(Guid ticketId)
@@ -299,7 +301,11 @@ public class SlaService : ISlaService
         var percentUsed = totalSlaTime > 0 ? Math.Min(100, (elapsed / totalSlaTime) * 100) : 0;
         var breached = now > effectiveExpiry;
 
-        return (Math.Max(0, (int)remaining), percentUsed, breached);
+        return (
+            hrsRemaining: Math.Max(0, (int)Math.Ceiling(remaining)),
+            percentUsed,
+            breached
+        );
     }
 
     public async Task<(int HoursRemaining, double PercentUsed, bool Breached, bool Achieved)> GetFrtStatusAsync(Guid ticketId)
@@ -327,7 +333,12 @@ public class SlaService : ISlaService
         var percentUsed = totalFrtTime > 0 ? Math.Min(100, (elapsed / totalFrtTime) * 100) : 0;
         var breached = now > expiry;
 
-        return (Math.Max(0, (int)remaining), percentUsed, breached, false);
+        return (
+            hrsRemaining: Math.Max(0, (int)Math.Ceiling(remaining)),
+            percentUsed,
+            breached,
+            false
+        );
     }
 
     public async Task<bool> CheckAndLogSlaBreachAsync(Guid ticketId)

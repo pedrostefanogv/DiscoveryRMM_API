@@ -181,6 +181,7 @@ Migrations/
  M127_DropAgentP2pBootstraps.cs
  M128_AddSlaCalendarHolidayTypes.cs
  M129_AddDepartmentScopeToCustomFields.cs
+ M130_FixTimestampTimezones.cs
 obj/Debug/net10.0/
  .NETCoreApp,Version=v10.0.AssemblyAttributes.cs
  Discovery.Migrations.AssemblyInfo.cs

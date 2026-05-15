@@ -40,7 +40,7 @@ public class TicketSlaController : ControllerBase
         return Ok(new
         {
             SlaExpiresAt = ticket.SlaExpiresAt,
-            HoursRemaining = hoursRemaining,
+            HoursRemaining = Math.Max(0, hoursRemaining),
             PercentUsed = Math.Round(percentUsed, 2),
             Breached = breached,
             Status = breached ? "🔴 VIOLADO" : 
@@ -66,8 +66,8 @@ public class TicketSlaController : ControllerBase
         var (hoursRemaining, percentUsed, breached) = await _slaService.GetSlaStatusAsync(ticketId);
         var effectiveExpiry = _slaService.GetEffectiveSlaExpiry(ticket);
         var now = DateTime.UtcNow;
-        var totalSlaHours = (int)(ticket.SlaExpiresAt.Value - ticket.CreatedAt).TotalHours;
-        var elapsedHours = (int)(now - ticket.CreatedAt).TotalHours;
+        var totalSlaHours = (int)Math.Round((ticket.SlaExpiresAt.Value - ticket.CreatedAt).TotalHours, MidpointRounding.AwayFromZero);
+        var elapsedHours = Math.Max(0, (int)Math.Round((now - ticket.CreatedAt).TotalHours, MidpointRounding.AwayFromZero));
 
         // FRT
         object? frtInfo = null;
