@@ -13,7 +13,16 @@ public partial class DiscoveryDbContext
         {
             entity.ToTable("custom_field_definitions");
             entity.HasKey(d => d.Id);
-            entity.HasIndex(d => new { d.ScopeType, d.Name }).IsUnique().HasDatabaseName("ux_custom_field_definitions_scope_name");
+            // Partial unique indexes: department_id IS NULL → unique (scope_type, name)
+            //                      department_id IS NOT NULL → unique (scope_type, department_id, name)
+            entity.HasIndex(d => new { d.ScopeType, d.Name })
+                .IsUnique()
+                .HasDatabaseName("ux_custom_field_definitions_scope_name")
+                .HasFilter("department_id IS NULL");
+            entity.HasIndex(d => new { d.ScopeType, d.DepartmentId, d.Name })
+                .IsUnique()
+                .HasDatabaseName("ux_custom_field_definitions_scope_dept_name")
+                .HasFilter("department_id IS NOT NULL");
             entity.HasIndex(d => new { d.ScopeType, d.IsActive }).HasDatabaseName("ix_custom_field_definitions_scope_active");
 
             entity.Property(d => d.Id).HasColumnName("id").ValueGeneratedNever();
@@ -34,8 +43,13 @@ public partial class DiscoveryDbContext
             entity.Property(d => d.AllowRuntimeRead).HasColumnName("allow_runtime_read");
             entity.Property(d => d.AllowAgentWrite).HasColumnName("allow_agent_write");
             entity.Property(d => d.RuntimeAccessMode).HasColumnName("runtime_access_mode").HasConversion<int>();
+            entity.Property(d => d.DepartmentId).HasColumnName("department_id");
+            entity.Property(d => d.IsInternal).HasColumnName("is_internal");
             entity.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(d => d.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+
+            entity.HasIndex(d => d.DepartmentId).HasDatabaseName("ix_custom_field_definitions_department_id");
+            entity.HasOne<Department>().WithMany().HasForeignKey(d => d.DepartmentId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<CustomFieldValue>(entity =>

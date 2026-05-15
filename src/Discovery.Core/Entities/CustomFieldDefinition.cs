@@ -22,6 +22,18 @@ public class CustomFieldDefinition
     public bool AllowRuntimeRead { get; set; }
     public bool AllowAgentWrite { get; set; }
     public CustomFieldRuntimeAccessMode RuntimeAccessMode { get; set; } = CustomFieldRuntimeAccessMode.Disabled;
+    
+    /// <summary>
+    /// Departamento ao qual este campo pertence (quando ScopeType = Department).
+    /// </summary>
+    public Guid? DepartmentId { get; set; }
+    
+    /// <summary>
+    /// Se true, o campo é interno e visível apenas para atendentes do departamento.
+    /// Se false, o campo aparece no formulário público de abertura de chamado.
+    /// </summary>
+    public bool IsInternal { get; set; }
+    
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

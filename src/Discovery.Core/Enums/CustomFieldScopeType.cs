@@ -6,5 +6,6 @@ public enum CustomFieldScopeType
     Client = 1,
     Site = 2,
     Agent = 3,
-    Ticket = 4
+    Ticket = 4,
+    Department = 5
 }

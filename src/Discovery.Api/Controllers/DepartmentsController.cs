@@ -1,4 +1,5 @@
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Api.Filters;
@@ -11,8 +12,15 @@ namespace Discovery.Api.Controllers;
 public class DepartmentsController : ControllerBase
 {
     private readonly IDepartmentRepository _repo;
+    private readonly IDepartmentCustomFieldService _customFieldService;
 
-    public DepartmentsController(IDepartmentRepository repo) => _repo = repo;
+    public DepartmentsController(
+        IDepartmentRepository repo,
+        IDepartmentCustomFieldService customFieldService)
+    {
+        _repo = repo;
+        _customFieldService = customFieldService;
+    }
 
     /// <summary>
     /// Obtém departamentos globais.
@@ -118,6 +126,162 @@ public class DepartmentsController : ControllerBase
         await _repo.DeleteAsync(id);
         return NoContent();
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Custom Fields do Departamento
+    // ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lista todos os campos customizados de um departamento.
+    /// </summary>
+    [HttpGet("{departmentId:guid}/custom-fields")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    public async Task<IActionResult> GetCustomFields(
+        Guid departmentId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var fields = await _customFieldService.GetDefinitionsByDepartmentAsync(departmentId, cancellationToken);
+            return Ok(fields);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Cria um novo campo customizado para o departamento.
+    /// </summary>
+    [HttpPost("{departmentId:guid}/custom-fields")]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
+    public async Task<IActionResult> CreateCustomField(
+        Guid departmentId,
+        [FromBody] CreateDepartmentCustomFieldRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var created = await _customFieldService.CreateDepartmentFieldAsync(
+                departmentId,
+                request.ToInput(),
+                HttpContext.Items["Username"] as string ?? "api",
+                cancellationToken);
+
+            return CreatedAtAction(
+                nameof(GetCustomFields),
+                new { departmentId },
+                created);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Atualiza um campo customizado existente do departamento.
+    /// </summary>
+    [HttpPut("{departmentId:guid}/custom-fields/{fieldId:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
+    public async Task<IActionResult> UpdateCustomField(
+        Guid departmentId,
+        Guid fieldId,
+        [FromBody] UpdateDepartmentCustomFieldRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var updated = await _customFieldService.UpdateDepartmentFieldAsync(
+                fieldId,
+                departmentId,
+                request.ToInput(),
+                HttpContext.Items["Username"] as string ?? "api",
+                cancellationToken);
+
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Remove (soft-delete) um campo customizado do departamento.
+    /// </summary>
+    [HttpDelete("{departmentId:guid}/custom-fields/{fieldId:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.Delete)]
+    public async Task<IActionResult> DeleteCustomField(
+        Guid departmentId,
+        Guid fieldId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var removed = await _customFieldService.DeleteDepartmentFieldAsync(
+                fieldId, departmentId, cancellationToken);
+            return removed ? NoContent() : NotFound();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Retorna o schema público de campos para o formulário de abertura de chamado.
+    /// Inclui apenas campos não-internos e ativos.
+    /// </summary>
+    [HttpGet("{departmentId:guid}/ticket-schema")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    public async Task<IActionResult> GetTicketSchema(
+        Guid departmentId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var schema = await _customFieldService.GetPublicSchemaForDepartmentAsync(
+                departmentId, cancellationToken);
+            return Ok(schema);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Retorna o schema completo de campos do departamento (públicos + internos).
+    /// Query param includeInternal=true requer permissão de edição.
+    /// </summary>
+    [HttpGet("{departmentId:guid}/custom-fields/schema")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    public async Task<IActionResult> GetFullSchema(
+        Guid departmentId,
+        [FromQuery] bool includeInternal = false,
+        [FromQuery] Guid? ticketId = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (includeInternal)
+            {
+                var schema = await _customFieldService.GetFullSchemaForDepartmentAsync(
+                    departmentId, ticketId, cancellationToken);
+                return Ok(schema);
+            }
+
+            var publicSchema = await _customFieldService.GetPublicSchemaForDepartmentAsync(
+                departmentId, cancellationToken);
+            return Ok(publicSchema);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
 }
 
 public record CreateDepartmentRequest(
@@ -133,3 +297,43 @@ public record UpdateDepartmentRequest(
     Guid? InheritFromGlobalId,
     int SortOrder,
     bool IsActive);
+
+public record CreateDepartmentCustomFieldRequest(
+    string Name,
+    string Label,
+    string? Description,
+    CustomFieldDataType DataType,
+    bool IsRequired,
+    bool IsInternal,
+    bool IsActive,
+    IReadOnlyList<string>? Options,
+    string? ValidationRegex,
+    int? MinLength,
+    int? MaxLength,
+    decimal? MinValue,
+    decimal? MaxValue)
+{
+    public CreateDepartmentCustomFieldInput ToInput() => new(
+        Name, Label, Description, DataType, IsRequired, IsInternal, IsActive,
+        Options, ValidationRegex, MinLength, MaxLength, MinValue, MaxValue);
+}
+
+public record UpdateDepartmentCustomFieldRequest(
+    string Name,
+    string Label,
+    string? Description,
+    CustomFieldDataType DataType,
+    bool IsRequired,
+    bool IsInternal,
+    bool IsActive,
+    IReadOnlyList<string>? Options,
+    string? ValidationRegex,
+    int? MinLength,
+    int? MaxLength,
+    decimal? MinValue,
+    decimal? MaxValue)
+{
+    public UpdateDepartmentCustomFieldInput ToInput() => new(
+        Name, Label, Description, DataType, IsRequired, IsInternal, IsActive,
+        Options, ValidationRegex, MinLength, MaxLength, MinValue, MaxValue);
+}

@@ -180,6 +180,7 @@ Migrations/
  M126_AddP2pOptimizationTables.cs
  M127_DropAgentP2pBootstraps.cs
  M128_AddSlaCalendarHolidayTypes.cs
+ M129_AddDepartmentScopeToCustomFields.cs
 obj/Debug/net10.0/
  .NETCoreApp,Version=v10.0.AssemblyAttributes.cs
  Discovery.Migrations.AssemblyInfo.cs

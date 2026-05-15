@@ -29,6 +29,7 @@ public class TicketsController : ControllerBase
     private readonly INotificationService _notificationService;
     private readonly ITicketWatcherRepository _watcherRepo;
     private readonly IScopeContext _scopeContext;
+    private readonly IDepartmentCustomFieldService _departmentCustomFieldService;
 
     public TicketsController(
         ITicketRepository repo,
@@ -43,7 +44,8 @@ public class TicketsController : ControllerBase
         AlertDispatchService alertDispatchService,
         INotificationService notificationService,
         ITicketWatcherRepository watcherRepo,
-        IScopeContext scopeContext)
+        IScopeContext scopeContext,
+        IDepartmentCustomFieldService departmentCustomFieldService)
     {
         _repo = repo;
         _workflowRepo = workflowRepo;
@@ -58,6 +60,7 @@ public class TicketsController : ControllerBase
         _notificationService = notificationService;
         _watcherRepo = watcherRepo;
         _scopeContext = scopeContext;
+        _departmentCustomFieldService = departmentCustomFieldService;
     }
 
     [HttpGet]
@@ -141,6 +144,28 @@ public class TicketsController : ControllerBase
                 return BadRequest("Departamento não encontrado.");
         }
 
+        // ── Validar campos customizados do departamento ──
+        if (request.DepartmentId.HasValue && request.CustomFieldValues is { Count: > 0 })
+        {
+            var validationErrors = await _departmentCustomFieldService.ValidateTicketFieldsAsync(
+                request.DepartmentId.Value,
+                request.CustomFieldValues);
+
+            if (validationErrors.Count > 0)
+            {
+                return BadRequest(new
+                {
+                    error = "Validação de campos customizados falhou.",
+                    fieldErrors = validationErrors.Select(e => new
+                    {
+                        e.DefinitionId,
+                        e.FieldName,
+                        e.ErrorMessage
+                    })
+                });
+            }
+        }
+
         // Validar e carregar workflow profile para calcular SLA
         WorkflowProfile? workflowProfile = null;
         DateTime? slaExpiresAt = null;
@@ -183,6 +208,16 @@ public class TicketsController : ControllerBase
         };
 
         var created = await _repo.CreateAsync(ticket);
+
+        // ── Persistir campos customizados do departamento ──
+        if (request.DepartmentId.HasValue && request.CustomFieldValues is { Count: > 0 })
+        {
+            await _departmentCustomFieldService.SaveTicketFieldValuesAsync(
+                created.Id,
+                request.DepartmentId.Value,
+                request.CustomFieldValues,
+                HttpContext.Items["Username"] as string ?? "api");
+        }
 
         // Log da criação
         await _activityLogService.LogActivityAsync(
@@ -631,7 +666,8 @@ public record CreateTicketRequest(
     string Description,
     TicketPriority? Priority,
     string? Category,
-    Guid? AssignedToUserId);
+    Guid? AssignedToUserId,
+    Dictionary<Guid, string>? CustomFieldValues = null);
 
 public record UpdateTicketRequest(
     string Title,

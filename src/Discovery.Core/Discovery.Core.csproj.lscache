@@ -369,6 +369,7 @@ Interfaces/
   IRoleRepository.cs
   IUserGroupRepository.cs
   IUserRepository.cs
+ IDepartmentCustomFieldService.cs
  IDepartmentRepository.cs
  IDeployTokenRepository.cs
  IDeployTokenService.cs
