@@ -1,6 +1,28 @@
 # Discovery RMM installer – deployment (publish, environment file, systemd, Nginx)
 # Requires: common.sh (log, warn, fail, build_https_origin_from_host, build_portal_access_url, normalize_host_without_scheme, resolve_fido2_server_domain, build_nip_io_host_from_ipv4, is_ipv4_address)
 
+# Remove releases antigas mantendo apenas as N mais recentes (DISCOVERY_KEEP_RELEASES).
+# Usa chown para corrigir ownership de releases criadas como root antes de remover.
+cleanup_old_releases() {
+  local releases_dir="$1"
+  local keep="${DISCOVERY_KEEP_RELEASES:-5}"
+
+  mapfile -t release_dirs < <(ls -1dt "$releases_dir"/* 2>/dev/null || true)
+  if (( ${#release_dirs[@]} <= keep )); then
+    return
+  fi
+  log "Removendo $(( ${#release_dirs[@]} - keep )) release(s) antiga(s) em $releases_dir"
+  for old_release in "${release_dirs[@]:$keep}"; do
+    # Corrige ownership caso a release tenha sido criada como root (deploy manual)
+    sudo chown -R discovery-api:discovery-api "$old_release" 2>/dev/null || true
+    if sudo -u discovery-api rm -rf "$old_release" 2>/dev/null; then
+      log "Release antiga removida: $(basename "$old_release")"
+    else
+      warn "Nao foi possivel remover release antiga: $(basename "$old_release")"
+    fi
+  done
+}
+
 publish_api() {
   log "Publicando Discovery.Api"
   local release_id; release_id="$(date +%Y%m%d%H%M%S)-initial"
@@ -20,6 +42,8 @@ publish_api() {
   if ! sudo -u discovery-api test -x "$release_dir/Discovery.Api"; then
     fail "Binario Discovery.Api nao gerado"
   fi
+
+  cleanup_old_releases "$DISCOVERY_API_RELEASES"
 }
 
 apply_site_release_permissions() {
@@ -54,6 +78,8 @@ publish_site() {
   sudo -u discovery-api cp -a "$DISCOVERY_SITE_SOURCE/dist/." "$release_dir/"
   apply_site_release_permissions "$release_dir"
   sudo -u discovery-api ln -sfn "$release_dir" "$DISCOVERY_SITE_CURRENT"
+
+  cleanup_old_releases "$DISCOVERY_SITE_RELEASES"
 }
 
 # ── Environment file ───────────────────────────────────────────────────────

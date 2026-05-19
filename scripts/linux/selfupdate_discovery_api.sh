@@ -105,6 +105,23 @@ mkdir -p "$DISCOVERY_API_RELEASES"
 
 export GIT_TERMINAL_PROMPT=0
 
+cleanup_old_releases() {
+  local releases_dir="$1"
+
+  mapfile -t RELEASE_DIRS < <(ls -1dt "$releases_dir"/* 2>/dev/null || true)
+  if (( ${#RELEASE_DIRS[@]} <= DISCOVERY_KEEP_RELEASES )); then
+    return
+  fi
+  log "Removendo $(( ${#RELEASE_DIRS[@]} - DISCOVERY_KEEP_RELEASES )) release(s) antiga(s) em $releases_dir"
+  for old_release in "${RELEASE_DIRS[@]:DISCOVERY_KEEP_RELEASES}"; do
+    if rm -rf "$old_release" 2>/dev/null; then
+      log "Release antiga removida: $(basename "$old_release")"
+    else
+      warn "Sem permissao para remover release antiga: $(basename "$old_release") — corrija com: chown -R discovery-api:discovery-api $old_release"
+    fi
+  done
+}
+
 clean_api_build_cache() {
   if [[ "${DISCOVERY_CLEAN_BUILD:-1}" != "1" ]]; then
     return
@@ -127,6 +144,7 @@ REMOTE_REV="$(git -C "$DISCOVERY_API_SOURCE" rev-parse "origin/$DISCOVERY_GIT_BR
 
 if [[ "$LOCAL_REV" == "$REMOTE_REV" ]]; then
   log "Sem atualizacoes no branch $DISCOVERY_GIT_BRANCH"
+  cleanup_old_releases "$DISCOVERY_API_RELEASES"
   exit 0
 fi
 
@@ -153,11 +171,6 @@ rm -f "$NEW_RELEASE"/appsettings*.json || true
 ln -sfn "$NEW_RELEASE" "$DISCOVERY_API_CURRENT"
 log "Release ativa atualizada para $RELEASE_ID"
 
-mapfile -t RELEASE_DIRS < <(ls -1dt "$DISCOVERY_API_RELEASES"/* 2>/dev/null || true)
-if (( ${#RELEASE_DIRS[@]} > DISCOVERY_KEEP_RELEASES )); then
-  for old_release in "${RELEASE_DIRS[@]:DISCOVERY_KEEP_RELEASES}"; do
-    rm -rf "$old_release"
-  done
-fi
+cleanup_old_releases "$DISCOVERY_API_RELEASES"
 
 log "Self-update concluido com sucesso"
