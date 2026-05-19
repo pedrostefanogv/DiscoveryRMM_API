@@ -7,7 +7,6 @@ namespace Discovery.Api.Services.Quartz;
 
 /// <summary>
 /// Quartz job que reconcilia políticas de grupo MeshCentral com o banco local.
-/// Substitui MeshCentralGroupPolicyReconciliationBackgroundService.
 /// Schedule: configurável via MeshCentral:GroupPolicyReconciliationIntervalMinutes (default 60min).
 /// </summary>
 [DisallowConcurrentExecution]

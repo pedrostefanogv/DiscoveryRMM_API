@@ -168,13 +168,11 @@ obj/Debug/net10.0/
 Program.cs
 Services/
  AgentCommandDispatcher.cs
- AgentLabelingReconciliationBackgroundService.cs
  AgentPackagePrebuildHostedService.cs
  AgentTlsCertificateProbe.cs
  AgentTransferService.cs
  AiChatJobBackgroundService.cs
  AlertDispatchService.cs
- AlertSchedulerBackgroundService.cs
  BackgroundServices/
   BackgroundServiceMetrics.cs
   BackgroundServiceRegistry.cs
@@ -182,8 +180,6 @@ Services/
  DatabaseSeeder.cs
  HeartbeatExpiryBackgroundService.cs
  IRemoteDebugSessionManager.cs
- MeshCentralGroupPolicyReconciliationBackgroundService.cs
- MeshCentralIdentityReconciliationBackgroundService.cs
  MeshCentralIdentitySyncTriggerService.cs
  NatsAuthCalloutBackgroundService.cs
  NatsAuthCalloutReloadSignal.cs
@@ -213,8 +209,6 @@ Services/
  RedisService.cs
  RemoteDebugSessionCleanupService.cs
  RemoteDebugSessionManager.cs
- ReportGenerationBackgroundService.cs
- SlaMonitoringBackgroundService.cs
  SpecialCommandPayloadValidator.cs
  SyncInvalidationPublisher.cs
  SyncPingDispatchBackgroundService.cs

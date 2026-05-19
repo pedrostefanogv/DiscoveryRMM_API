@@ -6,7 +6,6 @@ namespace Discovery.Api.Services.Quartz;
 
 /// <summary>
 /// Quartz job que monitora alertas agendados e os despacha quando o momento chegou.
-/// Substitui AlertSchedulerBackgroundService.
 /// Schedule: a cada 30s.
 /// </summary>
 [DisallowConcurrentExecution]

@@ -7,7 +7,6 @@ namespace Discovery.Api.Services.Quartz;
 
 /// <summary>
 /// Quartz job que monitora SLAs de tickets e marca violações.
-/// Substitui SlaMonitoringBackgroundService.
 /// Schedule: a cada 5 minutos.
 /// </summary>
 [DisallowConcurrentExecution]

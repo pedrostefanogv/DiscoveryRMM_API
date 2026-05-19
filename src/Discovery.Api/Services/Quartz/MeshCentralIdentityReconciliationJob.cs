@@ -7,7 +7,6 @@ namespace Discovery.Api.Services.Quartz;
 
 /// <summary>
 /// Quartz job que reconcilia identidades de usuários MeshCentral com o banco local.
-/// Substitui MeshCentralIdentityReconciliationBackgroundService.
 /// Schedule: configurável via MeshCentral:IdentitySyncReconciliationIntervalMinutes (default 60min).
 /// </summary>
 [DisallowConcurrentExecution]

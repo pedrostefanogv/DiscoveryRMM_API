@@ -11,12 +11,16 @@ namespace Discovery.Api.DependencyInjection;
 public static class BackgroundServicesCollectionExtensions
 {
     public sealed record BackgroundServicesConfig(
-        bool IsDevelopment);
+        bool IsDevelopment,
+        bool AlertSchedulerEnabled = true,
+        bool SyncPingDispatchEnabled = true);
 
     public static BackgroundServicesConfig ReadBackgroundServicesConfig(IConfiguration configuration, bool isDevelopment)
     {
         return new BackgroundServicesConfig(
-            IsDevelopment: isDevelopment);
+            IsDevelopment: isDevelopment,
+            AlertSchedulerEnabled: configuration.GetValue<bool?>("BackgroundJobs:AlertScheduler:Enabled") ?? true,
+            SyncPingDispatchEnabled: configuration.GetValue<bool?>("BackgroundJobs:SyncPingDispatch:Enabled") ?? true);
     }
 
     public static IServiceCollection AddDiscoveryBackgroundServices(
@@ -29,12 +33,14 @@ public static class BackgroundServicesCollectionExtensions
 
         // Always-registered services
         services.AddScoped<AlertDispatchService>();
-        services.AddHostedService<AlertSchedulerBackgroundService>();
         services.AddHostedService<AgentPackagePrebuildHostedService>();
 
-        // Sync ping dispatch (singleton + hosted service pattern)
-        services.AddSingleton<ISyncPingDispatchQueue, SyncPingDispatchBackgroundService>();
-        services.AddHostedService(sp => (SyncPingDispatchBackgroundService)sp.GetRequiredService<ISyncPingDispatchQueue>());
+        // Sync ping dispatch (singleton + hosted service pattern, toggleable)
+        if (config.SyncPingDispatchEnabled)
+        {
+            services.AddSingleton<ISyncPingDispatchQueue, SyncPingDispatchBackgroundService>();
+            services.AddHostedService(sp => (SyncPingDispatchBackgroundService)sp.GetRequiredService<ISyncPingDispatchQueue>());
+        }
 
         // Note: LogPurge, ReportRetention, AiChatRetention, P2pMaintenance,
         // KnowledgeEmbedding, AlertScheduler, SlaMonitoring, ReportGeneration,

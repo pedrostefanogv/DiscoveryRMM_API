@@ -172,7 +172,6 @@ Entities/
  ListeningPortInfo.cs
  LogEntry.cs
  LogQuery.cs
- McpToolPolicy.cs
  MemoryModuleInfo.cs
  MeshCentralRightsProfile.cs
  NetworkAdapterInfo.cs
@@ -373,7 +372,6 @@ Interfaces/
  IDepartmentRepository.cs
  IDeployTokenRepository.cs
  IDeployTokenService.cs
- IDistributedLockService.cs
  IEmbeddingProvider.cs
  IEntityNoteRepository.cs
  IHeartbeatCacheService.cs

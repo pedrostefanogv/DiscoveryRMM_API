@@ -205,15 +205,10 @@ public static class BackgroundServiceCategoryMap
         ["NatsFanoutStreamBootstrapService"] = BackgroundServiceCategories.Messaging,
         ["NatsAuthCalloutBackgroundService"] = BackgroundServiceCategories.Messaging,
         // Knowledge — migrated to Quartz (KnowledgeEmbeddingJob)
-        // Alerts
-        ["AlertSchedulerBackgroundService"] = BackgroundServiceCategories.Alerts,
-        ["SlaMonitoringBackgroundService"] = BackgroundServiceCategories.Alerts,
-        // Reports
-        ["ReportGenerationBackgroundService"] = BackgroundServiceCategories.Reports,
-        // Reconciliation
-        ["AgentLabelingReconciliationBackgroundService"] = BackgroundServiceCategories.Reconciliation,
-        ["MeshCentralIdentityReconciliationBackgroundService"] = BackgroundServiceCategories.Reconciliation,
-        ["MeshCentralGroupPolicyReconciliationBackgroundService"] = BackgroundServiceCategories.Reconciliation,
+        // Alerts — migrated to Quartz (AlertSchedulerJob, SlaMonitoringJob)
+        // Reports — migrated to Quartz (ReportGenerationJob, ReportScheduleDispatchJob)
+        // Reconciliation — migrated to Quartz (AgentLabelingReconciliationJob,
+        // MeshCentralIdentityReconciliationJob, MeshCentralGroupPolicyReconciliationJob)
         // Remote debug
         ["RemoteDebugSessionCleanupService"] = BackgroundServiceCategories.RemoteDebug,
         // Sync

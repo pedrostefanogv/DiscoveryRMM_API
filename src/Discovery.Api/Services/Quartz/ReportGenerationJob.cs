@@ -5,7 +5,6 @@ namespace Discovery.Api.Services.Quartz;
 
 /// <summary>
 /// Quartz job que processa execuções pendentes de relatórios.
-/// Substitui ReportGenerationBackgroundService.
 /// Schedule: a cada 15 segundos.
 /// </summary>
 [DisallowConcurrentExecution]

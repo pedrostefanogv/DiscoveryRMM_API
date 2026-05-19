@@ -5,7 +5,6 @@ namespace Discovery.Api.Services.Quartz;
 
 /// <summary>
 /// Quartz job que reconcilia labels de agentes com regras de auto-labeling configuradas.
-/// Substitui AgentLabelingReconciliationBackgroundService.
 /// Schedule: a cada 10 minutos.
 /// </summary>
 [DisallowConcurrentExecution]

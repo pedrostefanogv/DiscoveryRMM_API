@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Data;
 
-// ── AI Chat & MCP: AiChatSession, AiChatMessage, AiChatJob, McpToolPolicy ──
+// ── AI Chat & MCP: AiChatSession, AiChatMessage, AiChatJob ──
 
 public partial class DiscoveryDbContext
 {
