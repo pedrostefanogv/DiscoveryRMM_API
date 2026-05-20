@@ -6,6 +6,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Pgvector;
 
@@ -18,7 +19,8 @@ public class KnowledgeController(
     IKnowledgeChunkRepository chunkRepository,
     IEmbeddingProvider embeddingProvider,
     IConfigurationResolver configurationResolver,
-    IKnowledgeEmbeddingQueueRepository embeddingQueueRepository) : ControllerBase
+    IKnowledgeEmbeddingQueueRepository embeddingQueueRepository,
+    IUserRepository userRepository) : ControllerBase
 {
     // ─── CRUD de Artigos ──────────────────────────────────────────────
 
@@ -70,13 +72,15 @@ public class KnowledgeController(
             ? JsonSerializer.Serialize(request.Tags)
             : null;
 
+        var createdBy = await ResolveActorDisplayNameAsync(request.CreatedBy);
+
         var article = new KnowledgeArticle
         {
             Title = request.Title.Trim(),
             Content = request.Content,
             Category = request.Category?.Trim(),
             TagsJson = tagsJson,
-            CreatedBy = request.CreatedBy,
+            CreatedBy = createdBy,
             ClientId = request.ClientId,
             SiteId = request.SiteId,
             DepartmentId = request.DepartmentId,
@@ -102,11 +106,13 @@ public class KnowledgeController(
         var article = await articleRepository.GetByIdAsync(id, ct);
         if (article == null) return NotFound();
 
+        var lastEditedBy = await ResolveActorDisplayNameAsync(request.LastEditedBy);
+
         article.Title = request.Title.Trim();
         article.Content = request.Content;
         article.Category = request.Category?.Trim();
         article.TagsJson = request.Tags?.Count > 0 ? JsonSerializer.Serialize(request.Tags) : null;
-        article.LastEditedBy = request.LastEditedBy;
+        article.LastEditedBy = lastEditedBy;
         article.LastEditedAt = DateTime.UtcNow;
 
         // Se estava publicado/interno, volta para Draft (edição requer re-publicação)
@@ -163,9 +169,11 @@ public class KnowledgeController(
         var wasAlreadyPublished = article.Status == ArticleStatus.Published.ToString()
             || article.Status == ArticleStatus.Internal.ToString();
 
+        var lastEditedBy = await ResolveActorDisplayNameAsync(request.LastEditedBy);
+
         // Atualiza status
         article.Status = request.Status;
-        article.LastEditedBy = request.LastEditedBy;
+        article.LastEditedBy = lastEditedBy;
         article.LastEditedAt = DateTime.UtcNow;
 
         if (!wasAlreadyPublished)
@@ -184,7 +192,7 @@ public class KnowledgeController(
             Category = article.Category,
             TagsJson = article.TagsJson,
             Status = article.Status,
-            EditedBy = request.LastEditedBy,
+            EditedBy = lastEditedBy,
             ChangeSummary = request.ChangeSummary
         };
         await articleRepository.CreateVersionAsync(version, ct);
@@ -210,8 +218,10 @@ public class KnowledgeController(
         var article = await articleRepository.GetByIdAsync(id, ct);
         if (article == null) return NotFound();
 
+        var resolvedLastEditedBy = await ResolveActorDisplayNameAsync(lastEditedBy);
+
         article.Status = ArticleStatus.Draft.ToString();
-        article.LastEditedBy = lastEditedBy;
+        article.LastEditedBy = resolvedLastEditedBy;
         article.LastEditedAt = DateTime.UtcNow;
 
         var updated = await articleRepository.UpdateAsync(article, ct);
@@ -418,8 +428,10 @@ public class KnowledgeController(
         var existing = await articleRepository.GetLinkAsync(ticketId, request.ArticleId, ct);
         if (existing != null) return Conflict("Artigo já está vinculado a este ticket.");
 
+        var linkedBy = await ResolveActorDisplayNameAsync(request.LinkedBy);
+
         var link = await articleRepository.LinkToTicketAsync(
-            ticketId, request.ArticleId, request.LinkedBy, request.Note, ct);
+            ticketId, request.ArticleId, linkedBy, request.Note, ct);
 
         var response = new TicketKnowledgeLinkResponse(
             link.Id, link.TicketId, link.ArticleId,
@@ -550,5 +562,32 @@ public class KnowledgeController(
             a.DepartmentId, a.CurrentVersionNumber,
             a.PublishedAt, chunks.Count, embeddingsReady,
             a.CreatedAt, a.UpdatedAt);
+    }
+
+    private async Task<string> ResolveActorDisplayNameAsync(string? fallback)
+    {
+        var normalizedFallback = NormalizeActor(fallback);
+
+        if (HttpContext.Items["UserId"] is not Guid userId)
+        {
+            return normalizedFallback ?? "system";
+        }
+
+        var user = await userRepository.GetByIdAsync(userId);
+        var resolved = NormalizeActor(user?.FullName)
+            ?? NormalizeActor(user?.Login)
+            ?? NormalizeActor(user?.Email)
+            ?? normalizedFallback
+            ?? userId.ToString("D");
+
+        return resolved;
+    }
+
+    private static string? NormalizeActor(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+
+        var normalized = value.Trim();
+        return normalized.Length <= 256 ? normalized : normalized[..256];
     }
 }
