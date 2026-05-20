@@ -138,6 +138,12 @@ public partial class AgentAuthController
             hardware.HardwareComponentsJson = JsonSerializer.Serialize(consolidated);
             hardware.TotalDisksCount = consolidated.Disks.Count;
 
+            // Machine score — enviado pelo agent como campo top-level do envelope
+            if (request.MachineScore.HasValue)
+                hardware.MachineScore = request.MachineScore.Value;
+            else if (request.Hardware?.MachineScore.HasValue)
+                hardware.MachineScore = request.Hardware.MachineScore.Value;
+
             await _hardwareRepo.UpsertAsync(hardware, consolidated);
             await InvalidateAgentInventoryCachesAsync(agentId);
             await _agentAutoLabelingService.EvaluateAgentAsync(agentId, "hardware-updated");

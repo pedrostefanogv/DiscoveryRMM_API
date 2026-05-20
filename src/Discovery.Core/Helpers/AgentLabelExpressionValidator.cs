@@ -45,7 +45,8 @@ public static class AgentLabelExpressionValidator
         AgentLabelField.GpuMemoryBytes,
         AgentLabelField.DiskFreeSpaceBytes,
         AgentLabelField.DiskTotalSpaceBytes,
-        AgentLabelField.DiskFreeSpacePercent
+        AgentLabelField.DiskFreeSpacePercent,
+        AgentLabelField.MachineScore
     ];
 
     private static readonly HashSet<AgentLabelField> CustomFields =

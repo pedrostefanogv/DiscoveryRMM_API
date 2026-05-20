@@ -46,6 +46,10 @@ public class AgentHardwareInfo
     public string? BiosDate { get; set; }
     public string? BiosSerialNumber { get; set; }
 
+    // Machine score (0-100 baseline, no cap — higher = more powerful)
+    // Calculated by the agent: 50% CPU + 50% RAM, reference 16c/32t + 64 GB ≈ 100
+    public int? MachineScore { get; set; }
+
     // OS
     public string? OsName { get; set; }
     public string? OsVersion { get; set; }

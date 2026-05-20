@@ -434,6 +434,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             AgentLabelField.DiskFreeSpacePercent => EvaluateNumber(CalculateDiskFreePercent(currentDisk), op, expected),
             AgentLabelField.DiskFileSystem => EvaluateText(currentDisk?.FileSystem, op, expected),
             AgentLabelField.DiskMediaType => EvaluateText(currentDisk?.MediaType, op, expected),
+            AgentLabelField.MachineScore => EvaluateNumber(hardware?.MachineScore, op, expected),
             AgentLabelField.AgentCustomField
                 or AgentLabelField.ClientCustomField
                 or AgentLabelField.SiteCustomField

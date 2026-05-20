@@ -283,6 +283,7 @@ public partial class DiscoveryDbContext
                 .HasColumnName("gpu_driver_version")
                 .HasMaxLength(100);
             entity.Property(info => info.TotalDisksCount).HasColumnName("total_disks_count");
+            entity.Property(info => info.MachineScore).HasColumnName("machine_score");
             entity.Property(info => info.CollectedAt)
                 .HasColumnName("collected_at")
                 .HasColumnType("timestamptz");

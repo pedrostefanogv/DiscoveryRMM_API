@@ -28,6 +28,9 @@ public enum AgentLabelField
     DiskFileSystem = 21,
     DiskMediaType = 22,
 
+    // Machine score (hardware capability rating, 0+ with 100 baseline for 16c/32t+64GB, no ceiling)
+    MachineScore = 23,
+
     // Custom field references — DefinitionId must be set on the expression node
     AgentCustomField = 100,
     ClientCustomField = 101,
