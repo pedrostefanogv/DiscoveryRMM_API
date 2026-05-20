@@ -1,3 +1,5 @@
+using Discovery.Core.Enums;
+
 namespace Discovery.Core.DTOs;
 
 // ─── Request DTOs ──────────────────────────────────────────────
@@ -7,16 +9,22 @@ public record CreateArticleRequest(
     string Content,
     string? Category,
     List<string>? Tags,
-    string? Author,
+    string? CreatedBy,
     Guid? ClientId,
-    Guid? SiteId);
+    Guid? SiteId,
+    Guid? DepartmentId = null);
 
 public record UpdateArticleRequest(
     string Title,
     string Content,
     string? Category,
     List<string>? Tags,
-    string? Author);
+    string? LastEditedBy);
+
+public record PublishArticleRequest(
+    string Status,        // "Published" ou "Internal"
+    string? LastEditedBy,
+    string? ChangeSummary = null);
 
 public record LinkTicketRequest(
     Guid ArticleId,
@@ -27,6 +35,7 @@ public record KbSearchRequest(
     string Query,
     Guid? ClientId,
     Guid? SiteId,
+    Guid? DepartmentId = null,
     string Mode = "hybrid", // "semantic", "keyword", "hybrid"
     int MaxResults = 10);
 
@@ -37,11 +46,14 @@ public record ArticleListItem(
     string Title,
     string? Category,
     List<string> Tags,
-    string? Author,
+    string? CreatedBy,
+    string? LastEditedBy,
+    string Status,
     string Scope,           // "Global", "Client", "Site"
     Guid? ClientId,
     Guid? SiteId,
-    bool IsPublished,
+    Guid? DepartmentId,
+    int CurrentVersionNumber,
     DateTime? PublishedAt,
     int ChunkCount,
     DateTime CreatedAt,
@@ -53,16 +65,33 @@ public record ArticleResponse(
     string Content,
     string? Category,
     List<string> Tags,
-    string? Author,
+    string? CreatedBy,
+    string? LastEditedBy,
+    DateTime? LastEditedAt,
+    string Status,
     string Scope,
     Guid? ClientId,
     Guid? SiteId,
-    bool IsPublished,
+    Guid? DepartmentId,
+    int CurrentVersionNumber,
     DateTime? PublishedAt,
     int ChunkCount,
     bool EmbeddingsReady,
     DateTime CreatedAt,
     DateTime UpdatedAt);
+
+public record ArticleVersionResponse(
+    Guid Id,
+    Guid ArticleId,
+    int VersionNumber,
+    string Title,
+    string Content,
+    string? Category,
+    List<string> Tags,
+    string Status,
+    string? EditedBy,
+    string? ChangeSummary,
+    DateTime CreatedAt);
 
 public record KbSearchResult(
     Guid ArticleId,

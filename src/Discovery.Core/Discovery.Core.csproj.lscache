@@ -168,6 +168,7 @@ Entities/
   UserGroupRole.cs
  KnowledgeArticle.cs
  KnowledgeArticleChunk.cs
+ KnowledgeArticleVersion.cs
  KnowledgeEmbeddingQueueItem.cs
  ListeningPortInfo.cs
  LogEntry.cs
@@ -233,6 +234,7 @@ Enums/
  AppApprovalScopeType.cs
  AppInstallationType.cs
  AppStorePolicyType.cs
+ ArticleStatus.cs
  AutomationExecutionSourceType.cs
  AutomationExecutionStatus.cs
  AutomationScriptChangeType.cs
