@@ -59,9 +59,13 @@ public class M060_AddArticleStatusAndDepartment : Migration
         // ── Novos índices ──────────────────────────────────────────
         Create.Index("ix_ka_status").OnTable("knowledge_articles").OnColumn("status");
         Create.Index("ix_ka_department_id").OnTable("knowledge_articles").OnColumn("department_id");
-        Create.Index("ix_ka_status_department")
-            .OnTable("knowledge_articles")
-            .OnColumns("status", "department_id");
+
+        // Índice composto (status, department_id) via SQL raw
+        Execute.Sql(@"
+            CREATE INDEX ix_ka_status_department
+            ON knowledge_articles (status, department_id)
+            WHERE deleted_at IS NULL;
+        ");
 
         // Garante status válidos
         Execute.Sql(@"

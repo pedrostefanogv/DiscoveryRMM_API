@@ -2,6 +2,7 @@ using System.Text.Json;
 using Discovery.Api.Filters;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
@@ -22,19 +23,23 @@ public class KnowledgeController(
     // ─── CRUD de Artigos ──────────────────────────────────────────────
 
     /// <summary>
-    /// Lista artigos respeitando herança: site → client → global
+    /// Lista artigos respeitando herança: site → client → global.
+    /// Filtra por status, departamento e categoria.
+    /// Artigos Internal só são visíveis se departmentId fornecido.
     /// </summary>
     [HttpGet]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<ActionResult<List<ArticleListItem>>> List(
         [FromQuery] Guid? clientId,
         [FromQuery] Guid? siteId,
+        [FromQuery] string? status,
+        [FromQuery] Guid? departmentId,
         [FromQuery] string? category,
-        [FromQuery] bool publishedOnly = true,
         CancellationToken ct = default)
     {
-        var articles = await articleRepository.ListByScopeAsync(clientId, siteId, publishedOnly, category, ct);
-        var response = articles.Select(a => MapToListItem(a)).ToList();
+        var articles = await articleRepository.ListByScopeAsync(
+            clientId, siteId, status, departmentId, category, ct);
+        var response = articles.Select(MapToListItem).ToList();
         return Ok(response);
     }
 
@@ -47,6 +52,9 @@ public class KnowledgeController(
         return Ok(MapToResponse(article));
     }
 
+    /// <summary>
+    /// Cria artigo em status Draft. O autor original fica em CreatedBy (imutável).
+    /// </summary>
     [HttpPost]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.Create)]
     public async Task<ActionResult<ArticleResponse>> Create(
@@ -57,6 +65,7 @@ public class KnowledgeController(
         if (request.SiteId.HasValue && !request.ClientId.HasValue)
             return BadRequest("ClientId é obrigatório quando SiteId é informado.");
 
+        // Valida departamento: se Internal precisará de departmentId (validação no publish)
         var tagsJson = request.Tags?.Count > 0
             ? JsonSerializer.Serialize(request.Tags)
             : null;
@@ -67,18 +76,22 @@ public class KnowledgeController(
             Content = request.Content,
             Category = request.Category?.Trim(),
             TagsJson = tagsJson,
-            Author = request.Author,
+            CreatedBy = request.CreatedBy,
             ClientId = request.ClientId,
             SiteId = request.SiteId,
-            IsPublished = false
+            DepartmentId = request.DepartmentId,
+            Status = ArticleStatus.Draft.ToString(),
+            CurrentVersionNumber = 0
         };
 
         var created = await articleRepository.CreateAsync(article, ct);
-        if (created.IsPublished)
-            await embeddingQueueRepository.EnqueueAsync(created.Id, "create", ct);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, MapToResponse(created));
     }
 
+    /// <summary>
+    /// Atualiza artigo. Edições em Draft NÃO geram versão — alteram o registro diretamente.
+    /// Se estava Published/Internal, volta para Draft (unpublish implícito).
+    /// </summary>
     [HttpPut("{id:guid}")]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<ActionResult<ArticleResponse>> Update(
@@ -93,16 +106,25 @@ public class KnowledgeController(
         article.Content = request.Content;
         article.Category = request.Category?.Trim();
         article.TagsJson = request.Tags?.Count > 0 ? JsonSerializer.Serialize(request.Tags) : null;
-        article.Author = request.Author;
-        // Invalida chunking para re-processar
+        article.LastEditedBy = request.LastEditedBy;
+        article.LastEditedAt = DateTime.UtcNow;
+
+        // Se estava publicado/interno, volta para Draft (edição requer re-publicação)
+        if (article.Status != ArticleStatus.Draft.ToString())
+        {
+            article.Status = ArticleStatus.Draft.ToString();
+        }
+
+        // Invalida chunking para re-processar quando publicado
         article.LastChunkedAt = null;
 
         var updated = await articleRepository.UpdateAsync(article, ct);
-        if (updated.IsPublished)
-            await embeddingQueueRepository.EnqueueAsync(updated.Id, "update", ct);
         return Ok(MapToResponse(updated));
     }
 
+    /// <summary>
+    /// Soft delete do artigo.
+    /// </summary>
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct = default)
@@ -113,18 +135,61 @@ public class KnowledgeController(
         return NoContent();
     }
 
-    // ─── Publicação ───────────────────────────────────────────────────
+    // ─── Publicação / Internalização (com versionamento) ──────────────
 
+    /// <summary>
+    /// Publica ou internaliza um artigo.
+    /// Transição Draft → Published ou Draft → Internal gera snapshot de versão.
+    /// DepartmentId é obrigatório para status Internal.
+    /// </summary>
     [HttpPost("{id:guid}/publish")]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
-    public async Task<ActionResult<ArticleResponse>> Publish(Guid id, CancellationToken ct = default)
+    public async Task<ActionResult<ArticleResponse>> Publish(
+        Guid id,
+        [FromBody] PublishArticleRequest request,
+        CancellationToken ct = default)
     {
+        if (request.Status != ArticleStatus.Published.ToString()
+            && request.Status != ArticleStatus.Internal.ToString())
+            return BadRequest("Status deve ser 'Published' ou 'Internal'.");
+
         var article = await articleRepository.GetByIdAsync(id, ct);
         if (article == null) return NotFound();
 
-        article.IsPublished = true;
-        article.PublishedAt ??= DateTime.UtcNow;
-        // Força re-chunking ao publicar
+        // Valida departamento obrigatório para Internal
+        if (request.Status == ArticleStatus.Internal.ToString() && !article.DepartmentId.HasValue)
+            return BadRequest("DepartmentId é obrigatório para artigos Internal.");
+
+        var wasAlreadyPublished = article.Status == ArticleStatus.Published.ToString()
+            || article.Status == ArticleStatus.Internal.ToString();
+
+        // Atualiza status
+        article.Status = request.Status;
+        article.LastEditedBy = request.LastEditedBy;
+        article.LastEditedAt = DateTime.UtcNow;
+
+        if (!wasAlreadyPublished)
+        {
+            article.PublishedAt = DateTime.UtcNow;
+        }
+
+        // Incrementa versão e cria snapshot
+        article.CurrentVersionNumber++;
+        var version = new KnowledgeArticleVersion
+        {
+            ArticleId = article.Id,
+            VersionNumber = article.CurrentVersionNumber,
+            Title = article.Title,
+            Content = article.Content,
+            Category = article.Category,
+            TagsJson = article.TagsJson,
+            Status = article.Status,
+            EditedBy = request.LastEditedBy,
+            ChangeSummary = request.ChangeSummary
+        };
+        await articleRepository.CreateVersionAsync(version, ct);
+
+        // Força re-chunking
         article.LastChunkedAt = null;
 
         var updated = await articleRepository.UpdateAsync(article, ct);
@@ -132,22 +197,73 @@ public class KnowledgeController(
         return Ok(MapToResponse(updated));
     }
 
+    /// <summary>
+    /// Volta artigo para Draft sem gerar versão.
+    /// </summary>
     [HttpPost("{id:guid}/unpublish")]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
-    public async Task<ActionResult<ArticleResponse>> Unpublish(Guid id, CancellationToken ct = default)
+    public async Task<ActionResult<ArticleResponse>> Unpublish(
+        Guid id,
+        [FromQuery] string? lastEditedBy,
+        CancellationToken ct = default)
     {
         var article = await articleRepository.GetByIdAsync(id, ct);
         if (article == null) return NotFound();
 
-        article.IsPublished = false;
+        article.Status = ArticleStatus.Draft.ToString();
+        article.LastEditedBy = lastEditedBy;
+        article.LastEditedAt = DateTime.UtcNow;
+
         var updated = await articleRepository.UpdateAsync(article, ct);
         return Ok(MapToResponse(updated));
+    }
+
+    // ─── Versionamento ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Lista versões de um artigo (mais recente primeiro).
+    /// </summary>
+    [HttpGet("{id:guid}/versions")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    public async Task<ActionResult<List<ArticleVersionResponse>>> GetVersions(
+        Guid id, CancellationToken ct = default)
+    {
+        var article = await articleRepository.GetByIdAsync(id, ct);
+        if (article == null) return NotFound();
+
+        var versions = await articleRepository.GetVersionsAsync(id, ct);
+        var response = versions.Select(v => new ArticleVersionResponse(
+            v.Id, v.ArticleId, v.VersionNumber,
+            v.Title, v.Content, v.Category, ParseTags(v.TagsJson),
+            v.Status, v.EditedBy, v.ChangeSummary, v.CreatedAt)).ToList();
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// Visualiza uma versão específica.
+    /// </summary>
+    [HttpGet("{id:guid}/versions/{versionNumber:int}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    public async Task<ActionResult<ArticleVersionResponse>> GetVersion(
+        Guid id, int versionNumber, CancellationToken ct = default)
+    {
+        var article = await articleRepository.GetByIdAsync(id, ct);
+        if (article == null) return NotFound();
+
+        var version = await articleRepository.GetVersionAsync(id, versionNumber, ct);
+        if (version == null) return NotFound();
+
+        return Ok(new ArticleVersionResponse(
+            version.Id, version.ArticleId, version.VersionNumber,
+            version.Title, version.Content, version.Category, ParseTags(version.TagsJson),
+            version.Status, version.EditedBy, version.ChangeSummary, version.CreatedAt));
     }
 
     // ─── Busca ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Busca unificada: semantic (pgvector), keyword (ILIKE) ou hybrid (ambos)
+    /// Busca unificada: semantic (pgvector), keyword (ILIKE) ou hybrid (ambos).
+    /// Aceita departmentId para filtrar artigos Internal do departamento.
     /// </summary>
     [HttpGet("search")]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
@@ -155,6 +271,7 @@ public class KnowledgeController(
         [FromQuery] string q,
         [FromQuery] Guid? clientId,
         [FromQuery] Guid? siteId,
+        [FromQuery] Guid? departmentId,
         [FromQuery] string mode = "hybrid",
         [FromQuery] int maxResults = 10,
         CancellationToken ct = default)
@@ -175,7 +292,8 @@ public class KnowledgeController(
                 embBaseUrl1,
                 ct);
             var semanticResults = await chunkRepository.SearchSemanticAsync(
-                new Vector(embedding), clientId, siteId, maxResults, ct: ct);
+                new Vector(embedding), clientId, siteId, maxResults,
+                departmentId: departmentId, ct: ct);
 
             results.AddRange(semanticResults.Select(r => new KbSearchResult(
                 r.ArticleId,
@@ -191,7 +309,8 @@ public class KnowledgeController(
 
         if (mode is "keyword" or "hybrid")
         {
-            var keywordResults = await articleRepository.SearchKeywordAsync(q, clientId, siteId, ct);
+            var keywordResults = await articleRepository.SearchKeywordAsync(
+                q, clientId, siteId, departmentId, ct);
             var existingIds = results.Select(r => r.ArticleId).ToHashSet();
 
             results.AddRange(keywordResults
@@ -216,6 +335,54 @@ public class KnowledgeController(
             .ToList();
 
         return Ok(ordered);
+    }
+
+    // ─── Busca integrada com Chat/IA ──────────────────────────────────
+
+    /// <summary>
+    /// Busca semântica otimizada para o chat.
+    /// Recebe a pergunta do usuário + contexto (clientId, siteId, departmentId)
+    /// e retorna chunks relevantes para injeção no system prompt.
+    /// </summary>
+    [HttpPost("chat-search")]
+    [RequirePermission(ResourceType.AiChat, ActionType.View)]
+    public async Task<ActionResult<KbSuggestResult>> ChatSearch(
+        [FromBody] KbSearchRequest request,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.Query))
+            return BadRequest("Query é obrigatório.");
+
+        var settings = await configurationResolver.GetAISettingsAsync();
+        var embBaseUrl = string.IsNullOrWhiteSpace(settings.EmbeddingBaseUrl) ? settings.BaseUrl : settings.EmbeddingBaseUrl;
+        var embApiKey = string.IsNullOrWhiteSpace(settings.EmbeddingApiKey) ? settings.ApiKey : settings.EmbeddingApiKey;
+
+        var embedding = await embeddingProvider.GenerateEmbeddingAsync(
+            request.Query,
+            settings.EmbeddingModel,
+            embApiKey,
+            embBaseUrl,
+            ct);
+
+        var semanticResults = await chunkRepository.SearchSemanticAsync(
+            new Vector(embedding), request.ClientId, request.SiteId,
+            Math.Min(request.MaxResults, 10),
+            minSimilarity: 0.7, // Similaridade mínima para chat
+            departmentId: request.DepartmentId,
+            ct: ct);
+
+        var suggestions = semanticResults.Select(r => new KbSearchResult(
+            r.ArticleId,
+            r.ArticleTitle,
+            r.SectionTitle,
+            r.ChunkContent.Length > 400 ? r.ChunkContent[..400] + "..." : r.ChunkContent,
+            null,
+            GetScope(r.ArticleClientId, r.ArticleSiteId),
+            r.ArticleClientId,
+            r.ArticleSiteId,
+            Math.Round(1.0 - r.Distance, 4))).ToList();
+
+        return Ok(new KbSuggestResult(suggestions));
     }
 
     // ─── Vínculo Ticket ↔ KB (montado em /api/v1/tickets/{ticketId}/knowledge) ──
@@ -274,7 +441,7 @@ public class KnowledgeController(
     }
 
     /// <summary>
-    /// Sugere artigos relevantes para um ticket via busca semântica no título+descrição
+    /// Sugere artigos relevantes para um ticket via busca semântica no título+descrição.
     /// </summary>
     [HttpGet("/api/v1/tickets/{ticketId:guid}/knowledge/suggest")]
     [RequirePermission(ResourceType.AiChat, ActionType.View)]
@@ -283,6 +450,7 @@ public class KnowledgeController(
         [FromQuery] string q,
         [FromQuery] Guid? clientId,
         [FromQuery] Guid? siteId,
+        [FromQuery] Guid? departmentId,
         [FromQuery] int maxResults = 5,
         CancellationToken ct = default)
     {
@@ -299,7 +467,8 @@ public class KnowledgeController(
             embBaseUrl2,
             ct);
         var semanticResults = await chunkRepository.SearchSemanticAsync(
-            new Vector(embedding), clientId, siteId, maxResults, ct: ct);
+            new Vector(embedding), clientId, siteId, maxResults,
+            departmentId: departmentId, ct: ct);
 
         var response = semanticResults.Select(r => new KbSearchResult(
             r.ArticleId,
@@ -361,9 +530,12 @@ public class KnowledgeController(
     }
 
     private static ArticleListItem MapToListItem(KnowledgeArticle a) => new(
-        a.Id, a.Title, a.Category, ParseTags(a.TagsJson), a.Author,
+        a.Id, a.Title, a.Category, ParseTags(a.TagsJson),
+        a.CreatedBy, a.LastEditedBy,
+        a.Status,
         GetScope(a.ClientId, a.SiteId), a.ClientId, a.SiteId,
-        a.IsPublished, a.PublishedAt, a.Chunks.Count,
+        a.DepartmentId, a.CurrentVersionNumber,
+        a.PublishedAt, a.Chunks.Count,
         a.CreatedAt, a.UpdatedAt);
 
     private static ArticleResponse MapToResponse(KnowledgeArticle a)
@@ -371,9 +543,12 @@ public class KnowledgeController(
         var chunks = a.Chunks.ToList();
         var embeddingsReady = chunks.Count > 0 && chunks.All(c => c.EmbeddingGeneratedAt != null);
         return new ArticleResponse(
-            a.Id, a.Title, a.Content, a.Category, ParseTags(a.TagsJson), a.Author,
+            a.Id, a.Title, a.Content, a.Category, ParseTags(a.TagsJson),
+            a.CreatedBy, a.LastEditedBy, a.LastEditedAt,
+            a.Status,
             GetScope(a.ClientId, a.SiteId), a.ClientId, a.SiteId,
-            a.IsPublished, a.PublishedAt, chunks.Count, embeddingsReady,
+            a.DepartmentId, a.CurrentVersionNumber,
+            a.PublishedAt, chunks.Count, embeddingsReady,
             a.CreatedAt, a.UpdatedAt);
     }
 }

@@ -215,13 +215,13 @@ public class TicketAiController : ControllerBase
         {
             createdArticle = await _knowledgeRepo.CreateAsync(new KnowledgeArticle
             {
-                Id = Guid.NewGuid(),
                 Title = ticket.Title,
                 Content = response.Content,
-                Author = "ai-draft",
+                CreatedBy = "ai-draft",
                 ClientId = ticket.ClientId,
                 SiteId = ticket.SiteId,
-                IsPublished = false,
+                Status = Discovery.Core.Enums.ArticleStatus.Draft.ToString(),
+                CurrentVersionNumber = 0,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             }, ct);

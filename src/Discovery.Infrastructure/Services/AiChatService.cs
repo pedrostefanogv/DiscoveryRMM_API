@@ -803,6 +803,7 @@ Responda de forma profissional e prestativa.";
                 session.SiteId,
                 limit: maxChunks,
                 minSimilarity: aiSettings.MinSimilarityScore,
+                departmentId: null, // TODO: inferir departmentId do usuário/ticket quando disponível
                 ct: ct);
 
             if (kbChunks.Count == 0)

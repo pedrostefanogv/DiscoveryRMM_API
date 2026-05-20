@@ -30,9 +30,11 @@ public class M061_AddArticleVersioning : Migration
             .OnTable("knowledge_article_versions")
             .OnColumn("article_id");
 
-        Create.Index("ix_kav_article_version")
-            .OnTable("knowledge_article_versions")
-            .OnColumns("article_id", "version_number");
+        // Índice composto (article_id, version_number) via SQL raw
+        Execute.Sql(@"
+            CREATE INDEX ix_kav_article_version
+            ON knowledge_article_versions (article_id, version_number);
+        ");
 
         Create.UniqueConstraint("uq_kav_article_version")
             .OnTable("knowledge_article_versions")
@@ -41,7 +43,7 @@ public class M061_AddArticleVersioning : Migration
         // Índice para busca por data (consultar histórico)
         Create.Index("ix_kav_created_at")
             .OnTable("knowledge_article_versions")
-            .OnColumn("article_id", "created_at");
+            .OnColumn("created_at");
     }
 
     public override void Down()

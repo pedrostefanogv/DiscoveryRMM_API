@@ -219,6 +219,7 @@ Validators/
  ClientValidators.cs
  DeployTokenValidators.cs
  HardwareValidators.cs
+ KnowledgeValidators.cs
  LogValidators.cs
  ReportValidators.cs
  SiteValidators.cs

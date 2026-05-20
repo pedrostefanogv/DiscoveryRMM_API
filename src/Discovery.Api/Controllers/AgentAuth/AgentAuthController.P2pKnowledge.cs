@@ -20,7 +20,7 @@ public partial class AgentAuthController
         var articles = await _knowledgeRepo.ListByScopeAsync(
             clientId: site?.ClientId,
             siteId: agent.SiteId,
-            publishedOnly: true,
+            status: "Published",
             category: null,
             ct: ct);
         return Ok(articles);

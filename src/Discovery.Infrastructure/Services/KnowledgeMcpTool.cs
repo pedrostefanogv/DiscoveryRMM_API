@@ -87,12 +87,13 @@ public class KnowledgeMcpTool(
                 vector, clientId, siteId, maxResults,
                 minSimilarity: settings.MinSimilarityScore,
                 excludeArticleIds: excludeArticleIds,
-                ct);
+                departmentId: null,
+                ct: ct);
 
             if (semanticResults.Count == 0)
             {
                 // Fallback: busca keyword
-                var keywordResults = await articleRepository.SearchKeywordAsync(query, clientId, siteId, ct);
+                var keywordResults = await articleRepository.SearchKeywordAsync(query, clientId, siteId, departmentId: null, ct);
                 if (keywordResults.Count == 0)
                     return JsonSerializer.Serialize(new { found = false, message = "Nenhum artigo encontrado na base de conhecimento." });
 
