@@ -129,6 +129,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         ConfigureCoreEntities(modelBuilder);
         ConfigureInventory(modelBuilder);
         ConfigureTickets(modelBuilder);
+        ConfigureKnowledge(modelBuilder);
         ConfigureConfigurations(modelBuilder);
         ConfigureReports(modelBuilder);
         ConfigureTokensAndNotes(modelBuilder);
@@ -153,6 +154,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureCoreEntities(ModelBuilder modelBuilder);
     static partial void ConfigureInventory(ModelBuilder modelBuilder);
     static partial void ConfigureTickets(ModelBuilder modelBuilder);
+    static partial void ConfigureKnowledge(ModelBuilder modelBuilder);
     static partial void ConfigureConfigurations(ModelBuilder modelBuilder);
     static partial void ConfigureReports(ModelBuilder modelBuilder);
     static partial void ConfigureTokensAndNotes(ModelBuilder modelBuilder);

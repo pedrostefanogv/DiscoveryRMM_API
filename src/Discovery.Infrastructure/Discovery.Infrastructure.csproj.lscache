@@ -67,6 +67,7 @@ Data/
   DiscoveryDbContext.CoreEntities.cs
   DiscoveryDbContext.CustomFields.cs
   DiscoveryDbContext.Inventory.cs
+  DiscoveryDbContext.Knowledge.cs
   DiscoveryDbContext.Reports.cs
   DiscoveryDbContext.Tickets.cs
   DiscoveryDbContext.Tokens.cs
