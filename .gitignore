@@ -624,4 +624,4 @@ $RECYCLE.BIN/
 .vscode/
 .github/
 appsettings.Development.json
-.lscache
+*.lscache
