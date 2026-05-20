@@ -110,7 +110,9 @@ Migrations/
  M057_CreateAgentLabeling.cs
  M058_AddDescriptionToAgentLabelRules.cs
  M059_AddObjectStorageConfigurationToServer.cs
+ M060_AddArticleStatusAndDepartment.cs
  M060_AddObjectStorageFieldsToReportExecutionAndAttachments.cs
+ M061_AddArticleVersioning.cs
  M061_AddTicketAttachmentSettingsToServer.cs
  M062_DropLegacyLocalReportColumns.cs
  M063_CreateAutomationScripts.cs

@@ -87,6 +87,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     // Knowledge Base
     public DbSet<KnowledgeArticle> KnowledgeArticles => Set<KnowledgeArticle>();
     public DbSet<KnowledgeArticleChunk> KnowledgeArticleChunks => Set<KnowledgeArticleChunk>();
+    public DbSet<KnowledgeArticleVersion> KnowledgeArticleVersions => Set<KnowledgeArticleVersion>();
     public DbSet<TicketKnowledgeLink> TicketKnowledgeLinks => Set<TicketKnowledgeLink>();
     public DbSet<KnowledgeEmbeddingQueueItem> KnowledgeEmbeddingQueueItems => Set<KnowledgeEmbeddingQueueItem>();
 

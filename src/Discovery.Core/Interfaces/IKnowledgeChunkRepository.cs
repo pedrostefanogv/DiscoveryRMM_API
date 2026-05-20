@@ -8,6 +8,7 @@ public interface IKnowledgeChunkRepository
     /// <summary>
     /// Busca semântica por cosine distance no escopo especificado.
     /// Inclui artigos do site + client + global.
+    /// Filtra artigos Internal pelo departamento do usuário.
     /// </summary>
     Task<List<KnowledgeChunkSearchResult>> SearchSemanticAsync(
         Vector queryEmbedding,
@@ -16,6 +17,7 @@ public interface IKnowledgeChunkRepository
         int limit = 5,
         double minSimilarity = 0.0,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
+        Guid? departmentId = null,
         CancellationToken ct = default);
 
     /// <summary>

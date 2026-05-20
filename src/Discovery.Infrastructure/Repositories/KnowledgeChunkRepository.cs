@@ -1,4 +1,5 @@
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
@@ -14,6 +15,7 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
     /// Busca semântica por cosine distance com herança de escopo.
     /// Usa operador pgvector <=> para distância cosine.
     /// A distância é calculada UMA única vez via projeção SELECT antes do ORDER BY.
+    /// Artigos Internal só são retornados se departmentId corresponder.
     /// </summary>
     public async Task<List<KnowledgeChunkSearchResult>> SearchSemanticAsync(
         Vector queryEmbedding,
@@ -22,6 +24,7 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         int limit = 5,
         double minSimilarity = 0.0,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
+        Guid? departmentId = null,
         CancellationToken ct = default)
     {
         var chunksQuery = db.KnowledgeArticleChunks
@@ -29,7 +32,8 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
             .Where(c =>
                 c.Embedding != null &&
                 c.Article.DeletedAt == null &&
-                c.Article.IsPublished);
+                (c.Article.Status == ArticleStatus.Published.ToString() ||
+                 c.Article.Status == ArticleStatus.Internal.ToString()));
 
         // Filtro de herança de escopo via artigo pai
         chunksQuery = (clientId, siteId) switch
@@ -45,6 +49,20 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
 
             _ => chunksQuery.Where(c => c.Article.ClientId == null && c.Article.SiteId == null)
         };
+
+        // Filtro de departamento para artigos Internal
+        if (departmentId.HasValue)
+        {
+            chunksQuery = chunksQuery.Where(c =>
+                c.Article.Status != ArticleStatus.Internal.ToString() ||
+                c.Article.DepartmentId == departmentId.Value);
+        }
+        else
+        {
+            // Sem departmentId, não retorna artigos Internal
+            chunksQuery = chunksQuery.Where(c =>
+                c.Article.Status != ArticleStatus.Internal.ToString());
+        }
 
         // Excluir artigos já injetados no system prompt (evita duplicação no RAG + tool call)
         if (excludeArticleIds != null && excludeArticleIds.Count > 0)
@@ -92,7 +110,10 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         CancellationToken ct = default)
         => await db.KnowledgeArticleChunks
             .Include(c => c.Article)
-            .Where(c => c.EmbeddingGeneratedAt == null && c.Article.IsPublished && c.Article.DeletedAt == null)
+            .Where(c => c.EmbeddingGeneratedAt == null
+                && (c.Article.Status == ArticleStatus.Published.ToString() ||
+                    c.Article.Status == ArticleStatus.Internal.ToString())
+                && c.Article.DeletedAt == null)
             .OrderBy(c => c.ArticleId).ThenBy(c => c.ChunkIndex)
             .Take(limit)
             .ToListAsync(ct);

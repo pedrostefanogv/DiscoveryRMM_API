@@ -133,7 +133,8 @@ public sealed class KnowledgeEmbeddingJob : IJob
             try
             {
                 var article = await articleRepository.GetByIdAsync(item.ArticleId);
-                if (article == null || article.DeletedAt != null || !article.IsPublished)
+                if (article == null || article.DeletedAt != null
+                    || (article.Status != "Published" && article.Status != "Internal"))
                 {
                     await queueRepository.MarkDoneAsync(item.Id);
                     continue;

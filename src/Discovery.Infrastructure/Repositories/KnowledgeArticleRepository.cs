@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
@@ -17,6 +18,8 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
     public async Task<KnowledgeArticle> CreateAsync(KnowledgeArticle article, CancellationToken ct = default)
     {
         article.Id = IdGenerator.NewId();
+        article.Status = ArticleStatus.Draft.ToString();
+        article.CurrentVersionNumber = 0;
         article.CreatedAt = DateTime.UtcNow;
         article.UpdatedAt = DateTime.UtcNow;
         db.KnowledgeArticles.Add(article);
@@ -42,15 +45,15 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
     }
 
     /// <summary>
-    /// Herança de escopo: site → client → global
-    /// Se siteId informado: inclui artigos do site + do client (sem site) + globais
-    /// Se só clientId: inclui artigos do client + globais
-    /// Se nenhum: só globais
+    /// Herança de escopo: site → client → global.
+    /// Filtro de status: null = retorna todos visíveis ao usuário atual
+    /// (Published/Internal no mesmo departamento, mais Drafts do próprio usuário se aplicável)
     /// </summary>
     public async Task<List<KnowledgeArticle>> ListByScopeAsync(
         Guid? clientId,
         Guid? siteId,
-        bool publishedOnly = true,
+        string? status = null,
+        Guid? departmentId = null,
         string? category = null,
         CancellationToken ct = default)
     {
@@ -58,8 +61,11 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             .Include(a => a.Chunks)
             .Where(a => a.DeletedAt == null);
 
-        if (publishedOnly)
-            query = query.Where(a => a.IsPublished);
+        // Filtro de status
+        if (!string.IsNullOrEmpty(status))
+        {
+            query = query.Where(a => a.Status == status);
+        }
 
         // Filtro de herança de escopo
         query = (clientId, siteId) switch
@@ -76,6 +82,14 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             _ => query.Where(a => a.ClientId == null && a.SiteId == null)
         };
 
+        // Filtro de departamento (para artigos Internal)
+        if (departmentId.HasValue)
+        {
+            query = query.Where(a =>
+                a.Status != ArticleStatus.Internal.ToString() ||
+                a.DepartmentId == departmentId.Value);
+        }
+
         if (!string.IsNullOrWhiteSpace(category))
             query = query.Where(a => a.Category != null && a.Category.ToLower() == category.ToLower());
 
@@ -86,13 +100,15 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         string queryText,
         Guid? clientId,
         Guid? siteId,
+        Guid? departmentId = null,
         CancellationToken ct = default)
     {
         var sanitized = queryText.Replace("%", "").Replace("_", "").Trim();
         var pattern = $"%{sanitized}%";
 
         var query = db.KnowledgeArticles
-            .Where(a => a.DeletedAt == null && a.IsPublished)
+            .Where(a => a.DeletedAt == null
+                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()))
             .Where(a =>
                 EF.Functions.ILike(a.Title, pattern) ||
                 EF.Functions.ILike(a.Content, pattern) ||
@@ -113,6 +129,14 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             _ => query.Where(a => a.ClientId == null && a.SiteId == null)
         };
 
+        // Filtro de departamento para artigos Internal
+        if (departmentId.HasValue)
+        {
+            query = query.Where(a =>
+                a.Status != ArticleStatus.Internal.ToString() ||
+                a.DepartmentId == departmentId.Value);
+        }
+
         return await query.OrderBy(a => a.Title).Take(20).ToListAsync(ct);
     }
 
@@ -120,11 +144,38 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         int limit = 20,
         CancellationToken ct = default)
         => await db.KnowledgeArticles
-            .Where(a => a.DeletedAt == null && a.IsPublished &&
-                        (a.LastChunkedAt == null || a.LastChunkedAt < a.UpdatedAt))
+            .Where(a => a.DeletedAt == null
+                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString())
+                && (a.LastChunkedAt == null || a.LastChunkedAt < a.UpdatedAt))
             .OrderBy(a => a.CreatedAt)
             .Take(limit)
             .ToListAsync(ct);
+
+    // ─── Versionamento ──────────────────────────────────────────────
+
+    public async Task<KnowledgeArticleVersion> CreateVersionAsync(
+        KnowledgeArticleVersion version, CancellationToken ct = default)
+    {
+        version.Id = IdGenerator.NewId();
+        version.CreatedAt = DateTime.UtcNow;
+        db.KnowledgeArticleVersions.Add(version);
+        await db.SaveChangesAsync(ct);
+        return version;
+    }
+
+    public async Task<List<KnowledgeArticleVersion>> GetVersionsAsync(
+        Guid articleId, CancellationToken ct = default)
+        => await db.KnowledgeArticleVersions
+            .Where(v => v.ArticleId == articleId)
+            .OrderByDescending(v => v.VersionNumber)
+            .ToListAsync(ct);
+
+    public async Task<KnowledgeArticleVersion?> GetVersionAsync(
+        Guid articleId, int versionNumber, CancellationToken ct = default)
+        => await db.KnowledgeArticleVersions
+            .FirstOrDefaultAsync(v => v.ArticleId == articleId && v.VersionNumber == versionNumber, ct);
+
+    // ─── Ticket ↔ KB ───────────────────────────────────────────────
 
     public async Task<List<KnowledgeArticle>> GetByTicketAsync(Guid ticketId, CancellationToken ct = default)
         => await db.TicketKnowledgeLinks

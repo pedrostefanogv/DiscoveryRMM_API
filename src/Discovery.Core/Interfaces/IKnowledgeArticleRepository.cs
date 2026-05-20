@@ -12,11 +12,13 @@ public interface IKnowledgeArticleRepository
     /// <summary>
     /// Lista artigos respeitando herança de escopo:
     /// site → client → global (todos os níveis superiores são incluídos)
+    /// + filtro por status e departamento
     /// </summary>
     Task<List<KnowledgeArticle>> ListByScopeAsync(
         Guid? clientId,
         Guid? siteId,
-        bool publishedOnly = true,
+        string? status = null,
+        Guid? departmentId = null,
         string? category = null,
         CancellationToken ct = default);
 
@@ -27,10 +29,11 @@ public interface IKnowledgeArticleRepository
         string query,
         Guid? clientId,
         Guid? siteId,
+        Guid? departmentId = null,
         CancellationToken ct = default);
 
     /// <summary>
-    /// Artigos publicados que precisam re-chunking (last_chunked_at IS NULL ou anterior a updated_at)
+    /// Artigos publicados/internos que precisam re-chunking (last_chunked_at IS NULL ou anterior a updated_at)
     /// </summary>
     Task<List<KnowledgeArticle>> GetArticlesNeedingChunkingAsync(int limit = 20, CancellationToken ct = default);
 
@@ -38,6 +41,25 @@ public interface IKnowledgeArticleRepository
     /// Artigos linkados a um ticket
     /// </summary>
     Task<List<KnowledgeArticle>> GetByTicketAsync(Guid ticketId, CancellationToken ct = default);
+
+    // ─── Versionamento ──────────────────────────────────────────
+
+    /// <summary>
+    /// Cria snapshot de versão ao publicar/internalizar
+    /// </summary>
+    Task<KnowledgeArticleVersion> CreateVersionAsync(KnowledgeArticleVersion version, CancellationToken ct = default);
+
+    /// <summary>
+    /// Lista versões de um artigo (decrescente por version_number)
+    /// </summary>
+    Task<List<KnowledgeArticleVersion>> GetVersionsAsync(Guid articleId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Obtém uma versão específica
+    /// </summary>
+    Task<KnowledgeArticleVersion?> GetVersionAsync(Guid articleId, int versionNumber, CancellationToken ct = default);
+
+    // ─── Ticket ↔ KB ───────────────────────────────────────────
 
     Task<TicketKnowledgeLink?> GetLinkAsync(Guid ticketId, Guid articleId, CancellationToken ct = default);
     Task<TicketKnowledgeLink> LinkToTicketAsync(Guid ticketId, Guid articleId, string? linkedBy, string? note, CancellationToken ct = default);
