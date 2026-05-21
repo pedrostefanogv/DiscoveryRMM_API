@@ -21,6 +21,20 @@ public interface IKnowledgeChunkRepository
         CancellationToken ct = default);
 
     /// <summary>
+    /// Busca semântica em múltiplos escopos (ACL do usuário).
+    /// </summary>
+    Task<List<KnowledgeChunkSearchResult>> SearchSemanticByUserScopeAsync(
+        Vector queryEmbedding,
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds,
+        int limit = 5,
+        double minSimilarity = 0.0,
+        IReadOnlyCollection<Guid>? excludeArticleIds = null,
+        Guid? departmentId = null,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Chunks sem embedding gerado (para background service)
     /// </summary>
     Task<List<KnowledgeArticleChunk>> GetChunksWithoutEmbeddingAsync(int limit = 20, CancellationToken ct = default);

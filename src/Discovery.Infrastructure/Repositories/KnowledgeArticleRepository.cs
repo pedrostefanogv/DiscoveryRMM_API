@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
@@ -228,5 +229,198 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         db.TicketKnowledgeLinks.Update(link);
         await db.SaveChangesAsync(ct);
         return link;
+    }
+
+    // ─── ACL multi-escopo + paginação cursor-based ──────────────
+
+    /// <summary>
+    /// Monta a cláusula WHERE de escopo para múltiplos clientes/sites.
+    /// </summary>
+    private static IQueryable<KnowledgeArticle> ApplyMultiScopeFilter(
+        IQueryable<KnowledgeArticle> query,
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds)
+    {
+        if (hasGlobalAccess)
+            return query; // vê tudo
+
+        var clientList = allowedClientIds.ToList();
+        var siteList = allowedSiteIds.ToList();
+
+        if (clientList.Count == 0 && siteList.Count == 0)
+        {
+            // Sem acesso a nenhum cliente/site específico → só globais
+            return query.Where(a => a.ClientId == null && a.SiteId == null);
+        }
+
+        if (clientList.Count > 0 && siteList.Count > 0)
+        {
+            return query.Where(a =>
+                (a.ClientId == null && a.SiteId == null) ||                         // globais
+                (a.ClientId != null && a.SiteId == null && clientList.Contains(a.ClientId.Value)) ||  // client-level
+                (a.SiteId != null && siteList.Contains(a.SiteId.Value)));            // site-level
+        }
+
+        if (clientList.Count > 0)
+        {
+            return query.Where(a =>
+                (a.ClientId == null && a.SiteId == null) ||
+                (a.ClientId != null && a.SiteId == null && clientList.Contains(a.ClientId.Value)) ||
+                (a.SiteId != null && clientList.Contains(a.ClientId!.Value)));
+        }
+
+        // Só sites
+        return query.Where(a =>
+            (a.ClientId == null && a.SiteId == null) ||
+            (a.SiteId != null && siteList.Contains(a.SiteId.Value)));
+    }
+
+    public async Task<ArticleListPageData> ListByUserScopeAsync(
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds,
+        string? status = null,
+        Guid? departmentId = null,
+        string? category = null,
+        string? cursor = null,
+        int limit = 20,
+        CancellationToken ct = default)
+    {
+        var query = db.KnowledgeArticles
+            .Include(a => a.Chunks)
+            .Where(a => a.DeletedAt == null);
+
+        // Filtro de status
+        if (!string.IsNullOrEmpty(status))
+        {
+            var statusFilter = status;
+            if (statusFilter == "visible")
+            {
+                // Visible = Published + Internal (do departamento)
+                // departmentId já é tratado abaixo
+                query = query.Where(a =>
+                    a.Status == ArticleStatus.Published.ToString() ||
+                    a.Status == ArticleStatus.Internal.ToString());
+            }
+            else
+            {
+                query = query.Where(a => a.Status == statusFilter);
+            }
+        }
+
+        // Filtro multi-escopo via ACL
+        query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
+
+        // Filtro de departamento (para artigos Internal)
+        if (departmentId.HasValue)
+        {
+            query = query.Where(a =>
+                a.Status != ArticleStatus.Internal.ToString() ||
+                a.DepartmentId == departmentId.Value);
+        }
+        else
+        {
+            // Sem departmentId, Internal não aparece
+            query = query.Where(a => a.Status != ArticleStatus.Internal.ToString());
+        }
+
+        if (!string.IsNullOrWhiteSpace(category))
+            query = query.Where(a => a.Category != null && a.Category.ToLower() == category.ToLower());
+
+        // Paginação cursor-based: cursor = base64(cursor_value)
+        // Usamos Title + Id como chave composta (ordena por Title, desempata por Id)
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            var cursorValue = DecodePaginationCursor(cursor);
+            if (cursorValue is not null)
+            {
+                query = query.Where(a =>
+                    string.Compare(a.Title, cursorValue.Title) > 0 ||
+                    (a.Title == cursorValue.Title && a.Id.CompareTo(cursorValue.Id) > 0));
+            }
+        }
+
+        var orderedQuery = query.OrderBy(a => a.Title).ThenBy(a => a.Id);
+        var page = await orderedQuery.Take(limit + 1).ToListAsync(ct);
+
+        var hasMore = page.Count > limit;
+        var items = hasMore ? page.Take(limit).ToList() : page;
+
+        string? nextCursor = null;
+        if (hasMore && items.Count > 0)
+        {
+            var last = items[^1];
+            nextCursor = EncodePaginationCursor(last.Title, last.Id);
+        }
+
+        return new ArticleListPageData
+        {
+            Items = items,
+            Count = items.Count,
+            NextCursor = nextCursor,
+            HasMore = hasMore
+        };
+    }
+
+    public async Task<List<KnowledgeArticle>> SearchKeywordByUserScopeAsync(
+        string queryText,
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds,
+        Guid? departmentId = null,
+        CancellationToken ct = default)
+    {
+        var sanitized = queryText.Replace("%", "").Replace("_", "").Trim();
+        var pattern = $"%{sanitized}%";
+
+        var query = db.KnowledgeArticles
+            .Where(a => a.DeletedAt == null
+                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()))
+            .Where(a =>
+                EF.Functions.ILike(a.Title, pattern) ||
+                EF.Functions.ILike(a.Content, pattern) ||
+                (a.Category != null && EF.Functions.ILike(a.Category, pattern)));
+
+        query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
+
+        if (departmentId.HasValue)
+        {
+            query = query.Where(a =>
+                a.Status != ArticleStatus.Internal.ToString() ||
+                a.DepartmentId == departmentId.Value);
+        }
+        else
+        {
+            query = query.Where(a => a.Status != ArticleStatus.Internal.ToString());
+        }
+
+        return await query.OrderBy(a => a.Title).Take(20).ToListAsync(ct);
+    }
+
+    // ─── Helpers de cursor ─────────────────────────────────────
+
+    private static string EncodePaginationCursor(string title, Guid id)
+    {
+        var combined = $"{title}|||{id:N}";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(combined);
+        return Convert.ToBase64String(bytes);
+    }
+
+    private static (string Title, Guid Id)? DecodePaginationCursor(string cursor)
+    {
+        try
+        {
+            var bytes = Convert.FromBase64String(cursor);
+            var combined = System.Text.Encoding.UTF8.GetString(bytes);
+            var parts = combined.Split("|||");
+            if (parts.Length == 2 && Guid.TryParse(parts[1], out var id))
+                return (parts[0], id);
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

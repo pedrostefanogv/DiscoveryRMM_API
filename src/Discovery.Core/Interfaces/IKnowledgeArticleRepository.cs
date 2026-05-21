@@ -23,12 +23,39 @@ public interface IKnowledgeArticleRepository
         CancellationToken ct = default);
 
     /// <summary>
+    /// Lista artigos de múltiplos escopos (ACL do usuário) com paginação cursor-based.
+    /// Quando <paramref name="allowedClientIds"/> e <paramref name="allowedSiteIds"/> estão vazios
+    /// e <paramref name="hasGlobalAccess"/> é false, retorna apenas artigos globais (client_id IS NULL, site_id IS NULL).
+    /// </summary>
+    Task<ArticleListPageData> ListByUserScopeAsync(
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds,
+        string? status = null,
+        Guid? departmentId = null,
+        string? category = null,
+        string? cursor = null,
+        int limit = 20,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Busca por palavra-chave em title + content + tags (ILIKE)
     /// </summary>
     Task<List<KnowledgeArticle>> SearchKeywordAsync(
         string query,
         Guid? clientId,
         Guid? siteId,
+        Guid? departmentId = null,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Busca por palavra-chave em múltiplos escopos (ACL do usuário).
+    /// </summary>
+    Task<List<KnowledgeArticle>> SearchKeywordByUserScopeAsync(
+        string query,
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds,
         Guid? departmentId = null,
         CancellationToken ct = default);
 

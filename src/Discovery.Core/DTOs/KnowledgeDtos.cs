@@ -1,3 +1,4 @@
+using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 
 namespace Discovery.Core.DTOs;
@@ -37,6 +38,7 @@ public record KbSearchRequest(
     Guid? SiteId,
     Guid? DepartmentId = null,
     string Mode = "hybrid", // "semantic", "keyword", "hybrid"
+    string? ScopeMode = null,  // null/omitido = legado (usa clientId/siteId), "all-visible" = multi-escopo via ACL
     int MaxResults = 10);
 
 // ─── Response DTOs ─────────────────────────────────────────────
@@ -50,14 +52,26 @@ public record ArticleListItem(
     string? LastEditedBy,
     string Status,
     string Scope,           // "Global", "Client", "Site"
+    string ScopeOrigin,     // "global", "client", "site" — origem real do escopo
     Guid? ClientId,
     Guid? SiteId,
+    string? ClientName,     // resolvido via join, null para globais
+    string? SiteName,       // resolvido via join, null para globais ou client-level
     Guid? DepartmentId,
     int CurrentVersionNumber,
     DateTime? PublishedAt,
     int ChunkCount,
     DateTime CreatedAt,
     DateTime UpdatedAt);
+
+/// <summary>Resposta paginada (cursor-based) para listagem de artigos.</summary>
+public record ArticleListPage(
+    IReadOnlyList<ArticleListItem> Items,
+    int Count,
+    string? Cursor,         // cursor anterior (para voltar)
+    string? NextCursor,     // próximo cursor
+    bool HasMore,
+    int Limit);
 
 public record ArticleResponse(
     Guid Id,
@@ -70,8 +84,11 @@ public record ArticleResponse(
     DateTime? LastEditedAt,
     string Status,
     string Scope,
+    string ScopeOrigin,
     Guid? ClientId,
     Guid? SiteId,
+    string? ClientName,
+    string? SiteName,
     Guid? DepartmentId,
     int CurrentVersionNumber,
     DateTime? PublishedAt,
@@ -100,8 +117,11 @@ public record KbSearchResult(
     string Excerpt,          // Trecho relevante do chunk
     string? Category,
     string Scope,
+    string ScopeOrigin,      // "global", "client", "site"
     Guid? ClientId,
     Guid? SiteId,
+    string? ClientName,
+    string? SiteName,
     double? Score);          // Cosine similarity (0–1), null para resultado keyword
 
 public record TicketKnowledgeLinkResponse(
@@ -116,3 +136,12 @@ public record TicketKnowledgeLinkResponse(
 
 public record KbSuggestResult(
     List<KbSearchResult> Suggestions);
+
+/// <summary>Dados brutos de página usados pelo repositório (antes de mapear para DTO).</summary>
+public class ArticleListPageData
+{
+    public IReadOnlyList<KnowledgeArticle> Items { get; init; } = [];
+    public int Count { get; init; }
+    public string? NextCursor { get; init; }
+    public bool HasMore { get; init; }
+}

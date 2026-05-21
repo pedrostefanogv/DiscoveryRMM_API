@@ -6,6 +6,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Pgvector;
@@ -20,7 +21,10 @@ public class KnowledgeController(
     IEmbeddingProvider embeddingProvider,
     IConfigurationResolver configurationResolver,
     IKnowledgeEmbeddingQueueRepository embeddingQueueRepository,
-    IUserRepository userRepository) : ControllerBase
+    IUserRepository userRepository,
+    IPermissionService permissionService,
+    IScopeContext scopeContext,
+    ILogger<KnowledgeController> logger) : ControllerBase
 {
     // ─── CRUD de Artigos ──────────────────────────────────────────────
 
@@ -28,17 +32,60 @@ public class KnowledgeController(
     /// Lista artigos respeitando herança: site → client → global.
     /// Filtra por status, departamento e categoria.
     /// Artigos Internal só são visíveis se departmentId fornecido.
+    /// 
+    /// Modos de escopo:
+    /// - scopeMode=all-visible: ignora clientId/siteId e lista TODOS os artigos
+    ///   que o usuário pode ver (globais + clientes/sites da ACL).
+    /// - Sem scopeMode: comportamento legado, usa clientId/siteId explícitos.
+    /// - Sem scopeMode e sem clientId/siteId: apenas artigos globais.
+    /// 
+    /// Paginação cursor-based: cursor=base64(title|||id), limit=20.
     /// </summary>
     [HttpGet]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
-    public async Task<ActionResult<List<ArticleListItem>>> List(
+    public async Task<ActionResult<ArticleListPage>> List(
         [FromQuery] Guid? clientId,
         [FromQuery] Guid? siteId,
         [FromQuery] string? status,
         [FromQuery] Guid? departmentId,
         [FromQuery] string? category,
+        [FromQuery] string? scopeMode,
+        [FromQuery] string? cursor,
+        [FromQuery] int limit = 20,
         CancellationToken ct = default)
     {
+        var normalizedLimit = Math.Clamp(limit, 1, 100);
+
+        if (string.Equals(scopeMode, "all-visible", StringComparison.OrdinalIgnoreCase))
+        {
+            var access = await ResolveUserScopeAsync();
+            var userId = HttpContext.Items["UserId"] as Guid? ?? Guid.Empty;
+            logger.LogInformation(
+                "[Knowledge] List/AllVisible: userId={UserId}, hasGlobal={HasGlobal}, " +
+                "clientCount={ClientCount}, siteCount={SiteCount}, status={Status}, limit={Limit}",
+                userId,
+                access.HasGlobalAccess,
+                access.AllowedClientIds.Count,
+                access.AllowedSiteIds.Count,
+                status,
+                normalizedLimit);
+
+            var pageData = await articleRepository.ListByUserScopeAsync(
+                access.HasGlobalAccess,
+                access.AllowedClientIds.ToHashSet(),
+                access.AllowedSiteIds.ToHashSet(),
+                status,
+                departmentId,
+                category,
+                cursor,
+                normalizedLimit,
+                ct);
+
+            var items = pageData.Items.Select(MapToListItem).ToList();
+            return Ok(new ArticleListPage(items, pageData.Count, cursor, pageData.NextCursor, pageData.HasMore, normalizedLimit));
+        }
+
+        // Comportamento legado
         var articles = await articleRepository.ListByScopeAsync(
             clientId, siteId, status, departmentId, category, ct);
         var response = articles.Select(MapToListItem).ToList();
@@ -274,6 +321,8 @@ public class KnowledgeController(
     /// <summary>
     /// Busca unificada: semantic (pgvector), keyword (ILIKE) ou hybrid (ambos).
     /// Aceita departmentId para filtrar artigos Internal do departamento.
+    /// 
+    /// scopeMode=all-visible: ignora clientId/siteId e busca em todos os escopos da ACL.
     /// </summary>
     [HttpGet("search")]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
@@ -284,9 +333,15 @@ public class KnowledgeController(
         [FromQuery] Guid? departmentId,
         [FromQuery] string mode = "hybrid",
         [FromQuery] int maxResults = 10,
+        [FromQuery] string? scopeMode = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(q)) return BadRequest("q é obrigatório.");
+
+        var useMultiScope = string.Equals(scopeMode, "all-visible", StringComparison.OrdinalIgnoreCase);
+        UserScopeAccess? access = null;
+        if (useMultiScope)
+            access = await ResolveUserScopeAsync();
 
         var results = new List<KbSearchResult>();
 
@@ -301,9 +356,25 @@ public class KnowledgeController(
                 embApiKey1,
                 embBaseUrl1,
                 ct);
-            var semanticResults = await chunkRepository.SearchSemanticAsync(
-                new Vector(embedding), clientId, siteId, maxResults,
-                departmentId: departmentId, ct: ct);
+
+            List<KnowledgeChunkSearchResult> semanticResults;
+            if (useMultiScope && access is not null)
+            {
+                semanticResults = await chunkRepository.SearchSemanticByUserScopeAsync(
+                    new Vector(embedding),
+                    access.HasGlobalAccess,
+                    access.AllowedClientIds.ToHashSet(),
+                    access.AllowedSiteIds.ToHashSet(),
+                    maxResults,
+                    departmentId: departmentId,
+                    ct: ct);
+            }
+            else
+            {
+                semanticResults = await chunkRepository.SearchSemanticAsync(
+                    new Vector(embedding), clientId, siteId, maxResults,
+                    departmentId: departmentId, ct: ct);
+            }
 
             results.AddRange(semanticResults.Select(r => new KbSearchResult(
                 r.ArticleId,
@@ -312,15 +383,33 @@ public class KnowledgeController(
                 r.ChunkContent.Length > 400 ? r.ChunkContent[..400] + "..." : r.ChunkContent,
                 null,
                 GetScope(r.ArticleClientId, r.ArticleSiteId),
+                GetScopeOrigin(r.ArticleClientId, r.ArticleSiteId),
                 r.ArticleClientId,
                 r.ArticleSiteId,
+                null, // ClientName
+                null, // SiteName
                 Math.Round(1.0 - r.Distance, 4))));
         }
 
         if (mode is "keyword" or "hybrid")
         {
-            var keywordResults = await articleRepository.SearchKeywordAsync(
-                q, clientId, siteId, departmentId, ct);
+            List<KnowledgeArticle> keywordResults;
+            if (useMultiScope && access is not null)
+            {
+                keywordResults = await articleRepository.SearchKeywordByUserScopeAsync(
+                    q,
+                    access.HasGlobalAccess,
+                    access.AllowedClientIds.ToHashSet(),
+                    access.AllowedSiteIds.ToHashSet(),
+                    departmentId,
+                    ct);
+            }
+            else
+            {
+                keywordResults = await articleRepository.SearchKeywordAsync(
+                    q, clientId, siteId, departmentId, ct);
+            }
+
             var existingIds = results.Select(r => r.ArticleId).ToHashSet();
 
             results.AddRange(keywordResults
@@ -333,8 +422,11 @@ public class KnowledgeController(
                     a.Content.Length > 400 ? a.Content[..400] + "..." : a.Content,
                     a.Category,
                     GetScope(a.ClientId, a.SiteId),
+                    GetScopeOrigin(a.ClientId, a.SiteId),
                     a.ClientId,
                     a.SiteId,
+                    null,
+                    null,
                     null)));
         }
 
@@ -343,6 +435,16 @@ public class KnowledgeController(
             .OrderByDescending(r => r.Score ?? 0)
             .Take(maxResults)
             .ToList();
+
+        if (useMultiScope && access is not null)
+        {
+            var userId = HttpContext.Items["UserId"] as Guid? ?? Guid.Empty;
+            logger.LogInformation(
+                "[Knowledge] Search/AllVisible: userId={UserId}, query={Query}, mode={Mode}, " +
+                "hasGlobal={HasGlobal}, clientCount={ClientCount}, resultCount={ResultCount}",
+                userId, q, mode, access.HasGlobalAccess,
+                access.AllowedClientIds.Count, ordered.Count);
+        }
 
         return Ok(ordered);
     }
@@ -534,6 +636,14 @@ public class KnowledgeController(
             _ => "Site"
         };
 
+    private static string GetScopeOrigin(Guid? clientId, Guid? siteId) =>
+        (clientId, siteId) switch
+        {
+            (null, null) => "global",
+            (not null, null) => "client",
+            _ => "site"
+        };
+
     private static List<string> ParseTags(string? tagsJson)
     {
         if (string.IsNullOrEmpty(tagsJson)) return [];
@@ -541,11 +651,22 @@ public class KnowledgeController(
         catch { return []; }
     }
 
+    private async Task<UserScopeAccess> ResolveUserScopeAsync()
+    {
+        var userId = HttpContext.Items["UserId"] as Guid? ?? Guid.Empty;
+        return await permissionService.GetScopeAccessAsync(
+            userId, ResourceType.KnowledgeBase, ActionType.View);
+    }
+
     private static ArticleListItem MapToListItem(KnowledgeArticle a) => new(
         a.Id, a.Title, a.Category, ParseTags(a.TagsJson),
         a.CreatedBy, a.LastEditedBy,
         a.Status,
-        GetScope(a.ClientId, a.SiteId), a.ClientId, a.SiteId,
+        GetScope(a.ClientId, a.SiteId),
+        GetScopeOrigin(a.ClientId, a.SiteId),
+        a.ClientId, a.SiteId,
+        null, // ClientName — resolvido na camada de apresentação se necessário
+        null, // SiteName
         a.DepartmentId, a.CurrentVersionNumber,
         a.PublishedAt, a.Chunks.Count,
         a.CreatedAt, a.UpdatedAt);
@@ -558,7 +679,11 @@ public class KnowledgeController(
             a.Id, a.Title, a.Content, a.Category, ParseTags(a.TagsJson),
             a.CreatedBy, a.LastEditedBy, a.LastEditedAt,
             a.Status,
-            GetScope(a.ClientId, a.SiteId), a.ClientId, a.SiteId,
+            GetScope(a.ClientId, a.SiteId),
+            GetScopeOrigin(a.ClientId, a.SiteId),
+            a.ClientId, a.SiteId,
+            null, // ClientName
+            null, // SiteName
             a.DepartmentId, a.CurrentVersionNumber,
             a.PublishedAt, chunks.Count, embeddingsReady,
             a.CreatedAt, a.UpdatedAt);
