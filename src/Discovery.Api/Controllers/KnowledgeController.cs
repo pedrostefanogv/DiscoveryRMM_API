@@ -23,7 +23,6 @@ public class KnowledgeController(
     IKnowledgeEmbeddingQueueRepository embeddingQueueRepository,
     IUserRepository userRepository,
     IPermissionService permissionService,
-    IScopeContext scopeContext,
     ILogger<KnowledgeController> logger) : ControllerBase
 {
     // ─── CRUD de Artigos ──────────────────────────────────────────────
@@ -490,8 +489,11 @@ public class KnowledgeController(
             r.ChunkContent.Length > 400 ? r.ChunkContent[..400] + "..." : r.ChunkContent,
             null,
             GetScope(r.ArticleClientId, r.ArticleSiteId),
+            GetScopeOrigin(r.ArticleClientId, r.ArticleSiteId),
             r.ArticleClientId,
             r.ArticleSiteId,
+            null,
+            null,
             Math.Round(1.0 - r.Distance, 4))).ToList();
 
         return Ok(new KbSuggestResult(suggestions));
@@ -591,8 +593,11 @@ public class KnowledgeController(
             r.ChunkContent.Length > 400 ? r.ChunkContent[..400] + "..." : r.ChunkContent,
             null,
             GetScope(r.ArticleClientId, r.ArticleSiteId),
+            GetScopeOrigin(r.ArticleClientId, r.ArticleSiteId),
             r.ArticleClientId,
             r.ArticleSiteId,
+            null,
+            null,
             Math.Round(1.0 - r.Distance, 4))).ToList();
 
         return Ok(response);

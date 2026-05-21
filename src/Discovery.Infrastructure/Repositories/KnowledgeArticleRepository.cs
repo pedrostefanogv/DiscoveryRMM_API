@@ -335,9 +335,10 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             var cursorValue = DecodePaginationCursor(cursor);
             if (cursorValue is not null)
             {
+                var parsedCursor = cursorValue.Value;
                 query = query.Where(a =>
-                    string.Compare(a.Title, cursorValue.Title) > 0 ||
-                    (a.Title == cursorValue.Title && a.Id.CompareTo(cursorValue.Id) > 0));
+                    string.Compare(a.Title, parsedCursor.Title) > 0 ||
+                    (a.Title == parsedCursor.Title && a.Id.CompareTo(parsedCursor.Id) > 0));
             }
         }
 

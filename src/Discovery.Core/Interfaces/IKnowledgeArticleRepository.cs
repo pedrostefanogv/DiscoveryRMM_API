@@ -1,3 +1,4 @@
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 
 namespace Discovery.Core.Interfaces;

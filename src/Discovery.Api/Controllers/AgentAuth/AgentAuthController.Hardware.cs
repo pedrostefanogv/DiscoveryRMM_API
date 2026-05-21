@@ -141,8 +141,8 @@ public partial class AgentAuthController
             // Machine score — enviado pelo agent como campo top-level do envelope
             if (request.MachineScore.HasValue)
                 hardware.MachineScore = request.MachineScore.Value;
-            else if (request.Hardware?.MachineScore.HasValue)
-                hardware.MachineScore = request.Hardware.MachineScore.Value;
+            else if (request.Hardware?.MachineScore is int nestedScore)
+                hardware.MachineScore = nestedScore;
 
             await _hardwareRepo.UpsertAsync(hardware, consolidated);
             await InvalidateAgentInventoryCachesAsync(agentId);
