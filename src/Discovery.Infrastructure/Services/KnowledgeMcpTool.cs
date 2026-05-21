@@ -51,28 +51,27 @@ public class KnowledgeMcpTool(
             "KnowledgeMcpTool.ExecuteInternalAsync: query={Query}, clientId={ClientId}, siteId={SiteId}, max={Max}",
             LogSanitizer.Sanitize(query), clientId, siteId, maxResults);
 
+        // Configuração (compartilhada entre caminhos)
+        var settings = aiSettings ?? await configurationResolver.GetAISettingsAsync();
+
+        // Sobrescreve com credencial por escopo (Site > Client > Global) se disponível
+        if (clientId.HasValue || siteId.HasValue)
+        {
+            var credential = await credentialResolver.ResolveAsync(clientId, siteId, ct);
+            if (credential is not null)
+            {
+                if (!string.IsNullOrWhiteSpace(credential.EffectiveEmbeddingApiKey))
+                    settings.EmbeddingApiKey = credential.EffectiveEmbeddingApiKey;
+                if (!string.IsNullOrWhiteSpace(credential.EffectiveEmbeddingBaseUrl))
+                    settings.EmbeddingBaseUrl = credential.EffectiveEmbeddingBaseUrl;
+            }
+        }
+
+        List<KnowledgeChunkSearchResult>? semanticResults = null;
+
+        // ── Tentativa de busca semântica ──
         try
         {
-            // Usa settings passadas pelo caller (evita GetAISettingsAsync redundante por tool call)
-            var settings = aiSettings ?? await configurationResolver.GetAISettingsAsync();
-
-            // Sobrescreve com credencial por escopo (Site > Client > Global) se disponível
-            if (clientId.HasValue || siteId.HasValue)
-            {
-                var credential = await credentialResolver.ResolveAsync(clientId, siteId, ct);
-                if (credential is not null)
-                {
-                    if (!string.IsNullOrWhiteSpace(credential.EffectiveEmbeddingApiKey))
-                    {
-                        settings.EmbeddingApiKey = credential.EffectiveEmbeddingApiKey;
-                        // Se a credencial tem EmbeddingApiKey própria, não usar a do settings
-                    }
-                    if (!string.IsNullOrWhiteSpace(credential.EffectiveEmbeddingBaseUrl))
-                        settings.EmbeddingBaseUrl = credential.EffectiveEmbeddingBaseUrl;
-                }
-            }
-
-            // Busca semântica via embedding
             var embBaseUrl = string.IsNullOrWhiteSpace(settings.EmbeddingBaseUrl) ? settings.BaseUrl : settings.EmbeddingBaseUrl;
             var embApiKey = string.IsNullOrWhiteSpace(settings.EmbeddingApiKey) ? settings.ApiKey : settings.EmbeddingApiKey;
             var embedding = await embeddingProvider.GenerateEmbeddingAsync(
@@ -83,48 +82,59 @@ public class KnowledgeMcpTool(
                 ct);
             var vector = new Vector(embedding);
 
-            var semanticResults = await chunkRepository.SearchSemanticAsync(
+            semanticResults = await chunkRepository.SearchSemanticAsync(
                 vector, clientId, siteId, maxResults,
                 minSimilarity: settings.MinSimilarityScore,
                 excludeArticleIds: excludeArticleIds,
                 departmentId: null,
                 ct: ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "[KnowledgeMcpTool] Falha na busca semântica (motor de IA/embedding indisponível). " +
+                "Fallback automático para keyword. Query={Query}",
+                LogSanitizer.Sanitize(query));
+        }
 
-            if (semanticResults.Count == 0)
-            {
-                // Fallback: busca keyword
-                var keywordResults = await articleRepository.SearchKeywordAsync(query, clientId, siteId, departmentId: null, ct);
-                if (keywordResults.Count == 0)
-                    return JsonSerializer.Serialize(new { found = false, message = "Nenhum artigo encontrado na base de conhecimento." });
-
-                var kwItems = keywordResults.Take(maxResults).Select(a => new
-                {
-                    article_id = a.Id,
-                    title = a.Title,
-                    section = (string?)null,
-                    content = a.Content.Length > 600 ? a.Content[..600] + "..." : a.Content,
-                    score = (double?)null,
-                    scope = GetScope(a.ClientId, a.SiteId)
-                });
-
-                return JsonSerializer.Serialize(new { found = true, results = kwItems });
-            }
-
+        // ── Resultados semânticos encontrados ──
+        if (semanticResults is { Count: > 0 })
+        {
             var items = semanticResults.Select(r => new
             {
                 article_id = r.ArticleId,
                 title = r.ArticleTitle,
                 section = r.SectionTitle,
                 content = r.ChunkContent.Length > 600 ? r.ChunkContent[..600] + "..." : r.ChunkContent,
-                score = Math.Round(1.0 - r.Distance, 4), // converte distância para similaridade
+                score = Math.Round(1.0 - r.Distance, 4),
                 scope = GetScope(r.ArticleClientId, r.ArticleSiteId)
             });
 
             return JsonSerializer.Serialize(new { found = true, results = items });
         }
+
+        // ── Fallback: busca keyword ──
+        try
+        {
+            var keywordResults = await articleRepository.SearchKeywordAsync(query, clientId, siteId, departmentId: null, ct);
+            if (keywordResults.Count == 0)
+                return JsonSerializer.Serialize(new { found = false, message = "Nenhum artigo encontrado na base de conhecimento." });
+
+            var kwItems = keywordResults.Take(maxResults).Select(a => new
+            {
+                article_id = a.Id,
+                title = a.Title,
+                section = (string?)null,
+                content = a.Content.Length > 600 ? a.Content[..600] + "..." : a.Content,
+                score = (double?)null,
+                scope = GetScope(a.ClientId, a.SiteId)
+            });
+
+            return JsonSerializer.Serialize(new { found = true, results = kwItems });
+        }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Erro ao executar KnowledgeMcpTool para query={Query}", LogSanitizer.Sanitize(query));
+            logger.LogError(ex, "Erro ao executar KnowledgeMcpTool (busca keyword) para query={Query}", LogSanitizer.Sanitize(query));
             return JsonSerializer.Serialize(new { found = false, error = "Erro ao consultar base de conhecimento." });
         }
     }

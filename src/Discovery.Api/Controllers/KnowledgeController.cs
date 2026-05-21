@@ -322,6 +322,8 @@ public class KnowledgeController(
     /// Aceita departmentId para filtrar artigos Internal do departamento.
     /// 
     /// scopeMode=all-visible: ignora clientId/siteId e busca em todos os escopos da ACL.
+    /// 
+    /// No modo hybrid, se o motor de embedding falhar, faz fallback automático para keyword-only.
     /// </summary>
     [HttpGet("search")]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
@@ -343,51 +345,63 @@ public class KnowledgeController(
             access = await ResolveUserScopeAsync();
 
         var results = new List<KbSearchResult>();
+        var semanticFailed = false;
 
         if (mode is "semantic" or "hybrid")
         {
-            var aiSettings = await configurationResolver.GetAISettingsAsync();
-            var embBaseUrl1 = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
-            var embApiKey1 = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey;
-            var embedding = await embeddingProvider.GenerateEmbeddingAsync(
-                q,
-                aiSettings.EmbeddingModel,
-                embApiKey1,
-                embBaseUrl1,
-                ct);
-
-            List<KnowledgeChunkSearchResult> semanticResults;
-            if (useMultiScope && access is not null)
+            try
             {
-                semanticResults = await chunkRepository.SearchSemanticByUserScopeAsync(
-                    new Vector(embedding),
-                    access.HasGlobalAccess,
-                    access.AllowedClientIds.ToHashSet(),
-                    access.AllowedSiteIds.ToHashSet(),
-                    maxResults,
-                    departmentId: departmentId,
-                    ct: ct);
-            }
-            else
-            {
-                semanticResults = await chunkRepository.SearchSemanticAsync(
-                    new Vector(embedding), clientId, siteId, maxResults,
-                    departmentId: departmentId, ct: ct);
-            }
+                var aiSettings = await configurationResolver.GetAISettingsAsync();
+                var embBaseUrl1 = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
+                var embApiKey1 = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey;
+                var embedding = await embeddingProvider.GenerateEmbeddingAsync(
+                    q,
+                    aiSettings.EmbeddingModel,
+                    embApiKey1,
+                    embBaseUrl1,
+                    ct);
 
-            results.AddRange(semanticResults.Select(r => new KbSearchResult(
-                r.ArticleId,
-                r.ArticleTitle,
-                r.SectionTitle,
-                r.ChunkContent.Length > 400 ? r.ChunkContent[..400] + "..." : r.ChunkContent,
-                null,
-                GetScope(r.ArticleClientId, r.ArticleSiteId),
-                GetScopeOrigin(r.ArticleClientId, r.ArticleSiteId),
-                r.ArticleClientId,
-                r.ArticleSiteId,
-                null, // ClientName
-                null, // SiteName
-                Math.Round(1.0 - r.Distance, 4))));
+                List<KnowledgeChunkSearchResult> semanticResults;
+                if (useMultiScope && access is not null)
+                {
+                    semanticResults = await chunkRepository.SearchSemanticByUserScopeAsync(
+                        new Vector(embedding),
+                        access.HasGlobalAccess,
+                        access.AllowedClientIds.ToHashSet(),
+                        access.AllowedSiteIds.ToHashSet(),
+                        maxResults,
+                        departmentId: departmentId,
+                        ct: ct);
+                }
+                else
+                {
+                    semanticResults = await chunkRepository.SearchSemanticAsync(
+                        new Vector(embedding), clientId, siteId, maxResults,
+                        departmentId: departmentId, ct: ct);
+                }
+
+                results.AddRange(semanticResults.Select(r => new KbSearchResult(
+                    r.ArticleId,
+                    r.ArticleTitle,
+                    r.SectionTitle,
+                    r.ChunkContent.Length > 400 ? r.ChunkContent[..400] + "..." : r.ChunkContent,
+                    null,
+                    GetScope(r.ArticleClientId, r.ArticleSiteId),
+                    GetScopeOrigin(r.ArticleClientId, r.ArticleSiteId),
+                    r.ArticleClientId,
+                    r.ArticleSiteId,
+                    null, // ClientName
+                    null, // SiteName
+                    Math.Round(1.0 - r.Distance, 4))));
+            }
+            catch (Exception ex) when (mode is "hybrid")
+            {
+                logger.LogWarning(ex,
+                    "[Knowledge] Falha na busca semântica (motor de IA/embedding indisponível). " +
+                    "Fallback automático para keyword-only. Query={Query}, Mode={Mode}",
+                    q, mode);
+                semanticFailed = true;
+            }
         }
 
         if (mode is "keyword" or "hybrid")
@@ -440,9 +454,17 @@ public class KnowledgeController(
             var userId = HttpContext.Items["UserId"] as Guid? ?? Guid.Empty;
             logger.LogInformation(
                 "[Knowledge] Search/AllVisible: userId={UserId}, query={Query}, mode={Mode}, " +
-                "hasGlobal={HasGlobal}, clientCount={ClientCount}, resultCount={ResultCount}",
+                "hasGlobal={HasGlobal}, clientCount={ClientCount}, resultCount={ResultCount}, semanticFallback={SemanticFallback}",
                 userId, q, mode, access.HasGlobalAccess,
-                access.AllowedClientIds.Count, ordered.Count);
+                access.AllowedClientIds.Count, ordered.Count, semanticFailed);
+        }
+        else if (semanticFailed)
+        {
+            var userId = HttpContext.Items["UserId"] as Guid? ?? Guid.Empty;
+            logger.LogWarning(
+                "[Knowledge] Search/Fallback: userId={UserId}, query={Query}, mode={Mode}, " +
+                "resultCount={ResultCount} (semântico indisponível, usando apenas keyword)",
+                userId, q, mode, ordered.Count);
         }
 
         return Ok(ordered);
