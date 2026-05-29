@@ -7,6 +7,8 @@ using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Discovery.Api.Filters;
@@ -513,7 +515,7 @@ public class ReportsController : ControllerBase
             var htmlPreview = await _reportService.PreviewHtmlAsync(effectiveTemplate, effectiveTemplate.FiltersJson, cancellationToken);
             Response.Headers.Append("X-Report-Preview", "true");
             Response.Headers.Append("X-Report-RowCount", htmlPreview.RowCount.ToString());
-            Response.Headers.Append("X-Report-Title", htmlPreview.Title);
+            Response.Headers.Append("X-Report-Title", ToHeaderSafeAscii(htmlPreview.Title, "Report Preview"));
             Response.Headers.Append("X-Report-Format", "Html");
 
             return Content(htmlPreview.Html, "text/html; charset=utf-8");
@@ -522,14 +524,15 @@ public class ReportsController : ControllerBase
         var preview = await _reportService.PreviewAsync(effectiveTemplate, selectedFormat, effectiveTemplate.FiltersJson, cancellationToken);
         Response.Headers.Append("X-Report-Preview", "true");
         Response.Headers.Append("X-Report-RowCount", preview.RowCount.ToString());
-        Response.Headers.Append("X-Report-Title", preview.Title);
+        Response.Headers.Append("X-Report-Title", ToHeaderSafeAscii(preview.Title, "Report Preview"));
         Response.Headers.Append("X-Report-Format", selectedFormat.ToString());
 
         var downloadName = BuildPreviewFileName(request.FileName, preview.Title, preview.Document.FileExtension);
         var disposition = string.Equals(request.ResponseDisposition, "attachment", StringComparison.OrdinalIgnoreCase)
             ? "attachment"
             : "inline";
-        Response.Headers.ContentDisposition = $"{disposition}; filename=\"{downloadName}\"";
+        var asciiDownloadName = ToHeaderSafeAscii(downloadName, $"report-preview.{preview.Document.FileExtension}");
+        Response.Headers.ContentDisposition = $"{disposition}; filename=\"{asciiDownloadName}\"; filename*=UTF-8''{Uri.EscapeDataString(downloadName)}";
         return File(preview.Document.Content, preview.Document.ContentType);
     }
 
@@ -855,6 +858,25 @@ public class ReportsController : ControllerBase
             sanitized = $"{sanitized}.{extension}";
 
         return sanitized;
+    }
+
+    private static string ToHeaderSafeAscii(string? value, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return fallback;
+
+        var normalized = value.Normalize(NormalizationForm.FormD);
+        var chars = normalized
+            .Where(ch => CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
+            .Select(ch => ch <= 0x7F && !char.IsControl(ch) ? ch : ' ')
+            .ToArray();
+
+        var sanitized = string.Join(" ", new string(chars)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+        return string.IsNullOrWhiteSpace(sanitized)
+            ? fallback
+            : sanitized;
     }
 
     private static List<string> ValidateTemplateFilters(ReportDatasetType datasetType, string? filtersJson, ReportExecutionSchema? customSchema = null)
