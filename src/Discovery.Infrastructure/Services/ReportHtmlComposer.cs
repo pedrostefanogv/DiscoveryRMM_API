@@ -15,6 +15,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         var layout = ReportLayoutDefinitionParser.ParseOrDefault(context.LayoutJson);
         var columns = ResolveColumns(layout, data);
         var rowsPerPage = ResolveRowsPerPage(layout);
+        var generatedFooterHtml = BuildGeneratedFooter(data.Rows.Count, DateTime.UtcNow);
         var logoUrl = layout.LogoUrl ?? layout.Style?.LogoUrl;
         var style = layout.Style ?? new ReportLayoutStyleDefinition();
         var content = string.IsNullOrWhiteSpace(layout.GroupBy)
@@ -90,6 +91,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                     tbody tr:nth-child(even) { background:var(--report-alt-row); }
                     .section-caption { margin: 16px 0 6px; color: var(--report-muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; }
                     .report-page-break { height: 0; margin: 0; border: 0; }
+                    .report-generated-footer { margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--report-border); color: var(--report-muted); font-size: 11px; font-style: italic; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 
                     @media print {
                         .report-page-break { page-break-after: always; break-after: page; }
@@ -140,6 +142,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                     </div>
                     {{chartsHtml}}
                     {{content}}
+                    {{generatedFooterHtml}}
                 </div>
             </body>
             </html>
@@ -831,6 +834,17 @@ public class ReportHtmlComposer : IReportHtmlComposer
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
         return $"\"{escaped}\"";
+    }
+
+    private static string BuildGeneratedFooter(int rowCount, DateTime generatedAtUtc)
+    {
+        var timestamp = generatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        return $$"""
+            <div class="report-generated-footer">
+                <span>Gerado por Discovery RMM em {{timestamp}} UTC</span>
+                <span>{{rowCount}} registro(s)</span>
+            </div>
+            """;
     }
 
     private static string BuildPageHeader(ReportLayoutDefinition layout)

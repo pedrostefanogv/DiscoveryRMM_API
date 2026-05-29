@@ -465,6 +465,40 @@ public class ReportCompositeLayoutRenderingTests
         Assert.That(html, Does.Contain("style=\"opacity:0.12;\""));
     }
 
+    [Test]
+    public void HtmlComposer_WhenRenderingAnyReport_IncludesGeneratedFooterMetadata()
+    {
+        var composer = new ReportHtmlComposer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "columns": [
+                { "field": "agentHostname", "header": "Hostname" }
+              ]
+            }
+            """
+        };
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname"],
+            Rows =
+            [
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "PC-01"
+                }
+            ]
+        };
+
+        var html = composer.Compose(context, data);
+
+        Assert.That(html, Does.Contain("Gerado por Discovery RMM em"));
+        Assert.That(html, Does.Contain("1 registro(s)"));
+    }
+
     private static int CountOccurrences(string input, string token)
     {
         if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(token))
