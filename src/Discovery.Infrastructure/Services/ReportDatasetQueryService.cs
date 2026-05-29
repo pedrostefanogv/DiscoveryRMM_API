@@ -1031,11 +1031,35 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
 
     private static int GetLimit(JsonElement filters)
     {
+        if (GetBool(filters, "allRows") is true)
+            return int.MaxValue;
+
         var value = GetInt(filters, "limit");
         if (value is null)
             return DefaultLimit;
 
+        if (value.Value <= 0)
+            return int.MaxValue;
+
         return Math.Clamp(value.Value, 1, MaxLimit);
+    }
+
+    private static bool? GetBool(JsonElement filters, string property)
+    {
+        if (filters.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (!filters.TryGetProperty(property, out var value))
+            return null;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Number when value.TryGetInt32(out var number) => number != 0,
+            JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
+            _ => null
+        };
     }
 
     private static int? GetInt(JsonElement filters, string property)

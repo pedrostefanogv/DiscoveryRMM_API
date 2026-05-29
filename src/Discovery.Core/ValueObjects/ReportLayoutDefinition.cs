@@ -144,6 +144,10 @@ public class ReportLayoutWatermarkDefinition
     public int FontSize { get; init; } = 120;
     public int Angle { get; init; } = -45;
     public bool Repeat { get; init; }
+    public bool UseLogo { get; init; }
+    public string? ImageUrl { get; init; }
+    public string? ImageFit { get; init; }
+    public double? ImageOpacity { get; init; }
 }
 
 public class ReportLayoutChartDefinition

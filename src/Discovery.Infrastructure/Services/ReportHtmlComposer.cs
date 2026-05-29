@@ -120,7 +120,10 @@ public class ReportHtmlComposer : IReportHtmlComposer
                     .report-chart img { max-width:100%; height:auto; }
 
                     /* Watermark */
-                    .report-watermark { position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:-1; opacity:0.06; display:flex; align-items:center; justify-content:center; font-size:{{layout.Watermark?.FontSize ?? 120}}px; color:{{CssValueOrDefault(layout.Watermark?.Color, "#000000")}}; transform:rotate({{layout.Watermark?.Angle ?? -45}}deg); }
+                    .report-watermark { position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:-1; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+                    .report-watermark-text { font-size:{{layout.Watermark?.FontSize ?? 120}}px; color:{{CssValueOrDefault(layout.Watermark?.Color, "#000000")}}; transform:rotate({{layout.Watermark?.Angle ?? -45}}deg); white-space:nowrap; }
+                    .report-watermark-image { width:70%; height:70%; object-fit:contain; }
+                    .report-watermark-image-cover { width:100%; height:100%; object-fit:cover; }
                 </style>
             </head>
             <body>
@@ -856,14 +859,44 @@ public class ReportHtmlComposer : IReportHtmlComposer
 
     private static string BuildWatermark(ReportLayoutDefinition layout)
     {
-        if (layout.Watermark is not { } wm || string.IsNullOrWhiteSpace(wm.Text))
+        if (layout.Watermark is not { } wm)
+            return string.Empty;
+
+        var watermarkImageUrl = ResolveWatermarkImageUrl(layout, wm);
+        if (!string.IsNullOrWhiteSpace(watermarkImageUrl))
+        {
+            var cssClass = string.Equals(wm.ImageFit, "cover", StringComparison.OrdinalIgnoreCase)
+                ? "report-watermark-image report-watermark-image-cover"
+                : "report-watermark-image";
+
+            var opacity = Math.Clamp(wm.ImageOpacity ?? 0.08, 0.01, 0.4)
+                .ToString("0.##", CultureInfo.InvariantCulture);
+
+            return $$"""
+                <div class="report-watermark" style="opacity:{{opacity}};">
+                    <img class="{{cssClass}}" src="{{HtmlAttributeEscape(watermarkImageUrl)}}" alt="watermark" />
+                </div>
+                """;
+        }
+
+        if (string.IsNullOrWhiteSpace(wm.Text))
             return string.Empty;
 
         return $$"""
-            <div class="report-watermark">
-                {{HtmlEscape(wm.Text)}}
+            <div class="report-watermark" style="opacity:0.06;">
+                <div class="report-watermark-text">{{HtmlEscape(wm.Text)}}</div>
             </div>
             """;
+    }
+
+    private static string? ResolveWatermarkImageUrl(ReportLayoutDefinition layout, ReportLayoutWatermarkDefinition watermark)
+    {
+        if (watermark.UseLogo)
+            return layout.LogoUrl ?? layout.Style?.LogoUrl;
+
+        return string.IsNullOrWhiteSpace(watermark.ImageUrl)
+            ? null
+            : watermark.ImageUrl;
     }
 
     private sealed record ReportLayoutColumn(string Field, string Header, string? Format, string? SectionTitle, ReportLayoutConditionalFormat? ConditionalFormat = null);

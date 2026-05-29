@@ -424,6 +424,47 @@ public class ReportCompositeLayoutRenderingTests
         Assert.That(markdown, Does.Contain("| PC-070 | Windows |"));
     }
 
+    [Test]
+    public void HtmlComposer_WhenWatermarkUsesLogo_RendersImageWatermark()
+    {
+        var composer = new ReportHtmlComposer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "logoUrl": "https://cdn.exemplo.local/logo.png",
+              "watermark": {
+                "useLogo": true,
+                "imageFit": "cover",
+                "imageOpacity": 0.12
+              },
+              "columns": [
+                { "field": "agentHostname", "header": "Hostname" }
+              ]
+            }
+            """
+        };
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname"],
+            Rows =
+            [
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "PC-01"
+                }
+            ]
+        };
+
+        var html = composer.Compose(context, data);
+
+        Assert.That(html, Does.Contain("report-watermark-image-cover"));
+        Assert.That(html, Does.Contain("src=\"https://cdn.exemplo.local/logo.png\""));
+        Assert.That(html, Does.Contain("style=\"opacity:0.12;\""));
+    }
+
     private static int CountOccurrences(string input, string token)
     {
         if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(token))
