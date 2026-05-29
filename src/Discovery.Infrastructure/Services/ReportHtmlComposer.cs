@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
@@ -140,7 +141,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             builder.Append(BuildDetailsGrid(layout.GroupDetails, groupRows.FirstOrDefault()));
             if (layout.GroupSummaries is { Count: > 0 })
                 builder.Append(BuildSummaryCards(layout.GroupSummaries, groupRows));
-            AppendMainAndSectionTables(builder, layout, FilterColumnsForGrouping(columns, layout), groupRows);
+            AppendMainAndSectionTables(builder, layout, FilterColumnsForGrouping(columns, layout), groupRows, deduplicateMainRows: true);
             builder.Append("</section>");
         }
 
@@ -152,17 +153,65 @@ public class ReportHtmlComposer : IReportHtmlComposer
         var builder = new StringBuilder();
         if (layout.Summaries is { Count: > 0 })
             builder.Append(BuildSummaryCards(layout.Summaries, rows));
-        AppendMainAndSectionTables(builder, layout, columns, rows);
+        AppendMainAndSectionTables(builder, layout, columns, rows, deduplicateMainRows: false);
         return builder.ToString();
     }
 
-    private static void AppendMainAndSectionTables(StringBuilder builder, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> mainColumns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    private static void AppendMainAndSectionTables(StringBuilder builder, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> mainColumns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, bool deduplicateMainRows)
     {
         if (mainColumns.Count > 0)
-            builder.Append(BuildSingleTable(mainColumns, rows));
+        {
+            var mainRows = deduplicateMainRows
+                ? DistinctRowsForColumns(rows, mainColumns)
+                : rows;
+            builder.Append(BuildSingleTable(mainColumns, mainRows));
+        }
 
         if (layout.Sections is { Count: > 0 })
             builder.Append(BuildSectionTables(layout, rows));
+    }
+
+    private static IReadOnlyList<IReadOnlyDictionary<string, object?>> DistinctRowsForColumns(IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, IReadOnlyList<ReportLayoutColumn> columns)
+    {
+        if (rows.Count <= 1 || columns.Count == 0)
+            return rows;
+
+        var deduplicated = new List<IReadOnlyDictionary<string, object?>>(rows.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var row in rows)
+        {
+            var key = BuildRowDistinctKey(row, columns);
+            if (seen.Add(key))
+                deduplicated.Add(row);
+        }
+
+        return deduplicated;
+    }
+
+    private static string BuildRowDistinctKey(IReadOnlyDictionary<string, object?> row, IReadOnlyList<ReportLayoutColumn> columns)
+    {
+        var builder = new StringBuilder();
+        foreach (var column in columns)
+        {
+            row.TryGetValue(column.Field, out var value);
+            var normalized = NormalizeDistinctValue(value);
+            builder.Append(normalized.Length).Append(':').Append(normalized).Append('|');
+        }
+
+        return builder.ToString();
+    }
+
+    private static string NormalizeDistinctValue(object? value)
+    {
+        return value switch
+        {
+            null => "<null>",
+            DateTime dt => dt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            DateTimeOffset dto => dto.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? string.Empty,
+            _ => value.ToString() ?? string.Empty
+        };
     }
 
     private static string BuildSectionTables(ReportLayoutDefinition layout, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)

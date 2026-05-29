@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -116,7 +117,10 @@ public class MarkdownReportRenderer : IReportRenderer
 
             var filteredColumns = FilterColumnsForGrouping(columns, layout);
             if (filteredColumns.Count > 0)
-                BuildMarkdownTable(sb, filteredColumns, groupRows);
+            {
+                var mainRows = DistinctRowsForColumns(groupRows, filteredColumns);
+                BuildMarkdownTable(sb, filteredColumns, mainRows);
+            }
 
             BuildSectionTables(sb, layout.Sections, groupRows, headingLevel: 3);
 
@@ -181,6 +185,49 @@ public class MarkdownReportRenderer : IReportRenderer
             });
             sb.AppendLine("| " + string.Join(" | ", cells) + " |");
         }
+    }
+
+    private static IReadOnlyList<IReadOnlyDictionary<string, object?>> DistinctRowsForColumns(IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, IReadOnlyList<ReportLayoutColumn> columns)
+    {
+        if (rows.Count <= 1 || columns.Count == 0)
+            return rows;
+
+        var deduplicated = new List<IReadOnlyDictionary<string, object?>>(rows.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var row in rows)
+        {
+            var key = BuildRowDistinctKey(row, columns);
+            if (seen.Add(key))
+                deduplicated.Add(row);
+        }
+
+        return deduplicated;
+    }
+
+    private static string BuildRowDistinctKey(IReadOnlyDictionary<string, object?> row, IReadOnlyList<ReportLayoutColumn> columns)
+    {
+        var builder = new StringBuilder();
+        foreach (var column in columns)
+        {
+            row.TryGetValue(column.Field, out var value);
+            var normalized = NormalizeDistinctValue(value);
+            builder.Append(normalized.Length).Append(':').Append(normalized).Append('|');
+        }
+
+        return builder.ToString();
+    }
+
+    private static string NormalizeDistinctValue(object? value)
+    {
+        return value switch
+        {
+            null => "<null>",
+            DateTime dt => dt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            DateTimeOffset dto => dto.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? string.Empty,
+            _ => value.ToString() ?? string.Empty
+        };
     }
 
     private static string BuildSummaryTable(IReadOnlyList<ReportLayoutSummaryDefinition> summaries, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)

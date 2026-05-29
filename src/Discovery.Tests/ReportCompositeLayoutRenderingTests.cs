@@ -110,6 +110,70 @@ public class ReportCompositeLayoutRenderingTests
     }
 
     [Test]
+    public void HtmlComposer_WhenGroupedRowsHaveJoinFanOut_DeduplicatesMainTableRows()
+    {
+        var composer = new ReportHtmlComposer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "groupBy": "agentHostname",
+              "hideGroupColumn": true,
+              "columns": [
+                { "field": "agentHostname", "header": "Hostname" },
+                { "field": "totalMemoryGB", "header": "RAM (GB)" },
+                { "field": "osName", "header": "SO" },
+                { "field": "processor", "header": "Processador" }
+              ],
+              "sections": [
+                {
+                  "title": "Software",
+                  "columns": [
+                    { "field": "softwareName", "header": "Software" },
+                    { "field": "version", "header": "Versao" }
+                  ]
+                }
+              ]
+            }
+            """
+        };
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname", "totalMemoryGB", "osName", "processor", "softwareName", "version"],
+            Rows =
+            [
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "AORUSAXV2",
+                    ["totalMemoryGB"] = 64,
+                    ["osName"] = "Windows 11",
+                    ["processor"] = "Ryzen 7",
+                    ["softwareName"] = "Chrome",
+                    ["version"] = "126"
+                },
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "AORUSAXV2",
+                    ["totalMemoryGB"] = 64,
+                    ["osName"] = "Windows 11",
+                    ["processor"] = "Ryzen 7",
+                    ["softwareName"] = "Firefox",
+                    ["version"] = "127"
+                }
+            ]
+        };
+
+        var html = composer.Compose(context, data);
+
+        Assert.That(CountOccurrences(html, "<table>"), Is.EqualTo(2));
+        Assert.That(CountOccurrences(html, "<td>64</td><td>Windows 11</td><td>Ryzen 7</td>"), Is.EqualTo(1));
+        Assert.That(CountOccurrences(html, "<td>Chrome</td><td>126</td>"), Is.EqualTo(1));
+        Assert.That(CountOccurrences(html, "<td>Firefox</td><td>127</td>"), Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task MarkdownRenderer_WhenLayoutHasColumnsAndSections_RendersMainAndSectionTables()
     {
         var renderer = new MarkdownReportRenderer();
@@ -211,6 +275,70 @@ public class ReportCompositeLayoutRenderingTests
         Assert.That(markdown, Does.Not.Contain("| Hostname | SO |"));
         Assert.That(markdown, Does.Contain("### Software"));
         Assert.That(markdown, Does.Contain("| Software | Versao |"));
+    }
+
+    [Test]
+    public async Task MarkdownRenderer_WhenGroupedRowsHaveJoinFanOut_DeduplicatesMainTableRows()
+    {
+        var renderer = new MarkdownReportRenderer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "groupBy": "agentHostname",
+              "hideGroupColumn": true,
+              "columns": [
+                { "field": "agentHostname", "header": "Hostname" },
+                { "field": "totalMemoryGB", "header": "RAM (GB)" },
+                { "field": "osName", "header": "SO" },
+                { "field": "processor", "header": "Processador" }
+              ],
+              "sections": [
+                {
+                  "title": "Software",
+                  "columns": [
+                    { "field": "softwareName", "header": "Software" },
+                    { "field": "version", "header": "Versao" }
+                  ]
+                }
+              ]
+            }
+            """
+        };
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname", "totalMemoryGB", "osName", "processor", "softwareName", "version"],
+            Rows =
+            [
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "AORUSAXV2",
+                    ["totalMemoryGB"] = 64,
+                    ["osName"] = "Windows 11",
+                    ["processor"] = "Ryzen 7",
+                    ["softwareName"] = "Chrome",
+                    ["version"] = "126"
+                },
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "AORUSAXV2",
+                    ["totalMemoryGB"] = 64,
+                    ["osName"] = "Windows 11",
+                    ["processor"] = "Ryzen 7",
+                    ["softwareName"] = "Firefox",
+                    ["version"] = "127"
+                }
+            ]
+        };
+
+        var result = await renderer.RenderAsync(context, data);
+        var markdown = Encoding.UTF8.GetString(result.Content);
+
+        Assert.That(CountOccurrences(markdown, "| 64 | Windows 11 | Ryzen 7 |"), Is.EqualTo(1));
+        Assert.That(CountOccurrences(markdown, "| Chrome | 126 |"), Is.EqualTo(1));
+        Assert.That(CountOccurrences(markdown, "| Firefox | 127 |"), Is.EqualTo(1));
     }
 
     private static int CountOccurrences(string input, string token)
