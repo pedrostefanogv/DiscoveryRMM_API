@@ -140,7 +140,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             builder.Append(BuildDetailsGrid(layout.GroupDetails, groupRows.FirstOrDefault()));
             if (layout.GroupSummaries is { Count: > 0 })
                 builder.Append(BuildSummaryCards(layout.GroupSummaries, groupRows));
-            builder.Append(layout.Sections is { Count: > 0 } ? BuildSectionTables(layout, groupRows) : BuildSingleTable(FilterColumnsForGrouping(columns, layout), groupRows));
+            AppendMainAndSectionTables(builder, layout, FilterColumnsForGrouping(columns, layout), groupRows);
             builder.Append("</section>");
         }
 
@@ -152,8 +152,17 @@ public class ReportHtmlComposer : IReportHtmlComposer
         var builder = new StringBuilder();
         if (layout.Summaries is { Count: > 0 })
             builder.Append(BuildSummaryCards(layout.Summaries, rows));
-        builder.Append(layout.Sections is { Count: > 0 } ? BuildSectionTables(layout, rows) : BuildSingleTable(columns, rows));
+        AppendMainAndSectionTables(builder, layout, columns, rows);
         return builder.ToString();
+    }
+
+    private static void AppendMainAndSectionTables(StringBuilder builder, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> mainColumns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    {
+        if (mainColumns.Count > 0)
+            builder.Append(BuildSingleTable(mainColumns, rows));
+
+        if (layout.Sections is { Count: > 0 })
+            builder.Append(BuildSectionTables(layout, rows));
     }
 
     private static string BuildSectionTables(ReportLayoutDefinition layout, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)

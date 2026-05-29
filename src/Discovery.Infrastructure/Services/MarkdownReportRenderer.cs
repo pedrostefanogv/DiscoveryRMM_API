@@ -114,29 +114,11 @@ public class MarkdownReportRenderer : IReportRenderer
                 sb.AppendLine();
             }
 
-            // Content tables
-            if (layout.Sections is { Count: > 0 })
-            {
-                foreach (var section in layout.Sections)
-                {
-                    var sectionColumns = (section.Columns ?? [])
-                        .Where(c => !string.IsNullOrWhiteSpace(c.Field))
-                        .Select(c => new ReportLayoutColumn(c.Field!, ResolveDisplayHeader(c), c.Format, section.Title))
-                        .ToList();
-
-                    if (sectionColumns.Count == 0) continue;
-
-                    if (!string.IsNullOrWhiteSpace(section.Title))
-                        sb.AppendLine($"### {EscapeHeading(section.Title)}");
-
-                    BuildMarkdownTable(sb, sectionColumns, groupRows);
-                }
-            }
-            else
-            {
-                var filteredColumns = FilterColumnsForGrouping(columns, layout);
+            var filteredColumns = FilterColumnsForGrouping(columns, layout);
+            if (filteredColumns.Count > 0)
                 BuildMarkdownTable(sb, filteredColumns, groupRows);
-            }
+
+            BuildSectionTables(sb, layout.Sections, groupRows, headingLevel: 3);
 
             sb.AppendLine();
         }
@@ -144,28 +126,38 @@ public class MarkdownReportRenderer : IReportRenderer
 
     private static void BuildUngroupedContent(StringBuilder sb, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
     {
-        if (layout.Sections is { Count: > 0 })
-        {
-            foreach (var section in layout.Sections)
-            {
-                var sectionColumns = (section.Columns ?? [])
-                    .Where(c => !string.IsNullOrWhiteSpace(c.Field))
-                    .Select(c => new ReportLayoutColumn(c.Field!, ResolveDisplayHeader(c), c.Format, section.Title))
-                    .ToList();
+        sb.AppendLine("## Dados");
+        sb.AppendLine();
 
-                if (sectionColumns.Count == 0) continue;
-
-                if (!string.IsNullOrWhiteSpace(section.Title))
-                    sb.AppendLine($"## {EscapeHeading(section.Title)}");
-
-                BuildMarkdownTable(sb, sectionColumns, rows);
-            }
-        }
-        else
-        {
-            sb.AppendLine("## Dados");
-            sb.AppendLine();
+        if (columns.Count > 0)
             BuildMarkdownTable(sb, columns, rows);
+
+        BuildSectionTables(sb, layout.Sections, rows, headingLevel: 2);
+    }
+
+    private static void BuildSectionTables(StringBuilder sb, IReadOnlyList<ReportLayoutSectionDefinition>? sections, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int headingLevel)
+    {
+        if (sections is not { Count: > 0 })
+            return;
+
+        foreach (var section in sections)
+        {
+            var sectionColumns = (section.Columns ?? [])
+                .Where(c => !string.IsNullOrWhiteSpace(c.Field))
+                .Select(c => new ReportLayoutColumn(c.Field!, ResolveDisplayHeader(c), c.Format, section.Title))
+                .ToList();
+
+            if (sectionColumns.Count == 0)
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(section.Title))
+            {
+                var headingPrefix = headingLevel == 3 ? "###" : "##";
+                sb.AppendLine($"{headingPrefix} {EscapeHeading(section.Title)}");
+            }
+
+            BuildMarkdownTable(sb, sectionColumns, rows);
+            sb.AppendLine();
         }
     }
 

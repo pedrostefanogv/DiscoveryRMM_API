@@ -54,6 +54,58 @@ public class ReportRendererColumnProjectionTests
     }
 
     [Test]
+    public async Task CsvRenderer_WhenLayoutDefinesColumnsAndSections_PrefersMainColumns()
+    {
+        var renderer = new CsvReportRenderer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "columns": [
+                { "field": "agentHostname", "label": "Agente" },
+                { "field": "osName", "label": "Sistema Operacional" }
+              ],
+              "sections": [
+                {
+                  "title": "Software",
+                  "columns": [
+                    { "field": "softwareName", "label": "Software" }
+                  ]
+                }
+              ]
+            }
+            """
+        };
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname", "osName", "softwareName"],
+            Rows =
+            [
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "PC-01",
+                    ["osName"] = "Windows 11",
+                    ["softwareName"] = "Chrome"
+                }
+            ]
+        };
+
+        var result = await renderer.RenderAsync(context, data);
+        var content = Encoding.UTF8.GetString(result.Content);
+        var lines = content
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd('\r'))
+            .ToArray();
+
+        Assert.That(lines.Length, Is.GreaterThanOrEqualTo(3));
+        Assert.That(lines[1], Is.EqualTo("\"Agente\",\"Sistema Operacional\""));
+        Assert.That(lines[2], Is.EqualTo("\"PC-01\",\"Windows 11\""));
+        Assert.That(content, Does.Not.Contain("\"Software\""));
+    }
+
+    [Test]
     public async Task XlsxRenderer_WhenLayoutUsesSections_ExportsOnlySectionColumns()
     {
         var renderer = new XlsxReportRenderer();
@@ -101,5 +153,58 @@ public class ReportRendererColumnProjectionTests
 
         Assert.That(sheet.Cell(4, 1).GetString(), Is.EqualTo("PC-01"));
         Assert.That(sheet.Cell(4, 2).GetString(), Is.EqualTo("16"));
+    }
+
+    [Test]
+    public async Task XlsxRenderer_WhenLayoutDefinesColumnsAndSections_PrefersMainColumns()
+    {
+        var renderer = new XlsxReportRenderer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "columns": [
+                { "field": "agentHostname", "label": "Agente" },
+                { "field": "osName", "label": "Sistema Operacional" }
+              ],
+              "sections": [
+                {
+                  "title": "Software",
+                  "columns": [
+                    { "field": "softwareName", "label": "Software" }
+                  ]
+                }
+              ]
+            }
+            """
+        };
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname", "osName", "softwareName"],
+            Rows =
+            [
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "PC-01",
+                    ["osName"] = "Windows 11",
+                    ["softwareName"] = "Chrome"
+                }
+            ]
+        };
+
+        var result = await renderer.RenderAsync(context, data);
+
+        using var stream = new MemoryStream(result.Content);
+        using var workbook = new XLWorkbook(stream);
+        var sheet = workbook.Worksheet("Report");
+
+        Assert.That(sheet.Cell(3, 1).GetString(), Is.EqualTo("Agente"));
+        Assert.That(sheet.Cell(3, 2).GetString(), Is.EqualTo("Sistema Operacional"));
+        Assert.That(sheet.Cell(3, 3).IsEmpty(), Is.True);
+
+        Assert.That(sheet.Cell(4, 1).GetString(), Is.EqualTo("PC-01"));
+        Assert.That(sheet.Cell(4, 2).GetString(), Is.EqualTo("Windows 11"));
     }
 }
