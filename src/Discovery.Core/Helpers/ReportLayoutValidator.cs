@@ -20,7 +20,7 @@ public static partial class ReportLayoutValidator
     private const int MaxLogoUrlLength = 8_192;
     private const int MaxDataUrlLength = 32_768;
     private static readonly HashSet<string> AllowedOrientations = new(StringComparer.OrdinalIgnoreCase) { "portrait", "landscape" };
-    private static readonly HashSet<string> AllowedColumnFormats = new(StringComparer.OrdinalIgnoreCase) { "text", "datetime", "number", "boolean" };
+    private static readonly HashSet<string> AllowedColumnFormats = new(StringComparer.OrdinalIgnoreCase) { "text", "date", "datetime", "number", "boolean" };
     private static readonly HashSet<string> AllowedAggregates = new(StringComparer.OrdinalIgnoreCase) { "count", "countDistinct", "sum" };
     private static readonly HashSet<string> AllowedJoinTypes = new(StringComparer.OrdinalIgnoreCase) { "left", "inner" };
 
@@ -99,9 +99,6 @@ public static partial class ReportLayoutValidator
 
         if (layout.Sections is { Count: > 0 } && layout.Sections.Count > MaxSections)
             errors.Add($"Layout supports at most {MaxSections} sections.");
-
-        if (layout.Columns is { Count: > 0 } && layout.Sections is { Count: > 0 })
-            errors.Add("Use either 'columns' or 'sections' in layoutJson, not both.");
 
         if (layout.Columns is { Count: > 0 })
             ValidateColumns(layout.Columns, "columns", errors);

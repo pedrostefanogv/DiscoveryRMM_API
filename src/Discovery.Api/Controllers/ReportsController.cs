@@ -112,8 +112,8 @@ public class ReportsController : ControllerBase
             },
             notes = new[]
             {
-                "Use columns for a single main table.",
-                "Use sections for multiple subtables in the same report or group.",
+                "Use columns for the main table and optionally combine with sections for subtables.",
+                "Use sections for additional subtables in the same report or group.",
                 "Use groupDetails to render key-value cards above each grouped section.",
                 "Use groupBy with groupTitleTemplate to create sections such as Agent X followed by its data.",
                 "For multi-source reports, use layout.dataSources and reference fields as alias.field."

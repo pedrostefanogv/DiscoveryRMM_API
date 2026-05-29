@@ -42,7 +42,7 @@ public class ReportLayoutValidatorTests
     }
 
     [Test]
-    public void ValidateJson_WhenColumnsAndSectionsAreMixed_ReturnsError()
+    public void ValidateJson_WhenColumnsAndSectionsAreMixed_ReturnsNoErrors()
     {
         const string layoutJson = """
         {
@@ -58,7 +58,23 @@ public class ReportLayoutValidatorTests
 
         var errors = ReportLayoutValidator.ValidateJson(layoutJson);
 
-        Assert.That(errors, Has.Some.Contains("either 'columns' or 'sections'"));
+        Assert.That(errors, Is.Empty);
+    }
+
+    [Test]
+    public void ValidateJson_WhenColumnFormatIsDate_ReturnsNoErrors()
+    {
+        const string layoutJson = """
+        {
+          "columns": [
+            { "field": "createdAt", "format": "date" }
+          ]
+        }
+        """;
+
+        var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+        Assert.That(errors, Is.Empty);
     }
 
     [Test]
