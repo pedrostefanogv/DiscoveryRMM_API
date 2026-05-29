@@ -518,6 +518,66 @@ public class AgentPackageService : IAgentPackageService
         return (bootstrapBytes, outputName);
     }
 
+    private async Task<(byte[] Content, string FileName)> BuildGenericWithNsisAsync(
+        string projectPath,
+        string activeProfile)
+    {
+        var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
+            ?? Path.Combine("src", "build", "windows", "installer");
+        var installerDir = Path.Combine(projectPath, installerDirectory);
+        var projectNsi = Path.Combine(installerDir, "project.nsi");
+        if (!File.Exists(projectNsi))
+            throw new FileNotFoundException("NSIS project file not found.", projectNsi);
+
+        var makensisPath = ResolveMakensisPath();
+
+        var outputName = "discovery-agent-zerotouch.exe";
+        var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
+
+        _logger.LogInformation(
+            "Generic (zero-touch) installer build: output={OutputName}, discovery={Discovery}",
+            outputName,
+            defaultDiscovery);
+
+        await EnsureWebView2BootstrapperAsync(installerDir);
+
+        var binaryPath = GetBinaryPath();
+
+        var arguments = new List<string>
+        {
+            "-V3",
+            "-INPUTCHARSET", "UTF8",
+            $"-DARG_WAILS_AMD64_BINARY={binaryPath}",
+            $"-DARG_OUTFILE_NAME={outputName}",
+            // Generic mode: no URL/KEY, P2P auto-provisioning enabled
+            "-DARG_GENERIC_INSTALL=1",
+            $"-DARG_DEFAULT_DISCOVERY={defaultDiscovery}",
+            "-DARG_DEFAULT_URL=",
+            "-DARG_DEFAULT_KEY="
+        };
+
+        arguments.Add("project.nsi");
+
+        await RunProcessAsync(
+            fileName: makensisPath,
+            workingDirectory: installerDir,
+            arguments: arguments.ToArray());
+
+        var binDir = Path.Combine(projectPath, "src", "build", "bin");
+        if (!Directory.Exists(binDir))
+            binDir = Path.Combine(projectPath, "build", "bin");
+
+        if (!Directory.Exists(binDir))
+            throw new InvalidOperationException("Installer output directory not found after build.");
+
+        var installerPath = Path.Combine(binDir, outputName);
+        if (!File.Exists(installerPath))
+            throw new FileNotFoundException($"Generic (zero-touch) installer was not generated: {installerPath}");
+
+        var bytes = await File.ReadAllBytesAsync(installerPath);
+        return (bytes, outputName);
+    }
+
     private async Task EnsureWebView2BootstrapperAsync(string installerDir)
     {
         var tmpDir = Path.Combine(installerDir, "tmp");

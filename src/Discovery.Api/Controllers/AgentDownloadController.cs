@@ -18,17 +18,20 @@ namespace Discovery.Api.Controllers;
 public class AgentDownloadController : ControllerBase
 {
     private readonly IAgentUpdateService _agentUpdateService;
+    private readonly IAgentPackageService _agentPackageService;
     private readonly IObjectStorageProviderFactory _storageProviderFactory;
     private readonly ILoggingService _loggingService;
     private readonly ILogger<AgentDownloadController> _logger;
 
     public AgentDownloadController(
         IAgentUpdateService agentUpdateService,
+        IAgentPackageService agentPackageService,
         IObjectStorageProviderFactory storageProviderFactory,
         ILoggingService loggingService,
         ILogger<AgentDownloadController> logger)
     {
         _agentUpdateService = agentUpdateService;
+        _agentPackageService = agentPackageService;
         _storageProviderFactory = storageProviderFactory;
         _loggingService = loggingService;
         _logger = logger;
@@ -102,6 +105,60 @@ public class AgentDownloadController : ControllerBase
 
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = "Agent binary is temporarily unavailable. Please try again later." });
+        }
+    }
+
+    /// <summary>
+    /// Downloads the generic (zero-touch) agent installer for windows/amd64.
+    /// No URL or deploy token is embedded — the agent uses P2P auto-provisioning
+    /// to discover the server and self-register after installation.
+    /// Result is cached in memory (default 30 min). Pass ?forceRebuild=true to bypass cache.
+    /// </summary>
+    [HttpGet("agent/generic")]
+    [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> DownloadGenericAgent(
+        [FromQuery] bool forceRebuild = false,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var (content, fileName) = await _agentPackageService.BuildGenericInstallerAsync(forceRebuild);
+
+            var clientIp = ResolveClientIp();
+            var userAgent = HttpContext.Request.Headers["User-Agent"].FirstOrDefault() ?? "unknown";
+
+            _logger.LogInformation(
+                "Generic (zero-touch) agent download served: fileName={FileName} size={Size} ip={ClientIp} ua={UserAgent}",
+                fileName, content.Length, clientIp, userAgent);
+
+            // Audit log — fire-and-forget
+            _ = _loggingService.LogInfoAsync(
+                LogType.System,
+                LogSource.Api,
+                "Generic (zero-touch) agent installer download",
+                new
+                {
+                    FileName = fileName,
+                    SizeBytes = content.Length,
+                    ClientIp = clientIp,
+                    UserAgent = userAgent,
+                    TraceId = HttpContext.TraceIdentifier
+                },
+                cancellationToken: CancellationToken.None);
+
+            return File(content, "application/x-msdownload", fileName);
+        }
+        catch (FileNotFoundException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Installer resources are not available on this server.", detail = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Installer build failed.", detail = ex.Message });
         }
     }
 
