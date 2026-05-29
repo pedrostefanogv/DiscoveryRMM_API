@@ -23,6 +23,11 @@ public static class RateLimitingServiceCollectionExtensions
         var agentWindow = Math.Max(1, configuration.GetValue<int?>("Security:RateLimiting:Agent:WindowSeconds") ?? 60);
         var agentQueue = Math.Max(0, configuration.GetValue<int?>("Security:RateLimiting:Agent:QueueLimit") ?? 0);
 
+        // Download tier: public stage2 endpoint — moderate rate for installer downloads
+        var downloadPermit = Math.Max(1, configuration.GetValue<int?>("Security:RateLimiting:Download:PermitLimit") ?? 30);
+        var downloadWindow = Math.Max(1, configuration.GetValue<int?>("Security:RateLimiting:Download:WindowSeconds") ?? 60);
+        var downloadQueue = Math.Max(0, configuration.GetValue<int?>("Security:RateLimiting:Download:QueueLimit") ?? 5);
+
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -67,6 +72,20 @@ public static class RateLimitingServiceCollectionExtensions
                             PermitLimit = agentPermit,
                             Window = TimeSpan.FromSeconds(agentWindow),
                             QueueLimit = agentQueue,
+                            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                            AutoReplenishment = true
+                        });
+                }
+
+                if (path.StartsWithSegments("/api/v1/download", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RateLimitPartition.GetFixedWindowLimiter(
+                        partitionKey: $"download:{ip}",
+                        factory: _ => new FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = downloadPermit,
+                            Window = TimeSpan.FromSeconds(downloadWindow),
+                            QueueLimit = downloadQueue,
                             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                             AutoReplenishment = true
                         });

@@ -74,6 +74,7 @@ Controllers/
   HardwareInventoryParser.cs
   ParseJson.cs
   SoftwareInventoryParser.cs
+ AgentDownloadController.cs
  AgentInstallController.cs
  AgentLabelsController.cs
  AgentP2pController.ArtifactSource.cs

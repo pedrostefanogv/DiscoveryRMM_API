@@ -99,7 +99,8 @@ public class DeployTokensController : ControllerBase
             try
             {
                 var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
-                var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(rawToken, publicApiBaseUrl);
+                // Build bootstrap (minimal) installer that downloads the latest stage2 at install time.
+                var (installerBytes, fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(rawToken, publicApiBaseUrl);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
             catch (FileNotFoundException ex)
@@ -218,7 +219,8 @@ public class DeployTokensController : ControllerBase
             if (installerType == "online")
             {
                 var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
-                var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(request.RawToken, publicApiBaseUrl);
+                // Build bootstrap (minimal) installer that downloads the latest stage2 at install time.
+                var (installerBytes, fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(request.RawToken, publicApiBaseUrl);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
 
@@ -255,7 +257,8 @@ public class DeployTokensController : ControllerBase
             if (artifact == "installer")
             {
                 var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
-                var (installerBytes, fileName) = await _agentPackageService.BuildInstallerAsync(request.RawToken, publicApiBaseUrl);
+                // Build bootstrap (minimal) installer that downloads the latest stage2 at install time.
+                var (installerBytes, fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(request.RawToken, publicApiBaseUrl);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
 

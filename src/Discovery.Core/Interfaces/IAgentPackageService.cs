@@ -19,8 +19,27 @@ public interface IAgentPackageService
     /// <summary>
     /// Builds a NSIS installer executable with defaults embedded at build time.
     /// The deploy token is embedded as ARG_DEFAULT_KEY.
+    /// This produces the FULL stage2 installer (the payload that the bootstrap downloads).
     /// </summary>
     Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null);
+
+    /// <summary>
+    /// Builds a bootstrap (minimal) NSIS installer that downloads and executes the stage2
+    /// from the public download endpoint (/api/v1/download/agent).
+    /// The deploy token and server URL are embedded so the stage2 receives them at runtime.
+    /// Requires a current stage2 build to exist (published via refresh-build).
+    /// </summary>
+    /// <param name="rawDeployToken">Deploy token to embed in bootstrap defaults.</param>
+    /// <param name="publicApiBaseUrl">Public API base URL used to construct the stage2 download URL.</param>
+    Task<(byte[] Content, string FileName)> BuildBootstrapInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null);
+
+    /// <summary>
+    /// Builds a generic (zero-touch) NSIS installer with no URL or deploy token embedded.
+    /// The agent starts in P2P auto-provisioning mode — it discovers the server via
+    /// peer discovery and self-registers. No API endpoint or token is needed at install time.
+    /// Result is cached in memory with a configurable TTL.
+    /// </summary>
+    Task<(byte[] Content, string FileName)> BuildGenericInstallerAsync(bool forceRebuild = false);
 
     /// <summary>
     /// Builds a NSIS installer executable for agent self-update flow.

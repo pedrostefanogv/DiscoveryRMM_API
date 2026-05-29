@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -12,6 +14,7 @@ public class AgentPackageService : IAgentPackageService
 {
     private readonly IConfiguration _config;
     private readonly IConfigurationService _configurationService;
+    private readonly IAgentUpdateBuildRepository _agentUpdateBuildRepository;
     private readonly ILogger<AgentPackageService> _logger;
     private static readonly SemaphoreSlim BuildLock = new(1, 1);
     private static readonly HashSet<string> AllowedBranches = new(StringComparer.OrdinalIgnoreCase)
@@ -19,10 +22,19 @@ public class AgentPackageService : IAgentPackageService
         "dev", "release", "beta", "lts"
     };
 
-    public AgentPackageService(IConfiguration config, IConfigurationService configurationService, ILogger<AgentPackageService> logger)
+    // Generic (zero-touch) installer cache — single entry with TTL
+    private static readonly ConcurrentDictionary<string, (byte[] Content, string FileName, DateTime CreatedAt)> GenericInstallerCache = new();
+    private static readonly SemaphoreSlim GenericBuildLock = new(1, 1);
+
+    public AgentPackageService(
+        IConfiguration config,
+        IConfigurationService configurationService,
+        IAgentUpdateBuildRepository agentUpdateBuildRepository,
+        ILogger<AgentPackageService> logger)
     {
         _config = config;
         _configurationService = configurationService;
+        _agentUpdateBuildRepository = agentUpdateBuildRepository;
         _logger = logger;
     }
 
@@ -253,6 +265,113 @@ public class AgentPackageService : IAgentPackageService
         return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken: null, activeProfile, publicApiBaseUrl: null, includeBootstrapDefaults: false);
     }
 
+    public async Task<(byte[] Content, string FileName)> BuildBootstrapInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null)
+    {
+        var activeProfile = GetActiveProfileName();
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+
+        if (!Directory.Exists(projectPath))
+            throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
+
+        // Ensure the base binary is built (needed for wails_tools.nsh macros)
+        await PrebuildBaseBinaryAsync();
+
+        // Look up the current stage2 build to get its SHA256 for integrity validation
+        string? stage2Sha256 = null;
+        try
+        {
+            var currentBuild = await _agentUpdateBuildRepository.GetCurrentAsync(
+                platform: "windows",
+                architecture: "amd64",
+                artifactType: AgentReleaseArtifactType.Installer,
+                cancellationToken: CancellationToken.None);
+
+            if (currentBuild is null)
+            {
+                throw new InvalidOperationException(
+                    "No stage2 build is currently published. Trigger refresh-build first to publish the stage2 installer " +
+                    "that the bootstrap will download.");
+            }
+
+            stage2Sha256 = currentBuild.Sha256;
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to resolve stage2 SHA256 for bootstrap build; proceeding without integrity check");
+        }
+
+        // Construct the public stage2 download URL
+        var publicApiUrl = ResolveInstallerServerUrl(publicApiBaseUrl);
+        var stage2Url = $"{publicApiUrl}v1/download/agent";
+
+        _logger.LogInformation(
+            "Building bootstrap installer: stage2Url={Stage2Url}, sha256={Sha256}, publicApiUrl={PublicApiUrl}",
+            stage2Url,
+            stage2Sha256 ?? "(not validated)",
+            publicApiUrl);
+
+        return await BuildBootstrapWithNsisAsync(projectPath, rawDeployToken, publicApiUrl, stage2Url, stage2Sha256, activeProfile);
+    }
+
+    public async Task<(byte[] Content, string FileName)> BuildGenericInstallerAsync(bool forceRebuild = false)
+    {
+        const string cacheKey = "generic-zerotouch";
+
+        // Return cached entry if still valid
+        if (!forceRebuild && GenericInstallerCache.TryGetValue(cacheKey, out var cached))
+        {
+            var ttlMinutes = _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 30;
+            if (DateTime.UtcNow - cached.CreatedAt < TimeSpan.FromMinutes(ttlMinutes))
+            {
+                _logger.LogInformation("Returning cached generic installer (built {Age}s ago, TTL={TtlMin}m)",
+                    (int)(DateTime.UtcNow - cached.CreatedAt).TotalSeconds, ttlMinutes);
+                return (cached.Content, cached.FileName);
+            }
+        }
+
+        await GenericBuildLock.WaitAsync();
+        try
+        {
+            // Re-check after acquiring lock
+            if (!forceRebuild && GenericInstallerCache.TryGetValue(cacheKey, out cached))
+            {
+                var ttlMinutes = _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 30;
+                if (DateTime.UtcNow - cached.CreatedAt < TimeSpan.FromMinutes(ttlMinutes))
+                    return (cached.Content, cached.FileName);
+            }
+
+            var activeProfile = GetActiveProfileName();
+            var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+                ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+
+            if (!Directory.Exists(projectPath))
+                throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
+
+            await PrebuildBaseBinaryAsync();
+
+            _logger.LogInformation("Building generic (zero-touch) installer...");
+
+            var (content, fileName) = await BuildGenericWithNsisAsync(projectPath, activeProfile);
+
+            GenericInstallerCache[cacheKey] = (content, fileName, DateTime.UtcNow);
+
+            _logger.LogInformation(
+                "Generic installer built: fileName={FileName}, size={Size} bytes, cached for {TtlMin}m",
+                fileName, content.Length, _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 30);
+
+            return (content, fileName);
+        }
+        finally
+        {
+            GenericBuildLock.Release();
+        }
+    }
+
     private async Task<(byte[] Content, string FileName)> BuildInstallerWithNsisAsync(
         string projectPath,
         string? rawDeployToken,
@@ -322,6 +441,81 @@ public class AgentPackageService : IAgentPackageService
 
         var bytes = await File.ReadAllBytesAsync(installerPath);
         return (bytes, outputName);
+    }
+
+    private async Task<(byte[] Content, string FileName)> BuildBootstrapWithNsisAsync(
+        string projectPath,
+        string rawDeployToken,
+        string publicApiUrl,
+        string stage2Url,
+        string? stage2Sha256,
+        string activeProfile)
+    {
+        var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
+            ?? Path.Combine("src", "build", "windows", "installer");
+        var installerDir = Path.Combine(projectPath, installerDirectory);
+        var projectNsi = Path.Combine(installerDir, "project.nsi");
+        if (!File.Exists(projectNsi))
+            throw new FileNotFoundException("NSIS project file not found.", projectNsi);
+
+        var makensisPath = ResolveMakensisPath();
+
+        var outputName = "discovery-agent-bootstrap.exe";
+        var payloadFileName = "discovery-agent-install.exe";
+        var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
+
+        _logger.LogInformation(
+            "Bootstrap installer build: stage2Url={Stage2Url}, sha256={Sha256}, output={OutputName}",
+            stage2Url,
+            stage2Sha256 ?? "(not validated)",
+            outputName);
+
+        await EnsureWebView2BootstrapperAsync(installerDir);
+
+        var binaryPath = GetBinaryPath();
+
+        var arguments = new List<string>
+        {
+            "-V3",
+            "-INPUTCHARSET", "UTF8",
+            $"-DARG_WAILS_AMD64_BINARY={binaryPath}",
+            $"-DARG_OUTFILE_NAME={outputName}",
+            // Bootstrap mode: downloads and executes stage2, then exits
+            "-DARG_BOOTSTRAP_INSTALL=1",
+            $"-DARG_PAYLOAD_URL={stage2Url}",
+            $"-DARG_PAYLOAD_FILENAME={payloadFileName}",
+            // Pass through defaults so stage2 inherits URL + token + minimal mode
+            $"-DARG_DEFAULT_URL={publicApiUrl}",
+            $"-DARG_DEFAULT_KEY={rawDeployToken}",
+            $"-DARG_DEFAULT_DISCOVERY={defaultDiscovery}",
+            "-DARG_DEFAULT_MINIMAL=1"
+        };
+
+        if (!string.IsNullOrWhiteSpace(stage2Sha256))
+        {
+            arguments.Add($"-DARG_PAYLOAD_SHA256={stage2Sha256}");
+        }
+
+        arguments.Add("project.nsi");
+
+        await RunProcessAsync(
+            fileName: makensisPath,
+            workingDirectory: installerDir,
+            arguments: arguments.ToArray());
+
+        var binDir = Path.Combine(projectPath, "src", "build", "bin");
+        if (!Directory.Exists(binDir))
+            binDir = Path.Combine(projectPath, "build", "bin");
+
+        if (!Directory.Exists(binDir))
+            throw new InvalidOperationException("Installer output directory not found after build.");
+
+        var installerPath = Path.Combine(binDir, outputName);
+        if (!File.Exists(installerPath))
+            throw new FileNotFoundException($"Bootstrap installer was not generated: {installerPath}");
+
+        var bootstrapBytes = await File.ReadAllBytesAsync(installerPath);
+        return (bootstrapBytes, outputName);
     }
 
     private async Task EnsureWebView2BootstrapperAsync(string installerDir)
