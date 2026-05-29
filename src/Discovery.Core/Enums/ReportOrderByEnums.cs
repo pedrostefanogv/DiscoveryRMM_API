@@ -49,3 +49,27 @@ public enum AgentInventoryCompositeOrderBy
     SoftwareName = 2,
     CollectedAt = 3
 }
+
+public enum AgentLabelsOrderBy
+{
+    LabelName = 0,
+    AgentHostname = 1,
+    SiteName = 2,
+    AppliedAt = 3
+}
+
+public enum AutomaticLabelRulesOrderBy
+{
+    RuleName = 0,
+    LabelName = 1,
+    MatchCount = 2,
+    CreatedAt = 3
+}
+
+public enum AutomationExecutionsOrderBy
+{
+    Timestamp = 0,
+    AgentHostname = 1,
+    Status = 2,
+    ExitCode = 3
+}

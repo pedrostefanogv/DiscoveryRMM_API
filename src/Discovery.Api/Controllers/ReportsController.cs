@@ -175,6 +175,57 @@ public class ReportsController : ControllerBase
         });
     }
 
+    [HttpGet("join-compatibility")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
+    [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Long")]
+    public IActionResult GetJoinCompatibility()
+    {
+        // Maps each dataset to its joinable keys (common identifiers)
+        var compatibility = new Dictionary<string, string[]>
+        {
+            ["softwareInventory"] = ["agentId", "clientId", "siteId", "softwareName"],
+            ["agentHardware"] = ["agentId", "clientId", "siteId"],
+            ["agentLabels"] = ["agentId", "clientId", "siteId", "labelName"],
+            ["automaticLabelRules"] = ["labelName", "ruleId"],
+            ["logs"] = ["agentId", "clientId", "siteId"],
+            ["tickets"] = ["agentId", "clientId", "siteId"],
+            ["configurationAudit"] = ["agentId", "clientId", "siteId"],
+            ["automationExecutions"] = ["agentId"],
+            ["agentInventoryComposite"] = ["agentId", "clientId", "siteId"],
+        };
+
+        // Build a pairwise join suggestion matrix
+        var suggestions = new List<object>();
+        var keys = compatibility.Keys.ToList();
+        for (var i = 0; i < keys.Count; i++)
+        {
+            for (var j = i + 1; j < keys.Count; j++)
+            {
+                var commonKeys = compatibility[keys[i]].Intersect(compatibility[keys[j]], StringComparer.OrdinalIgnoreCase).ToArray();
+                if (commonKeys.Length == 0) continue;
+
+                suggestions.Add(new
+                {
+                    sourceA = keys[i],
+                    sourceB = keys[j],
+                    commonKeys,
+                    preferredKey = commonKeys.Contains("agentId") ? "agentId"
+                        : commonKeys.Contains("clientId") ? "clientId"
+                        : commonKeys.Contains("siteId") ? "siteId"
+                        : commonKeys[0],
+                    recommendedJoinType = "left"
+                });
+            }
+        }
+
+        return Ok(new
+        {
+            compatibility,
+            joinSuggestions = suggestions.OrderByDescending(s => ((dynamic)s).commonKeys.Length).ToArray(),
+            note = "Use the joinSuggestions to offer auto-join when user selects datasets in the wizard."
+        });
+    }
+
     [HttpPost("templates")]
     [RequirePermission(ResourceType.Reports, ActionType.Create)]
     public async Task<IActionResult> CreateTemplate([FromBody] CreateReportTemplateRequest request)
@@ -1183,6 +1234,96 @@ public class ReportsController : ControllerBase
                     [
                         new ReportFilterPreset("Hardware + software por agente", "Combina dados basicos de hardware com lista de softwares por agente", "{\"limit\":5000,\"orderBy\":\"agentHostname\",\"orderDirection\":\"asc\",\"orientation\":\"landscape\"}"),
                         new ReportFilterPreset("Por cliente", "Inventario composto com escopo de cliente", "{\"clientId\":\"<guid>\",\"limit\":3000,\"orderBy\":\"siteName\",\"orderDirection\":\"asc\"}")
+                    ])),
+
+            [ReportDatasetType.AgentLabels] = new(
+                Fields:
+                [
+                    "agentId", "agentHostname", "agentName", "clientId", "clientName", "siteId", "siteName", "labelName", "labelSource", "labelAppliedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "landscape",
+                    AllowedSortFields: GetEnumNamesAsCamelCase<AgentLabelsOrderBy>(),
+                    DefaultSortField: ToCamelCase(nameof(AgentLabelsOrderBy.LabelName)),
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID do cliente"),
+                        new("siteId", "Site", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por site.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "clientId", Placeholder: "GUID do site"),
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por agente.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "siteId", Placeholder: "GUID do agente"),
+                        new("labelName", "Label", ReportFilterFieldType.Text, false, "Filtros", "Busca parcial por nome da label.", UiComponent: ReportFilterUiComponent.TextSearch, Placeholder: "Ex.: Windows Server", MaxLength: 200, IsPartialMatch: true),
+                        new("orderBy", "Ordenar por", ReportFilterFieldType.Enum, false, "Ordenacao", "Campo para ordenacao dos resultados.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: GetEnumNamesAsCamelCase<AgentLabelsOrderBy>(), DefaultValue: ToCamelCase(nameof(AgentLabelsOrderBy.LabelName))),
+                        new("orderDirection", "Direcao", ReportFilterFieldType.Enum, false, "Ordenacao", "Direcao da ordenacao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["asc", "desc"], DefaultValue: "asc"),
+                        new("orientation", "Orientacao", ReportFilterFieldType.Enum, false, "Formatacao", "Orientacao da pagina do relatorio.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["landscape", "portrait"], DefaultValue: "landscape"),
+                        new("limit", "Limite de linhas", ReportFilterFieldType.Integer, false, "Saida", "Maximo recomendado: 10000.", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
+                    ],
+                    SampleFilterPresets:
+                    [
+                        new ReportFilterPreset("Todas as labels", "Lista completa de labels por agente", "{\"limit\":5000,\"orderBy\":\"labelName\",\"orderDirection\":\"asc\",\"orientation\":\"landscape\"}")
+                    ])),
+
+            [ReportDatasetType.AutomaticLabelRules] = new(
+                Fields:
+                [
+                    "ruleId", "ruleName", "labelName", "ruleDescription", "isActive", "conditionExpression", "matchCount", "affectedAgentHostnames", "createdAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.Global,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "landscape",
+                    AllowedSortFields: GetEnumNamesAsCamelCase<AutomaticLabelRulesOrderBy>(),
+                    DefaultSortField: ToCamelCase(nameof(AutomaticLabelRulesOrderBy.RuleName)),
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("labelName", "Label", ReportFilterFieldType.Text, false, "Filtros", "Busca parcial por nome da label.", UiComponent: ReportFilterUiComponent.TextSearch, Placeholder: "Ex.: Windows Server", MaxLength: 200, IsPartialMatch: true),
+                        new("orderBy", "Ordenar por", ReportFilterFieldType.Enum, false, "Ordenacao", "Campo para ordenacao dos resultados.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: GetEnumNamesAsCamelCase<AutomaticLabelRulesOrderBy>(), DefaultValue: ToCamelCase(nameof(AutomaticLabelRulesOrderBy.RuleName))),
+                        new("orderDirection", "Direcao", ReportFilterFieldType.Enum, false, "Ordenacao", "Direcao da ordenacao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["asc", "desc"], DefaultValue: "asc"),
+                        new("orientation", "Orientacao", ReportFilterFieldType.Enum, false, "Formatacao", "Orientacao da pagina do relatorio.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["landscape", "portrait"], DefaultValue: "landscape"),
+                        new("limit", "Limite de linhas", ReportFilterFieldType.Integer, false, "Saida", "Maximo recomendado: 10000.", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
+                    ],
+                    SampleFilterPresets:
+                    [
+                        new ReportFilterPreset("Regras ativas", "Lista regras de label automatica com contagem de agents", "{\"limit\":500,\"orderBy\":\"matchCount\",\"orderDirection\":\"desc\",\"orientation\":\"landscape\"}")
+                    ])),
+
+            [ReportDatasetType.AutomationExecutions] = new(
+                Fields:
+                [
+                    "executionId", "commandId", "agentId", "agentHostname", "siteId", "siteName", "taskId", "scriptId", "sourceType", "status", "exitCode", "errorMessage", "createdAt", "completedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.OptionalRange,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "landscape",
+                    AllowedSortFields: GetEnumNamesAsCamelCase<AutomationExecutionsOrderBy>(),
+                    DefaultSortField: ToCamelCase(nameof(AutomationExecutionsOrderBy.Timestamp)),
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "desc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID do cliente"),
+                        new("siteId", "Site", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por site.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "clientId", Placeholder: "GUID do site"),
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por agente.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "siteId", Placeholder: "GUID do agente"),
+                        new("taskId", "Task", ReportFilterFieldType.Guid, false, "Filtros", "Filtrar por task especifica.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID da task"),
+                        new("scriptId", "Script", ReportFilterFieldType.Guid, false, "Filtros", "Filtrar por script especifico.", UiComponent: ReportFilterUiComponent.GuidInput, Placeholder: "GUID do script"),
+                        new("status", "Status", ReportFilterFieldType.Enum, false, "Filtros", "Status da execucao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["Dispatched", "Acknowledged", "InProgress", "Completed", "Failed", "TimedOut"]),
+                        new("orderBy", "Ordenar por", ReportFilterFieldType.Enum, false, "Ordenacao", "Campo para ordenacao dos resultados.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: GetEnumNamesAsCamelCase<AutomationExecutionsOrderBy>(), DefaultValue: ToCamelCase(nameof(AutomationExecutionsOrderBy.Timestamp))),
+                        new("orderDirection", "Direcao", ReportFilterFieldType.Enum, false, "Ordenacao", "Direcao da ordenacao.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["asc", "desc"], DefaultValue: "desc"),
+                        new("orientation", "Orientacao", ReportFilterFieldType.Enum, false, "Formatacao", "Orientacao da pagina do relatorio.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["landscape", "portrait"], DefaultValue: "landscape"),
+                        new("limit", "Limite de linhas", ReportFilterFieldType.Integer, false, "Saida", "Maximo recomendado: 10000.", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
+                    ],
+                    SampleFilterPresets:
+                    [
+                        new ReportFilterPreset("Execucoes recentes", "Ultimas execucoes de automacao", "{\"limit\":500,\"orderBy\":\"timestamp\",\"orderDirection\":\"desc\",\"orientation\":\"landscape\"}"),
+                        new ReportFilterPreset("Falhas", "Execucoes com falha", "{\"status\":\"Failed\",\"limit\":500,\"orderBy\":\"timestamp\",\"orderDirection\":\"desc\",\"orientation\":\"landscape\"}")
                     ]))
         };
     }
@@ -1210,6 +1351,9 @@ public class ReportsController : ControllerBase
             ReportDatasetType.Tickets => "Tickets",
             ReportDatasetType.AgentHardware => "Agent Hardware",
             ReportDatasetType.AgentInventoryComposite => "Agent Inventory Composite",
+            ReportDatasetType.AgentLabels => "Agent Labels",
+            ReportDatasetType.AutomaticLabelRules => "Automatic Label Rules",
+            ReportDatasetType.AutomationExecutions => "Automation Executions",
             _ => datasetType.ToString()
         };
     }
@@ -1224,6 +1368,9 @@ public class ReportsController : ControllerBase
             ReportDatasetType.Tickets => "Ticket lifecycle, SLA and workflow data.",
             ReportDatasetType.AgentHardware => "Hardware inventory and system specs by agent.",
             ReportDatasetType.AgentInventoryComposite => "Pre-joined hardware and software inventory by agent.",
+            ReportDatasetType.AgentLabels => "Labels (manual and automatic) applied to agents.",
+            ReportDatasetType.AutomaticLabelRules => "Automatic label rules with affected agent counts.",
+            ReportDatasetType.AutomationExecutions => "Automation script execution history by agent.",
             _ => "Dataset available for reporting."
         };
     }
@@ -1232,7 +1379,9 @@ public class ReportsController : ControllerBase
     {
         return field.Equals("clientId", StringComparison.OrdinalIgnoreCase)
             || field.Equals("siteId", StringComparison.OrdinalIgnoreCase)
-            || field.Equals("agentId", StringComparison.OrdinalIgnoreCase);
+            || field.Equals("agentId", StringComparison.OrdinalIgnoreCase)
+            || field.Equals("labelName", StringComparison.OrdinalIgnoreCase)
+            || field.Equals("ruleId", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string InferFieldType(string field)
@@ -1259,6 +1408,9 @@ public class ReportsController : ControllerBase
             ReportDatasetType.ConfigurationAudit => "audit",
             ReportDatasetType.Tickets => "tk",
             ReportDatasetType.AgentInventoryComposite => "inv",
+            ReportDatasetType.AgentLabels => "lbl",
+            ReportDatasetType.AutomaticLabelRules => "rule",
+            ReportDatasetType.AutomationExecutions => "auto",
             _ => "src"
         };
     }

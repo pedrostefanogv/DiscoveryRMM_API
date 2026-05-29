@@ -6,6 +6,7 @@ using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -15,10 +16,13 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
     private const int MaxLimit = 10000;
 
     private readonly DiscoveryDbContext _db;
+    private readonly IMemoryCache _cache;
+    private static readonly TimeSpan QueryCacheTtl = TimeSpan.FromSeconds(60);
 
-    public ReportDatasetQueryService(DiscoveryDbContext db)
+    public ReportDatasetQueryService(DiscoveryDbContext db, IMemoryCache cache)
     {
         _db = db;
+        _cache = cache;
     }
 
     public async Task<ReportQueryResult> QueryAsync(ReportTemplate template, string? filtersJson, CancellationToken cancellationToken = default)
@@ -43,6 +47,9 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             ReportDatasetType.Tickets => await QueryTicketsAsync(clientId, filters, cancellationToken),
             ReportDatasetType.AgentHardware => await QueryAgentHardwareAsync(clientId, filters, cancellationToken),
             ReportDatasetType.AgentInventoryComposite => await QueryAgentInventoryCompositeAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.AgentLabels => await QueryAgentLabelsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.AutomaticLabelRules => await QueryAutomaticLabelRulesAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.AutomationExecutions => await QueryAutomationExecutionsAsync(clientId, filters, cancellationToken),
             _ => new ReportQueryResult { Columns = ["message"], Rows = [new Dictionary<string, object?> { ["message"] = "Dataset not supported." }] }
         };
     }
@@ -66,18 +73,30 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             var mergedFiltersElement = ParseFilters(mergedFiltersJson);
             var clientId = GetGuid(mergedFiltersElement, "clientId");
 
-            var result = await QuerySingleDatasetAsync(source.DatasetType!.Value, clientId, mergedFiltersElement, cancellationToken);
-            sourceResults.Add(new MultiSourceResult(source, result));
+            var cacheKey = $"report_query:{source.DatasetType}:{clientId}:{mergedFiltersJson?.GetHashCode() ?? 0}";
+            if (!_cache.TryGetValue(cacheKey, out ReportQueryResult? cachedResult))
+            {
+                cachedResult = await QuerySingleDatasetAsync(source.DatasetType!.Value, clientId, mergedFiltersElement, cancellationToken);
+                _cache.Set(cacheKey, cachedResult, QueryCacheTtl);
+            }
+
+            sourceResults.Add(new MultiSourceResult(source, cachedResult!));
         }
 
         if (sourceResults.Count == 1)
             return sourceResults[0].Result;
+
+        // Build lookup of sources by alias for chained joins (A←B←C pattern)
+        var sourceByAlias = sourceResults
+            .GroupBy(sr => sr.Source.Alias!)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         var baseSource = sourceResults[0];
         var mergedRows = baseSource.Result.Rows
             .Select(row => BuildBaseRow(baseSource.Source.Alias!, row))
             .ToList();
 
+        // Process joins in order — each source joins with whichever alias it specifies (chained)
         for (var index = 1; index < sourceResults.Count; index++)
         {
             var current = sourceResults[index];
@@ -87,7 +106,9 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
 
             var sourceKey = join.SourceKey;
             var targetKey = string.IsNullOrWhiteSpace(join.TargetKey) ? sourceKey : join.TargetKey!;
-            var joinAlias = string.IsNullOrWhiteSpace(join.JoinToAlias) ? baseSource.Source.Alias! : join.JoinToAlias!;
+            var joinAlias = string.IsNullOrWhiteSpace(join.JoinToAlias)
+                ? baseSource.Source.Alias!
+                : join.JoinToAlias!;
             var joinType = string.Equals(join.JoinType, "inner", StringComparison.OrdinalIgnoreCase) ? "inner" : "left";
 
             var lookup = current.Result.Rows
@@ -133,6 +154,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             mergedRows = nextRows;
         }
 
+        // Collect columns from all sources
         var columns = new List<string>();
         foreach (var column in baseSource.Result.Columns)
         {
@@ -754,6 +776,246 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         return new ReportQueryResult
         {
             Columns = ["clientName", "siteName", "agentId", "agentHostname", "automaticLabels", "osName", "osVersion", "processor", "totalMemoryGB", "totalDisksCount", "softwareName", "publisher", "softwareVersion", "softwareLastSeenAt", "hardwareCollectedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryAgentLabelsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
+        var agentId = GetGuid(filters, "agentId");
+        var labelName = GetString(filters, "labelName");
+        var orderBy = GetEnum(filters, "orderBy", AgentLabelsOrderBy.LabelName);
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query =
+            from al in _db.AgentLabels.AsNoTracking()
+            join ag in _db.Agents.AsNoTracking() on al.AgentId equals ag.Id
+            join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
+            join cli in _db.Clients.AsNoTracking() on st.ClientId equals cli.Id
+            where !clientId.HasValue || st.ClientId == clientId.Value
+            select new
+            {
+                AgentId = ag.Id,
+                AgentHostname = ag.Hostname,
+                AgentDisplayName = ag.DisplayName,
+                ClientId = cli.Id,
+                ClientName = cli.Name,
+                SiteId = st.Id,
+                SiteName = st.Name,
+                al.Label,
+                al.SourceType,
+                al.CreatedAt
+            };
+
+        if (siteId.HasValue)
+            query = query.Where(x => x.SiteId == siteId.Value);
+        if (agentId.HasValue)
+            query = query.Where(x => x.AgentId == agentId.Value);
+        if (!string.IsNullOrWhiteSpace(labelName))
+            query = query.Where(x => EF.Functions.ILike(x.Label, $"%{labelName}%"));
+
+        var orderedQuery = orderBy switch
+        {
+            AgentLabelsOrderBy.AgentHostname => descending
+                ? query.OrderByDescending(x => x.AgentHostname).ThenBy(x => x.Label)
+                : query.OrderBy(x => x.AgentHostname).ThenBy(x => x.Label),
+            AgentLabelsOrderBy.SiteName => descending
+                ? query.OrderByDescending(x => x.SiteName).ThenBy(x => x.Label)
+                : query.OrderBy(x => x.SiteName).ThenBy(x => x.Label),
+            AgentLabelsOrderBy.AppliedAt => descending
+                ? query.OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Label)
+                : query.OrderBy(x => x.CreatedAt).ThenBy(x => x.Label),
+            _ => descending
+                ? query.OrderByDescending(x => x.Label).ThenBy(x => x.AgentHostname)
+                : query.OrderBy(x => x.Label).ThenBy(x => x.AgentHostname)
+        };
+
+        var rowsRaw = await orderedQuery
+            .Take(limit)
+            .ToListAsync(cancellationToken);
+
+        var rows = rowsRaw
+            .Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+            {
+                ["agentId"] = x.AgentId,
+                ["agentHostname"] = x.AgentHostname,
+                ["agentName"] = x.AgentDisplayName,
+                ["clientId"] = x.ClientId,
+                ["clientName"] = x.ClientName,
+                ["siteId"] = x.SiteId,
+                ["siteName"] = x.SiteName,
+                ["labelName"] = x.Label,
+                ["labelSource"] = x.SourceType.ToString(),
+                ["labelAppliedAt"] = x.CreatedAt
+            })
+            .ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["agentId", "agentHostname", "agentName", "clientId", "clientName", "siteId", "siteName", "labelName", "labelSource", "labelAppliedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryAutomaticLabelRulesAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var labelName = GetString(filters, "labelName");
+        var orderBy = GetEnum(filters, "orderBy", AutomaticLabelRulesOrderBy.RuleName);
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query =
+            from lr in _db.AgentLabelRules.AsNoTracking()
+            join lrm in _db.AgentLabelRuleMatches.AsNoTracking() on lr.Id equals lrm.RuleId into matchesJoin
+            from lrm in matchesJoin.DefaultIfEmpty()
+            join ag in _db.Agents.AsNoTracking() on lrm != null ? lrm.AgentId : Guid.Empty equals ag.Id into agentsJoin
+            from ag in agentsJoin.DefaultIfEmpty()
+            group new { lr, ag } by new { lr.Id, lr.Name, lr.Label, lr.Description, lr.IsEnabled, lr.ExpressionJson, lr.CreatedAt } into g
+            select new
+            {
+                g.Key.Id,
+                RuleName = g.Key.Name,
+                LabelName = g.Key.Label,
+                RuleDescription = g.Key.Description,
+                IsActive = g.Key.IsEnabled,
+                ConditionExpression = g.Key.ExpressionJson,
+                MatchCount = g.Count(x => x.ag != null),
+                AffectedAgentHostnames = g.Where(x => x.ag != null).Select(x => x.ag.Hostname).Distinct().ToList(),
+                g.Key.CreatedAt
+            };
+
+        if (!string.IsNullOrWhiteSpace(labelName))
+            query = query.Where(x => EF.Functions.ILike(x.LabelName, $"%{labelName}%"));
+
+        var orderedQuery = orderBy switch
+        {
+            AutomaticLabelRulesOrderBy.LabelName => descending
+                ? query.OrderByDescending(x => x.LabelName).ThenBy(x => x.RuleName)
+                : query.OrderBy(x => x.LabelName).ThenBy(x => x.RuleName),
+            AutomaticLabelRulesOrderBy.MatchCount => descending
+                ? query.OrderByDescending(x => x.MatchCount).ThenBy(x => x.RuleName)
+                : query.OrderBy(x => x.MatchCount).ThenBy(x => x.RuleName),
+            AutomaticLabelRulesOrderBy.CreatedAt => descending
+                ? query.OrderByDescending(x => x.CreatedAt).ThenBy(x => x.RuleName)
+                : query.OrderBy(x => x.CreatedAt).ThenBy(x => x.RuleName),
+            _ => descending
+                ? query.OrderByDescending(x => x.RuleName)
+                : query.OrderBy(x => x.RuleName)
+        };
+
+        var rowsRaw = await orderedQuery
+            .Take(limit)
+            .ToListAsync(cancellationToken);
+
+        var rows = rowsRaw
+            .Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+            {
+                ["ruleId"] = x.Id,
+                ["ruleName"] = x.RuleName,
+                ["labelName"] = x.LabelName,
+                ["ruleDescription"] = x.RuleDescription,
+                ["isActive"] = x.IsActive,
+                ["conditionExpression"] = x.ConditionExpression,
+                ["matchCount"] = x.MatchCount,
+                ["affectedAgentHostnames"] = string.Join(", ", x.AffectedAgentHostnames ?? []),
+                ["createdAt"] = x.CreatedAt
+            })
+            .ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["ruleId", "ruleName", "labelName", "ruleDescription", "isActive", "conditionExpression", "matchCount", "affectedAgentHostnames", "createdAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryAutomationExecutionsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
+        var agentId = GetGuid(filters, "agentId");
+        var taskId = GetGuid(filters, "taskId");
+        var scriptId = GetGuid(filters, "scriptId");
+        var orderBy = GetEnum(filters, "orderBy", AutomationExecutionsOrderBy.Timestamp);
+        var descending = GetSortDescending(filters, defaultValue: true);
+
+        var query =
+            from aer in _db.AutomationExecutionReports.AsNoTracking()
+            join ag in _db.Agents.AsNoTracking() on aer.AgentId equals ag.Id
+            join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
+            where !clientId.HasValue || st.ClientId == clientId.Value
+            select new
+            {
+                aer.Id,
+                aer.CommandId,
+                AgentId = ag.Id,
+                AgentHostname = ag.Hostname,
+                SiteId = st.Id,
+                SiteName = st.Name,
+                aer.TaskId,
+                aer.ScriptId,
+                aer.SourceType,
+                aer.Status,
+                aer.ExitCode,
+                aer.ErrorMessage,
+                aer.CreatedAt,
+                aer.ResultReceivedAt
+            };
+
+        if (siteId.HasValue)
+            query = query.Where(x => x.SiteId == siteId.Value);
+        if (agentId.HasValue)
+            query = query.Where(x => x.AgentId == agentId.Value);
+        if (taskId.HasValue)
+            query = query.Where(x => x.TaskId == taskId.Value);
+        if (scriptId.HasValue)
+            query = query.Where(x => x.ScriptId == scriptId.Value);
+
+        var orderedQuery = orderBy switch
+        {
+            AutomationExecutionsOrderBy.AgentHostname => descending
+                ? query.OrderByDescending(x => x.AgentHostname).ThenByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.AgentHostname).ThenByDescending(x => x.CreatedAt),
+            AutomationExecutionsOrderBy.Status => descending
+                ? query.OrderByDescending(x => x.Status).ThenByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.Status).ThenByDescending(x => x.CreatedAt),
+            AutomationExecutionsOrderBy.ExitCode => descending
+                ? query.OrderByDescending(x => x.ExitCode).ThenByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.ExitCode).ThenByDescending(x => x.CreatedAt),
+            _ => descending
+                ? query.OrderByDescending(x => x.CreatedAt)
+                : query.OrderBy(x => x.CreatedAt)
+        };
+
+        var rowsRaw = await orderedQuery
+            .Take(limit)
+            .ToListAsync(cancellationToken);
+
+        var rows = rowsRaw
+            .Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+            {
+                ["executionId"] = x.Id,
+                ["commandId"] = x.CommandId,
+                ["agentId"] = x.AgentId,
+                ["agentHostname"] = x.AgentHostname,
+                ["siteId"] = x.SiteId,
+                ["siteName"] = x.SiteName,
+                ["taskId"] = x.TaskId,
+                ["scriptId"] = x.ScriptId,
+                ["sourceType"] = x.SourceType.ToString(),
+                ["status"] = x.Status.ToString(),
+                ["exitCode"] = x.ExitCode,
+                ["errorMessage"] = x.ErrorMessage,
+                ["createdAt"] = x.CreatedAt,
+                ["completedAt"] = x.ResultReceivedAt
+            })
+            .ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["executionId", "commandId", "agentId", "agentHostname", "siteId", "siteName", "taskId", "scriptId", "sourceType", "status", "exitCode", "errorMessage", "createdAt", "completedAt"],
             Rows = rows
         };
     }

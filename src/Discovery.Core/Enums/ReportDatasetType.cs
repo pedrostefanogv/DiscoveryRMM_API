@@ -7,5 +7,8 @@ public enum ReportDatasetType
     ConfigurationAudit = 2,
     Tickets = 3,
     AgentHardware = 4,
-    AgentInventoryComposite = 5
+    AgentInventoryComposite = 5,
+    AgentLabels = 6,
+    AutomaticLabelRules = 7,
+    AutomationExecutions = 8
 }
