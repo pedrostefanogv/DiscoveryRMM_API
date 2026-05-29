@@ -377,9 +377,11 @@ public class ReportCompositeLayoutRenderingTests
         var html = composer.Compose(context, data);
 
         Assert.That(CountOccurrences(html, "<table>"), Is.EqualTo(3));
+        Assert.That(CountOccurrences(html, "<div class=\"report-generated-footer\">"), Is.EqualTo(3));
         Assert.That(CountOccurrences(html, "<div class=\"report-page-break\"></div>"), Is.EqualTo(2));
         Assert.That(html, Does.Contain("Pagina 2/3"));
         Assert.That(html, Does.Contain("<td>PC-070</td>"));
+        Assert.That(html, Does.Contain("@bottom-center { content: \"Gerado por Discovery RMM em"));
     }
 
     [Test]

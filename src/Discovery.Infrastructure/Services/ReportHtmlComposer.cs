@@ -15,13 +15,15 @@ public class ReportHtmlComposer : IReportHtmlComposer
         var layout = ReportLayoutDefinitionParser.ParseOrDefault(context.LayoutJson);
         var columns = ResolveColumns(layout, data);
         var rowsPerPage = ResolveRowsPerPage(layout);
-        var generatedFooterHtml = BuildGeneratedFooter(data.Rows.Count, DateTime.UtcNow);
+        var generatedAtUtc = DateTime.UtcNow;
+        var generatedFooterText = BuildGeneratedFooterText(data.Rows.Count, generatedAtUtc);
+        var generatedFooterHtml = BuildGeneratedFooter(generatedFooterText);
         var logoUrl = layout.LogoUrl ?? layout.Style?.LogoUrl;
         var style = layout.Style ?? new ReportLayoutStyleDefinition();
         var alternateRowBackground = ResolveAlternateRowBackground(style);
         var content = string.IsNullOrWhiteSpace(layout.GroupBy)
-            ? BuildUngroupedContent(layout, columns, data.Rows, rowsPerPage)
-            : BuildGroupedSections(layout, columns, data.Rows, rowsPerPage);
+            ? BuildUngroupedContent(layout, columns, data.Rows, rowsPerPage, generatedFooterHtml)
+            : BuildGroupedSections(layout, columns, data.Rows, rowsPerPage, generatedFooterHtml);
 
         var subtitleHtml = string.IsNullOrWhiteSpace(context.Subtitle)
             ? string.Empty
@@ -42,7 +44,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
 
         // Page header/footer
         var pageHeaderCssContent = BuildPageHeaderCssContent(layout);
-        var pageFooterCssContent = BuildPageFooterCssContent(layout);
+        var pageFooterCssContent = BuildPageFooterCssContent(layout, generatedFooterText);
 
         // Watermark
         var watermarkHtml = BuildWatermark(layout);
@@ -143,14 +145,13 @@ public class ReportHtmlComposer : IReportHtmlComposer
                     </div>
                     {{chartsHtml}}
                     {{content}}
-                    {{generatedFooterHtml}}
                 </div>
             </body>
             </html>
             """;
     }
 
-    private static string BuildGroupedSections(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
+    private static string BuildGroupedSections(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage, string generatedFooterHtml)
     {
         var grouped = rows.GroupBy(row => GetGroupValue(row, layout.GroupBy!)).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
         var builder = new StringBuilder();
@@ -164,34 +165,34 @@ public class ReportHtmlComposer : IReportHtmlComposer
             builder.Append(BuildDetailsGrid(layout.GroupDetails, groupRows.FirstOrDefault()));
             if (layout.GroupSummaries is { Count: > 0 })
                 builder.Append(BuildSummaryCards(layout.GroupSummaries, groupRows));
-            AppendMainAndSectionTables(builder, layout, FilterColumnsForGrouping(columns, layout), groupRows, deduplicateMainRows: true, rowsPerPage);
+            AppendMainAndSectionTables(builder, layout, FilterColumnsForGrouping(columns, layout), groupRows, deduplicateMainRows: true, rowsPerPage, generatedFooterHtml);
             builder.Append("</section>");
         }
 
         return builder.ToString();
     }
 
-    private static string BuildUngroupedContent(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
+    private static string BuildUngroupedContent(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage, string generatedFooterHtml)
     {
         var builder = new StringBuilder();
         if (layout.Summaries is { Count: > 0 })
             builder.Append(BuildSummaryCards(layout.Summaries, rows));
-        AppendMainAndSectionTables(builder, layout, columns, rows, deduplicateMainRows: false, rowsPerPage);
+        AppendMainAndSectionTables(builder, layout, columns, rows, deduplicateMainRows: false, rowsPerPage, generatedFooterHtml);
         return builder.ToString();
     }
 
-    private static void AppendMainAndSectionTables(StringBuilder builder, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> mainColumns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, bool deduplicateMainRows, int rowsPerPage)
+    private static void AppendMainAndSectionTables(StringBuilder builder, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> mainColumns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, bool deduplicateMainRows, int rowsPerPage, string generatedFooterHtml)
     {
         if (mainColumns.Count > 0)
         {
             var mainRows = deduplicateMainRows
                 ? DistinctRowsForColumns(rows, mainColumns)
                 : rows;
-            builder.Append(BuildSingleTable(mainColumns, mainRows, rowsPerPage));
+            builder.Append(BuildSingleTable(mainColumns, mainRows, rowsPerPage, generatedFooterHtml));
         }
 
         if (layout.Sections is { Count: > 0 })
-            builder.Append(BuildSectionTables(layout, rows, rowsPerPage));
+            builder.Append(BuildSectionTables(layout, rows, rowsPerPage, generatedFooterHtml));
     }
 
     private static IReadOnlyList<IReadOnlyDictionary<string, object?>> DistinctRowsForColumns(IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, IReadOnlyList<ReportLayoutColumn> columns)
@@ -237,7 +238,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         };
     }
 
-    private static string BuildSectionTables(ReportLayoutDefinition layout, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
+    private static string BuildSectionTables(ReportLayoutDefinition layout, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage, string generatedFooterHtml)
     {
         if (layout.Sections is not { Count: > 0 })
             return string.Empty;
@@ -253,7 +254,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             if (columns.Count == 0)
                 continue;
 
-            builder.Append(BuildSingleTable(columns, rows, rowsPerPage));
+            builder.Append(BuildSingleTable(columns, rows, rowsPerPage, generatedFooterHtml));
         }
 
         return builder.ToString();
@@ -289,7 +290,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
-    private static string BuildSingleTable(IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
+    private static string BuildSingleTable(IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage, string generatedFooterHtml)
     {
         var safeRowsPerPage = Math.Clamp(rowsPerPage, 10, 200);
         var totalPages = rows.Count == 0 ? 1 : (int)Math.Ceiling(rows.Count / (double)safeRowsPerPage);
@@ -299,6 +300,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         if (rows.Count == 0)
         {
             builder.Append(BuildTablePage(columns, rows, baseCaption));
+            builder.Append(generatedFooterHtml);
             return builder.ToString();
         }
 
@@ -313,6 +315,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             }
 
             builder.Append(BuildTablePage(columns, chunk, caption));
+            builder.Append(generatedFooterHtml);
             if (pageIndex < totalPages - 1)
                 builder.Append("<div class=\"report-page-break\"></div>");
         }
@@ -857,13 +860,21 @@ public class ReportHtmlComposer : IReportHtmlComposer
         return CssStringLiteral(BuildPageHeader(layout));
     }
 
-    private static string BuildPageFooterCssContent(ReportLayoutDefinition layout)
+    private static string BuildPageFooterCssContent(ReportLayoutDefinition layout, string generatedFooterText)
     {
+        var footerParts = new List<string>();
         var footer = BuildPageFooter(layout);
-        if (string.IsNullOrWhiteSpace(footer))
-            return "\"Pagina \" counter(page) \" de \" counter(pages)";
+        if (!string.IsNullOrWhiteSpace(footer))
+            footerParts.Add(footer);
 
-        return $"{CssStringLiteral($"{footer} | Pagina ")} counter(page) \" de \" counter(pages)";
+        if (!string.IsNullOrWhiteSpace(generatedFooterText))
+            footerParts.Add(generatedFooterText);
+
+        var prefix = footerParts.Count == 0
+            ? "Pagina "
+            : $"{string.Join(" | ", footerParts)} | Pagina ";
+
+        return $"{CssStringLiteral(prefix)} counter(page) \" de \" counter(pages)";
     }
 
     private static string CssStringLiteral(string? value)
@@ -874,13 +885,17 @@ public class ReportHtmlComposer : IReportHtmlComposer
         return $"\"{escaped}\"";
     }
 
-    private static string BuildGeneratedFooter(int rowCount, DateTime generatedAtUtc)
+    private static string BuildGeneratedFooterText(int rowCount, DateTime generatedAtUtc)
     {
         var timestamp = generatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        return $"Gerado por Discovery RMM em {timestamp} UTC | {rowCount} registro(s)";
+    }
+
+    private static string BuildGeneratedFooter(string generatedFooterText)
+    {
         return $$"""
             <div class="report-generated-footer">
-                <span>Gerado por Discovery RMM em {{timestamp}} UTC</span>
-                <span>{{rowCount}} registro(s)</span>
+                <span>{{HtmlEscape(generatedFooterText)}}</span>
             </div>
             """;
     }
