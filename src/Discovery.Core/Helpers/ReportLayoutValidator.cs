@@ -23,6 +23,7 @@ public static partial class ReportLayoutValidator
     private static readonly HashSet<string> AllowedColumnFormats = new(StringComparer.OrdinalIgnoreCase) { "text", "date", "datetime", "number", "boolean" };
     private static readonly HashSet<string> AllowedAggregates = new(StringComparer.OrdinalIgnoreCase) { "count", "countDistinct", "sum" };
     private static readonly HashSet<string> AllowedJoinTypes = new(StringComparer.OrdinalIgnoreCase) { "left", "inner" };
+    private static readonly HashSet<string> AllowedWatermarkFits = new(StringComparer.OrdinalIgnoreCase) { "contain", "cover" };
 
     public static IReadOnlyCollection<string> GetSupportedOrientations() => AllowedOrientations.ToArray();
     public static IReadOnlyCollection<string> GetSupportedColumnFormats() => AllowedColumnFormats.ToArray();
@@ -93,6 +94,7 @@ public static partial class ReportLayoutValidator
 
         ValidateLogo(layout.LogoUrl, "logoUrl", errors);
         ValidateStyle(layout.Style, errors);
+        ValidateWatermark(layout.Watermark, errors);
 
         if (layout.Columns is { Count: > 0 } && layout.Columns.Count > MaxTopLevelColumns)
             errors.Add($"Layout supports at most {MaxTopLevelColumns} top-level columns.");
@@ -302,6 +304,18 @@ public static partial class ReportLayoutValidator
 
         if (style.LogoMaxHeightPx.HasValue && (style.LogoMaxHeightPx < 24 || style.LogoMaxHeightPx > 200))
             errors.Add("style.logoMaxHeightPx must be between 24 and 200.");
+    }
+
+    private static void ValidateWatermark(ReportLayoutWatermarkDefinition? watermark, ICollection<string> errors)
+    {
+        if (watermark is null)
+            return;
+
+        ValidateLogo(watermark.LogoUrl, "watermark.logoUrl", errors);
+        ValidateLogo(watermark.ImageUrl, "watermark.imageUrl", errors);
+
+        if (!string.IsNullOrWhiteSpace(watermark.ImageFit) && !AllowedWatermarkFits.Contains(watermark.ImageFit))
+            errors.Add($"watermark.imageFit must be one of: {string.Join(", ", AllowedWatermarkFits)}.");
     }
 
     private static void ValidateColor(string? value, string fieldName, ICollection<string> errors)

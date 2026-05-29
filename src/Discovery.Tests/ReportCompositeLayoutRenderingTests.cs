@@ -466,6 +466,83 @@ public class ReportCompositeLayoutRenderingTests
     }
 
     [Test]
+    public void HtmlComposer_WhenShowRowStripesIsDisabled_UsesTransparentAlternateRowColor()
+    {
+        var composer = new ReportHtmlComposer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "style": {
+                "alternateRowColor": "#EEF4F7",
+                "showRowStripes": false
+              },
+              "columns": [
+                { "field": "agentHostname", "header": "Hostname" }
+              ]
+            }
+            """
+        };
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname"],
+            Rows =
+            [
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "PC-01"
+                }
+            ]
+        };
+
+        var html = composer.Compose(context, data);
+
+        Assert.That(html, Does.Contain("--report-alt-row: transparent;"));
+    }
+
+    [Test]
+    public void HtmlComposer_WhenWatermarkHasDedicatedLogoUrl_PrioritizesDedicatedUrl()
+    {
+        var composer = new ReportHtmlComposer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "logoUrl": "https://cdn.exemplo.local/logo-principal.png",
+              "watermark": {
+                "useLogo": true,
+                "logoUrl": "https://cdn.exemplo.local/logo-watermark.png",
+                "imageOpacity": 0.2
+              },
+              "columns": [
+                { "field": "agentHostname", "header": "Hostname" }
+              ]
+            }
+            """
+        };
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname"],
+            Rows =
+            [
+                new Dictionary<string, object?>
+                {
+                    ["agentHostname"] = "PC-01"
+                }
+            ]
+        };
+
+        var html = composer.Compose(context, data);
+
+        Assert.That(html, Does.Contain("src=\"https://cdn.exemplo.local/logo-principal.png\""));
+        Assert.That(html, Does.Contain("src=\"https://cdn.exemplo.local/logo-watermark.png\""));
+    }
+
+    [Test]
     public void HtmlComposer_WhenRenderingAnyReport_IncludesGeneratedFooterMetadata()
     {
         var composer = new ReportHtmlComposer();

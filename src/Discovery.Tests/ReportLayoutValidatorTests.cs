@@ -95,6 +95,43 @@ public class ReportLayoutValidatorTests
     }
 
     [Test]
+    public void ValidateJson_WhenWatermarkDedicatedLogoUrlIsValid_ReturnsNoErrors()
+    {
+        const string layoutJson = """
+        {
+          "columns": [ { "field": "softwareName" } ],
+          "watermark": {
+            "useLogo": true,
+            "logoUrl": "https://cdn.exemplo.local/watermark.png",
+            "imageFit": "cover",
+            "imageOpacity": 0.2
+          }
+        }
+        """;
+
+        var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+        Assert.That(errors, Is.Empty);
+    }
+
+    [Test]
+    public void ValidateJson_WhenWatermarkImageFitIsInvalid_ReturnsError()
+    {
+        const string layoutJson = """
+        {
+          "columns": [ { "field": "softwareName" } ],
+          "watermark": {
+            "imageFit": "stretch"
+          }
+        }
+        """;
+
+        var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+        Assert.That(errors, Has.Some.Contains("watermark.imageFit"));
+    }
+
+    [Test]
     public void ValidateJson_WhenSummaryRequiresFieldAndDoesNotProvideIt_ReturnsError()
     {
         const string layoutJson = """

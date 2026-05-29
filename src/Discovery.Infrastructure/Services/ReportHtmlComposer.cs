@@ -18,6 +18,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         var generatedFooterHtml = BuildGeneratedFooter(data.Rows.Count, DateTime.UtcNow);
         var logoUrl = layout.LogoUrl ?? layout.Style?.LogoUrl;
         var style = layout.Style ?? new ReportLayoutStyleDefinition();
+        var alternateRowBackground = ResolveAlternateRowBackground(style);
         var content = string.IsNullOrWhiteSpace(layout.GroupBy)
             ? BuildUngroupedContent(layout, columns, data.Rows, rowsPerPage)
             : BuildGroupedSections(layout, columns, data.Rows, rowsPerPage);
@@ -56,7 +57,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                         --report-primary: {{CssValueOrDefault(style.PrimaryColor, "#0f4c81")}};
                         --report-header-bg: {{CssValueOrDefault(style.HeaderBackgroundColor, style.PrimaryColor, "#0f4c81")}};
                         --report-header-text: {{CssValueOrDefault(style.HeaderTextColor, "#ffffff")}};
-                        --report-alt-row: {{CssValueOrDefault(style.AlternateRowColor, "#f5f7fb")}};
+                        --report-alt-row: {{alternateRowBackground}};
                         --report-border: {{CssValueOrDefault(style.BorderColor, "#d9e2ec")}};
                         --report-muted: {{CssValueOrDefault(style.SecondaryColor, "#52606d")}};
                         --report-font: {{CssValueOrDefault(style.FontFamily, "Arial, sans-serif")}};
@@ -69,7 +70,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                         @bottom-center { content: {{pageFooterCssContent}}; font-size: 9px; color: var(--report-muted); }
                     }
 
-                    body { font-family: var(--report-font); margin: 0; color: #1f2933; background: #ffffff; }
+                    body { font-family: var(--report-font); margin: 0; color: #1f2933; background: #ffffff; position: relative; }
                     .report-shell { padding: 12px 6px; max-width: 190mm; margin: 0 auto; }
                     .report-header { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; border-bottom:3px solid var(--report-primary); padding-bottom:14px; margin-bottom:18px; }
                     .report-title { margin:0; color:var(--report-primary); font-size:26px; }
@@ -611,6 +612,43 @@ public class ReportHtmlComposer : IReportHtmlComposer
         return string.Empty;
     }
 
+    private static string ResolveAlternateRowBackground(ReportLayoutStyleDefinition style)
+    {
+        if (style.ShowRowStripes is false)
+            return "transparent";
+
+        var rawColor = CssValueOrDefault(style.AlternateRowColor, "#f5f7fb");
+        return TryParseHexColor(rawColor, out var red, out var green, out var blue)
+            ? $"rgba({red}, {green}, {blue}, 0.35)"
+            : rawColor;
+    }
+
+    private static bool TryParseHexColor(string? value, out int red, out int green, out int blue)
+    {
+        red = 0;
+        green = 0;
+        blue = 0;
+
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var hex = value.Trim();
+        if (!hex.StartsWith('#'))
+            return false;
+
+        if (hex.Length == 4)
+        {
+            hex = $"#{hex[1]}{hex[1]}{hex[2]}{hex[2]}{hex[3]}{hex[3]}";
+        }
+
+        if (hex.Length != 7)
+            return false;
+
+        return int.TryParse(hex.AsSpan(1, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out red)
+            && int.TryParse(hex.AsSpan(3, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out green)
+            && int.TryParse(hex.AsSpan(5, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out blue);
+    }
+
     private static string HtmlAttributeEscape(string? text) => System.Net.WebUtility.HtmlEncode(text ?? string.Empty);
     private static string HtmlEscape(string? text) => System.Net.WebUtility.HtmlEncode(text ?? string.Empty);
 
@@ -905,12 +943,16 @@ public class ReportHtmlComposer : IReportHtmlComposer
 
     private static string? ResolveWatermarkImageUrl(ReportLayoutDefinition layout, ReportLayoutWatermarkDefinition watermark)
     {
+        if (!string.IsNullOrWhiteSpace(watermark.LogoUrl))
+            return watermark.LogoUrl;
+
+        if (!string.IsNullOrWhiteSpace(watermark.ImageUrl))
+            return watermark.ImageUrl;
+
         if (watermark.UseLogo)
             return layout.LogoUrl ?? layout.Style?.LogoUrl;
 
-        return string.IsNullOrWhiteSpace(watermark.ImageUrl)
-            ? null
-            : watermark.ImageUrl;
+        return null;
     }
 
     private sealed record ReportLayoutColumn(string Field, string Header, string? Format, string? SectionTitle, ReportLayoutConditionalFormat? ConditionalFormat = null);

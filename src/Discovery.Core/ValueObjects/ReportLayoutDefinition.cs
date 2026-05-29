@@ -70,6 +70,7 @@ public class ReportLayoutStyleDefinition
     public string? FontFamily { get; init; }
     public string? LogoUrl { get; init; }
     public int? LogoMaxHeightPx { get; init; }
+    public bool? ShowRowStripes { get; init; }
 }
 
 public static class ReportLayoutDefinitionParser
@@ -145,6 +146,7 @@ public class ReportLayoutWatermarkDefinition
     public int Angle { get; init; } = -45;
     public bool Repeat { get; init; }
     public bool UseLogo { get; init; }
+    public string? LogoUrl { get; init; }
     public string? ImageUrl { get; init; }
     public string? ImageFit { get; init; }
     public double? ImageOpacity { get; init; }
