@@ -37,7 +37,8 @@ internal static class ReportValidationHelpers
         var formats = new HashSet<ReportFormat>
         {
             ReportFormat.Xlsx,
-            ReportFormat.Csv
+            ReportFormat.Csv,
+            ReportFormat.Markdown
         };
 
         if (options.EnablePdf)
