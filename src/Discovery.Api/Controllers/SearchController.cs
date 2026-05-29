@@ -19,14 +19,14 @@ public class SearchController : ControllerBase
     }
 
     /// <summary>
-    /// Busca universal. Retorna resultados de Agents, Clients, Sites, Tickets e Software
-    /// filtrados conforme as permissões de escopo do usuário autenticado.
+    /// Busca universal. Retorna resultados de Agents, Clients, Sites, Tickets, Software,
+    /// menus de navegação e templates de relatório com atalho para execução.
+    /// Todos os resultados são filtrados conforme as permissões de escopo do usuário autenticado.
     /// </summary>
     /// <param name="q">Termo de busca (mínimo 2 caracteres).</param>
     /// <param name="maxResults">Máximo de resultados por grupo (padrão: 10, máximo: 25).</param>
     /// <param name="ct">Token de cancelamento.</param>
     [HttpGet]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> Search(
         [FromQuery] string q,
         [FromQuery] int maxResults = 10,

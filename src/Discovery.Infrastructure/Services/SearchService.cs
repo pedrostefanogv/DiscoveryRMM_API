@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums.Identity;
@@ -16,6 +18,7 @@ namespace Discovery.Infrastructure.Services;
 public class SearchService : ISearchService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly NavigationTarget[] NavigationTargets = BuildNavigationTargets();
     private const int CacheTtlSeconds = 30;
     private const int SearchTimeoutMs = 5000;
     private const int MaxResultsDefault = 10;
@@ -63,6 +66,13 @@ public class SearchService : ISearchService
         var clientAccess = await _scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View);
         var siteAccess = await _scopeContext.GetAccessAsync(ResourceType.Sites, ActionType.View);
         var ticketAccess = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
+        var reportAccess = await _scopeContext.GetAccessAsync(ResourceType.Reports, ActionType.View);
+        var navigationPermissionMap = await ResolveNavigationPermissionsAsync(
+            agentAccess,
+            clientAccess,
+            siteAccess,
+            ticketAccess,
+            reportAccess);
 
         // Executa consultas em sequencia com timeout parcial
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -70,11 +80,13 @@ public class SearchService : ISearchService
 
         var searchSteps = new Func<CancellationToken, Task<SearchResultGroup?>>[]
         {
+            token => SearchNavigationAsync(query, maxResults, navigationPermissionMap, token),
             token => SearchAgentsAsync(query, agentAccess, maxResults, token),
             token => SearchClientsAsync(query, clientAccess, maxResults, token),
             token => SearchSitesAsync(query, clientAccess, siteAccess, maxResults, token),
             token => SearchTicketsAsync(query, ticketAccess, maxResults, token),
             token => SearchSoftwareAsync(query, agentAccess, maxResults, token),
+            token => SearchReportTemplatesAsync(query, reportAccess, maxResults, token),
         };
 
         var completedGroups = new List<SearchResultGroup>();
@@ -452,8 +464,253 @@ public class SearchService : ISearchService
             : null;
     }
 
+    private Task<SearchResultGroup?> SearchNavigationAsync(
+        string query,
+        int maxResults,
+        IReadOnlyDictionary<ResourceType, bool> permissionMap,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var items = NavigationTargets
+            .Where(target => NavigationTargetAllowed(target, permissionMap))
+            .Where(target => NavigationTargetMatches(target, query))
+            .Take(maxResults)
+            .Select(target => new SearchResultItem(
+                Id: DeterministicGuid($"navigation:{target.Url}"),
+                Title: target.Title,
+                Subtitle: target.Section,
+                Description: target.Description,
+                EntityType: "navigation",
+                ClientId: null,
+                ClientName: null,
+                SiteId: null,
+                SiteName: null,
+                Url: target.Url))
+            .ToList();
+
+        SearchResultGroup? group = items.Count > 0
+            ? new SearchResultGroup("navigation", "Navegação", "layers", items)
+            : null;
+
+        return Task.FromResult(group);
+    }
+
+    private async Task<SearchResultGroup?> SearchReportTemplatesAsync(
+        string query,
+        UserScopeAccess access,
+        int maxResults,
+        CancellationToken ct)
+    {
+        if (!HasAnyAccess(access))
+            return null;
+
+        var templates = _db.ReportTemplates
+            .AsNoTracking()
+            .Where(template => template.IsActive)
+            .Where(template =>
+                EF.Functions.ILike(template.Name, $"%{query}%") ||
+                EF.Functions.ILike(template.Description ?? "", $"%{query}%") ||
+                EF.Functions.ILike(template.Instructions ?? "", $"%{query}%"));
+
+        if (!access.HasGlobalAccess)
+        {
+            var allowedClientIds = access.AllowedClientIds.ToHashSet();
+            if (allowedClientIds.Count == 0 && access.AllowedSiteIds.Count > 0)
+            {
+                var allowedSiteIds = access.AllowedSiteIds.ToHashSet();
+                var siteClientIds = await _db.Sites
+                    .AsNoTracking()
+                    .Where(site => allowedSiteIds.Contains(site.Id))
+                    .Select(site => site.ClientId)
+                    .Distinct()
+                    .ToListAsync(ct);
+
+                allowedClientIds.UnionWith(siteClientIds);
+            }
+
+            if (allowedClientIds.Count == 0)
+                return null;
+
+            templates = templates.Where(template =>
+                template.ClientId == null ||
+                (template.ClientId.HasValue && allowedClientIds.Contains(template.ClientId.Value)));
+        }
+
+        var results = await templates
+            .OrderBy(template => template.Name)
+            .Take(maxResults)
+            .Select(template => new
+            {
+                template.Id,
+                template.Name,
+                template.Description,
+                template.DatasetType,
+                template.DefaultFormat,
+                template.ClientId
+            })
+            .ToListAsync(ct);
+
+        if (results.Count == 0)
+            return null;
+
+        var clientIds = results
+            .Where(item => item.ClientId.HasValue)
+            .Select(item => item.ClientId!.Value)
+            .Distinct()
+            .ToList();
+
+        var clientMap = clientIds.Count == 0
+            ? new Dictionary<Guid, string>()
+            : await _db.Clients
+                .AsNoTracking()
+                .Where(client => clientIds.Contains(client.Id))
+                .ToDictionaryAsync(client => client.Id, client => client.Name, ct);
+
+        var items = results.Select(item =>
+        {
+            var clientName = item.ClientId.HasValue && clientMap.TryGetValue(item.ClientId.Value, out var name)
+                ? name
+                : null;
+
+            return new SearchResultItem(
+                Id: item.Id,
+                Title: item.Name,
+                Subtitle: $"{item.DatasetType} • {item.DefaultFormat}",
+                Description: item.Description,
+                EntityType: "report-template",
+                ClientId: item.ClientId,
+                ClientName: clientName,
+                SiteId: null,
+                SiteName: null,
+                Url: $"/reports/run?templateId={item.Id}");
+        }).ToList();
+
+        return new SearchResultGroup("reports", "Relatórios", "package", items);
+    }
+
     // ─── Helpers ───────────────────────────────────────────────────────
+
+    private static bool HasAnyAccess(UserScopeAccess access)
+        => access.HasGlobalAccess || access.AllowedClientIds.Count > 0 || access.AllowedSiteIds.Count > 0;
+
+    private static bool NavigationTargetMatches(NavigationTarget target, string query)
+    {
+        if (ContainsInsensitive(target.Title, query) || ContainsInsensitive(target.Url, query))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(target.Section) && ContainsInsensitive(target.Section, query))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(target.Description) && ContainsInsensitive(target.Description, query))
+            return true;
+
+        return !string.IsNullOrWhiteSpace(target.Keywords) && ContainsInsensitive(target.Keywords, query);
+    }
+
+    private static bool NavigationTargetAllowed(
+        NavigationTarget target,
+        IReadOnlyDictionary<ResourceType, bool> permissionMap)
+    {
+        if (target.AnyOfResources.Length == 0)
+            return true;
+
+        foreach (var resource in target.AnyOfResources)
+        {
+            if (permissionMap.TryGetValue(resource, out var hasAccess) && hasAccess)
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task<IReadOnlyDictionary<ResourceType, bool>> ResolveNavigationPermissionsAsync(
+        UserScopeAccess agentAccess,
+        UserScopeAccess clientAccess,
+        UserScopeAccess siteAccess,
+        UserScopeAccess ticketAccess,
+        UserScopeAccess reportAccess)
+    {
+        var map = new Dictionary<ResourceType, bool>
+        {
+            [ResourceType.Agents] = HasAnyAccess(agentAccess),
+            [ResourceType.Clients] = HasAnyAccess(clientAccess),
+            [ResourceType.Sites] = HasAnyAccess(siteAccess),
+            [ResourceType.Tickets] = HasAnyAccess(ticketAccess),
+            [ResourceType.Reports] = HasAnyAccess(reportAccess)
+        };
+
+        var missingResources = NavigationTargets
+            .SelectMany(target => target.AnyOfResources)
+            .Distinct()
+            .Where(resource => !map.ContainsKey(resource))
+            .ToList();
+
+        foreach (var resource in missingResources)
+        {
+            var access = await _scopeContext.GetAccessAsync(resource, ActionType.View);
+            map[resource] = HasAnyAccess(access);
+        }
+
+        return map;
+    }
+
+    private static bool ContainsInsensitive(string source, string value)
+        => source.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+    private static Guid DeterministicGuid(string seed)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(seed));
+        return new Guid(hash[..16]);
+    }
+
+    private static NavigationTarget[] BuildNavigationTargets() =>
+    [
+        new("Dashboard", "Principal", "Visão geral do ambiente.", "/", "painel home inicio dashboard", [ResourceType.Dashboard]),
+        new("Clientes", "Navegação", "Lista de clientes.", "/clients", "clientes customer customer list", [ResourceType.Clients]),
+        new("Sites", "Navegação", "Lista de sites.", "/sites", "sites unidades locais", [ResourceType.Sites]),
+        new("Agentes", "Navegação", "Inventário de agentes.", "/agents", "agentes dispositivos hosts endpoints", [ResourceType.Agents]),
+        new("Logs", "Navegação", "Eventos e logs do sistema.", "/logs", "logs eventos auditoria", [ResourceType.Logs]),
+        new("Deploy", "Navegação", "Distribuição e instalação.", "/deploy", "deploy instalacao instalador token", [ResourceType.Deployment]),
+        new("Chamados", "Suporte", "Fila de chamados.", "/tickets", "tickets chamados suporte", [ResourceType.Tickets]),
+        new("Conhecimento", "Suporte", "Base de conhecimento.", "/knowledge", "kb base conhecimento artigos", [ResourceType.KnowledgeBase]),
+        new("Alertas", "Suporte", "Regras e eventos de alerta.", "/tickets/alerts", "alertas regras", [ResourceType.Tickets]),
+        new("SLA, Calendários e Perfis", "Suporte", "Gestão de SLA e horários.", "/tickets/sla", "sla calendario perfis", [ResourceType.Tickets]),
+        new("Departamentos", "Suporte", "Configuração de departamentos.", "/tickets/departments", "departamentos", [ResourceType.Tickets]),
+        new("Workflow Profiles", "Suporte", "Perfis de workflow.", "/settings/workflow-profiles", "workflow profiles", [ResourceType.Tickets]),
+        new("Inventário Detalhado", "Softwares", "Inventário de software instalado.", "/software/inventory", "software inventario", [ResourceType.Agents]),
+        new("Loja de aplicativos", "Softwares", "Catálogo de aplicativos.", "/software/store", "software loja app store", [ResourceType.AppStore]),
+        new("Automação", "Automação", "Visão geral de automações.", "/automation", "automacao automacao geral overview", [ResourceType.Automation]),
+        new("Scripts", "Automação", "Biblioteca de scripts.", "/automation/scripts", "scripts automacao", [ResourceType.Automation]),
+        new("Tarefas", "Automação", "Tarefas automatizadas.", "/automation/tasks", "tarefas jobs automacao", [ResourceType.Automation]),
+        new("Operações", "Automação", "Execuções operacionais.", "/automation/operations", "operacoes runs execucoes", [ResourceType.Automation]),
+        new("Auditoria", "Automação", "Auditoria das automações.", "/automation/audit", "auditoria automation", [ResourceType.Automation]),
+        new("Labels Automáticas", "Automação", "Gerenciamento de labels automáticas.", "/settings/agent-labels", "labels tags automaticas", [ResourceType.Automation]),
+        new("Templates de Relatórios", "Relatórios", "Biblioteca de templates de relatório.", "/reports/templates", "relatorios relatorios templates", [ResourceType.Reports]),
+        new("Execuções de Relatórios", "Relatórios", "Histórico e status de execuções.", "/reports/executions", "relatorios execucoes processamento", [ResourceType.Reports]),
+        new("Perfil e Segurança", "Identidade", "Configurações de autenticação.", "/identity/authentication", "perfil seguranca autenticacao", []),
+        new("Usuários e Acesso", "Identidade", "Gerenciamento de usuários.", "/identity/users", "usuarios acesso", [ResourceType.Users]),
+        new("Grupos de Usuários", "Identidade", "Gerenciamento de grupos.", "/identity/groups", "grupos usuarios", [ResourceType.Users]),
+        new("Roles e Permissões", "Identidade", "Controle de permissões.", "/identity/roles", "roles permissoes", [ResourceType.Users]),
+        new("Perfis Mesh", "Identidade", "Perfis do MeshCentral.", "/identity/mesh-profiles", "mesh profiles", [ResourceType.Users]),
+        new("Config MeshCentral", "Identidade", "Configurações do MeshCentral.", "/identity/mesh-central", "mesh central config", [ResourceType.Users, ResourceType.SiteConfig]),
+        new("Diagnostics MeshCentral", "Identidade", "Diagnóstico do MeshCentral.", "/identity/mesh-diagnostics", "mesh diagnostics", [ResourceType.SiteConfig]),
+        new("Node Links Mesh", "Identidade", "Vínculos de nós Mesh.", "/identity/mesh-node-links", "mesh node links", [ResourceType.Agents, ResourceType.SiteConfig]),
+        new("Configurações Gerais", "Configurações", "Configurações globais.", "/settings", "configuracoes settings geral", [ResourceType.ServerConfig]),
+        new("Workflow", "Configurações", "Configuração de workflows.", "/settings/workflow", "workflow configuracoes", [ResourceType.Tickets]),
+        new("Auditoria Config", "Configurações", "Auditoria de configurações.", "/settings/audit", "auditoria configuracao", [ResourceType.Logs]),
+        new("Campos Personalizados", "Configurações", "Campos customizáveis.", "/settings/custom-fields", "campos personalizados custom fields", [ResourceType.ServerConfig]),
+        new("Branding", "Configurações", "Identidade visual da plataforma.", "/settings/branding", "branding tema marca", [ResourceType.ServerConfig])
+    ];
 
     private static UniversalSearchResult EmptyResult()
         => new([], 0, DateTime.UtcNow);
+
+    private sealed record NavigationTarget(
+        string Title,
+        string Section,
+        string? Description,
+        string Url,
+        string? Keywords,
+        ResourceType[] AnyOfResources);
 }

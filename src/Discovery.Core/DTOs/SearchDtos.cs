@@ -13,8 +13,8 @@ public record UniversalSearchResult(
 /// Grupo de resultados de um mesmo tipo de entidade.
 /// </summary>
 public record SearchResultGroup(
-    string EntityType,       // "agents", "clients", "sites", "tickets", "software"
-    string Label,            // "Agentes", "Clientes", "Sites", "Chamados", "Softwares"
+    string EntityType,       // "agents", "clients", "sites", "tickets", "software", "navigation", "reports"
+    string Label,            // "Agentes", "Clientes", "Sites", "Chamados", "Softwares", "Navegação", "Relatórios"
     string Icon,             // Nome do ícone para o frontend
     List<SearchResultItem> Items);
 

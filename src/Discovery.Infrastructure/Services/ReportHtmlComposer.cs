@@ -7,15 +7,19 @@ namespace Discovery.Infrastructure.Services;
 
 public class ReportHtmlComposer : IReportHtmlComposer
 {
+    private const int DefaultPortraitRowsPerPage = 32;
+    private const int DefaultLandscapeRowsPerPage = 24;
+
     public string Compose(ReportRenderContext context, ReportQueryResult data)
     {
         var layout = ReportLayoutDefinitionParser.ParseOrDefault(context.LayoutJson);
         var columns = ResolveColumns(layout, data);
+        var rowsPerPage = ResolveRowsPerPage(layout);
         var logoUrl = layout.LogoUrl ?? layout.Style?.LogoUrl;
         var style = layout.Style ?? new ReportLayoutStyleDefinition();
         var content = string.IsNullOrWhiteSpace(layout.GroupBy)
-            ? BuildUngroupedContent(layout, columns, data.Rows)
-            : BuildGroupedSections(layout, columns, data.Rows);
+            ? BuildUngroupedContent(layout, columns, data.Rows, rowsPerPage)
+            : BuildGroupedSections(layout, columns, data.Rows, rowsPerPage);
 
         var subtitleHtml = string.IsNullOrWhiteSpace(context.Subtitle)
             ? string.Empty
@@ -35,8 +39,8 @@ public class ReportHtmlComposer : IReportHtmlComposer
         var chartsHtml = BuildChartsSection(layout);
 
         // Page header/footer
-        var pageHeaderHtml = BuildPageHeader(layout);
-        var pageFooterHtml = BuildPageFooter(layout);
+        var pageHeaderCssContent = BuildPageHeaderCssContent(layout);
+        var pageFooterCssContent = BuildPageFooterCssContent(layout);
 
         // Watermark
         var watermarkHtml = BuildWatermark(layout);
@@ -60,17 +64,17 @@ public class ReportHtmlComposer : IReportHtmlComposer
                     @page {
                         size: A4 {{layout.Orientation ?? "portrait"}};
                         margin: 20mm 15mm 25mm 15mm;
-                        @top-center { content: "{{pageHeaderHtml}}"; font-size: 10px; color: var(--report-muted); }
-                        @bottom-center { content: "{{pageFooterHtml}}"; font-size: 9px; color: var(--report-muted); }
+                        @top-center { content: {{pageHeaderCssContent}}; font-size: 10px; color: var(--report-muted); }
+                        @bottom-center { content: {{pageFooterCssContent}}; font-size: 9px; color: var(--report-muted); }
                     }
 
                     body { font-family: var(--report-font); margin: 0; color: #1f2933; background: #ffffff; }
-                    .report-shell { padding: 12px 6px; }
+                    .report-shell { padding: 12px 6px; max-width: 190mm; margin: 0 auto; }
                     .report-header { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; border-bottom:3px solid var(--report-primary); padding-bottom:14px; margin-bottom:18px; }
                     .report-title { margin:0; color:var(--report-primary); font-size:26px; }
                     .report-subtitle { margin:6px 0 0; color:var(--report-muted); font-size:13px; }
                     .report-logo { max-height: {{Math.Clamp(style.LogoMaxHeightPx ?? 56, 24, 180)}}px; max-width:220px; object-fit:contain; }
-                    .report-group { margin: 18px 0 24px; page-break-inside: avoid; }
+                    .report-group { margin: 18px 0 24px; page-break-inside: auto; break-inside: auto; }
                     .report-group-title { margin: 0 0 8px; font-size: 18px; color: var(--report-primary); }
                     .report-group-meta { margin: 0 0 10px; color: var(--report-muted); font-size: 12px; }
                     .details-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0 14px; }
@@ -78,10 +82,22 @@ public class ReportHtmlComposer : IReportHtmlComposer
                     .detail-label { font-size:11px; color:var(--report-muted); text-transform:uppercase; letter-spacing:0.04em; }
                     .detail-value { margin-top:6px; font-size:14px; font-weight:600; }
                     table { width:100%; border-collapse:collapse; table-layout:fixed; margin-top:10px; }
+                    thead { display: table-header-group; }
+                    tfoot { display: table-footer-group; }
+                    tr { break-inside: avoid; page-break-inside: avoid; }
                     th, td { border:1px solid var(--report-border); padding:8px 10px; font-size:12px; text-align:left; vertical-align:top; word-wrap:break-word; }
                     th { background:var(--report-header-bg); color:var(--report-header-text); font-weight:700; }
                     tbody tr:nth-child(even) { background:var(--report-alt-row); }
                     .section-caption { margin: 16px 0 6px; color: var(--report-muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; }
+                    .report-page-break { height: 0; margin: 0; border: 0; }
+
+                    @media print {
+                        .report-page-break { page-break-after: always; break-after: page; }
+                    }
+
+                    @media screen {
+                        .report-page-break { border-top: 1px dashed var(--report-border); margin: 18px 0; }
+                    }
 
                     /* Cover page */
                     .report-cover { page-break-after: always; display:flex; flex-direction:column; justify-content:center; align-items:center; min-height:90vh; text-align:center; }
@@ -127,7 +143,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
-    private static string BuildGroupedSections(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    private static string BuildGroupedSections(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
     {
         var grouped = rows.GroupBy(row => GetGroupValue(row, layout.GroupBy!)).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
         var builder = new StringBuilder();
@@ -141,34 +157,34 @@ public class ReportHtmlComposer : IReportHtmlComposer
             builder.Append(BuildDetailsGrid(layout.GroupDetails, groupRows.FirstOrDefault()));
             if (layout.GroupSummaries is { Count: > 0 })
                 builder.Append(BuildSummaryCards(layout.GroupSummaries, groupRows));
-            AppendMainAndSectionTables(builder, layout, FilterColumnsForGrouping(columns, layout), groupRows, deduplicateMainRows: true);
+            AppendMainAndSectionTables(builder, layout, FilterColumnsForGrouping(columns, layout), groupRows, deduplicateMainRows: true, rowsPerPage);
             builder.Append("</section>");
         }
 
         return builder.ToString();
     }
 
-    private static string BuildUngroupedContent(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    private static string BuildUngroupedContent(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
     {
         var builder = new StringBuilder();
         if (layout.Summaries is { Count: > 0 })
             builder.Append(BuildSummaryCards(layout.Summaries, rows));
-        AppendMainAndSectionTables(builder, layout, columns, rows, deduplicateMainRows: false);
+        AppendMainAndSectionTables(builder, layout, columns, rows, deduplicateMainRows: false, rowsPerPage);
         return builder.ToString();
     }
 
-    private static void AppendMainAndSectionTables(StringBuilder builder, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> mainColumns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, bool deduplicateMainRows)
+    private static void AppendMainAndSectionTables(StringBuilder builder, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> mainColumns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, bool deduplicateMainRows, int rowsPerPage)
     {
         if (mainColumns.Count > 0)
         {
             var mainRows = deduplicateMainRows
                 ? DistinctRowsForColumns(rows, mainColumns)
                 : rows;
-            builder.Append(BuildSingleTable(mainColumns, mainRows));
+            builder.Append(BuildSingleTable(mainColumns, mainRows, rowsPerPage));
         }
 
         if (layout.Sections is { Count: > 0 })
-            builder.Append(BuildSectionTables(layout, rows));
+            builder.Append(BuildSectionTables(layout, rows, rowsPerPage));
     }
 
     private static IReadOnlyList<IReadOnlyDictionary<string, object?>> DistinctRowsForColumns(IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, IReadOnlyList<ReportLayoutColumn> columns)
@@ -214,7 +230,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         };
     }
 
-    private static string BuildSectionTables(ReportLayoutDefinition layout, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    private static string BuildSectionTables(ReportLayoutDefinition layout, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
     {
         if (layout.Sections is not { Count: > 0 })
             return string.Empty;
@@ -230,7 +246,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             if (columns.Count == 0)
                 continue;
 
-            builder.Append(BuildSingleTable(columns, rows));
+            builder.Append(BuildSingleTable(columns, rows, rowsPerPage));
         }
 
         return builder.ToString();
@@ -266,10 +282,40 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
-    private static string BuildSingleTable(IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    private static string BuildSingleTable(IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
+    {
+        var safeRowsPerPage = Math.Clamp(rowsPerPage, 10, 200);
+        var totalPages = rows.Count == 0 ? 1 : (int)Math.Ceiling(rows.Count / (double)safeRowsPerPage);
+        var baseCaption = columns.Select(column => column.SectionTitle).FirstOrDefault(title => !string.IsNullOrWhiteSpace(title));
+        var builder = new StringBuilder();
+
+        if (rows.Count == 0)
+        {
+            builder.Append(BuildTablePage(columns, rows, baseCaption));
+            return builder.ToString();
+        }
+
+        for (var pageIndex = 0; pageIndex < totalPages; pageIndex++)
+        {
+            var chunk = rows.Skip(pageIndex * safeRowsPerPage).Take(safeRowsPerPage).ToList();
+            var caption = baseCaption;
+            if (totalPages > 1)
+            {
+                var pageLabel = $"Pagina {pageIndex + 1}/{totalPages}";
+                caption = string.IsNullOrWhiteSpace(caption) ? pageLabel : $"{caption} - {pageLabel}";
+            }
+
+            builder.Append(BuildTablePage(columns, chunk, caption));
+            if (pageIndex < totalPages - 1)
+                builder.Append("<div class=\"report-page-break\"></div>");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string BuildTablePage(IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, string? caption)
     {
         var headers = string.Join(string.Empty, columns.Select(column => $"<th>{HtmlEscape(column.Header)}</th>"));
-        var caption = columns.Select(column => column.SectionTitle).FirstOrDefault(title => !string.IsNullOrWhiteSpace(title));
         var captionHtml = string.IsNullOrWhiteSpace(caption) ? string.Empty : $"<div class=\"section-caption\">{HtmlEscape(caption)}</div>";
         var rowsHtml = string.Join("\n", rows.Select(row =>
         {
@@ -568,7 +614,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         return string.IsNullOrWhiteSpace(display) ? (column.Field ?? string.Empty) : display;
     }
 
-    // ─── Cover Page ────────────────────────────────────────────────
+    // Cover Page
 
     private static string BuildCoverPage(ReportLayoutDefinition layout, ReportRenderContext context, int rowCount, string? logoUrl, ReportLayoutStyleDefinition style)
     {
@@ -601,18 +647,18 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
-    // ─── Table of Contents ─────────────────────────────────────────
+    // Table of Contents
 
     private static string BuildTableOfContents(ReportLayoutDefinition layout)
     {
         if (layout.TableOfContents is not { Enabled: true })
             return string.Empty;
 
-        var tocTitle = string.IsNullOrWhiteSpace(layout.TableOfContents.Title) ? "Índice" : layout.TableOfContents.Title;
+        var tocTitle = string.IsNullOrWhiteSpace(layout.TableOfContents.Title) ? "Indice" : layout.TableOfContents.Title;
 
         // Build TOC from group titles
         var items = new List<(string Title, int Level)>();
-        items.Add((layout.Title ?? "Relatório", 1));
+        items.Add((layout.Title ?? "Relatorio", 1));
 
         if (layout.Sections is { Count: > 0 })
         {
@@ -637,7 +683,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
-    // ─── Charts (QuickChart.io integration) ────────────────────────
+    // Charts (QuickChart.io integration)
 
     private static string BuildChartsSection(ReportLayoutDefinition layout)
     {
@@ -701,7 +747,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             _ => "bar"
         };
 
-        // Placeholder — data will be injected dynamically in future iterations
+        // Placeholder - data will be injected dynamically in future iterations
         // For now, we generate a chart with labels only as placeholder
         var labels = "[\"A\", \"B\", \"C\"]";
         var data = "[10, 25, 15]";
@@ -753,7 +799,36 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
-    // ─── Page Header / Footer ──────────────────────────────────────
+    // Page Header / Footer
+
+    private static int ResolveRowsPerPage(ReportLayoutDefinition layout)
+    {
+        return string.Equals(layout.Orientation, "landscape", StringComparison.OrdinalIgnoreCase)
+            ? DefaultLandscapeRowsPerPage
+            : DefaultPortraitRowsPerPage;
+    }
+
+    private static string BuildPageHeaderCssContent(ReportLayoutDefinition layout)
+    {
+        return CssStringLiteral(BuildPageHeader(layout));
+    }
+
+    private static string BuildPageFooterCssContent(ReportLayoutDefinition layout)
+    {
+        var footer = BuildPageFooter(layout);
+        if (string.IsNullOrWhiteSpace(footer))
+            return "\"Pagina \" counter(page) \" de \" counter(pages)";
+
+        return $"{CssStringLiteral($"{footer} | Pagina ")} counter(page) \" de \" counter(pages)";
+    }
+
+    private static string CssStringLiteral(string? value)
+    {
+        var escaped = (value ?? string.Empty)
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
+        return $"\"{escaped}\"";
+    }
 
     private static string BuildPageHeader(ReportLayoutDefinition layout)
     {
@@ -777,7 +852,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         return string.Join(" | ", parts);
     }
 
-    // ─── Watermark ─────────────────────────────────────────────────
+    // Watermark
 
     private static string BuildWatermark(ReportLayoutDefinition layout)
     {

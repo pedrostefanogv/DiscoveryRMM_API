@@ -341,6 +341,89 @@ public class ReportCompositeLayoutRenderingTests
         Assert.That(CountOccurrences(markdown, "| Firefox | 127 |"), Is.EqualTo(1));
     }
 
+    [Test]
+    public void HtmlComposer_WhenRowsExceedPageThreshold_InsertsPageBreakMarkers()
+    {
+        var composer = new ReportHtmlComposer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "columns": [
+                { "field": "agentHostname", "header": "Hostname" },
+                { "field": "osName", "header": "SO" }
+              ]
+            }
+            """
+        };
+
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        for (var i = 1; i <= 70; i++)
+        {
+            rows.Add(new Dictionary<string, object?>
+            {
+                ["agentHostname"] = $"PC-{i:D3}",
+                ["osName"] = "Windows"
+            });
+        }
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname", "osName"],
+            Rows = rows
+        };
+
+        var html = composer.Compose(context, data);
+
+        Assert.That(CountOccurrences(html, "<table>"), Is.EqualTo(3));
+        Assert.That(CountOccurrences(html, "<div class=\"report-page-break\"></div>"), Is.EqualTo(2));
+        Assert.That(html, Does.Contain("Pagina 2/3"));
+        Assert.That(html, Does.Contain("<td>PC-070</td>"));
+    }
+
+    [Test]
+    public async Task MarkdownRenderer_WhenRowsExceedPageThreshold_InsertsPageBreakMarkers()
+    {
+        var renderer = new MarkdownReportRenderer();
+        var context = new ReportRenderContext
+        {
+            TemplateName = "Preview",
+            LayoutJson = """
+            {
+              "columns": [
+                { "field": "agentHostname", "header": "Hostname" },
+                { "field": "osName", "header": "SO" }
+              ]
+            }
+            """
+        };
+
+        var rows = new List<IReadOnlyDictionary<string, object?>>();
+        for (var i = 1; i <= 70; i++)
+        {
+            rows.Add(new Dictionary<string, object?>
+            {
+                ["agentHostname"] = $"PC-{i:D3}",
+                ["osName"] = "Windows"
+            });
+        }
+
+        var data = new ReportQueryResult
+        {
+            Columns = ["agentHostname", "osName"],
+            Rows = rows
+        };
+
+        var result = await renderer.RenderAsync(context, data);
+        var markdown = Encoding.UTF8.GetString(result.Content);
+
+        Assert.That(markdown, Does.Contain("_Pagina 1 de 3_"));
+        Assert.That(markdown, Does.Contain("_Pagina 3 de 3_"));
+        Assert.That(CountOccurrences(markdown, "<div style=\"page-break-after: always;\"></div>"), Is.EqualTo(2));
+        Assert.That(markdown, Does.Contain("| PC-070 | Windows |"));
+    }
+
     private static int CountOccurrences(string input, string token)
     {
         if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(token))

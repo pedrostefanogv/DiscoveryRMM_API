@@ -13,12 +13,16 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public class MarkdownReportRenderer : IReportRenderer
 {
+    private const int DefaultPortraitRowsPerPage = 32;
+    private const int DefaultLandscapeRowsPerPage = 24;
+
     public ReportFormat Format => ReportFormat.Markdown;
 
     public Task<ReportDocument> RenderAsync(ReportRenderContext context, ReportQueryResult data, CancellationToken cancellationToken = default)
     {
         var layout = ReportLayoutDefinitionParser.ParseOrDefault(context.LayoutJson);
         var columns = ResolveColumns(layout, data);
+        var rowsPerPage = ResolveRowsPerPage(layout);
         var sb = new StringBuilder();
 
         // Header
@@ -55,11 +59,11 @@ public class MarkdownReportRenderer : IReportRenderer
         // Content: grouped or ungrouped
         if (!string.IsNullOrWhiteSpace(layout.GroupBy))
         {
-            BuildGroupedContent(sb, layout, columns, data.Rows);
+            BuildGroupedContent(sb, layout, columns, data.Rows, rowsPerPage);
         }
         else
         {
-            BuildUngroupedContent(sb, layout, columns, data.Rows);
+            BuildUngroupedContent(sb, layout, columns, data.Rows, rowsPerPage);
         }
 
         // Footer
@@ -75,7 +79,14 @@ public class MarkdownReportRenderer : IReportRenderer
         });
     }
 
-    private static void BuildGroupedContent(StringBuilder sb, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    private static int ResolveRowsPerPage(ReportLayoutDefinition layout)
+    {
+        return string.Equals(layout.Orientation, "landscape", StringComparison.OrdinalIgnoreCase)
+            ? DefaultLandscapeRowsPerPage
+            : DefaultPortraitRowsPerPage;
+    }
+
+    private static void BuildGroupedContent(StringBuilder sb, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
     {
         var grouped = rows
             .GroupBy(row => GetGroupValue(row, layout.GroupBy!))
@@ -119,27 +130,27 @@ public class MarkdownReportRenderer : IReportRenderer
             if (filteredColumns.Count > 0)
             {
                 var mainRows = DistinctRowsForColumns(groupRows, filteredColumns);
-                BuildMarkdownTable(sb, filteredColumns, mainRows);
+                BuildMarkdownTable(sb, filteredColumns, mainRows, rowsPerPage);
             }
 
-            BuildSectionTables(sb, layout.Sections, groupRows, headingLevel: 3);
+            BuildSectionTables(sb, layout.Sections, groupRows, headingLevel: 3, rowsPerPage);
 
             sb.AppendLine();
         }
     }
 
-    private static void BuildUngroupedContent(StringBuilder sb, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    private static void BuildUngroupedContent(StringBuilder sb, ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
     {
         sb.AppendLine("## Dados");
         sb.AppendLine();
 
         if (columns.Count > 0)
-            BuildMarkdownTable(sb, columns, rows);
+            BuildMarkdownTable(sb, columns, rows, rowsPerPage);
 
-        BuildSectionTables(sb, layout.Sections, rows, headingLevel: 2);
+        BuildSectionTables(sb, layout.Sections, rows, headingLevel: 2, rowsPerPage);
     }
 
-    private static void BuildSectionTables(StringBuilder sb, IReadOnlyList<ReportLayoutSectionDefinition>? sections, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int headingLevel)
+    private static void BuildSectionTables(StringBuilder sb, IReadOnlyList<ReportLayoutSectionDefinition>? sections, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int headingLevel, int rowsPerPage)
     {
         if (sections is not { Count: > 0 })
             return;
@@ -160,12 +171,43 @@ public class MarkdownReportRenderer : IReportRenderer
                 sb.AppendLine($"{headingPrefix} {EscapeHeading(section.Title)}");
             }
 
-            BuildMarkdownTable(sb, sectionColumns, rows);
+            BuildMarkdownTable(sb, sectionColumns, rows, rowsPerPage);
             sb.AppendLine();
         }
     }
 
-    private static void BuildMarkdownTable(StringBuilder sb, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    private static void BuildMarkdownTable(StringBuilder sb, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage)
+    {
+        var safeRowsPerPage = Math.Clamp(rowsPerPage, 10, 200);
+        var totalPages = rows.Count == 0 ? 1 : (int)Math.Ceiling(rows.Count / (double)safeRowsPerPage);
+
+        if (rows.Count == 0)
+        {
+            AppendTablePage(sb, columns, rows);
+            return;
+        }
+
+        for (var pageIndex = 0; pageIndex < totalPages; pageIndex++)
+        {
+            var chunk = rows.Skip(pageIndex * safeRowsPerPage).Take(safeRowsPerPage).ToList();
+            if (totalPages > 1)
+            {
+                sb.AppendLine($"_Pagina {pageIndex + 1} de {totalPages}_");
+                sb.AppendLine();
+            }
+
+            AppendTablePage(sb, columns, chunk);
+
+            if (pageIndex < totalPages - 1)
+            {
+                sb.AppendLine();
+                sb.AppendLine("<div style=\"page-break-after: always;\"></div>");
+                sb.AppendLine();
+            }
+        }
+    }
+
+    private static void AppendTablePage(StringBuilder sb, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
     {
         // Header row
         var headers = columns.Select(c => EscapePipe(c.Header)).ToList();
