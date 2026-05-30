@@ -1,3 +1,5 @@
+using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Api.Services;
@@ -9,6 +11,7 @@ namespace Discovery.Api.Services;
 public sealed class AgentPackagePrebuildHostedService : BackgroundService
 {
     private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(5);
+    private const string StartupBuildActor = "startup-prebuild";
 
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
@@ -52,6 +55,7 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
             return;
         }
 
+        var publishStage2OnStartup = _configuration.GetValue<bool?>("AgentPackage:PublishStage2OnStartup") ?? true;
         var activeProfile = ResolveActiveProfile();
         var targetPlatform = ResolveConfigForProfile(activeProfile, "InstallerTargetPlatform") ?? "windows/amd64";
         _logger.LogInformation(
@@ -63,12 +67,50 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
         try
         {
             using var scope = _serviceProvider.CreateScope();
-            var service = scope.ServiceProvider.GetRequiredService<IAgentPackageService>();
+            var packageService = scope.ServiceProvider.GetRequiredService<IAgentPackageService>();
+            var agentUpdateService = scope.ServiceProvider.GetRequiredService<IAgentUpdateService>();
+            var syncInvalidationPublisher = scope.ServiceProvider.GetRequiredService<ISyncInvalidationPublisher>();
+
             _logger.LogInformation("Agent prebuild: starting clean base binary build...");
-            await service.PrebuildBaseBinaryAsync(forceRebuild: true, stoppingToken);
+            await packageService.PrebuildBaseBinaryAsync(forceRebuild: true, stoppingToken);
 
             _logger.LogInformation("Agent prebuild: generating update installer artifact...");
-            var (content, fileName) = await service.BuildUpdateInstallerAsync();
+            var (content, fileName) = await packageService.BuildUpdateInstallerAsync();
+
+            if (publishStage2OnStartup)
+            {
+                var version = await ResolveStartupBuildVersionAsync(agentUpdateService, activeProfile, stoppingToken);
+                var contentType = ResolveConfigForProfile(activeProfile, "InstallerContentType")
+                    ?? "application/x-msdownload";
+
+                await using var stream = new MemoryStream(content, writable: false);
+                var publishedBuild = await agentUpdateService.RefreshCurrentBuildAsync(
+                    version: version,
+                    platform: "windows",
+                    architecture: "amd64",
+                    artifactType: AgentReleaseArtifactType.Installer,
+                    fileName: fileName,
+                    contentType: contentType,
+                    content: stream,
+                    signatureThumbprint: null,
+                    actor: StartupBuildActor,
+                    cancellationToken: stoppingToken);
+
+                await syncInvalidationPublisher.PublishGlobalAsync(
+                    SyncResourceType.AgentUpdate,
+                    "agent-build-refreshed-startup",
+                    cancellationToken: stoppingToken);
+
+                _logger.LogInformation(
+                    "Agent prebuild startup published stage2 build successfully. BuildId={BuildId}, version={Version}, file={FileName}",
+                    publishedBuild.Id,
+                    publishedBuild.Version,
+                    publishedBuild.FileName);
+            }
+            else
+            {
+                _logger.LogInformation("Agent prebuild startup stage2 publish skipped (AgentPackage:PublishStage2OnStartup=false).");
+            }
 
             _logger.LogInformation(
                 "Agent prebuild on startup finished successfully. Update installer generated: {FileName} ({SizeBytes} bytes)",
@@ -116,5 +158,55 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
             return profileValue;
 
         return _configuration[$"AgentPackage:{key}"];
+    }
+
+    private async Task<string> ResolveStartupBuildVersionAsync(
+        IAgentUpdateService agentUpdateService,
+        string activeProfile,
+        CancellationToken cancellationToken)
+    {
+        var configuredVersion = ResolveConfigForProfile(activeProfile, "StartupStage2Version");
+        var normalizedConfigured = NormalizeSemanticVersion(configuredVersion);
+        if (!string.IsNullOrWhiteSpace(normalizedConfigured))
+            return normalizedConfigured;
+
+        var currentBuild = await agentUpdateService.GetCurrentBuildAsync(
+            platform: "windows",
+            architecture: "amd64",
+            artifactType: AgentReleaseArtifactType.Installer,
+            cancellationToken: cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(currentBuild?.Version))
+            return currentBuild.Version;
+
+        var assemblyVersion = typeof(AgentPackagePrebuildHostedService).Assembly.GetName().Version;
+        if (assemblyVersion is not null)
+        {
+            var fallback = $"{Math.Max(assemblyVersion.Major, 1)}.{Math.Max(assemblyVersion.Minor, 0)}.{Math.Max(assemblyVersion.Build, 0)}";
+            if (SemanticVersion.TryParse(fallback, out _))
+                return fallback;
+        }
+
+        return "1.0.0";
+    }
+
+    private string? NormalizeSemanticVersion(string? rawVersion)
+    {
+        if (string.IsNullOrWhiteSpace(rawVersion))
+            return null;
+
+        var normalized = rawVersion.Trim();
+        if (normalized.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[1..];
+
+        if (!SemanticVersion.TryParse(normalized, out _))
+        {
+            _logger.LogWarning(
+                "Ignoring invalid semantic version configured for startup stage2 publication: {Version}",
+                rawVersion);
+            return null;
+        }
+
+        return normalized;
     }
 }

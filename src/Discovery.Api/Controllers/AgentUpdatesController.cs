@@ -1,9 +1,11 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Discovery.Api.Controllers;
 
@@ -35,12 +37,12 @@ public class AgentUpdatesController(
     [HttpPost("build/refresh")]
     [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
     public async Task<IActionResult> RefreshBuild(
-        [FromBody] RefreshAgentBuildRequest request,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] RefreshAgentBuildRequest? request,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            if (request.ForceRebuild)
+            if (request?.ForceRebuild == true)
                 await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
 
             var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync();
@@ -48,13 +50,14 @@ public class AgentUpdatesController(
             var contentType = configuration["AgentPackage:InstallerContentType"]
                 ?? "application/x-msdownload";
 
-            var platform = string.IsNullOrWhiteSpace(request.Platform) ? "windows" : request.Platform.Trim().ToLowerInvariant();
-            var architecture = string.IsNullOrWhiteSpace(request.Architecture) ? "amd64" : request.Architecture.Trim().ToLowerInvariant();
-            var artifactType = request.ArtifactType ?? AgentReleaseArtifactType.Installer;
+            var version = await ResolveRefreshVersionAsync(request, cancellationToken);
+            var platform = string.IsNullOrWhiteSpace(request?.Platform) ? "windows" : request.Platform.Trim().ToLowerInvariant();
+            var architecture = string.IsNullOrWhiteSpace(request?.Architecture) ? "amd64" : request.Architecture.Trim().ToLowerInvariant();
+            var artifactType = request?.ArtifactType ?? AgentReleaseArtifactType.Installer;
 
             await using var stream = new MemoryStream(content, writable: false);
             var build = await agentUpdateService.RefreshCurrentBuildAsync(
-                request.Version,
+                version,
                 platform,
                 architecture,
                 artifactType,
@@ -80,6 +83,34 @@ public class AgentUpdatesController(
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    private async Task<string> ResolveRefreshVersionAsync(
+        RefreshAgentBuildRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var requestedVersion = request?.Version?.Trim();
+        if (!string.IsNullOrWhiteSpace(requestedVersion))
+        {
+            if (requestedVersion.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+                requestedVersion = requestedVersion[1..];
+
+            if (!SemanticVersion.TryParse(requestedVersion, out _))
+                throw new InvalidOperationException("version must be a valid semantic version.");
+
+            return requestedVersion;
+        }
+
+        var current = await agentUpdateService.GetCurrentBuildAsync(
+            platform: "windows",
+            architecture: "amd64",
+            artifactType: AgentReleaseArtifactType.Installer,
+            cancellationToken: cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(current?.Version))
+            return current.Version;
+
+        return "1.0.0";
     }
 
     [HttpGet("agents/{agentId:guid}/events")]
@@ -234,9 +265,9 @@ public class AgentUpdatesController(
 }
 
 public sealed record RefreshAgentBuildRequest(
-    string Version,
-    string? Platform,
-    string? Architecture,
+    string? Version = null,
+    string? Platform = null,
+    string? Architecture = null,
     AgentReleaseArtifactType? ArtifactType = AgentReleaseArtifactType.Installer,
     bool ForceRebuild = false);
 
