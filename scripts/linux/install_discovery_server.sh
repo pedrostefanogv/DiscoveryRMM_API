@@ -179,6 +179,7 @@ main() {
   confirm_installation
 
   install_apt_dependencies
+  install_nsis_nsjson_plugin
   ensure_dotnet_sdk
   ensure_nodejs
   ensure_service_user

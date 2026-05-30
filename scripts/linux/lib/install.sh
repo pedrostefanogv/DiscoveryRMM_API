@@ -12,6 +12,28 @@ install_apt_dependencies() {
   sudo apt-get install -y "${packages[@]}"
 }
 
+# Instala o plugin nsJSON no NSIS para merge de configuracao JSON sem PowerShell.
+# O DLL e empacotado junto com os scripts de instalacao (scripts/linux/lib/nsJSON.dll).
+install_nsis_nsjson_plugin() {
+  local plugin_dir="/usr/share/nsis/Plugins/x86-unicode"
+  local dll_path="$plugin_dir/nsJSON.dll"
+  local bundled_dll="${SCRIPT_DIR:-.}/lib/nsJSON.dll"
+
+  if [[ -f "$dll_path" ]]; then
+    log "nsJSON plugin ja instalado em $dll_path"
+    return
+  fi
+
+  if [[ -f "$bundled_dll" ]]; then
+    log "Instalando nsJSON NSIS plugin em $dll_path"
+    sudo mkdir -p "$plugin_dir"
+    sudo cp "$bundled_dll" "$dll_path"
+    sudo chmod 644 "$dll_path"
+  else
+    warn "nsJSON.dll nao encontrado em $bundled_dll; o build NSIS pode falhar"
+  fi
+}
+
 ensure_dotnet_sdk() {
   if command -v dotnet >/dev/null 2>&1; then
     log "dotnet ja instalado"; return
