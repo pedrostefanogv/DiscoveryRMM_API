@@ -15,7 +15,14 @@ public class CreateDeployTokenRequestValidator : AbstractValidator<CreateDeployT
             .WithMessage("ExpiresInHours must be between 1 and 720.");
 
         RuleFor(x => x.Delivery)
-            .Must(v => string.IsNullOrWhiteSpace(v) || v.Equals("token", StringComparison.OrdinalIgnoreCase) || v.Equals("installer", StringComparison.OrdinalIgnoreCase))
-            .WithMessage("Delivery must be 'token' or 'installer'.");
+            .Must(v =>
+                string.IsNullOrWhiteSpace(v)
+                || v.Equals("token", StringComparison.OrdinalIgnoreCase)
+                || v.Equals("installer", StringComparison.OrdinalIgnoreCase)
+                || v.Equals("full-installer", StringComparison.OrdinalIgnoreCase)
+                || v.Equals("installer-full", StringComparison.OrdinalIgnoreCase)
+                || v.Equals("offline", StringComparison.OrdinalIgnoreCase)
+                || v.Equals("full", StringComparison.OrdinalIgnoreCase))
+            .WithMessage("Delivery must be 'token', 'installer', or 'full-installer'.");
     }
 }

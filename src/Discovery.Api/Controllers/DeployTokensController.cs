@@ -92,15 +92,18 @@ public class DeployTokensController : ControllerBase
             request.ExpiresInHours,
             request.MultiUse ?? false);
 
-        var delivery = string.IsNullOrWhiteSpace(request.Delivery) ? "token" : request.Delivery.Trim().ToLowerInvariant();
+        var delivery = NormalizeDelivery(request.Delivery);
 
-        if (delivery == "installer")
+        if (delivery is "installer" or "full-installer")
         {
             try
             {
                 var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
-                // Build bootstrap (minimal) installer that downloads the latest stage2 at install time.
-                var (installerBytes, fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(rawToken, publicApiBaseUrl);
+                var (installerBytes, fileName) = delivery == "installer"
+                    // Build bootstrap (minimal) installer that downloads the latest stage2 at install time.
+                    ? await _agentPackageService.BuildBootstrapInstallerAsync(rawToken, publicApiBaseUrl)
+                    // Build full installer with token pre-configured.
+                    : await _agentPackageService.BuildInstallerAsync(rawToken, publicApiBaseUrl);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
             catch (FileNotFoundException ex)
@@ -381,6 +384,20 @@ public class DeployTokensController : ControllerBase
             "online" or "installer" => "online",
             "offline" or "portable" => "offline",
             _ => "online"
+        };
+    }
+
+    private static string NormalizeDelivery(string? delivery)
+    {
+        var normalized = string.IsNullOrWhiteSpace(delivery)
+            ? "token"
+            : delivery.Trim().ToLowerInvariant();
+
+        return normalized switch
+        {
+            "installer" or "bootstrap" or "minimal" or "minimal-installer" => "installer",
+            "full-installer" or "installer-full" or "offline" or "full" => "full-installer",
+            _ => "token"
         };
     }
 
