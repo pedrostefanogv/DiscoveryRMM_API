@@ -2,6 +2,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 
 namespace Discovery.Api.Controllers;
 
@@ -19,20 +20,20 @@ public class AgentDownloadController : ControllerBase
 {
     private readonly IAgentUpdateService _agentUpdateService;
     private readonly IAgentPackageService _agentPackageService;
-    private readonly IObjectStorageProviderFactory _storageProviderFactory;
+    private readonly IConfiguration _configuration;
     private readonly ILoggingService _loggingService;
     private readonly ILogger<AgentDownloadController> _logger;
 
     public AgentDownloadController(
         IAgentUpdateService agentUpdateService,
         IAgentPackageService agentPackageService,
-        IObjectStorageProviderFactory storageProviderFactory,
+        IConfiguration configuration,
         ILoggingService loggingService,
         ILogger<AgentDownloadController> logger)
     {
         _agentUpdateService = agentUpdateService;
         _agentPackageService = agentPackageService;
-        _storageProviderFactory = storageProviderFactory;
+        _configuration = configuration;
         _loggingService = loggingService;
         _logger = logger;
     }
@@ -40,7 +41,7 @@ public class AgentDownloadController : ControllerBase
     /// <summary>
     /// Downloads the latest agent stage2 installer for windows/amd64.
     /// Returns 404 if no build has been published yet (run refresh-build first).
-    /// Returns 503 if the object storage is temporarily unreachable.
+    /// Returns 503 if the local stage2 artifact is unavailable.
     /// </summary>
     [HttpGet("agent")]
     [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
@@ -61,8 +62,22 @@ public class AgentDownloadController : ControllerBase
 
         try
         {
-            var storage = await _storageProviderFactory.CreateObjectStorageServiceAsync(cancellationToken);
-            var stream = await storage.DownloadAsync(build.StorageObjectKey, cancellationToken);
+            if (string.IsNullOrWhiteSpace(build.StorageObjectKey))
+                throw new InvalidOperationException("Current build does not include a local storage key.");
+
+            var localArtifactPath = ResolveStage2ArtifactPath(build.StorageObjectKey);
+            if (!System.IO.File.Exists(localArtifactPath))
+            {
+                _logger.LogWarning(
+                    "Current build artifact is missing locally: version={Version} objectKey={ObjectKey}",
+                    build.Version,
+                    build.StorageObjectKey);
+
+                return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                    new { error = "Agent binary is not available on this node. Trigger refresh-build or restart the API." });
+            }
+
+            var stream = new FileStream(localArtifactPath, FileMode.Open, FileAccess.Read, FileShare.Read);
 
             var clientIp = ResolveClientIp();
             var userAgent = HttpContext.Request.Headers["User-Agent"].FirstOrDefault() ?? "unknown";
@@ -100,7 +115,7 @@ public class AgentDownloadController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "Failed to serve agent download: version={Version} objectKey={ObjectKey}",
+                "Failed to serve local agent download: version={Version} objectKey={ObjectKey}",
                 build.Version, build.StorageObjectKey);
 
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
@@ -177,5 +192,40 @@ public class AgentDownloadController : ControllerBase
         }
 
         return HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    }
+
+    private string ResolveStage2ArtifactPath(string objectKey)
+    {
+        var rootPath = ResolveStage2ArtifactsRootPath();
+        var normalizedObjectKey = objectKey
+            .Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar)
+            .TrimStart(Path.DirectorySeparatorChar);
+
+        var fullPath = Path.GetFullPath(Path.Combine(rootPath, normalizedObjectKey));
+        var rootPrefix = rootPath.EndsWith(Path.DirectorySeparatorChar)
+            ? rootPath
+            : rootPath + Path.DirectorySeparatorChar;
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (!fullPath.StartsWith(rootPrefix, pathComparison))
+            throw new InvalidOperationException("Current build points to an invalid local path.");
+
+        return fullPath;
+    }
+
+    private string ResolveStage2ArtifactsRootPath()
+    {
+        var configuredPath = _configuration["AgentPackage:Stage2ArtifactsPath"];
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+            return Path.GetFullPath(configuredPath.Trim());
+
+        var discoveryBase = Environment.GetEnvironmentVariable("DISCOVERY_API_BASE");
+        if (!string.IsNullOrWhiteSpace(discoveryBase))
+            return Path.GetFullPath(Path.Combine(discoveryBase.Trim(), "shared", "agent-update-builds"));
+
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "app_data", "agent-update-builds"));
     }
 }

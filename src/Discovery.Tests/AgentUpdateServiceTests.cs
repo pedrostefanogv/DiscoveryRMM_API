@@ -5,6 +5,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Services;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Discovery.Tests;
@@ -97,12 +98,7 @@ public class AgentUpdateServiceTests
         var agent = CreateAgent(version: "1.0.0");
         var release = CreateRelease("1.2.0");
         var policy = CreatePolicy(rolloutPercentage: 100);
-        var storage = new FakeObjectStorageService("https://storage.example.com/agent-update.exe");
-        var service = CreateService(
-            agent,
-            policy,
-            [release],
-            storageFactory: new FakeObjectStorageProviderFactory(storage));
+        var service = CreateService(agent, policy, [release]);
 
         var payload = await service.GetPresignedDownloadUrlAsync(
             agent.Id,
@@ -112,11 +108,9 @@ public class AgentUpdateServiceTests
         Assert.That(payload, Is.Not.Null);
         Assert.Multiple(() =>
         {
-            Assert.That(payload!.DownloadUrl, Is.EqualTo("https://storage.example.com/agent-update.exe"));
+            Assert.That(payload!.DownloadUrl, Is.EqualTo("https://api.example.com/api/v1/download/agent"));
             Assert.That(payload.Sha256, Is.EqualTo("abc123"));
             Assert.That(payload.FileName, Is.EqualTo("discovery-installer.exe"));
-            Assert.That(storage.LastObjectKey, Is.EqualTo(release.Artifacts[0].StorageObjectKey));
-            Assert.That(storage.LastTtlHours, Is.EqualTo(1));
         });
     }
 
@@ -126,12 +120,7 @@ public class AgentUpdateServiceTests
         var agent = CreateAgent(version: "1.0.0");
         var release = CreateRelease("1.2.0");
         var policy = CreatePolicy(rolloutPercentage: 100);
-        var storage = new FakeObjectStorageService("https://storage.example.com/agent-update.exe");
-        var service = CreateService(
-            agent,
-            policy,
-            [release],
-            storageFactory: new FakeObjectStorageProviderFactory(storage));
+        var service = CreateService(agent, policy, [release]);
 
         var payload = await service.GetPresignedDownloadUrlAsync(
             agent.Id,
@@ -141,7 +130,6 @@ public class AgentUpdateServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(payload, Is.Null);
-            Assert.That(storage.LastObjectKey, Is.Null);
         });
     }
 
@@ -226,7 +214,7 @@ public class AgentUpdateServiceTests
         {
             Assert.That(root.GetProperty("action").GetString(), Is.EqualTo("install"));
             Assert.That(root.GetProperty("version").GetString(), Is.EqualTo("1.2.0"));
-            Assert.That(root.GetProperty("url").GetString(), Is.EqualTo("https://example.invalid/download"));
+            Assert.That(root.GetProperty("url").GetString(), Is.EqualTo("https://api.example.com/api/v1/download/agent"));
         });
     }
 
@@ -365,9 +353,18 @@ public class AgentUpdateServiceTests
                 }))
                 .ToList());
 
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AgentPackage:PublicApiScheme"] = "https",
+                ["AgentPackage:PublicApiServer"] = "api.example.com"
+            })
+            .Build();
+
         return new AgentUpdateService(
             agentRepository ?? new FakeAgentRepository(agent),
             new FakeConfigurationResolver(policy, agent.SiteId),
+            config,
             releaseRepository ?? new FakeAgentReleaseRepository(releases),
             seededBuildRepository,
             eventRepository ?? new FakeAgentUpdateEventRepository(),

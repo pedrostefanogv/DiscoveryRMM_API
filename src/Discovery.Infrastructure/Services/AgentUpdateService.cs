@@ -7,6 +7,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
@@ -14,6 +15,7 @@ namespace Discovery.Infrastructure.Services;
 public class AgentUpdateService(
     IAgentRepository agentRepository,
     IConfigurationResolver configurationResolver,
+    IConfiguration configuration,
     IAgentReleaseRepository agentReleaseRepository,
     IAgentUpdateBuildRepository agentUpdateBuildRepository,
     IAgentUpdateEventRepository agentUpdateEventRepository,
@@ -77,13 +79,13 @@ public class AgentUpdateService(
             artifactType,
             safeFileName);
 
-        var storage = await storageProviderFactory.CreateObjectStorageServiceAsync(cancellationToken);
-        await using var uploadStream = new MemoryStream(bytes, writable: false);
-        var storageObject = await storage.UploadAsync(
-            objectKey,
-            uploadStream,
-            string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType,
-            cancellationToken);
+        var localArtifactPath = ResolveStage2ArtifactPath(objectKey);
+        Directory.CreateDirectory(Path.GetDirectoryName(localArtifactPath)!);
+        await File.WriteAllBytesAsync(localArtifactPath, bytes, cancellationToken);
+
+        var normalizedContentType = string.IsNullOrWhiteSpace(contentType)
+            ? "application/octet-stream"
+            : contentType;
 
         var created = await agentUpdateBuildRepository.CreateAsync(new AgentUpdateBuild
         {
@@ -92,12 +94,12 @@ public class AgentUpdateService(
             Architecture = normalizedArchitecture,
             ArtifactType = artifactType,
             FileName = safeFileName,
-            ContentType = string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType,
-            StorageObjectKey = storageObject.ObjectKey,
-            StorageBucket = storageObject.Bucket,
-            StorageProviderType = (int)storageObject.StorageProvider,
+            ContentType = normalizedContentType,
+            StorageObjectKey = objectKey,
+            StorageBucket = "local-stage2",
+            StorageProviderType = (int)ObjectStorageProviderType.Local,
             Sha256 = sha256,
-            SizeBytes = storageObject.SizeBytes,
+            SizeBytes = bytes.LongLength,
             SignatureThumbprint = string.IsNullOrWhiteSpace(signatureThumbprint) ? null : signatureThumbprint.Trim(),
             IsActive = true,
             CreatedBy = actor,
@@ -115,7 +117,7 @@ public class AgentUpdateService(
             !string.IsNullOrWhiteSpace(previousBuild.StorageObjectKey) &&
             !string.Equals(previousBuild.StorageObjectKey, created.StorageObjectKey, StringComparison.Ordinal))
         {
-            await storage.DeleteAsync(previousBuild.StorageObjectKey, cancellationToken);
+            TryDeleteLocalStage2Artifact(previousBuild.StorageObjectKey);
         }
 
         return created;
@@ -501,8 +503,7 @@ public class AgentUpdateService(
         if (build is null)
             return null;
 
-        var storage = await storageProviderFactory.CreateObjectStorageServiceAsync(cancellationToken);
-        var downloadUrl = await storage.GetPresignedDownloadUrlAsync(build.StorageObjectKey, ttlHours: 1, cancellationToken);
+        var downloadUrl = BuildDirectStage2DownloadUrl();
 
         return new AgentUpdateRedirectPayload
         {
@@ -754,6 +755,71 @@ public class AgentUpdateService(
             return "A newer version exists, but this agent is outside the current rollout window.";
 
         return "A newer agent version is available for download.";
+    }
+
+    private string BuildDirectStage2DownloadUrl()
+    {
+        const string relativePath = "/api/v1/download/agent";
+
+        var publicApiScheme = configuration["AgentPackage:PublicApiScheme"]?.Trim();
+        var publicApiServer = configuration["AgentPackage:PublicApiServer"]?.Trim().TrimEnd('/');
+
+        if (string.IsNullOrWhiteSpace(publicApiScheme) || string.IsNullOrWhiteSpace(publicApiServer))
+            return relativePath;
+
+        return $"{publicApiScheme.ToLowerInvariant()}://{publicApiServer}{relativePath}";
+    }
+
+    private string ResolveStage2ArtifactPath(string objectKey)
+    {
+        if (string.IsNullOrWhiteSpace(objectKey))
+            throw new InvalidOperationException("Current build storage key is missing.");
+
+        var rootPath = ResolveStage2ArtifactsRootPath();
+        var normalizedObjectKey = objectKey
+            .Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar)
+            .TrimStart(Path.DirectorySeparatorChar);
+
+        var fullPath = Path.GetFullPath(Path.Combine(rootPath, normalizedObjectKey));
+        var rootPrefix = rootPath.EndsWith(Path.DirectorySeparatorChar)
+            ? rootPath
+            : rootPath + Path.DirectorySeparatorChar;
+        var pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (!fullPath.StartsWith(rootPrefix, pathComparison))
+            throw new InvalidOperationException("Current build storage key resolved to an invalid local path.");
+
+        return fullPath;
+    }
+
+    private string ResolveStage2ArtifactsRootPath()
+    {
+        var configuredPath = configuration["AgentPackage:Stage2ArtifactsPath"];
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+            return Path.GetFullPath(configuredPath.Trim());
+
+        var discoveryBase = Environment.GetEnvironmentVariable("DISCOVERY_API_BASE");
+        if (!string.IsNullOrWhiteSpace(discoveryBase))
+            return Path.GetFullPath(Path.Combine(discoveryBase.Trim(), "shared", "agent-update-builds"));
+
+        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "app_data", "agent-update-builds"));
+    }
+
+    private void TryDeleteLocalStage2Artifact(string objectKey)
+    {
+        try
+        {
+            var localPath = ResolveStage2ArtifactPath(objectKey);
+            if (File.Exists(localPath))
+                File.Delete(localPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to remove previous local stage2 artifact {ObjectKey}.", objectKey);
+        }
     }
 
     private static string BuildCurrentBuildObjectKey(

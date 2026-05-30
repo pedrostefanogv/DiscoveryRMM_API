@@ -32,12 +32,9 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var enabled = _configuration.GetValue<bool?>("AgentPackage:PrebuildOnStartup") ?? true;
-        if (!enabled)
-        {
-            _logger.LogInformation("Agent prebuild on startup is disabled by config.");
-            return;
-        }
+        var prebuildConfigured = _configuration.GetValue<bool?>("AgentPackage:PrebuildOnStartup") ?? true;
+        if (!prebuildConfigured)
+            _logger.LogWarning("AgentPackage:PrebuildOnStartup=false ignored because stage2 rebuild on startup is mandatory.");
 
         await WaitForApplicationStartedAsync(stoppingToken);
 
@@ -55,7 +52,6 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
             return;
         }
 
-        var publishStage2OnStartup = _configuration.GetValue<bool?>("AgentPackage:PublishStage2OnStartup") ?? true;
         var activeProfile = ResolveActiveProfile();
         var targetPlatform = ResolveConfigForProfile(activeProfile, "InstallerTargetPlatform") ?? "windows/amd64";
         _logger.LogInformation(
@@ -76,41 +72,33 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
 
             _logger.LogInformation("Agent prebuild: generating update installer artifact...");
             var (content, fileName) = await packageService.BuildUpdateInstallerAsync();
+            var version = await ResolveStartupBuildVersionAsync(agentUpdateService, activeProfile, stoppingToken);
+            var contentType = ResolveConfigForProfile(activeProfile, "InstallerContentType")
+                ?? "application/x-msdownload";
 
-            if (publishStage2OnStartup)
-            {
-                var version = await ResolveStartupBuildVersionAsync(agentUpdateService, activeProfile, stoppingToken);
-                var contentType = ResolveConfigForProfile(activeProfile, "InstallerContentType")
-                    ?? "application/x-msdownload";
+            await using var stream = new MemoryStream(content, writable: false);
+            var publishedBuild = await agentUpdateService.RefreshCurrentBuildAsync(
+                version: version,
+                platform: "windows",
+                architecture: "amd64",
+                artifactType: AgentReleaseArtifactType.Installer,
+                fileName: fileName,
+                contentType: contentType,
+                content: stream,
+                signatureThumbprint: null,
+                actor: StartupBuildActor,
+                cancellationToken: stoppingToken);
 
-                await using var stream = new MemoryStream(content, writable: false);
-                var publishedBuild = await agentUpdateService.RefreshCurrentBuildAsync(
-                    version: version,
-                    platform: "windows",
-                    architecture: "amd64",
-                    artifactType: AgentReleaseArtifactType.Installer,
-                    fileName: fileName,
-                    contentType: contentType,
-                    content: stream,
-                    signatureThumbprint: null,
-                    actor: StartupBuildActor,
-                    cancellationToken: stoppingToken);
+            await syncInvalidationPublisher.PublishGlobalAsync(
+                SyncResourceType.AgentUpdate,
+                "agent-build-refreshed-startup",
+                cancellationToken: stoppingToken);
 
-                await syncInvalidationPublisher.PublishGlobalAsync(
-                    SyncResourceType.AgentUpdate,
-                    "agent-build-refreshed-startup",
-                    cancellationToken: stoppingToken);
-
-                _logger.LogInformation(
-                    "Agent prebuild startup published stage2 build successfully. BuildId={BuildId}, version={Version}, file={FileName}",
-                    publishedBuild.Id,
-                    publishedBuild.Version,
-                    publishedBuild.FileName);
-            }
-            else
-            {
-                _logger.LogInformation("Agent prebuild startup stage2 publish skipped (AgentPackage:PublishStage2OnStartup=false).");
-            }
+            _logger.LogInformation(
+                "Agent prebuild startup published stage2 build successfully. BuildId={BuildId}, version={Version}, file={FileName}",
+                publishedBuild.Id,
+                publishedBuild.Version,
+                publishedBuild.FileName);
 
             _logger.LogInformation(
                 "Agent prebuild on startup finished successfully. Update installer generated: {FileName} ({SizeBytes} bytes)",
