@@ -111,7 +111,10 @@ public class AgentDownloadController : ControllerBase
             if (string.IsNullOrWhiteSpace(contentType))
                 contentType = "application/x-msdownload";
 
-            return File(stream, contentType, fileName);
+            // EnableRangeProcessing: required for BITS (Background Intelligent Transfer Service)
+            // to download the file in parallel chunks with Range requests.
+            // Without this, BITS either fails or falls back to a single slow sequential download.
+            return PhysicalFile(localArtifactPath, contentType, fileName, enableRangeProcessing: true);
         }
         catch (Exception ex)
         {
