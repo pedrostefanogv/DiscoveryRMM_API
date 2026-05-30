@@ -13,25 +13,44 @@ install_apt_dependencies() {
 }
 
 # Instala o plugin nsJSON no NSIS para merge de configuracao JSON sem PowerShell.
-# O DLL e empacotado junto com os scripts de instalacao (scripts/linux/lib/nsJSON.dll).
+# Baixa o release oficial do GitHub (Pieter-Dewachter/nsJSON v1.1.1.1).
+# O DLL x86-unicode e extraido e copiado para /usr/share/nsis/Plugins/.
 install_nsis_nsjson_plugin() {
   local plugin_dir="/usr/share/nsis/Plugins/x86-unicode"
   local dll_path="$plugin_dir/nsJSON.dll"
-  local bundled_dll="${SCRIPT_DIR:-.}/lib/nsJSON.dll"
+  local version="1.1.1.1"
+  local download_url="https://github.com/Pieter-Dewachter/nsJSON/releases/download/v${version}/NsJSON-${version}.zip"
+  local tmp_zip="/tmp/NsJSON-${version}.zip"
+  local tmp_dir="/tmp/nsJSON-${version}"
 
   if [[ -f "$dll_path" ]]; then
     log "nsJSON plugin ja instalado em $dll_path"
     return
   fi
 
-  if [[ -f "$bundled_dll" ]]; then
-    log "Instalando nsJSON NSIS plugin em $dll_path"
-    sudo mkdir -p "$plugin_dir"
-    sudo cp "$bundled_dll" "$dll_path"
-    sudo chmod 644 "$dll_path"
-  else
-    warn "nsJSON.dll nao encontrado em $bundled_dll; o build NSIS pode falhar"
+  log "Baixando nsJSON NSIS plugin v${version} de GitHub..."
+  if ! curl -fsSL -o "$tmp_zip" "$download_url"; then
+    warn "Falha ao baixar nsJSON de $download_url; o build NSIS pode falhar"
+    return
   fi
+
+  sudo mkdir -p "$plugin_dir" "$tmp_dir"
+  unzip -qo "$tmp_zip" -d "$tmp_dir"
+  local extracted_dll
+  extracted_dll=$(find "$tmp_dir" -name 'nsJSON.dll' -path '*/x86-unicode/*' -print -quit)
+  if [[ -z "$extracted_dll" ]]; then
+    extracted_dll=$(find "$tmp_dir" -name 'nsJSON.dll' -print -quit)
+  fi
+
+  if [[ -f "$extracted_dll" ]]; then
+    sudo cp "$extracted_dll" "$dll_path"
+    sudo chmod 644 "$dll_path"
+    log "nsJSON plugin instalado com sucesso em $dll_path"
+  else
+    warn "nsJSON.dll nao encontrado no zip; build NSIS pode falhar"
+  fi
+
+  rm -rf "$tmp_zip" "$tmp_dir"
 }
 
 ensure_dotnet_sdk() {
