@@ -17,6 +17,8 @@ public class AgentPackageService : IAgentPackageService
     private readonly IAgentUpdateBuildRepository _agentUpdateBuildRepository;
     private readonly ILogger<AgentPackageService> _logger;
     private static readonly SemaphoreSlim BuildLock = new(1, 1);
+    private static readonly SemaphoreSlim InstallerBuildLock = new(1, 1);
+    private static readonly SemaphoreSlim RepositorySyncLock = new(1, 1);
     private static readonly HashSet<string> AllowedBranches = new(StringComparer.OrdinalIgnoreCase)
     {
         "dev", "release", "beta", "lts"
@@ -171,7 +173,7 @@ public class AgentPackageService : IAgentPackageService
         }
     }
 
-    public async Task<byte[]> BuildPortablePackageAsync(string rawDeployToken, string? publicApiBaseUrl = null)
+    public async Task<byte[]> BuildPortablePackageAsync(string rawDeployToken, string? publicApiBaseUrl = null, CancellationToken cancellationToken = default)
     {
         var binaryPath = GetBinaryPath();
         var (apiScheme, apiServer) = ResolvePublicApiEndpoint(publicApiBaseUrl);
@@ -222,7 +224,7 @@ public class AgentPackageService : IAgentPackageService
             using (var entryStream = exeEntry.Open())
             using (var fs = new FileStream(binaryPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
-                fs.CopyTo(entryStream);
+                await fs.CopyToAsync(entryStream, cancellationToken);
             }
 
             // Pre-configured settings file
@@ -230,14 +232,14 @@ public class AgentPackageService : IAgentPackageService
             using (var entryStream = configEntry.Open())
             using (var writer = new StreamWriter(entryStream))
             {
-                writer.Write(debugConfigJson);
+                await writer.WriteAsync(debugConfigJson.AsMemory(), cancellationToken);
             }
         }
 
         return ms.ToArray();
     }
 
-    public async Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null)
+    public async Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null, CancellationToken cancellationToken = default)
     {
         var activeProfile = GetActiveProfileName();
         var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
@@ -246,12 +248,14 @@ public class AgentPackageService : IAgentPackageService
         if (!Directory.Exists(projectPath))
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
-        await PrebuildBaseBinaryAsync();
+        await PrebuildBaseBinaryAsync(cancellationToken: cancellationToken);
 
-        return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken, activeProfile, publicApiBaseUrl, includeBootstrapDefaults: true);
+        return await RunExclusiveInstallerBuildAsync(
+            () => BuildInstallerWithNsisAsync(projectPath, rawDeployToken, activeProfile, publicApiBaseUrl, includeBootstrapDefaults: true, cancellationToken),
+            cancellationToken);
     }
 
-    public async Task<(byte[] Content, string FileName)> BuildUpdateInstallerAsync()
+    public async Task<(byte[] Content, string FileName)> BuildUpdateInstallerAsync(CancellationToken cancellationToken = default)
     {
         var activeProfile = GetActiveProfileName();
         var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
@@ -260,12 +264,14 @@ public class AgentPackageService : IAgentPackageService
         if (!Directory.Exists(projectPath))
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
-        await PrebuildBaseBinaryAsync();
+        await PrebuildBaseBinaryAsync(cancellationToken: cancellationToken);
 
-        return await BuildInstallerWithNsisAsync(projectPath, rawDeployToken: null, activeProfile, publicApiBaseUrl: null, includeBootstrapDefaults: false);
+        return await RunExclusiveInstallerBuildAsync(
+            () => BuildInstallerWithNsisAsync(projectPath, rawDeployToken: null, activeProfile, publicApiBaseUrl: null, includeBootstrapDefaults: false, cancellationToken),
+            cancellationToken);
     }
 
-    public async Task<(byte[] Content, string FileName)> BuildBootstrapInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null)
+    public async Task<(byte[] Content, string FileName)> BuildBootstrapInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null, CancellationToken cancellationToken = default)
     {
         var activeProfile = GetActiveProfileName();
         var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
@@ -285,7 +291,7 @@ public class AgentPackageService : IAgentPackageService
                 platform: "windows",
                 architecture: "amd64",
                 artifactType: AgentReleaseArtifactType.Installer,
-                cancellationToken: CancellationToken.None);
+                cancellationToken: cancellationToken);
 
             if (currentBuild is null)
             {
@@ -315,10 +321,12 @@ public class AgentPackageService : IAgentPackageService
             stage2Sha256 ?? "(not validated)",
             publicApiUrl);
 
-        return await BuildBootstrapWithNsisAsync(projectPath, rawDeployToken, publicApiUrl, stage2Url, stage2Sha256, activeProfile);
+        return await RunExclusiveInstallerBuildAsync(
+            () => BuildBootstrapWithNsisAsync(projectPath, rawDeployToken, publicApiUrl, stage2Url, stage2Sha256, activeProfile, cancellationToken),
+            cancellationToken);
     }
 
-    public async Task<(byte[] Content, string FileName)> BuildGenericInstallerAsync(bool forceRebuild = false)
+    public async Task<(byte[] Content, string FileName)> BuildGenericInstallerAsync(bool forceRebuild = false, CancellationToken cancellationToken = default)
     {
         const string cacheKey = "generic-zerotouch";
 
@@ -334,7 +342,7 @@ public class AgentPackageService : IAgentPackageService
             }
         }
 
-        await GenericBuildLock.WaitAsync();
+        await GenericBuildLock.WaitAsync(cancellationToken);
         try
         {
             // Re-check after acquiring lock
@@ -352,11 +360,13 @@ public class AgentPackageService : IAgentPackageService
             if (!Directory.Exists(projectPath))
                 throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
-            await PrebuildBaseBinaryAsync();
+            await PrebuildBaseBinaryAsync(cancellationToken: cancellationToken);
 
             _logger.LogInformation("Building generic (zero-touch) installer...");
 
-            var (content, fileName) = await BuildGenericWithNsisAsync(projectPath, activeProfile);
+            var (content, fileName) = await RunExclusiveInstallerBuildAsync(
+                () => BuildGenericWithNsisAsync(projectPath, activeProfile, cancellationToken),
+                cancellationToken);
 
             GenericInstallerCache[cacheKey] = (content, fileName, DateTime.UtcNow);
 
@@ -377,7 +387,8 @@ public class AgentPackageService : IAgentPackageService
         string? rawDeployToken,
         string activeProfile,
         string? publicApiBaseUrl,
-        bool includeBootstrapDefaults)
+        bool includeBootstrapDefaults,
+        CancellationToken cancellationToken)
     {
         var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
             ?? Path.Combine("src", "build", "windows", "installer");
@@ -397,7 +408,7 @@ public class AgentPackageService : IAgentPackageService
             includeBootstrapDefaults);
 
         // WebView2 bootstrapper is embedded by the NSIS script (wails_tools.nsh).
-        await EnsureWebView2BootstrapperAsync(installerDir);
+        await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
 
         var binaryPath = GetBinaryPath();
 
@@ -426,7 +437,8 @@ public class AgentPackageService : IAgentPackageService
         await RunProcessAsync(
             fileName: makensisPath,
             workingDirectory: installerDir,
-            arguments: arguments.ToArray());
+            arguments: arguments.ToArray(),
+            cancellationToken: cancellationToken);
 
         var binDir = Path.Combine(projectPath, "src", "build", "bin");
         if (!Directory.Exists(binDir))
@@ -439,7 +451,7 @@ public class AgentPackageService : IAgentPackageService
         if (!File.Exists(installerPath))
             throw new FileNotFoundException($"Installer executable was not generated: {installerPath}");
 
-        var bytes = await File.ReadAllBytesAsync(installerPath);
+        var bytes = await File.ReadAllBytesAsync(installerPath, cancellationToken);
         return (bytes, outputName);
     }
 
@@ -449,7 +461,8 @@ public class AgentPackageService : IAgentPackageService
         string publicApiUrl,
         string stage2Url,
         string? stage2Sha256,
-        string activeProfile)
+        string activeProfile,
+        CancellationToken cancellationToken)
     {
         var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
             ?? Path.Combine("src", "build", "windows", "installer");
@@ -470,7 +483,7 @@ public class AgentPackageService : IAgentPackageService
             stage2Sha256 ?? "(not validated)",
             outputName);
 
-        await EnsureWebView2BootstrapperAsync(installerDir);
+        await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
 
         var binaryPath = GetBinaryPath();
 
@@ -501,7 +514,8 @@ public class AgentPackageService : IAgentPackageService
         await RunProcessAsync(
             fileName: makensisPath,
             workingDirectory: installerDir,
-            arguments: arguments.ToArray());
+            arguments: arguments.ToArray(),
+            cancellationToken: cancellationToken);
 
         var binDir = Path.Combine(projectPath, "src", "build", "bin");
         if (!Directory.Exists(binDir))
@@ -514,13 +528,14 @@ public class AgentPackageService : IAgentPackageService
         if (!File.Exists(installerPath))
             throw new FileNotFoundException($"Bootstrap installer was not generated: {installerPath}");
 
-        var bootstrapBytes = await File.ReadAllBytesAsync(installerPath);
+        var bootstrapBytes = await File.ReadAllBytesAsync(installerPath, cancellationToken);
         return (bootstrapBytes, outputName);
     }
 
     private async Task<(byte[] Content, string FileName)> BuildGenericWithNsisAsync(
         string projectPath,
-        string activeProfile)
+        string activeProfile,
+        CancellationToken cancellationToken)
     {
         var installerDirectory = GetAgentPackageSetting("InstallerDirectory")
             ?? Path.Combine("src", "build", "windows", "installer");
@@ -539,7 +554,7 @@ public class AgentPackageService : IAgentPackageService
             outputName,
             defaultDiscovery);
 
-        await EnsureWebView2BootstrapperAsync(installerDir);
+        await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
 
         var binaryPath = GetBinaryPath();
 
@@ -561,7 +576,8 @@ public class AgentPackageService : IAgentPackageService
         await RunProcessAsync(
             fileName: makensisPath,
             workingDirectory: installerDir,
-            arguments: arguments.ToArray());
+            arguments: arguments.ToArray(),
+            cancellationToken: cancellationToken);
 
         var binDir = Path.Combine(projectPath, "src", "build", "bin");
         if (!Directory.Exists(binDir))
@@ -574,11 +590,11 @@ public class AgentPackageService : IAgentPackageService
         if (!File.Exists(installerPath))
             throw new FileNotFoundException($"Generic (zero-touch) installer was not generated: {installerPath}");
 
-        var bytes = await File.ReadAllBytesAsync(installerPath);
+        var bytes = await File.ReadAllBytesAsync(installerPath, cancellationToken);
         return (bytes, outputName);
     }
 
-    private async Task EnsureWebView2BootstrapperAsync(string installerDir)
+    private async Task EnsureWebView2BootstrapperAsync(string installerDir, CancellationToken cancellationToken)
     {
         var tmpDir = Path.Combine(installerDir, "tmp");
         var webview2Path = Path.Combine(tmpDir, "MicrosoftEdgeWebview2Setup.exe");
@@ -592,11 +608,12 @@ public class AgentPackageService : IAgentPackageService
         using var http = new HttpClient();
         using var response = await http.GetAsync(
             "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-            HttpCompletionOption.ResponseHeadersRead);
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
         response.EnsureSuccessStatusCode();
 
         await using var fs = new FileStream(webview2Path, FileMode.Create, FileAccess.Write, FileShare.None);
-        await response.Content.CopyToAsync(fs);
+        await response.Content.CopyToAsync(fs, cancellationToken);
         _logger.LogInformation("WebView2 bootstrapper downloaded to {Path}", webview2Path);
     }
 
@@ -710,6 +727,19 @@ public class AgentPackageService : IAgentPackageService
         return _config[$"AgentPackage:{key}"];
     }
 
+    private static async Task<T> RunExclusiveInstallerBuildAsync<T>(Func<Task<T>> buildAction, CancellationToken cancellationToken)
+    {
+        await InstallerBuildLock.WaitAsync(cancellationToken);
+        try
+        {
+            return await buildAction();
+        }
+        finally
+        {
+            InstallerBuildLock.Release();
+        }
+    }
+
     private static async Task RunProcessAsync(string fileName, string workingDirectory, string[] arguments, Dictionary<string, string>? extraEnvironment = null, CancellationToken cancellationToken = default)
     {
         var startInfo = new ProcessStartInfo
@@ -745,7 +775,24 @@ public class AgentPackageService : IAgentPackageService
         var stdOutTask = process.StandardOutput.ReadToEndAsync();
         var stdErrTask = process.StandardError.ReadToEndAsync();
 
-        await process.WaitForExitAsync(cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // Best effort cleanup on cancellation.
+            }
+
+            throw;
+        }
 
         var stdOut = await stdOutTask;
         var stdErr = await stdErrTask;
@@ -763,60 +810,68 @@ public class AgentPackageService : IAgentPackageService
         string branch,
         CancellationToken cancellationToken = default)
     {
-        branch = (branch ?? string.Empty).Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(branch))
-            branch = "release";
+        await RepositorySyncLock.WaitAsync(cancellationToken);
+        try
+        {
+            branch = (branch ?? string.Empty).Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(branch))
+                branch = "release";
 
-        if (!AllowedBranches.Contains(branch))
-            throw new InvalidOperationException(
-                $"Branch '{branch}' is not allowed. Allowed branches: {string.Join(", ", AllowedBranches.OrderBy(b => b))}.");
+            if (!AllowedBranches.Contains(branch))
+                throw new InvalidOperationException(
+                    $"Branch '{branch}' is not allowed. Allowed branches: {string.Join(", ", AllowedBranches.OrderBy(b => b))}.");
 
-        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
-            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+            var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+                ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
 
-        if (!Directory.Exists(projectPath))
-            throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
+            if (!Directory.Exists(projectPath))
+                throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
-        // Validate that the directory is a git repository
-        var gitDir = Path.Combine(projectPath, ".git");
-        if (!Directory.Exists(gitDir))
-            throw new InvalidOperationException($"Not a git repository: {projectPath}");
+            // Validate that the directory is a git repository
+            var gitDir = Path.Combine(projectPath, ".git");
+            if (!Directory.Exists(gitDir))
+                throw new InvalidOperationException($"Not a git repository: {projectPath}");
 
-        _logger.LogInformation(
-            "Syncing agent repository at {Path} to branch {Branch}",
-            projectPath, branch);
+            _logger.LogInformation(
+                "Syncing agent repository at {Path} to branch {Branch}",
+                projectPath, branch);
 
-        // 1. Capture current HEAD before sync
-        var beforeCommit = await CaptureGitHeadAsync(projectPath, cancellationToken);
+            // 1. Capture current HEAD before sync
+            var beforeCommit = await CaptureGitHeadAsync(projectPath, cancellationToken);
 
-        // 2. git fetch origin {branch} — only fetch the target branch, not all
-        await RunProcessAsync(
-            fileName: "git",
-            workingDirectory: projectPath,
-            arguments: ["fetch", "origin", branch, "--prune", "--quiet"],
-            cancellationToken: cancellationToken);
+            // 2. git fetch origin {branch} — only fetch the target branch, not all
+            await RunProcessAsync(
+                fileName: "git",
+                workingDirectory: projectPath,
+                arguments: ["fetch", "origin", branch, "--prune", "--quiet"],
+                cancellationToken: cancellationToken);
 
-        // 3. git reset --hard origin/{branch}
-        var resetOutput = await CaptureGitOutputAsync(projectPath,
-            ["reset", "--hard", $"origin/{branch}"],
-            cancellationToken);
-        _logger.LogInformation("Git reset output: {Output}", resetOutput.Trim());
+            // 3. git reset --hard origin/{branch}
+            var resetOutput = await CaptureGitOutputAsync(projectPath,
+                ["reset", "--hard", $"origin/{branch}"],
+                cancellationToken);
+            _logger.LogInformation("Git reset output: {Output}", resetOutput.Trim());
 
-        // 4. Capture new HEAD after sync
-        var afterCommit = await CaptureGitHeadAsync(projectPath, cancellationToken);
+            // 4. Capture new HEAD after sync
+            var afterCommit = await CaptureGitHeadAsync(projectPath, cancellationToken);
 
-        var changed = !string.Equals(beforeCommit, afterCommit, StringComparison.Ordinal);
-        _logger.LogInformation(
-            "Agent repository sync completed. Branch={Branch}, Before={Before}, After={After}, Changed={Changed}",
-            branch, beforeCommit, afterCommit, changed);
+            var changed = !string.Equals(beforeCommit, afterCommit, StringComparison.Ordinal);
+            _logger.LogInformation(
+                "Agent repository sync completed. Branch={Branch}, Before={Before}, After={After}, Changed={Changed}",
+                branch, beforeCommit, afterCommit, changed);
 
-        return new Discovery.Core.DTOs.AgentRepositorySyncResult(
-            branch,
-            beforeCommit,
-            afterCommit ?? "unknown",
-            changed,
-            changed ? $"Updated to {afterCommit?[..Math.Min(12, afterCommit.Length)]}" : "Already up to date."
-        );
+            return new Discovery.Core.DTOs.AgentRepositorySyncResult(
+                branch,
+                beforeCommit,
+                afterCommit ?? "unknown",
+                changed,
+                changed ? $"Updated to {afterCommit?[..Math.Min(12, afterCommit.Length)]}" : "Already up to date."
+            );
+        }
+        finally
+        {
+            RepositorySyncLock.Release();
+        }
     }
 
     private static async Task<string?> CaptureGitHeadAsync(string projectPath, CancellationToken cancellationToken)
@@ -864,7 +919,24 @@ public class AgentPackageService : IAgentPackageService
         var stdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stdErrTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-        await process.WaitForExitAsync(cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // Best effort cleanup on cancellation.
+            }
+
+            throw;
+        }
 
         if (process.ExitCode != 0)
         {

@@ -101,9 +101,9 @@ public class DeployTokensController : ControllerBase
                 var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
                 var (installerBytes, fileName) = delivery == "installer"
                     // Build bootstrap (minimal) installer that downloads the latest stage2 at install time.
-                    ? await _agentPackageService.BuildBootstrapInstallerAsync(rawToken, publicApiBaseUrl)
+                    ? await _agentPackageService.BuildBootstrapInstallerAsync(rawToken, publicApiBaseUrl, HttpContext.RequestAborted)
                     // Build full installer with token pre-configured.
-                    : await _agentPackageService.BuildInstallerAsync(rawToken, publicApiBaseUrl);
+                    : await _agentPackageService.BuildInstallerAsync(rawToken, publicApiBaseUrl, HttpContext.RequestAborted);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
             catch (FileNotFoundException ex)
@@ -223,11 +223,11 @@ public class DeployTokensController : ControllerBase
             {
                 var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
                 // Build bootstrap (minimal) installer that downloads the latest stage2 at install time.
-                var (installerBytes, fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(request.RawToken, publicApiBaseUrl);
+                var (installerBytes, fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(request.RawToken, publicApiBaseUrl, HttpContext.RequestAborted);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
 
-            var package = await _agentPackageService.BuildPortablePackageAsync(request.RawToken, ResolvePublicApiBaseUrl(Request));
+            var package = await _agentPackageService.BuildPortablePackageAsync(request.RawToken, ResolvePublicApiBaseUrl(Request), HttpContext.RequestAborted);
             return File(package, "application/zip", "discovery-discovery-offline.zip");
         }
         catch (FileNotFoundException ex)
@@ -261,11 +261,11 @@ public class DeployTokensController : ControllerBase
             {
                 var publicApiBaseUrl = ResolvePublicApiBaseUrl(Request);
                 // Build bootstrap (minimal) installer that downloads the latest stage2 at install time.
-                var (installerBytes, fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(request.RawToken, publicApiBaseUrl);
+                var (installerBytes, fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(request.RawToken, publicApiBaseUrl, HttpContext.RequestAborted);
                 return File(installerBytes, ResolveInstallerContentType(), fileName);
             }
 
-            var package = await _agentPackageService.BuildPortablePackageAsync(request.RawToken, ResolvePublicApiBaseUrl(Request));
+            var package = await _agentPackageService.BuildPortablePackageAsync(request.RawToken, ResolvePublicApiBaseUrl(Request), HttpContext.RequestAborted);
             return File(package, "application/zip", "discovery-discovery-setup.zip");
         }
         catch (FileNotFoundException ex)

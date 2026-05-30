@@ -140,7 +140,7 @@ public class AgentDownloadController : ControllerBase
     {
         try
         {
-            var (content, fileName) = await _agentPackageService.BuildGenericInstallerAsync(forceRebuild);
+            var (content, fileName) = await _agentPackageService.BuildGenericInstallerAsync(forceRebuild, cancellationToken);
 
             var clientIp = ResolveClientIp();
             var userAgent = HttpContext.Request.Headers["User-Agent"].FirstOrDefault() ?? "unknown";

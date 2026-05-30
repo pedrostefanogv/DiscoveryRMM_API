@@ -5,8 +5,8 @@ using Discovery.Core.Interfaces;
 namespace Discovery.Api.Services;
 
 /// <summary>
-/// Warmup service that prebuilds Discovery base binary and update installer on API startup.
-/// This reduces latency for the first self-update build/refresh request.
+/// Warmup service that prebuilds Discovery base binary and update installers on API startup.
+/// This reduces latency for the first self-update build/refresh and zero-touch download requests.
 /// </summary>
 public sealed class AgentPackagePrebuildHostedService : BackgroundService
 {
@@ -71,7 +71,7 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
             await packageService.PrebuildBaseBinaryAsync(forceRebuild: true, stoppingToken);
 
             _logger.LogInformation("Agent prebuild: generating update installer artifact...");
-            var (content, fileName) = await packageService.BuildUpdateInstallerAsync();
+            var (content, fileName) = await packageService.BuildUpdateInstallerAsync(stoppingToken);
             var version = await ResolveStartupBuildVersionAsync(agentUpdateService, activeProfile, stoppingToken);
             var contentType = ResolveConfigForProfile(activeProfile, "InstallerContentType")
                 ?? "application/x-msdownload";
@@ -100,8 +100,24 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
                 publishedBuild.Version,
                 publishedBuild.FileName);
 
+            try
+            {
+                _logger.LogInformation("Agent prebuild: warming generic zero-touch installer cache...");
+                var (genericContent, genericFileName) = await packageService.BuildGenericInstallerAsync(cancellationToken: stoppingToken);
+
+                _logger.LogInformation(
+                    "Agent prebuild startup warmed generic zero-touch installer cache successfully. File={FileName}, size={SizeBytes} bytes",
+                    genericFileName,
+                    genericContent.LongLength);
+            }
+            catch (Exception ex)
+            {
+                // Do not fail startup/stage2 publication due to zero-touch warmup issues.
+                _logger.LogWarning(ex, "Agent prebuild startup failed to warm generic zero-touch installer cache.");
+            }
+
             _logger.LogInformation(
-                "Agent prebuild on startup finished successfully. Update installer generated: {FileName} ({SizeBytes} bytes)",
+                "Agent prebuild on startup finished successfully. Stage2 installer generated: {FileName} ({SizeBytes} bytes)",
                 fileName,
                 content.Length);
         }

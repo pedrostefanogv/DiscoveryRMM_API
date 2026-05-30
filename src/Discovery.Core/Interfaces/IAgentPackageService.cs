@@ -14,14 +14,14 @@ public interface IAgentPackageService
     /// Builds a ZIP package in memory containing the agent binary and a
     /// pre-configured debug_config.json with the given deploy token and server URLs.
     /// </summary>
-    Task<byte[]> BuildPortablePackageAsync(string rawDeployToken, string? publicApiBaseUrl = null);
+    Task<byte[]> BuildPortablePackageAsync(string rawDeployToken, string? publicApiBaseUrl = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Builds a NSIS installer executable with defaults embedded at build time.
     /// The deploy token is embedded as ARG_DEFAULT_KEY.
     /// This produces the FULL stage2 installer (the payload that the bootstrap downloads).
     /// </summary>
-    Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null);
+    Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Builds a bootstrap (minimal) NSIS installer that downloads and executes the stage2
@@ -31,7 +31,7 @@ public interface IAgentPackageService
     /// </summary>
     /// <param name="rawDeployToken">Deploy token to embed in bootstrap defaults.</param>
     /// <param name="publicApiBaseUrl">Public API base URL used to construct the stage2 download URL.</param>
-    Task<(byte[] Content, string FileName)> BuildBootstrapInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null);
+    Task<(byte[] Content, string FileName)> BuildBootstrapInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Builds a generic (zero-touch) NSIS installer with no URL or deploy token embedded.
@@ -39,14 +39,14 @@ public interface IAgentPackageService
     /// peer discovery and self-registers. No API endpoint or token is needed at install time.
     /// Result is cached in memory with a configurable TTL.
     /// </summary>
-    Task<(byte[] Content, string FileName)> BuildGenericInstallerAsync(bool forceRebuild = false);
+    Task<(byte[] Content, string FileName)> BuildGenericInstallerAsync(bool forceRebuild = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Builds a NSIS installer executable for agent self-update flow.
     /// This variant does not embed bootstrap defaults (URL/token/discovery/minimal)
     /// so an existing agent configuration is preserved during /S /UPDATE runs.
     /// </summary>
-    Task<(byte[] Content, string FileName)> BuildUpdateInstallerAsync();
+    Task<(byte[] Content, string FileName)> BuildUpdateInstallerAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Synchronizes the agent source repository with the configured branch.

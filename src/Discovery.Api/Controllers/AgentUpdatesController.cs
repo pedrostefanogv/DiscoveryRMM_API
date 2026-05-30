@@ -45,7 +45,7 @@ public class AgentUpdatesController(
             if (request?.ForceRebuild == true)
                 await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
 
-            var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync();
+            var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync(cancellationToken);
 
             var contentType = configuration["AgentPackage:InstallerContentType"]
                 ?? "application/x-msdownload";
@@ -232,7 +232,7 @@ public class AgentUpdatesController(
             // Force rebuild after sync
             await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
 
-            var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync();
+            var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync(cancellationToken);
 
             var syncInfo = new
             {
