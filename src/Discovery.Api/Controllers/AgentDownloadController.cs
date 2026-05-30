@@ -43,6 +43,7 @@ public class AgentDownloadController : ControllerBase
     /// Returns 404 if no build has been published yet (run refresh-build first).
     /// Returns 503 if the local stage2 artifact is unavailable.
     /// </summary>
+    [HttpHead("agent")]
     [HttpGet("agent")]
     [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
