@@ -19,6 +19,7 @@ public static class CommandTypeWireMapper
             CommandType.RemoteDebug => "remotedebug",
             CommandType.ShowPsadtAlert => "showpsadtalert",
             CommandType.Notification => "notification",
+            CommandType.WakeOnLan => "wakeonlan",
             _ => commandType.ToString().ToLowerInvariant()
         };
     }
@@ -28,6 +29,9 @@ public static class CommandTypeWireMapper
         return commandType is CommandType.RemoteDebug
             or CommandType.ShowPsadtAlert
             or CommandType.Notification
-            or CommandType.Update;
+            or CommandType.Update
+            or CommandType.Restart
+            or CommandType.Shutdown
+            or CommandType.WakeOnLan;
     }
 }

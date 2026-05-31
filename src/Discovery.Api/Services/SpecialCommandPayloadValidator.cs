@@ -75,6 +75,10 @@ public sealed class SpecialCommandPayloadValidator
         "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex MacAddressRegex = new(
+        "^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     public bool TryNormalize(
         CommandType commandType,
         string payload,
@@ -118,6 +122,9 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.ShowPsadtAlert => TryNormalizePsadtAlert(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.Notification => TryNormalizeNotification(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.Update => TryNormalizeUpdate(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.Restart => TryNormalizeRestart(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.Shutdown => TryNormalizeShutdown(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.WakeOnLan => TryNormalizeWakeOnLan(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }
@@ -543,6 +550,167 @@ public sealed class SpecialCommandPayloadValidator
             ["action"] = action,
             ["version"] = version,
             ["url"] = url
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    private static bool TryNormalizeRestart(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        var delaySeconds = 15;
+        if (payload.TryGetProperty("delaySeconds", out var delayElement) && delayElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadPositiveInt(delayElement, out delaySeconds))
+            {
+                validationError = "field 'delaySeconds' must be a positive integer.";
+                return false;
+            }
+        }
+
+        var force = false;
+        if (payload.TryGetProperty("force", out var forceElement) && forceElement.ValueKind != JsonValueKind.Null)
+        {
+            if (forceElement.ValueKind == JsonValueKind.True || forceElement.ValueKind == JsonValueKind.False)
+            {
+                force = forceElement.GetBoolean();
+            }
+            else
+            {
+                validationError = "field 'force' must be a boolean.";
+                return false;
+            }
+        }
+
+        string? message = null;
+        if (payload.TryGetProperty("message", out var msgElement) && msgElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(msgElement, out var providedMessage))
+            {
+                validationError = "field 'message' must be a string when provided.";
+                return false;
+            }
+
+            message = providedMessage.Trim();
+            if (message.Length > 512)
+            {
+                validationError = "field 'message' must be at most 512 characters.";
+                return false;
+            }
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["delaySeconds"] = delaySeconds,
+            ["force"] = force,
+            ["message"] = message
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    private static bool TryNormalizeShutdown(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        var delaySeconds = 30;
+        if (payload.TryGetProperty("delaySeconds", out var delayElement) && delayElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadPositiveInt(delayElement, out delaySeconds))
+            {
+                validationError = "field 'delaySeconds' must be a positive integer.";
+                return false;
+            }
+        }
+
+        var force = false;
+        if (payload.TryGetProperty("force", out var forceElement) && forceElement.ValueKind != JsonValueKind.Null)
+        {
+            if (forceElement.ValueKind == JsonValueKind.True || forceElement.ValueKind == JsonValueKind.False)
+            {
+                force = forceElement.GetBoolean();
+            }
+            else
+            {
+                validationError = "field 'force' must be a boolean.";
+                return false;
+            }
+        }
+
+        string? message = null;
+        if (payload.TryGetProperty("message", out var msgElement) && msgElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(msgElement, out var providedMessage))
+            {
+                validationError = "field 'message' must be a string when provided.";
+                return false;
+            }
+
+            message = providedMessage.Trim();
+            if (message.Length > 512)
+            {
+                validationError = "field 'message' must be at most 512 characters.";
+                return false;
+            }
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["delaySeconds"] = delaySeconds,
+            ["force"] = force,
+            ["message"] = message
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    private static bool TryNormalizeWakeOnLan(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!TryGetRequiredString(payload, "macAddress", out var macAddress, out validationError))
+            return false;
+
+        if (!MacAddressRegex.IsMatch(macAddress))
+        {
+            validationError = "field 'macAddress' must be a valid MAC address (e.g., 00:11:22:33:44:55).";
+            return false;
+        }
+
+        string? broadcastAddress = null;
+        if (payload.TryGetProperty("broadcastAddress", out var broadcastElement) && broadcastElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(broadcastElement, out var providedBroadcast))
+            {
+                validationError = "field 'broadcastAddress' must be a string when provided.";
+                return false;
+            }
+
+            broadcastAddress = providedBroadcast.Trim();
+            if (broadcastAddress.Length == 0)
+                broadcastAddress = null;
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["macAddress"] = macAddress,
+            ["broadcastAddress"] = broadcastAddress
         };
 
         normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);

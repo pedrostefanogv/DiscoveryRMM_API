@@ -12,5 +12,6 @@ public enum CommandType
     Update = 7,
     RemoteDebug = 8,
     ShowPsadtAlert = 9,
-    Notification = 10
+    Notification = 10,
+    WakeOnLan = 11
 }

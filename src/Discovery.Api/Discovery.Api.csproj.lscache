@@ -89,6 +89,7 @@ Controllers/
   AgentsController.Fanout.cs
   AgentsController.Inventory.cs
   AgentsController.Maintenance.cs
+  AgentsController.PowerManagement.cs
   AgentsController.RemoteDebug.cs
   AgentsController.Transfer.cs
  AgentUpdatesController.cs
