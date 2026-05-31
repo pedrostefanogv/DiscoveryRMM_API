@@ -1,4 +1,5 @@
 using Discovery.Api.Filters;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
