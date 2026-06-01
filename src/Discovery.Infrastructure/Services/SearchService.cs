@@ -189,7 +189,7 @@ public class SearchService : ISearchService
                 ClientName: client?.Name,
                 SiteId: r.SiteId,
                 SiteName: site?.Name,
-                Url: $"/clients/{client?.Id}/sites/{r.SiteId}/agents/{r.Id}"
+                Url: $"/agents/{r.Id}"
             );
         }).ToList();
 
