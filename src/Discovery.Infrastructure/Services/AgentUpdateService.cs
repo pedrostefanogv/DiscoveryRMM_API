@@ -429,38 +429,99 @@ public class AgentUpdateService(
         var action = "check-update";
         string? version = null;
         string? url = null;
+        bool directInstallAttempted = false;
 
+        // Resolve the target version: explicit request > policy target > latest build
         var manifest = await GetManifestAsync(
             agentId,
-            new AgentUpdateManifestRequest(agent.AgentVersion, null, null, null),
+            new AgentUpdateManifestRequest(agent.AgentVersion, request.TargetPlatform, request.TargetArchitecture, null),
             cancellationToken);
 
-        if (manifest.DirectUpdateSupported && !string.IsNullOrWhiteSpace(manifest.LatestVersion))
-        {
-            var redirect = await GetPresignedDownloadUrlAsync(
-                agentId,
-                new AgentUpdateDownloadRequest(
-                    ReleaseId: null,
-                    Version: manifest.LatestVersion,
-                    Platform: manifest.Platform,
-                    Architecture: manifest.Architecture,
-                    ArtifactType: manifest.ArtifactType),
-                cancellationToken);
+        // When OverridePolicy is true, bypass the policy checks and directly look for builds.
+        // When the policy is enabled and direct update is supported, use the normal flow.
+        var canDirectInstall = request.OverridePolicy || manifest.DirectUpdateSupported;
 
-            if (!string.IsNullOrWhiteSpace(redirect?.DownloadUrl))
+        if (canDirectInstall)
+        {
+            var targetVersion = !string.IsNullOrWhiteSpace(request.TargetVersion)
+                ? request.TargetVersion.Trim()
+                : manifest.LatestVersion;
+
+            if (!string.IsNullOrWhiteSpace(targetVersion))
             {
-                action = "install";
-                version = manifest.LatestVersion;
-                url = redirect.DownloadUrl;
+                var redirect = await GetPresignedDownloadUrlAsync(
+                    agentId,
+                    new AgentUpdateDownloadRequest(
+                        ReleaseId: null,
+                        Version: targetVersion,
+                        Platform: request.TargetPlatform ?? manifest.Platform,
+                        Architecture: request.TargetArchitecture ?? manifest.Architecture,
+                        ArtifactType: manifest.ArtifactType),
+                    cancellationToken);
+
+                if (!string.IsNullOrWhiteSpace(redirect?.DownloadUrl))
+                {
+                    action = "install";
+                    version = targetVersion;
+                    url = redirect.DownloadUrl;
+                    directInstallAttempted = true;
+                }
+            }
+        }
+
+        // Fallback: if no direct install URL was obtained, try to find any current build
+        if (!directInstallAttempted && action == "check-update")
+        {
+            try
+            {
+                var platform = request.TargetPlatform ?? "windows";
+                var architecture = request.TargetArchitecture ?? "amd64";
+                var artifactType = manifest.ArtifactType ?? AgentReleaseArtifactType.Installer;
+
+                var build = await agentUpdateBuildRepository.GetCurrentAsync(
+                    NormalizePlatform(platform),
+                    NormalizeArchitecture(architecture),
+                    artifactType,
+                    cancellationToken);
+
+                if (build is not null && !string.IsNullOrWhiteSpace(build.Version))
+                {
+                    var downloadUrl = BuildDirectStage2DownloadUrl();
+                    if (!string.IsNullOrWhiteSpace(downloadUrl))
+                    {
+                        action = "install";
+                        version = build.Version;
+                        url = downloadUrl;
+                        directInstallAttempted = true;
+
+                        logger.LogInformation(
+                            "Force update: fallback to direct install via current build {Version} for agent {AgentId}",
+                            build.Version, agentId);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Force update: fallback build lookup failed for agent {AgentId}", agentId);
             }
         }
 
         logger.LogInformation(
-            "Force update request translated to update action {Action} for agent {AgentId} (actor={Actor}, reason={Reason})",
+            "Force update request translated to update action {Action} for agent {AgentId} (actor={Actor}, reason={Reason}, overridePolicy={OverridePolicy}, targetVersion={TargetVersion})",
             action,
             agentId,
             LogSanitizer.Sanitize(string.IsNullOrWhiteSpace(actor) ? "api" : actor.Trim()),
-            LogSanitizer.Sanitize(reason));
+            LogSanitizer.Sanitize(reason),
+            request.OverridePolicy,
+            version ?? "(latest)");
+
+        if (action == "check-update" && !request.OverridePolicy)
+        {
+            logger.LogWarning(
+                "Force update for agent {AgentId}: no direct install available (policy.Enabled={Enabled}, updateAvailable={UpdateAvailable}, rolloutEligible={RolloutEligible}). Sending check-update.",
+                agentId, manifest.Enabled, manifest.UpdateAvailable, manifest.RolloutEligible);
+        }
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -469,12 +530,54 @@ public class AgentUpdateService(
             url
         }, JsonOptions);
 
-        return await agentCommandDispatcher.DispatchAsync(new AgentCommand
+        var updateCommand = await agentCommandDispatcher.DispatchAsync(new AgentCommand
         {
             AgentId = agentId,
             CommandType = CommandType.Update,
             Payload = payload
         }, cancellationToken);
+
+        // Dispatch PSADT progress alert alongside the update command
+        if (request.ShowProgress && directInstallAttempted)
+        {
+            await DispatchUpdateProgressAlertAsync(agentId, version ?? "latest", updateCommand.Id, cancellationToken);
+        }
+
+        return updateCommand;
+    }
+
+    private async Task DispatchUpdateProgressAlertAsync(Guid agentId, string targetVersion, Guid commandId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var progressPayload = JsonSerializer.Serialize(new
+            {
+                alertId = commandId.ToString(),
+                type = "update-progress",
+                title = "Atualização do Agent",
+                statusText = $"Baixando versão {targetVersion}...",
+                progressPercent = 5,
+                subtitle = "Preparando download do instalador",
+                message = "O agent será atualizado automaticamente. Aguarde..."
+            }, JsonOptions);
+
+            await agentCommandDispatcher.DispatchAsync(new AgentCommand
+            {
+                AgentId = agentId,
+                CommandType = CommandType.ShowPsadtAlert,
+                Payload = progressPayload
+            }, cancellationToken);
+
+            logger.LogInformation(
+                "PSADT update progress alert dispatched for agent {AgentId}, command {CommandId}, version {Version}",
+                agentId, commandId, targetVersion);
+        }
+        catch (Exception ex)
+        {
+            // PSADT alert failure should not block the update command
+            logger.LogWarning(ex,
+                "Failed to dispatch PSADT update progress alert for agent {AgentId}", agentId);
+        }
     }
     public async Task<AgentUpdateRedirectPayload?> GetPresignedDownloadUrlAsync(Guid agentId, AgentUpdateDownloadRequest request, CancellationToken cancellationToken = default)
     {

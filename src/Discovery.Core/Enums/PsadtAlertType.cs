@@ -13,5 +13,12 @@ public enum PsadtAlertType
     /// <summary>
     /// Modal bloqueante que exige confirmação do usuário para fechar.
     /// </summary>
-    Modal = 1
+    Modal = 1,
+
+    /// <summary>
+    /// Indicador de progresso para self-update do agent.
+    /// Exibe barra de progresso sem interação do usuário.
+    /// Campos esperados no payload: progressPercent (0-100), statusText, subtitle.
+    /// </summary>
+    UpdateProgress = 2
 }

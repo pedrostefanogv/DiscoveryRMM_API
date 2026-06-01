@@ -90,7 +90,12 @@ public sealed record PromoteAgentReleaseRequest(
     bool IsActive = true);
 
 public sealed record ForceAgentUpdateRequest(
-    string? Reason = null);
+    string? Reason = null,
+    bool OverridePolicy = false,
+    string? TargetVersion = null,
+    string? TargetPlatform = null,
+    string? TargetArchitecture = null,
+    bool ShowProgress = true);
 
 public sealed record AgentUpdateRolloutAgentSnapshotDto(
     Guid AgentId,

@@ -32,7 +32,8 @@ public sealed class SpecialCommandPayloadValidator
     private static readonly HashSet<string> PsadtTypes = new(StringComparer.Ordinal)
     {
         "modal",
-        "toast"
+        "toast",
+        "update-progress"
     };
 
     private static readonly HashSet<string> PsadtIcons = new(StringComparer.Ordinal)
@@ -244,9 +245,12 @@ public sealed class SpecialCommandPayloadValidator
         type = type.ToLowerInvariant();
         if (!PsadtTypes.Contains(type))
         {
-            validationError = "field 'type' must be one of: modal, toast.";
+            validationError = "field 'type' must be one of: modal, toast, update-progress.";
             return false;
         }
+
+        if (type == "update-progress")
+            return TryNormalizePsadtUpdateProgress(payload, alertId, out normalizedPayload, out validationError);
 
         if (!TryGetRequiredString(payload, "title", out var title, out validationError))
             return false;
@@ -335,6 +339,70 @@ public sealed class SpecialCommandPayloadValidator
             ["icon"] = icon,
             ["actions"] = actions,
             ["defaultAction"] = defaultAction
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    private static bool TryNormalizePsadtUpdateProgress(
+        JsonElement payload,
+        string alertId,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!TryGetRequiredString(payload, "title", out var title, out validationError))
+            return false;
+
+        if (!TryGetRequiredString(payload, "statusText", out var statusText, out validationError))
+            return false;
+
+        var progressPercent = 0;
+        if (payload.TryGetProperty("progressPercent", out var progressElement) && progressElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!progressElement.TryGetInt32(out progressPercent) || progressPercent < 0 || progressPercent > 100)
+            {
+                validationError = "field 'progressPercent' must be an integer between 0 and 100.";
+                return false;
+            }
+        }
+
+        string? subtitle = null;
+        if (payload.TryGetProperty("subtitle", out var subtitleElement) && subtitleElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(subtitleElement, out var parsedSubtitle))
+            {
+                validationError = "field 'subtitle' must be a string when provided.";
+                return false;
+            }
+
+            subtitle = parsedSubtitle;
+        }
+
+        string? message = null;
+        if (payload.TryGetProperty("message", out var messageElement) && messageElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(messageElement, out var parsedMessage))
+            {
+                validationError = "field 'message' must be a string when provided.";
+                return false;
+            }
+
+            message = parsedMessage;
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["alertId"] = alertId,
+            ["type"] = "update-progress",
+            ["title"] = title,
+            ["statusText"] = statusText,
+            ["progressPercent"] = progressPercent,
+            ["subtitle"] = subtitle,
+            ["message"] = message
         };
 
         normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
