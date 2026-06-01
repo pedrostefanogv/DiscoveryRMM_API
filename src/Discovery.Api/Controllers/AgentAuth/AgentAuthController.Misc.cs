@@ -155,8 +155,14 @@ public partial class AgentAuthController
 
         try
         {
-            var payload = await _agentUpdateService.GetPresignedDownloadUrlAsync(agentId,
-                new AgentUpdateDownloadRequest(releaseId, version, platform, architecture, artifactType), cancellationToken);
+            var request = new AgentUpdateDownloadRequest(releaseId, version, platform, architecture, artifactType);
+
+            // Tenta via GetPresignedDownloadUrlAsync (exige DirectUpdateSupported)
+            var payload = await _agentUpdateService.GetPresignedDownloadUrlAsync(agentId, request, cancellationToken);
+
+            // Fallback: mesmo rebuild (versão igual, SHA256 diferente)
+            // GetDirectDownloadUrlAsync não verifica DirectUpdateSupported.
+            payload ??= await _agentUpdateService.GetDirectDownloadUrlAsync(agentId, request, cancellationToken);
 
             if (payload is null) return NotFound(new { error = "No applicable update artifact is available for this agent." });
 

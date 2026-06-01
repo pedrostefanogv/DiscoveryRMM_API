@@ -597,6 +597,35 @@ public class AgentUpdateService(
             !string.Equals(NormalizeOptionalVersion(request.Version, nameof(request.Version)), manifest.LatestVersion, StringComparison.Ordinal))
             return null;
 
+        return await BuildRedirectPayloadAsync(request, manifest, cancellationToken);
+    }
+
+    public async Task<AgentUpdateRedirectPayload?> GetDirectDownloadUrlAsync(Guid agentId, AgentUpdateDownloadRequest request, CancellationToken cancellationToken = default)
+    {
+        var manifest = await GetManifestAsync(
+            agentId,
+            new AgentUpdateManifestRequest(
+                CurrentVersion: null,
+                Platform: request.Platform,
+                Architecture: request.Architecture,
+                ArtifactType: request.ArtifactType),
+            cancellationToken);
+
+        // Same as GetPresignedDownloadUrlAsync but skips the DirectUpdateSupported check.
+        // Used for same-version rebuilds where a new binary was published
+        // but the version number didn't change.
+        if (!string.IsNullOrWhiteSpace(request.Version) &&
+            !string.Equals(NormalizeOptionalVersion(request.Version, nameof(request.Version)), manifest.LatestVersion, StringComparison.Ordinal))
+            return null;
+
+        return await BuildRedirectPayloadAsync(request, manifest, cancellationToken);
+    }
+
+    private async Task<AgentUpdateRedirectPayload?> BuildRedirectPayloadAsync(
+        AgentUpdateDownloadRequest request,
+        AgentUpdateManifestDto manifest,
+        CancellationToken cancellationToken)
+    {
         var build = await agentUpdateBuildRepository.GetCurrentAsync(
             NormalizePlatform(request.Platform ?? manifest.Platform),
             NormalizeArchitecture(request.Architecture ?? manifest.Architecture),
