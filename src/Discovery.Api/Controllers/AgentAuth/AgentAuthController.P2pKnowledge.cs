@@ -1,3 +1,4 @@
+using Discovery.Core.DTOs;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -23,7 +24,21 @@ public partial class AgentAuthController
             status: "Published",
             category: null,
             ct: ct);
-        return Ok(articles);
+
+        // Mapeia para DTOs planos para evitar recursão infinita na serialização JSON
+        // (Article → Chunks → Article → Chunks → ...)
+        var dtos = articles.Select(a => new AgentKnowledgeArticleDto(
+            a.Id,
+            a.Title,
+            a.Content,
+            a.Category,
+            ParseTags(a.TagsJson),
+            a.Status,
+            a.CurrentVersionNumber,
+            a.PublishedAt,
+            a.LastEditedAt)).ToList();
+
+        return Ok(dtos);
     }
 
     [HttpGet("knowledge/{articleId:guid}")]
@@ -36,6 +51,35 @@ public partial class AgentAuthController
         if (blocked is not null) return blocked;
 
         var article = await _knowledgeRepo.GetByIdAsync(articleId, ct);
-        return article is null ? NotFound(new { error = "Article not found." }) : Ok(article);
+        if (article is null)
+            return NotFound(new { error = "Article not found." });
+
+        // Mapeia para DTO plano para evitar recursão infinita
+        var dto = new AgentKnowledgeArticleDto(
+            article.Id,
+            article.Title,
+            article.Content,
+            article.Category,
+            ParseTags(article.TagsJson),
+            article.Status,
+            article.CurrentVersionNumber,
+            article.PublishedAt,
+            article.LastEditedAt);
+
+        return Ok(dto);
+    }
+
+    private static List<string> ParseTags(string? tagsJson)
+    {
+        if (string.IsNullOrWhiteSpace(tagsJson))
+            return [];
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<string>>(tagsJson) ?? [];
+        }
+        catch
+        {
+            return [];
+        }
     }
 }

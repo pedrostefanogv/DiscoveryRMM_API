@@ -145,3 +145,15 @@ public class ArticleListPageData
     public string? NextCursor { get; init; }
     public bool HasMore { get; init; }
 }
+
+/// <summary>DTO plano para envio ao agent, sem navigation properties que causam recursão infinita.</summary>
+public record AgentKnowledgeArticleDto(
+    Guid Id,
+    string Title,
+    string Content,
+    string? Category,
+    List<string> Tags,
+    string Status,
+    int CurrentVersionNumber,
+    DateTime? PublishedAt,
+    DateTime? LastEditedAt);
