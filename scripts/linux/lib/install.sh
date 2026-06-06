@@ -214,5 +214,8 @@ clone_or_update_repo() {
     sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" fetch origin "$DISCOVERY_GIT_BRANCH"
     sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" checkout "$DISCOVERY_GIT_BRANCH"
     sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" reset --hard "origin/$DISCOVERY_GIT_BRANCH"
+    # Limpa arquivos residuais (untracked) que podem causar conflitos de compilacao
+    # Ex: command_handler.go que foi deletado do repo mas sobreviveu como untracked
+    sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" clean -fd 2>/dev/null || true
   fi
 }

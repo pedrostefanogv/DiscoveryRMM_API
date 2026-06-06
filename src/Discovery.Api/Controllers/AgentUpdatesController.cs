@@ -317,7 +317,14 @@ public class AgentUpdatesController(
         }
         catch (Exception ex)
         {
-            return StatusCode(503, new { error = "Rebuild failed.", detail = ex.Message });
+            var detail = ex.Message;
+            // Extract only the relevant error lines from build output
+            var lines = detail.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var errorLines = lines.Where(l => l.Contains("error") || l.Contains("ERRO") || l.Contains("ERR:") || l.Contains("Error")).ToArray();
+            if (errorLines.Length > 0)
+                detail = string.Join("\n", errorLines.Take(3));
+            
+            return StatusCode(503, new { error = "Agent rebuild failed.", detail, hint = "Check the server build logs for full output." });
         }
     }
 
