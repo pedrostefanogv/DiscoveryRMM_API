@@ -87,6 +87,16 @@ public class AgentUpdateService(
             ? "application/octet-stream"
             : contentType;
 
+        // Deactivate previous active build FIRST, before creating a new active one.
+        // The table has a filtered unique index WHERE is_active = true that
+        // would otherwise reject the new insert.
+        await agentUpdateBuildRepository.DeactivateCurrentAsync(
+            normalizedPlatform,
+            normalizedArchitecture,
+            artifactType,
+            keepActiveBuildId: Guid.Empty, // deactivate ALL current builds
+            cancellationToken);
+
         var created = await agentUpdateBuildRepository.CreateAsync(new AgentUpdateBuild
         {
             Version = normalizedVersion,
@@ -105,13 +115,6 @@ public class AgentUpdateService(
             CreatedBy = actor,
             UpdatedBy = actor
         }, cancellationToken);
-
-        await agentUpdateBuildRepository.DeactivateCurrentAsync(
-            normalizedPlatform,
-            normalizedArchitecture,
-            artifactType,
-            created.Id,
-            cancellationToken);
 
         if (previousBuild is not null &&
             !string.IsNullOrWhiteSpace(previousBuild.StorageObjectKey) &&
