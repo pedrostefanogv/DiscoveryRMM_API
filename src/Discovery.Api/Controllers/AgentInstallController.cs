@@ -68,6 +68,8 @@ public class AgentInstallController : ControllerBase
             return Ok(new
             {
                 AgentId = agent.Id,
+                ClientId = deployToken.ClientId,
+                SiteId = deployToken.SiteId,
                 Token = rawToken
             });
         }
