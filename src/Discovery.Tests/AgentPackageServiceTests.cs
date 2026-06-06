@@ -1,7 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
 using Discovery.Core.Entities;
-using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
@@ -73,7 +72,6 @@ public class AgentPackageServiceTests
             return new AgentPackageService(
                 config,
                 new StubConfigurationService(),
-                new StubAgentUpdateBuildRepository(),
                 NullLogger<AgentPackageService>.Instance);
         }
 
@@ -95,27 +93,6 @@ public class AgentPackageServiceTests
             if (Directory.Exists(_tempRoot))
                 Directory.Delete(_tempRoot, recursive: true);
         }
-    }
-
-    private sealed class StubAgentUpdateBuildRepository : IAgentUpdateBuildRepository
-    {
-        public Task<AgentUpdateBuild?> GetCurrentAsync(
-            string platform,
-            string architecture,
-            AgentReleaseArtifactType artifactType,
-            CancellationToken cancellationToken = default)
-            => Task.FromResult<AgentUpdateBuild?>(null);
-
-        public Task<AgentUpdateBuild> CreateAsync(AgentUpdateBuild build, CancellationToken cancellationToken = default)
-            => throw new NotImplementedException();
-
-        public Task DeactivateCurrentAsync(
-            string platform,
-            string architecture,
-            AgentReleaseArtifactType artifactType,
-            Guid keepActiveBuildId,
-            CancellationToken cancellationToken = default)
-            => throw new NotImplementedException();
     }
 
     private sealed class StubConfigurationService : IConfigurationService

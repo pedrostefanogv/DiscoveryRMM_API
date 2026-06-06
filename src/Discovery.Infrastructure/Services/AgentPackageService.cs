@@ -14,7 +14,6 @@ public class AgentPackageService : IAgentPackageService
 {
     private readonly IConfiguration _config;
     private readonly IConfigurationService _configurationService;
-    private readonly IAgentUpdateBuildRepository _agentUpdateBuildRepository;
     private readonly ILogger<AgentPackageService> _logger;
     private static readonly SemaphoreSlim BuildLock = new(1, 1);
     private static readonly SemaphoreSlim InstallerBuildLock = new(1, 1);
@@ -31,12 +30,10 @@ public class AgentPackageService : IAgentPackageService
     public AgentPackageService(
         IConfiguration config,
         IConfigurationService configurationService,
-        IAgentUpdateBuildRepository agentUpdateBuildRepository,
         ILogger<AgentPackageService> logger)
     {
         _config = config;
         _configurationService = configurationService;
-        _agentUpdateBuildRepository = agentUpdateBuildRepository;
         _logger = logger;
     }
 
@@ -283,46 +280,22 @@ public class AgentPackageService : IAgentPackageService
         // Ensure the base binary is built (needed for wails_tools.nsh macros)
         await PrebuildBaseBinaryAsync();
 
-        // Look up the current stage2 build to get its SHA256 for integrity validation
-        string? stage2Sha256 = null;
-        try
-        {
-            var currentBuild = await _agentUpdateBuildRepository.GetCurrentAsync(
-                platform: "windows",
-                architecture: "amd64",
-                artifactType: AgentReleaseArtifactType.Installer,
-                cancellationToken: cancellationToken);
-
-            if (currentBuild is null)
-            {
-                throw new InvalidOperationException(
-                    "No stage2 build is currently published. Trigger refresh-build first to publish the stage2 installer " +
-                    "that the bootstrap will download.");
-            }
-
-            stage2Sha256 = currentBuild.Sha256;
-        }
-        catch (InvalidOperationException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to resolve stage2 SHA256 for bootstrap build; proceeding without integrity check");
-        }
-
-        // Construct the public stage2 download URL
+        // Construct the public stage2 download URL.
+        // The bootstrap always downloads the LATEST stage2 — it does NOT pin to a specific
+        // build version or embed a SHA256 hash. Embedding a compile-time hash would cause
+        // the bootstrap to break whenever a new build is published after generation.
+        // Transport integrity is guaranteed by HTTPS (TLS); per-build integrity validation
+        // happens in the agent's self-update flow, which fetches the SHA256 dynamically.
         var publicApiUrl = ResolveInstallerServerUrl(publicApiBaseUrl);
         var stage2Url = $"{publicApiUrl}v1/download/agent";
 
         _logger.LogInformation(
-            "Building bootstrap installer: stage2Url={Stage2Url}, sha256={Sha256}, publicApiUrl={PublicApiUrl}",
+            "Building bootstrap installer: stage2Url={Stage2Url}, publicApiUrl={PublicApiUrl}",
             stage2Url,
-            stage2Sha256 ?? "(not validated)",
             publicApiUrl);
 
         return await RunExclusiveInstallerBuildAsync(
-            () => BuildBootstrapWithNsisAsync(projectPath, rawDeployToken, publicApiUrl, stage2Url, stage2Sha256, activeProfile, cancellationToken),
+            () => BuildBootstrapWithNsisAsync(projectPath, rawDeployToken, publicApiUrl, stage2Url, activeProfile, cancellationToken),
             cancellationToken);
     }
 
@@ -460,7 +433,6 @@ public class AgentPackageService : IAgentPackageService
         string rawDeployToken,
         string publicApiUrl,
         string stage2Url,
-        string? stage2Sha256,
         string activeProfile,
         CancellationToken cancellationToken)
     {
@@ -478,9 +450,8 @@ public class AgentPackageService : IAgentPackageService
         var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
 
         _logger.LogInformation(
-            "Bootstrap installer build: stage2Url={Stage2Url}, sha256={Sha256}, output={OutputName}",
+            "Bootstrap installer build: stage2Url={Stage2Url}, output={OutputName}",
             stage2Url,
-            stage2Sha256 ?? "(not validated)",
             outputName);
 
         await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
@@ -504,10 +475,12 @@ public class AgentPackageService : IAgentPackageService
             "-DARG_DEFAULT_MINIMAL=1"
         };
 
-        if (!string.IsNullOrWhiteSpace(stage2Sha256))
-        {
-            arguments.Add($"-DARG_PAYLOAD_SHA256={stage2Sha256}");
-        }
+        // NOTE: ARG_PAYLOAD_SHA256 is intentionally NOT passed.
+        // The bootstrap always downloads the latest stage2 via the generic endpoint.
+        // Embedding a compile-time SHA256 would cause the bootstrap to fail when a
+        // new build is published after generation (hash mismatch).
+        // Transport integrity is guaranteed by HTTPS (TLS); per-build integrity
+        // validation happens in the agent's self-update flow.
 
         arguments.Add("project.nsi");
 
