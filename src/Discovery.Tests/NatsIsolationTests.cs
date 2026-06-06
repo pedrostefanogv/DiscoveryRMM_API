@@ -443,6 +443,7 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.ServerPongSubject(),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
+                NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
                 "_INBOX.>",
             ]);
     }
