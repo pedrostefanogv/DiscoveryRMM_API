@@ -7,7 +7,9 @@ public class SoftwareInventoryReportRequestValidator : AbstractValidator<Softwar
 {
     public SoftwareInventoryReportRequestValidator()
     {
+        // Software pode ser null (agente pode enviar payload vazio)
         RuleFor(x => x.Software).NotNull();
+        // Cada item é validado pelo validador filho
         RuleForEach(x => x.Software!).SetValidator(new SoftwareInventoryItemRequestValidator())
             .When(x => x.Software is not null);
     }
@@ -17,13 +19,8 @@ public class SoftwareInventoryItemRequestValidator : AbstractValidator<SoftwareI
 {
     public SoftwareInventoryItemRequestValidator()
     {
-        RuleFor(x => x.Name).NotEmpty().MaximumLength(300);
-        RuleFor(x => x.Version).MaximumLength(120);
-        RuleFor(x => x.Publisher).MaximumLength(300);
-        RuleFor(x => x.InstallId).MaximumLength(1000);
-        RuleFor(x => x.Serial).MaximumLength(1000);
-        RuleFor(x => x.Source).MaximumLength(120);
-        RuleFor(x => x.InstallDate).MaximumLength(64);
-        RuleFor(x => x.InstallSource).MaximumLength(2000);
+        // Name é obrigatório, mas não restringimos comprimento para evitar 400 inesperados.
+        // Campos longos serão truncados no parser/repositório.
+        RuleFor(x => x.Name).NotEmpty();
     }
 }

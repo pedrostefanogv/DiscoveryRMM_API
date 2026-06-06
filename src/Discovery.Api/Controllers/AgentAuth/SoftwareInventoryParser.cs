@@ -5,19 +5,35 @@ namespace Discovery.Api.Controllers;
 
 internal static class SoftwareInventoryParser
 {
+    /// <summary>Limites alinhados com as colunas do banco (software_catalog / HasMaxLength).</summary>
+    private const int MaxName = 300;
+    private const int MaxVersion = 120;
+    private const int MaxPublisher = 300;
+    private const int MaxInstallId = 1000;
+    private const int MaxSerial = 1000;
+    private const int MaxSource = 120;
+    private const int MaxInstallSource = 2000;
+
     public static SoftwareInventoryEntry ToEntry(SoftwareInventoryItemRequest item)
     {
         return new SoftwareInventoryEntry
         {
-            Name = item.Name,
-            Version = item.Version,
-            Publisher = item.Publisher,
-            InstallId = item.InstallId,
-            Serial = item.Serial,
-            Source = item.Source,
+            Name = Truncate(item.Name, MaxName),
+            Version = Truncate(item.Version, MaxVersion),
+            Publisher = Truncate(item.Publisher, MaxPublisher),
+            InstallId = Truncate(item.InstallId, MaxInstallId),
+            Serial = Truncate(item.Serial, MaxSerial),
+            Source = Truncate(item.Source, MaxSource),
             InstallDate = ParseInstallDate(item.InstallDate),
-            InstallSource = item.InstallSource
+            InstallSource = Truncate(item.InstallSource, MaxInstallSource)
         };
+    }
+
+    private static string? Truncate(string? value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value;
+        return value.Length > maxLength ? value[..maxLength] : value;
     }
 
     public static DateTime? ParseInstallDate(string? rawValue)
