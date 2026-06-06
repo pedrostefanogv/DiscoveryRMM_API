@@ -62,6 +62,7 @@ public record HardwareReportRequest(string? Hostname, string? DisplayName, strin
 public record HardwareComponentsPayload(List<DiskInfo>? Disks, List<NetworkAdapterInfo>? NetworkAdapters, List<MemoryModuleInfo>? MemoryModules, List<PrinterInfo>? Printers, List<ListeningPortInfo>? ListeningPorts, List<OpenSocketInfo>? OpenSockets);
 public record CreateTokenRequest(string? Description);
 public record ForceAutomationSyncRequest(bool Policies = true, bool Inventory = false, bool Software = false, bool AppStore = false);
+public record RefreshAgentDataRequest(bool ListeningPorts = false, bool OpenConnections = false, bool Software = false, bool Printers = false, bool Hardware = false);
 public record SoftwareInventoryReportRequest(DateTime? CollectedAt, List<SoftwareInventoryItemRequest>? Software);
 public record SoftwareInventoryItemRequest(string Name, string? Version, string? Publisher, string? InstallId, string? Serial, string? Source, string? InstallDate, string? InstallSource);
 public record UpsertAgentCustomFieldValueRequest(JsonElement Value);

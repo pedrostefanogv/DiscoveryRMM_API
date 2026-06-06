@@ -1,9 +1,11 @@
+using System.Net;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Api.Filters;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 
@@ -15,7 +17,8 @@ public class AgentUpdatesController(
     IAgentUpdateService agentUpdateService,
     IAgentPackageService agentPackageService,
     ISyncInvalidationPublisher syncInvalidationPublisher,
-    IConfiguration configuration) : ControllerBase
+    IConfiguration configuration,
+    ILogger<AgentUpdatesController> logger) : ControllerBase
 {
     private static readonly HashSet<string> AllowedSyncBranches = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -260,6 +263,69 @@ public class AgentUpdatesController(
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    // ── Internal Rebuild (script-friendly, localhost only) ────────────────
+
+    /// <summary>
+    /// Rebuilds the agent binary and installer from the current on-disk source,
+    /// then publishes it as the current self-update build. Only accessible from
+    /// localhost (127.0.0.1 / ::1) — used by the install/update script so that
+    /// no API restart is needed after an agent repository update.
+    /// </summary>
+    [HttpPost("rebuild")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Rebuild(CancellationToken cancellationToken = default)
+    {
+        if (!IsLocalHost(HttpContext))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "This endpoint is only accessible from localhost." });
+
+        try
+        {
+            await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, cancellationToken);
+            var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync(cancellationToken);
+
+            var version = await ResolveRefreshVersionAsync(null, cancellationToken);
+            var contentType = configuration["AgentPackage:InstallerContentType"] ?? "application/x-msdownload";
+
+            await using var stream = new MemoryStream(content, writable: false);
+            var build = await agentUpdateService.RefreshCurrentBuildAsync(
+                version, "windows", "amd64", AgentReleaseArtifactType.Installer,
+                fileName, contentType, stream,
+                signatureThumbprint: null,
+                actor: "update-script",
+                cancellationToken: cancellationToken);
+
+            await syncInvalidationPublisher.PublishGlobalAsync(
+                SyncResourceType.AgentUpdate, "agent-rebuild-script", cancellationToken: cancellationToken);
+
+            // Warm the generic zero-touch installer cache (non-fatal on failure)
+            try
+            {
+                await agentPackageService.BuildGenericInstallerAsync(forceRebuild: true, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Zero-touch installer warmup failed during script-triggered rebuild (non-fatal)");
+            }
+
+            return Ok(new
+            {
+                success = true,
+                build = new { build.Id, build.Version, build.FileName, sizeBytes = content.Length }
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(503, new { error = "Rebuild failed.", detail = ex.Message });
+        }
+    }
+
+    private static bool IsLocalHost(HttpContext context)
+    {
+        var ip = context.Connection.RemoteIpAddress;
+        if (ip is null) return false;
+        return IPAddress.IsLoopback(ip);
     }
 
 }

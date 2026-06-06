@@ -78,11 +78,49 @@ update_site() {
 update_agent() {
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
   log "Repositorio do agent atualizado em $DISCOVERY_AGENT_SRC"
-  if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
-    log "Reiniciando discovery-api para disparar prebuild automatico do agent no startup"
-    sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api apos update do agent"
+  _trigger_agent_rebuild_via_api
+}
+
+# ── Trigger agent rebuild via the HTTP rebuild endpoint ─────────────────
+
+_trigger_agent_rebuild_via_api() {
+  local api_url="http://127.0.0.1:8080"
+  local rebuild_endpoint="${api_url}/api/v1/agent-updates/rebuild"
+  local curl_timeout=300
+
+  if sudo systemctl is-active --quiet discovery-api.service 2>/dev/null; then :; else
+    warn "Servico discovery-api nao esta rodando; impossivel disparar rebuild do agent"
+    return
+  fi
+
+  log "Disparando rebuild do agent via API (sem restart)..."
+  local response http_code
+  response="$(curl -s -w '\n%{http_code}' -X POST "$rebuild_endpoint" \
+    -H "Content-Type: application/json" \
+    --max-time "$curl_timeout" \
+    2>&1)" || {
+    warn "Falha ao conectar na API em $api_url para rebuild do agent"
+    return
+  }
+
+  http_code="$(printf '%s' "$response" | tail -n 1)"
+  local body; body="$(printf '%s' "$response" | sed '$d')"
+
+  if [[ "$http_code" == "200" ]]; then
+    if echo "$body" | grep -q '"success":true'; then
+      local build_id build_version build_file
+      build_id="$(echo "$body" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+      build_version="$(echo "$body" | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+      build_file="$(echo "$body" | grep -o '"fileName":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+      log "Agent rebuild concluido com sucesso (sem downtime da API)"
+      log "Build publicado: version=${build_version:-?}, file=${build_file:-?}, id=${build_id:-?}"
+    else
+      log "Agent rebuild concluido (HTTP 200): ${body}"
+    fi
+  elif [[ "$http_code" == "403" ]]; then
+    warn "Rebuild do agent rejeitado (HTTP 403) — endpoint so aceita localhost. Resposta: ${body}"
   else
-    warn "Servico discovery-api nao encontrado; nao foi possivel disparar prebuild automatico do agent"
+    warn "Rebuild do agent falhou (HTTP ${http_code}). Resposta: ${body}"
   fi
 }
 
@@ -122,7 +160,7 @@ prompt_update_scope() {
     echo "1) Tudo (API + portal web + agent)" >&2
     echo "2) Somente API (backend .NET)" >&2
     echo "3) Somente portal web (frontend)" >&2
-    echo "4) Somente agent (repositorio do instalador Windows + restart da API para prebuild)" >&2
+    echo "4) Somente agent (repositorio do instalador Windows + rebuild via API sem downtime)" >&2
     echo "----------------------------------------" >&2
 
     local selected_option
@@ -162,7 +200,7 @@ apply_stack_update_only() {
       log "Atualizando somente o portal web (frontend)"
       update_site ;;
     agent)
-      log "Atualizando somente o repositorio do agent (com restart da API)"
+      log "Atualizando somente o repositorio do agent (rebuild via API, sem downtime)"
       update_agent ;;
     *) fail "Escopo de update invalido: $update_scope" ;;
   esac

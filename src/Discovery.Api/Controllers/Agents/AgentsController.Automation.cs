@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Discovery.Api.Controllers;
 
 /// <summary>
-/// Agent automation endpoints: run-now, force-sync, and execution history.
+/// Agent automation endpoints: run-now, force-sync, refresh-data, and execution history.
 /// </summary>
 public partial class AgentsController
 {
@@ -57,6 +57,58 @@ public partial class AgentsController
         var created = await _commandDispatcher.DispatchAsync(command);
         await CreateExecutionReportAsync(created, null, null, AutomationExecutionSourceType.ForceSync, normalized);
         return CreatedAtAction(nameof(GetCommands), new { id }, new { command = created, sync = normalized });
+    }
+
+    /// <summary>
+    /// Dispara coleta on-demand de dados específicos do agente (portas, conexões, software, impressoras).
+    /// Envia comando SystemInfo com flags seletivas para que o agente colete apenas o solicitado.
+    /// Usado pelos botões de refresh nas abas do dashboard de detalhes do agente.
+    /// </summary>
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [HttpPost("{id:guid}/refresh-data")]
+    public async Task<IActionResult> RefreshAgentData(Guid id, [FromBody] RefreshAgentDataRequest request, CancellationToken ct = default)
+    {
+        var agent = await _agentRepo.GetByIdAsync(id);
+        if (agent is null) return NotFound();
+
+        var hasAnyFlag = request.ListeningPorts || request.OpenConnections || request.Software || request.Printers || request.Hardware;
+        if (!hasAnyFlag)
+            return BadRequest(new { error = "At least one data type must be requested (listeningPorts, openConnections, software, printers, hardware)." });
+
+        var idempotencyKey = $"refresh-data-{id}-{DateTime.UtcNow:yyyyMMddHHmmss}";
+        var payload = JsonSerializer.Serialize(new
+        {
+            Operation = "refresh-on-demand",
+            Ports = request.ListeningPorts,
+            Connections = request.OpenConnections,
+            Software = request.Software,
+            Printers = request.Printers,
+            Hardware = request.Hardware,
+            RequestedAt = DateTime.UtcNow
+        });
+
+        var command = new AgentCommand
+        {
+            AgentId = id,
+            CommandType = CommandType.SystemInfo,
+            Payload = payload
+        };
+        var created = await _commandDispatcher.DispatchAsync(command, ct);
+
+        return Ok(new
+        {
+            success = true,
+            commandId = created.Id,
+            status = created.Status.ToString(),
+            flags = new
+            {
+                listeningPorts = request.ListeningPorts,
+                openConnections = request.OpenConnections,
+                software = request.Software,
+                printers = request.Printers,
+                hardware = request.Hardware
+            }
+        });
     }
 
     [RequirePermission(ResourceType.Automation, ActionType.View)]
