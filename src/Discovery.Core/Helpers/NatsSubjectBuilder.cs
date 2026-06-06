@@ -61,4 +61,12 @@ public static class NatsSubjectBuilder
     /// </summary>
     public static string P2pClientEventsSubject(Guid clientId)
         => $"tenant.{clientId}.p2p.events";
+
+    /// <summary>
+    /// Subject de descoberta P2P por site.
+    /// Agents assinam este subject para receber snapshots de peers do mesmo site.
+    /// tenant.{clientId}.site.{siteId}.p2p.discovery
+    /// </summary>
+    public static string P2pSiteDiscoverySubject(Guid clientId, Guid siteId)
+        => $"tenant.{clientId}.site.{siteId}.p2p.discovery";
 }

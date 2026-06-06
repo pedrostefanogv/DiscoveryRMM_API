@@ -48,11 +48,13 @@ public class NatsFanoutStreamBootstrapService : BackgroundService
 
         if (subjects.Length == 0)
         {
+            // tenant.*.agents.command ja captura mensagens publicadas em tenant.global.agents.command
+            // (wildcard * casa com o token literal "global").
+            // Incluir ambos causa overlap rejeitado pelo NATS: "subject overlaps with".
             subjects =
             [
                 NatsSubjectBuilder.SiteAgentsCommandStreamSubject,
                 NatsSubjectBuilder.ClientAgentsCommandStreamSubject,
-                NatsSubjectBuilder.GlobalAgentsCommandStreamSubject,
             ];
         }
 
