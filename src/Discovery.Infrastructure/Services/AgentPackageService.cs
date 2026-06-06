@@ -476,11 +476,10 @@ public class AgentPackageService : IAgentPackageService
         };
 
         // NOTE: ARG_PAYLOAD_SHA256 is intentionally NOT passed.
-        // The bootstrap always downloads the latest stage2 via the generic endpoint.
-        // Embedding a compile-time SHA256 would cause the bootstrap to fail when a
-        // new build is published after generation (hash mismatch).
-        // Transport integrity is guaranteed by HTTPS (TLS); per-build integrity
-        // validation happens in the agent's self-update flow.
+        // The bootstrap derives the SHA256 endpoint from the payload URL
+        // (PayloadUrl/sha256) and fetches the expected hash dynamically at
+        // install time. This prevents bootstrap breakage when the stage2
+        // is rebuilt after the bootstrap was generated.
 
         arguments.Add("project.nsi");
 

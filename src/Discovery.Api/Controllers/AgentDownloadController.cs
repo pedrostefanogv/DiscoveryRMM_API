@@ -181,6 +181,32 @@ public class AgentDownloadController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Returns the SHA256 hash of the current agent stage2 installer.
+    /// Used by the bootstrap installer to dynamically validate payload integrity
+    /// at install time (instead of embedding a compile-time hash that breaks
+    /// when the stage2 is rebuilt after bootstrap generation).
+    /// Returns 404 if no build has been published yet.
+    /// </summary>
+    [HttpGet("agent/sha256")]
+    [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetCurrentAgentSha256(CancellationToken cancellationToken)
+    {
+        var build = await _agentUpdateService.GetCurrentBuildAsync(
+            platform: "windows",
+            architecture: "amd64",
+            artifactType: AgentReleaseArtifactType.Installer,
+            cancellationToken: cancellationToken);
+
+        if (build is null || string.IsNullOrWhiteSpace(build.Sha256))
+        {
+            return NotFound(new { error = "No agent build is currently available." });
+        }
+
+        return Content(build.Sha256, "text/plain");
+    }
+
     private string ResolveClientIp()
     {
         var cfConnectingIp = HttpContext.Request.Headers["CF-Connecting-IP"].FirstOrDefault();
