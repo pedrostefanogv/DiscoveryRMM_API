@@ -487,7 +487,14 @@ public class ConfigurationService : IConfigurationService
             return element.GetInt32();
 
         if (targetType == typeof(string))
+        {
+            // Se o frontend enviar um objeto JSON (ex: AIIntegrationSettingsJson como {...}),
+            // serializamos para string JSON em vez de lançar exceção.
+            if (element.ValueKind == JsonValueKind.Object || element.ValueKind == JsonValueKind.Array)
+                return element.GetRawText();
+
             return element.GetString();
+        }
 
         if (targetType.IsEnum)
             return Enum.Parse(targetType, element.GetRawText().Trim('"'), ignoreCase: true);

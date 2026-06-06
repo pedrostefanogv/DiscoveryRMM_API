@@ -805,7 +805,22 @@ public class ConfigurationsController : ControllerBase
                 openai = AIIntegrationSettings.OpenAiDefaultBaseUrl,
                 openrouter = AIIntegrationSettings.OpenRouterDefaultBaseUrl,
                 openai_compatible = (string?)null
-            }
+            },
+            recommendedChatModels = AIIntegrationSettings.RecommendedChatModels,
+            recommendedEmbeddingModels = AIIntegrationSettings.RecommendedEmbeddingModels,
+            embeddingDimensionsMap = AIIntegrationSettings.EmbeddingDimensionsMap
+        });
+    }
+
+    /// <summary>Retorna catálogo estático de modelos recomendados por provider.</summary>
+    [HttpGet("ai/recommended-models")]
+    public IActionResult GetRecommendedModels()
+    {
+        return Ok(new
+        {
+            chatModels = AIIntegrationSettings.RecommendedChatModels,
+            embeddingModels = AIIntegrationSettings.RecommendedEmbeddingModels,
+            embeddingDimensionsMap = AIIntegrationSettings.EmbeddingDimensionsMap
         });
     }
 

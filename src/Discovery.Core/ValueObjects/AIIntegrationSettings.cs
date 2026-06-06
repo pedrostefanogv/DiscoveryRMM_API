@@ -123,4 +123,50 @@ public class AIIntegrationSettings
         ProviderOpenAi or ProviderOpenRouter or ProviderOpenAiCompatible => true,
         _ => false
     };
+
+    // ── Catálogo de modelos recomendados ────────────────────────────────────
+
+    /// <summary>Modelos de chat recomendados por provider (provider → lista de model IDs).</summary>
+    public static readonly Dictionary<string, string[]> RecommendedChatModels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [ProviderOpenAi] = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "o4-mini", "o3-mini"],
+        [ProviderOpenRouter] = [
+            "openai/gpt-4o-mini",
+            "openai/gpt-4o",
+            "openai/gpt-4.1-nano",
+            "anthropic/claude-3.5-haiku",
+            "anthropic/claude-3.5-sonnet",
+            "google/gemini-2.5-flash",
+            "google/gemini-2.5-pro",
+            "google/gemma-3-4b-it",
+            "deepseek/deepseek-chat-v3-0324",
+            "meta-llama/llama-4-maverick",
+        ],
+        ["anthropic"] = ["claude-3-5-haiku-20241022", "claude-3-5-sonnet-20241022"],
+        ["azure-openai"] = [], // deployments customizados pelo usuário
+        [ProviderOpenAiCompatible] = [], // genérico — usuário informa
+    };
+
+    /// <summary>Modelos de embedding recomendados por provider (provider → lista de model IDs).</summary>
+    public static readonly Dictionary<string, string[]> RecommendedEmbeddingModels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [ProviderOpenAi] = ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"],
+        [ProviderOpenRouter] = [
+            "openai/text-embedding-3-small",
+            "google/text-embedding-004",
+        ],
+        ["anthropic"] = [], // Anthropic não oferece API de embedding pública
+        ["azure-openai"] = [], // deployments customizados
+        [ProviderOpenAiCompatible] = [], // genérico
+    };
+
+    /// <summary>Dimensões padrão por modelo de embedding.</summary>
+    public static readonly Dictionary<string, int> EmbeddingDimensionsMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["text-embedding-3-small"] = 1536,
+        ["text-embedding-3-large"] = 3072,
+        ["text-embedding-ada-002"] = 1536,
+        ["openai/text-embedding-3-small"] = 1536,
+        ["google/text-embedding-004"] = 768,
+    };
 }
