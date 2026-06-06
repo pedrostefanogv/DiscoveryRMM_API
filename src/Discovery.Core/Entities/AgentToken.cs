@@ -15,6 +15,8 @@ public class AgentToken
     public DateTime CreatedAt { get; set; }
     public DateTime? RevokedAt { get; set; }
     public DateTime? LastUsedAt { get; set; }
+    /// <summary>Última vez que este token foi usado com sucesso no auth callout NATS.</summary>
+    public DateTime? LastNatsConnectedAt { get; set; }
     public bool IsRevoked => RevokedAt.HasValue;
     public bool IsExpired => ExpiresAt.HasValue && DateTime.UtcNow > ExpiresAt.Value;
     public bool IsValid => !IsRevoked && !IsExpired;

@@ -222,6 +222,31 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             if (agentToken is null)
                 return await BuildErrorResponseAsync("Invalid agent token.", request.Nats.UserNkey, serverId, configurationService, ct);
 
+            // Fase 1: Detecção de conexão duplicada.
+            // Se o mesmo token já está em uso por outra conexão NATS, rejeitamos.
+            var sessionAcquired = await agentAuthService.TryAcquireNatsSessionAsync(
+                agentToken.Id,
+                agentToken.AgentId,
+                request.Nats.UserNkey,
+                TimeSpan.FromMinutes(5));
+
+            if (!sessionAcquired)
+            {
+                _logger.LogWarning(
+                    "NATS auth callout rejected: token {TokenId} for agent {AgentId} already has an active NATS session.",
+                    agentToken.Id,
+                    agentToken.AgentId);
+                return await BuildErrorResponseAsync(
+                    "Token already in use by another connection.",
+                    request.Nats.UserNkey,
+                    serverId,
+                    configurationService,
+                    ct);
+            }
+
+            // Fase 2: Auditoria — registra última conexão NATS bem-sucedida.
+            await agentAuthService.UpdateLastNatsConnectedAsync(agentToken.Id);
+
             var jwt = await credentialsService.IssueUserJwtForAgentAsync(
                 request.Nats.UserNkey,
                 agentToken.AgentId,

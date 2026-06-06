@@ -24,4 +24,11 @@ public interface IRedisService
 
     /// <summary>Retorna todas as chaves com o prefixo informado. Usa SCAN internamente.</summary>
     Task<IReadOnlyList<string>> GetKeysByPrefixAsync(string prefix, int maxResults = 10000);
+
+    /// <summary>
+    /// SET key value NX EX expirySeconds.
+    /// Retorna true se a chave foi criada (não existia), false se já existia.
+    /// Útil para travas distribuídas (distributed locks sem RedLock).
+    /// </summary>
+    Task<bool> SetIfNotExistsAsync(string key, string value, int expirySeconds);
 }

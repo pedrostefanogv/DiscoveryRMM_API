@@ -131,6 +131,50 @@ public class AgentTokenAuthService : IAgentAuthService
         return await _tokenRepo.GetByAgentIdAsync(agentId);
     }
 
+    // ── Fase 1: Detecção de conexão duplicada via Redis SET NX ────────────────
+
+    /// <summary>TTL da trava de sessão NATS. Após este tempo sem renovação, a sessão é considerada expirada.</summary>
+    private static readonly TimeSpan DefaultNatsSessionTtl = TimeSpan.FromMinutes(5);
+
+    public async Task<bool> TryAcquireNatsSessionAsync(Guid tokenId, Guid agentId, string userNkey, TimeSpan sessionTtl)
+    {
+        if (sessionTtl <= TimeSpan.Zero)
+            sessionTtl = DefaultNatsSessionTtl;
+
+        var sessionKey = GetNatsSessionKey(tokenId);
+        // Armazena agentId e userNkey para auditoria/debug
+        var sessionValue = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            agentId = agentId.ToString(),
+            userNkey,
+            acquiredAt = DateTime.UtcNow.ToString("O")
+        });
+
+        var acquired = await _redisService.SetIfNotExistsAsync(
+            sessionKey,
+            sessionValue,
+            (int)Math.Ceiling(sessionTtl.TotalSeconds));
+
+        return acquired;
+    }
+
+    public async Task ReleaseNatsSessionAsync(Guid tokenId)
+    {
+        var sessionKey = GetNatsSessionKey(tokenId);
+        await _redisService.DeleteAsync(sessionKey);
+    }
+
+    // ── Fase 2: Auditoria de última conexão NATS ──────────────────────────────
+
+    public async Task UpdateLastNatsConnectedAsync(Guid tokenId)
+    {
+        await _tokenRepo.UpdateLastNatsConnectedAsync(tokenId);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static string GetNatsSessionKey(Guid tokenId) => $"nats:session:token:{tokenId}";
+
     private static string GenerateRawToken()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);

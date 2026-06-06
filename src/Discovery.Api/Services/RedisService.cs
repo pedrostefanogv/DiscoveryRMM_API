@@ -204,4 +204,19 @@ public class RedisService : IRedisService
         }
         return keys;
     }
+
+    public async Task<bool> SetIfNotExistsAsync(string key, string value, int expirySeconds)
+    {
+        try
+        {
+            var db = _connection.GetDatabase();
+            var expiry = TimeSpan.FromSeconds(expirySeconds);
+            return await db.StringSetAsync(key, value, expiry, When.NotExists);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error executing SET NX for key {Key} in Redis", LogSanitizer.Sanitize(key));
+            return false;
+        }
+    }
 }

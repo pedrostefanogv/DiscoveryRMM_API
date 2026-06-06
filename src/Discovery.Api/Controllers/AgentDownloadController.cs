@@ -188,6 +188,7 @@ public class AgentDownloadController : ControllerBase
     /// when the stage2 is rebuilt after bootstrap generation).
     /// Returns 404 if no build has been published yet.
     /// </summary>
+    [HttpHead("agent/sha256")]
     [HttpGet("agent/sha256")]
     [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

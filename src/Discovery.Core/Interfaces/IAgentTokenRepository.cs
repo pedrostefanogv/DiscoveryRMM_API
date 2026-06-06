@@ -9,6 +9,7 @@ public interface IAgentTokenRepository
     Task<IEnumerable<AgentToken>> GetByAgentIdAsync(Guid agentId);
     Task<AgentToken> CreateAsync(AgentToken token);
     Task UpdateLastUsedAsync(Guid id);
+    Task UpdateLastNatsConnectedAsync(Guid id);
     Task RevokeAsync(Guid id);
     Task RevokeAllByAgentIdAsync(Guid agentId);
 }

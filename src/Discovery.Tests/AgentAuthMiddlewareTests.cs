@@ -112,6 +112,13 @@ public class AgentAuthMiddlewareTests
 
         public Task<IEnumerable<AgentToken>> GetTokensByAgentIdAsync(Guid agentId)
             => Task.FromResult<IEnumerable<AgentToken>>(_token is null ? [] : [_token]);
+
+        public Task<bool> TryAcquireNatsSessionAsync(Guid tokenId, Guid agentId, string userNkey, TimeSpan sessionTtl)
+            => Task.FromResult(true);
+
+        public Task ReleaseNatsSessionAsync(Guid tokenId) => Task.CompletedTask;
+
+        public Task UpdateLastNatsConnectedAsync(Guid tokenId) => Task.CompletedTask;
     }
 
 }

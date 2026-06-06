@@ -25,6 +25,7 @@ public partial class DiscoveryDbContext
             entity.Property(t => t.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(t => t.RevokedAt).HasColumnName("revoked_at").HasColumnType("timestamptz");
             entity.Property(t => t.LastUsedAt).HasColumnName("last_used_at").HasColumnType("timestamptz");
+            entity.Property(t => t.LastNatsConnectedAt).HasColumnName("last_nats_connected_at").HasColumnType("timestamptz");
 
             entity.Ignore(t => t.IsRevoked);
             entity.Ignore(t => t.IsExpired);

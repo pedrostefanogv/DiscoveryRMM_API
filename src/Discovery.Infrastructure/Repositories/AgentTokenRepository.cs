@@ -58,6 +58,16 @@ public class AgentTokenRepository : IAgentTokenRepository
                 .SetProperty(token => token.LastUsedAt, _ => now));
     }
 
+    public async Task UpdateLastNatsConnectedAsync(Guid id)
+    {
+        var now = DateTime.UtcNow;
+
+        await _db.AgentTokens
+            .Where(token => token.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(token => token.LastNatsConnectedAt, _ => now));
+    }
+
     public async Task RevokeAsync(Guid id)
     {
         var now = DateTime.UtcNow;
