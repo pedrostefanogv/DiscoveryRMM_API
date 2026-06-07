@@ -801,8 +801,8 @@ public class ConfigurationsController : ControllerBase
         {
             providers = new[]
             {
-                new { id = "openrouter", name = "OpenRouter (recomendado)", isConfigurable = false, defaultBaseUrl = AIIntegrationSettings.OpenRouterDefaultBaseUrl },
-                new { id = "openai", name = "OpenAI", isConfigurable = false, defaultBaseUrl = AIIntegrationSettings.OpenAiDefaultBaseUrl },
+                new { id = "openrouter", name = "OpenRouter (recomendado)", isConfigurable = false, defaultBaseUrl = (string?)AIIntegrationSettings.OpenRouterDefaultBaseUrl },
+                new { id = "openai", name = "OpenAI", isConfigurable = false, defaultBaseUrl = (string?)AIIntegrationSettings.OpenAiDefaultBaseUrl },
                 new { id = "openai-compatible", name = "Personalizado (OpenAI-compatible)", isConfigurable = true, defaultBaseUrl = (string?)null }
             },
             recommendedChatModels = AIIntegrationSettings.RecommendedChatModels,

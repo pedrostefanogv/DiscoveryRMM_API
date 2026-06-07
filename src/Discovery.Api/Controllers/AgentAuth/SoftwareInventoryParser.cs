@@ -18,7 +18,7 @@ internal static class SoftwareInventoryParser
     {
         return new SoftwareInventoryEntry
         {
-            Name = Truncate(item.Name, MaxName),
+            Name = Truncate(item.Name, MaxName) ?? string.Empty,
             Version = Truncate(item.Version, MaxVersion),
             Publisher = Truncate(item.Publisher, MaxPublisher),
             InstallId = Truncate(item.InstallId, MaxInstallId),
