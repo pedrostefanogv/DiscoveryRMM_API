@@ -131,7 +131,7 @@ public class AgentTokenAuthService : IAgentAuthService
         return await _tokenRepo.GetByAgentIdAsync(agentId);
     }
 
-    // ── Fase 1: Detecção de conexão duplicada via Redis SET NX ────────────────
+    // ── Fase 1: Detecção de conexão duplicada via Redis ───────────────────────
 
     /// <summary>TTL da trava de sessão NATS. Após este tempo sem renovação, a sessão é considerada expirada.</summary>
     private static readonly TimeSpan DefaultNatsSessionTtl = TimeSpan.FromMinutes(5);
@@ -142,20 +142,39 @@ public class AgentTokenAuthService : IAgentAuthService
             sessionTtl = DefaultNatsSessionTtl;
 
         var sessionKey = GetNatsSessionKey(tokenId);
-        // Armazena agentId e userNkey para auditoria/debug
         var sessionValue = System.Text.Json.JsonSerializer.Serialize(new
         {
             agentId = agentId.ToString(),
             userNkey,
             acquiredAt = DateTime.UtcNow.ToString("O")
         });
+        var expirySeconds = (int)Math.Ceiling(sessionTtl.TotalSeconds);
 
-        var acquired = await _redisService.SetIfNotExistsAsync(
-            sessionKey,
-            sessionValue,
-            (int)Math.Ceiling(sessionTtl.TotalSeconds));
+        // Tenta adquirir via SET NX (primeira conexão)
+        var acquired = await _redisService.SetIfNotExistsAsync(sessionKey, sessionValue, expirySeconds);
+        if (acquired)
+            return true;
 
-        return acquired;
+        // Sessão já existe — verifica se é o MESMO agente (ex: troca de transporte nats→wss)
+        var existing = await _redisService.GetAsync(sessionKey);
+        if (!string.IsNullOrWhiteSpace(existing))
+        {
+            try
+            {
+                var existingData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(existing);
+                if (existingData.TryGetProperty("agentId", out var existingAgentId) &&
+                    existingAgentId.GetString() == agentId.ToString())
+                {
+                    // Mesmo agente trocando de transporte — sobrescreve a sessão
+                    await _redisService.SetAsync(sessionKey, sessionValue, expirySeconds);
+                    return true;
+                }
+            }
+            catch { /* fall through to rejection */ }
+        }
+
+        // AgentId diferente — token está sendo usado por outro agente → rejeitar
+        return false;
     }
 
     public async Task ReleaseNatsSessionAsync(Guid tokenId)

@@ -519,7 +519,7 @@ public class AiModelCatalogService : IAiModelCatalogService
                 var id = item.GetProperty("id").GetString() ?? "";
                 var name = item.GetProperty("name").GetString() ?? id;
                 var desc = item.TryGetProperty("description", out var d) ? d.GetString() : null;
-                var contextLen = item.TryGetProperty("context_length", out var cl) && cl.TryGetInt32(out var clv) ? clv : (int?)null;
+                var contextLen = TryGetInt(item, "context_length");
                 var supportedParams = ParseStringArray(item, "supported_parameters");
                 var isFree = IsFreeModel(ParsePricing(item));
 
@@ -566,6 +566,25 @@ public class AiModelCatalogService : IAiModelCatalogService
 
     private static string? ParsePriceString(JsonElement parent, string propertyName) =>
         parent.TryGetProperty(propertyName, out var v) ? v.GetRawText().Trim('"') : null;
+
+    /// <summary>Tenta ler um int de um JsonElement que pode ser number ou string.</summary>
+    private static int? TryGetInt(JsonElement parent, string propertyName)
+    {
+        if (!parent.TryGetProperty(propertyName, out var el))
+            return null;
+
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var intVal))
+            return intVal;
+
+        if (el.ValueKind == JsonValueKind.String)
+        {
+            var str = el.GetString();
+            if (int.TryParse(str, out var parsed))
+                return parsed;
+        }
+
+        return null;
+    }
 
     // ─── Fase 1: Validate API Key ─────────────────────────────────────────────
 
