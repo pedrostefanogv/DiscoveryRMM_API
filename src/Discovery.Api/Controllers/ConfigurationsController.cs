@@ -7,6 +7,7 @@ using System.Text.Json;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Core.ValueObjects;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Discovery.Api.Services;
