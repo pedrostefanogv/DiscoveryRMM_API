@@ -825,6 +825,7 @@ public class ConfigurationsController : ControllerBase
 
     /// <summary>Busca modelos disponíveis diretamente da API OpenRouter.</summary>
     [HttpGet("ai/openrouter/models")]
+    [AllowAnonymous]
     public async Task<IActionResult> GetOpenRouterModels(
         [FromQuery] string? modality = null,
         [FromQuery] bool refresh = false,
