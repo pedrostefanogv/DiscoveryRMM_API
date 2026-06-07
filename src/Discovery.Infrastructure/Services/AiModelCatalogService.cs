@@ -521,14 +521,14 @@ public class AiModelCatalogService : IAiModelCatalogService
                 var desc = item.TryGetProperty("description", out var d) ? d.GetString() : null;
                 var contextLen = TryGetInt(item, "context_length");
                 var supportedParams = ParseStringArray(item, "supported_parameters");
-                var isFree = IsFreeModel(ParsePricing(item));
+                var pricing = ParsePricingAsString(item);
+                var isFree = pricing is not null && pricing.Prompt == "0" && (pricing.Completion == "0" || pricing.Completion == null);
 
                 var outputMods = ParseStringArray(
                     item.TryGetProperty("architecture", out var arch) ? arch : default,
                     "output_modalities");
 
                 var dimensions = DetermineEmbeddingDimensions(id, name, outputMods);
-                var pricing = ParsePricingAsString(item);
 
                 result.Add(new OpenRouterModelItem(
                     Id: id,
