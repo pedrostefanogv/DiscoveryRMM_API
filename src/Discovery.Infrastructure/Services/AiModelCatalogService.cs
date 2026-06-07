@@ -24,6 +24,10 @@ public class AiModelCatalogService : IAiModelCatalogService
 
     private static readonly TimeSpan DefaultCacheTtl = TimeSpan.FromMinutes(60);
 
+    // Cache dedicado para OpenRouter models (sem depender de credencial resolvida)
+    private (DateTime CachedAt, OpenRouterModelsResponse Response)? _openRouterCache;
+    private static readonly TimeSpan OpenRouterCacheTtl = TimeSpan.FromMinutes(60);
+
     public AiModelCatalogService(
         IAiCredentialResolver credentialResolver,
         ILogger<AiModelCatalogService> logger)
@@ -456,4 +460,155 @@ public class AiModelCatalogService : IAiModelCatalogService
         new AiModelInfo("text-embedding-3-large", "Text Embedding 3 Large", "OpenAI", "openai",
             ["embeddings"], ["text"], ["embeddings"], [], null, null, null, false, false, true, 3072, null),
     ];
+
+    // ─── Fase 1: OpenRouter Models dinâmico ───────────────────────────────────
+
+    public async Task<OpenRouterModelsResponse> ListOpenRouterModelsAsync(
+        string? modality = null,
+        bool forceRefresh = false,
+        CancellationToken ct = default)
+    {
+        if (!forceRefresh && _openRouterCache.HasValue &&
+            DateTime.UtcNow - _openRouterCache.Value.CachedAt < OpenRouterCacheTtl)
+        {
+            return _openRouterCache.Value.Response with { FromCache = true };
+        }
+
+        var baseUrl = AIIntegrationSettings.OpenRouterDefaultBaseUrl;
+
+        // Busca modelos de chat e embeddings em paralelo
+        var chatTask = FetchOpenRouterModelsRawAsync($"{baseUrl}models", ct);
+        var embedTask = FetchOpenRouterModelsRawAsync($"{baseUrl}embeddings/models", ct);
+        var rerankTask = FetchOpenRouterModelsRawAsync($"{baseUrl}models?output_modalities=rerank", ct);
+
+        await Task.WhenAll(chatTask, embedTask, rerankTask);
+
+        var chatModels = MapOpenRouterItems(chatTask.Result, null);
+        var embeddingModels = MapOpenRouterItems(embedTask.Result, null);
+        var rerankModels = MapOpenRouterItems(rerankTask.Result, null);
+
+        var response = new OpenRouterModelsResponse(
+            ChatModels: chatModels,
+            EmbeddingModels: embeddingModels,
+            RerankModels: rerankModels,
+            CachedAt: DateTime.UtcNow,
+            TtlMinutes: (int)OpenRouterCacheTtl.TotalMinutes,
+            FromCache: false
+        );
+
+        _openRouterCache = (DateTime.UtcNow, response);
+        return response;
+    }
+
+    private async Task<List<JsonElement>> FetchOpenRouterModelsRawAsync(string url, CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            // Sem Authorization — a API de listagem do OpenRouter é pública para modelos disponíveis
+            var response = await _httpClient.SendAsync(request, ct);
+            response.EnsureSuccessStatusCode();
+            var body = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(body);
+            var data = doc.RootElement.GetProperty("data");
+            return data.EnumerateArray().ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao buscar modelos de {Url}", url);
+            return [];
+        }
+    }
+
+    private static List<OpenRouterModelItem> MapOpenRouterItems(List<JsonElement> items, int? embeddingDimensionOverride)
+    {
+        var result = new List<OpenRouterModelItem>();
+        foreach (var item in items)
+        {
+            var id = item.GetProperty("id").GetString() ?? "";
+            var name = item.GetProperty("name").GetString() ?? id;
+            var desc = item.TryGetProperty("description", out var d) ? d.GetString() : null;
+            var contextLen = item.TryGetProperty("context_length", out var cl) && cl.TryGetInt32(out var clv) ? clv : (int?)null;
+            var supportedParams = ParseStringArray(item, "supported_parameters");
+            var isFree = IsFreeModel(ParsePricing(item));
+
+            var outputMods = ParseStringArray(
+                item.TryGetProperty("architecture", out var arch) ? arch : default,
+                "output_modalities");
+
+            var dimensions = embeddingDimensionOverride ?? DetermineEmbeddingDimensions(id, name, outputMods);
+
+            var pricing = item.TryGetProperty("pricing", out var p) ? new OpenRouterModelPricing(
+                Prompt: ParsePriceString(p, "prompt"),
+                Completion: ParsePriceString(p, "completion"),
+                Image: ParsePriceString(p, "image"),
+                Request: ParsePriceString(p, "request")
+            ) : null;
+
+            result.Add(new OpenRouterModelItem(
+                Id: id,
+                Name: name,
+                Description: desc,
+                ContextLength: contextLen,
+                Pricing: pricing,
+                SupportedParameters: supportedParams,
+                EmbeddingDimensions: dimensions,
+                IsFree: isFree
+            ));
+        }
+        return result;
+    }
+
+    private static string? ParsePriceString(JsonElement parent, string propertyName) =>
+        parent.TryGetProperty(propertyName, out var v) ? v.GetRawText().Trim('"') : null;
+
+    // ─── Fase 1: Validate API Key ─────────────────────────────────────────────
+
+    public async Task<bool> ValidateApiKeyAsync(
+        string provider, string baseUrl, string apiKey, CancellationToken ct = default)
+    {
+        var url = $"{baseUrl.TrimEnd('/')}/models";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        var response = await _httpClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        return true;
+    }
+
+    // ─── Fase 4: Rerank ──────────────────────────────────────────────────────
+
+    public async Task<List<AiRerankResult>> RerankAsync(
+        string query,
+        List<string> documents,
+        string? model = null,
+        int? topN = null,
+        CancellationToken ct = default)
+    {
+        var modelId = string.IsNullOrWhiteSpace(model) ? "cohere/rerank-v3.5" : model;
+        var n = topN ?? 3;
+        var baseUrl = AIIntegrationSettings.OpenRouterDefaultBaseUrl;
+
+        var body = JsonSerializer.Serialize(new { model = modelId, query, documents, top_n = n });
+        var url = $"{baseUrl.TrimEnd('/')}/rerank";
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+        };
+
+        var response = await _httpClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+
+        var responseBody = await response.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(responseBody);
+        var results = doc.RootElement.GetProperty("results");
+
+        return results.EnumerateArray().Select(r => new AiRerankResult(
+            Index: r.GetProperty("index").GetInt32(),
+            RelevanceScore: r.GetProperty("relevance_score").GetDouble(),
+            Document: r.GetProperty("document").TryGetProperty("text", out var t)
+                ? t.GetString() ?? ""
+                : documents.ElementAtOrDefault(r.GetProperty("index").GetInt32()) ?? ""
+        )).ToList();
+    }
 }

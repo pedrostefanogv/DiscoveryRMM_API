@@ -793,18 +793,17 @@ public class ConfigurationsController : ControllerBase
 
     // ============ AI Providers & Credentials ============
 
-    /// <summary>Lista providers suportados</summary>
+    /// <summary>Lista providers suportados com metadados e catálogos</summary>
     [HttpGet("ai/providers")]
     public IActionResult GetAiProviders()
     {
         return Ok(new
         {
-            providers = _aiModelCatalog.GetSupportedProviders(),
-            defaults = new
+            providers = new[]
             {
-                openai = AIIntegrationSettings.OpenAiDefaultBaseUrl,
-                openrouter = AIIntegrationSettings.OpenRouterDefaultBaseUrl,
-                openai_compatible = (string?)null
+                new { id = "openrouter", name = "OpenRouter (recomendado)", isConfigurable = false, defaultBaseUrl = AIIntegrationSettings.OpenRouterDefaultBaseUrl },
+                new { id = "openai", name = "OpenAI", isConfigurable = false, defaultBaseUrl = AIIntegrationSettings.OpenAiDefaultBaseUrl },
+                new { id = "openai-compatible", name = "Personalizado (OpenAI-compatible)", isConfigurable = true, defaultBaseUrl = (string?)null }
             },
             recommendedChatModels = AIIntegrationSettings.RecommendedChatModels,
             recommendedEmbeddingModels = AIIntegrationSettings.RecommendedEmbeddingModels,
@@ -822,6 +821,63 @@ public class ConfigurationsController : ControllerBase
             embeddingModels = AIIntegrationSettings.RecommendedEmbeddingModels,
             embeddingDimensionsMap = AIIntegrationSettings.EmbeddingDimensionsMap
         });
+    }
+
+    /// <summary>Busca modelos disponíveis diretamente da API OpenRouter.</summary>
+    [HttpGet("ai/openrouter/models")]
+    public async Task<IActionResult> GetOpenRouterModels(
+        [FromQuery] string? modality = null,
+        [FromQuery] bool refresh = false,
+        CancellationToken ct = default)
+    {
+        var result = await _aiModelCatalog.ListOpenRouterModelsAsync(modality, refresh, ct);
+        return Ok(result);
+    }
+
+    /// <summary>Valida uma API key contra o provider (testa conectividade).</summary>
+    [HttpPost("ai/validate-key")]
+    public async Task<IActionResult> ValidateApiKey(
+        [FromBody] AiKeyValidationRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.ApiKey))
+            return BadRequest(new { valid = false, error = "ApiKey é obrigatória." });
+
+        var provider = string.IsNullOrWhiteSpace(request.Provider) ? "openrouter" : request.Provider;
+        var baseUrl = string.IsNullOrWhiteSpace(request.BaseUrl)
+            ? (provider == "openrouter" ? AIIntegrationSettings.OpenRouterDefaultBaseUrl : AIIntegrationSettings.OpenAiDefaultBaseUrl)
+            : request.BaseUrl;
+
+        try
+        {
+            var valid = await _aiModelCatalog.ValidateApiKeyAsync(provider, baseUrl, request.ApiKey, ct);
+            return Ok(new { valid = true, provider, baseUrl });
+        }
+        catch (Exception ex)
+        {
+            return Ok(new { valid = false, error = ex.Message });
+        }
+    }
+
+    /// <summary>Rerank documents usando cross-encoder (OpenRouter).</summary>
+    [HttpPost("ai/rerank")]
+    public async Task<IActionResult> RerankDocuments(
+        [FromBody] AiRerankRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Query) || request.Documents is null || request.Documents.Count == 0)
+            return BadRequest(new { error = "Query e documents são obrigatórios." });
+
+        try
+        {
+            var results = await _aiModelCatalog.RerankAsync(
+                request.Query, request.Documents, request.Model, request.TopN, ct);
+            return Ok(new { results });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     /// <summary>Lista/obtém credenciais AI. scopeType=global|client|site</summary>

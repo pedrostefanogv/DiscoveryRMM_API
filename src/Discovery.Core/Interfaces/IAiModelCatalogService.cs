@@ -39,4 +39,31 @@ public interface IAiModelCatalogService
     /// Lista providers suportados (ex: ["openai", "openrouter", "openai-compatible"]).
     /// </summary>
     List<string> GetSupportedProviders();
+
+    /// <summary>
+    /// Busca modelos diretamente da API OpenRouter (/models e /embeddings/models) com cache de 60min.
+    /// </summary>
+    Task<OpenRouterModelsResponse> ListOpenRouterModelsAsync(
+        string? modality = null,
+        bool forceRefresh = false,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Valida uma API key contra o provider (faz uma requisição leve de ping).
+    /// </summary>
+    Task<bool> ValidateApiKeyAsync(
+        string provider,
+        string baseUrl,
+        string apiKey,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Rerank documents usando cross-encoder via OpenRouter (/rerank).
+    /// </summary>
+    Task<List<AiRerankResult>> RerankAsync(
+        string query,
+        List<string> documents,
+        string? model = null,
+        int? topN = null,
+        CancellationToken ct = default);
 }

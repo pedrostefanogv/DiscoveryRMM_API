@@ -75,3 +75,67 @@ public record AiModelValidationRequest(
     Guid? ClientId = null,
     Guid? SiteId = null
 );
+
+/// <summary>
+/// Request para validação de API key.
+/// </summary>
+public record AiKeyValidationRequest(
+    string ApiKey,
+    string? Provider = null,
+    string? BaseUrl = null
+);
+
+/// <summary>
+/// Request para rerank de documentos.
+/// </summary>
+public record AiRerankRequest(
+    string Query,
+    List<string> Documents,
+    string? Model = null,
+    int? TopN = null
+);
+
+/// <summary>
+/// Resultado individual do rerank.
+/// </summary>
+public record AiRerankResult(
+    int Index,
+    double RelevanceScore,
+    string Document
+);
+
+/// <summary>
+/// Resposta do endpoint OpenRouter models.
+/// </summary>
+public record OpenRouterModelsResponse(
+    List<OpenRouterModelItem> ChatModels,
+    List<OpenRouterModelItem> EmbeddingModels,
+    List<OpenRouterModelItem> RerankModels,
+    DateTime CachedAt,
+    int TtlMinutes,
+    bool FromCache
+);
+
+/// <summary>
+/// Item de modelo da API OpenRouter.
+/// </summary>
+public record OpenRouterModelItem(
+    string Id,
+    string Name,
+    string? Description,
+    int? ContextLength,
+    OpenRouterModelPricing? Pricing,
+    List<string> SupportedParameters,
+    int? EmbeddingDimensions,
+    bool IsFree
+);
+
+/// <summary>
+/// Preço do modelo OpenRouter (por 1M tokens).
+/// </summary>
+public record OpenRouterModelPricing(
+    string? Prompt,
+    string? Completion,
+    string? Image,
+    string? Request
+);

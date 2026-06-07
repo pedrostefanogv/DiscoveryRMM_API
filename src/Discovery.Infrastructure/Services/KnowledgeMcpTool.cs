@@ -100,16 +100,7 @@ public class KnowledgeMcpTool(
         // ── Resultados semânticos encontrados ──
         if (semanticResults is { Count: > 0 })
         {
-            var items = semanticResults.Select(r => new
-            {
-                article_id = r.ArticleId,
-                title = r.ArticleTitle,
-                section = r.SectionTitle,
-                content = r.ChunkContent.Length > 600 ? r.ChunkContent[..600] + "..." : r.ChunkContent,
-                score = Math.Round(1.0 - r.Distance, 4),
-                scope = GetScope(r.ArticleClientId, r.ArticleSiteId)
-            });
-
+            var items = semanticResults.Select(r => BuildCitationResult(r, null, settings));
             return JsonSerializer.Serialize(new { found = true, results = items });
         }
 
@@ -120,16 +111,7 @@ public class KnowledgeMcpTool(
             if (keywordResults.Count == 0)
                 return JsonSerializer.Serialize(new { found = false, message = "Nenhum artigo encontrado na base de conhecimento." });
 
-            var kwItems = keywordResults.Take(maxResults).Select(a => new
-            {
-                article_id = a.Id,
-                title = a.Title,
-                section = (string?)null,
-                content = a.Content.Length > 600 ? a.Content[..600] + "..." : a.Content,
-                score = (double?)null,
-                scope = GetScope(a.ClientId, a.SiteId)
-            });
-
+            var kwItems = keywordResults.Take(maxResults).Select(a => BuildKeywordCitation(a, settings));
             return JsonSerializer.Serialize(new { found = true, results = kwItems });
         }
         catch (Exception ex)
@@ -137,6 +119,65 @@ public class KnowledgeMcpTool(
             logger.LogError(ex, "Erro ao executar KnowledgeMcpTool (busca keyword) para query={Query}", LogSanitizer.Sanitize(query));
             return JsonSerializer.Serialize(new { found = false, error = "Erro ao consultar base de conhecimento." });
         }
+    }
+
+    private static object BuildCitationResult(KnowledgeChunkSearchResult r, string? keywordScore, AIIntegrationSettings settings)
+    {
+        var baseFields = new
+        {
+            article_id = r.ArticleId,
+            title = r.ArticleTitle,
+            section = r.SectionTitle,
+            content = r.ChunkContent.Length > 600 ? r.ChunkContent[..600] + "..." : r.ChunkContent,
+            score = keywordScore ?? Math.Round(1.0 - r.Distance, 4).ToString("F4"),
+            scope = GetScope(r.ArticleClientId, r.ArticleSiteId),
+            source_line = keywordScore is not null ? "keyword" : "semantic"
+        };
+
+        if (!settings.CitationsEnabled)
+            return baseFields;
+
+        // Citações enriquecidas: inclui metadados para o LLM citar fontes
+        return new
+        {
+            baseFields.article_id,
+            baseFields.title,
+            baseFields.section,
+            baseFields.content,
+            baseFields.score,
+            baseFields.scope,
+            baseFields.source_line,
+            citation = FormattableString.Invariant($"[Fonte: {r.ArticleTitle}]")
+        };
+    }
+
+    private static object BuildKeywordCitation(Discovery.Core.Entities.KnowledgeArticle a, AIIntegrationSettings settings)
+    {
+        if (!settings.CitationsEnabled)
+        {
+            return new
+            {
+                article_id = a.Id,
+                title = a.Title,
+                section = (string?)null,
+                content = a.Content.Length > 600 ? a.Content[..600] + "..." : a.Content,
+                score = (string?)null,
+                scope = GetScope(a.ClientId, a.SiteId),
+                source_line = "keyword"
+            };
+        }
+
+        return new
+        {
+            article_id = a.Id,
+            title = a.Title,
+            section = (string?)null,
+            content = a.Content.Length > 600 ? a.Content[..600] + "..." : a.Content,
+            score = (string?)null,
+            scope = GetScope(a.ClientId, a.SiteId),
+            source_line = "keyword",
+            citation = FormattableString.Invariant($"[Fonte: {a.Title}]")
+        };
     }
 
     private static string GetScope(Guid? clientId, Guid? siteId) =>

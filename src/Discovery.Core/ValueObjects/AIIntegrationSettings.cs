@@ -80,6 +80,61 @@ public class AIIntegrationSettings
     /// <summary>Número máximo de chunks da KB injetados no system prompt via RAG (1–10)</summary>
     public int MaxKbChunks { get; set; } = 3;
 
+    // ── Sampling Parameters (OpenRouter / OpenAI-compatible) ─────────────────
+
+    /// <summary>Top P — nucleus sampling (0.0–1.0). Default: 1.0</summary>
+    public double TopP { get; set; } = 1.0;
+
+    /// <summary>Frequency penalty (-2.0–2.0). Reduz repetição baseada em frequência.</summary>
+    public double FrequencyPenalty { get; set; } = 0.0;
+
+    /// <summary>Presence penalty (-2.0–2.0). Reduz repetição de tokens já usados.</summary>
+    public double PresencePenalty { get; set; } = 0.0;
+
+    /// <summary>Seed para amostragem determinística (opcional). Mesmo seed + parâmetros = mesma resposta.</summary>
+    public int? Seed { get; set; }
+
+    // ── OpenRouter-specific features ──────────────────────────────────────────
+
+    /// <summary>Habilita reasoning/thinking tokens em modelos compatíveis (ex: o3-mini, gemini-2.5-pro).</summary>
+    public bool ReasoningEnabled { get; set; } = false;
+
+    /// <summary>Esforço de reasoning: low, medium, high. Só aplicável se ReasoningEnabled=true.</summary>
+    public string? ReasoningEffort { get; set; }
+
+    /// <summary>Habilita web search nativa para modelos compatíveis (via OpenRouter).</summary>
+    public bool WebSearchEnabled { get; set; } = false;
+
+    /// <summary>Formato de resposta: null (texto livre) ou "json_object" (JSON mode).</summary>
+    public string? ResponseFormat { get; set; }
+
+    // ── Rerank (Fase 4) ──────────────────────────────────────────────────────
+
+    /// <summary>Habilita reranking com cross-encoder (ex: cohere/rerank-v3.5) para melhorar precisão da busca.</summary>
+    public bool RerankEnabled { get; set; } = false;
+
+    /// <summary>Modelo de rerank. Default: cohere/rerank-v3.5 (via OpenRouter).</summary>
+    public string? RerankModel { get; set; } = "cohere/rerank-v3.5";
+
+    /// <summary>Quantos candidatos manter após rerank (1–10).</summary>
+    public int RerankTopN { get; set; } = 3;
+
+    // ── Chunking (Fase 5) ────────────────────────────────────────────────────
+
+    /// <summary>Estratégia de chunking: "semantic" (headings), "paragraph", "fixed".</summary>
+    public string ChunkingStrategy { get; set; } = "semantic";
+
+    /// <summary>Tamanho alvo do chunk em tokens (200–1000).</summary>
+    public int ChunkSizeTokens { get; set; } = 300;
+
+    /// <summary>Overlap entre chunks adjacentes em tokens (0–100).</summary>
+    public int ChunkOverlapTokens { get; set; } = 50;
+
+    // ── Citações (Fase 6) ────────────────────────────────────────────────────
+
+    /// <summary>Inclui metadados (título, categoria, tags) nos chunks enviados ao LLM.</summary>
+    public bool CitationsEnabled { get; set; } = true;
+
     // --- OpenRouter ---
 
     /// <summary>Header HTTP-Referer para OpenRouter (URL do site/app)</summary>
@@ -154,6 +209,7 @@ public class AIIntegrationSettings
         [ProviderOpenRouter] = [
             "openai/text-embedding-3-small",
             "google/text-embedding-004",
+            "perplexity/pplx-embed-v1-0.6b",
         ],
         ["anthropic"] = [], // Anthropic não oferece API de embedding pública
         ["azure-openai"] = [], // deployments customizados
@@ -168,5 +224,6 @@ public class AIIntegrationSettings
         ["text-embedding-ada-002"] = 1536,
         ["openai/text-embedding-3-small"] = 1536,
         ["google/text-embedding-004"] = 768,
+        ["perplexity/pplx-embed-v1-0.6b"] = 1024,
     };
 }
