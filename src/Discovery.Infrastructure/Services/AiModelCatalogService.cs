@@ -476,21 +476,17 @@ public class AiModelCatalogService : IAiModelCatalogService
 
         var baseUrl = AIIntegrationSettings.OpenRouterDefaultBaseUrl;
 
-        // Busca modelos de chat e embeddings em paralelo
-        var chatTask = FetchOpenRouterModelsRawAsync($"{baseUrl}models", ct);
-        var embedTask = FetchOpenRouterModelsRawAsync($"{baseUrl}embeddings/models", ct);
-        var rerankTask = FetchOpenRouterModelsRawAsync($"{baseUrl}models?output_modalities=rerank", ct);
+        // Busca modelos de chat e embeddings em paralelo com parse direto para evitar JsonElement disposed
+        var chatTask = FetchOpenRouterModelsAsync($"{baseUrl}models", ct);
+        var embedTask = FetchOpenRouterModelsAsync($"{baseUrl}embeddings/models", ct);
+        var rerankTask = FetchOpenRouterModelsAsync($"{baseUrl}models?output_modalities=rerank", ct);
 
         await Task.WhenAll(chatTask, embedTask, rerankTask);
 
-        var chatModels = MapOpenRouterItems(chatTask.Result, null);
-        var embeddingModels = MapOpenRouterItems(embedTask.Result, null);
-        var rerankModels = MapOpenRouterItems(rerankTask.Result, null);
-
         var response = new OpenRouterModelsResponse(
-            ChatModels: chatModels,
-            EmbeddingModels: embeddingModels,
-            RerankModels: rerankModels,
+            ChatModels: chatTask.Result,
+            EmbeddingModels: embedTask.Result,
+            RerankModels: rerankTask.Result,
             CachedAt: DateTime.UtcNow,
             TtlMinutes: (int)OpenRouterCacheTtl.TotalMinutes,
             FromCache: false
@@ -500,18 +496,49 @@ public class AiModelCatalogService : IAiModelCatalogService
         return response;
     }
 
-    private async Task<List<JsonElement>> FetchOpenRouterModelsRawAsync(string url, CancellationToken ct)
+    private async Task<List<OpenRouterModelItem>> FetchOpenRouterModelsAsync(string url, CancellationToken ct)
     {
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            // Sem Authorization — a API de listagem do OpenRouter é pública para modelos disponíveis
             var response = await _httpClient.SendAsync(request, ct);
             response.EnsureSuccessStatusCode();
             var body = await response.Content.ReadAsStringAsync(ct);
+
+            // Deserializa para JsonElement via JsonDocument mantido vivo durante todo o parse
             using var doc = JsonDocument.Parse(body);
             var data = doc.RootElement.GetProperty("data");
-            return data.EnumerateArray().ToList();
+            var items = data.EnumerateArray();
+
+            var result = new List<OpenRouterModelItem>();
+            foreach (var item in items)
+            {
+                var id = item.GetProperty("id").GetString() ?? "";
+                var name = item.GetProperty("name").GetString() ?? id;
+                var desc = item.TryGetProperty("description", out var d) ? d.GetString() : null;
+                var contextLen = item.TryGetProperty("context_length", out var cl) && cl.TryGetInt32(out var clv) ? clv : (int?)null;
+                var supportedParams = ParseStringArray(item, "supported_parameters");
+                var isFree = IsFreeModel(ParsePricing(item));
+
+                var outputMods = ParseStringArray(
+                    item.TryGetProperty("architecture", out var arch) ? arch : default,
+                    "output_modalities");
+
+                var dimensions = DetermineEmbeddingDimensions(id, name, outputMods);
+                var pricing = ParsePricingAsString(item);
+
+                result.Add(new OpenRouterModelItem(
+                    Id: id,
+                    Name: name,
+                    Description: desc,
+                    ContextLength: contextLen,
+                    Pricing: pricing,
+                    SupportedParameters: supportedParams,
+                    EmbeddingDimensions: dimensions,
+                    IsFree: isFree
+                ));
+            }
+            return result;
         }
         catch (Exception ex)
         {
@@ -520,43 +547,17 @@ public class AiModelCatalogService : IAiModelCatalogService
         }
     }
 
-    private static List<OpenRouterModelItem> MapOpenRouterItems(List<JsonElement> items, int? embeddingDimensionOverride)
+    private static OpenRouterModelPricing? ParsePricingAsString(JsonElement item)
     {
-        var result = new List<OpenRouterModelItem>();
-        foreach (var item in items)
-        {
-            var id = item.GetProperty("id").GetString() ?? "";
-            var name = item.GetProperty("name").GetString() ?? id;
-            var desc = item.TryGetProperty("description", out var d) ? d.GetString() : null;
-            var contextLen = item.TryGetProperty("context_length", out var cl) && cl.TryGetInt32(out var clv) ? clv : (int?)null;
-            var supportedParams = ParseStringArray(item, "supported_parameters");
-            var isFree = IsFreeModel(ParsePricing(item));
+        if (!item.TryGetProperty("pricing", out var p) || p.ValueKind != JsonValueKind.Object)
+            return null;
 
-            var outputMods = ParseStringArray(
-                item.TryGetProperty("architecture", out var arch) ? arch : default,
-                "output_modalities");
-
-            var dimensions = embeddingDimensionOverride ?? DetermineEmbeddingDimensions(id, name, outputMods);
-
-            var pricing = item.TryGetProperty("pricing", out var p) ? new OpenRouterModelPricing(
-                Prompt: ParsePriceString(p, "prompt"),
-                Completion: ParsePriceString(p, "completion"),
-                Image: ParsePriceString(p, "image"),
-                Request: ParsePriceString(p, "request")
-            ) : null;
-
-            result.Add(new OpenRouterModelItem(
-                Id: id,
-                Name: name,
-                Description: desc,
-                ContextLength: contextLen,
-                Pricing: pricing,
-                SupportedParameters: supportedParams,
-                EmbeddingDimensions: dimensions,
-                IsFree: isFree
-            ));
-        }
-        return result;
+        return new OpenRouterModelPricing(
+            Prompt: ParsePriceString(p, "prompt"),
+            Completion: ParsePriceString(p, "completion"),
+            Image: ParsePriceString(p, "image"),
+            Request: ParsePriceString(p, "request")
+        );
     }
 
     private static string? ParsePriceString(JsonElement parent, string propertyName) =>
