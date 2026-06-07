@@ -501,6 +501,9 @@ public class AiModelCatalogService : IAiModelCatalogService
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.TryAddWithoutValidation("User-Agent", "DiscoveryRMM/1.0");
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
             var response = await _httpClient.SendAsync(request, ct);
             response.EnsureSuccessStatusCode();
             var body = await response.Content.ReadAsStringAsync(ct);
@@ -538,11 +541,12 @@ public class AiModelCatalogService : IAiModelCatalogService
                     IsFree: isFree
                 ));
             }
+            _logger.LogInformation("Fetched {Count} models from {Url}", result.Count, url);
             return result;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Falha ao buscar modelos de {Url}", url);
+            _logger.LogError(ex, "Falha ao buscar modelos de {Url}: {Error}", url, ex.Message);
             return [];
         }
     }
