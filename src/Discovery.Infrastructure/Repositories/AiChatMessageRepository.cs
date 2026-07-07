@@ -34,4 +34,37 @@ public class AiChatMessageRepository : IAiChatMessageRepository
             .OrderBy(m => m.SequenceNumber)
             .ToListAsync(ct);
     }
+
+    public async Task CreateBatchAsync(IReadOnlyList<AiChatMessage> messages, CancellationToken ct = default)
+    {
+        foreach (var message in messages)
+        {
+            message.Id = IdGenerator.NewId();
+            message.CreatedAt = DateTime.UtcNow;
+            _db.AiChatMessages.Add(message);
+        }
+
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task<(int MessageCount, int EstimatedTokens)> GetStatsAsync(Guid sessionId, CancellationToken ct = default)
+    {
+        var messages = await _db.AiChatMessages
+            .AsNoTracking()
+            .Where(m => m.SessionId == sessionId && m.Role != "tool")
+            .Select(m => new { m.Role, m.Content, m.TokensUsed })
+            .ToListAsync(ct);
+
+        var tokenSum = messages
+            .Where(m => m.TokensUsed.HasValue)
+            .Sum(m => m.TokensUsed!.Value);
+
+        // Se não temos tokens registrados, estimamos por palavras (1.3 tokens/palavra)
+        if (tokenSum == 0)
+        {
+            tokenSum = (int)messages.Sum(m => (m.Content?.Length ?? 0) * 0.3);
+        }
+
+        return (messages.Count, tokenSum);
+    }
 }

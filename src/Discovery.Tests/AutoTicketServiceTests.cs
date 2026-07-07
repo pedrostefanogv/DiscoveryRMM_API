@@ -453,6 +453,9 @@ public class AutoTicketServiceTests
         public Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId)
             => Task.FromResult<IEnumerable<TicketComment>>([]);
 
+        public Task<IReadOnlyList<TicketComment>> GetCommentsPageAsync(Guid ticketId, string? cursor, int limit)
+            => Task.FromResult<IReadOnlyList<TicketComment>>(Array.Empty<TicketComment>());
+
         public Task<TicketComment> AddCommentAsync(TicketComment comment)
             => Task.FromResult(comment);
 

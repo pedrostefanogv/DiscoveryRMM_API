@@ -11,16 +11,25 @@ namespace Discovery.Infrastructure.Services;
 
 public class OpenAiProvider : ILlmProvider
 {
-    private readonly HttpClient _httpClient;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<OpenAiProvider> _logger;
 
-    public OpenAiProvider(ILogger<OpenAiProvider> logger)
+    public OpenAiProvider(IHttpClientFactory httpClientFactory, ILogger<OpenAiProvider> logger)
     {
-        _httpClient = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(30)
-        };
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Resolve a BaseUrl padrão ou da opção. Suporta Ollama como provider explícito.
+    /// </summary>
+    internal static string ResolveDefaultBaseUrl(string? provider)
+    {
+        if (string.Equals(provider, AIIntegrationSettings.ProviderOpenRouter, StringComparison.OrdinalIgnoreCase))
+            return AIIntegrationSettings.OpenRouterDefaultBaseUrl;
+        if (string.Equals(provider, AIIntegrationSettings.ProviderOllama, StringComparison.OrdinalIgnoreCase))
+            return AIIntegrationSettings.OllamaDefaultBaseUrl;
+        return AIIntegrationSettings.OpenAiDefaultBaseUrl;
     }
 
     /// <summary>Aplica headers OpenRouter se o provider for openrouter</summary>
@@ -58,6 +67,10 @@ public class OpenAiProvider : ILlmProvider
             var baseUrl = !string.IsNullOrWhiteSpace(options.BaseUrl)
                 ? options.BaseUrl
                 : ResolveDefaultBaseUrl(options.Provider);
+
+            var hasFallback = options.EnableTools == false
+                && !string.IsNullOrWhiteSpace(options.BaseUrl)
+                && !string.IsNullOrWhiteSpace(options.ApiKey);
 
             // IMPORTANTE: NUNCA logar _apiKey
             _logger.LogInformation(
@@ -128,7 +141,8 @@ public class OpenAiProvider : ILlmProvider
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             ApplyOpenRouterHeaders(request, options);
 
-            var response = await _httpClient.SendAsync(request, cancellationToken);
+            var httpClient = _httpClientFactory.CreateClient("AiChat");
+            var response = await httpClient.SendAsync(request, cancellationToken);
             
             if (!response.IsSuccessStatusCode)
             {
@@ -234,7 +248,8 @@ public class OpenAiProvider : ILlmProvider
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         ApplyOpenRouterHeaders(request, options);
 
-        using var response = await _httpClient.SendAsync(
+        var httpClient = _httpClientFactory.CreateClient("AiChat");
+        using var response = await httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
@@ -291,6 +306,201 @@ public class OpenAiProvider : ILlmProvider
         }
     }
 
+    /// <summary>
+    /// Streaming SSE com suporte a tool calls. Emite LlmStreamEvent (token, tool_calls, done)
+    /// em vez de strings. Detecta finish_reason=tool_calls e emite as tool calls acumuladas.
+    /// </summary>
+    public async IAsyncEnumerable<LlmStreamEvent> StreamWithToolsAsync(
+        string systemPrompt,
+        List<LlmMessage> messages,
+        LlmOptions options,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var model = options.Model;
+        if (string.IsNullOrWhiteSpace(model))
+            throw new InvalidOperationException("Modelo de IA não definido no banco para o escopo atual.");
+
+        var apiKey = options.ApiKey;
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
+
+        var baseUrl = !string.IsNullOrWhiteSpace(options.BaseUrl)
+            ? options.BaseUrl
+            : ResolveDefaultBaseUrl(options.Provider);
+
+        _logger.LogInformation(
+            "StreamWithToolsAsync LLM provider={Provider}: {MessageCount} messages, model={Model}, tools={Tools}",
+            options.Provider ?? "openai", messages.Count, model, options.EnableTools && options.Tools != null);
+
+        var openAiMessages = new List<object> { new { role = "system", content = systemPrompt } };
+        foreach (var msg in messages)
+        {
+            if (msg.Role == "tool")
+            {
+                openAiMessages.Add(new { role = "tool", tool_call_id = msg.ToolCallId, content = msg.Content });
+            }
+            else
+            {
+                openAiMessages.Add(new { role = msg.Role, content = msg.Content });
+            }
+        }
+
+        var payload = new
+        {
+            model,
+            messages = openAiMessages,
+            max_tokens = options.MaxTokens,
+            temperature = options.Temperature,
+            stream = true,
+            tools = options.EnableTools && options.Tools != null
+                ? options.Tools.Select(t => new
+                {
+                    type = "function",
+                    function = new { name = t.Name, description = t.Description, parameters = t.Schema }
+                }).ToList()
+                : null
+        };
+
+        var requestBody = new StringContent(
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }),
+            Encoding.UTF8,
+            "application/json");
+
+        var requestUri = new Uri(new Uri(baseUrl), "chat/completions");
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = requestBody };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        ApplyOpenRouterHeaders(request, options);
+
+        var httpClient = _httpClientFactory.CreateClient("AiChat");
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogError("OpenAI stream error: {StatusCode} - {Error}", response.StatusCode, errorBody);
+            throw new HttpRequestException($"OpenAI API returned {response.StatusCode}");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+
+        // Acumuladores de tool calls (delta.tool_calls chega em chunks incrementais)
+        var pendingToolCalls = new Dictionary<int, (string Id, string Name, StringBuilder Args)>();
+
+        string? line;
+        while ((line = await reader.ReadLineAsync(cancellationToken)) != null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrEmpty(line)) continue;
+            if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+
+            var data = line["data: ".Length..];
+            if (data == "[DONE]")
+            {
+                yield return new LlmStreamEvent(Type: "done");
+                yield break;
+            }
+
+            // ── Parse chunk (fora de try-catch para permitir yield) ──
+            LlmStreamEvent? parsed = null;
+            try
+            {
+                parsed = ParseStreamChunk(data, pendingToolCalls);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            if (parsed is not null)
+            {
+                yield return parsed;
+                if (parsed.Type is "tool_calls" or "done")
+                    yield break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parse um chunk SSE e retorna o LlmStreamEvent correspondente.
+    /// Extraído para método separado para evitar yield dentro de try-catch.
+    /// </summary>
+    private static LlmStreamEvent? ParseStreamChunk(string data, Dictionary<int, (string Id, string Name, StringBuilder Args)> pendingToolCalls)
+    {
+        using var doc = JsonDocument.Parse(data);
+        var choices = doc.RootElement.GetProperty("choices");
+        if (choices.GetArrayLength() == 0) return null;
+
+        var choice = choices[0];
+        var delta = choice.GetProperty("delta");
+        string? finishReason = null;
+        if (choice.TryGetProperty("finish_reason", out var frProp) && frProp.ValueKind == JsonValueKind.String)
+            finishReason = frProp.GetString();
+
+        // 1. Delta content (texto)
+        if (delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
+        {
+            var token = contentProp.GetString();
+            if (!string.IsNullOrEmpty(token))
+                return new LlmStreamEvent(Type: "token", Content: token);
+        }
+
+        // 2. Delta tool_calls (incremental)
+        if (delta.TryGetProperty("tool_calls", out var tcProp) && tcProp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var tc in tcProp.EnumerateArray())
+            {
+                var index = tc.GetProperty("index").GetInt32();
+
+                if (!pendingToolCalls.ContainsKey(index))
+                {
+                    var id = tc.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String
+                        ? idProp.GetString()! : string.Empty;
+                    var fn = tc.GetProperty("function");
+                    var name = fn.TryGetProperty("name", out var nProp) && nProp.ValueKind == JsonValueKind.String
+                        ? nProp.GetString()! : string.Empty;
+                    pendingToolCalls[index] = (id, name, new StringBuilder());
+                }
+
+                var existing = pendingToolCalls[index];
+                var fnDelta = tc.GetProperty("function");
+                if (fnDelta.TryGetProperty("arguments", out var argsProp) && argsProp.ValueKind == JsonValueKind.String)
+                    existing.Args.Append(argsProp.GetString());
+            }
+        }
+
+        // 3. Finish reason = tool_calls → emitir tool calls acumuladas
+        if (string.Equals(finishReason, "tool_calls", StringComparison.OrdinalIgnoreCase) && pendingToolCalls.Count > 0)
+        {
+            var parsedToolCalls = pendingToolCalls.Values.Select(tc => new LlmToolCall(
+                tc.Id, tc.Name, tc.Args.ToString())).ToList();
+
+            int? tokensUsed = null;
+            if (doc.RootElement.TryGetProperty("usage", out var usageProp))
+            {
+                if (usageProp.TryGetProperty("total_tokens", out var ttProp))
+                    tokensUsed = ttProp.GetInt32();
+            }
+
+            return new LlmStreamEvent(Type: "tool_calls", ToolCalls: parsedToolCalls, TokensUsed: tokensUsed);
+        }
+
+        // 4. Finish reason = stop
+        if (string.Equals(finishReason, "stop", StringComparison.OrdinalIgnoreCase))
+        {
+            int? tokensUsed = null;
+            if (doc.RootElement.TryGetProperty("usage", out var usageProp))
+            {
+                if (usageProp.TryGetProperty("total_tokens", out var ttProp))
+                    tokensUsed = ttProp.GetInt32();
+            }
+
+            return new LlmStreamEvent(Type: "done", TokensUsed: tokensUsed);
+        }
+
+        return null;
+    }
+
     // DTOs internos para deserialização da resposta OpenAI
     private record OpenAiChatResponse(
         [property: JsonPropertyName("id")] string Id,
@@ -327,10 +537,4 @@ public class OpenAiProvider : ILlmProvider
         [property: JsonPropertyName("completion_tokens")] int CompletionTokens,
         [property: JsonPropertyName("total_tokens")] int TotalTokens
     );
-
-    private static string ResolveDefaultBaseUrl(string? provider) => provider?.ToLowerInvariant() switch
-    {
-        AIIntegrationSettings.ProviderOpenRouter => AIIntegrationSettings.OpenRouterDefaultBaseUrl,
-        _ => AIIntegrationSettings.OpenAiDefaultBaseUrl
-    };
 }

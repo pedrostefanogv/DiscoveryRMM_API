@@ -24,6 +24,18 @@ public interface IPermissionService
     /// Útil para queries filtradas por escopo.
     /// </summary>
     Task<UserScopeAccess> GetScopeAccessAsync(Guid userId, ResourceType resource, ActionType action);
+
+    /// <summary>
+    /// Invalida o cache de permissões para um usuário específico.
+    /// Chamado quando grupos/roles do usuário são alterados.
+    /// </summary>
+    Task InvalidateUserCacheAsync(Guid userId);
+
+    /// <summary>
+    /// Invalida todo o cache de permissões.
+    /// Chamado quando roles/papéis são alterados globalmente.
+    /// </summary>
+    Task InvalidateAllCacheAsync();
 }
 
 /// <summary>Representa o acesso de escopo de um usuário a um recurso.</summary>

@@ -28,6 +28,11 @@ public static class RateLimitingServiceCollectionExtensions
         var downloadWindow = Math.Max(1, configuration.GetValue<int?>("Security:RateLimiting:Download:WindowSeconds") ?? 60);
         var downloadQueue = Math.Max(0, configuration.GetValue<int?>("Security:RateLimiting:Download:QueueLimit") ?? 5);
 
+        // Ticket creation tier: prevent abuse
+        var ticketCreatePermit = Math.Max(1, configuration.GetValue<int?>("Security:RateLimiting:TicketCreate:PermitLimit") ?? 30);
+        var ticketCreateWindow = Math.Max(1, configuration.GetValue<int?>("Security:RateLimiting:TicketCreate:WindowSeconds") ?? 60);
+        var ticketCreateQueue = Math.Max(0, configuration.GetValue<int?>("Security:RateLimiting:TicketCreate:QueueLimit") ?? 0);
+
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -91,6 +96,30 @@ public static class RateLimitingServiceCollectionExtensions
                         });
                 }
 
+                // Ticket creation: stricter rate limiting
+                if (httpContext.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase)
+                    && (path.StartsWithSegments("/api/v", StringComparison.OrdinalIgnoreCase)
+                        && path.Value?.Contains("/tickets", StringComparison.OrdinalIgnoreCase) == true
+                        && !path.Value.Contains("/comments", StringComparison.OrdinalIgnoreCase)
+                        && !path.Value.Contains("/attachments", StringComparison.OrdinalIgnoreCase)
+                        && !path.Value.Contains("/audit", StringComparison.OrdinalIgnoreCase)
+                        && !path.Value.Contains("/watchers", StringComparison.OrdinalIgnoreCase)
+                        && !path.Value.Contains("/ai", StringComparison.OrdinalIgnoreCase)
+                        && !path.Value.Contains("/sla", StringComparison.OrdinalIgnoreCase)
+                        && !path.Value.Contains("/custom-fields", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return RateLimitPartition.GetFixedWindowLimiter(
+                        partitionKey: $"tickets-create:{ip}",
+                        factory: _ => new FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = ticketCreatePermit,
+                            Window = TimeSpan.FromSeconds(ticketCreateWindow),
+                            QueueLimit = ticketCreateQueue,
+                            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                            AutoReplenishment = true
+                        });
+                }
+
                 return RateLimitPartition.GetFixedWindowLimiter(
                     partitionKey: $"general:{ip}",
                     factory: _ => new FixedWindowRateLimiterOptions
@@ -108,22 +137,18 @@ public static class RateLimitingServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Resolves the client IP, respecting Cloudflare and reverse-proxy headers.
+    /// Resolves the client IP. After the ForwardedHeaders middleware has processed
+    /// X-Forwarded-For from trusted proxies, Connection.RemoteIpAddress contains
+    /// the real client IP. CF-Connecting-IP is only trusted when the connection
+    /// originates from a known Cloudflare IP range (configured in Security:TrustedProxies).
     /// </summary>
     private static string ResolveClientIp(HttpContext context)
     {
-        var cfConnectingIp = context.Request.Headers["CF-Connecting-IP"].FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(cfConnectingIp))
-            return cfConnectingIp;
+        // Primary source: RemoteIpAddress already resolved by ForwardedHeaders middleware
+        var remoteIp = context.Connection.RemoteIpAddress?.ToString();
+        if (!string.IsNullOrWhiteSpace(remoteIp))
+            return remoteIp;
 
-        var xForwardedFor = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(xForwardedFor))
-        {
-            var firstIp = xForwardedFor.Split(',')[0].Trim();
-            if (!string.IsNullOrWhiteSpace(firstIp))
-                return firstIp;
-        }
-
-        return context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        return "unknown";
     }
 }

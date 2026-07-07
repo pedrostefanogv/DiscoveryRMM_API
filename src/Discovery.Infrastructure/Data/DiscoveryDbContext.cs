@@ -46,6 +46,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<AiChatSession> AiChatSessions => Set<AiChatSession>();
     public DbSet<AiChatMessage> AiChatMessages => Set<AiChatMessage>();
     public DbSet<AiChatJob> AiChatJobs => Set<AiChatJob>();
+    public DbSet<McpToolPolicy> McpToolPolicies => Set<McpToolPolicy>();
     public DbSet<AppApprovalRule> AppApprovalRules => Set<AppApprovalRule>();
     public DbSet<AppApprovalAudit> AppApprovalAudits => Set<AppApprovalAudit>();
     public DbSet<AutomationScriptDefinition> AutomationScriptDefinitions => Set<AutomationScriptDefinition>();
@@ -89,6 +90,8 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<KnowledgeArticleChunk> KnowledgeArticleChunks => Set<KnowledgeArticleChunk>();
     public DbSet<KnowledgeArticleVersion> KnowledgeArticleVersions => Set<KnowledgeArticleVersion>();
     public DbSet<TicketKnowledgeLink> TicketKnowledgeLinks => Set<TicketKnowledgeLink>();
+    public DbSet<TicketMergeRecord> TicketMergeRecords => Set<TicketMergeRecord>();
+    public DbSet<TicketRelation> TicketRelations => Set<TicketRelation>();
     public DbSet<KnowledgeEmbeddingQueueItem> KnowledgeEmbeddingQueueItems => Set<KnowledgeEmbeddingQueueItem>();
 
     // AI Provider Credentials

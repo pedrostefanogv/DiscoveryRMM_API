@@ -34,6 +34,7 @@ public class AlertToTicketService : IAlertToTicketService
 
     /// <summary>
     /// Cria um ticket a partir de um alerta.
+    /// Delega para CreateTicketFromMonitoringEventAsync usando adapter de request.
     /// Se o alerta já possuir TicketId, retorna o ticket existente sem criar duplicata.
     /// </summary>
     public async Task<Ticket> CreateTicketFromAlertAsync(
@@ -55,34 +56,20 @@ public class AlertToTicketService : IAlertToTicketService
             }
         }
 
-        var initialState = await _workflowRepo.GetInitialStateAsync(clientId);
-        if (initialState is null)
+        // Delega para o fluxo unificado via AutoTicketCreateTicketRequest
+        var request = new AutoTicketCreateTicketRequest
         {
-            _logger.LogError("Não existe estado inicial de workflow para o cliente {ClientId}.", clientId);
-            throw new InvalidOperationException($"Estado inicial de workflow não encontrado para o cliente {clientId}.");
-        }
-
-        var ticket = await _ticketRepo.CreateAsync(new Ticket
-        {
-            Id = Guid.NewGuid(),
             ClientId = clientId,
             SiteId = siteId,
             AgentId = agentId,
             Title = $"[Alerta] {alert.Title}",
             Description = $"Ticket criado automaticamente a partir do alerta:\n\n{alert.Message}",
             Category = "Alert",
-            WorkflowStateId = initialState.Id,
             Priority = priority,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        });
+            ActivityMessage = $"Ticket criado automaticamente a partir do alerta {alert.Id}: {alert.Title}"
+        };
 
-        await _activityLogService.LogActivityAsync(
-            ticket.Id,
-            TicketActivityType.AutoCreatedFromAlert,
-            null, null,
-            "system",
-            $"Ticket criado automaticamente a partir do alerta {alert.Id}: {alert.Title}");
+        var ticket = await CreateTicketFromMonitoringEventAsync(request, ct);
 
         // Vincula o ticket ao alerta
         alert.TicketId = ticket.Id;

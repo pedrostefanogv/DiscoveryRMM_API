@@ -16,23 +16,26 @@ namespace Discovery.Api.Controllers;
 public class TicketAiController : ControllerBase
 {
     private readonly ITicketRepository _ticketRepo;
-    private readonly ILlmProvider _llmProvider;
+    private readonly IAiChatService _aiChatService;
     private readonly IConfigurationResolver _configResolver;
     private readonly IActivityLogService _activityLogService;
     private readonly IKnowledgeArticleRepository _knowledgeRepo;
+    private readonly ILogger<TicketAiController> _logger;
 
     public TicketAiController(
         ITicketRepository ticketRepo,
-        ILlmProvider llmProvider,
+        IAiChatService aiChatService,
         IConfigurationResolver configResolver,
         IActivityLogService activityLogService,
-        IKnowledgeArticleRepository knowledgeRepo)
+        IKnowledgeArticleRepository knowledgeRepo,
+        ILogger<TicketAiController> logger)
     {
         _ticketRepo = ticketRepo;
-        _llmProvider = llmProvider;
+        _aiChatService = aiChatService;
         _configResolver = configResolver;
         _activityLogService = activityLogService;
         _knowledgeRepo = knowledgeRepo;
+        _logger = logger;
     }
 
     /// <summary>
@@ -45,36 +48,44 @@ public class TicketAiController : ControllerBase
         var ticket = await _ticketRepo.GetByIdAsync(id);
         if (ticket is null) return NotFound();
 
-        var aiSettings = await _configResolver.GetAISettingsAsync();
-        if (!aiSettings.Enabled || string.IsNullOrWhiteSpace(aiSettings.ApiKey))
-            return StatusCode(503, new { error = "IA não configurada." });
-
-        var systemPrompt =
-            "Você é um assistente de triagem de suporte técnico. " +
-            "Analise o ticket e responda APENAS com JSON no formato: " +
-            "{\"category\": string, \"priority\": \"Low|Medium|High|Critical\", \"department\": string, \"reasoning\": string}. " +
-            "Não inclua nenhum texto fora do JSON.";
-
-        var userMessage = $"Título: {ticket.Title}\n\nDescrição: {ticket.Description}";
-
-        var llmOptions = BuildLlmOptions(aiSettings, maxTokens: 400, temperature: 0.2);
-        var response = await _llmProvider.CompleteAsync(
-            systemPrompt,
-            [new("user", userMessage)],
-            llmOptions,
-            ct);
-
-        await _activityLogService.LogActivityAsync(
-            id, TicketActivityType.DescriptionUpdated, null, null, "ai:triage",
-            "Triagem automática gerada por IA");
-
-        return Ok(new
+        try
         {
-            ticketId = id,
-            suggestion = response.Content,
-            tokensUsed = response.TokensUsed,
-            model = response.ModelVersion
-        });
+            var systemPrompt =
+                "Você é um assistente de triagem de suporte técnico. " +
+                "Analise o ticket e responda APENAS com JSON no formato: " +
+                "{\"category\": string, \"priority\": \"Low|Medium|High|Critical\", \"department\": string, \"reasoning\": string}. " +
+                "Não inclua nenhum texto fora do JSON.";
+
+            var userMessage = $"Título: {ticket.Title}\n\nDescrição: {ticket.Description}";
+
+            var response = await _aiChatService.ProcessTicketPromptAsync(
+                systemPrompt, userMessage, ticket.SiteId, 400, 0.2, ticket.DepartmentId, ct);
+
+            await _activityLogService.LogActivityAsync(
+                id, TicketActivityType.DescriptionUpdated, null, null, "ai:triage",
+                "Triagem automática gerada por IA");
+
+            return Ok(new
+            {
+                ticketId = id,
+                suggestion = response.Content,
+                tokensUsed = response.TokensUsed,
+                model = response.ModelVersion
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AI triage failed for ticket {TicketId}", id);
+            return StatusCode(503, new
+            {
+                error = "IA temporariamente indisponível. Tente novamente em instantes.",
+                degraded = new { priority = ticket.Priority.ToString(), department = "manual" }
+            });
+        }
     }
 
     /// <summary>
@@ -87,39 +98,43 @@ public class TicketAiController : ControllerBase
         var ticket = await _ticketRepo.GetByIdAsync(id);
         if (ticket is null) return NotFound();
 
-        var aiSettings = await _configResolver.GetAISettingsAsync();
-        if (!aiSettings.Enabled || string.IsNullOrWhiteSpace(aiSettings.ApiKey))
-            return StatusCode(503, new { error = "IA não configurada." });
-
-        var comments = await _ticketRepo.GetCommentsAsync(id);
-        var commentText = string.Join("\n---\n", comments
-            .OrderBy(c => c.CreatedAt)
-            .Select(c => $"[{c.CreatedAt:dd/MM/yyyy HH:mm}] {c.Author}: {c.Content}"));
-
-        var systemPrompt =
-            "Você é um assistente de suporte técnico. " +
-            "Gere um resumo executivo conciso (máximo 3 parágrafos) do ticket de suporte abaixo, " +
-            "incluindo: problema relatado, ações tomadas e situação atual. Responda em português.";
-
-        var userMessage =
-            $"Título: {ticket.Title}\n\n" +
-            $"Descrição: {ticket.Description}\n\n" +
-            $"Histórico de comentários:\n{(string.IsNullOrWhiteSpace(commentText) ? "(nenhum comentário)" : commentText)}";
-
-        var llmOptions = BuildLlmOptions(aiSettings, maxTokens: 600, temperature: 0.4);
-        var response = await _llmProvider.CompleteAsync(
-            systemPrompt,
-            [new("user", userMessage)],
-            llmOptions,
-            ct);
-
-        return Ok(new
+        try
         {
-            ticketId = id,
-            summary = response.Content,
-            tokensUsed = response.TokensUsed,
-            model = response.ModelVersion
-        });
+            var comments = await _ticketRepo.GetCommentsAsync(id);
+            var commentText = string.Join("\n---\n", comments
+                .OrderBy(c => c.CreatedAt)
+                .Select(c => $"[{c.CreatedAt:dd/MM/yyyy HH:mm}] {c.Author}: {c.Content}"));
+
+            var systemPrompt =
+                "Você é um assistente de suporte técnico. " +
+                "Gere um resumo executivo conciso (máximo 3 parágrafos) do ticket de suporte abaixo, " +
+                "incluindo: problema relatado, ações tomadas e situação atual. Responda em português.";
+
+            var userMessage =
+                $"Título: {ticket.Title}\n\n" +
+                $"Descrição: {ticket.Description}\n\n" +
+                $"Histórico de comentários:\n{(string.IsNullOrWhiteSpace(commentText) ? "(nenhum comentário)" : commentText)}";
+
+            var response = await _aiChatService.ProcessTicketPromptAsync(
+                systemPrompt, userMessage, ticket.SiteId, 600, 0.4, ticket.DepartmentId, ct);
+
+            return Ok(new
+            {
+                ticketId = id,
+                summary = response.Content,
+                tokensUsed = response.TokensUsed,
+                model = response.ModelVersion
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AI summarize failed for ticket {TicketId}", id);
+            return StatusCode(503, new { error = "IA temporariamente indisponível.", summary = (string?)null });
+        }
     }
 
     /// <summary>
@@ -132,39 +147,43 @@ public class TicketAiController : ControllerBase
         var ticket = await _ticketRepo.GetByIdAsync(id);
         if (ticket is null) return NotFound();
 
-        var aiSettings = await _configResolver.GetAISettingsAsync();
-        if (!aiSettings.Enabled || string.IsNullOrWhiteSpace(aiSettings.ApiKey))
-            return StatusCode(503, new { error = "IA não configurada." });
-
-        var comments = await _ticketRepo.GetCommentsAsync(id);
-        var commentText = string.Join("\n---\n", comments
-            .OrderBy(c => c.CreatedAt)
-            .Select(c => $"[{c.Author}]: {c.Content}"));
-
-        var systemPrompt =
-            "Você é um agente de suporte técnico experiente. " +
-            "Com base no ticket e no histórico de interações, escreva uma resposta profissional e empática " +
-            "para o próximo passo no atendimento. Responda em português, de forma direta e objetiva.";
-
-        var userMessage =
-            $"Título: {ticket.Title}\n\n" +
-            $"Descrição: {ticket.Description}\n\n" +
-            $"Histórico:\n{(string.IsNullOrWhiteSpace(commentText) ? "(sem interações anteriores)" : commentText)}";
-
-        var llmOptions = BuildLlmOptions(aiSettings, maxTokens: 500, temperature: 0.6);
-        var response = await _llmProvider.CompleteAsync(
-            systemPrompt,
-            [new("user", userMessage)],
-            llmOptions,
-            ct);
-
-        return Ok(new
+        try
         {
-            ticketId = id,
-            suggestedReply = response.Content,
-            tokensUsed = response.TokensUsed,
-            model = response.ModelVersion
-        });
+            var comments = await _ticketRepo.GetCommentsAsync(id);
+            var commentText = string.Join("\n---\n", comments
+                .OrderBy(c => c.CreatedAt)
+                .Select(c => $"[{c.Author}]: {c.Content}"));
+
+            var systemPrompt =
+                "Você é um agente de suporte técnico experiente. " +
+                "Com base no ticket e no histórico de interações, escreva uma resposta profissional e empática " +
+                "para o próximo passo no atendimento. Responda em português, de forma direta e objetiva.";
+
+            var userMessage =
+                $"Título: {ticket.Title}\n\n" +
+                $"Descrição: {ticket.Description}\n\n" +
+                $"Histórico:\n{(string.IsNullOrWhiteSpace(commentText) ? "(sem interações anteriores)" : commentText)}";
+
+            var response = await _aiChatService.ProcessTicketPromptAsync(
+                systemPrompt, userMessage, ticket.SiteId, 500, 0.6, ticket.DepartmentId, ct);
+
+            return Ok(new
+            {
+                ticketId = id,
+                suggestedReply = response.Content,
+                tokensUsed = response.TokensUsed,
+                model = response.ModelVersion
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AI suggest-reply failed for ticket {TicketId}", id);
+            return StatusCode(503, new { error = "IA temporariamente indisponível.", suggestedReply = (string?)null });
+        }
     }
 
     // ------------------------------------------------------------------ helpers
@@ -180,82 +199,73 @@ public class TicketAiController : ControllerBase
         var ticket = await _ticketRepo.GetByIdAsync(id);
         if (ticket is null) return NotFound();
 
-        var aiSettings = await _configResolver.GetAISettingsAsync();
-        if (!aiSettings.Enabled || string.IsNullOrWhiteSpace(aiSettings.ApiKey))
-            return StatusCode(503, new { error = "IA não configurada." });
-
-        var comments = await _ticketRepo.GetCommentsAsync(id);
-        var commentText = string.Join("\n---\n", comments
-            .OrderBy(c => c.CreatedAt)
-            .Select(c => $"[{c.Author}] {c.Content}"));
-
-        var systemPrompt =
-            "Você é um especialista em documentação técnica. " +
-            "Com base no ticket de suporte e seu histórico, gere um artigo de base de conhecimento em Markdown. " +
-            "Responda APENAS com JSON no formato: " +
-            "{\"title\": string, \"summary\": string, \"content\": string, \"tags\": [string]}. " +
-            "O campo 'content' deve ser Markdown completo com seções: Problema, Causa, Solução, Observações. " +
-            "Não inclua nenhum texto fora do JSON.";
-
-        var userMessage =
-            $"Título do ticket: {ticket.Title}\n\n" +
-            $"Descrição: {ticket.Description}\n\n" +
-            $"Histórico:\n{(string.IsNullOrWhiteSpace(commentText) ? "(sem comentários)" : commentText)}";
-
-        var llmOptions = BuildLlmOptions(aiSettings, maxTokens: 1200, temperature: 0.3);
-        var response = await _llmProvider.CompleteAsync(
-            systemPrompt,
-            [new("user", userMessage)],
-            llmOptions,
-            ct);
-
-        // Se solicitado, persiste como rascunho de artigo
-        KnowledgeArticle? createdArticle = null;
-        if (req?.PersistAsDraft == true && !string.IsNullOrWhiteSpace(response.Content))
+        try
         {
-            createdArticle = await _knowledgeRepo.CreateAsync(new KnowledgeArticle
+            var comments = await _ticketRepo.GetCommentsAsync(id);
+            var commentText = string.Join("\n---\n", comments
+                .OrderBy(c => c.CreatedAt)
+                .Select(c => $"[{c.Author}] {c.Content}"));
+
+            var systemPrompt =
+                "Você é um especialista em documentação técnica. " +
+                "Com base no ticket de suporte e seu histórico, gere um artigo de base de conhecimento em Markdown. " +
+                "Responda APENAS com JSON no formato: " +
+                "{\"title\": string, \"summary\": string, \"content\": string, \"tags\": [string]}. " +
+                "O campo 'content' deve ser Markdown completo com seções: Problema, Causa, Solução, Observações. " +
+                "Não inclua nenhum texto fora do JSON.";
+
+            var userMessage =
+                $"Título do ticket: {ticket.Title}\n\n" +
+                $"Descrição: {ticket.Description}\n\n" +
+                $"Histórico:\n{(string.IsNullOrWhiteSpace(commentText) ? "(sem comentários)" : commentText)}";
+
+            var response = await _aiChatService.ProcessTicketPromptAsync(
+                systemPrompt, userMessage, ticket.SiteId, 1200, 0.3, ticket.DepartmentId, ct);
+
+            // Se solicitado, persiste como rascunho de artigo
+            KnowledgeArticle? createdArticle = null;
+            if (req?.PersistAsDraft == true && !string.IsNullOrWhiteSpace(response.Content))
             {
-                Title = ticket.Title,
-                Content = response.Content,
-                CreatedBy = "ai-draft",
-                ClientId = ticket.ClientId,
-                SiteId = ticket.SiteId,
-                Status = Discovery.Core.Enums.ArticleStatus.Draft.ToString(),
-                CurrentVersionNumber = 0,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            }, ct);
+                createdArticle = await _knowledgeRepo.CreateAsync(new KnowledgeArticle
+                {
+                    Title = ticket.Title,
+                    Content = response.Content,
+                    CreatedBy = "ai-draft",
+                    ClientId = ticket.ClientId,
+                    SiteId = ticket.SiteId,
+                    Status = Discovery.Core.Enums.ArticleStatus.Draft.ToString(),
+                    CurrentVersionNumber = 0,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                }, ct);
 
-            await _knowledgeRepo.LinkToTicketAsync(id, createdArticle.Id, "ai-draft-kb-article", null, ct);
+                await _knowledgeRepo.LinkToTicketAsync(id, createdArticle.Id, "ai-draft-kb-article", null, ct);
+            }
+
+            await _activityLogService.LogActivityAsync(
+                id, TicketActivityType.DescriptionUpdated, null, null, "ai:draft-kb-article",
+                createdArticle is null
+                    ? "Rascunho de artigo KB gerado por IA (não salvo)"
+                    : $"Rascunho de artigo KB criado: {createdArticle.Id}");
+
+            return Ok(new
+            {
+                ticketId = id,
+                aiContent = response.Content,
+                articleId = createdArticle?.Id,
+                persisted = createdArticle is not null,
+                tokensUsed = response.TokensUsed,
+                model = response.ModelVersion
+            });
         }
-
-        await _activityLogService.LogActivityAsync(
-            id, TicketActivityType.DescriptionUpdated, null, null, "ai:draft-kb-article",
-            createdArticle is null
-                ? "Rascunho de artigo KB gerado por IA (não salvo)"
-                : $"Rascunho de artigo KB criado: {createdArticle.Id}");
-
-        return Ok(new
+        catch (InvalidOperationException ex)
         {
-            ticketId = id,
-            aiContent = response.Content,
-            articleId = createdArticle?.Id,
-            persisted = createdArticle is not null,
-            tokensUsed = response.TokensUsed,
-            model = response.ModelVersion
-        });
-    }
-
-    private static LlmOptions BuildLlmOptions(
-        Discovery.Core.ValueObjects.AIIntegrationSettings ai,
-        int maxTokens,
-        double temperature)
-    {
-        return new LlmOptions(
-            MaxTokens: maxTokens,
-            Temperature: temperature,
-            Model: string.IsNullOrWhiteSpace(ai.ChatModel) ? null : ai.ChatModel,
-            BaseUrl: string.IsNullOrWhiteSpace(ai.BaseUrl) ? null : ai.BaseUrl,
-            ApiKey: string.IsNullOrWhiteSpace(ai.ApiKey) ? null : ai.ApiKey);
+            return StatusCode(503, new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AI draft-kb-article failed for ticket {TicketId}", id);
+            return StatusCode(503, new { error = "IA temporariamente indisponível.", aiContent = (string?)null });
+        }
     }
 }

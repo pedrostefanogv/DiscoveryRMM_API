@@ -67,6 +67,16 @@ ensure_bootstrap_dependencies() {
   require_cmd bash
   ensure_bootstrap_command mktemp coreutils
   ensure_bootstrap_command git git ca-certificates
+  if [[ -f /etc/os-release ]]; then
+    local os_id
+    os_id="$(. /etc/os-release && printf '%s' "${ID:-}" | tr '[:upper:]' '[:lower:]')"
+    case "$os_id" in
+      ubuntu|debian) ;;
+      *) fail "Sistema operacional nao suportado: ${os_id}. O instalador requer Ubuntu ou Debian." ;;
+    esac
+  else
+    fail "Sistema operacional nao suportado: /etc/os-release nao encontrado."
+  fi
 }
 
 detect_system_architecture() {
@@ -363,6 +373,8 @@ fi
 if [[ -z "$BOOTSTRAP_WORKDIR" ]]; then
   BOOTSTRAP_WORKDIR="$(mktemp -d /tmp/discovery-bootstrap.XXXXXX)"
 fi
+# Cleanup do diretorio temporario em caso de saida anormal ou sucesso.
+trap 'rm -rf "$BOOTSTRAP_WORKDIR"' EXIT INT TERM
 
 clone_candidates=("$BOOTSTRAP_BRANCH")
 case "$BOOTSTRAP_BRANCH" in
@@ -399,7 +411,19 @@ done
 [[ -n "$CLONED_BRANCH" ]] || fail "Nenhum canal/branch valido encontrado. Tentativas: ${clone_candidates[*]}"
 
 if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
-  log "Fallback aplicado: solicitado '$BOOTSTRAP_BRANCH', usando '$CLONED_BRANCH'"
+  # Em modo nao interativo, falha se a branch solicitada nao existir.
+  if [[ "${non_interactive:-0}" -eq 1 ]]; then
+    fail "Branch solicitada '$BOOTSTRAP_BRANCH' nao disponivel (fallback para '$CLONED_BRANCH' rejeitado em modo --non-interactive). Use a branch disponivel ou corrija o parametro."
+  fi
+  warn "Branch solicitada '$BOOTSTRAP_BRANCH' nao disponivel; fallback para '$CLONED_BRANCH'."
+  echo "Branch '$BOOTSTRAP_BRANCH' nao encontrada. Usar '$CLONED_BRANCH'? (S/n): " >&2
+  local confirm_fallback
+  read -r confirm_fallback
+  confirm_fallback="$(printf '%s' "${confirm_fallback:-s}" | tr '[:upper:]' '[:lower:]')"
+  case "$confirm_fallback" in
+    s|sim|y|yes) log "Fallback confirmado: usando '$CLONED_BRANCH'." ;;
+    *) fail "Instalacao cancelada pelo usuario. Branch '$BOOTSTRAP_BRANCH' nao disponivel." ;;
+  esac
 fi
 
 if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && ! installer_supports_maintenance "$INSTALLER_PATH"; then

@@ -6,10 +6,10 @@ using Discovery.Core.Interfaces;
 namespace Discovery.Api.Services;
 
 /// <summary>
-/// Resolve o escopo de um AgentAlertDefinition em uma lista de agents,
-/// cria o AgentCommand correspondente para cada um e os entrega via NATS.
+/// resolve o escopo de um agentalertdefinition em uma lista de agents,
+/// cria o agentcommand correspondente para cada um e os entrega via nats.
 /// </summary>
-public class AlertDispatchService
+public class AlertDispatchService : IAlertDispatchService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 

@@ -113,9 +113,27 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             entity.Property(s => s.CreatedBy).HasColumnName("created_by").HasMaxLength(256);
             entity.Property(s => s.UpdatedBy).HasColumnName("updated_by").HasMaxLength(256);
+            entity.Property(s => s.DeliveryMode).HasColumnName("delivery_mode").HasMaxLength(20);
+            entity.Property(s => s.Recipients).HasColumnName("recipients").HasMaxLength(4000);
+            entity.Property(s => s.WebhookUrl).HasColumnName("webhook_url").HasMaxLength(2048);
 
             entity.HasOne<ReportTemplate>().WithMany().HasForeignKey(s => s.TemplateId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<Client>().WithMany().HasForeignKey(s => s.ClientId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ReportFilterPreset>(entity =>
+        {
+            entity.ToTable("report_filter_presets");
+            entity.HasKey(p => p.Id);
+            entity.HasIndex(p => new { p.UserId, p.TemplateId }).HasDatabaseName("ix_report_filter_presets_user_template");
+
+            entity.Property(p => p.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(p => p.UserId).HasColumnName("user_id");
+            entity.Property(p => p.TemplateId).HasColumnName("template_id");
+            entity.Property(p => p.Name).HasColumnName("name").HasMaxLength(200);
+            entity.Property(p => p.FiltersJson).HasColumnName("filters_json").HasColumnType("jsonb");
+            entity.Property(p => p.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(p => p.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });
     }
 }

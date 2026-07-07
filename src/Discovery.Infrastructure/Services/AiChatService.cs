@@ -33,10 +33,12 @@ public class AiChatService : IAiChatService
     private readonly IKnowledgeMcpTool _knowledgeMcpTool;
     private readonly IConfigurationResolver _configurationResolver;
     private readonly IAiCredentialResolver _credentialResolver;
+    private readonly IMcpToolExecutor _mcpToolExecutor;
+    private readonly IAiCostControlService _costControl;
     
     private const int MaxMessageSizeBytes = 2048; // 2KB
     private const int SessionExpirationDays = 180;
-    private const int MaxToolCallIterations = 3;
+    private const int DefaultMaxToolCallIterations = 3;
     private const int DefaultMaxHistoryMessages = 10;
     private const int DefaultMaxKbContextTokens = 2000;
     private const int DefaultMaxTokens = 1000;
@@ -56,7 +58,9 @@ public class AiChatService : IAiChatService
         IKnowledgeChunkRepository chunkRepository,
         IKnowledgeMcpTool knowledgeMcpTool,
         IConfigurationResolver configurationResolver,
-        IAiCredentialResolver credentialResolver)
+        IAiCredentialResolver credentialResolver,
+        IMcpToolExecutor mcpToolExecutor,
+        IAiCostControlService costControl)
     {
         _sessionRepository = sessionRepository;
         _messageRepository = messageRepository;
@@ -72,6 +76,8 @@ public class AiChatService : IAiChatService
         _knowledgeMcpTool = knowledgeMcpTool;
         _configurationResolver = configurationResolver;
         _credentialResolver = credentialResolver;
+        _mcpToolExecutor = mcpToolExecutor;
+        _costControl = costControl;
     }
     
     /// <summary>
@@ -80,8 +86,11 @@ public class AiChatService : IAiChatService
     public async Task<AgentChatSyncResponse> ProcessSyncAsync(
         Guid agentId, 
         string message, 
-        Guid? sessionId, 
-        CancellationToken ct)
+        Guid? sessionId,
+        string? createdByIp = null,
+        int? requestMaxTokens = null,
+        Guid? departmentId = null,
+        CancellationToken ct = default)
     {
         var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
         var startTime = DateTime.UtcNow;
@@ -117,6 +126,17 @@ public class AiChatService : IAiChatService
             {
                 throw new InvalidOperationException("Chat IA está desabilitado para este escopo.");
             }
+
+            // ── Cost control check ──
+            if (aiSettings.CostControlEnabled)
+            {
+                var allowed = await _costControl.TryAcquireAsync(scopeClientId, scopeSiteId, aiSettings, ct);
+                if (!allowed)
+                {
+                    throw new InvalidOperationException(
+                        "Limite de uso de IA excedido. Tente novamente mais tarde ou contate o administrador.");
+                }
+            }
             
             // 3. Criar ou recuperar sessão
             AiChatSession session;
@@ -142,7 +162,7 @@ public class AiChatService : IAiChatService
                     ClientId = scopeClientId,
                     Topic = "general",
                     CreatedAt = startTime,
-                    CreatedByIp = "0.0.0.0", // Será injetado pelo controller
+                    CreatedByIp = createdByIp ?? "unknown",
                     TraceId = traceId,
                     ExpiresAt = startTime.AddDays(SessionExpirationDays)
                 };
@@ -166,7 +186,8 @@ public class AiChatService : IAiChatService
                 : 1;
             
             // 6. Build system prompt com contexto do agent + RAG da KB
-            var (systemPrompt, injectedArticleIds) = await BuildSystemPromptAsync(agent, session, message, aiSettings, ct);
+            var (systemPrompt, injectedArticleIds) = await BuildSystemPromptAsync(
+                agent, session, message, aiSettings, departmentId, ct);
             
             // 7. Converter histórico para formato LLM
             var llmMessages = historyMessages
@@ -177,29 +198,28 @@ public class AiChatService : IAiChatService
             // 8. Adicionar mensagem atual do usuário
             llmMessages.Add(new LlmMessage("user", message));
             
-            // 9. Chamar LLM com tool call loop (MCP knowledge_search)
-            var knowledgeSearchTool = new LlmTool(
-                Name: "knowledge_search",
-                Description: "Pesquisa artigos e procedimentos na base de conhecimento da empresa. Use quando o usuário perguntar sobre procedimentos, políticas, SOPs ou quando precisar de informações específicas documentadas.",
-                Schema: new
-                {
-                    type = "object",
-                    properties = new
-                    {
-                        query = new { type = "string", description = "Termos de busca" },
-                        max_results = new { type = "integer", description = "Número máximo de resultados (1-5)", @default = 3 }
-                    },
-                    required = new[] { "query" }
-                });
+            // 9. Chamar LLM com tool call loop (MCP via McpToolExecutor)
+            var availableTools = aiSettings.KnowledgeBaseEnabled
+                ? await _mcpToolExecutor.GetAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, ct)
+                : [];
+
+            var maxIterations = aiSettings.MaxToolCallIterations is >= 1 and <= 10
+                ? aiSettings.MaxToolCallIterations
+                : DefaultMaxToolCallIterations;
+
+            // Respeitar MaxTokens do request, com clamp
+            var clampedMaxTokens = requestMaxTokens.HasValue
+                ? Math.Clamp(requestMaxTokens.Value, 100, 8000)
+                : ClampMaxTokens(aiSettings);
 
             var llmOptions = new LlmOptions(
-                MaxTokens: ClampMaxTokens(aiSettings),
+                MaxTokens: clampedMaxTokens,
                 Temperature: ClampTemperature(aiSettings),
                 Model: string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
                 BaseUrl: string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
                 ApiKey: string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
-                EnableTools: aiSettings.KnowledgeBaseEnabled,
-                Tools: [knowledgeSearchTool],
+                EnableTools: availableTools.Count > 0,
+                Tools: availableTools,
                 Provider: aiSettings.Provider,
                 OpenRouterReferer: aiSettings.OpenRouterReferer,
                 OpenRouterTitle: aiSettings.OpenRouterTitle,
@@ -218,7 +238,7 @@ public class AiChatService : IAiChatService
 
                 // Se não há tool calls ou atingiu limite, encerra
                 if (llmResponse.ToolCalls == null || llmResponse.ToolCalls.Count == 0 ||
-                    toolIterations >= MaxToolCallIterations)
+                    toolIterations >= maxIterations)
                     break;
 
                 toolIterations++;
@@ -226,38 +246,22 @@ public class AiChatService : IAiChatService
                 // Adiciona a resposta do assistant (com tool calls) ao contexto
                 llmMessages.Add(new LlmMessage("assistant", llmResponse.Content ?? string.Empty));
 
-                // Processa cada tool call
+                // Processa cada tool call via McpToolExecutor
                 foreach (var toolCall in llmResponse.ToolCalls)
                 {
-                    string toolResult;
-                    if (toolCall.Name == "knowledge_search")
-                    {
-                        using var argsDoc = JsonDocument.Parse(toolCall.ArgumentsJson);
-                        var query = argsDoc.RootElement.TryGetProperty("query", out var qProp)
-                            ? qProp.GetString() ?? message
-                            : message;
-                        var maxRes = argsDoc.RootElement.TryGetProperty("max_results", out var mProp)
-                            ? mProp.GetInt32()
-                            : 3;
+                    var toolResult = await _mcpToolExecutor.ExecuteAsync(
+                        toolCall.Name,
+                        toolCall.ArgumentsJson,
+                        scopeClientId,
+                        scopeSiteId,
+                        agentId,
+                        aiSettings,
+                        injectedArticleIds,
+                        departmentId,
+                        ct);
 
-                        // Passa aiSettings já resolvidas (evita GetAISettingsAsync redundante) +
-                        // IDs já injetados no system prompt (evita duplicar chunks)
-                        toolResult = await _knowledgeMcpTool.ExecuteWithSettingsAsync(
-                            scopeClientId,
-                            scopeSiteId,
-                            query,
-                            aiSettings,
-                            excludeArticleIds: injectedArticleIds,
-                            maxRes,
-                            ct);
-
-                        _logger.LogDebug("[{TraceId}] MCP tool 'knowledge_search' executada ({Iter}/{Max})",
-                            traceId, toolIterations, MaxToolCallIterations);
-                    }
-                    else
-                    {
-                        toolResult = $"{{\"error\": \"Tool '{toolCall.Name}' não reconhecida.\"}}"; 
-                    }
+                    _logger.LogDebug("[{TraceId}] MCP tool '{ToolName}' executada ({Iter}/{Max})",
+                        traceId, toolCall.Name, toolIterations, maxIterations);
 
                     // Persiste a mensagem da tool call e o resultado
                     await _messageRepository.CreateAsync(new AiChatMessage
@@ -279,7 +283,16 @@ public class AiChatService : IAiChatService
             
             stopwatch.Stop();
             
-            // 10. Persistir mensagem do usuário
+            // ── Record token usage for cost control ──
+            if (aiSettings.CostControlEnabled)
+            {
+                await _costControl.RecordUsageAsync(scopeClientId, scopeSiteId, llmResponse.TokensUsed, ct);
+            }
+
+            // ── Apply output guardrails ──
+            var safeContent = ApplyOutputGuardrails(llmResponse.Content, aiSettings);
+
+            // 10. Persistir mensagem do usuário e assistant em lote (transação única)
             var userMessage = new AiChatMessage
             {
                 Id = Guid.NewGuid(),
@@ -290,25 +303,22 @@ public class AiChatService : IAiChatService
                 CreatedAt = startTime,
                 TraceId = traceId
             };
-            
-            await _messageRepository.CreateAsync(userMessage, ct);
-            
-            // 11. Persistir mensagem do assistant
+
             var assistantMessage = new AiChatMessage
             {
                 Id = Guid.NewGuid(),
                 SessionId = session.Id,
                 SequenceNumber = nextSequenceNumber + 1,
                 Role = "assistant",
-                Content = llmResponse.Content,
+                Content = safeContent,
                 TokensUsed = llmResponse.TokensUsed,
                 LatencyMs = (int)stopwatch.ElapsedMilliseconds,
                 ModelVersion = llmResponse.ModelVersion,
                 CreatedAt = DateTime.UtcNow,
                 TraceId = traceId
             };
-            
-            await _messageRepository.CreateAsync(assistantMessage, ct);
+
+            await _messageRepository.CreateBatchAsync([userMessage, assistantMessage], ct);
             
             // 12. Calcular tokens totais da conversa
             var conversationTokens = await CalculateConversationTokens(session.Id, ct);
@@ -339,7 +349,7 @@ public class AiChatService : IAiChatService
             // 14. Retornar resposta
             return new AgentChatSyncResponse(
                 SessionId: session.Id,
-                AssistantMessage: llmResponse.Content,
+                AssistantMessage: safeContent,
                 TokensUsed: llmResponse.TokensUsed,
                 ConversationTokensTotal: conversationTokens,
                 LatencyMs: (int)stopwatch.ElapsedMilliseconds
@@ -371,8 +381,10 @@ public class AiChatService : IAiChatService
     public async Task<Guid> ProcessAsyncAsync(
         Guid agentId, 
         string message, 
-        Guid? sessionId, 
-        CancellationToken ct)
+        Guid? sessionId,
+        int? requestMaxTokens = null,
+        Guid? departmentId = null,
+        CancellationToken ct = default)
     {
         var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
         
@@ -422,7 +434,7 @@ public class AiChatService : IAiChatService
                     ClientId = site.ClientId,
                     Topic = "general",
                     CreatedAt = DateTime.UtcNow,
-                    CreatedByIp = "0.0.0.0",
+                    CreatedByIp = "unknown",
                     TraceId = traceId,
                     ExpiresAt = DateTime.UtcNow.AddDays(SessionExpirationDays)
                 };
@@ -530,26 +542,31 @@ public class AiChatService : IAiChatService
     
     /// <summary>
     /// Streaming SSE: retorna chunks incrementais enquanto o LLM gera tokens.
+    /// Streaming SSE: retorna chunks incrementais com suporte a tool calls.
+    /// Suporta loop de MCP tools (até MaxToolCallIterations) e RAG departamental.
     /// Persiste as mensagens no DB ao final do stream.
-    /// Não suporta tool calls — o contexto da KB é injetado no system prompt via RAG.
     /// </summary>
     public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(
         Guid agentId,
         string message,
         Guid? sessionId,
-        [EnumeratorCancellation] CancellationToken ct)
+        Guid? departmentId = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
         var startTime = DateTime.UtcNow;
         var stopwatch = Stopwatch.StartNew();
 
         AiChatSession? session = null;
-        LlmOptions? llmOptions = null;
         string? systemPrompt = null;
         List<LlmMessage>? llmMessages = null;
         int nextSeq = 1;
         bool setupOk = false;
         string? setupError = null;
+        AIIntegrationSettings? aiSettings = null;
+        Guid scopeClientId = Guid.Empty;
+        Guid scopeSiteId = Guid.Empty;
+        int maxIterations = DefaultMaxToolCallIterations;
 
         try
         {
@@ -563,10 +580,16 @@ public class AiChatService : IAiChatService
             if (site == null)
                 throw new ArgumentException($"Site {agent.SiteId} não encontrado");
 
-            var aiSettings = await ResolveAiSettingsAsync(agent.SiteId, ct);
+            scopeSiteId = agent.SiteId;
+            scopeClientId = site.ClientId;
+            aiSettings = await ResolveAiSettingsAsync(agent.SiteId, ct);
 
             if (!aiSettings.Enabled || !aiSettings.ChatAIEnabled)
                 throw new InvalidOperationException("Chat IA está desabilitado para este escopo.");
+
+            maxIterations = aiSettings.MaxToolCallIterations is >= 1 and <= 10
+                ? aiSettings.MaxToolCallIterations
+                : DefaultMaxToolCallIterations;
 
             if (sessionId.HasValue)
             {
@@ -583,7 +606,7 @@ public class AiChatService : IAiChatService
                     ClientId = site.ClientId,
                     Topic = "general",
                     CreatedAt = startTime,
-                    CreatedByIp = "0.0.0.0",
+                    CreatedByIp = "unknown",
                     TraceId = traceId,
                     ExpiresAt = startTime.AddDays(SessionExpirationDays)
                 }, ct);
@@ -594,21 +617,15 @@ public class AiChatService : IAiChatService
 
             nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
 
-            (systemPrompt, _) = await BuildSystemPromptAsync(agent, session, message, aiSettings, ct);
+            // RAG com departmentId (se fornecido, libera artigos Internal do departamento)
+            (systemPrompt, _) = await BuildSystemPromptAsync(
+                agent, session, message, aiSettings, departmentId, ct);
 
             llmMessages = history
                 .OrderBy(m => m.SequenceNumber)
                 .Select(m => new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName))
                 .ToList();
             llmMessages.Add(new LlmMessage("user", message));
-
-            llmOptions = new LlmOptions(
-                MaxTokens: ClampMaxTokens(aiSettings),
-                Temperature: ClampTemperature(aiSettings),
-                Model: string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
-                BaseUrl: string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
-                ApiKey: string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
-                EnableTools: false);
 
             setupOk = true;
         }
@@ -618,58 +635,168 @@ public class AiChatService : IAiChatService
             _logger.LogError(ex, "[{TraceId}] StreamAsync setup falhou para AgentId={AgentId}", traceId, agentId);
         }
 
-        if (!setupOk || session == null || llmOptions == null || systemPrompt == null || llmMessages == null)
+        if (!setupOk || session == null || aiSettings == null || systemPrompt == null || llmMessages == null)
         {
             yield return new AiChatStreamChunk(Type: "error", Error: setupError ?? "Erro interno");
             yield break;
         }
 
-        // ── Streaming de tokens ───────────────────────────────────────────────
+        // ── Streaming com tool call loop ──────────────────────────────────────
         var contentBuilder = new StringBuilder();
+        var toolIterations = 0;
+        var injectedArticleIds = new List<Guid>();
+        int? totalTokens = null;
+        var toolMessagesToPersist = new List<AiChatMessage>();
 
-        await foreach (var token in _llmProvider.StreamAsync(systemPrompt, llmMessages, llmOptions, ct))
+        // Tools disponíveis no escopo
+        var availableTools = aiSettings.KnowledgeBaseEnabled
+            ? await _mcpToolExecutor.GetAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, ct)
+            : [];
+
+        while (true)
         {
-            contentBuilder.Append(token);
-            yield return new AiChatStreamChunk(Type: "token", Content: token);
+            var streamOptions = new LlmOptions(
+                MaxTokens: ClampMaxTokens(aiSettings),
+                Temperature: ClampTemperature(aiSettings),
+                Model: string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
+                BaseUrl: string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
+                ApiKey: string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
+                EnableTools: availableTools.Count > 0,
+                Tools: availableTools,
+                Provider: aiSettings.Provider,
+                OpenRouterReferer: aiSettings.OpenRouterReferer,
+                OpenRouterTitle: aiSettings.OpenRouterTitle,
+                OpenRouterCategories: aiSettings.OpenRouterCategories);
+
+            bool hasToolCalls = false;
+
+            if (availableTools.Count > 0)
+            {
+                // Stream com tool calls
+                await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
+                {
+                    if (evt.Type == "token" && !string.IsNullOrWhiteSpace(evt.Content))
+                    {
+                        contentBuilder.Append(evt.Content);
+                        yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
+                    }
+                    else if (evt.Type == "tool_calls" && evt.ToolCalls is { Count: > 0 })
+                    {
+                        hasToolCalls = true;
+                        totalTokens = evt.TokensUsed;
+
+                        // Adiciona resposta parcial do assistant ao contexto
+                        llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString()));
+
+                        foreach (var toolCall in evt.ToolCalls)
+                        {
+                            yield return new AiChatStreamChunk(
+                                Type: "tool_call_start",
+                                ToolCallId: toolCall.Id,
+                                ToolName: toolCall.Name);
+
+                            var toolResult = await _mcpToolExecutor.ExecuteAsync(
+                                toolCall.Name,
+                                toolCall.ArgumentsJson,
+                                scopeClientId,
+                                scopeSiteId,
+                                agentId,
+                                aiSettings,
+                                null,
+                                departmentId,
+                                ct);
+
+                            yield return new AiChatStreamChunk(
+                                Type: "tool_result",
+                                ToolCallId: toolCall.Id,
+                                ToolResult: toolResult);
+
+                            llmMessages.Add(new LlmMessage("tool", toolResult, toolCall.Id, toolCall.Name));
+
+                            toolMessagesToPersist.Add(new AiChatMessage
+                            {
+                                Id = Guid.NewGuid(),
+                                SessionId = session.Id,
+                                SequenceNumber = nextSeq++,
+                                Role = "tool",
+                                Content = toolResult,
+                                ToolCallId = toolCall.Id,
+                                ToolName = toolCall.Name,
+                                CreatedAt = DateTime.UtcNow,
+                                TraceId = traceId
+                            });
+
+                            _logger.LogDebug("[{TraceId}] MCP tool '{ToolName}' executada via stream ({Iter}/{Max})",
+                                traceId, toolCall.Name, toolIterations + 1, maxIterations);
+                        }
+                    }
+                    else if (evt.Type == "done")
+                    {
+                        totalTokens = evt.TokensUsed;
+                    }
+                }
+            }
+            else
+            {
+                // Stream sem tools (fallback simples)
+                await foreach (var token in _llmProvider.StreamAsync(systemPrompt, llmMessages, streamOptions, ct))
+                {
+                    contentBuilder.Append(token);
+                    yield return new AiChatStreamChunk(Type: "token", Content: token);
+                }
+            }
+
+            if (!hasToolCalls || toolIterations >= maxIterations - 1)
+                break;
+
+            toolIterations++;
         }
 
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
-        // ── Persistência pós-stream ───────────────────────────────────────────
+        // ── Persistência pós-stream (lote transacional) ───────────────────────
         try
         {
-            await _messageRepository.CreateAsync(new AiChatMessage
+            var messagesToCreate = new List<AiChatMessage>
             {
-                Id = Guid.NewGuid(),
-                SessionId = session.Id,
-                SequenceNumber = nextSeq,
-                Role = "user",
-                Content = message,
-                CreatedAt = startTime,
-                TraceId = traceId
-            }, ct);
+                new()
+                {
+                    Id = Guid.NewGuid(),
+                    SessionId = session.Id,
+                    SequenceNumber = nextSeq++,
+                    Role = "user",
+                    Content = message,
+                    CreatedAt = startTime,
+                    TraceId = traceId
+                },
+                new()
+                {
+                    Id = Guid.NewGuid(),
+                    SessionId = session.Id,
+                    SequenceNumber = nextSeq,
+                    Role = "assistant",
+                    Content = fullContent,
+                    TokensUsed = totalTokens,
+                    LatencyMs = (int)stopwatch.ElapsedMilliseconds,
+                    ModelVersion = aiSettings.ChatModel,
+                    CreatedAt = DateTime.UtcNow,
+                    TraceId = traceId
+                }
+            };
 
-            await _messageRepository.CreateAsync(new AiChatMessage
-            {
-                Id = Guid.NewGuid(),
-                SessionId = session.Id,
-                SequenceNumber = nextSeq + 1,
-                Role = "assistant",
-                Content = fullContent,
-                LatencyMs = (int)stopwatch.ElapsedMilliseconds,
-                CreatedAt = DateTime.UtcNow,
-                TraceId = traceId
-            }, ct);
+            // Inclui tool messages no batch (re-sequenciadas corretamente)
+            messagesToCreate.AddRange(toolMessagesToPersist);
+
+            await _messageRepository.CreateBatchAsync(messagesToCreate, ct);
 
             _logger.LogInformation(
-                "[{TraceId}] StreamAsync concluído: AgentId={AgentId}, Latency={LatencyMs}ms",
-                traceId, agentId, stopwatch.ElapsedMilliseconds);
+                "[{TraceId}] StreamAsync concluído: AgentId={AgentId}, ContentLen={Len}, Latency={LatencyMs}ms",
+                traceId, agentId, fullContent.Length, stopwatch.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[{TraceId}] Falha ao persistir mensagens do stream", traceId);
-            // Não interrompe o cliente — stream já foi entregue
         }
 
         yield return new AiChatStreamChunk(
@@ -678,7 +805,46 @@ public class AiChatService : IAiChatService
             LatencyMs: (int)stopwatch.ElapsedMilliseconds);
     }
 
-    #region Private Methods
+    // ── Ticket Prompt (shared with TicketAiController) ────────────────────────
+
+    /// <summary>
+    /// Processa um prompt para contexto de ticket (triagem/resumo/sugestão), sem persistência de histórico.
+    /// </summary>
+    public async Task<LlmResponse> ProcessTicketPromptAsync(
+        string systemPrompt,
+        string userMessage,
+        Guid siteId,
+        int maxTokens,
+        double temperature,
+        Guid? departmentId = null,
+        CancellationToken ct = default)
+    {
+        var aiSettings = await ResolveAiSettingsAsync(siteId, ct);
+
+        if (!aiSettings.Enabled || string.IsNullOrWhiteSpace(aiSettings.ApiKey))
+            throw new InvalidOperationException("IA não configurada para este escopo.");
+
+        if (!aiSettings.ChatAIEnabled)
+            throw new InvalidOperationException("Chat IA está desabilitado para este escopo.");
+
+        var llmOptions = new LlmOptions(
+            MaxTokens: maxTokens,
+            Temperature: temperature,
+            Model: string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
+            BaseUrl: string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
+            ApiKey: string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
+            Provider: aiSettings.Provider);
+
+        return await _llmProvider.CompleteAsync(
+            systemPrompt,
+            [new LlmMessage("user", userMessage)],
+            llmOptions,
+            ct);
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    /// <summary>
     /// Rejeita: vazio, > 2KB, padrões maliciosos
     /// </summary>
     private void ValidateUserInput(string message)
@@ -775,7 +941,8 @@ Responda de forma profissional e prestativa.";
     /// Retorna o prompt final e os IDs dos artigos injetados (para deduplicação em tool calls).
     /// </summary>
     private async Task<(string Prompt, List<Guid> InjectedArticleIds)> BuildSystemPromptAsync(
-        Agent agent, AiChatSession session, string userMessage, AIIntegrationSettings aiSettings, CancellationToken ct)
+        Agent agent, AiChatSession session, string userMessage, AIIntegrationSettings aiSettings,
+        Guid? departmentId, CancellationToken ct)
     {
         var basePrompt = BuildSystemPrompt(agent, aiSettings);
         var injected = new List<Guid>();
@@ -803,7 +970,7 @@ Responda de forma profissional e prestativa.";
                 session.SiteId,
                 limit: maxChunks,
                 minSimilarity: aiSettings.MinSimilarityScore,
-                departmentId: null, // TODO: inferir departmentId do usuário/ticket quando disponível
+                departmentId: departmentId,
                 ct: ct);
 
             if (kbChunks.Count == 0)
@@ -849,18 +1016,12 @@ Responda de forma profissional e prestativa.";
     }
     
     /// <summary>
-    /// Calcula o total de tokens usados na conversa
+    /// Calcula o total de tokens usados na conversa via query eficiente.
     /// </summary>
     private async Task<int> CalculateConversationTokens(Guid sessionId, CancellationToken ct)
     {
-        var allMessages = await _messageRepository.GetRecentBySessionAsync(
-            sessionId, 
-            int.MaxValue, 
-            ct);
-        
-        return allMessages
-            .Where(m => m.TokensUsed.HasValue)
-            .Sum(m => m.TokensUsed!.Value);
+        var stats = await _messageRepository.GetStatsAsync(sessionId, ct);
+        return stats.EstimatedTokens;
     }
 
     private async Task<AIIntegrationSettings> ResolveAiSettingsAsync(Guid siteId, CancellationToken ct)
@@ -902,6 +1063,39 @@ Responda de forma profissional e prestativa.";
 
     private static double ClampTemperature(AIIntegrationSettings settings)
         => settings.Temperature is >= 0 and <= 2 ? settings.Temperature : DefaultTemperature;
-    
-    #endregion
+
+    /// <summary>
+    /// Guardrails de saída: detecta e redige PII/secrets na resposta do LLM.
+    /// </summary>
+    private static string ApplyOutputGuardrails(string content, AIIntegrationSettings settings)
+    {
+        if (!settings.OutputGuardrailsEnabled || string.IsNullOrWhiteSpace(content))
+            return content;
+
+        var result = content;
+
+        // Detectar API keys no formato comum (sk-..., key-..., etc.)
+        result = Regex.Replace(result,
+            @"\b(sk-[a-zA-Z0-9]{20,})\b",
+            "***REDACTED_API_KEY***",
+            RegexOptions.IgnoreCase);
+
+        // Detectar tokens JWT
+        result = Regex.Replace(result,
+            @"\b(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})\b",
+            "***REDACTED_JWT***");
+
+        // Detectar senhas em padrão chave=valor
+        result = Regex.Replace(result,
+            @"(password|senha|passwd|secret|api[_-]?key)\s*[:=]\s*\S+",
+            "$1: ***REDACTED***",
+            RegexOptions.IgnoreCase);
+
+        // Detectar CPF (formato brasileiro)
+        result = Regex.Replace(result,
+            @"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b",
+            "***.###.###-**");
+
+        return result;
+    }
 }

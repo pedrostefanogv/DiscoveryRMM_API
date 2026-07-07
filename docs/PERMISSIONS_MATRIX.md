@@ -24,7 +24,7 @@
 | **Automation** | Scripts, tasks | Scripts, tasks | Scripts, tasks | Scripts, tasks | Consumir script |
 | **Deployment** | Tokens, updates | Tokens, updates | Tokens, updates | Revogar token | - |
 | **KnowledgeBase** | ✖ (não tem controller) | - | - | - | - |
-| **AiChat** | ✖ (não tem controller) | - | - | - | - |
+| **AiChat** | ✔ (`TicketAiController`, `AgentAuthController.AiChat.cs`) | `Execute` | `/api/v{version}/tickets/{id}/ai/*`, `/api/v{version}/agent-auth/me/ai-chat*` | Agentes autenticados podem usar chat IA; usuários com permissão podem gerar triagem/resumo/sugestão de resposta em tickets |
 | **AppStore** | Catálogo, diffs | - | Custom, approvals, sync | Remover approval | - |
 | **Logs** | Audit, monitoring | - | - | - | Ingest events |
 | **Dashboard** | Summaries | - | - | - | - |
@@ -319,7 +319,7 @@
 
 ## Notas
 
-1. **Permissões vazias**: `KnowledgeBase`, `AiChat`, `RemoteDebug` não têm controllers implementados ainda.
+1. **Permissões vazias**: `KnowledgeBase`, `RemoteDebug` não têm controllers implementados ainda.
 2. **Sites**: Não há `SitesController` dedicado — sites são gerenciados via MeshCentral embed.
 3. **AppStore scoped**: Endpoints de approvals/diffs usam escopo dinâmico resolvido por `AppApprovalScopeType` (Global/Client/Site/Agent).
 4. **Automation scoped**: Scripts e tasks resolvem escopo por `clientId` ou `scopeType/scopeId`.

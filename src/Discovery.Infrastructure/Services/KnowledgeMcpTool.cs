@@ -25,8 +25,9 @@ public class KnowledgeMcpTool(
         Guid? siteId,
         string query,
         int maxResults = 3,
+        Guid? departmentId = null,
         CancellationToken ct = default)
-        => ExecuteInternalAsync(clientId, siteId, query, aiSettings: null, excludeArticleIds: null, maxResults, ct);
+        => ExecuteInternalAsync(clientId, siteId, query, aiSettings: null, excludeArticleIds: null, maxResults, departmentId, ct);
 
     public Task<string> ExecuteWithSettingsAsync(
         Guid? clientId,
@@ -35,8 +36,9 @@ public class KnowledgeMcpTool(
         AIIntegrationSettings aiSettings,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         int maxResults = 3,
+        Guid? departmentId = null,
         CancellationToken ct = default)
-        => ExecuteInternalAsync(clientId, siteId, query, aiSettings, excludeArticleIds, maxResults, ct);
+        => ExecuteInternalAsync(clientId, siteId, query, aiSettings, excludeArticleIds, maxResults, departmentId, ct);
 
     private async Task<string> ExecuteInternalAsync(
         Guid? clientId,
@@ -45,11 +47,12 @@ public class KnowledgeMcpTool(
         AIIntegrationSettings? aiSettings,
         IReadOnlyCollection<Guid>? excludeArticleIds,
         int maxResults,
+        Guid? departmentId,
         CancellationToken ct)
     {
         logger.LogDebug(
-            "KnowledgeMcpTool.ExecuteInternalAsync: query={Query}, clientId={ClientId}, siteId={SiteId}, max={Max}",
-            LogSanitizer.Sanitize(query), clientId, siteId, maxResults);
+            "KnowledgeMcpTool.ExecuteInternalAsync: query={Query}, clientId={ClientId}, siteId={SiteId}, deptId={DeptId}, max={Max}",
+            LogSanitizer.Sanitize(query), clientId, siteId, departmentId, maxResults);
 
         // Configuração (compartilhada entre caminhos)
         var settings = aiSettings ?? await configurationResolver.GetAISettingsAsync();
@@ -86,7 +89,7 @@ public class KnowledgeMcpTool(
                 vector, clientId, siteId, maxResults,
                 minSimilarity: settings.MinSimilarityScore,
                 excludeArticleIds: excludeArticleIds,
-                departmentId: null,
+                departmentId: departmentId,
                 ct: ct);
         }
         catch (Exception ex)
@@ -107,7 +110,7 @@ public class KnowledgeMcpTool(
         // ── Fallback: busca keyword ──
         try
         {
-            var keywordResults = await articleRepository.SearchKeywordAsync(query, clientId, siteId, departmentId: null, ct);
+            var keywordResults = await articleRepository.SearchKeywordAsync(query, clientId, siteId, departmentId: departmentId, ct);
             if (keywordResults.Count == 0)
                 return JsonSerializer.Serialize(new { found = false, message = "Nenhum artigo encontrado na base de conhecimento." });
 

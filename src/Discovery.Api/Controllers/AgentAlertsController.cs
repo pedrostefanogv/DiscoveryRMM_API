@@ -19,7 +19,7 @@ namespace Discovery.Api.Controllers;
 public class AgentAlertsController : ControllerBase
 {
     private readonly IAgentAlertService _alertService;
-    private readonly AlertDispatchService _dispatchService;
+    private readonly IAlertDispatchService _dispatchService;
     private readonly IAgentRepository _agentRepo;
     private readonly IClientRepository _clientRepo;
     private readonly IAgentLabelRepository _labelRepo;
@@ -27,7 +27,7 @@ public class AgentAlertsController : ControllerBase
 
     public AgentAlertsController(
         IAgentAlertService alertService,
-        AlertDispatchService dispatchService,
+        IAlertDispatchService dispatchService,
         IAgentRepository agentRepo,
         IClientRepository clientRepo,
         IAgentLabelRepository labelRepo,

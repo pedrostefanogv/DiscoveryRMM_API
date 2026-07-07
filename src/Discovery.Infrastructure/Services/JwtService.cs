@@ -4,13 +4,14 @@ using System.Security.Cryptography;
 using System.Text;
 using Discovery.Core.Interfaces.Auth;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Discovery.Infrastructure.Services;
 
 /// <summary>
 /// Serviço JWT com RS256 (chaves PEM). Se as chaves não existirem no caminho configurado,
-/// gera um par RSA temporário (modo desenvolvimento).
+/// em desenvolvimento gera um par RSA temporário. Em produção, falha com exceção clara.
 /// </summary>
 public class JwtService : IJwtService
 {
@@ -26,7 +27,7 @@ public class JwtService : IJwtService
     private readonly int _mfaTokenMinutes;
     private readonly int _mfaSetupTokenMinutes;
 
-    public JwtService(IConfiguration configuration)
+    public JwtService(IConfiguration configuration, IHostEnvironment environment)
     {
         var section = configuration.GetSection("Authentication:Jwt");
         _issuer = section.GetValue<string>("Issuer", "Discovery")!;
@@ -39,11 +40,11 @@ public class JwtService : IJwtService
         var privateKeyPath = section.GetValue<string>("PrivateKeyPath");
         var publicKeyPath = section.GetValue<string>("PublicKeyPath");
 
-        (_signingKey, _validationKey) = LoadOrGenerateKeys(privateKeyPath, publicKeyPath);
+        (_signingKey, _validationKey) = LoadOrGenerateKeys(privateKeyPath, publicKeyPath, environment.IsDevelopment());
     }
 
     private static (RsaSecurityKey signing, RsaSecurityKey validation) LoadOrGenerateKeys(
-        string? privateKeyPath, string? publicKeyPath)
+        string? privateKeyPath, string? publicKeyPath, bool isDevelopment)
     {
         if (!string.IsNullOrWhiteSpace(privateKeyPath) && File.Exists(privateKeyPath)
             && !string.IsNullOrWhiteSpace(publicKeyPath) && File.Exists(publicKeyPath))
@@ -57,23 +58,37 @@ public class JwtService : IJwtService
             return (new RsaSecurityKey(privateRsa), new RsaSecurityKey(publicRsa));
         }
 
-        // Modo desenvolvimento: gera par RSA em memória (sem persistência)
+        // Fail fast in production: keys must exist before startup.
+        if (!isDevelopment)
+        {
+            var missing = new List<string>();
+            if (string.IsNullOrWhiteSpace(privateKeyPath)) missing.Add("Authentication:Jwt:PrivateKeyPath");
+            else if (!File.Exists(privateKeyPath)) missing.Add($"PrivateKey file not found: {privateKeyPath}");
+            if (string.IsNullOrWhiteSpace(publicKeyPath)) missing.Add("Authentication:Jwt:PublicKeyPath");
+            else if (!File.Exists(publicKeyPath)) missing.Add($"PublicKey file not found: {publicKeyPath}");
+
+            throw new InvalidOperationException(
+                $"JWT RSA keys are required in production but are missing. " +
+                $"Generate keys and configure the paths. Missing: {string.Join(", ", missing)}");
+        }
+
+        // Development mode: generate RSA pair (may persist to disk for consistency across restarts)
         var tempRsa = RSA.Create(2048);
 
         if (!string.IsNullOrWhiteSpace(privateKeyPath) && !string.IsNullOrWhiteSpace(publicKeyPath))
         {
-            // Persiste as chaves geradas para consistência entre restarts
+            // Persist generated keys for consistency across restarts
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(privateKeyPath)!);
                 File.WriteAllText(privateKeyPath, tempRsa.ExportRSAPrivateKeyPem());
                 File.WriteAllText(publicKeyPath, tempRsa.ExportSubjectPublicKeyInfoPem());
             }
-            catch { /* ignora erro de escrita em dev */ }
+            catch { /* ignore write error in dev */ }
         }
 
         var signingKey = new RsaSecurityKey(tempRsa);
-        // Para validação, usa a mesma instância RSA (tem a chave pública embarcada)
+        // For validation, use a separate RSA instance with the public key only
         var validationRsa = RSA.Create();
         validationRsa.ImportRSAPublicKey(tempRsa.ExportRSAPublicKey(), out _);
         return (signingKey, new RsaSecurityKey(validationRsa));

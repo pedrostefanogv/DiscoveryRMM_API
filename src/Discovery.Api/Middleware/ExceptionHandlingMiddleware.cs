@@ -91,7 +91,7 @@ public class ExceptionHandlingMiddleware
                 {
                     Method = context.Request.Method,
                     Path = context.Request.Path.Value,
-                    QueryString = context.Request.QueryString.ToString(),
+                    QueryString = SanitizeQueryString(context.Request.QueryString.ToString()),
                     ClientIp = clientIp,
                     UserAgent = userAgent,
                     ContentType = contentType,
@@ -183,7 +183,7 @@ public class ExceptionHandlingMiddleware
             StatusCode = context.Response.StatusCode,
             Method = context.Request.Method,
             Path = context.Request.Path.Value,
-            QueryString = context.Request.QueryString.ToString(),
+            QueryString = SanitizeQueryString(context.Request.QueryString.ToString()),
             ClientIp = clientIp,
             UserAgent = userAgent,
             ContentType = contentType,
@@ -293,5 +293,28 @@ public class ExceptionHandlingMiddleware
                 => StatusCodes.Status408RequestTimeout,
             _ => StatusCodes.Status500InternalServerError
         };
+    }
+
+    private static readonly string[] SensitiveQueryParams = ["access_token", "token", "api_key", "apikey", "secret", "password", "key"];
+
+    /// <summary>
+    /// Mascara parâmetros sensíveis na query string para evitar log de credenciais.
+    /// </summary>
+    private static string SanitizeQueryString(string queryString)
+    {
+        if (string.IsNullOrWhiteSpace(queryString))
+            return string.Empty;
+
+        var sanitized = queryString;
+        foreach (var param in SensitiveQueryParams)
+        {
+            // Match param=value (case-insensitive) and replace value with [REDACTED]
+            sanitized = System.Text.RegularExpressions.Regex.Replace(
+                sanitized,
+                $@"([?&]{System.Text.RegularExpressions.Regex.Escape(param)}=)([^&]*)",
+                $"$1[REDACTED]",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+        return sanitized;
     }
 }

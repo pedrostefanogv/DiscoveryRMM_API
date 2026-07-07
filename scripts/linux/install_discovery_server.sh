@@ -70,6 +70,7 @@ source "$LIB_DIR/modes.sh"
 # â”€â”€ Bootstrap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 initialize_log_context_from_requested_mode
+validate_host_os
 require_cmd sudo
 start_sudo_keepalive
 trap cleanup_sudo_keepalive EXIT

@@ -127,8 +127,11 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
     public async Task PublishDashboardEventAsync(DashboardEventMessage message, CancellationToken cancellationToken = default)
     {
-        _ = cancellationToken;
-        // Agentes sem clientId (orfãos) usam subject global de fallback — não é mais erro.
+        // Cancelamento é respeitado antes da operação; após início do publish, ignora para
+        // evitar estado inconsistente (mensagem pode já ter sido parcialmente enviada).
+        if (cancellationToken.IsCancellationRequested)
+            return;
+
         var payload = JsonSerializer.Serialize(message, JsonOptions);
         var subject = NatsSubjectBuilder.DashboardSubject(message.ClientId, message.SiteId);
 
@@ -137,7 +140,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
     public async Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, CancellationToken cancellationToken = default)
     {
-        _ = cancellationToken;
+        if (cancellationToken.IsCancellationRequested)
+            return;
 
         var subject = await BuildAgentSubjectAsync(agentId, "sync.ping");
         var message = JsonSerializer.Serialize(ping, JsonOptions);

@@ -177,7 +177,9 @@ Migrations/
  M120_AddReportJoinPerformanceIndexes.cs
  M121_AddAgentSoftwareInstallMetadata.cs
  M121_SeedBuiltInReportTemplates.cs
+ M122_CreateReportFilterPresets.cs
  M122_SeedRemoteDebugPermissionForAdmin.cs
+ M123_SeedBuiltInReportTemplatesV3.cs
  M123_SeedRolePermissions.cs
  M124_AddApiTokenScopeFields.cs
  M125_AddAgentMaintenanceFields.cs
@@ -189,13 +191,14 @@ Migrations/
  M130_FixTimestampTimezones.cs
  M131_AddMachineScore.cs
  M132_AddAgentTokenLastNatsConnectedAt.cs
+ M133_SeedMcpToolPolicies.cs
 obj/Debug/net10.0/
  .NETCoreApp,Version=v10.0.AssemblyAttributes.cs
  Discovery.Migrations.AssemblyInfo.cs
  Discovery.Migrations.GlobalUsings.g.cs
 
 [metadataReferences]
-<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.8/ref/net10.0/
+<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.9/ref/net10.0/
  Microsoft.CSharp.dll
  Microsoft.VisualBasic.Core.dll
  Microsoft.VisualBasic.dll
@@ -372,18 +375,18 @@ obj/Debug/net10.0/
  microsoft.extensions.primitives/8.0.0/lib/net8.0/Microsoft.Extensions.Primitives.dll
 
 [analyzerReferences]
-<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.8/analyzers/dotnet/cs/
+<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.9/analyzers/dotnet/cs/
  Microsoft.Interop.ComInterfaceGenerator.dll
  Microsoft.Interop.JavaScript.JSImportGenerator.dll
  Microsoft.Interop.LibraryImportGenerator.dll
  Microsoft.Interop.SourceGeneration.dll
  System.Text.Json.SourceGeneration.dll
  System.Text.RegularExpressions.Generator.dll
-<DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk/analyzers/
+<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/
  Microsoft.CodeAnalysis.CSharp.NetAnalyzers.dll
  Microsoft.CodeAnalysis.NetAnalyzers.dll
 <NUGET>/microsoft.extensions.options/8.0.0/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Options.SourceGeneration.dll
 
 [analyzerConfigFiles]
-<DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
+<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
 obj/Debug/net10.0/Discovery.Migrations.GeneratedMSBuildEditorConfig.editorconfig

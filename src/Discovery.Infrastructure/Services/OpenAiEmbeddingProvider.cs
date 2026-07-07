@@ -16,17 +16,13 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
     private const int MaxInputChars = 30000; // ~8000 tokens de segurança
     private const string DefaultEmbeddingModel = "text-embedding-3-small";
 
-    private readonly HttpClient _httpClient;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<OpenAiEmbeddingProvider> _logger;
 
-    public OpenAiEmbeddingProvider(ILogger<OpenAiEmbeddingProvider> logger)
+    public OpenAiEmbeddingProvider(IHttpClientFactory httpClientFactory, ILogger<OpenAiEmbeddingProvider> logger)
     {
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
-
-        _httpClient = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(30)
-        };
     }
 
     /// <summary>Aplica headers OpenRouter se a base URL for OpenRouter</summary>
@@ -72,7 +68,8 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKeyOverride);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        var httpClient = _httpClientFactory.CreateClient("AiChat");
+        var response = await httpClient.SendAsync(request, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -152,7 +149,8 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
             _logger.LogDebug("Batch embedding para OpenRouter detectado pela URL");
         }
 
-        var response = await _httpClient.SendAsync(request, ct);
+        var httpClient2 = _httpClientFactory.CreateClient("AiChat");
+        var response = await httpClient2.SendAsync(request, ct);
 
         if (!response.IsSuccessStatusCode)
         {

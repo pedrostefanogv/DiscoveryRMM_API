@@ -21,9 +21,13 @@ public static partial class ReportLayoutValidator
     private const int MaxDataUrlLength = 32_768;
     private static readonly HashSet<string> AllowedOrientations = new(StringComparer.OrdinalIgnoreCase) { "portrait", "landscape" };
     private static readonly HashSet<string> AllowedColumnFormats = new(StringComparer.OrdinalIgnoreCase) { "text", "date", "datetime", "number", "boolean" };
-    private static readonly HashSet<string> AllowedAggregates = new(StringComparer.OrdinalIgnoreCase) { "count", "countDistinct", "sum" };
+    private static readonly HashSet<string> AllowedAggregates = new(StringComparer.OrdinalIgnoreCase) { "count", "countDistinct", "sum", "avg", "min", "max", "countIf", "sumIf", "first", "last", "median", "percentile90", "compliancePercent" };
     private static readonly HashSet<string> AllowedJoinTypes = new(StringComparer.OrdinalIgnoreCase) { "left", "inner" };
     private static readonly HashSet<string> AllowedWatermarkFits = new(StringComparer.OrdinalIgnoreCase) { "contain", "cover" };
+    private static readonly HashSet<string> AllowedChartTypes = new(StringComparer.OrdinalIgnoreCase) { "bar", "horizontalbar", "pie", "doughnut", "line", "stackedbar", "gauge", "sparkline" };
+    private static readonly HashSet<string> AllowedConditionalOperators = new(StringComparer.OrdinalIgnoreCase) { "eq", "ne", "lt", "lte", "gt", "gte", "contains" };
+    private static readonly HashSet<string> AllowedChartAggregates = new(StringComparer.OrdinalIgnoreCase) { "count", "countDistinct", "sum", "avg", "min", "max", "compliancePercent" };
+    private static readonly HashSet<string> AllowedBucketByIntervals = new(StringComparer.OrdinalIgnoreCase) { "hour", "day", "week", "month" };
 
     public static IReadOnlyCollection<string> GetSupportedOrientations() => AllowedOrientations.ToArray();
     public static IReadOnlyCollection<string> GetSupportedColumnFormats() => AllowedColumnFormats.ToArray();
@@ -132,6 +136,13 @@ public static partial class ReportLayoutValidator
         ValidateSummaries(layout.Summaries, "summaries", errors);
         ValidateSummaries(layout.GroupSummaries, "groupSummaries", errors);
         ValidateDataSources(layout.DataSources, errors);
+        ValidateCharts(layout.Charts, errors);
+        ValidateComputedFields(layout.ComputedFields, errors);
+        ValidateGroupLevels(layout.GroupLevels, errors);
+        ValidateCoverPage(layout.CoverPage, errors);
+        ValidatePageHeaderFooter(layout.PageHeader, "pageHeader", errors);
+        ValidatePageHeaderFooter(layout.PageFooter, "pageFooter", errors);
+        ValidateTableOfContents(layout.TableOfContents, errors);
 
         return errors;
     }
@@ -207,6 +218,9 @@ public static partial class ReportLayoutValidator
 
             if (column.Width.HasValue)
                 ValidateWidth(column.Width.Value, path, index, errors);
+
+            if (column.ConditionalFormat?.Rules is { Count: > 0 })
+                ValidateConditionalFormat(column.ConditionalFormat, $"{path}[{index}].conditionalFormat", errors);
         }
     }
 
@@ -366,4 +380,163 @@ public static partial class ReportLayoutValidator
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")]
     private static partial Regex AliasRegex();
+
+    private static void ValidateCharts(IReadOnlyList<ReportLayoutChartDefinition>? charts, ICollection<string> errors)
+    {
+        if (charts is not { Count: > 0 })
+            return;
+
+        const int maxCharts = 16;
+        if (charts.Count > maxCharts)
+            errors.Add($"charts supports at most {maxCharts} items.");
+
+        for (var i = 0; i < charts.Count; i++)
+        {
+            var chart = charts[i];
+            if (string.IsNullOrWhiteSpace(chart.Type) || !AllowedChartTypes.Contains(chart.Type))
+                errors.Add($"charts[{i}].type must be one of: {string.Join(", ", AllowedChartTypes)}.");
+
+            if (!string.IsNullOrWhiteSpace(chart.Aggregate) && !AllowedChartAggregates.Contains(chart.Aggregate))
+                errors.Add($"charts[{i}].aggregate must be one of: {string.Join(", ", AllowedChartAggregates)}.");
+
+            if (chart.Type is not null && chart.Type != "gauge" && string.IsNullOrWhiteSpace(chart.GroupField))
+                errors.Add($"charts[{i}].groupField is required for chart type '{chart.Type}'.");
+
+            if (!string.IsNullOrWhiteSpace(chart.BucketBy) && !AllowedBucketByIntervals.Contains(chart.BucketBy))
+                errors.Add($"charts[{i}].bucketBy must be one of: {string.Join(", ", AllowedBucketByIntervals)}.");
+
+            if (chart.Limit is < 1 or > 100)
+                errors.Add($"charts[{i}].limit must be between 1 and 100.");
+
+            if (chart.Thresholds is { Count: > 0 })
+            {
+                for (var t = 0; t < chart.Thresholds.Count; t++)
+                {
+                    var threshold = chart.Thresholds[t];
+                    if (!string.IsNullOrWhiteSpace(threshold.Color))
+                        ValidateColor(threshold.Color, $"charts[{i}].thresholds[{t}].color", errors);
+                }
+            }
+        }
+    }
+
+    private static void ValidateComputedFields(IReadOnlyList<ReportLayoutComputedFieldDefinition>? computedFields, ICollection<string> errors)
+    {
+        if (computedFields is not { Count: > 0 })
+            return;
+
+        const int maxComputedFields = 20;
+        if (computedFields.Count > maxComputedFields)
+            errors.Add($"computedFields supports at most {maxComputedFields} items.");
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < computedFields.Count; i++)
+        {
+            var field = computedFields[i];
+            if (string.IsNullOrWhiteSpace(field.Name))
+                errors.Add($"computedFields[{i}].name is required.");
+            else if (field.Name.Length > MaxGroupFieldLength)
+                errors.Add($"computedFields[{i}].name exceeds maximum length of {MaxGroupFieldLength}.");
+            else if (!names.Add(field.Name))
+                errors.Add($"computedFields[{i}].name '{field.Name}' is duplicated.");
+
+            if (string.IsNullOrWhiteSpace(field.Expression))
+                errors.Add($"computedFields[{i}].expression is required.");
+            else if (field.Expression.Length > 512)
+                errors.Add($"computedFields[{i}].expression exceeds maximum length of 512.");
+
+            if (!string.IsNullOrWhiteSpace(field.Format) && !AllowedColumnFormats.Contains(field.Format))
+                errors.Add($"computedFields[{i}].format must be one of: {string.Join(", ", AllowedColumnFormats)}.");
+        }
+    }
+
+    private static void ValidateCoverPage(ReportLayoutCoverPageDefinition? coverPage, ICollection<string> errors)
+    {
+        if (coverPage is null || !coverPage.Enabled)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(coverPage.Title) && coverPage.Title.Length > MaxTitleLength)
+            errors.Add("coverPage.title exceeds maximum length of {MaxTitleLength}.");
+
+        if (!string.IsNullOrWhiteSpace(coverPage.Subtitle) && coverPage.Subtitle.Length > MaxSubtitleLength)
+            errors.Add("coverPage.subtitle exceeds maximum length of {MaxSubtitleLength}.");
+
+        ValidateLogo(coverPage.LogoUrl, "coverPage.logoUrl", errors);
+    }
+
+    private static void ValidatePageHeaderFooter(ReportLayoutPageHeaderFooterDefinition? definition, string path, ICollection<string> errors)
+    {
+        if (definition is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(definition.Left) && definition.Left.Length > MaxGroupFieldLength)
+            errors.Add($"{path}.left exceeds maximum length of {MaxGroupFieldLength}.");
+        if (!string.IsNullOrWhiteSpace(definition.Center) && definition.Center.Length > MaxGroupFieldLength)
+            errors.Add($"{path}.center exceeds maximum length of {MaxGroupFieldLength}.");
+        if (!string.IsNullOrWhiteSpace(definition.Right) && definition.Right.Length > MaxGroupFieldLength)
+            errors.Add($"{path}.right exceeds maximum length of {MaxGroupFieldLength}.");
+    }
+
+    private static void ValidateTableOfContents(ReportLayoutTableOfContentsDefinition? toc, ICollection<string> errors)
+    {
+        if (toc is null || !toc.Enabled)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(toc.Title) && toc.Title.Length > MaxTitleLength)
+            errors.Add("tableOfContents.title exceeds maximum length of {MaxTitleLength}.");
+
+        if (toc.MaxLevel is < 1 or > 3)
+            errors.Add("tableOfContents.maxLevel must be between 1 and 3.");
+    }
+
+    private static void ValidateConditionalFormat(ReportLayoutConditionalFormat conditionalFormat, string path, ICollection<string> errors)
+    {
+        if (conditionalFormat.Rules is not { Count: > 0 })
+            return;
+
+        const int maxRules = 20;
+        if (conditionalFormat.Rules.Count > maxRules)
+            errors.Add($"{path}.rules supports at most {maxRules} items.");
+
+        for (var i = 0; i < conditionalFormat.Rules.Count; i++)
+        {
+            var rule = conditionalFormat.Rules[i];
+            if (string.IsNullOrWhiteSpace(rule.Operator) || !AllowedConditionalOperators.Contains(rule.Operator))
+                errors.Add($"{path}.rules[{i}].operator must be one of: {string.Join(", ", AllowedConditionalOperators)}.");
+
+            if (!string.IsNullOrWhiteSpace(rule.BackgroundColor))
+                ValidateColor(rule.BackgroundColor, $"{path}.rules[{i}].backgroundColor", errors);
+
+            if (!string.IsNullOrWhiteSpace(rule.TextColor))
+                ValidateColor(rule.TextColor, $"{path}.rules[{i}].textColor", errors);
+
+            if (!string.IsNullOrWhiteSpace(rule.Label) && rule.Label.Length > MaxTitleLength)
+                errors.Add($"{path}.rules[{i}].label exceeds maximum length of {MaxTitleLength}.");
+        }
+    }
+
+    private static void ValidateGroupLevels(IReadOnlyList<ReportLayoutGroupLevelDefinition>? groupLevels, ICollection<string> errors)
+    {
+        if (groupLevels is not { Count: > 0 })
+            return;
+
+        const int maxGroupLevels = 5;
+        if (groupLevels.Count > maxGroupLevels)
+            errors.Add($"groupLevels supports at most {maxGroupLevels} levels.");
+
+        var fields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < groupLevels.Count; i++)
+        {
+            var level = groupLevels[i];
+            if (string.IsNullOrWhiteSpace(level.Field))
+                errors.Add($"groupLevels[{i}].field is required.");
+            else if (level.Field.Length > MaxGroupFieldLength)
+                errors.Add($"groupLevels[{i}].field exceeds maximum length of {MaxGroupFieldLength}.");
+            else if (!fields.Add(level.Field))
+                errors.Add($"groupLevels[{i}].field '{level.Field}' is duplicated.");
+
+            if (!string.IsNullOrWhiteSpace(level.TitleTemplate) && level.TitleTemplate.Length > MaxGroupTitleLength)
+                errors.Add($"groupLevels[{i}].titleTemplate exceeds maximum length of {MaxGroupTitleLength}.");
+        }
+    }
 }

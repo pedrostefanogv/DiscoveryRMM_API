@@ -32,7 +32,7 @@ public static class BackgroundServicesCollectionExtensions
         services.AddSingleton<BackgroundServiceRegistry>();
 
         // Always-registered services
-        services.AddScoped<AlertDispatchService>();
+        services.AddScoped<IAlertDispatchService, AlertDispatchService>();
         services.AddHostedService<AgentPackagePrebuildHostedService>();
 
         // Sync ping dispatch (singleton + hosted service pattern, toggleable)

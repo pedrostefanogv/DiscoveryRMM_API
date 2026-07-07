@@ -173,6 +173,7 @@ Entities/
  ListeningPortInfo.cs
  LogEntry.cs
  LogQuery.cs
+ McpToolPolicy.cs
  MemoryModuleInfo.cs
  MeshCentralRightsProfile.cs
  NetworkAdapterInfo.cs
@@ -183,6 +184,7 @@ Entities/
  P2pSeedPlan.cs
  PrinterInfo.cs
  ReportExecution.cs
+ ReportFilterPreset.cs
  ReportSchedule.cs
  ReportTemplate.cs
  ReportTemplateHistory.cs
@@ -210,6 +212,8 @@ Entities/
  TicketComment.cs
  TicketEscalationRule.cs
  TicketKnowledgeLink.cs
+ TicketMergeRecord.cs
+ TicketRelation.cs
  TicketRemoteSession.cs
  TicketSavedView.cs
  TicketWatcher.cs
@@ -282,7 +286,7 @@ Enums/
  TicketActivityType.cs
  TicketAutomationLinkStatus.cs
  TicketPriority.cs
- TicketStatus.cs
+ TicketRelationType.cs
 Helpers/
  AgentLabelExpressionValidator.cs
  CommandTypeWireMapper.cs
@@ -294,6 +298,7 @@ Helpers/
  MeshCentralRights.cs
  NatsSubjectBuilder.cs
  ReportLayoutValidator.cs
+ ReportParameterResolver.cs
  SemanticVersion.cs
 Interfaces/Auth/
  IApiTokenService.cs
@@ -334,6 +339,7 @@ Interfaces/
  IAiModelCatalogService.cs
  IAiProviderCredentialRepository.cs
  IAlertCorrelationLockRepository.cs
+ IAlertDispatchService.cs
  IAlertToTicketService.cs
  IAppApprovalAuditRepository.cs
  IAppApprovalAuditService.cs
@@ -386,6 +392,7 @@ Interfaces/
  ILlmProvider.cs
  ILoggingService.cs
  ILogRepository.cs
+ IMcpToolPolicyRepository.cs
  IMeshCentralAclSyncService.cs
  IMeshCentralApiService.cs
  IMeshCentralConfigService.cs
@@ -411,6 +418,7 @@ Interfaces/
  IRedisService.cs
  IReportDatasetQueryService.cs
  IReportExecutionRepository.cs
+ IReportFilterPresetRepository.cs
  IReportHtmlComposer.cs
  IReportRenderer.cs
  IReportScheduleRepository.cs
@@ -427,10 +435,15 @@ Interfaces/
  ITicketAlertRuleRepository.cs
  ITicketAutomationLinkRepository.cs
  ITicketEscalationRuleRepository.cs
+ ITicketKnowledgeLinkRepository.cs
+ ITicketKpiCacheService.cs
+ ITicketMergeService.cs
+ ITicketRelationService.cs
  ITicketRemoteSessionRepository.cs
  ITicketRepository.cs
  ITicketSavedViewRepository.cs
  ITicketWatcherRepository.cs
+ ITicketWorkflowService.cs
  IWingetPackageRepository.cs
  IWingetPackageSyncService.cs
  IWorkflowProfileRepository.cs
@@ -465,7 +478,7 @@ ValueObjects/
  UpdateMaintenanceWindow.cs
 
 [metadataReferences]
-<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.8/ref/net10.0/
+<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.9/ref/net10.0/
  Microsoft.CSharp.dll
  Microsoft.VisualBasic.Core.dll
  Microsoft.VisualBasic.dll
@@ -640,18 +653,18 @@ ValueObjects/
  pgvector/0.3.2/lib/net6.0/Pgvector.dll
 
 [analyzerReferences]
-<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.8/analyzers/dotnet/cs/
+<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.9/analyzers/dotnet/cs/
  Microsoft.Interop.ComInterfaceGenerator.dll
  Microsoft.Interop.JavaScript.JSImportGenerator.dll
  Microsoft.Interop.LibraryImportGenerator.dll
  Microsoft.Interop.SourceGeneration.dll
  System.Text.Json.SourceGeneration.dll
  System.Text.RegularExpressions.Generator.dll
-<DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk/analyzers/
+<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/
  Microsoft.CodeAnalysis.CSharp.NetAnalyzers.dll
  Microsoft.CodeAnalysis.NetAnalyzers.dll
 <NUGET>/microsoft.extensions.logging.abstractions/8.0.0/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Logging.Generators.dll
 
 [analyzerConfigFiles]
-<DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
+<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
 obj/Debug/net10.0/Discovery.Core.GeneratedMSBuildEditorConfig.editorconfig

@@ -76,274 +76,258 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             var decision = await _ruleEngineService.EvaluateAsync(monitoringEvent, labels, cancellationToken: cancellationToken);
             matchedRule = decision.Rule;
 
-            if (!decision.Matched)
-            {
-                execution = await CreateExecutionAsync(
-                    monitoringEvent,
-                    null,
-                    AutoTicketDecision.MatchedNoAction,
-                    decision.Reason,
-                    null,
-                    null,
-                    false);
-                return execution;
-            }
+            // Step 1: No match / suppressed / not-creating
+            var (handled, earlyResult) = await HandleNonCreateDecisionsAsync(monitoringEvent, decision, cancellationToken);
+            if (handled) return earlyResult!;
 
-            if (decision.IsSuppressed)
-            {
-                execution = await CreateExecutionAsync(
-                    monitoringEvent,
-                    decision.Rule,
-                    AutoTicketDecision.Suppressed,
-                    decision.Reason,
-                    null,
-                    null,
-                    false);
-                return execution;
-            }
+            // Step 2: Check if enabled and in scope
+            var (disabled, disabledResult) = HandleConfigAndScopeCheck(monitoringEvent, decision);
+            if (disabled) return disabledResult!;
 
-            if (!decision.ShouldCreateTicket)
-            {
-                execution = await CreateExecutionAsync(
-                    monitoringEvent,
-                    decision.Rule,
-                    AutoTicketDecision.MatchedNoAction,
-                    decision.Reason,
-                    null,
-                    null,
-                    false);
-                return execution;
-            }
-
-            if (!_options.Enabled)
-            {
-                execution = await CreateExecutionAsync(
-                    monitoringEvent,
-                    decision.Rule,
-                    AutoTicketDecision.MatchedNoAction,
-                    "AutoTicket is disabled by configuration.",
-                    null,
-                    null,
-                    false);
-                return execution;
-            }
-
+            // Step 3: Dedup + Reopen + Rate limit + Create
             var dedupKey = _dedupFingerprintService.BuildDedupKey(monitoringEvent, decision.Rule!);
-            if (!CanCreateTicketsFor(monitoringEvent.ClientId, monitoringEvent.SiteId))
-            {
-                execution = await CreateExecutionAsync(
-                    monitoringEvent,
-                    decision.Rule,
-                    AutoTicketDecision.MatchedNoAction,
-                    _options.ShadowMode ? "AutoTicket shadow mode is active." : "Monitoring event is outside of the configured canary scope.",
-                    null,
-                    dedupKey,
-                    false);
-                return execution;
-            }
-
-            await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
-            var dedupResult = await _dedupService.TryAcquireOrGetAsync(
-                dedupKey,
-                TimeSpan.FromMinutes(Math.Max(1, decision.Rule!.DedupWindowMinutes)),
-                cancellationToken);
-
-            if (!dedupResult.Acquired)
-            {
-                execution = await CreateExecutionAsync(
-                    monitoringEvent,
-                    decision.Rule,
-                    AutoTicketDecision.Deduped,
-                    "Existing correlation lock found inside dedup window.",
-                    dedupResult.ExistingTicketId,
-                    dedupKey,
-                    true);
-                await transaction.CommitAsync(cancellationToken);
-                return execution;
-            }
-
-            var ticketRequest = BuildTicketRequest(monitoringEvent, decision.Rule, labels);
-            var reusableOpenTicketId = await _executionRepository.GetReusableOpenTicketIdAsync(
-                monitoringEvent.ClientId,
-                monitoringEvent.AgentId,
-                monitoringEvent.AlertCode,
-                ticketRequest.DepartmentId,
-                ticketRequest.WorkflowProfileId,
-                ticketRequest.Category);
-
-            if (reusableOpenTicketId.HasValue)
-            {
-                await _dedupService.RegisterCreatedTicketAsync(dedupKey, reusableOpenTicketId.Value, cancellationToken);
-
-                execution = await CreateExecutionAsync(
-                    monitoringEvent,
-                    decision.Rule,
-                    AutoTicketDecision.Deduped,
-                    "Existing open AutoTicket was found for the same agent and alert type.",
-                    reusableOpenTicketId.Value,
-                    dedupKey,
-                    true);
-
-                await transaction.CommitAsync(cancellationToken);
-
-                _logger.LogInformation(
-                    "AutoTicket reused existing open ticket {TicketId} for monitoring event {MonitoringEventId} using dedupKey {DedupKey}.",
-                    reusableOpenTicketId.Value,
-                    monitoringEvent.Id,
-                    LogSanitizer.Sanitize(dedupKey));
-
-                return execution;
-            }
-
-            if (_options.ReopenWindowMinutes > 0)
-            {
-                var reopenableClosedTicketId = await _executionRepository.GetReopenableClosedTicketIdAsync(
-                    monitoringEvent.ClientId,
-                    monitoringEvent.AgentId,
-                    monitoringEvent.AlertCode,
-                    DateTime.UtcNow.AddMinutes(-_options.ReopenWindowMinutes),
-                    ticketRequest.DepartmentId,
-                    ticketRequest.WorkflowProfileId,
-                    ticketRequest.Category);
-
-                if (reopenableClosedTicketId.HasValue)
-                {
-                    var reopenableTicket = await _ticketRepository.GetByIdAsync(reopenableClosedTicketId.Value);
-                    var initialState = await _workflowRepository.GetInitialStateAsync(monitoringEvent.ClientId);
-
-                    if (reopenableTicket is not null && reopenableTicket.ClosedAt.HasValue && initialState is not null)
-                    {
-                        var previousClosedAt = reopenableTicket.ClosedAt.Value;
-                        await _ticketRepository.UpdateWorkflowStateAsync(reopenableTicket.Id, initialState.Id, closedAt: null);
-                        await _activityLogService.LogActivityAsync(
-                            reopenableTicket.Id,
-                            TicketActivityType.Reopened,
-                            null,
-                            previousClosedAt.ToString("O"),
-                            null,
-                            $"Ticket reaberto automaticamente a partir do evento de monitoramento {monitoringEvent.Id}: {monitoringEvent.AlertCode}");
-                        await _dedupService.RegisterCreatedTicketAsync(dedupKey, reopenableTicket.Id, cancellationToken);
-
-                        execution = await CreateExecutionAsync(
-                            monitoringEvent,
-                            decision.Rule,
-                            AutoTicketDecision.Deduped,
-                            $"Closed AutoTicket was reopened inside the configured reopen window ({_options.ReopenWindowMinutes} min).",
-                            reopenableTicket.Id,
-                            dedupKey,
-                            true);
-
-                        await transaction.CommitAsync(cancellationToken);
-
-                        _logger.LogInformation(
-                            "AutoTicket reopened closed ticket {TicketId} for monitoring event {MonitoringEventId} using dedupKey {DedupKey}.",
-                            reopenableTicket.Id,
-                            monitoringEvent.Id,
-                            LogSanitizer.Sanitize(dedupKey));
-
-                        return execution;
-                    }
-                }
-            }
-
-            if (_options.MaxCreatedTicketsPerHourPerAlertCode > 0)
-            {
-                var createdInLastHour = await _executionRepository.GetCreatedCountForClientAlertAsync(
-                    monitoringEvent.ClientId,
-                    monitoringEvent.AlertCode,
-                    DateTime.UtcNow.AddHours(-1));
-
-                if (createdInLastHour >= _options.MaxCreatedTicketsPerHourPerAlertCode)
-                {
-                    execution = await CreateExecutionAsync(
-                        monitoringEvent,
-                        decision.Rule,
-                        AutoTicketDecision.RateLimited,
-                        $"Client alert rate limit reached for '{monitoringEvent.AlertCode}' ({_options.MaxCreatedTicketsPerHourPerAlertCode} tickets/hour).",
-                        null,
-                        dedupKey,
-                        false);
-
-                    await transaction.CommitAsync(cancellationToken);
-
-                    _logger.LogWarning(
-                        "AutoTicket rate limit reached for client {ClientId}, alertCode {AlertCode}. Limit={LimitPerHour}, monitoringEventId={MonitoringEventId}.",
-                        monitoringEvent.ClientId,
-                        LogSanitizer.Sanitize(monitoringEvent.AlertCode),
-                        _options.MaxCreatedTicketsPerHourPerAlertCode,
-                        monitoringEvent.Id);
-
-                    return execution;
-                }
-            }
-
-            var ticket = await _alertToTicketService.CreateTicketFromMonitoringEventAsync(
-                ticketRequest,
-                cancellationToken);
-
-            await _dedupService.RegisterCreatedTicketAsync(dedupKey, ticket.Id, cancellationToken);
-
-            execution = await CreateExecutionAsync(
-                monitoringEvent,
-                decision.Rule,
-                AutoTicketDecision.Created,
-                decision.Reason,
-                ticket.Id,
-                dedupKey,
-                false);
-
-            await transaction.CommitAsync(cancellationToken);
-
-            _logger.LogInformation(
-                "AutoTicket created ticket {TicketId} for monitoring event {MonitoringEventId} using rule {RuleId} and dedupKey {DedupKey}.",
-                ticket.Id,
-                monitoringEvent.Id,
-                decision.Rule.Id,
-                LogSanitizer.Sanitize(dedupKey));
-
+            execution = await ExecuteCreatePipelineAsync(monitoringEvent, decision, labels, dedupKey, cancellationToken);
             return execution;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "AutoTicket failed for monitoring event {MonitoringEventId} ({AlertCode}).", monitoringEvent.Id, LogSanitizer.Sanitize(monitoringEvent.AlertCode));
             execution = await CreateExecutionAsync(
-                monitoringEvent,
-                matchedRule,
-                AutoTicketDecision.Failed,
-                ex.Message,
-                null,
-                null,
-                false);
+                monitoringEvent, matchedRule, AutoTicketDecision.Failed, ex.Message, null, null, false);
             return execution;
         }
         finally
         {
             stopwatch.Stop();
+            RecordMetrics(monitoringEvent, execution, stopwatch);
+        }
+    }
 
-            var tags = new TagList
-            {
-                { "decision", execution?.Decision.ToString() ?? "Unknown" },
-                { "alertCode", monitoringEvent.AlertCode }
-            };
+    private async Task<(bool Handled, AutoTicketRuleExecution? Result)> HandleNonCreateDecisionsAsync(
+        AgentMonitoringEvent monitoringEvent,
+        AutoTicketRuleDecision decision,
+        CancellationToken ct)
+    {
+        if (!decision.Matched)
+        {
+            var ex = await CreateExecutionAsync(monitoringEvent, null, AutoTicketDecision.MatchedNoAction, decision.Reason, null, null, false);
+            return (true, ex);
+        }
 
-            EvaluatedCounter.Add(1, tags);
-            EvalDurationMs.Record(stopwatch.Elapsed.TotalMilliseconds, tags);
+        if (decision.IsSuppressed)
+        {
+            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.Suppressed, decision.Reason, null, null, false);
+            return (true, ex);
+        }
 
-            switch (execution?.Decision)
-            {
-                case AutoTicketDecision.Created:
-                    CreatedCounter.Add(1, tags);
-                    break;
-                case AutoTicketDecision.Deduped:
-                    DedupedCounter.Add(1, tags);
-                    break;
-                case AutoTicketDecision.Failed:
-                    FailedCounter.Add(1, tags);
-                    break;
-                case AutoTicketDecision.RateLimited:
-                    RateLimitedCounter.Add(1, tags);
-                    break;
-            }
+        if (!decision.ShouldCreateTicket)
+        {
+            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction, decision.Reason, null, null, false);
+            return (true, ex);
+        }
+
+        return (false, null);
+    }
+
+    private (bool Disabled, AutoTicketRuleExecution? Result) HandleConfigAndScopeCheck(
+        AgentMonitoringEvent monitoringEvent,
+        AutoTicketRuleDecision decision)
+    {
+        if (!_options.Enabled)
+        {
+            var ex = CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
+                "AutoTicket is disabled by configuration.", null, null, false).Result;
+            return (true, ex);
+        }
+
+        if (!CanCreateTicketsFor(monitoringEvent.ClientId, monitoringEvent.SiteId))
+        {
+            var ex = CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
+                _options.ShadowMode ? "AutoTicket shadow mode is active." : "Monitoring event is outside of the configured canary scope.",
+                null, null, false).Result;
+            return (true, ex);
+        }
+
+        return (false, null);
+    }
+
+    private async Task<AutoTicketRuleExecution> ExecuteCreatePipelineAsync(
+        AgentMonitoringEvent monitoringEvent,
+        AutoTicketRuleDecision decision,
+        IReadOnlyCollection<string> labels,
+        string dedupKey,
+        CancellationToken ct)
+    {
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+
+        // Dedup via correlation lock
+        var dedupResult = await _dedupService.TryAcquireOrGetAsync(
+            dedupKey, TimeSpan.FromMinutes(Math.Max(1, decision.Rule!.DedupWindowMinutes)), ct);
+
+        if (!dedupResult.Acquired)
+        {
+            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.Deduped,
+                "Existing correlation lock found inside dedup window.", dedupResult.ExistingTicketId, dedupKey, true);
+            await transaction.CommitAsync(ct);
+            return ex;
+        }
+
+        var ticketRequest = BuildTicketRequest(monitoringEvent, decision.Rule, labels);
+
+        // Check reusable open ticket
+        var (reused, reuseResult) = await TryReuseOpenTicketAsync(monitoringEvent, decision, ticketRequest, dedupKey, ct);
+        if (reused)
+        {
+            await transaction.CommitAsync(ct);
+            return reuseResult!;
+        }
+
+        // Check reopenable closed ticket
+        var (reopened, reopenResult) = await TryReopenClosedTicketAsync(monitoringEvent, decision, ticketRequest, dedupKey, ct);
+        if (reopened)
+        {
+            await transaction.CommitAsync(ct);
+            return reopenResult!;
+        }
+
+        // Rate limit check
+        var (rateLimited, rateLimitResult) = await CheckRateLimitAsync(monitoringEvent, decision, dedupKey, ct);
+        if (rateLimited)
+        {
+            await transaction.CommitAsync(ct);
+            return rateLimitResult!;
+        }
+
+        // Create ticket
+        var ticket = await _alertToTicketService.CreateTicketFromMonitoringEventAsync(ticketRequest, ct);
+        await _dedupService.RegisterCreatedTicketAsync(dedupKey, ticket.Id, ct);
+
+        var execution = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.Created,
+            decision.Reason, ticket.Id, dedupKey, false);
+
+        await transaction.CommitAsync(ct);
+
+        _logger.LogInformation(
+            "AutoTicket created ticket {TicketId} for monitoring event {MonitoringEventId} using rule {RuleId} and dedupKey {DedupKey}.",
+            ticket.Id, monitoringEvent.Id, decision.Rule.Id, LogSanitizer.Sanitize(dedupKey));
+
+        return execution;
+    }
+
+    private async Task<(bool Reused, AutoTicketRuleExecution? Result)> TryReuseOpenTicketAsync(
+        AgentMonitoringEvent monitoringEvent,
+        AutoTicketRuleDecision decision,
+        AutoTicketCreateTicketRequest ticketRequest,
+        string dedupKey,
+        CancellationToken ct)
+    {
+        var reusableOpenTicketId = await _executionRepository.GetReusableOpenTicketIdAsync(
+            monitoringEvent.ClientId, monitoringEvent.AgentId, monitoringEvent.AlertCode,
+            ticketRequest.DepartmentId, ticketRequest.WorkflowProfileId, ticketRequest.Category);
+
+        if (!reusableOpenTicketId.HasValue)
+            return (false, null);
+
+        await _dedupService.RegisterCreatedTicketAsync(dedupKey, reusableOpenTicketId.Value, ct);
+
+        var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.Deduped,
+            "Existing open AutoTicket was found for the same agent and alert type.",
+            reusableOpenTicketId.Value, dedupKey, true);
+
+        _logger.LogInformation(
+            "AutoTicket reused existing open ticket {TicketId} for monitoring event {MonitoringEventId} using dedupKey {DedupKey}.",
+            reusableOpenTicketId.Value, monitoringEvent.Id, LogSanitizer.Sanitize(dedupKey));
+
+        return (true, ex);
+    }
+
+    private async Task<(bool Reopened, AutoTicketRuleExecution? Result)> TryReopenClosedTicketAsync(
+        AgentMonitoringEvent monitoringEvent,
+        AutoTicketRuleDecision decision,
+        AutoTicketCreateTicketRequest ticketRequest,
+        string dedupKey,
+        CancellationToken ct)
+    {
+        if (_options.ReopenWindowMinutes <= 0)
+            return (false, null);
+
+        var reopenableClosedTicketId = await _executionRepository.GetReopenableClosedTicketIdAsync(
+            monitoringEvent.ClientId, monitoringEvent.AgentId, monitoringEvent.AlertCode,
+            DateTime.UtcNow.AddMinutes(-_options.ReopenWindowMinutes),
+            ticketRequest.DepartmentId, ticketRequest.WorkflowProfileId, ticketRequest.Category);
+
+        if (!reopenableClosedTicketId.HasValue)
+            return (false, null);
+
+        var reopenableTicket = await _ticketRepository.GetByIdAsync(reopenableClosedTicketId.Value);
+        var initialState = await _workflowRepository.GetInitialStateAsync(monitoringEvent.ClientId);
+
+        if (reopenableTicket is null || !reopenableTicket.ClosedAt.HasValue || initialState is null)
+            return (false, null);
+
+        var previousClosedAt = reopenableTicket.ClosedAt.Value;
+        await _ticketRepository.UpdateWorkflowStateAsync(reopenableTicket.Id, initialState.Id, closedAt: null);
+        await _activityLogService.LogActivityAsync(
+            reopenableTicket.Id, TicketActivityType.Reopened, null,
+            previousClosedAt.ToString("O"), null,
+            $"Ticket reaberto automaticamente a partir do evento de monitoramento {monitoringEvent.Id}: {monitoringEvent.AlertCode}");
+        await _dedupService.RegisterCreatedTicketAsync(dedupKey, reopenableTicket.Id, ct);
+
+        var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.Deduped,
+            $"Closed AutoTicket was reopened inside the configured reopen window ({_options.ReopenWindowMinutes} min).",
+            reopenableTicket.Id, dedupKey, true);
+
+        _logger.LogInformation(
+            "AutoTicket reopened closed ticket {TicketId} for monitoring event {MonitoringEventId} using dedupKey {DedupKey}.",
+            reopenableTicket.Id, monitoringEvent.Id, LogSanitizer.Sanitize(dedupKey));
+
+        return (true, ex);
+    }
+
+    private async Task<(bool RateLimited, AutoTicketRuleExecution? Result)> CheckRateLimitAsync(
+        AgentMonitoringEvent monitoringEvent,
+        AutoTicketRuleDecision decision,
+        string dedupKey,
+        CancellationToken ct)
+    {
+        if (_options.MaxCreatedTicketsPerHourPerAlertCode <= 0)
+            return (false, null);
+
+        var createdInLastHour = await _executionRepository.GetCreatedCountForClientAlertAsync(
+            monitoringEvent.ClientId, monitoringEvent.AlertCode, DateTime.UtcNow.AddHours(-1));
+
+        if (createdInLastHour < _options.MaxCreatedTicketsPerHourPerAlertCode)
+            return (false, null);
+
+        var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.RateLimited,
+            $"Client alert rate limit reached for '{monitoringEvent.AlertCode}' ({_options.MaxCreatedTicketsPerHourPerAlertCode} tickets/hour).",
+            null, dedupKey, false);
+
+        _logger.LogWarning(
+            "AutoTicket rate limit reached for client {ClientId}, alertCode {AlertCode}. Limit={LimitPerHour}, monitoringEventId={MonitoringEventId}.",
+            monitoringEvent.ClientId, LogSanitizer.Sanitize(monitoringEvent.AlertCode),
+            _options.MaxCreatedTicketsPerHourPerAlertCode, monitoringEvent.Id);
+
+        return (true, ex);
+    }
+
+    private void RecordMetrics(AgentMonitoringEvent monitoringEvent, AutoTicketRuleExecution? execution, Stopwatch stopwatch)
+    {
+        var tags = new TagList
+        {
+            { "decision", execution?.Decision.ToString() ?? "Unknown" },
+            { "alertCode", monitoringEvent.AlertCode }
+        };
+
+        EvaluatedCounter.Add(1, tags);
+        EvalDurationMs.Record(stopwatch.Elapsed.TotalMilliseconds, tags);
+
+        switch (execution?.Decision)
+        {
+            case AutoTicketDecision.Created: CreatedCounter.Add(1, tags); break;
+            case AutoTicketDecision.Deduped: DedupedCounter.Add(1, tags); break;
+            case AutoTicketDecision.Failed: FailedCounter.Add(1, tags); break;
+            case AutoTicketDecision.RateLimited: RateLimitedCounter.Add(1, tags); break;
         }
     }
 

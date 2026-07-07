@@ -12,26 +12,9 @@ public static class HealthChecksServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        var redisConnString = configuration.GetValue<string>("Redis:Connection") ?? "127.0.0.1:6379";
-
         var healthChecksBuilder = services.AddHealthChecks()
-            .AddCheck<PostgresHealthCheck>("postgresql", tags: ["db", "critical"]);
-
-        // Redis health check
-        healthChecksBuilder.AddAsyncCheck("redis", async ct =>
-        {
-            try
-            {
-                var redis = await StackExchange.Redis.ConnectionMultiplexer.ConnectAsync(
-                    StackExchange.Redis.ConfigurationOptions.Parse(redisConnString));
-                await redis.GetDatabase().PingAsync();
-                return HealthCheckResult.Healthy("Redis connected");
-            }
-            catch (Exception ex)
-            {
-                return HealthCheckResult.Unhealthy("Redis unavailable", ex);
-            }
-        }, tags: ["cache"]);
+            .AddCheck<PostgresHealthCheck>("postgresql", tags: ["db", "critical"])
+            .AddCheck<RedisHealthCheck>("redis", tags: ["cache"]);
 
         // NATS health check
         healthChecksBuilder.AddAsyncCheck("nats", async ct =>
@@ -58,6 +41,25 @@ public static class HealthChecksServiceCollectionExtensions
         }, tags: ["messaging"]);
 
         return services;
+    }
+}
+
+internal sealed class RedisHealthCheck : IHealthCheck
+{
+    private readonly StackExchange.Redis.IConnectionMultiplexer _redis;
+    public RedisHealthCheck(StackExchange.Redis.IConnectionMultiplexer redis) => _redis = redis;
+
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await _redis.GetDatabase().PingAsync();
+            return HealthCheckResult.Healthy("Redis connected");
+        }
+        catch (Exception ex)
+        {
+            return HealthCheckResult.Unhealthy("Redis unavailable", ex);
+        }
     }
 }
 

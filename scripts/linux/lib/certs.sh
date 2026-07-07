@@ -10,11 +10,11 @@ setup_jwt_signing_keys() {
     return
   fi
 
-  log "Gerando par de chaves JWT persistentes (RS256)"
+  log "Gerando par de chaves JWT persistentes (RS256, 3072-bit)"
   local private_tmp; private_tmp="$(mktemp)"
   local public_tmp;  public_tmp="$(mktemp)"
 
-  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$private_tmp"
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$private_tmp"
   openssl rsa -in "$private_tmp" -pubout -out "$public_tmp"
 
   sudo install -m 640 -o root -g discovery-api "$private_tmp" "$private_key_path"
@@ -23,6 +23,21 @@ setup_jwt_signing_keys() {
 }
 
 setup_self_signed_proxy_certificate() {
+  local cert_path="/etc/discovery-api/certs/api-internal.crt"
+  local key_path="/etc/discovery-api/certs/api-internal.key"
+
+  # Verifica se o certificado ja existe e e valido (nao expirado) e cobre os SANs atuais
+  if sudo test -f "$cert_path" && sudo test -f "$key_path"; then
+    if sudo openssl x509 -in "$cert_path" -noout -checkend 0 >/dev/null 2>&1; then
+      log "Certificado self-signed existente ainda valido; mantendo atual."
+      sudo chmod 640 "$key_path"
+      sudo chmod 644 "$cert_path"
+      sudo chown root:discovery-api "$key_path" 2>/dev/null || true
+      return
+    fi
+    log "Certificado self-signed existente expirado; regenerando."
+  fi
+
   log "Gerando certificado self-signed para o proxy web local"
 
   local fido2_server_domain; fido2_server_domain="$(resolve_fido2_server_domain)"
@@ -48,7 +63,7 @@ setup_self_signed_proxy_certificate() {
   local cert_conf; cert_conf="$(mktemp)"
   cat > "$cert_conf" <<EOF
 [req]
-default_bits = 4096
+default_bits = 2048
 prompt = no
 default_md = sha256
 distinguished_name = dn
@@ -64,17 +79,17 @@ extendedKeyUsage = serverAuth
 keyUsage = digitalSignature, keyEncipherment
 EOF
 
-  sudo rm -f /etc/discovery-api/certs/api-internal.key /etc/discovery-api/certs/api-internal.crt
+  sudo rm -f "$key_path" "$cert_path"
   sudo openssl req -x509 -nodes -days 825 \
-    -newkey rsa:4096 \
-    -keyout /etc/discovery-api/certs/api-internal.key \
-    -out /etc/discovery-api/certs/api-internal.crt \
+    -newkey rsa:2048 \
+    -keyout "$key_path" \
+    -out "$cert_path" \
     -config "$cert_conf"
   rm -f "$cert_conf"
 
-  sudo chmod 640 /etc/discovery-api/certs/api-internal.key
-  sudo chmod 644 /etc/discovery-api/certs/api-internal.crt
-  sudo chown root:discovery-api /etc/discovery-api/certs/api-internal.key
+  sudo chmod 640 "$key_path"
+  sudo chmod 644 "$cert_path"
+  sudo chown root:discovery-api "$key_path"
 }
 
 # ── ZeroSSL ACME ───────────────────────────────────────────────────────────
@@ -175,24 +190,40 @@ load_existing_tls_defaults() {
 setup_cloudflare_tunnel() {
   [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]] || return 0
 
+  # Em modo external, falha de tunnel e critico; em modo hybrid, e aviso apenas.
+  local tunnel_critical=0
+  if [[ "$ACCESS_MODE" == "external" ]]; then tunnel_critical=1; fi
+
   log "Instalando e configurando cloudflared"
 
   if ! command -v cloudflared >/dev/null 2>&1; then
     if ! curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-main.gpg; then
+      if [[ "$tunnel_critical" -eq 1 ]]; then
+        fail "Nao foi possivel configurar repositorio do cloudflared (critico em ACCESS_MODE=external)."
+      fi
       warn "Nao foi possivel configurar repositorio do cloudflared; seguindo sem tunnel automatico."; return
     fi
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
     sudo apt-get update -y
     if ! sudo apt-get install -y cloudflared; then
+      if [[ "$tunnel_critical" -eq 1 ]]; then
+        fail "cloudflared indisponivel (critico em ACCESS_MODE=external)."
+      fi
       warn "cloudflared indisponivel para esta arquitetura/distribuicao; seguindo sem tunnel automatico."; return
     fi
   fi
 
   if ! command -v cloudflared >/dev/null 2>&1; then
+    if [[ "$tunnel_critical" -eq 1 ]]; then
+      fail "cloudflared nao encontrado apos tentativa de instalacao (critico em ACCESS_MODE=external)."
+    fi
     warn "cloudflared nao encontrado apos tentativa de instalacao; seguindo sem tunnel automatico."; return
   fi
 
   if ! sudo cloudflared service install "$CLOUDFLARE_TUNNEL_TOKEN"; then
+    if [[ "$tunnel_critical" -eq 1 ]]; then
+      fail "Falha ao configurar cloudflared service install (critico em ACCESS_MODE=external)."
+    fi
     warn "Falha ao configurar cloudflared service install; siga com configuracao manual do tunnel."; return
   fi
 

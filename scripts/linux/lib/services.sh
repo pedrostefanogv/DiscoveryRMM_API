@@ -1,6 +1,14 @@
 # Discovery RMM installer – service provisioning (Postgres, Redis, NATS, JetStream)
 # Requires: common.sh (log, warn, fail, resolve_nats_conf_path)
 
+# ── Helper: extract value from env file ────────────────────────────────────
+
+env_file_get() {
+  local key="$1"
+  local env_file="$2"
+  sudo awk -F= -v k="$key" '$1==k {sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true
+}
+
 setup_redis() {
   log "Configurando Redis"
   sudo systemctl enable redis-server
@@ -71,7 +79,6 @@ install_nk_tool() {
 
   local nk_url="https://github.com/nats-io/nkeys/releases/download/${release_tag}/nkeys-${release_tag}-linux-${nk_arch}.zip"
   log "Baixando ferramenta nk (geracao de chaves NATS)..."
-  sudo apt-get install -y unzip >/dev/null
   curl -fsSL "$nk_url" -o "$nk_zip"
   unzip -q "$nk_zip" -d "$tmp_dir"
 
@@ -107,7 +114,6 @@ install_nats_cli() {
   [[ -n "$asset_url" && "$asset_url" != "null" ]] || fail "Nao foi possivel localizar asset Linux do nats CLI para arquitetura $nats_arch."
 
   log "Baixando nats CLI para bootstrap de streams JetStream..."
-  sudo apt-get install -y unzip >/dev/null
   curl -fsSL "$asset_url" -o "$nats_zip"
   unzip -q "$nats_zip" -d "$tmp_dir"
 
@@ -170,38 +176,38 @@ load_existing_nats_defaults() {
   local nats_conf; nats_conf="$(resolve_nats_conf_path)"
 
   if sudo test -f "$env_file"; then
-    NATS_AUTH_USER="${NATS_AUTH_USER:-$(sudo awk -F= '/^Nats__AuthUser=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$(sudo awk -F= '/^Nats__AuthPassword=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_AUTH_USER="${NATS_AUTH_USER:-$(env_file_get "Nats__AuthUser" "$env_file")}"
+    NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$(env_file_get "Nats__AuthPassword" "$env_file")}"
     local existing_callout_enabled
-    existing_callout_enabled="$(sudo awk -F= '/^Nats__AuthCallout__Enabled=/{print tolower(substr($0, index($0,$2))); exit}' "$env_file" 2>/dev/null || true)"
+    existing_callout_enabled="$(env_file_get "Nats__AuthCallout__Enabled" "$env_file" | tr '[:upper:]' '[:lower:]')"
     if [[ -z "${NATS_AUTH_CALLOUT_ENABLED:-}" && -n "$existing_callout_enabled" ]]; then
       if [[ "$existing_callout_enabled" == "true" ]]; then NATS_AUTH_CALLOUT_ENABLED="1"
       elif [[ "$existing_callout_enabled" == "false" ]]; then NATS_AUTH_CALLOUT_ENABLED="0"; fi
     fi
-    NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$(sudo awk -F= '/^Nats__AuthCallout__Subject=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_SERVER_HOST_EXTERNAL="${NATS_SERVER_HOST_EXTERNAL:-$(sudo awk -F= '/^Nats__ServerHostExternal=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_SERVER_HOST_INTERNAL="${NATS_SERVER_HOST_INTERNAL:-$(sudo awk -F= '/^Nats__ServerHostInternal=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$(env_file_get "Nats__AuthCallout__Subject" "$env_file")}"
+    NATS_SERVER_HOST_EXTERNAL="${NATS_SERVER_HOST_EXTERNAL:-$(env_file_get "Nats__ServerHostExternal" "$env_file")}"
+    NATS_SERVER_HOST_INTERNAL="${NATS_SERVER_HOST_INTERNAL:-$(env_file_get "Nats__ServerHostInternal" "$env_file")}"
     local existing_use_wss_external
-    existing_use_wss_external="$(sudo awk -F= '/^Nats__UseWssExternal=/{print tolower(substr($0, index($0,$2))); exit}' "$env_file" 2>/dev/null || true)"
+    existing_use_wss_external="$(env_file_get "Nats__UseWssExternal" "$env_file" | tr '[:upper:]' '[:lower:]')"
     if [[ -z "${NATS_USE_WSS_EXTERNAL:-}" && -n "$existing_use_wss_external" ]]; then
       if [[ "$existing_use_wss_external" == "true" ]]; then NATS_USE_WSS_EXTERNAL="true"
       elif [[ "$existing_use_wss_external" == "false" ]]; then NATS_USE_WSS_EXTERNAL="false"; fi
     fi
-    NATS_WS_PORT="${NATS_WS_PORT:-$(sudo awk -F= '/^NATS_WS_PORT=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_WS_HOST="${NATS_WS_HOST:-$(sudo awk -F= '/^NATS_WS_HOST=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(sudo awk -F= '/^NATS_WS_TLS_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$(sudo awk -F= '/^Nats__AccountSeed=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_XKEY_SEED="${NATS_XKEY_SEED:-$(sudo awk -F= '/^Nats__XKeySeed=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_ENABLED="${NATS_JS_ENABLED:-$(sudo awk -F= '/^NATS_JS_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_STORE_DIR="${NATS_JS_STORE_DIR:-$(sudo awk -F= '/^NATS_JS_STORE_DIR=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_MAX_MEMORY_STORE="${NATS_JS_MAX_MEMORY_STORE:-$(sudo awk -F= '/^NATS_JS_MAX_MEMORY_STORE=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_MAX_FILE_STORE="${NATS_JS_MAX_FILE_STORE:-$(sudo awk -F= '/^NATS_JS_MAX_FILE_STORE=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_FANOUT_STREAM_ENABLED="${NATS_JS_FANOUT_STREAM_ENABLED:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_FANOUT_STREAM_NAME="${NATS_JS_FANOUT_STREAM_NAME:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_NAME=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_FANOUT_STREAM_SUBJECTS="${NATS_JS_FANOUT_STREAM_SUBJECTS:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_SUBJECTS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_FANOUT_STREAM_MAX_AGE="${NATS_JS_FANOUT_STREAM_MAX_AGE:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_MAX_AGE=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_FANOUT_STREAM_MAX_BYTES="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_MAX_BYTES=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-    NATS_JS_FANOUT_STREAM_DUPE_WINDOW="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-$(sudo awk -F= '/^NATS_JS_FANOUT_STREAM_DUPE_WINDOW=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+    NATS_WS_PORT="${NATS_WS_PORT:-$(env_file_get "NATS_WS_PORT" "$env_file")}"
+    NATS_WS_HOST="${NATS_WS_HOST:-$(env_file_get "NATS_WS_HOST" "$env_file")}"
+    NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(env_file_get "NATS_WS_TLS_ENABLED" "$env_file")}"
+    NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$(env_file_get "Nats__AccountSeed" "$env_file")}"
+    NATS_XKEY_SEED="${NATS_XKEY_SEED:-$(env_file_get "Nats__XKeySeed" "$env_file")}"
+    NATS_JS_ENABLED="${NATS_JS_ENABLED:-$(env_file_get "NATS_JS_ENABLED" "$env_file")}"
+    NATS_JS_STORE_DIR="${NATS_JS_STORE_DIR:-$(env_file_get "NATS_JS_STORE_DIR" "$env_file")}"
+    NATS_JS_MAX_MEMORY_STORE="${NATS_JS_MAX_MEMORY_STORE:-$(env_file_get "NATS_JS_MAX_MEMORY_STORE" "$env_file")}"
+    NATS_JS_MAX_FILE_STORE="${NATS_JS_MAX_FILE_STORE:-$(env_file_get "NATS_JS_MAX_FILE_STORE" "$env_file")}"
+    NATS_JS_FANOUT_STREAM_ENABLED="${NATS_JS_FANOUT_STREAM_ENABLED:-$(env_file_get "NATS_JS_FANOUT_STREAM_ENABLED" "$env_file")}"
+    NATS_JS_FANOUT_STREAM_NAME="${NATS_JS_FANOUT_STREAM_NAME:-$(env_file_get "NATS_JS_FANOUT_STREAM_NAME" "$env_file")}"
+    NATS_JS_FANOUT_STREAM_SUBJECTS="${NATS_JS_FANOUT_STREAM_SUBJECTS:-$(env_file_get "NATS_JS_FANOUT_STREAM_SUBJECTS" "$env_file")}"
+    NATS_JS_FANOUT_STREAM_MAX_AGE="${NATS_JS_FANOUT_STREAM_MAX_AGE:-$(env_file_get "NATS_JS_FANOUT_STREAM_MAX_AGE" "$env_file")}"
+    NATS_JS_FANOUT_STREAM_MAX_BYTES="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-$(env_file_get "NATS_JS_FANOUT_STREAM_MAX_BYTES" "$env_file")}"
+    NATS_JS_FANOUT_STREAM_DUPE_WINDOW="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-$(env_file_get "NATS_JS_FANOUT_STREAM_DUPE_WINDOW" "$env_file")}"
   fi
 
   if sudo test -f "$nats_conf"; then
@@ -281,8 +287,8 @@ ensure_nats_fanout_stream() {
     --password "$NATS_AUTH_PASSWORD"
   )
 
-  local attempt
-  for attempt in {1..10}; do
+  local attempt delay
+  for attempt in $(seq 1 15); do
     if "${nats_cmd[@]}" stream info "$stream_name" >/dev/null 2>&1; then
       if "${nats_cmd[@]}" stream update "$stream_name" \
         --subjects "$stream_subjects" \
@@ -310,7 +316,9 @@ ensure_nats_fanout_stream() {
         return
       fi
     fi
-    sleep 2
+    delay=$(( 2 ** (attempt < 7 ? attempt : 7) ))
+    log "Tentativa ${attempt}/15 de bootstrap JetStream falhou; aguardando ${delay}s..."
+    sleep "$delay"
   done
 
   fail "Nao foi possivel criar/atualizar o stream JetStream de fan-out ('${stream_name}')."
@@ -438,7 +446,8 @@ EOF
 )
   fi
 
-  sudo tee "$nats_conf" >/dev/null <<EOF
+  local new_nats_conf; new_nats_conf="$(mktemp)"
+  cat > "$new_nats_conf" <<EOF
 listen: ${NATS_BIND_HOST}:4222
 http: ${NATS_MONITOR_HOST}:8222
 server_name: discovery-nats
@@ -448,9 +457,25 @@ write_deadline: 5s
 ${jetstream_block}${auth_block}${ws_block}
 EOF
 
-  sudo chmod 640 "$nats_conf"
-  sudo chown root:nats "$nats_conf" || true
+  local needs_restart=0
+  if sudo test -f "$nats_conf"; then
+    if ! sudo diff -q "$new_nats_conf" "$nats_conf" >/dev/null 2>&1; then
+      log "Configuracao do NATS alterada; aplicando."
+      sudo install -m 640 -o root -g nats "$new_nats_conf" "$nats_conf" || sudo install -m 640 -o root -g root "$new_nats_conf" "$nats_conf"
+      needs_restart=1
+    else
+      log "Configuracao do NATS inalterada; mantendo atual."
+    fi
+  else
+    sudo install -m 640 -o root -g nats "$new_nats_conf" "$nats_conf" || sudo install -m 640 -o root -g root "$new_nats_conf" "$nats_conf"
+    needs_restart=1
+  fi
+  rm -f "$new_nats_conf"
 
   sudo systemctl enable nats-server
-  sudo systemctl restart nats-server
+  if [[ "$needs_restart" -eq 1 ]]; then
+    sudo systemctl restart nats-server
+  else
+    log "Servico nats-server sem alteracoes; pulando restart."
+  fi
 }

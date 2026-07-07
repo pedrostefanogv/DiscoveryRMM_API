@@ -33,6 +33,24 @@ public class SiteRepository : ISiteRepository
             .ToListAsync();
     }
 
+    public async Task<IEnumerable<Site>> GetByClientIdsAsync(IEnumerable<Guid> clientIds, bool includeInactive = false)
+    {
+        var ids = clientIds as ICollection<Guid> ?? clientIds.ToList();
+        if (ids.Count == 0)
+            return Enumerable.Empty<Site>();
+
+        IQueryable<Site> query = _db.Sites
+            .AsNoTracking()
+            .Where(site => ids.Contains(site.ClientId));
+
+        if (!includeInactive)
+            query = query.Where(site => site.IsActive);
+
+        return await query
+            .OrderBy(site => site.Name)
+            .ToListAsync();
+    }
+
     public async Task<Site> CreateAsync(Site site)
     {
         site.Id = IdGenerator.NewId();

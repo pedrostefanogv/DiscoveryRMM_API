@@ -35,7 +35,7 @@ public sealed class AlertSchedulerJob : IJob
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var alertRepo = scope.ServiceProvider.GetRequiredService<IAgentAlertRepository>();
-        var dispatchService = scope.ServiceProvider.GetRequiredService<AlertDispatchService>();
+        var dispatchService = scope.ServiceProvider.GetRequiredService<IAlertDispatchService>();
 
         var pending = await alertRepo.GetPendingScheduledAsync(DateTime.UtcNow);
         if (pending.Count > 0)

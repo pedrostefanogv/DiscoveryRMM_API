@@ -11,11 +11,13 @@ public class TicketRepository : ITicketRepository
 {
     private readonly DiscoveryDbContext _db;
     private readonly IAgentMessaging _messaging;
+    private readonly ITicketKpiCacheService? _kpiCache;
 
-    public TicketRepository(DiscoveryDbContext db, IAgentMessaging messaging)
+    public TicketRepository(DiscoveryDbContext db, IAgentMessaging messaging, ITicketKpiCacheService? kpiCache = null)
     {
         _db = db;
         _messaging = messaging;
+        _kpiCache = kpiCache;
     }
 
     public async Task<Ticket?> GetByIdAsync(Guid id)
@@ -226,10 +228,37 @@ public class TicketRepository : ITicketRepository
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<TicketComment>> GetCommentsPageAsync(Guid ticketId, string? cursor, int limit)
+    {
+        var query = _db.TicketComments
+            .AsNoTracking()
+            .Where(comment => comment.TicketId == ticketId);
+
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorCreatedAtUtc, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyCreatedAtCursor(
+                query,
+                cursorCreatedAtUtc,
+                cursorId,
+                comment => comment.CreatedAt,
+                comment => comment.Id);
+        }
+
+        var safeLimit = Math.Clamp(limit, 1, 200);
+
+        return await query
+            .OrderBy(comment => comment.CreatedAt)
+            .ThenBy(comment => comment.Id)
+            .Take(safeLimit + 1)
+            .ToListAsync();
+    }
+
     public async Task<TicketComment> AddCommentAsync(TicketComment comment)
     {
         comment.Id = IdGenerator.NewId();
         comment.CreatedAt = DateTime.UtcNow;
+
+        await using var tx = await _db.Database.BeginTransactionAsync();
 
         _db.TicketComments.Add(comment);
 
@@ -240,6 +269,8 @@ public class TicketRepository : ITicketRepository
                 .SetProperty(ticket => ticket.UpdatedAt, _ => now));
 
         await _db.SaveChangesAsync();
+
+        await tx.CommitAsync();
 
         var ticket = await _db.Tickets
             .AsNoTracking()
@@ -293,50 +324,75 @@ public class TicketRepository : ITicketRepository
 
         var now = DateTime.UtcNow;
 
-        var allTickets = await baseQuery.ToListAsync();
+        // ---- Agregações SQL (evita carregar todos os tickets em memória) ----
+        var openQuery = baseQuery.Where(t => !t.ClosedAt.HasValue);
+        var closedQuery = baseQuery.Where(t => t.ClosedAt.HasValue);
 
-        var open = allTickets.Where(t => !t.ClosedAt.HasValue).ToList();
-        var closed = allTickets.Where(t => t.ClosedAt.HasValue).ToList();
+        // Executar contagens e agregações em paralelo
+        var totalOpenTask = openQuery.CountAsync();
+        var totalClosedTask = closedQuery.CountAsync();
+        var slaBreachedTask = openQuery.CountAsync(t => t.SlaBreached);
+        var onHoldTask = openQuery.CountAsync(t => t.SlaHoldStartedAt.HasValue);
 
-        var totalOpen = open.Count;
-        var totalClosed = closed.Count;
-        var slaBreached = open.Count(t => t.SlaBreached);
-        var slaWarning = open.Count(t =>
-            !t.SlaBreached && t.SlaExpiresAt.HasValue &&
-            (t.SlaExpiresAt.Value - now).TotalHours <= 2);
-        var onHold = open.Count(t => t.SlaHoldStartedAt.HasValue);
+        // SLA warning: open, não breached, expires dentro de 2h
+        var slaWarningThreshold = now.AddHours(2);
+        var slaWarningTask = openQuery.CountAsync(t =>
+            !t.SlaBreached && t.SlaExpiresAt.HasValue && t.SlaExpiresAt.Value <= slaWarningThreshold);
 
-        // FRT achievement rate: tickets com FirstRespondedAt <= SlaFirstResponseExpiresAt
-        var withFrt = allTickets.Where(t => t.FirstRespondedAt.HasValue && t.SlaFirstResponseExpiresAt.HasValue).ToList();
-        var frtAchievedCount = withFrt.Count(t => t.FirstRespondedAt!.Value <= t.SlaFirstResponseExpiresAt!.Value);
-        var frtAchievementRate = withFrt.Count > 0 ? (frtAchievedCount / (double)withFrt.Count) * 100.0 : 0.0;
+        // FRT achievements
+        var frtQuery = baseQuery.Where(t => t.FirstRespondedAt.HasValue && t.SlaFirstResponseExpiresAt.HasValue);
+        var frtAchievedCountTask = frtQuery.CountAsync(t => t.FirstRespondedAt!.Value <= t.SlaFirstResponseExpiresAt!.Value);
+        var frtTotalCountTask = frtQuery.CountAsync();
 
-        // Avg resolution hours (closed only)
-        var avgResolution = closed.Count > 0
-            ? closed.Average(t => (t.ClosedAt!.Value - t.CreatedAt).TotalHours)
+        // Avg resolution (closed only) - projeto para DB e agrega em C# após materialização limitada
+        var closedDurations = await closedQuery
+            .Select(t => new { t.CreatedAt, t.ClosedAt })
+            .ToListAsync();
+        var avgResolution = closedDurations.Count > 0
+            ? closedDurations.Average(t => (t.ClosedAt!.Value - t.CreatedAt).TotalHours)
             : 0.0;
 
-        // Avg age of open tickets
-        var avgAgeOpen = open.Count > 0
-            ? open.Average(t => (now - t.CreatedAt).TotalHours)
+        // Avg age open
+        var openDurations = await openQuery
+            .Select(t => t.CreatedAt)
+            .ToListAsync();
+        var avgAgeOpen = openDurations.Count > 0
+            ? openDurations.Average(t => (now - t).TotalHours)
             : 0.0;
 
-        // By assignee
-        var byAssignee = open
+        // By assignee (open tickets, agrupado no banco)
+        var byAssigneeTask = openQuery
             .GroupBy(t => t.AssignedToUserId)
-            .Select(g => new TicketKpiByAssignee(
-                g.Key,
-                g.Count(),
-                g.Count(t => t.SlaBreached)))
+            .Select(g => new { AssignedToUserId = g.Key, Open = g.Count(), Breached = g.Count(t => t.SlaBreached) })
+            .ToListAsync();
+
+        // By department (open tickets, agrupado no banco)
+        var byDepartmentTask = openQuery
+            .GroupBy(t => t.DepartmentId)
+            .Select(g => new { DepartmentId = g.Key, Open = g.Count(), Breached = g.Count(t => t.SlaBreached) })
+            .ToListAsync();
+
+        await Task.WhenAll(
+            totalOpenTask, totalClosedTask, slaBreachedTask, slaWarningTask, onHoldTask,
+            frtAchievedCountTask, frtTotalCountTask,
+            byAssigneeTask, byDepartmentTask);
+
+        var totalOpen = totalOpenTask.Result;
+        var totalClosed = totalClosedTask.Result;
+        var slaBreached = slaBreachedTask.Result;
+        var slaWarning = slaWarningTask.Result;
+        var onHold = onHoldTask.Result;
+
+        var frtAchievedCount = frtAchievedCountTask.Result;
+        var frtTotalCount = frtTotalCountTask.Result;
+        var frtAchievementRate = frtTotalCount > 0 ? (frtAchievedCount / (double)frtTotalCount) * 100.0 : 0.0;
+
+        var byAssignee = byAssigneeTask.Result
+            .Select(g => new TicketKpiByAssignee(g.AssignedToUserId, g.Open, g.Breached))
             .ToList();
 
-        // By department
-        var byDepartment = open
-            .GroupBy(t => t.DepartmentId)
-            .Select(g => new TicketKpiByDepartment(
-                g.Key,
-                g.Count(),
-                g.Count(t => t.SlaBreached)))
+        var byDepartment = byDepartmentTask.Result
+            .Select(g => new TicketKpiByDepartment(g.DepartmentId, g.Open, g.Breached))
             .ToList();
 
         return new TicketKpiResult(
@@ -353,9 +409,9 @@ public class TicketRepository : ITicketRepository
         );
     }
 
-    private Task PublishDashboardEventAsync(string eventType, Ticket ticket)
+    private async Task PublishDashboardEventAsync(string eventType, Ticket ticket)
     {
-        return _messaging.PublishDashboardEventAsync(
+        var publishTask = _messaging.PublishDashboardEventAsync(
             DashboardEventMessage.Create(
                 eventType,
                 new
@@ -369,5 +425,10 @@ public class TicketRepository : ITicketRepository
                 },
                 ticket.ClientId,
                 ticket.SiteId));
+
+        // Invalidar cache KPI on-write
+        var invalidateTask = _kpiCache?.InvalidateAsync(ticket.ClientId, CancellationToken.None) ?? Task.CompletedTask;
+
+        await Task.WhenAll(publishTask, invalidateTask);
     }
 }

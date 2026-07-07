@@ -193,4 +193,30 @@ public class PermissionService : IPermissionService
 
         return false;
     }
+
+    public async Task InvalidateUserCacheAsync(Guid userId)
+    {
+        _userRoleCache.Remove(userId);
+        try
+        {
+            await _redis.DeleteAsync($"{CachePrefix}{userId:N}");
+        }
+        catch
+        {
+            // Redis unavailable — local cache already cleared
+        }
+    }
+
+    public async Task InvalidateAllCacheAsync()
+    {
+        _userRoleCache.Clear();
+        try
+        {
+            await _redis.DeleteByPrefixAsync(CachePrefix);
+        }
+        catch
+        {
+            // Redis unavailable — local cache already cleared
+        }
+    }
 }

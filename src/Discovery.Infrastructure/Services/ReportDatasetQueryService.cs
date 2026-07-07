@@ -50,6 +50,20 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             ReportDatasetType.AgentLabels => await QueryAgentLabelsAsync(clientId, filters, cancellationToken),
             ReportDatasetType.AutomaticLabelRules => await QueryAutomaticLabelRulesAsync(clientId, filters, cancellationToken),
             ReportDatasetType.AutomationExecutions => await QueryAutomationExecutionsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.AgentMonitoringEvents => await QueryAgentMonitoringEventsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.AgentAlerts => await QueryAgentAlertsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.P2pTelemetry => await QueryP2pTelemetryAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.AgentDisks => await QueryAgentDisksAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.NetworkAdapters => await QueryNetworkAdaptersAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.ListeningPorts => await QueryListeningPortsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.Printers => await QueryPrintersAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.SoftwareCatalog => await QuerySoftwareCatalogAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.AutomationScripts => await QueryAutomationScriptsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.AppPackages => await QueryAppPackagesAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.TicketActivity => await QueryTicketActivityAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.TicketEscalations => await QueryTicketEscalationsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.CustomFields => await QueryCustomFieldsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.KnowledgeBase => await QueryKnowledgeBaseAsync(clientId, filters, cancellationToken),
             _ => new ReportQueryResult { Columns = ["message"], Rows = [new Dictionary<string, object?> { ["message"] = "Dataset not supported." }] }
         };
     }
@@ -1016,6 +1030,516 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         return new ReportQueryResult
         {
             Columns = ["executionId", "commandId", "agentId", "agentHostname", "siteId", "siteName", "taskId", "scriptId", "sourceType", "status", "exitCode", "errorMessage", "createdAt", "completedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryAgentMonitoringEventsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
+        var agentId = GetGuid(filters, "agentId");
+        var severity = GetString(filters, "severity");
+        var from = GetDateTime(filters, "from");
+        var to = GetDateTime(filters, "to");
+        var descending = GetSortDescending(filters, defaultValue: true);
+
+        var query = _db.AgentMonitoringEvents.AsNoTracking().AsQueryable();
+        if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
+        if (siteId.HasValue) query = query.Where(x => x.SiteId == siteId.Value);
+        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
+        if (!string.IsNullOrWhiteSpace(severity)) query = query.Where(x => x.Severity.ToString() == severity);
+        if (from.HasValue) query = query.Where(x => x.OccurredAt >= from.Value);
+        if (to.HasValue) query = query.Where(x => x.OccurredAt <= to.Value);
+
+        query = descending
+            ? query.OrderByDescending(x => x.OccurredAt)
+            : query.OrderBy(x => x.OccurredAt);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["clientId"] = x.ClientId, ["siteId"] = x.SiteId, ["agentId"] = x.AgentId,
+            ["alertCode"] = x.AlertCode, ["severity"] = x.Severity.ToString(), ["title"] = x.Title,
+            ["message"] = x.Message, ["metricKey"] = x.MetricKey, ["metricValue"] = x.MetricValue,
+            ["source"] = x.Source.ToString(), ["correlationId"] = x.CorrelationId,
+            ["occurredAt"] = x.OccurredAt, ["createdAt"] = x.CreatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "clientId", "siteId", "agentId", "alertCode", "severity", "title", "message", "metricKey", "metricValue", "source", "correlationId", "occurredAt", "createdAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryAgentAlertsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.AgentAlertDefinitions.AsNoTracking().AsQueryable();
+        if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
+
+        query = descending
+            ? query.OrderByDescending(x => x.Name)
+            : query.OrderBy(x => x.Name);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["clientId"] = x.ClientId, ["name"] = x.Name,
+            ["severity"] = x.Severity.ToString(), ["enabled"] = x.IsEnabled,
+            ["metricKey"] = x.MetricKey, ["threshold"] = x.Threshold,
+            ["scopeType"] = x.ScopeType.ToString(), ["createdAt"] = x.CreatedAt, ["updatedAt"] = x.UpdatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "clientId", "name", "severity", "enabled", "metricKey", "threshold", "scopeType", "createdAt", "updatedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryP2pTelemetryAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
+        var agentId = GetGuid(filters, "agentId");
+        var descending = GetSortDescending(filters, defaultValue: true);
+
+        var query = _db.P2pAgentTelemetries.AsNoTracking().AsQueryable();
+        if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
+        if (siteId.HasValue) query = query.Where(x => x.SiteId == siteId.Value);
+        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
+
+        query = descending
+            ? query.OrderByDescending(x => x.CollectedAt)
+            : query.OrderBy(x => x.CollectedAt);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["agentId"] = x.AgentId, ["siteId"] = x.SiteId, ["clientId"] = x.ClientId,
+            ["collectedAt"] = x.CollectedAt, ["receivedAt"] = x.ReceivedAt,
+            ["publishedArtifacts"] = x.PublishedArtifacts, ["replicationsSucceeded"] = x.ReplicationsSucceeded,
+            ["replicationsFailed"] = x.ReplicationsFailed, ["bytesServed"] = x.BytesServed,
+            ["bytesDownloaded"] = x.BytesDownloaded, ["activeReplications"] = x.ActiveReplications,
+            ["hostCpuPercent"] = x.HostCpuPercent, ["hostMemoryPercent"] = x.HostMemoryPercent,
+            ["hostDiskBusyPercent"] = x.HostDiskBusyPercent, ["hostCpuCores"] = x.HostCpuCores,
+            ["hostRamGB"] = x.HostRamGB, ["knownPeers"] = x.KnownPeers, ["connectedPeers"] = x.ConnectedPeers,
+            ["planTotalAgents"] = x.PlanTotalAgents, ["planSelectedSeeds"] = x.PlanSelectedSeeds
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "agentId", "siteId", "clientId", "collectedAt", "receivedAt", "publishedArtifacts", "replicationsSucceeded", "replicationsFailed", "bytesServed", "bytesDownloaded", "activeReplications", "hostCpuPercent", "hostMemoryPercent", "hostDiskBusyPercent", "hostCpuCores", "hostRamGB", "knownPeers", "connectedPeers", "planTotalAgents", "planSelectedSeeds"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryAgentDisksAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
+        var agentId = GetGuid(filters, "agentId");
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.DiskInfos.AsNoTracking().AsQueryable();
+        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
+        if (siteId.HasValue || clientId.HasValue)
+        {
+            query = from d in query
+                join ag in _db.Agents.AsNoTracking() on d.AgentId equals ag.Id
+                join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
+                where (!clientId.HasValue || st.ClientId == clientId.Value)
+                   && (!siteId.HasValue || st.Id == siteId.Value)
+                select d;
+        }
+
+        query = descending
+            ? query.OrderByDescending(x => x.SizeBytes)
+            : query.OrderBy(x => x.Interface).ThenBy(x => x.Name);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var agentIds = rowsRaw.Select(x => x.AgentId).Distinct().ToList();
+        var agents = await _db.Agents.AsNoTracking().Where(a => agentIds.Contains(a.Id))
+            .Join(_db.Sites.AsNoTracking(), a => a.SiteId, s => s.Id, (a, s) => new { a, s })
+            .Join(_db.Clients.AsNoTracking(), x => x.s.ClientId, c => c.Id, (x, c) => new { x.a.Id, x.a.Hostname, x.s.Name, ClientName = c.Name })
+            .ToDictionaryAsync(x => x.Id, x => (x.Hostname, SiteName: x.Name, x.ClientName), cancellationToken);
+
+        var rows = rowsRaw.Select(x =>
+        {
+            agents.TryGetValue(x.AgentId, out var agent);
+            return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+            {
+                ["agentId"] = x.AgentId, ["agentHostname"] = agent.Hostname,
+                ["siteName"] = agent.SiteName, ["clientName"] = agent.ClientName,
+                ["diskName"] = x.Name, ["sizeBytes"] = x.SizeBytes,
+                ["freeBytes"] = x.FreeBytes, ["fileSystem"] = x.FileSystem,
+                ["interface"] = x.Interface, ["type"] = x.Type,
+                ["serialNumber"] = x.SerialNumber, ["healthStatus"] = x.HealthStatus,
+                ["collectedAt"] = x.CollectedAt
+            };
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["agentId", "agentHostname", "siteName", "clientName", "diskName", "sizeBytes", "freeBytes", "fileSystem", "interface", "type", "serialNumber", "healthStatus", "collectedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryNetworkAdaptersAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var agentId = GetGuid(filters, "agentId");
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.NetworkAdapterInfos.AsNoTracking().AsQueryable();
+        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
+
+        query = descending
+            ? query.OrderByDescending(x => x.Name)
+            : query.OrderBy(x => x.Name);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+        var agentIds = rowsRaw.Select(x => x.AgentId).Distinct().ToList();
+        var agents = await _db.Agents.AsNoTracking().Where(a => agentIds.Contains(a.Id))
+            .Join(_db.Sites.AsNoTracking(), a => a.SiteId, s => s.Id, (a, s) => new { a, s })
+            .Join(_db.Clients.AsNoTracking(), x => x.s.ClientId, c => c.Id, (x, c) => new { x.a.Id, x.a.Hostname, x.s.Name, ClientName = c.Name })
+            .ToDictionaryAsync(x => x.Id, x => (x.Hostname, SiteName: x.Name, x.ClientName), cancellationToken);
+
+        var rows = rowsRaw.Select(x =>
+        {
+            agents.TryGetValue(x.AgentId, out var agent);
+            return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+            {
+                ["agentId"] = x.AgentId, ["agentHostname"] = agent.Hostname,
+                ["siteName"] = agent.SiteName, ["clientName"] = agent.ClientName,
+                ["adapterName"] = x.Name, ["macAddress"] = x.MacAddress,
+                ["ipAddresses"] = string.Join(", ", x.IpAddresses ?? []),
+                ["speedMbps"] = x.SpeedMbps, ["isDefault"] = x.IsDefault,
+                ["collectedAt"] = x.CollectedAt
+            };
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["agentId", "agentHostname", "siteName", "clientName", "adapterName", "macAddress", "ipAddresses", "speedMbps", "isDefault", "collectedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryListeningPortsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var agentId = GetGuid(filters, "agentId");
+        var port = GetInt(filters, "port");
+        var processName = GetString(filters, "processName");
+        var state = GetString(filters, "state");
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.ListeningPortInfos.AsNoTracking().AsQueryable();
+        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
+        if (port.HasValue) query = query.Where(x => x.Port == port.Value);
+        if (!string.IsNullOrWhiteSpace(processName)) query = query.Where(x => x.ProcessName != null && x.ProcessName.Contains(processName));
+        if (!string.IsNullOrWhiteSpace(state)) query = query.Where(x => x.State != null && x.State.Contains(state));
+
+        query = descending
+            ? query.OrderByDescending(x => x.Port)
+            : query.OrderBy(x => x.Port);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+        var agentIds = rowsRaw.Select(x => x.AgentId).Distinct().ToList();
+        var agents = await _db.Agents.AsNoTracking().Where(a => agentIds.Contains(a.Id))
+            .Join(_db.Sites.AsNoTracking(), a => a.SiteId, s => s.Id, (a, s) => new { a, s })
+            .Join(_db.Clients.AsNoTracking(), x => x.s.ClientId, c => c.Id, (x, c) => new { x.a.Id, x.a.Hostname, x.s.Name, ClientName = c.Name })
+            .ToDictionaryAsync(x => x.Id, x => (x.Hostname, SiteName: x.Name, x.ClientName), cancellationToken);
+
+        var rows = rowsRaw.Select(x =>
+        {
+            agents.TryGetValue(x.AgentId, out var agent);
+            return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+            {
+                ["agentId"] = x.AgentId, ["agentHostname"] = agent.Hostname,
+                ["siteName"] = agent.SiteName, ["clientName"] = agent.ClientName,
+                ["port"] = x.Port, ["protocol"] = x.Protocol,
+                ["processName"] = x.ProcessName, ["state"] = x.State,
+                ["collectedAt"] = x.CollectedAt
+            };
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["agentId", "agentHostname", "siteName", "clientName", "port", "protocol", "processName", "state", "collectedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryPrintersAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var agentId = GetGuid(filters, "agentId");
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.PrinterInfos.AsNoTracking().AsQueryable();
+        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
+
+        query = descending
+            ? query.OrderByDescending(x => x.Name)
+            : query.OrderBy(x => x.Name);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+        var agentIds = rowsRaw.Select(x => x.AgentId).Distinct().ToList();
+        var agents = await _db.Agents.AsNoTracking().Where(a => agentIds.Contains(a.Id))
+            .Join(_db.Sites.AsNoTracking(), a => a.SiteId, s => s.Id, (a, s) => new { a, s })
+            .Join(_db.Clients.AsNoTracking(), x => x.s.ClientId, c => c.Id, (x, c) => new { x.a.Id, x.a.Hostname, x.s.Name, ClientName = c.Name })
+            .ToDictionaryAsync(x => x.Id, x => (x.Hostname, SiteName: x.Name, x.ClientName), cancellationToken);
+
+        var rows = rowsRaw.Select(x =>
+        {
+            agents.TryGetValue(x.AgentId, out var agent);
+            return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+            {
+                ["agentId"] = x.AgentId, ["agentHostname"] = agent.Hostname,
+                ["siteName"] = agent.SiteName, ["clientName"] = agent.ClientName,
+                ["printerName"] = x.Name, ["driverName"] = x.DriverName,
+                ["portName"] = x.PortName, ["isDefault"] = x.IsDefault,
+                ["isShared"] = x.IsShared, ["collectedAt"] = x.CollectedAt
+            };
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["agentId", "agentHostname", "siteName", "clientName", "printerName", "driverName", "portName", "isDefault", "isShared", "collectedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QuerySoftwareCatalogAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var category = GetString(filters, "category");
+        var publisher = GetString(filters, "publisher");
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.SoftwareCatalogs.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(category)) query = query.Where(x => x.Category == category);
+        if (!string.IsNullOrWhiteSpace(publisher)) query = query.Where(x => x.Publisher == publisher);
+
+        query = descending
+            ? query.OrderByDescending(x => x.Name)
+            : query.OrderBy(x => x.Name);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["name"] = x.Name, ["publisher"] = x.Publisher,
+            ["category"] = x.Category, ["latestVersion"] = x.LatestVersion,
+            ["eolDate"] = x.EolDate, ["isEol"] = x.IsEol,
+            ["licenseType"] = x.LicenseType, ["updatedAt"] = x.UpdatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "name", "publisher", "category", "latestVersion", "eolDate", "isEol", "licenseType", "updatedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryAutomationScriptsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var language = GetString(filters, "language");
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.AutomationScriptDefinitions.AsNoTracking().AsQueryable();
+        if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
+        if (!string.IsNullOrWhiteSpace(language)) query = query.Where(x => x.Language == language);
+
+        query = descending
+            ? query.OrderByDescending(x => x.UpdatedAt)
+            : query.OrderBy(x => x.Name);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["clientId"] = x.ClientId, ["name"] = x.Name,
+            ["language"] = x.Language, ["isActive"] = x.IsActive,
+            ["createdAt"] = x.CreatedAt, ["updatedAt"] = x.UpdatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "clientId", "name", "language", "isActive", "createdAt", "updatedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryAppPackagesAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var source = GetString(filters, "source");
+        var category = GetString(filters, "category");
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.AppPackages.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(source)) query = query.Where(x => x.Source.ToLowerInvariant() == source.ToLowerInvariant());
+        if (!string.IsNullOrWhiteSpace(category)) query = query.Where(x => x.Category == category);
+
+        query = descending
+            ? query.OrderByDescending(x => x.UpdatedAt)
+            : query.OrderBy(x => x.Name);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["name"] = x.Name, ["publisher"] = x.Publisher,
+            ["version"] = x.Version, ["source"] = x.Source,
+            ["category"] = x.Category, ["isActive"] = x.IsActive,
+            ["description"] = x.Description, ["updatedAt"] = x.UpdatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "name", "publisher", "version", "source", "category", "isActive", "description", "updatedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryTicketActivityAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var ticketId = GetGuid(filters, "ticketId");
+        var action = GetString(filters, "action");
+        var from = GetDateTime(filters, "from");
+        var to = GetDateTime(filters, "to");
+        var descending = GetSortDescending(filters, defaultValue: true);
+
+        var query = _db.TicketActivityLogs.AsNoTracking().AsQueryable();
+        if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
+        if (ticketId.HasValue) query = query.Where(x => x.TicketId == ticketId.Value);
+        if (!string.IsNullOrWhiteSpace(action)) query = query.Where(x => x.Action == action);
+        if (from.HasValue) query = query.Where(x => x.CreatedAt >= from.Value);
+        if (to.HasValue) query = query.Where(x => x.CreatedAt <= to.Value);
+
+        query = descending
+            ? query.OrderByDescending(x => x.CreatedAt)
+            : query.OrderBy(x => x.CreatedAt);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["ticketId"] = x.TicketId, ["clientId"] = x.ClientId,
+            ["action"] = x.Action, ["changedBy"] = x.ChangedBy,
+            ["oldValue"] = x.OldValue, ["newValue"] = x.NewValue,
+            ["createdAt"] = x.CreatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "ticketId", "clientId", "action", "changedBy", "oldValue", "newValue", "createdAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryTicketEscalationsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.TicketEscalationRules.AsNoTracking().AsQueryable();
+        if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
+
+        query = descending
+            ? query.OrderByDescending(x => x.Name)
+            : query.OrderBy(x => x.Name);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["clientId"] = x.ClientId, ["name"] = x.Name,
+            ["escalationLevel"] = x.EscalationLevel, ["isActive"] = x.IsActive,
+            ["createdAt"] = x.CreatedAt, ["updatedAt"] = x.UpdatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "clientId", "name", "escalationLevel", "isActive", "createdAt", "updatedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryCustomFieldsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var entityName = GetString(filters, "entityName");
+        var descending = GetSortDescending(filters, defaultValue: false);
+
+        var query = _db.CustomFieldDefinitions.AsNoTracking().AsQueryable();
+        if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
+        if (!string.IsNullOrWhiteSpace(entityName)) query = query.Where(x => x.EntityName == entityName);
+
+        query = descending
+            ? query.OrderByDescending(x => x.Name)
+            : query.OrderBy(x => x.EntityName).ThenBy(x => x.Name);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["clientId"] = x.ClientId, ["entityName"] = x.EntityName,
+            ["fieldName"] = x.Name, ["valueType"] = x.ValueType.ToString(),
+            ["isRequired"] = x.IsRequired, ["isActive"] = x.IsActive,
+            ["createdAt"] = x.CreatedAt, ["updatedAt"] = x.UpdatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "clientId", "entityName", "fieldName", "valueType", "isRequired", "isActive", "createdAt", "updatedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryKnowledgeBaseAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var status = GetString(filters, "status");
+        var category = GetString(filters, "category");
+        var descending = GetSortDescending(filters, defaultValue: true);
+
+        var query = _db.KnowledgeArticles.AsNoTracking().AsQueryable();
+        if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
+        if (!string.IsNullOrWhiteSpace(status)) query = query.Where(x => x.Status.ToString() == status);
+        if (!string.IsNullOrWhiteSpace(category)) query = query.Where(x => x.Category == category);
+
+        query = descending
+            ? query.OrderByDescending(x => x.UpdatedAt)
+            : query.OrderBy(x => x.Title);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["id"] = x.Id, ["clientId"] = x.ClientId, ["title"] = x.Title,
+            ["category"] = x.Category, ["status"] = x.Status.ToString(),
+            ["author"] = x.Author, ["updatedAt"] = x.UpdatedAt,
+            ["createdAt"] = x.CreatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["id", "clientId", "title", "category", "status", "author", "updatedAt", "createdAt"],
             Rows = rows
         };
     }

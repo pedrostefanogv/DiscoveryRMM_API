@@ -130,7 +130,9 @@ Controllers/
  TicketAuditController.cs
  TicketAutomationLinksController.cs
  TicketCustomFieldsController.cs
+ TicketKnowledgeLinksController.cs
  TicketKpiController.cs
+ TicketMergeRelationsController.cs
  TicketRemoteSessionsController.cs
  TicketSavedViewsController.cs
  TicketsController.cs
@@ -234,7 +236,7 @@ Validators/
  Discovery.Core/obj/Debug/net10.0/ref/Discovery.Core.dll
  Discovery.Infrastructure/obj/Debug/net10.0/ref/Discovery.Infrastructure.dll
  Discovery.Migrations/obj/Debug/net10.0/ref/Discovery.Migrations.dll
-<DOTNET>/packs/Microsoft.AspNetCore.App.Ref/10.0.8/ref/net10.0/
+<DOTNET>/packs/Microsoft.AspNetCore.App.Ref/10.0.9/ref/net10.0/
  Microsoft.AspNetCore.Antiforgery.dll
  Microsoft.AspNetCore.Authentication.Abstractions.dll
  Microsoft.AspNetCore.Authentication.BearerToken.dll
@@ -375,7 +377,7 @@ Validators/
  System.Formats.Cbor.dll
  System.Security.Cryptography.Xml.dll
  System.Threading.RateLimiting.dll
-<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.8/ref/net10.0/
+<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.9/ref/net10.0/
  Microsoft.CSharp.dll
  Microsoft.VisualBasic.Core.dll
  Microsoft.VisualBasic.dll
@@ -592,6 +594,7 @@ Validators/
  microsoft.entityframeworkcore.abstractions/10.0.5/lib/net10.0/Microsoft.EntityFrameworkCore.Abstractions.dll
  microsoft.entityframeworkcore.relational/10.0.4/lib/net10.0/Microsoft.EntityFrameworkCore.Relational.dll
  microsoft.entityframeworkcore/10.0.5/lib/net10.0/Microsoft.EntityFrameworkCore.dll
+ microsoft.extensions.http.polly/10.0.5/lib/netstandard2.0/Microsoft.Extensions.Http.Polly.dll
  microsoft.identity.client.extensions.msal/4.61.3/lib/net6.0/Microsoft.Identity.Client.Extensions.Msal.dll
  microsoft.identity.client/4.61.3/lib/net6.0/Microsoft.Identity.Client.dll
  microsoft.identitymodel.abstractions/8.16.0/lib/net10.0/Microsoft.IdentityModel.Abstractions.dll
@@ -633,6 +636,8 @@ Validators/
  pgvector.entityframeworkcore/0.3.0/lib/net8.0/Pgvector.EntityFrameworkCore.dll
  pgvector/0.3.2/lib/net6.0/Pgvector.dll
  pipelines.sockets.unofficial/2.2.8/lib/net5.0/Pipelines.Sockets.Unofficial.dll
+ polly.extensions.http/3.0.0/lib/netstandard2.0/Polly.Extensions.Http.dll
+ polly/7.2.4/lib/netstandard2.0/Polly.dll
  quartz.extensions.dependencyinjection/3.14.0/lib/net9.0/Quartz.Extensions.DependencyInjection.dll
  quartz.extensions.hosting/3.14.0/lib/net9.0/Quartz.Extensions.Hosting.dll
  quartz.serialization.json/3.14.0/lib/netstandard2.0/Quartz.Serialization.Json.dll
@@ -651,7 +656,7 @@ Validators/
  system.security.cryptography.protecteddata/9.0.0/lib/net9.0/System.Security.Cryptography.ProtectedData.dll
 
 [analyzerReferences]
-<DOTNET>/packs/Microsoft.AspNetCore.App.Ref/10.0.8/analyzers/dotnet/cs/
+<DOTNET>/packs/Microsoft.AspNetCore.App.Ref/10.0.9/analyzers/dotnet/cs/
  Microsoft.AspNetCore.App.Analyzers.dll
  Microsoft.AspNetCore.App.CodeFixes.dll
  Microsoft.AspNetCore.App.SourceGenerators.dll
@@ -659,21 +664,21 @@ Validators/
  Microsoft.Extensions.Logging.Generators.dll
  Microsoft.Extensions.Options.SourceGeneration.dll
  Microsoft.Extensions.Validation.ValidationsGenerator.dll
-<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.8/analyzers/dotnet/cs/
+<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.9/analyzers/dotnet/cs/
  Microsoft.Interop.ComInterfaceGenerator.dll
  Microsoft.Interop.JavaScript.JSImportGenerator.dll
  Microsoft.Interop.LibraryImportGenerator.dll
  Microsoft.Interop.SourceGeneration.dll
  System.Text.Json.SourceGeneration.dll
  System.Text.RegularExpressions.Generator.dll
-<DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk.Razor/source-generators/
+<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk.Razor/source-generators/
  Microsoft.AspNetCore.Razor.Utilities.Shared.dll
  Microsoft.CodeAnalysis.Razor.Compiler.dll
  Microsoft.Extensions.ObjectPool.dll
-<DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk.Web/analyzers/cs/
+<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk.Web/analyzers/cs/
  Microsoft.AspNetCore.Analyzers.dll
  Microsoft.AspNetCore.Mvc.Analyzers.dll
-<DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk/analyzers/
+<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/
  Microsoft.CodeAnalysis.CSharp.NetAnalyzers.dll
  Microsoft.CodeAnalysis.NetAnalyzers.dll
 <NUGET>/
@@ -681,5 +686,5 @@ Validators/
  microsoft.entityframeworkcore.analyzers/10.0.5/analyzers/dotnet/cs/Microsoft.EntityFrameworkCore.Analyzers.dll
 
 [analyzerConfigFiles]
-<DOTNET>/sdk/10.0.300/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
+<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
 obj/Debug/net10.0/Discovery.Api.GeneratedMSBuildEditorConfig.editorconfig

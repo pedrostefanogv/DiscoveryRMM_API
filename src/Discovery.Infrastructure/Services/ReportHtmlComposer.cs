@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 
@@ -21,9 +22,14 @@ public class ReportHtmlComposer : IReportHtmlComposer
         var logoUrl = layout.LogoUrl ?? layout.Style?.LogoUrl;
         var style = layout.Style ?? new ReportLayoutStyleDefinition();
         var alternateRowBackground = ResolveAlternateRowBackground(style);
+
+        // Computed fields — apply before anything else that reads data
+        var enrichedRows = BuildComputedRows(layout, data.Rows);
+        var enrichedData = new ReportQueryResult { Columns = data.Columns, Rows = enrichedRows };
+
         var content = string.IsNullOrWhiteSpace(layout.GroupBy)
-            ? BuildUngroupedContent(layout, columns, data.Rows, rowsPerPage, generatedFooterHtml)
-            : BuildGroupedSections(layout, columns, data.Rows, rowsPerPage, generatedFooterHtml);
+            ? BuildUngroupedContent(layout, columns, enrichedRows, rowsPerPage, generatedFooterHtml)
+            : BuildGroupedSections(layout, columns, enrichedRows, rowsPerPage, generatedFooterHtml);
 
         var subtitleHtml = string.IsNullOrWhiteSpace(context.Subtitle)
             ? string.Empty
@@ -34,13 +40,13 @@ public class ReportHtmlComposer : IReportHtmlComposer
             : $"<img class=\"report-logo\" src=\"{HtmlAttributeEscape(logoUrl)}\" alt=\"logo\" />";
 
         // Cover page (before the shell)
-        var coverPageHtml = BuildCoverPage(layout, context, data.Rows.Count, logoUrl, style);
+        var coverPageHtml = BuildCoverPage(layout, context, enrichedRows.Count, logoUrl, style);
 
         // Table of Contents
         var tocHtml = BuildTableOfContents(layout);
 
         // Charts
-        var chartsHtml = BuildChartsSection(layout);
+        var chartsHtml = BuildChartsSection(layout, enrichedData);
 
         // Page header/footer
         var pageHeaderCssContent = BuildPageHeaderCssContent(layout);
@@ -153,6 +159,9 @@ public class ReportHtmlComposer : IReportHtmlComposer
 
     private static string BuildGroupedSections(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage, string generatedFooterHtml)
     {
+        if (layout.GroupLevels is { Count: > 0 })
+            return BuildNestedGroupedSections(layout, columns, rows, rowsPerPage, generatedFooterHtml, layout.GroupLevels, 0);
+
         var grouped = rows.GroupBy(row => GetGroupValue(row, layout.GroupBy!)).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
         var builder = new StringBuilder();
         foreach (var group in grouped)
@@ -166,6 +175,57 @@ public class ReportHtmlComposer : IReportHtmlComposer
             if (layout.GroupSummaries is { Count: > 0 })
                 builder.Append(BuildSummaryCards(layout.GroupSummaries, groupRows));
             AppendMainAndSectionTables(builder, layout, FilterColumnsForGrouping(columns, layout), groupRows, deduplicateMainRows: true, rowsPerPage, generatedFooterHtml);
+            builder.Append("</section>");
+        }
+
+        return builder.ToString();
+    }
+
+    private static string BuildNestedGroupedSections(ReportLayoutDefinition layout, IReadOnlyList<ReportLayoutColumn> columns, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, int rowsPerPage, string generatedFooterHtml, IReadOnlyList<ReportLayoutGroupLevelDefinition> levels, int levelIndex)
+    {
+        if (levelIndex >= levels.Count)
+        {
+            return BuildUngroupedContent(layout, columns, rows, rowsPerPage, generatedFooterHtml);
+        }
+
+        var level = levels[levelIndex];
+        var field = level.Field;
+        if (string.IsNullOrWhiteSpace(field))
+            return BuildUngroupedContent(layout, columns, rows, rowsPerPage, generatedFooterHtml);
+
+        var grouped = rows.GroupBy(row => GetGroupValue(row, field))
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
+
+        var builder = new StringBuilder();
+        foreach (var group in grouped)
+        {
+            var groupRows = group.ToList();
+            var titleTemplate = level.TitleTemplate ?? "{{value}} ({{count}})";
+            var title = titleTemplate
+                .Replace("{{value}}", group.Key ?? "Nao informado", StringComparison.OrdinalIgnoreCase)
+                .Replace("{{count}}", groupRows.Count.ToString(), StringComparison.OrdinalIgnoreCase);
+
+            builder.Append("<section class=\"report-group\">");
+            builder.Append($"<h2 class=\"report-group-title\">{HtmlEscape(title)}</h2>");
+            builder.Append($"<p class=\"report-group-meta\">{groupRows.Count} registro(s)</p>");
+
+            // Show group details for the first level only (leaf levels use standard columns)
+            if (levelIndex == 0 && layout.GroupDetails is { Count: > 0 })
+                builder.Append(BuildDetailsGrid(layout.GroupDetails, groupRows.FirstOrDefault()));
+
+            if (layout.GroupSummaries is { Count: > 0 })
+                builder.Append(BuildSummaryCards(layout.GroupSummaries, groupRows));
+
+            // Recurse or render leaf
+            if (levelIndex + 1 < levels.Count)
+            {
+                builder.Append(BuildNestedGroupedSections(layout, columns, groupRows, rowsPerPage, generatedFooterHtml, levels, levelIndex + 1));
+            }
+            else
+            {
+                AppendMainAndSectionTables(builder, layout, FilterColumnsForGrouping(columns, layout), groupRows, deduplicateMainRows: true, rowsPerPage, generatedFooterHtml);
+            }
+
             builder.Append("</section>");
         }
 
@@ -332,7 +392,12 @@ public class ReportHtmlComposer : IReportHtmlComposer
             var cells = columns.Select(column =>
             {
                 row.TryGetValue(column.Field, out var value);
-                return $"<td>{HtmlEscape(FormatValue(value, column.Format))}</td>";
+                var formattedValue = FormatValue(value, column.Format);
+                var style = ResolveConditionalCellStyle(column.ConditionalFormat, value);
+                var icon = ResolveConditionalIcon(column.ConditionalFormat, value);
+                var displayValue = string.IsNullOrWhiteSpace(icon) ? formattedValue : $"{icon} {formattedValue}";
+                var styleAttr = string.IsNullOrWhiteSpace(style) ? "" : $" style=\"{style}\"";
+                return $"<td{styleAttr}>{HtmlEscape(displayValue)}</td>";
             });
             return $"<tr>{string.Join(string.Empty, cells)}</tr>";
         }));
@@ -462,7 +527,67 @@ public class ReportHtmlComposer : IReportHtmlComposer
             return max;
         }
 
+        if (string.Equals(summary.Aggregate, "countIf", StringComparison.OrdinalIgnoreCase))
+        {
+            if (summary.Condition is null)
+                return rows.Count(r => r.TryGetValue(summary.Field, out var v) && v is bool b && b);
+            return rows.Count(row => EvaluateConditionAgainstSummary(row, summary.Field!, summary.Condition.Value));
+        }
+
+        if (string.Equals(summary.Aggregate, "sumIf", StringComparison.OrdinalIgnoreCase))
+        {
+            decimal sumIf = 0;
+            foreach (var row in rows)
+            {
+                if (EvaluateConditionAgainstSummary(row, summary.Field!, summary.Condition))
+                {
+                    if (row.TryGetValue(summary.Field, out var v) && v is not null && TryConvertToDecimal(v, out var dv))
+                        sumIf += dv;
+                }
+            }
+            return sumIf;
+        }
+
+        if (string.Equals(summary.Aggregate, "compliancePercent", StringComparison.OrdinalIgnoreCase))
+        {
+            var total = rows.Count;
+            if (total == 0) return 0m;
+            var compliant = rows.Count(r =>
+            {
+                if (!r.TryGetValue(summary.Field, out var v)) return true;
+                return v is not bool b || !b;
+            });
+            return Math.Round((decimal)compliant / total * 100, 1);
+        }
+
         return null;
+    }
+
+    private static bool EvaluateConditionAgainstSummary(IReadOnlyDictionary<string, object?> row, string field, JsonElement condition)
+    {
+        if (condition.ValueKind != JsonValueKind.Object)
+            return false;
+
+        // Try "eq" condition
+        if (condition.TryGetProperty("eq", out var eqValue))
+        {
+            row.TryGetValue(field, out var rowValue);
+            var expected = eqValue.ValueKind switch
+            {
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                JsonValueKind.String => eqValue.GetString() ?? "",
+                _ => eqValue.ToString()
+            };
+            var actual = rowValue switch
+            {
+                bool b => b.ToString().ToLowerInvariant(),
+                _ => rowValue?.ToString() ?? ""
+            };
+            return string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     private static string? ResolveConditionalCellStyle(ReportLayoutConditionalFormat? conditionalFormat, object? value)
@@ -730,9 +855,121 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
+    // Computed Fields
+
+    private static IReadOnlyList<IReadOnlyDictionary<string, object?>> BuildComputedRows(ReportLayoutDefinition layout, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    {
+        if (layout.ComputedFields is not { Count: > 0 })
+            return rows;
+
+        var result = new List<IReadOnlyDictionary<string, object?>>(rows.Count);
+        foreach (var row in rows)
+        {
+            var enriched = new Dictionary<string, object?>(row, StringComparer.OrdinalIgnoreCase);
+            foreach (var computed in layout.ComputedFields)
+            {
+                if (string.IsNullOrWhiteSpace(computed.Name) || string.IsNullOrWhiteSpace(computed.Expression))
+                    continue;
+                enriched[computed.Name] = EvaluateComputedExpression(computed.Expression, row);
+            }
+            result.Add(enriched);
+        }
+        return result;
+    }
+
+    private static object? EvaluateComputedExpression(string expression, IReadOnlyDictionary<string, object?> row)
+    {
+        try
+        {
+            var resolved = new StringBuilder(expression);
+            foreach (var key in row.Keys.OrderByDescending(k => k.Length))
+            {
+                if (!row.TryGetValue(key, out var val) || val is null)
+                    continue;
+                resolved.Replace(key, FormatNumericLiteral(val));
+            }
+
+            var resolvedExpr = resolved.ToString();
+
+            var divMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^\s*([0-9.]+)\s*/\s*([0-9.]+)\s*$");
+            if (divMatch.Success && decimal.TryParse(divMatch.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var d1)
+                && decimal.TryParse(divMatch.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var d2) && d2 != 0)
+                return Math.Round(d1 / d2, 2);
+
+            var subMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^\s*([0-9.]+)\s*-\s*([0-9.]+)\s*$");
+            if (subMatch.Success && decimal.TryParse(subMatch.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var s1)
+                && decimal.TryParse(subMatch.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var s2))
+                return s1 - s2;
+
+            var mulMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^\s*([0-9.]+)\s*\*\s*([0-9.]+)\s*$");
+            if (mulMatch.Success && decimal.TryParse(mulMatch.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var m1)
+                && decimal.TryParse(mulMatch.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var m2))
+                return Math.Round(m1 * m2, 2);
+
+            var addMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^\s*([0-9.]+)\s*\+\s*([0-9.]+)\s*$");
+            if (addMatch.Success && decimal.TryParse(addMatch.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var a1)
+                && decimal.TryParse(addMatch.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var a2))
+                return a1 + a2;
+
+            var ternaryMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^(.+?)\s*\?\s*(.+?)\s*:\s*(.+)$");
+            if (ternaryMatch.Success)
+            {
+                var cond = ternaryMatch.Groups[1].Value.Trim();
+                var trueVal = ternaryMatch.Groups[2].Value.Trim();
+                var falseVal = ternaryMatch.Groups[3].Value.Trim();
+                return EvaluateTernaryCondition(cond, row) ? trueVal.Trim('\'', '"') : falseVal.Trim('\'', '"');
+            }
+
+            return resolvedExpr;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool EvaluateTernaryCondition(string condition, IReadOnlyDictionary<string, object?> row)
+    {
+        var neMatch = System.Text.RegularExpressions.Regex.Match(condition, @"(\w+)\s*!=\s*null", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (neMatch.Success)
+        {
+            var fieldName = neMatch.Groups[1].Value;
+            return row.TryGetValue(fieldName, out var val) && val is not null;
+        }
+
+        var eqMatch = System.Text.RegularExpressions.Regex.Match(condition, @"(\w+)\s*==\s*(.+)");
+        if (eqMatch.Success)
+        {
+            var fieldName = eqMatch.Groups[1].Value;
+            var expected = eqMatch.Groups[2].Value.Trim().Trim('\'', '"');
+            row.TryGetValue(fieldName, out var val);
+            var strVal = val switch
+            {
+                bool b => b.ToString().ToLowerInvariant(),
+                _ => val?.ToString() ?? ""
+            };
+            return string.Equals(strVal, expected, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
+
+    private static string FormatNumericLiteral(object value)
+    {
+        return value switch
+        {
+            decimal d => d.ToString(CultureInfo.InvariantCulture),
+            double d => d.ToString(CultureInfo.InvariantCulture),
+            float f => f.ToString(CultureInfo.InvariantCulture),
+            int i => i.ToString(CultureInfo.InvariantCulture),
+            long l => l.ToString(CultureInfo.InvariantCulture),
+            _ => value.ToString() ?? "0"
+        };
+    }
+
     // Charts (QuickChart.io integration)
 
-    private static string BuildChartsSection(ReportLayoutDefinition layout)
+    private static string BuildChartsSection(ReportLayoutDefinition layout, ReportQueryResult data)
     {
         if (layout.Charts is not { Count: > 0 })
             return string.Empty;
@@ -741,7 +978,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         foreach (var chart in layout.Charts)
         {
             var chartTitle = string.IsNullOrWhiteSpace(chart.Title) ? (chart.Type ?? "Chart") : chart.Title;
-            var chartUrl = BuildQuickChartUrl(chart);
+            var chartUrl = BuildQuickChartUrl(chart, data.Rows);
             if (string.IsNullOrWhiteSpace(chartUrl))
                 continue;
 
@@ -761,7 +998,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
-    private static string? BuildQuickChartUrl(ReportLayoutChartDefinition chart)
+    private static string? BuildQuickChartUrl(ReportLayoutChartDefinition chart, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
     {
         if (string.IsNullOrWhiteSpace(chart.Type))
             return null;
@@ -769,11 +1006,10 @@ public class ReportHtmlComposer : IReportHtmlComposer
         var w = Math.Clamp(chart.Width, 200, 1200);
         var h = Math.Clamp(chart.Height, 150, 800);
 
-        // Base config for specific chart types
         var chartConfig = chart.Type.ToLowerInvariant() switch
         {
-            "gauge" => BuildGaugeConfig(chart),
-            _ => BuildStandardChartConfig(chart)
+            "gauge" => BuildGaugeConfig(chart, rows),
+            _ => BuildStandardChartConfig(chart, rows)
         };
 
         if (chartConfig is null)
@@ -783,7 +1019,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
         return $"https://quickchart.io/chart?c={encoded}&w={w}&h={h}";
     }
 
-    private static string BuildStandardChartConfig(ReportLayoutChartDefinition chart)
+    private static string? BuildStandardChartConfig(ReportLayoutChartDefinition chart, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
     {
         var chartType = chart.Type?.ToLowerInvariant() switch
         {
@@ -791,50 +1027,61 @@ public class ReportHtmlComposer : IReportHtmlComposer
             "pie" => "pie",
             "doughnut" => "doughnut",
             "line" => "line",
+            "stackedbar" => "bar",
             _ => "bar"
         };
 
-        // Placeholder - data will be injected dynamically in future iterations
-        // For now, we generate a chart with labels only as placeholder
-        var labels = "[\"A\", \"B\", \"C\"]";
-        var data = "[10, 25, 15]";
+        var aggregate = string.IsNullOrWhiteSpace(chart.Aggregate) ? "count" : chart.Aggregate.ToLowerInvariant();
+        var limit = chart.Limit > 0 ? chart.Limit : 15;
+
+        var series = BuildChartDataSeries(rows, chart.GroupField, chart.ValueField, aggregate, limit, chart.BucketBy);
+        if (series.Labels.Count == 0)
+            return null;
+
+        var labelsJson = System.Text.Json.JsonSerializer.Serialize(series.Labels);
+        var dataJson = System.Text.Json.JsonSerializer.Serialize(series.Values);
+        var title = chart.Title ?? "Dados";
+
+        var stackedOption = chartType == "bar" && string.Equals(chart.Type, "stackedbar", StringComparison.OrdinalIgnoreCase)
+            ? ", \"stacked\": true"
+            : "";
 
         return $$"""
             {
                 "type": "{{chartType}}",
                 "data": {
-                    "labels": {{labels}},
+                    "labels": {{labelsJson}},
                     "datasets": [{
-                        "label": "{{chart.Title ?? "Dados"}}",
-                        "data": {{data}}
+                        "label": "{{title}}",
+                        "data": {{dataJson}}{{stackedOption}}
                     }]
                 },
                 "options": {
                     "plugins": {
-                        "title": { "display": true, "text": "{{chart.Title ?? ""}}" }
+                        "title": { "display": true, "text": "{{title}}" },
+                        "legend": { "display": false }
                     }
                 }
             }
             """;
     }
 
-    private static string? BuildGaugeConfig(ReportLayoutChartDefinition chart)
+    private static string? BuildGaugeConfig(ReportLayoutChartDefinition chart, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
     {
-        if (string.IsNullOrWhiteSpace(chart.ValueExpr) && chart.Thresholds is null)
+        var rawValue = ComputeGaugeValue(chart, rows);
+        if (rawValue is null && chart.Thresholds is null)
             return null;
 
-        var value = chart.ValueExpr ?? "0";
-        var thresholds = chart.Thresholds is { Count: > 0 }
-            ? string.Join(",", chart.Thresholds.Select(t => $"{{ \"value\": {t.Value}, \"color\": \"{t.Color ?? "#888"}\" }}"))
-            : "";
+        var gaugeValue = rawValue ?? 0;
+        var needleColor = GetGaugeNeedleColor(chart.Thresholds, Convert.ToDouble(gaugeValue));
 
         return $$"""
             {
                 "type": "radialGauge",
                 "data": {
                     "datasets": [{
-                        "data": [{{value}}],
-                        "backgroundColor": ["{{chart.Thresholds?.LastOrDefault()?.Color ?? "#22c55e"}}"]
+                        "data": [{{gaugeValue}}],
+                        "backgroundColor": ["{{needleColor}}"]
                     }]
                 },
                 "options": {
@@ -844,6 +1091,171 @@ public class ReportHtmlComposer : IReportHtmlComposer
                 }
             }
             """;
+    }
+
+    private static object? ComputeGaugeValue(ReportLayoutChartDefinition chart, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    {
+        if (string.IsNullOrWhiteSpace(chart.GroupField) && string.IsNullOrWhiteSpace(chart.Aggregate))
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(chart.GroupField) && !string.IsNullOrWhiteSpace(chart.Aggregate))
+        {
+            var aggregate = chart.Aggregate.ToLowerInvariant();
+            var valueField = chart.ValueField;
+
+            if (aggregate == "count" && !string.IsNullOrWhiteSpace(valueField))
+            {
+                var total = rows.Count;
+                if (total == 0) return 0;
+                var matching = rows.Count(r => r.TryGetValue(valueField, out var v) && v is bool b && b);
+                return Math.Round((decimal)matching / total * 100, 1);
+            }
+
+            if (aggregate == "compliancePercent")
+            {
+                var total = rows.Count;
+                if (total == 0) return 0;
+                var compliant = rows.Count(r =>
+                {
+                    if (!r.TryGetValue(chart.GroupField, out var v)) return true;
+                    return v is not bool b || !b;
+                });
+                return Math.Round((decimal)compliant / total * 100, 1);
+            }
+
+            if (aggregate is "avg" or "sum" && !string.IsNullOrWhiteSpace(valueField))
+            {
+                decimal sum = 0;
+                int count = 0;
+                foreach (var row in rows)
+                {
+                    if (row.TryGetValue(valueField, out var v) && TryConvertToDecimal(v, out var dv))
+                    {
+                        sum += dv;
+                        count++;
+                    }
+                }
+                return count > 0 ? Math.Round(aggregate == "avg" ? sum / count : sum, 1) : null;
+            }
+        }
+
+        return null;
+    }
+
+    private static string GetGaugeNeedleColor(IReadOnlyList<ReportLayoutChartThreshold>? thresholds, double value)
+    {
+        if (thresholds is not { Count: > 0 })
+            return "#22c55e";
+
+        string? color = null;
+        foreach (var t in thresholds.OrderBy(t => t.Value))
+        {
+            if (value <= t.Value)
+            {
+                color = t.Color;
+                break;
+            }
+        }
+        return string.IsNullOrWhiteSpace(color) ? thresholds.Last().Color ?? "#22c55e" : color!;
+    }
+
+    private sealed record ChartDataSeries(List<string> Labels, List<double> Values);
+
+    private static ChartDataSeries BuildChartDataSeries(IReadOnlyList<IReadOnlyDictionary<string, object?>> rows, string? groupField, string? valueField, string aggregate, int limit, string? bucketBy)
+    {
+        if (string.IsNullOrWhiteSpace(groupField))
+            return new ChartDataSeries([], []);
+
+        var grouped = rows
+            .Where(r => r.TryGetValue(groupField, out var v) && v is not null)
+            .GroupBy(r =>
+            {
+                r.TryGetValue(groupField, out var v);
+                var raw = v?.ToString() ?? "N/A";
+
+                if (!string.IsNullOrWhiteSpace(bucketBy) && v is DateTime dt)
+                {
+                    return bucketBy.ToLowerInvariant() switch
+                    {
+                        "hour" => dt.ToString("yyyy-MM-dd HH:00"),
+                        "day" => dt.ToString("yyyy-MM-dd"),
+                        "week" => $"Week {System.Globalization.ISOWeek.GetWeekOfYear(dt)}",
+                        "month" => dt.ToString("yyyy-MM"),
+                        _ => raw
+                    };
+                }
+                return raw;
+            })
+            .Select(group => (
+                Label: group.Key,
+                Value: ComputeGroupAggregate(group.ToList(), valueField, aggregate)
+            ))
+            .Where(item => item.Value.HasValue)
+            .OrderByDescending(item => item.Value!.Value)
+            .Take(limit)
+            .ToList();
+
+        if (!string.IsNullOrWhiteSpace(bucketBy))
+            grouped = grouped.OrderBy(item => item.Label, StringComparer.Ordinal).ToList();
+
+        return new ChartDataSeries(
+            grouped.Select(item => item.Label).ToList(),
+            grouped.Select(item => (double)item.Value!.Value).ToList()
+        );
+    }
+
+    private static double? ComputeGroupAggregate(IReadOnlyList<IReadOnlyDictionary<string, object?>> groupRows, string? valueField, string aggregate)
+    {
+        switch (aggregate.ToLowerInvariant())
+        {
+            case "count":
+                return groupRows.Count;
+            case "countdistinct":
+                if (string.IsNullOrWhiteSpace(valueField))
+                    return groupRows.Count;
+                return groupRows
+                    .Where(r => r.TryGetValue(valueField, out var v) && v is not null)
+                    .Select(r => r[valueField]?.ToString())
+                    .Where(v => !string.IsNullOrWhiteSpace(v))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count();
+            case "sum":
+            case "avg":
+                if (string.IsNullOrWhiteSpace(valueField))
+                    return null;
+                decimal total = 0;
+                int count = 0;
+                foreach (var row in groupRows)
+                {
+                    if (row.TryGetValue(valueField, out var v) && TryConvertToDecimal(v, out var dv))
+                    {
+                        total += dv;
+                        count++;
+                    }
+                }
+                if (count == 0) return null;
+                return aggregate == "avg" ? (double)(total / count) : (double)total;
+            case "min":
+                if (string.IsNullOrWhiteSpace(valueField)) return null;
+                decimal? min = null;
+                foreach (var row in groupRows)
+                {
+                    if (row.TryGetValue(valueField, out var v) && TryConvertToDecimal(v, out var dv))
+                        min = min is null ? dv : dv < min ? dv : min;
+                }
+                return min.HasValue ? (double)min.Value : null;
+            case "max":
+                if (string.IsNullOrWhiteSpace(valueField)) return null;
+                decimal? max = null;
+                foreach (var row in groupRows)
+                {
+                    if (row.TryGetValue(valueField, out var v) && TryConvertToDecimal(v, out var dv))
+                        max = max is null ? dv : dv > max ? dv : max;
+                }
+                return max.HasValue ? (double)max.Value : null;
+            default:
+                return groupRows.Count;
+        }
     }
 
     // Page Header / Footer

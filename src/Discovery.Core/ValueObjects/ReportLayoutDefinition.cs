@@ -28,6 +28,7 @@ public class ReportLayoutDefinition
     public ReportLayoutWatermarkDefinition? Watermark { get; init; }
     public List<ReportLayoutChartDefinition>? Charts { get; init; }
     public List<ReportLayoutComputedFieldDefinition>? ComputedFields { get; init; }
+    public List<ReportLayoutGroupLevelDefinition>? GroupLevels { get; init; }
 
     public static ReportLayoutDefinition Empty { get; } = new();
 }
@@ -57,6 +58,7 @@ public class ReportLayoutSummaryDefinition
     public string? Field { get; init; }
     public string? Aggregate { get; init; }
     public string? Format { get; init; }
+    public JsonElement? Condition { get; init; }
 }
 
 public class ReportLayoutStyleDefinition
@@ -181,6 +183,13 @@ public class ReportLayoutComputedFieldDefinition
     public string? Name { get; init; }
     public string? Expression { get; init; }
     public string? Format { get; init; }
+}
+
+public class ReportLayoutGroupLevelDefinition
+{
+    public string? Field { get; init; }
+    public string? TitleTemplate { get; init; }
+    public bool PageBreak { get; init; }
 }
 
 public class ReportLayoutConditionalFormatRule

@@ -3,14 +3,20 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Repositories;
 
 public class AiChatJobRepository : IAiChatJobRepository
 {
     private readonly DiscoveryDbContext _db;
+    private readonly ILogger<AiChatJobRepository> _logger;
 
-    public AiChatJobRepository(DiscoveryDbContext db) => _db = db;
+    public AiChatJobRepository(DiscoveryDbContext db, ILogger<AiChatJobRepository> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
 
     public async Task<AiChatJob> CreateAsync(AiChatJob job, CancellationToken ct = default)
     {
@@ -44,17 +50,23 @@ public class AiChatJobRepository : IAiChatJobRepository
 
     public async Task UpdateAsync(AiChatJob job, CancellationToken ct = default)
     {
-        var existingJob = await _db.AiChatJobs.SingleOrDefaultAsync(j => j.Id == job.Id, ct);
-        if (existingJob is null)
-            return;
+        // Usa ExecuteUpdateAsync para evitar race condition (busca-then-update sem lock)
+        // Só atualiza se o status atual permitir (ex: não sobrescrever Completed com Processing)
+        var rows = await _db.AiChatJobs
+            .Where(j => j.Id == job.Id && (j.Status == "Pending" || j.Status == "Processing"))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(j => j.Status, job.Status)
+                .SetProperty(j => j.AssistantMessage, job.AssistantMessage)
+                .SetProperty(j => j.TokensUsed, job.TokensUsed)
+                .SetProperty(j => j.ErrorMessage, job.ErrorMessage)
+                .SetProperty(j => j.StartedAt, job.StartedAt)
+                .SetProperty(j => j.CompletedAt, job.CompletedAt),
+            ct);
 
-        existingJob.Status = job.Status;
-        existingJob.AssistantMessage = job.AssistantMessage;
-        existingJob.TokensUsed = job.TokensUsed;
-        existingJob.ErrorMessage = job.ErrorMessage;
-        existingJob.StartedAt = job.StartedAt;
-        existingJob.CompletedAt = job.CompletedAt;
-
-        await _db.SaveChangesAsync(ct);
+        if (rows == 0)
+        {
+            // Pode já ter sido processado por outra instância
+            _logger.LogWarning("AiChatJob {JobId} não atualizado: não encontrado ou já finalizado", job.Id);
+        }
     }
 }

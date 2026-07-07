@@ -1,9 +1,10 @@
 using Discovery.Core.Entities;
+using Discovery.Core.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Data;
 
-// ── AI Chat & MCP: AiChatSession, AiChatMessage, AiChatJob ──
+// ── AI Chat & MCP: AiChatSession, AiChatMessage, AiChatJob, McpToolPolicy ──
 
 public partial class DiscoveryDbContext
 {
@@ -63,6 +64,24 @@ public partial class DiscoveryDbContext
             entity.Property(j => j.StartedAt).HasColumnName("started_at").HasColumnType("timestamptz");
             entity.Property(j => j.CompletedAt).HasColumnName("completed_at").HasColumnType("timestamptz");
             entity.Property(j => j.TraceId).HasColumnName("trace_id").HasMaxLength(100);
+        });
+
+        // ── MCP Tool Policies (Migration M045) ──
+        modelBuilder.Entity<McpToolPolicy>(entity =>
+        {
+            entity.ToTable("mcp_tool_policies");
+            entity.HasKey(p => p.Id);
+            entity.Property(p => p.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(p => p.ClientId).HasColumnName("client_id");
+            entity.Property(p => p.SiteId).HasColumnName("site_id");
+            entity.Property(p => p.AgentId).HasColumnName("agent_id");
+            entity.Property(p => p.ToolName).HasColumnName("tool_name").HasMaxLength(200).IsRequired();
+            entity.Property(p => p.IsEnabled).HasColumnName("is_enabled");
+            entity.Property(p => p.ArgumentSchemaJson).HasColumnName("argument_schema_json");
+            entity.Property(p => p.MaxCallsPerMinute).HasColumnName("max_calls_per_minute");
+            entity.Property(p => p.TimeoutSeconds).HasColumnName("timeout_seconds");
+            entity.Property(p => p.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(p => p.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });
     }
 }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Quartz;
 
@@ -28,6 +29,7 @@ public sealed class ReportScheduleDispatchJob : IJob
         var scheduleRepo = scope.ServiceProvider.GetRequiredService<IReportScheduleRepository>();
         var templateRepo = scope.ServiceProvider.GetRequiredService<IReportTemplateRepository>();
         var executionRepo = scope.ServiceProvider.GetRequiredService<IReportExecutionRepository>();
+        var notificationService = scope.ServiceProvider.GetRequiredService<INotificationService>();
 
         try
         {
@@ -43,13 +45,16 @@ public sealed class ReportScheduleDispatchJob : IJob
             {
                 ct.ThrowIfCancellationRequested();
 
+                // Resolve dynamic filters (e.g. <now-24h>)
+                var resolvedFilters = ReportParameterResolver.ResolveFiltersJson(schedule.FiltersJson, utcNow);
+
                 // Create execution
                 var execution = new ReportExecution
                 {
                     TemplateId = schedule.TemplateId,
                     ClientId = schedule.ClientId,
                     Format = schedule.Format,
-                    FiltersJson = schedule.FiltersJson,
+                    FiltersJson = resolvedFilters,
                     Status = ReportExecutionStatus.Pending,
                     CreatedBy = schedule.CreatedBy ?? "ReportSchedule",
                     ScheduleId = schedule.Id
@@ -64,8 +69,25 @@ public sealed class ReportScheduleDispatchJob : IJob
                 await scheduleRepo.UpdateAsync(schedule);
 
                 logger.LogInformation(
-                    "Schedule {ScheduleId} ({Label}) triggered execution {ExecutionId} (next: {NextTrigger:O})",
-                    schedule.Id, schedule.ScheduleLabel, execution.Id, nextTrigger);
+                    "Schedule {ScheduleId} ({Label}) triggered execution {ExecutionId} (next: {NextTrigger:O}, delivery: {DeliveryMode})",
+                    schedule.Id, schedule.ScheduleLabel, execution.Id, nextTrigger, schedule.DeliveryMode);
+
+                // Fire-and-forget delivery notification (will be handled after execution completes)
+                if (!string.IsNullOrWhiteSpace(schedule.DeliveryMode) &&
+                    !string.Equals(schedule.DeliveryMode, "storage", StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = notificationService.PublishAsync(new NotificationPublishRequest(
+                        EventType: "report.schedule.triggered",
+                        Topic: "report-delivery",
+                        Title: $"Relatorio agendado: {schedule.ScheduleLabel ?? "Scheduled Report"}",
+                        Message: $"Execucao #{execution.Id} iniciada. Delivery: {schedule.DeliveryMode}. Download disponivel quando concluida.",
+                        Payload: new
+                        {
+                            executionId = execution.Id,
+                            scheduleId = schedule.Id,
+                            deliveryMode = schedule.DeliveryMode
+                        }));
+                }
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

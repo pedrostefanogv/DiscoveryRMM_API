@@ -2,14 +2,28 @@
 # Requires: common.sh (log, warn, fail)
 
 install_apt_dependencies() {
-  local -a packages=(
+  local -a all_packages=(
     apt-transport-https ca-certificates curl git gnupg jq lsb-release
     dnsutils nginx openssl postgresql postgresql-contrib redis-server nats-server
-    golang-go gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 nsis
+    golang-go gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 nsis unzip
   )
-  log "Instalando dependencias de sistema via apt: ${packages[*]}"
+
+  local -a missing_packages=()
+  local pkg
+  for pkg in "${all_packages[@]}"; do
+    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+      missing_packages+=("$pkg")
+    fi
+  done
+
+  if (( ${#missing_packages[@]} == 0 )); then
+    log "Todas as dependencias de sistema ja instaladas."
+    return
+  fi
+
+  log "Instalando dependencias de sistema via apt: ${missing_packages[*]}"
   sudo apt-get update -y
-  sudo apt-get install -y "${packages[@]}"
+  sudo apt-get install -y "${missing_packages[@]}"
 }
 
 # Instala o plugin nsJSON no NSIS para merge de configuracao JSON sem PowerShell.
@@ -83,7 +97,7 @@ ensure_dotnet_sdk() {
 }
 
 ensure_nodejs() {
-  local required_major="20"
+  local required_major="22"
   local current_major=""
 
   if command -v node >/dev/null 2>&1; then
@@ -110,7 +124,7 @@ ensure_service_user() {
     log "Usuario de servico discovery-api ja existe"; return
   fi
   log "Criando usuario de servico discovery-api"
-  sudo useradd --system --create-home --home-dir /opt/discovery-api --shell /usr/sbin/nologin discovery-api
+  sudo useradd --system --no-create-home --home-dir /opt/discovery-api --shell /usr/sbin/nologin discovery-api
 }
 
 create_directories() {
@@ -210,6 +224,22 @@ clone_or_update_repo() {
     sudo -u discovery-api "${git_env[@]}" git clone --branch "$DISCOVERY_GIT_BRANCH" "$repo_url" "$repo_dir"
   else
     ensure_repo_git_ownership "$repo_dir"
+    # Verifica se ha mudancas locais antes do reset destrutivo (apenas em modo interativo)
+    if [[ "${NON_INTERACTIVE:-0}" -eq 0 ]]; then
+      local dirty_files
+      dirty_files="$(sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" status --porcelain 2>/dev/null || true)"
+      if [[ -n "$dirty_files" ]]; then
+        warn "Repositorio $repo_dir possui mudancas locais que serao descartadas:"
+        printf '%s\n' "$dirty_files" | while IFS= read -r line; do warn "  $line"; done
+        local confirm
+        read -r -p "Confirmar reset --hard + git clean? Mudancas locais serao PERDIDAS. (s/N): " confirm
+        confirm="$(printf '%s' "${confirm:-n}" | tr '[:upper:]' '[:lower:]')"
+        case "$confirm" in
+          s|sim|y|yes) ;;
+          *) fail "Atualizacao cancelada pelo usuario devido a mudancas locais em $repo_dir." ;;
+        esac
+      fi
+    fi
     log "Atualizando repositorio existente: $repo_dir"
     sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" fetch origin "$DISCOVERY_GIT_BRANCH"
     sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" checkout "$DISCOVERY_GIT_BRANCH"

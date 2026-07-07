@@ -326,7 +326,7 @@ prepare_bootstrap_admin_login() {
   DISCOVERY_BOOTSTRAP_ADMIN_LOGIN_AUTO=0
 
   if [[ -z "$existing_login" ]] && sudo test -f /etc/discovery-api/discovery.env; then
-    existing_login="$(sudo awk -F= '/^DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=/{sub("^[^=]*=","""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+    existing_login="$(sudo awk -F= '/^DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 0 && -z "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then

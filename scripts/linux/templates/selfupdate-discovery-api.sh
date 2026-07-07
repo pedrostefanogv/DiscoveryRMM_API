@@ -2,11 +2,15 @@
 set -euo pipefail
 
 log() {
-  printf '[selfupdate] %s\n' "$*"
+  printf '[selfupdate] %s %s\n' "$(date +%H:%M:%S)" "$*"
+}
+
+warn() {
+  printf '[selfupdate][aviso] %s %s\n' "$(date +%H:%M:%S)" "$*" >&2
 }
 
 fail() {
-  printf '[selfupdate][erro] %s\n' "$*" >&2
+  printf '[selfupdate][erro] %s %s\n' "$(date +%H:%M:%S)" "$*" >&2
   exit 1
 }
 
@@ -145,7 +149,9 @@ cleanup_old_releases() {
   mapfile -t RELEASE_DIRS < <(ls -1dt "$releases_dir"/* 2>/dev/null || true)
   if (( ${#RELEASE_DIRS[@]} > DISCOVERY_KEEP_RELEASES )); then
     for old_release in "${RELEASE_DIRS[@]:DISCOVERY_KEEP_RELEASES}"; do
-      rm -rf "$old_release"
+      # Corrige ownership caso a release tenha sido criada como root (deploy manual)
+      sudo chown -R discovery-api:discovery-api "$old_release" 2>/dev/null || true
+      rm -rf "$old_release" || sudo rm -rf "$old_release" || true
     done
   fi
 }
@@ -217,6 +223,14 @@ publish_site_release() {
 clone_or_fetch_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
 clone_or_fetch_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
 
+# Atualiza tambem o repositorio do agent (se configurado)
+DISCOVERY_AGENT_GIT_REPO="${DISCOVERY_AGENT_GIT_REPO:-}"
+DISCOVERY_AGENT_SRC="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}"
+if [[ -n "$DISCOVERY_AGENT_GIT_REPO" ]] && [[ -d "$DISCOVERY_AGENT_SRC/.git" ]]; then
+  log "Atualizando repositorio do agent (fetch only)"
+  git -C "$DISCOVERY_AGENT_SRC" fetch origin "$DISCOVERY_GIT_BRANCH" 2>/dev/null || log "Fetch do agent nao disponivel para branch '$DISCOVERY_GIT_BRANCH'"
+fi
+
 API_LOCAL_REV="$(git -C "$DISCOVERY_API_SOURCE" rev-parse HEAD 2>/dev/null || true)"
 API_REMOTE_REV="$(git -C "$DISCOVERY_API_SOURCE" rev-parse "origin/$DISCOVERY_GIT_BRANCH")"
 SITE_LOCAL_REV="$(git -C "$DISCOVERY_SITE_SOURCE" rev-parse HEAD 2>/dev/null || true)"
@@ -232,11 +246,33 @@ if [[ "$API_CHANGED" -eq 0 && "$SITE_CHANGED" -eq 0 ]]; then
   exit 0
 fi
 
+# Guarda symlink anterior para rollback em caso de falha
+API_ROLLBACK_RELEASE="" SITE_ROLLBACK_RELEASE=""
+if [[ -L "$DISCOVERY_API_CURRENT" ]]; then
+  API_ROLLBACK_RELEASE="$(readlink -f "$DISCOVERY_API_CURRENT" 2>/dev/null || true)"
+fi
+if [[ -L "$DISCOVERY_SITE_CURRENT" ]]; then
+  SITE_ROLLBACK_RELEASE="$(readlink -f "$DISCOVERY_SITE_CURRENT" 2>/dev/null || true)"
+fi
+
+API_PUBLISHED=0
+SITE_PUBLISHED=0
+API_RESTARTED=0
+
 if [[ "$API_CHANGED" -eq 1 ]]; then
   log "Atualizacao detectada na API. Aplicando commit $API_REMOTE_REV"
   git -C "$DISCOVERY_API_SOURCE" checkout "$DISCOVERY_GIT_BRANCH"
   git -C "$DISCOVERY_API_SOURCE" reset --hard "origin/$DISCOVERY_GIT_BRANCH"
-  publish_api_release "$API_REMOTE_REV"
+  git -C "$DISCOVERY_API_SOURCE" clean -fd 2>/dev/null || true
+  if publish_api_release "$API_REMOTE_REV"; then
+    API_PUBLISHED=1
+  else
+    warn "Falha ao publicar release da API. Tentando rollback."
+    if [[ -n "$API_ROLLBACK_RELEASE" && -d "$API_ROLLBACK_RELEASE" ]]; then
+      ln -sfn "$API_ROLLBACK_RELEASE" "$DISCOVERY_API_CURRENT"
+      log "Rollback da API para release anterior: $API_ROLLBACK_RELEASE"
+    fi
+  fi
 else
   log "Sem atualizacoes na API"
 fi
@@ -245,9 +281,71 @@ if [[ "$SITE_CHANGED" -eq 1 ]]; then
   log "Atualizacao detectada no portal web. Aplicando commit $SITE_REMOTE_REV"
   git -C "$DISCOVERY_SITE_SOURCE" checkout "$DISCOVERY_GIT_BRANCH"
   git -C "$DISCOVERY_SITE_SOURCE" reset --hard "origin/$DISCOVERY_GIT_BRANCH"
-  publish_site_release "$SITE_REMOTE_REV"
+  git -C "$DISCOVERY_SITE_SOURCE" clean -fd 2>/dev/null || true
+  if publish_site_release "$SITE_REMOTE_REV"; then
+    SITE_PUBLISHED=1
+  else
+    warn "Falha ao publicar release do portal web. Tentando rollback."
+    if [[ -n "$SITE_ROLLBACK_RELEASE" && -d "$SITE_ROLLBACK_RELEASE" ]]; then
+      ln -sfn "$SITE_ROLLBACK_RELEASE" "$DISCOVERY_SITE_CURRENT"
+      log "Rollback do portal web para release anterior: $SITE_ROLLBACK_RELEASE"
+    fi
+  fi
 else
   log "Sem atualizacoes no portal web"
+fi
+
+# Reinicia servicos se houve alteracao publicada
+if [[ "$API_PUBLISHED" -eq 1 ]]; then
+  log "Reiniciando discovery-api com a nova release"
+  if sudo systemctl restart discovery-api 2>/dev/null; then
+    API_RESTARTED=1
+    # Health check rapido pos-restart
+    sleep 3
+    if curl -fsS "http://127.0.0.1:8080/health" >/dev/null 2>&1; then
+      log "discovery-api respondeu com sucesso apos restart."
+    else
+      warn "discovery-api nao respondeu ao health check apos restart. Aguardando mais 10s..."
+      sleep 10
+      if ! curl -fsS "http://127.0.0.1:8080/health" >/dev/null 2>&1; then
+        warn "discovery-api ainda sem resposta. Tentando rollback."
+        if [[ -n "$API_ROLLBACK_RELEASE" && -d "$API_ROLLBACK_RELEASE" ]]; then
+          ln -sfn "$API_ROLLBACK_RELEASE" "$DISCOVERY_API_CURRENT"
+          sudo systemctl restart discovery-api 2>/dev/null || true
+          log "Rollback da API executado devido a falha no health check."
+        fi
+      fi
+    fi
+  else
+    warn "Nao foi possivel reiniciar discovery-api (sem sudo?)."
+  fi
+fi
+
+if [[ "$SITE_PUBLISHED" -eq 1 ]]; then
+  if sudo nginx -t >/dev/null 2>&1; then
+    sudo systemctl reload nginx 2>/dev/null || log "Nao foi possivel recarregar nginx (sem sudo?)."
+  else
+    warn "Configuracao do nginx invalida; pulando reload."
+  fi
+fi
+
+# Dispara rebuild do agent se o repo foi atualizado
+if [[ -n "$DISCOVERY_AGENT_GIT_REPO" ]] && [[ -d "$DISCOVERY_AGENT_SRC/.git" ]]; then
+  local agent_local agent_remote
+  agent_local="$(git -C "$DISCOVERY_AGENT_SRC" rev-parse HEAD 2>/dev/null || true)"
+  agent_remote="$(git -C "$DISCOVERY_AGENT_SRC" rev-parse "origin/$DISCOVERY_GIT_BRANCH" 2>/dev/null || true)"
+  if [[ -n "$agent_local" && -n "$agent_remote" && "$agent_local" != "$agent_remote" ]]; then
+    git -C "$DISCOVERY_AGENT_SRC" checkout "$DISCOVERY_GIT_BRANCH" 2>/dev/null || true
+    git -C "$DISCOVERY_AGENT_SRC" reset --hard "origin/$DISCOVERY_GIT_BRANCH" 2>/dev/null || true
+    log "Agent atualizado; disparando rebuild via API..."
+    if sudo systemctl is-active --quiet discovery-api.service 2>/dev/null; then
+      curl -s -X POST "http://127.0.0.1:8080/api/v1/agent-updates/rebuild" \
+        -H "Content-Type: application/json" \
+        --max-time 300 >/dev/null 2>&1 \
+        && log "Rebuild do agent disparado com sucesso." \
+        || warn "Falha ao disparar rebuild do agent via API."
+    fi
+  fi
 fi
 
 log "Self-update concluido com sucesso"

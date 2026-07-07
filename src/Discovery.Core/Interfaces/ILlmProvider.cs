@@ -10,9 +10,19 @@ public interface ILlmProvider
 
     /// <summary>
     /// Retorna tokens da resposta incrementalmente (SSE streaming).
-    /// Não suporta tool calls — use CompleteAsync para isso.
+    /// Não suporta tool calls — use StreamWithToolsAsync para isso.
     /// </summary>
     IAsyncEnumerable<string> StreamAsync(
+        string systemPrompt,
+        List<LlmMessage> messages,
+        LlmOptions options,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Streaming SSE que suporta tool calls. Emite eventos estruturados (tokens, tool_calls, done)
+    /// em vez de apenas strings. O caller deve fazer o loop de tool calls.
+    /// </summary>
+    IAsyncEnumerable<LlmStreamEvent> StreamWithToolsAsync(
         string systemPrompt,
         List<LlmMessage> messages,
         LlmOptions options,
@@ -53,3 +63,15 @@ public record LlmToolCall(
     string Id, 
     string Name, 
     string ArgumentsJson);
+
+/// <summary>
+/// Evento emitido durante streaming SSE com suporte a tool calls.
+/// Type = "token"      → Content contém fragmento de texto.
+/// Type = "tool_calls" → ToolCalls contém as tool calls (finish_reason=tool_calls).
+/// Type = "done"       → Fim do streaming (finish_reason=stop).
+/// </summary>
+public record LlmStreamEvent(
+    string Type,
+    string? Content = null,
+    List<LlmToolCall>? ToolCalls = null,
+    int? TokensUsed = null);

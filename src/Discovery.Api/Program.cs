@@ -1,6 +1,8 @@
 using System.Text.Json.Serialization;
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using Polly;
+using Polly.Extensions.Http;
 using Discovery.Api;
 using Discovery.Api.Filters;
 using Discovery.Api.Validators;
@@ -109,6 +111,15 @@ builder.Services.AddScoped<IObjectStorageService>(sp =>
 builder.Services.AddSingleton<ChocolateyApiClient>();
 builder.Services.AddSingleton<WingetFeedClient>();
 
+builder.Services.AddHttpClient("AiChat", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(60);
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+})
+.AddTransientHttpErrorPolicy(policy =>
+    policy.WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromMilliseconds(Math.Pow(2, retryAttempt) * 200)));
+
+// Generic HttpClient for other services
 builder.Services.AddHttpClient();
 builder.Services.AddDiscoveryOpenTelemetry(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<IAgentTlsCertificateProbe, AgentTlsCertificateProbe>();
@@ -119,6 +130,11 @@ var backgroundServicesConfig = BackgroundServicesCollectionExtensions.ReadBackgr
 // AI Chat & MCP (auto-registered via AddDiscoveryAutoRegisteredServices)
 // Only the LLM provider is explicitly registered as singleton.
 builder.Services.AddSingleton<ILlmProvider, OpenAiProvider>();
+builder.Services.AddScoped<IMcpToolExecutor, McpToolExecutor>();
+builder.Services.AddScoped<IAiCostControlService, AiCostControlService>();
+
+// Register built-in MCP tool handlers after DI is built (handled at first use via McpToolExecutor constructor)
+
 
 builder.Services.AddDiscoveryBackgroundServices(backgroundServicesConfig);
 
@@ -185,8 +201,48 @@ builder.Services.AddDiscoveryApiVersioning();
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    options.KnownIPNetworks.Clear();
+
+    // Default trusted proxies: Cloudflare IPv4/IPv6 ranges + localhost for local nginx dev
+    var defaultTrustedProxies = new[]
+    {
+        // Cloudflare IPv4 ranges (https://www.cloudflare.com/ips/)
+        "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+        "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+        "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+        "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+        // Cloudflare IPv6 ranges
+        "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+        "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+        // Localhost for local nginx reverse proxy
+        "127.0.0.1", "::1"
+    };
+
+    var trustedProxies = builder.Configuration.GetSection("Security:TrustedProxies").Get<string[]>() ?? [];
+    var trustedNetworks = builder.Configuration.GetSection("Security:TrustedProxyNetworks").Get<string[]>() ?? [];
+
+    // Merge defaults with config (config takes precedence if explicitly set)
+    var allProxies = trustedProxies.Length > 0 ? trustedProxies : defaultTrustedProxies;
+    var allNetworks = trustedNetworks.Length > 0 ? trustedNetworks : defaultTrustedProxies.Where(p => p.Contains('/')).ToArray();
+
     options.KnownProxies.Clear();
+    options.KnownNetworks.Clear();
+
+    foreach (var ip in allProxies.Where(p => !p.Contains('/')).Distinct())
+    {
+        if (System.Net.IPAddress.TryParse(ip, out var parsed))
+            options.KnownProxies.Add(parsed);
+    }
+    foreach (var cidr in allNetworks.Distinct())
+    {
+        var parts = cidr.Split('/');
+        if (parts.Length == 2
+            && System.Net.IPAddress.TryParse(parts[0], out var netAddr)
+            && int.TryParse(parts[1], out var prefix)
+            && prefix >= 0 && prefix <= 128)
+        {
+            options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(netAddr, prefix));
+        }
+    }
 });
 
 builder.Services.AddDiscoveryRateLimiting(builder.Configuration);
@@ -238,11 +294,21 @@ if (hasMaintenanceMode)
     return;
 }
 
-// Run migrations on startup
-using (var scope = app.Services.CreateScope())
+// Run migrations on startup (config-gated, defaults to true for backward compatibility)
+var runMigrationsOnStartup = builder.Configuration.GetValue("Migrations:RunOnStartup", true);
+if (runMigrationsOnStartup)
 {
-    var runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();
-    runner.MigrateUp();
+    using (var scope = app.Services.CreateScope())
+    {
+        var runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();
+        runner.MigrateUp();
+    }
+
+    app.Logger.LogInformation("Migrations completed successfully at startup.");
+}
+else
+{
+    app.Logger.LogInformation("Migrations:RunOnStartup is false; skipping automatic migrations.");
 }
 
 // Seed default workflow states

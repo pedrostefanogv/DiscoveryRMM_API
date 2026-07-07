@@ -38,4 +38,13 @@ public class ReportSchedule
 
     public string? CreatedBy { get; set; }
     public string? UpdatedBy { get; set; }
+
+    /// <summary>Delivery mode: storage (default), email, webhook.</summary>
+    public string DeliveryMode { get; set; } = "storage";
+
+    /// <summary>Comma-separated recipient emails (for email delivery).</summary>
+    public string? Recipients { get; set; }
+
+    /// <summary>URL for webhook delivery (POST with download link).</summary>
+    public string? WebhookUrl { get; set; }
 }

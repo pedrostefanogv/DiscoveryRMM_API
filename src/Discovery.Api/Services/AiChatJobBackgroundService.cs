@@ -85,7 +85,8 @@ public sealed class AiChatJobBackgroundService : BackgroundService, IAiChatJobQu
                 workItem.AgentId,
                 job.UserMessage,
                 job.SessionId,
-                cancellationToken);
+                requestMaxTokens: null,
+                ct: cancellationToken);
 
             job.Status = "Completed";
             job.AssistantMessage = result.AssistantMessage;

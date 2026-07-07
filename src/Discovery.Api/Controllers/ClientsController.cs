@@ -29,9 +29,18 @@ public class ClientsController : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] bool includeInactive = false)
     {
         var scope = await _scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View);
-        var clients = scope.HasGlobalAccess
-            ? await _repo.GetAllAsync(includeInactive)
-            : (await _repo.GetAllAsync(includeInactive)).Where(c => scope.AllowedClientIds.Contains(c.Id));
+        List<Client> clients;
+        if (scope.HasGlobalAccess)
+        {
+            clients = (await _repo.GetAllAsync(includeInactive)).ToList();
+        }
+        else
+        {
+            var allowedIds = scope.AllowedClientIds.ToHashSet();
+            clients = (await _repo.GetAllAsync(includeInactive))
+                .Where(c => allowedIds.Contains(c.Id))
+                .ToList();
+        }
         return Ok(clients);
     }
 
@@ -39,6 +48,10 @@ public class ClientsController : ControllerBase
     [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View);
+        if (!scope.HasGlobalAccess && !scope.AllowedClientIds.Contains(id))
+            return NotFound();
+
         var client = await _repo.GetByIdAsync(id);
         return client is null ? NotFound() : Ok(client);
     }

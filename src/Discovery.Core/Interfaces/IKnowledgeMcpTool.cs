@@ -14,6 +14,7 @@ public interface IKnowledgeMcpTool
         Guid? siteId,
         string query,
         int maxResults = 3,
+        Guid? departmentId = null,
         CancellationToken ct = default);
 
     /// <summary>
@@ -27,5 +28,6 @@ public interface IKnowledgeMcpTool
         AIIntegrationSettings aiSettings,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         int maxResults = 3,
+        Guid? departmentId = null,
         CancellationToken ct = default);
 }

@@ -250,9 +250,7 @@ public class LogsController : ControllerBase
         var summary = await _logRepo.GetSummaryAsync(query);
         var clients = (await _clientRepo.GetAllAsync(includeInactive: true)).ToDictionary(item => item.Id, item => item.Name);
 
-        var allSites = new List<Site>();
-        foreach (var currentClientId in clients.Keys)
-            allSites.AddRange(await _siteRepo.GetByClientIdAsync(currentClientId, includeInactive: true));
+        var allSites = (await _siteRepo.GetByClientIdsAsync(clients.Keys, includeInactive: true)).ToList();
         var sites = allSites.GroupBy(item => item.Id).Select(group => group.First()).ToDictionary(item => item.Id, item => item.Name);
 
         var agents = (await _agentRepo.GetAllAsync()).ToDictionary(item => item.Id, item => item.DisplayName ?? item.Hostname);
@@ -282,9 +280,7 @@ public class LogsController : ControllerBase
         var scope = await _scopeContext.GetAccessAsync(ResourceType.Logs, ActionType.View);
         var allClients = (await _clientRepo.GetAllAsync(includeInactive: true)).ToList();
 
-        var allSites = new List<Site>();
-        foreach (var client in allClients)
-            allSites.AddRange(await _siteRepo.GetByClientIdAsync(client.Id, includeInactive: true));
+        var allSites = (await _siteRepo.GetByClientIdsAsync(allClients.Select(c => c.Id), includeInactive: true)).ToList();
 
         if (!scope.HasGlobalAccess)
         {

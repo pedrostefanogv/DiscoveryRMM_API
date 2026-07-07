@@ -23,5 +23,10 @@ public enum TicketActivityType
     AutomationLinked = 15,
     AutomationApproved = 16,
     AutomationRejected = 17,
-    AutoCreatedFromAlert = 18
+    AutoCreatedFromAlert = 18,
+    TicketMerged = 19,
+    TicketRelationAdded = 20,
+    TicketRelationRemoved = 21,
+    KnowledgeLinked = 22,
+    KnowledgeUnlinked = 23
 }

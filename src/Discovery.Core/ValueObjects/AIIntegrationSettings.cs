@@ -33,7 +33,7 @@ public class AIIntegrationSettings
     public string? BaseUrl { get; set; } = "https://api.openai.com/v1/";
 
     /// <summary>Modelo de chat (ex: gpt-4o-mini)</summary>
-    public string? ChatModel { get; set; } = "gpt-4-turbo";
+    public string? ChatModel { get; set; } = "gpt-4o-mini";
 
     /// <summary>Modelo de embedding (ex: text-embedding-3-small)</summary>
     public string? EmbeddingModel { get; set; } = "text-embedding-3-small";
@@ -152,19 +152,31 @@ public class AIIntegrationSettings
     /// <summary>Permite fallback automático entre providers configurados</summary>
     public bool AllowProviderFallbacks { get; set; } = false;
 
+    /// <summary>Providers de fallback em ordem de prioridade (ex: ["openrouter", "openai"]).</summary>
+    public string[]? FallbackProviders { get; set; }
+
+    /// <summary>Máximo de iterações de tool call (1-10). Default: 3.</summary>
+    public int MaxToolCallIterations { get; set; } = 3;
+
+    /// <summary>Habilita detecção de PII/secrets na saída do LLM (guardrails).</summary>
+    public bool OutputGuardrailsEnabled { get; set; } = true;
+
     // --- Constantes de provider ---
 
     public const string ProviderOpenAi = "openai";
     public const string ProviderOpenRouter = "openrouter";
     public const string ProviderOpenAiCompatible = "openai-compatible";
+    public const string ProviderOllama = "ollama";
 
     public const string OpenRouterDefaultBaseUrl = "https://openrouter.ai/api/v1/";
     public const string OpenAiDefaultBaseUrl = "https://api.openai.com/v1/";
+    public const string OllamaDefaultBaseUrl = "http://localhost:11434/v1/";
 
     /// <summary>Retorna a BaseUrl padrão conforme o provider configurado</summary>
     public string? ResolveDefaultBaseUrl() => Provider?.ToLowerInvariant() switch
     {
         ProviderOpenRouter => OpenRouterDefaultBaseUrl,
+        ProviderOllama => OllamaDefaultBaseUrl,
         ProviderOpenAiCompatible => null, // genérico: sem default fixo, usuário deve informar
         _ => OpenAiDefaultBaseUrl
     };
@@ -184,6 +196,7 @@ public class AIIntegrationSettings
     /// <summary>Modelos de chat recomendados por provider (provider → lista de model IDs).</summary>
     public static readonly Dictionary<string, string[]> RecommendedChatModels = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["ollama"] = ["llama3.2", "mistral", "phi4", "gemma3", "deepseek-r1", "qwen2.5"],
         [ProviderOpenAi] = ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "o4-mini", "o3-mini"],
         [ProviderOpenRouter] = [
             "openai/gpt-4o-mini",

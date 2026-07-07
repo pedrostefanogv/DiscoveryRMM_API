@@ -138,6 +138,8 @@ write_environment_file() {
     idx=$((idx + 1))
   done
 
+  local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
+
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
 ASPNETCORE_URLS=http://127.0.0.1:8080
@@ -150,7 +152,7 @@ Nats__AuthPassword=${NATS_AUTH_PASSWORD}
 Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}
 Nats__XKeySeed=${NATS_XKEY_SEED:-}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
-Nats__AuthCallout__Subject=${NATS_AUTH_CALLOUT_SUBJECT}
+Nats__AuthCallout__Subject=${escaped_callout_subject}
 Nats__ServerHostExternal=${nats_server_external_host}
 Nats__ServerHostInternal=127.0.0.1
 Nats__UseWssExternal=${nats_use_wss_external}
@@ -274,8 +276,11 @@ EOF
 # ── Systemd service ────────────────────────────────────────────────────────
 
 write_systemd_service() {
-  log "Criando servico systemd discovery-api"
-  sudo tee /etc/systemd/system/discovery-api.service >/dev/null <<EOF
+  log "Criando/verificando servico systemd discovery-api"
+  local service_file="/etc/systemd/system/discovery-api.service"
+  local tmp_service; tmp_service="$(mktemp)"
+
+  cat > "$tmp_service" <<EOF
 [Unit]
 Description=Discovery API
 After=network-online.target postgresql.service nats-server.service
@@ -298,9 +303,29 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-  sudo systemctl daemon-reload
+  local needs_restart=0
+  if sudo test -f "$service_file"; then
+    if ! sudo diff -q "$tmp_service" "$service_file" >/dev/null 2>&1; then
+      log "Arquivo de servico discovery-api alterado; atualizando."
+      sudo install -m 644 -o root -g root "$tmp_service" "$service_file"
+      sudo systemctl daemon-reload
+      needs_restart=1
+    else
+      log "Arquivo de servico discovery-api inalterado; mantendo atual."
+    fi
+  else
+    sudo install -m 644 -o root -g root "$tmp_service" "$service_file"
+    sudo systemctl daemon-reload
+    needs_restart=1
+  fi
+  rm -f "$tmp_service"
+
   sudo systemctl enable discovery-api
-  sudo systemctl restart discovery-api
+  if [[ "$needs_restart" -eq 1 ]]; then
+    sudo systemctl restart discovery-api
+  else
+    log "Servico discovery-api sem alteracoes; pulando restart."
+  fi
 }
 
 # ── Nginx site proxy ──────────────────────────────────────────────────────
@@ -508,6 +533,7 @@ update_nats_environment_file() {
 
   local nats_server_external_host
   nats_server_external_host="$(normalize_host_without_scheme "${NATS_SERVER_HOST_EXTERNAL:-${EXTERNAL_API_HOST:-${INTERNAL_API_HOST:-}}}")"
+  local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
 
   cat >> "$tmp_file" <<EOF
 Nats__Url=nats://${NATS_AUTH_USER}:${NATS_AUTH_PASSWORD}@127.0.0.1:4222
@@ -517,7 +543,7 @@ Nats__ServerHostExternal=${nats_server_external_host}
 Nats__ServerHostInternal=${NATS_SERVER_HOST_INTERNAL:-127.0.0.1}
 Nats__UseWssExternal=${NATS_USE_WSS_EXTERNAL:-false}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
-Nats__AuthCallout__Subject=${NATS_AUTH_CALLOUT_SUBJECT}
+Nats__AuthCallout__Subject=${escaped_callout_subject}
 Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}
 Nats__XKeySeed=${NATS_XKEY_SEED:-}
 NATS_JS_ENABLED=${NATS_JS_ENABLED:-1}

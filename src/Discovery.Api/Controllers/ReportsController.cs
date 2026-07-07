@@ -24,6 +24,7 @@ public class ReportsController : ControllerBase
     private readonly IReportTemplateRepository _templateRepository;
     private readonly IReportExecutionRepository _executionRepository;
     private readonly IReportScheduleRepository _scheduleRepository;
+    private readonly IReportFilterPresetRepository _filterPresetRepository;
     private readonly IReportService _reportService;
     private readonly ReportFormat[] _enabledFormats;
 
@@ -31,12 +32,14 @@ public class ReportsController : ControllerBase
         IReportTemplateRepository templateRepository,
         IReportExecutionRepository executionRepository,
         IReportScheduleRepository scheduleRepository,
+        IReportFilterPresetRepository filterPresetRepository,
         IReportService reportService,
         IOptions<ReportingOptions> reportingOptions)
     {
         _templateRepository = templateRepository;
         _executionRepository = executionRepository;
         _scheduleRepository = scheduleRepository;
+        _filterPresetRepository = filterPresetRepository;
         _reportService = reportService;
 
         var options = reportingOptions.Value;
@@ -194,6 +197,20 @@ public class ReportsController : ControllerBase
             ["configurationAudit"] = ["agentId", "clientId", "siteId"],
             ["automationExecutions"] = ["agentId"],
             ["agentInventoryComposite"] = ["agentId", "clientId", "siteId"],
+            ["agentMonitoringEvents"] = ["agentId", "clientId", "siteId"],
+            ["agentAlerts"] = ["clientId", "siteId"],
+            ["p2pTelemetry"] = ["agentId", "clientId", "siteId"],
+            ["agentDisks"] = ["agentId", "clientId", "siteId"],
+            ["networkAdapters"] = ["agentId", "clientId", "siteId"],
+            ["listeningPorts"] = ["agentId", "clientId", "siteId"],
+            ["printers"] = ["agentId", "clientId", "siteId"],
+            ["softwareCatalog"] = ["softwareName", "publisher"],
+            ["automationScripts"] = ["clientId"],
+            ["appPackages"] = ["softwareName"],
+            ["ticketActivity"] = ["ticketId", "clientId"],
+            ["ticketEscalations"] = ["clientId"],
+            ["customFields"] = ["clientId"],
+            ["knowledgeBase"] = ["clientId"],
         };
 
         // Build a pairwise join suggestion matrix
@@ -668,6 +685,58 @@ public class ReportsController : ControllerBase
     public async Task<IActionResult> DeleteSchedule(Guid id, [FromQuery] Guid? clientId)
     {
         var deleted = await _scheduleRepository.DeleteAsync(id, clientId);
+        return deleted ? NoContent() : NotFound();
+    }
+
+    // ───────────────────── Filter Presets ─────────────────────
+
+    [HttpPost("filter-presets")]
+    public async Task<IActionResult> CreateFilterPreset([FromBody] CreateReportFilterPresetRequest request)
+    {
+        var preset = new ReportFilterPreset
+        {
+            UserId = request.UserId,
+            TemplateId = request.TemplateId,
+            Name = request.Name,
+            FiltersJson = request.FiltersJson
+        };
+
+        var created = await _filterPresetRepository.CreateAsync(preset);
+        return CreatedAtAction(nameof(GetFilterPresetById), new { id = created.Id }, created);
+    }
+
+    [HttpGet("filter-presets")]
+    public async Task<IActionResult> GetFilterPresets([FromQuery] Guid userId, [FromQuery] Guid templateId)
+    {
+        var presets = await _filterPresetRepository.GetByUserAsync(userId, templateId);
+        return Ok(presets);
+    }
+
+    [HttpGet("filter-presets/{id:guid}")]
+    public async Task<IActionResult> GetFilterPresetById(Guid id, [FromQuery] Guid userId)
+    {
+        var preset = await _filterPresetRepository.GetByIdAsync(id, userId);
+        return preset is null ? NotFound() : Ok(preset);
+    }
+
+    [HttpPut("filter-presets/{id:guid}")]
+    public async Task<IActionResult> UpdateFilterPreset(Guid id, [FromBody] UpdateReportFilterPresetRequest request)
+    {
+        var preset = await _filterPresetRepository.GetByIdAsync(id, request.UserId);
+        if (preset is null) return NotFound();
+
+        if (request.Name is not null) preset.Name = request.Name;
+        if (request.FiltersJson is not null) preset.FiltersJson = request.FiltersJson;
+        preset.UpdatedAt = DateTime.UtcNow;
+
+        var updated = await _filterPresetRepository.UpdateAsync(preset);
+        return updated is null ? NotFound() : Ok(updated);
+    }
+
+    [HttpDelete("filter-presets/{id:guid}")]
+    public async Task<IActionResult> DeleteFilterPreset(Guid id, [FromQuery] Guid userId)
+    {
+        var deleted = await _filterPresetRepository.DeleteAsync(id, userId);
         return deleted ? NoContent() : NotFound();
     }
 
@@ -1346,6 +1415,314 @@ public class ReportsController : ControllerBase
                     [
                         new ReportFilterPreset("Execucoes recentes", "Ultimas execucoes de automacao", "{\"limit\":500,\"orderBy\":\"timestamp\",\"orderDirection\":\"desc\",\"orientation\":\"landscape\"}"),
                         new ReportFilterPreset("Falhas", "Execucoes com falha", "{\"status\":\"Failed\",\"limit\":500,\"orderBy\":\"timestamp\",\"orderDirection\":\"desc\",\"orientation\":\"landscape\"}")
+                    ])),
+
+            [ReportDatasetType.AgentMonitoringEvents] = new(
+                Fields:
+                [
+                    "id", "clientId", "siteId", "agentId", "alertCode", "severity", "title", "message", "metricKey", "metricValue", "source", "correlationId", "occurredAt", "createdAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.OptionalRange,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "portrait",
+                    AllowedSortFields: ["occurredAt", "severity", "alertCode", "title"],
+                    DefaultSortField: "occurredAt",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "desc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("siteId", "Site", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por site.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "clientId"),
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por agente.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "siteId"),
+                        new("severity", "Severidade", ReportFilterFieldType.Enum, false, "Filtros", "Severidade do alerta.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["Warning", "Error", "Critical", "Info"]),
+                        new("from", "Data inicial", ReportFilterFieldType.DateTime, false, "Periodo", "Inicio do periodo."),
+                        new("to", "Data final", ReportFilterFieldType.DateTime, false, "Periodo", "Fim do periodo."),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
+                    ],
+                    SampleFilterPresets:
+                    [
+                        new ReportFilterPreset("Alertas criticos 24h", "Alertas criticos das ultimas 24h", "{\"severity\":\"Critical\",\"limit\":500,\"from\":\"<now-24h>\"}")
+                    ])),
+
+            [ReportDatasetType.AgentAlerts] = new(
+                Fields:
+                [
+                    "id", "clientId", "name", "severity", "enabled", "metricKey", "threshold", "scopeType", "createdAt", "updatedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.Client,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["portrait"],
+                    DefaultOrientation: "portrait",
+                    AllowedSortFields: ["name", "severity", "createdAt"],
+                    DefaultSortField: "name",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.P2pTelemetry] = new(
+                Fields:
+                [
+                    "id", "agentId", "siteId", "clientId", "collectedAt", "receivedAt", "hostCpuPercent", "hostMemoryPercent", "hostDiskBusyPercent", "bytesServed", "bytesDownloaded", "connectedPeers", "knownPeers", "publishedArtifacts", "replicationsSucceeded", "replicationsFailed"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.OptionalRange,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "landscape",
+                    AllowedSortFields: ["collectedAt", "agentId", "hostCpuPercent", "bytesServed"],
+                    DefaultSortField: "collectedAt",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "desc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("siteId", "Site", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por site.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "clientId"),
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por agente.", UiComponent: ReportFilterUiComponent.GuidInput, DependsOn: "siteId"),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
+                    ],
+                    SampleFilterPresets:
+                    [
+                        new ReportFilterPreset("Telemetria recente", "Metricas P2P mais recentes", "{\"limit\":200,\"orderBy\":\"collectedAt\",\"orderDirection\":\"desc\"}")
+                    ])),
+
+            [ReportDatasetType.AgentDisks] = new(
+                Fields:
+                [
+                    "agentId", "agentHostname", "siteName", "clientName", "diskName", "sizeBytes", "freeBytes", "fileSystem", "interface", "type", "serialNumber", "healthStatus", "collectedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "landscape",
+                    AllowedSortFields: ["diskName", "sizeBytes", "type", "interface"],
+                    DefaultSortField: "diskName",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo por agente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "5000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.NetworkAdapters] = new(
+                Fields:
+                [
+                    "agentId", "agentHostname", "siteName", "clientName", "adapterName", "macAddress", "ipAddresses", "speedMbps", "isDefault", "collectedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "landscape",
+                    AllowedSortFields: ["adapterName", "speedMbps", "isDefault"],
+                    DefaultSortField: "adapterName",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo por agente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "5000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.ListeningPorts] = new(
+                Fields:
+                [
+                    "agentId", "agentHostname", "siteName", "clientName", "port", "protocol", "processName", "state", "collectedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "landscape",
+                    AllowedSortFields: ["port", "protocol", "processName"],
+                    DefaultSortField: "port",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo por agente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("port", "Porta", ReportFilterFieldType.Integer, false, "Filtros", "Numero da porta.", UiComponent: ReportFilterUiComponent.NumberInput, Min: 1, Max: 65535),
+                        new("processName", "Processo", ReportFilterFieldType.Text, false, "Filtros", "Nome do processo.", MaxLength: 200, IsPartialMatch: true),
+                        new("state", "Estado", ReportFilterFieldType.Text, false, "Filtros", "Estado (LISTEN, ESTABLISHED).", MaxLength: 50),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "5000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.Printers] = new(
+                Fields:
+                [
+                    "agentId", "agentHostname", "siteName", "clientName", "printerName", "driverName", "portName", "isDefault", "isShared", "collectedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.ClientSiteAgent,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["portrait"],
+                    DefaultOrientation: "portrait",
+                    AllowedSortFields: ["printerName", "isDefault", "isShared"],
+                    DefaultSortField: "printerName",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("agentId", "Agente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo por agente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "5000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.SoftwareCatalog] = new(
+                Fields:
+                [
+                    "id", "name", "publisher", "category", "latestVersion", "eolDate", "isEol", "licenseType", "updatedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.Global,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["portrait"],
+                    DefaultOrientation: "portrait",
+                    AllowedSortFields: ["name", "publisher", "category", "eolDate", "isEol"],
+                    DefaultSortField: "name",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("category", "Categoria", ReportFilterFieldType.Text, false, "Filtros", "Categoria do software.", MaxLength: 200),
+                        new("publisher", "Fabricante", ReportFilterFieldType.Text, false, "Filtros", "Nome do fabricante.", MaxLength: 200, IsPartialMatch: true),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "5000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.AutomationScripts] = new(
+                Fields:
+                [
+                    "id", "clientId", "name", "language", "isActive", "createdAt", "updatedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.Client,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["portrait"],
+                    DefaultOrientation: "portrait",
+                    AllowedSortFields: ["name", "language", "createdAt", "updatedAt"],
+                    DefaultSortField: "name",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("language", "Linguagem", ReportFilterFieldType.Text, false, "Filtros", "Linguagem do script.", MaxLength: 50),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "5000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.AppPackages] = new(
+                Fields:
+                [
+                    "id", "name", "publisher", "version", "source", "category", "isActive", "description", "updatedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.Global,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["portrait"],
+                    DefaultOrientation: "portrait",
+                    AllowedSortFields: ["name", "source", "category", "updatedAt"],
+                    DefaultSortField: "name",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("source", "Origem", ReportFilterFieldType.Enum, false, "Filtros", "Fonte do pacote.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["chocolatey", "winget"]),
+                        new("category", "Categoria", ReportFilterFieldType.Text, false, "Filtros", "Categoria do pacote.", MaxLength: 200),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "5000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.TicketActivity] = new(
+                Fields:
+                [
+                    "id", "ticketId", "clientId", "action", "changedBy", "oldValue", "newValue", "createdAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.Client,
+                    DateMode: ReportDateMode.OptionalRange,
+                    AllowedOrientations: ["landscape", "portrait"],
+                    DefaultOrientation: "landscape",
+                    AllowedSortFields: ["createdAt", "ticketId", "action"],
+                    DefaultSortField: "createdAt",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "desc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("ticketId", "Ticket", ReportFilterFieldType.Guid, false, "Escopo", "Ticket especifico.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("action", "Acao", ReportFilterFieldType.Text, false, "Filtros", "Tipo de acao.", MaxLength: 100),
+                        new("from", "Data inicial", ReportFilterFieldType.DateTime, false, "Periodo", "Inicio do periodo."),
+                        new("to", "Data final", ReportFilterFieldType.DateTime, false, "Periodo", "Fim do periodo."),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.TicketEscalations] = new(
+                Fields:
+                [
+                    "id", "clientId", "name", "escalationLevel", "isActive", "createdAt", "updatedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.Client,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["portrait"],
+                    DefaultOrientation: "portrait",
+                    AllowedSortFields: ["name", "escalationLevel", "isActive"],
+                    DefaultSortField: "name",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "1000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.CustomFields] = new(
+                Fields:
+                [
+                    "id", "clientId", "entityName", "fieldName", "valueType", "isRequired", "isActive", "createdAt", "updatedAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.Client,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["portrait"],
+                    DefaultOrientation: "portrait",
+                    AllowedSortFields: ["entityName", "fieldName", "valueType"],
+                    DefaultSortField: "entityName",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "asc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("entityName", "Entidade", ReportFilterFieldType.Text, false, "Filtros", "Tipo de entidade.", MaxLength: 200),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "5000", Min: 1, Max: 10000)
+                    ])),
+
+            [ReportDatasetType.KnowledgeBase] = new(
+                Fields:
+                [
+                    "id", "clientId", "title", "category", "status", "author", "updatedAt", "createdAt"
+                ],
+                ExecutionSchema: new ReportExecutionSchema(
+                    ScopeType: ReportScopeType.Client,
+                    DateMode: ReportDateMode.None,
+                    AllowedOrientations: ["portrait"],
+                    DefaultOrientation: "portrait",
+                    AllowedSortFields: ["title", "category", "status", "updatedAt"],
+                    DefaultSortField: "updatedAt",
+                    AllowedSortDirections: ["asc", "desc"],
+                    DefaultSortDirection: "desc",
+                    Filters:
+                    [
+                        new("clientId", "Cliente", ReportFilterFieldType.Guid, false, "Escopo", "Escopo opcional por cliente.", UiComponent: ReportFilterUiComponent.GuidInput),
+                        new("status", "Status", ReportFilterFieldType.Enum, false, "Filtros", "Status do artigo.", UiComponent: ReportFilterUiComponent.Select, AllowedValues: ["Draft", "Published", "Archived"]),
+                        new("category", "Categoria", ReportFilterFieldType.Text, false, "Filtros", "Categoria do artigo.", MaxLength: 200),
+                        new("limit", "Limite", ReportFilterFieldType.Integer, false, "Saida", "", UiComponent: ReportFilterUiComponent.NumberInput, DefaultValue: "5000", Min: 1, Max: 10000)
                     ]))
         };
     }
@@ -1376,6 +1753,20 @@ public class ReportsController : ControllerBase
             ReportDatasetType.AgentLabels => "Agent Labels",
             ReportDatasetType.AutomaticLabelRules => "Automatic Label Rules",
             ReportDatasetType.AutomationExecutions => "Automation Executions",
+            ReportDatasetType.AgentMonitoringEvents => "Agent Monitoring Events",
+            ReportDatasetType.AgentAlerts => "Agent Alerts",
+            ReportDatasetType.P2pTelemetry => "P2P Telemetry",
+            ReportDatasetType.AgentDisks => "Agent Disks",
+            ReportDatasetType.NetworkAdapters => "Network Adapters",
+            ReportDatasetType.ListeningPorts => "Listening Ports",
+            ReportDatasetType.Printers => "Printers",
+            ReportDatasetType.SoftwareCatalog => "Software Catalog",
+            ReportDatasetType.AutomationScripts => "Automation Scripts",
+            ReportDatasetType.AppPackages => "App Packages",
+            ReportDatasetType.TicketActivity => "Ticket Activity Log",
+            ReportDatasetType.TicketEscalations => "Ticket Escalation Rules",
+            ReportDatasetType.CustomFields => "Custom Fields",
+            ReportDatasetType.KnowledgeBase => "Knowledge Base",
             _ => datasetType.ToString()
         };
     }
@@ -1393,6 +1784,20 @@ public class ReportsController : ControllerBase
             ReportDatasetType.AgentLabels => "Labels (manual and automatic) applied to agents.",
             ReportDatasetType.AutomaticLabelRules => "Automatic label rules with affected agent counts.",
             ReportDatasetType.AutomationExecutions => "Automation script execution history by agent.",
+            ReportDatasetType.AgentMonitoringEvents => "Agent monitoring events with severity and metric data.",
+            ReportDatasetType.AgentAlerts => "Configured alert definitions and their thresholds.",
+            ReportDatasetType.P2pTelemetry => "P2P distribution telemetry: CPU, memory, bytes, peers.",
+            ReportDatasetType.AgentDisks => "Disk inventory per agent: size, type, filesystem, health.",
+            ReportDatasetType.NetworkAdapters => "Network adapter info per agent: MAC, IP, speed.",
+            ReportDatasetType.ListeningPorts => "Open TCP/UDP ports per agent (security audit).",
+            ReportDatasetType.Printers => "Printer inventory per agent: driver, port, shared.",
+            ReportDatasetType.SoftwareCatalog => "Software catalog with EOL, licensing and category info.",
+            ReportDatasetType.AutomationScripts => "Automation script definitions and audit history.",
+            ReportDatasetType.AppPackages => "App packages (Chocolatey/Winget) with source and category.",
+            ReportDatasetType.TicketActivity => "Ticket activity log: field changes and actions.",
+            ReportDatasetType.TicketEscalations => "Ticket escalation rules configuration.",
+            ReportDatasetType.CustomFields => "Custom field definitions with entity type and value type.",
+            ReportDatasetType.KnowledgeBase => "Knowledge base articles by status, category and author.",
             _ => "Dataset available for reporting."
         };
     }
@@ -1403,7 +1808,9 @@ public class ReportsController : ControllerBase
             || field.Equals("siteId", StringComparison.OrdinalIgnoreCase)
             || field.Equals("agentId", StringComparison.OrdinalIgnoreCase)
             || field.Equals("labelName", StringComparison.OrdinalIgnoreCase)
-            || field.Equals("ruleId", StringComparison.OrdinalIgnoreCase);
+            || field.Equals("ruleId", StringComparison.OrdinalIgnoreCase)
+            || field.Equals("ticketId", StringComparison.OrdinalIgnoreCase)
+            || field.Equals("softwareName", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string InferFieldType(string field)
@@ -1433,6 +1840,20 @@ public class ReportsController : ControllerBase
             ReportDatasetType.AgentLabels => "lbl",
             ReportDatasetType.AutomaticLabelRules => "rule",
             ReportDatasetType.AutomationExecutions => "auto",
+            ReportDatasetType.AgentMonitoringEvents => "evt",
+            ReportDatasetType.AgentAlerts => "alr",
+            ReportDatasetType.P2pTelemetry => "p2p",
+            ReportDatasetType.AgentDisks => "dsk",
+            ReportDatasetType.NetworkAdapters => "net",
+            ReportDatasetType.ListeningPorts => "port",
+            ReportDatasetType.Printers => "prt",
+            ReportDatasetType.SoftwareCatalog => "cat",
+            ReportDatasetType.AutomationScripts => "scp",
+            ReportDatasetType.AppPackages => "app",
+            ReportDatasetType.TicketActivity => "act",
+            ReportDatasetType.TicketEscalations => "esc",
+            ReportDatasetType.CustomFields => "cf",
+            ReportDatasetType.KnowledgeBase => "kb",
             _ => "src"
         };
     }
@@ -1567,3 +1988,14 @@ public record UpdateReportScheduleRequest(
     string? FiltersJson = null,
     string? UpdatedBy = null,
     Guid? ClientId = null);
+
+public record CreateReportFilterPresetRequest(
+    Guid UserId,
+    Guid TemplateId,
+    string Name,
+    string? FiltersJson);
+
+public record UpdateReportFilterPresetRequest(
+    Guid UserId,
+    string? Name = null,
+    string? FiltersJson = null);

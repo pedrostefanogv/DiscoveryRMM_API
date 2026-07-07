@@ -4,7 +4,8 @@ namespace Discovery.Core.DTOs;
 public record AgentChatRequest(
     string Message,
     Guid? SessionId = null, // null = nova sessão
-    int? MaxTokens = 1000
+    int? MaxTokens = 1000,
+    Guid? DepartmentId = null // opcional — contexto departamental para RAG da KB
 );
 
 // Resposta síncrona (curta)
@@ -39,9 +40,13 @@ public record AgentChatJobStatus(
 
 /// <summary>
 /// Chunk emitido durante streaming SSE.
-/// Type = "token"  → Content contém o fragmento de texto incremental.
-/// Type = "done"   → SessionId, TokensUsed e LatencyMs estão preenchidos.
-/// Type = "error"  → Error contém a mensagem de erro.
+/// Type = "token"            → Content contém o fragmento de texto incremental.
+/// Type = "tool_call_start"  → ToolCallId + ToolName preenchidos (início de tool call).
+/// Type = "tool_call_delta"  → ToolArgumentsDelta com fragmento incremental de argumentos.
+/// Type = "tool_call_end"    → ToolCallId preenchido (fim de tool call).
+/// Type = "tool_result"      → ToolCallId + ToolResult preenchidos (resultado da tool).
+/// Type = "done"             → SessionId, TokensUsed e LatencyMs estão preenchidos.
+/// Type = "error"            → Error contém a mensagem de erro.
 /// </summary>
 public record AiChatStreamChunk(
     string Type,
@@ -49,5 +54,9 @@ public record AiChatStreamChunk(
     Guid? SessionId = null,
     int? TokensUsed = null,
     int? LatencyMs = null,
-    string? Error = null
+    string? Error = null,
+    string? ToolCallId = null,
+    string? ToolName = null,
+    string? ToolArgumentsDelta = null,
+    string? ToolResult = null
 );

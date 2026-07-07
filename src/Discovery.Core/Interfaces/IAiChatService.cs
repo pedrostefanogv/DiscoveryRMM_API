@@ -14,8 +14,11 @@ public interface IAiChatService
     Task<AgentChatSyncResponse> ProcessSyncAsync(
         Guid agentId, 
         string message, 
-        Guid? sessionId, 
-        CancellationToken ct);
+        Guid? sessionId,
+        string? createdByIp = null,
+        int? requestMaxTokens = null,
+        Guid? departmentId = null,
+        CancellationToken ct = default);
     
     /// <summary>
     /// Processa uma mensagem de chat assíncrona (longa)
@@ -24,8 +27,10 @@ public interface IAiChatService
     Task<Guid> ProcessAsyncAsync(
         Guid agentId, 
         string message, 
-        Guid? sessionId, 
-        CancellationToken ct);
+        Guid? sessionId,
+        int? requestMaxTokens = null,
+        Guid? departmentId = null,
+        CancellationToken ct = default);
     
     /// <summary>
     /// Consulta o status de um job assíncrono
@@ -34,14 +39,29 @@ public interface IAiChatService
         Guid jobId, 
         Guid agentId, 
         CancellationToken ct);
+    
+    /// <summary>
+    /// Processa uma mensagem para contexto de ticket (triagem/resumo/sugestão).
+    /// Diferente do chat do agent, tem contextos mais focados sem histórico persistente.
+    /// </summary>
+    Task<LlmResponse> ProcessTicketPromptAsync(
+        string systemPrompt,
+        string userMessage,
+        Guid siteId,
+        int maxTokens,
+        double temperature,
+        Guid? departmentId = null,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Responde via SSE streaming — emite chunks incrementais enquanto o LLM gera tokens.
-    /// Não suporta tool calls; contexto RAG é injetado no system prompt antes de iniciar.
+    /// Suporta tool calls (loop de MCP tools) e RAG departamental.
     /// </summary>
     IAsyncEnumerable<AiChatStreamChunk> StreamAsync(
         Guid agentId,
         string message,
         Guid? sessionId,
-        CancellationToken ct);
+        Guid? departmentId = null,
+        CancellationToken ct = default);
 }
+

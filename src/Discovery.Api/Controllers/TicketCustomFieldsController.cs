@@ -121,20 +121,30 @@ public class TicketCustomFieldsController : ControllerBase
 
     /// <summary>
     /// Verifica se o usuário atual é atendente (staff) do departamento.
-    /// Um usuário é considerado staff se tem permissão de edição em Tickets.
+    /// Staff = acesso global (Admin/Manager) OU permissão de edição explícita em Tickets.
+    /// Não basta ter AllowedClientIds/SiteIds — isso é acesso View, não staff.
     /// </summary>
     private async Task<bool> IsDepartmentStaffAsync(Guid departmentId)
     {
         try
         {
-            var scope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
-            // Se tem acesso global ou permissão de edição, é staff
-            // Também verifica se o ticket está atribuído ao usuário atual
-            return scope.HasGlobalAccess || scope.AllowedClientIds.Any() || scope.AllowedSiteIds.Any();
+            // Verificar se tem acesso global
+            var editScope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
+            if (editScope.HasGlobalAccess)
+                return true;
+
+            // Verificar permissão de edição no escopo do departamento
+            // Staff precisa ter permissão explícita de Edit (não apenas View)
+            var viewScope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
+            // Se tem acesso View mas não Edit, não é staff para campos internos
+            if (viewScope.HasGlobalAccess && !editScope.HasGlobalAccess)
+                return false;
+
+            // Verificar se o usuário está na role Staff/Admin dos departamentos permitidos
+            return editScope.AllowedClientIds.Any() || editScope.AllowedSiteIds.Any();
         }
         catch
         {
-            // Em caso de erro na verificação, assume que não é staff (segurança)
             return false;
         }
     }

@@ -87,10 +87,8 @@ public class AgentDownloadController : ControllerBase
                 "Agent download served: version={Version} sha256={Sha256} size={Size} ip={ClientIp} ua={UserAgent}",
                 build.Version, build.Sha256, build.SizeBytes, clientIp, userAgent);
 
-            // Audit log — fire-and-forget to avoid blocking the download response
-            _ = _loggingService.LogInfoAsync(
-                LogType.System,
-                LogSource.Api,
+            // Audit log — safe fire-and-forget to avoid blocking the download response
+            FireAndForgetLog(
                 "Agent stage2 installer download",
                 new
                 {
@@ -103,8 +101,7 @@ public class AgentDownloadController : ControllerBase
                     ClientIp = clientIp,
                     UserAgent = userAgent,
                     TraceId = HttpContext.TraceIdentifier
-                },
-                cancellationToken: CancellationToken.None);
+                });
 
             var fileName = build.FileName ?? "discovery-agent-install.exe";
             var contentType = build.ContentType;
@@ -152,10 +149,8 @@ public class AgentDownloadController : ControllerBase
                 "Generic (zero-touch) agent download served: fileName={FileName} size={Size} ip={ClientIp} ua={UserAgent}",
                 fileName, content.Length, clientIp, userAgent);
 
-            // Audit log — fire-and-forget
-            _ = _loggingService.LogInfoAsync(
-                LogType.System,
-                LogSource.Api,
+            // Audit log — safe fire-and-forget
+            FireAndForgetLog(
                 "Generic (zero-touch) agent installer download",
                 new
                 {
@@ -164,8 +159,7 @@ public class AgentDownloadController : ControllerBase
                     ClientIp = clientIp,
                     UserAgent = userAgent,
                     TraceId = HttpContext.TraceIdentifier
-                },
-                cancellationToken: CancellationToken.None);
+                });
 
             return File(content, "application/x-msdownload", fileName);
         }
@@ -258,5 +252,32 @@ public class AgentDownloadController : ControllerBase
             return Path.GetFullPath(Path.Combine(discoveryBase.Trim(), "shared", "agent-update-builds"));
 
         return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "app_data", "agent-update-builds"));
+    }
+
+    /// <summary>
+    /// Safe fire-and-forget audit log that captures exceptions instead of swallowing them.
+    /// Uses Task.Run and ContinueWith to avoid running on a disposed request scope.
+    /// </summary>
+    private void FireAndForgetLog(string message, object? payload)
+    {
+        // Capture only the service reference — do NOT capture scoped dependencies
+        var loggingService = _loggingService;
+        var logger = _logger;
+        Task.Run(async () =>
+        {
+            try
+            {
+                await loggingService.LogInfoAsync(
+                    LogType.System,
+                    LogSource.Api,
+                    message,
+                    payload,
+                    cancellationToken: CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Background audit log failed: {Message}", message);
+            }
+        });
     }
 }

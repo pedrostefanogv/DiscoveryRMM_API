@@ -7,20 +7,32 @@ set_log_context() {
 }
 
 log() {
-  printf '[%s] %s\n' "$LOG_CONTEXT" "$*"
+  printf '[%s] %s %s\n' "$(date +%H:%M:%S)" "$LOG_CONTEXT" "$*"
 }
 
 warn() {
-  printf '[%s][aviso] %s\n' "$LOG_CONTEXT" "$*" >&2
+  printf '[%s] %s [aviso] %s\n' "$(date +%H:%M:%S)" "$LOG_CONTEXT" "$*" >&2
 }
 
 fail() {
-  printf '[%s][erro] %s\n' "$LOG_CONTEXT" "$*" >&2
+  printf '[%s] %s [erro] %s\n' "$(date +%H:%M:%S)" "$LOG_CONTEXT" "$*" >&2
   exit 1
 }
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
+}
+
+validate_host_os() {
+  if [[ ! -f /etc/os-release ]]; then
+    fail "Sistema operacional nao suportado: /etc/os-release nao encontrado."
+  fi
+  local os_id
+  os_id="$(. /etc/os-release && printf '%s' "${ID:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$os_id" in
+    ubuntu|debian) return 0 ;;
+    *) fail "Sistema operacional nao suportado: ${os_id}. O instalador requer Ubuntu ou Debian." ;;
+  esac
 }
 
 detect_system_architecture() {
@@ -126,6 +138,7 @@ generate_random_password() {
   set -o pipefail
 
   [[ -n "$generated" ]] || fail "Nao foi possivel gerar senha aleatoria."
+  (( ${#generated} == length )) || fail "Senha aleatoria gerada com comprimento insuficiente: ${#generated} de ${length}."
   printf '%s' "$generated"
 }
 

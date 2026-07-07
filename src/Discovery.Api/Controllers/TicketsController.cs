@@ -24,12 +24,11 @@ public class TicketsController : ControllerBase
     private readonly IActivityLogService _activityLogService;
     private readonly IAttachmentService _attachmentService;
     private readonly IServerConfigurationRepository _serverConfigurationRepository;
-    private readonly ITicketAlertRuleRepository _ticketAlertRuleRepo;
-    private readonly AlertDispatchService _alertDispatchService;
     private readonly INotificationService _notificationService;
     private readonly ITicketWatcherRepository _watcherRepo;
     private readonly IScopeContext _scopeContext;
     private readonly IDepartmentCustomFieldService _departmentCustomFieldService;
+    private readonly ITicketWorkflowService _ticketWorkflowService;
 
     public TicketsController(
         ITicketRepository repo,
@@ -40,12 +39,11 @@ public class TicketsController : ControllerBase
         IActivityLogService activityLogService,
         IAttachmentService attachmentService,
         IServerConfigurationRepository serverConfigurationRepository,
-        ITicketAlertRuleRepository ticketAlertRuleRepo,
-        AlertDispatchService alertDispatchService,
         INotificationService notificationService,
         ITicketWatcherRepository watcherRepo,
         IScopeContext scopeContext,
-        IDepartmentCustomFieldService departmentCustomFieldService)
+        IDepartmentCustomFieldService departmentCustomFieldService,
+        ITicketWorkflowService ticketWorkflowService)
     {
         _repo = repo;
         _workflowRepo = workflowRepo;
@@ -55,12 +53,11 @@ public class TicketsController : ControllerBase
         _activityLogService = activityLogService;
         _attachmentService = attachmentService;
         _serverConfigurationRepository = serverConfigurationRepository;
-        _ticketAlertRuleRepo = ticketAlertRuleRepo;
-        _alertDispatchService = alertDispatchService;
         _notificationService = notificationService;
         _watcherRepo = watcherRepo;
         _scopeContext = scopeContext;
         _departmentCustomFieldService = departmentCustomFieldService;
+        _ticketWorkflowService = ticketWorkflowService;
     }
 
     [HttpGet]
@@ -124,7 +121,18 @@ public class TicketsController : ControllerBase
     public async Task<IActionResult> GetById(Guid id)
     {
         var ticket = await _repo.GetByIdAsync(id);
-        return ticket is null ? NotFound() : Ok(ticket);
+        if (ticket is null) return NotFound();
+
+        // Validate scope: user must have access to this ticket's client
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
+        if (!scope.HasGlobalAccess
+            && !scope.AllowedClientIds.Contains(ticket.ClientId)
+            && !(ticket.SiteId.HasValue && scope.AllowedSiteIds.Contains(ticket.SiteId.Value)))
+        {
+            return NotFound();
+        }
+
+        return Ok(ticket);
     }
 
     [HttpPost]
@@ -253,6 +261,15 @@ public class TicketsController : ControllerBase
         var ticket = await _repo.GetByIdAsync(id);
         if (ticket is null) return NotFound();
 
+        // Validate scope: user must have access to the ticket's client
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
+        if (!scope.HasGlobalAccess
+            && !scope.AllowedClientIds.Contains(ticket.ClientId)
+            && !(ticket.SiteId.HasValue && scope.AllowedSiteIds.Contains(ticket.SiteId.Value)))
+        {
+            return NotFound(); // Don't leak existence
+        }
+
         var oldPriority = ticket.Priority;
         var oldAssignedTo = ticket.AssignedToUserId;
         var oldDepartmentId = ticket.DepartmentId;
@@ -331,89 +348,16 @@ public class TicketsController : ControllerBase
         var ticket = await _repo.GetByIdAsync(id);
         if (ticket is null) return NotFound();
 
-        // Validar se a transição é permitida
-        var valid = await _workflowRepo.IsTransitionValidAsync(ticket.WorkflowStateId, request.WorkflowStateId, ticket.ClientId);
-        if (!valid) return BadRequest("Invalid workflow transition.");
-
-        var oldStateId = ticket.WorkflowStateId;
-
-        // Verificar se o novo estado é final (para setar ClosedAt)
-        var newState = await _workflowRepo.GetStateByIdAsync(request.WorkflowStateId);
-        DateTime? closedAt = newState?.IsFinal == true ? DateTime.UtcNow : null;
-        ticket.ClosedAt = closedAt;
-
-        await _repo.UpdateWorkflowStateAsync(id, request.WorkflowStateId, closedAt);
-
-        // --- SLA Hold: pausar/retomar baseado em PausesSla do novo estado ---
-        var oldState = await _workflowRepo.GetStateByIdAsync(oldStateId);
-        var wasOnHold = oldState?.PausesSla == true;
-        var willBeOnHold = newState?.PausesSla == true;
-
-        if (!wasOnHold && willBeOnHold)
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
+        if (!scope.HasGlobalAccess
+            && !scope.AllowedClientIds.Contains(ticket.ClientId)
+            && !(ticket.SiteId.HasValue && scope.AllowedSiteIds.Contains(ticket.SiteId.Value)))
         {
-            // Entrou em pausa
-            await _repo.UpdateSlaHoldAsync(id, DateTime.UtcNow, ticket.SlaPausedSeconds);
-        }
-        else if (wasOnHold && !willBeOnHold && ticket.SlaHoldStartedAt.HasValue)
-        {
-            // Saiu da pausa: acumular tempo pausado
-            var addedSeconds = (int)(DateTime.UtcNow - ticket.SlaHoldStartedAt.Value).TotalSeconds;
-            await _repo.UpdateSlaHoldAsync(id, null, ticket.SlaPausedSeconds + addedSeconds);
+            return NotFound();
         }
 
-        // Log da mudança de estado
-        await _activityLogService.LogStateChangeAsync(id, null, oldStateId, request.WorkflowStateId);
-
-        // Disparar alertas automáticos vinculados ao novo estado
-        var alertRules = await _ticketAlertRuleRepo.GetByWorkflowStateIdAsync(request.WorkflowStateId);
-        foreach (var rule in alertRules)
-        {
-            var (scopeType, agentId, siteId, clientId) = ResolveAlertScope(ticket, rule.ScopePreference);
-            var alertDef = new Discovery.Core.Entities.AgentAlertDefinition
-            {
-                Id = Guid.NewGuid(),
-                Title = rule.Title,
-                Message = rule.Message,
-                AlertType = rule.AlertType,
-                TimeoutSeconds = rule.TimeoutSeconds,
-                ActionsJson = rule.ActionsJson,
-                DefaultAction = rule.DefaultAction,
-                Icon = rule.Icon,
-                ScopeType = scopeType,
-                ScopeAgentId = agentId,
-                ScopeSiteId = siteId,
-                ScopeClientId = clientId,
-                TicketId = id,
-                Status = Discovery.Core.Enums.AlertDefinitionStatus.Draft,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            try { await _alertDispatchService.DispatchAsync(alertDef); }
-            catch (Exception ex)
-            {
-                // Alerta falhou — não bloquear a transição de estado
-                _ = ex;
-            }
-        }
-
-        // Recarregar o ticket atualizado do banco
-        var updatedTicket = await _repo.GetByIdAsync(id);
-
-        // Notificar atribuído sobre mudança de estado
-        if (updatedTicket?.AssignedToUserId.HasValue == true)
-        {
-            var stateLabel = newState?.Name ?? request.WorkflowStateId.ToString();
-            await _notificationService.PublishAsync(new NotificationPublishRequest(
-                EventType: "ticket.state_changed",
-                Topic: "tickets",
-                Title: "Estado do ticket alterado",
-                Message: $"O ticket #{id} '{updatedTicket.Title}' mudou para o estado '{stateLabel}'.",
-                Severity: NotificationSeverity.Informational,
-                Payload: new { ticketId = id, workflowStateId = request.WorkflowStateId },
-                RecipientUserId: updatedTicket.AssignedToUserId
-            ));
-        }
+        var changedBy = HttpContext.Items["UserId"] as Guid?;
+        var updatedTicket = await _ticketWorkflowService.TransitionAsync(id, request.WorkflowStateId, changedBy, HttpContext.RequestAborted);
 
         return Ok(new { message = "Workflow state updated", ticket = updatedTicket });
     }
@@ -422,10 +366,27 @@ public class TicketsController : ControllerBase
 
     [HttpGet("{id:guid}/comments")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetComments(Guid id)
+    public async Task<IActionResult> GetComments(
+        Guid id,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50)
     {
-        var comments = await _repo.GetCommentsAsync(id);
-        return Ok(comments);
+        var ticket = await _repo.GetByIdAsync(id);
+        if (ticket is null) return NotFound();
+
+        var items = await _repo.GetCommentsPageAsync(id, cursor, Math.Clamp(limit, 1, 200));
+        var slice = CursorPaginationHelper.SlicePage(items.ToList(), Math.Clamp(limit, 1, 200));
+        var nextCursor = slice.HasMore && slice.LastItem is not null
+            ? CursorPaginationHelper.EncodeCreatedAtCursor(slice.LastItem.CreatedAt, slice.LastItem.Id)
+            : null;
+
+        return Ok(new CursorPageDto<TicketComment>(
+            slice.Page,
+            slice.Page.Count,
+            cursor,
+            nextCursor,
+            slice.HasMore,
+            Math.Clamp(limit, 1, 200)));
     }
 
     [HttpPost("{id:guid}/comments")]
@@ -498,14 +459,45 @@ public class TicketsController : ControllerBase
 
     [HttpGet("{id:guid}/attachments")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetAttachments(Guid id)
+    public async Task<IActionResult> GetAttachments(
+        Guid id,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50)
     {
         var ticket = await _repo.GetByIdAsync(id);
         if (ticket is null)
             return NotFound();
 
         var attachments = await _attachmentService.GetAttachmentsForEntityAsync("Ticket", id);
-        return Ok(attachments);
+        var safeLimit = Math.Clamp(limit, 1, 200);
+
+        // Se houver cursor, filtra em memória (poucos attachments por ticket)
+        if (!string.IsNullOrWhiteSpace(cursor)
+            && CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorCreatedAtUtc, out var cursorId))
+        {
+            attachments = attachments
+                .Where(a => a.CreatedAt < cursorCreatedAtUtc
+                    || (a.CreatedAt == cursorCreatedAtUtc && a.Id.CompareTo(cursorId) < 0))
+                .ToList();
+        }
+
+        var ordered = attachments
+            .OrderByDescending(a => a.CreatedAt)
+            .ThenByDescending(a => a.Id)
+            .ToList();
+
+        var page = ordered.Take(safeLimit).ToList();
+        var hasMore = ordered.Count > safeLimit;
+        var nextCursor = hasMore && page.Count > 0
+            ? CursorPaginationHelper.EncodeCreatedAtCursor(page[^1].CreatedAt, page[^1].Id)
+            : null;
+
+        return Ok(new
+        {
+            items = page,
+            cursor = nextCursor,
+            hasMore
+        });
     }
 
     [HttpPost("{id:guid}/attachments/presigned-upload")]
@@ -639,6 +631,91 @@ public class TicketsController : ControllerBase
         return TicketAttachmentSettings.FromJson(serverConfig.TicketAttachmentSettingsJson);
     }
 
+    // ── Reopen / Rating ──
+
+    [HttpPost("{id:guid}/reopen")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> Reopen(Guid id, [FromBody] ReopenTicketRequest request)
+    {
+        var ticket = await _repo.GetByIdAsync(id);
+        if (ticket is null) return NotFound();
+
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
+        if (!scope.HasGlobalAccess
+            && !scope.AllowedClientIds.Contains(ticket.ClientId)
+            && !(ticket.SiteId.HasValue && scope.AllowedSiteIds.Contains(ticket.SiteId.Value)))
+            return NotFound();
+
+        if (!ticket.ClosedAt.HasValue)
+            return BadRequest(new { error = "Ticket não está fechado. Use a transição de estado normal." });
+
+        var initialState = await _workflowRepo.GetInitialStateAsync(ticket.ClientId);
+        if (initialState is null)
+            return BadRequest("No initial workflow state configured.");
+
+        DateTime? newSla = null;
+        if (ticket.WorkflowProfileId.HasValue)
+            newSla = await _slaService.CalculateSlaExpiryAsync(ticket.WorkflowProfileId.Value, DateTime.UtcNow);
+
+        ticket.WorkflowStateId = initialState.Id;
+        ticket.ClosedAt = null;
+        ticket.SlaBreached = false;
+        ticket.SlaExpiresAt = newSla;
+        ticket.SlaPausedSeconds = 0;
+        ticket.SlaHoldStartedAt = null;
+        ticket.FirstRespondedAt = null;
+        ticket.SlaFirstResponseExpiresAt = null;
+        ticket.UpdatedAt = DateTime.UtcNow;
+
+        await _repo.UpdateAsync(ticket);
+
+        await _activityLogService.LogActivityAsync(
+            id, TicketActivityType.Reopened, null, null, null,
+            request.Reason ?? "Ticket reaberto");
+
+        if (ticket.AssignedToUserId.HasValue)
+        {
+            await _notificationService.PublishAsync(new NotificationPublishRequest(
+                EventType: "ticket.reopened", Topic: "tickets",
+                Title: "Ticket reaberto",
+                Message: $"O ticket #{id} '{ticket.Title}' foi reaberto." + (string.IsNullOrWhiteSpace(request.Reason) ? "" : $" Motivo: {request.Reason}"),
+                Severity: NotificationSeverity.Warning,
+                Payload: new { ticketId = id },
+                RecipientUserId: ticket.AssignedToUserId
+            ));
+        }
+
+        return Ok(ticket);
+    }
+
+    [HttpPost("{id:guid}/rating")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> Rate(Guid id, [FromBody] RateTicketRequest request)
+    {
+        var ticket = await _repo.GetByIdAsync(id);
+        if (ticket is null) return NotFound();
+
+        var scope = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
+        if (!scope.HasGlobalAccess
+            && !scope.AllowedClientIds.Contains(ticket.ClientId)
+            && !(ticket.SiteId.HasValue && scope.AllowedSiteIds.Contains(ticket.SiteId.Value)))
+            return NotFound();
+
+        if (!ticket.ClosedAt.HasValue)
+            return BadRequest(new { error = "Apenas tickets fechados podem ser avaliados." });
+
+        ticket.Rating = request.Rating;
+        ticket.RatedAt = DateTime.UtcNow;
+        ticket.RatedBy = HttpContext.Items["Username"] as string ?? HttpContext.Items["UserId"]?.ToString();
+        await _repo.UpdateAsync(ticket);
+
+        await _activityLogService.LogActivityAsync(
+            id, TicketActivityType.DescriptionUpdated, null, null, $"rating:{request.Rating}",
+            $"Ticket avaliado com nota {request.Rating}" + (string.IsNullOrWhiteSpace(request.Comment) ? "" : $": {request.Comment}"));
+
+        return Ok(new { ticketId = id, rating = request.Rating });
+    }
+
     /// <summary>
     /// Resolve o escopo de alerta a partir do contexto do ticket,
     /// respeitando a preferência configurada na regra com fallback Agent→Site→Client.
@@ -692,4 +769,8 @@ public record CompleteTicketAttachmentUploadRequest(
     string FileName,
     string ContentType,
     long SizeBytes,
-    string? UploadedBy);
+    string? UploadedBy = null);
+
+public record ReopenTicketRequest(string? Reason);
+
+public record RateTicketRequest(int Rating, string? Comment);
