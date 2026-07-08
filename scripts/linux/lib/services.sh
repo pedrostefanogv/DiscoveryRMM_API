@@ -276,7 +276,7 @@ ensure_nats_fanout_stream() {
   install_nats_cli
 
   local stream_name="${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}"
-  local stream_subjects="${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*.agents.command,tenant.*.agents.command,tenant.global.agents.command}"
+  local stream_subjects="${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*.agents.command,tenant.*.agents.command}"
   local stream_max_age="${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}"
   local stream_max_bytes="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}"
   local stream_dupe_window="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}"

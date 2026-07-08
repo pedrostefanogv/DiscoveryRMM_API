@@ -16,8 +16,19 @@ public sealed class LoginQueryHandler(
         {
             var response = await userAuthService.LoginAsync(q.Email, q.Password, q.IpAddress, q.UserAgent);
             return Result<LoginResultDto>.Success(new LoginResultDto(
-                Guid.Empty, response.AccessToken ?? string.Empty, response.RefreshToken ?? string.Empty,
-                response.MfaToken, response.MfaRequired, DateTime.UtcNow.AddSeconds(response.ExpiresInSeconds ?? 0)));
+                UserId: Guid.Empty,
+                AccessToken: response.AccessToken ?? string.Empty,
+                RefreshToken: response.RefreshToken ?? string.Empty,
+                MfaToken: response.MfaToken,
+                MfaRequired: response.MfaRequired,
+                ExpiresAt: DateTime.UtcNow.AddSeconds(response.ExpiresInSeconds ?? 0),
+                RoleMfaRequirement: response.RoleMfaRequirement,
+                MfaConfigured: response.MfaConfigured,
+                FirstAccessRequired: response.FirstAccessRequired,
+                MustChangePassword: response.MustChangePassword,
+                MustChangeProfile: response.MustChangeProfile,
+                SessionEstablished: response.SessionEstablished
+            ));
         }
         catch (UnauthorizedAccessException ex)
         {

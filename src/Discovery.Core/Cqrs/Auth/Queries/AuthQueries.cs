@@ -1,7 +1,21 @@
 using Discovery.Core.Cqrs;
+using Discovery.Core.Enums.Identity;
 namespace Discovery.Core.Cqrs.Auth.Queries;
 public sealed record LoginQuery(string Email, string Password, string? IpAddress, string? UserAgent) : IQuery<Result<LoginResultDto>>;
-public sealed record LoginResultDto(Guid UserId, string AccessToken, string RefreshToken, string MfaToken, bool MfaRequired, DateTime ExpiresAt);
+public sealed record LoginResultDto(
+    Guid UserId,
+    string AccessToken,
+    string RefreshToken,
+    string MfaToken,
+    bool MfaRequired,
+    DateTime ExpiresAt,
+    RoleMfaRequirement RoleMfaRequirement = RoleMfaRequirement.None,
+    bool MfaConfigured = false,
+    bool FirstAccessRequired = false,
+    bool MustChangePassword = false,
+    bool MustChangeProfile = false,
+    bool SessionEstablished = false
+);
 public sealed record RefreshTokenQuery(string RefreshToken) : IQuery<Result<RefreshResultDto>>;
 public sealed record RefreshResultDto(string AccessToken, string RefreshToken, DateTime ExpiresAt);
 public sealed record LogoutCommand(string RefreshToken) : ICommand<Result<VoidResult>>;

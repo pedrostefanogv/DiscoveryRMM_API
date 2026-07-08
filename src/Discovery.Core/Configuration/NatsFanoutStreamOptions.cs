@@ -17,7 +17,6 @@ public class NatsFanoutStreamOptions
     [
         NatsSubjectBuilder.SiteAgentsCommandStreamSubject,
         NatsSubjectBuilder.ClientAgentsCommandStreamSubject,
-        NatsSubjectBuilder.GlobalAgentsCommandStreamSubject,
     ];
 
     // Aceita formato compacto (ex.: 24h, 2m) e TimeSpan padrao (ex.: 24:00:00).
