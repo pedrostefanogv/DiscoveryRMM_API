@@ -1,135 +1,94 @@
-using Discovery.Core.Entities;
+using Discovery.Core.Cqrs.Clients.Commands;
+using Discovery.Core.Cqrs.Clients.Queries;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
-using Discovery.Core.Interfaces;
-using Discovery.Core.Interfaces.Auth;
 using Discovery.Api.Filters;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/[controller]")]
-public class ClientsController(
-    IClientRepository repo,
-    ICustomFieldService customFieldService,
-    IScopeContext scopeContext
-) : ControllerBase
+public class ClientsController(IMediator mediator) : ControllerBase
 {
-    private readonly IClientRepository _repo = repo;
-    private readonly ICustomFieldService _customFieldService = customFieldService;
-    private readonly IScopeContext _scopeContext = scopeContext;
-
     [HttpGet]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
     [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
     public async Task<IActionResult> GetAll([FromQuery] bool includeInactive = false)
     {
-        var scope = await _scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View);
-        List<Client> clients;
-        if (scope.HasGlobalAccess)
-        {
-            clients = (await _repo.GetAllAsync(includeInactive)).ToList();
-        }
-        else
-        {
-            var allowedIds = scope.AllowedClientIds.ToHashSet();
-            clients = (await _repo.GetAllAsync(includeInactive))
-                .Where(c => allowedIds.Contains(c.Id))
-                .ToList();
-        }
-        return Ok(clients);
+        var result = await mediator.Send(new GetAllClientsQuery(includeInactive));
+        return result.Match<IActionResult>(success: Ok, failure: Problem);
     }
 
     [HttpGet("{id:guid}")]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var scope = await _scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View);
-        if (!scope.HasGlobalAccess && !scope.AllowedClientIds.Contains(id))
-            return NotFound();
-
-        var client = await _repo.GetByIdAsync(id);
-        return client is null ? NotFound() : Ok(client);
+        var result = await mediator.Send(new GetClientByIdQuery(id));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));
     }
 
     [HttpPost]
     [RequirePermission(ResourceType.Clients, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateClientRequest request)
     {
-        var client = new Client
-        {
-            Name = request.Name,
-            Notes = request.Notes
-        };
-        var created = await _repo.CreateAsync(client);
-        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
+        var cmd = new CreateClientCommand(request.Name, request.Notes);
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: created => CreatedAtAction(nameof(GetById), new { id = created.Id }, created),
+            failure: Problem);
     }
 
     [HttpPut("{id:guid}")]
     [RequirePermission(ResourceType.Clients, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateClientRequest request)
     {
-        var client = await _repo.GetByIdAsync(id);
-        if (client is null) return NotFound();
-
-        client.Name = request.Name;
-        client.Notes = request.Notes;
-        client.IsActive = request.IsActive;
-
-        await _repo.UpdateAsync(client);
-        return Ok(client);
+        var cmd = new UpdateClientCommand(id, request.Name, request.Notes, request.IsActive);
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));
     }
 
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.Clients, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
-        await _repo.DeleteAsync(id);
+        await mediator.Send(new DeleteClientCommand(id));
         return NoContent();
     }
 
     [HttpGet("{id:guid}/custom-fields")]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
-    public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, CancellationToken cancellationToken = default)
+    public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, CancellationToken ct = default)
     {
-        var client = await _repo.GetByIdAsync(id);
-        if (client is null)
-            return NotFound();
-
-        var values = await _customFieldService.GetValuesAsync(CustomFieldScopeType.Client, id, includeSecrets, cancellationToken);
-        return Ok(values);
+        var result = await mediator.Send(new GetClientCustomFieldsQuery(id, includeSecrets), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));
     }
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
     [RequirePermission(ResourceType.Clients, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomFieldValue(
-        Guid id,
-        Guid definitionId,
+        Guid id, Guid definitionId,
         [FromBody] UpsertClientCustomFieldValueRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken ct = default)
     {
-        var client = await _repo.GetByIdAsync(id);
-        if (client is null)
-            return NotFound();
+        var username = HttpContext.Items["Username"] as string ?? "api";
+        var cmd = new UpsertClientCustomFieldCommand(id, definitionId, request.Value.GetRawText(), username);
+        var result = await mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+    }
 
-        try
-        {
-            var value = await _customFieldService.UpsertValueAsync(
-                new Discovery.Core.DTOs.UpsertCustomFieldValueInput(
-                    definitionId,
-                    CustomFieldScopeType.Client,
-                    id,
-                    request.Value.GetRawText(),
-                    HttpContext.Items["Username"] as string ?? "api"),
-                cancellationToken);
-
-            return Ok(value);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+    private IActionResult Problem(IReadOnlyList<Discovery.Core.Cqrs.Error> errors)
+    {
+        return Problem(errors[0].Message, statusCode: 400);
     }
 }
 

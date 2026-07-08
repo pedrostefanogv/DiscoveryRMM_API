@@ -112,9 +112,12 @@ Cqrs/
   Commands/ApiTokenCommands.cs
   Queries/ApiTokenQueries.cs
  AppStore/Queries/AppStoreQueries.cs
- Auth/
-  Commands/PasswordCommands.cs
-  Queries/AuthQueries.cs
+ Auth/Commands/
+  AuthMfaCommands.cs
+  PasswordCommands.cs
+ Auth/Queries/
+  AuthMfaQueries.cs
+  AuthQueries.cs
  Automation/
   Commands/AutomationCommands.cs
   Queries/AutomationQueries.cs
@@ -123,6 +126,9 @@ Cqrs/
  AutoTicketRules/
   Commands/AutoTicketRuleCommands.cs
   Queries/AutoTicketRuleQueries.cs
+ Clients/
+  Commands/ClientCommands.cs
+  Queries/ClientQueries.cs
  Configuration/
   Commands/ConfigCommands.cs
   Queries/ConfigQueries.cs
@@ -168,6 +174,9 @@ Cqrs/
   Commands/RoleCommands.cs
   Queries/RoleQueries.cs
  Search/Queries/SearchQueries.cs
+ Sites/
+  Commands/SiteCommands.cs
+  Queries/SiteQueries.cs
  SlaCalendars/
   Commands/SlaCalendarCommands.cs
   Queries/SlaCalendarQueries.cs

@@ -94,9 +94,12 @@ Cqrs/
   QueryHandlers/AlertQueryHandlers.cs
  ApiTokens/ApiTokenHandlers.cs
  AppStore/AppStoreHandlers.cs
- Auth/
-  CommandHandlers/AuthCommandHandlers.cs
-  QueryHandlers/AuthQueryHandlers.cs
+ Auth/CommandHandlers/
+  AuthCommandHandlers.cs
+  AuthMfaCommandHandlers.cs
+ Auth/QueryHandlers/
+  AuthMfaQueryHandlers.cs
+  AuthQueryHandlers.cs
  AutomationScripts/AutomationScriptHandlers.cs
  AutomationTasks/AutomationTaskHandlers.cs
  AutoTicketRules/AutoTicketRuleHandlers.cs
@@ -105,6 +108,7 @@ Cqrs/
   PerformanceBehavior.cs
   TransactionBehavior.cs
   ValidationBehavior.cs
+ Clients/ClientHandlers.cs
  CustomFields/CustomFieldHandlers.cs
  Dashboard/QueryHandlers/DashboardQueryHandlers.cs
  Departments/DepartmentHandlers.cs
@@ -123,6 +127,7 @@ Cqrs/
  Reports/ReportHandlers.cs
  Roles/RoleHandlers.cs
  Search/QueryHandlers/SearchQueryHandlers.cs
+ Sites/SiteHandlers.cs
  SlaCalendars/SlaCalendarHandlers.cs
  SoftwareInventory/SoftwareInventoryHandlers.cs
  Tickets/

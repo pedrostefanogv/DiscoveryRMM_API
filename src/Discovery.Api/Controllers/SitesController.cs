@@ -1,124 +1,87 @@
-using Discovery.Api.Filters;
-using Discovery.Core.Entities;
+using Discovery.Core.Cqrs.Sites.Commands;
+using Discovery.Core.Cqrs.Sites.Queries;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
-using Discovery.Core.Interfaces;
+using Discovery.Api.Filters;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/clients/{clientId:guid}/[controller]")]
-public class SitesController(
-    ISiteRepository repo,
-    ICustomFieldService customFieldService
-) : ControllerBase
+public class SitesController(IMediator mediator) : ControllerBase
 {
-    private readonly ISiteRepository _repo = repo;
-    private readonly ICustomFieldService _customFieldService = customFieldService;
-
     [HttpGet]
     [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetByClient(Guid clientId, [FromQuery] bool includeInactive = false)
     {
-        var sites = await _repo.GetByClientIdAsync(clientId, includeInactive);
-        return Ok(sites);
+        var result = await mediator.Send(new GetSitesByClientQuery(clientId, includeInactive));
+        return result.Match<IActionResult>(success: Ok, failure: Problem);
     }
 
     [HttpGet("{id:guid}")]
     [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetById(Guid clientId, Guid id)
     {
-        var site = await _repo.GetByIdAsync(id);
-        if (site is null || site.ClientId != clientId) return NotFound();
-        return Ok(site);
+        var result = await mediator.Send(new GetSiteByIdQuery(clientId, id));
+        return result.Match<IActionResult>(success: Ok, failure: _ => NotFound());
     }
 
     [HttpPost]
     [RequirePermission(ResourceType.Sites, ActionType.Create, ScopeSource.FromRoute)]
     public async Task<IActionResult> Create(Guid clientId, [FromBody] CreateSiteRequest request)
     {
-        var site = new Site
-        {
-            ClientId = clientId,
-            Name = request.Name,
-            Notes = request.Notes
-        };
-        var created = await _repo.CreateAsync(site);
-        return CreatedAtAction(nameof(GetById), new { clientId, id = created.Id }, created);
+        var cmd = new CreateSiteCommand(clientId, request.Name, request.Notes);
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: created => CreatedAtAction(nameof(GetById), new { clientId, id = created.Id }, created),
+            failure: Problem);
     }
 
     [HttpPut("{id:guid}")]
     [RequirePermission(ResourceType.Sites, ActionType.Edit, ScopeSource.FromRoute)]
     public async Task<IActionResult> Update(Guid clientId, Guid id, [FromBody] UpdateSiteRequest request)
     {
-        var site = await _repo.GetByIdAsync(id);
-        if (site is null || site.ClientId != clientId) return NotFound();
-
-        site.Name = request.Name;
-        site.Notes = request.Notes;
-        site.IsActive = request.IsActive;
-
-        await _repo.UpdateAsync(site);
-        return Ok(site);
+        var cmd = new UpdateSiteCommand(clientId, id, request.Name, request.Notes, request.IsActive);
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(success: Ok, failure: _ => NotFound());
     }
 
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.Sites, ActionType.Delete, ScopeSource.FromRoute)]
     public async Task<IActionResult> Delete(Guid clientId, Guid id)
     {
-        var site = await _repo.GetByIdAsync(id);
-        if (site is null || site.ClientId != clientId) return NotFound();
-        await _repo.DeleteAsync(id);
-        return NoContent();
+        var result = await mediator.Send(new DeleteSiteCommand(clientId, id));
+        return result.Match<IActionResult>(success: _ => NoContent(), failure: _ => NotFound());
     }
 
     [HttpGet("{id:guid}/custom-fields")]
     [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetCustomFieldValues(
-        Guid clientId,
-        Guid id,
-        [FromQuery] bool includeSecrets = true,
-        CancellationToken cancellationToken = default)
+        Guid clientId, Guid id, [FromQuery] bool includeSecrets = true, CancellationToken ct = default)
     {
-        var site = await _repo.GetByIdAsync(id);
-        if (site is null || site.ClientId != clientId)
-            return NotFound();
-
-        var values = await _customFieldService.GetValuesAsync(CustomFieldScopeType.Site, id, includeSecrets, cancellationToken);
-        return Ok(values);
+        var result = await mediator.Send(new GetSiteCustomFieldsQuery(clientId, id, includeSecrets), ct);
+        return result.Match<IActionResult>(success: Ok, failure: _ => NotFound());
     }
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
     [RequirePermission(ResourceType.Sites, ActionType.Edit, ScopeSource.FromRoute)]
     public async Task<IActionResult> UpsertCustomFieldValue(
-        Guid clientId,
-        Guid id,
-        Guid definitionId,
-        [FromBody] UpsertSiteCustomFieldValueRequest request,
-        CancellationToken cancellationToken = default)
+        Guid clientId, Guid id, Guid definitionId,
+        [FromBody] UpsertSiteCustomFieldValueRequest request, CancellationToken ct = default)
     {
-        var site = await _repo.GetByIdAsync(id);
-        if (site is null || site.ClientId != clientId)
-            return NotFound();
+        var username = HttpContext.Items["Username"] as string ?? "api";
+        var cmd = new UpsertSiteCustomFieldCommand(clientId, id, definitionId, request.Value.GetRawText(), username);
+        var result = await mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+    }
 
-        try
-        {
-            var value = await _customFieldService.UpsertValueAsync(
-                new Discovery.Core.DTOs.UpsertCustomFieldValueInput(
-                    definitionId,
-                    CustomFieldScopeType.Site,
-                    id,
-                    request.Value.GetRawText(),
-                    HttpContext.Items["Username"] as string ?? "api"),
-                cancellationToken);
-
-            return Ok(value);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+    private IActionResult Problem(IReadOnlyList<Discovery.Core.Cqrs.Error> errors)
+    {
+        return Problem(errors[0].Message, statusCode: 400);
     }
 }
 
