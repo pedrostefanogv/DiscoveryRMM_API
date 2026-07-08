@@ -130,10 +130,18 @@ Cqrs/
  Sites/SiteHandlers.cs
  SlaCalendars/SlaCalendarHandlers.cs
  SoftwareInventory/SoftwareInventoryHandlers.cs
+ Tickets/CommandHandlers/
+  TicketAlertRuleCommandHandlers.cs
+  TicketCommandHandlers.cs
+  TicketSavedViewCommandHandlers.cs
+  TicketSubResourceCommandHandlers.cs
  Tickets/
-  CommandHandlers/TicketCommandHandlers.cs
   EventHandlers/TicketEventHandlers.cs
-  QueryHandlers/TicketQueryHandlers.cs
+  QueryHandlers/
+   TicketAlertRuleQueryHandlers.cs
+   TicketQueryHandlers.cs
+   TicketSavedViewQueryHandlers.cs
+   TicketSubResourceQueryHandlers.cs
  UserGroups/UserGroupHandlers.cs
  Users/UserHandlers.cs
  Workflow/QueryHandlers/WorkflowQueryHandlers.cs

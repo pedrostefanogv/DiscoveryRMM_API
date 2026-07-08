@@ -188,6 +188,9 @@ Cqrs/
   AssignTicketCommand.cs
   CreateTicketCommand.cs
   MergeTicketsCommand.cs
+  TicketAlertRuleCommands.cs
+  TicketSavedViewCommands.cs
+  TicketSubResourceCommands.cs
   TransitionTicketStateCommand.cs
   UpdateTicketCommand.cs
  Tickets/
@@ -198,6 +201,9 @@ Cqrs/
    GetTicketCommentsQuery.cs
    GetTicketSlaStatusQuery.cs
    ListTicketsQuery.cs
+   TicketAlertRuleQueries.cs
+   TicketSavedViewQueries.cs
+   TicketSubResourceQueries.cs
  UserGroups/
   Commands/UserGroupCommands.cs
   Queries/UserGroupQueries.cs

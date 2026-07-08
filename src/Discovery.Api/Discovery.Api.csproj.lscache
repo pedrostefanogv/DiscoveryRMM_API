@@ -103,6 +103,7 @@ Controllers/
  SitesController.cs
  SlaCalendarsController.cs
  SoftwareInventoryController.cs
+ TicketAiController.cs
  TicketAlertRulesController.cs
  TicketSavedViewsController.cs
  TicketsController.cs
