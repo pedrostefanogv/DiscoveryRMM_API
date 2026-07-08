@@ -73,6 +73,7 @@ Controllers/
  AgentUpdatesController.cs
  ApiTokensController.cs
  AppStoreController.cs
+ AuthController.cs
  AutomationScriptsController.cs
  AutomationTasksController.cs
  AutoTicketRulesController.cs
