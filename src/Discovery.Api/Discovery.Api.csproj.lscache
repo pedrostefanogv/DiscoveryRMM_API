@@ -80,6 +80,7 @@ Controllers/
  BackgroundServicesController.cs
  ClientsController.cs
  ConfigurationAuditController.cs
+ ConfigurationsController.cs
  CustomFieldsController.cs
  DashboardController.cs
  DepartmentsController.cs
@@ -94,6 +95,7 @@ Controllers/
  NatsAuthController.cs
  NotesController.cs
  NotificationsController.cs
+ OpsP2pController.cs
  RealtimeController.cs
  ReportsController.cs
  RolesController.cs
@@ -101,6 +103,8 @@ Controllers/
  SitesController.cs
  SlaCalendarsController.cs
  SoftwareInventoryController.cs
+ TicketAlertRulesController.cs
+ TicketSavedViewsController.cs
  TicketsController.cs
  UserGroupsController.cs
  UsersController.cs
