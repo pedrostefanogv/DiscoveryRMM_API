@@ -77,7 +77,9 @@ Controllers/
  AutomationScriptsController.cs
  AutomationTasksController.cs
  AutoTicketRulesController.cs
+ BackgroundServicesController.cs
  ClientsController.cs
+ ConfigurationAuditController.cs
  CustomFieldsController.cs
  DashboardController.cs
  DepartmentsController.cs
@@ -95,6 +97,7 @@ Controllers/
  RealtimeController.cs
  ReportsController.cs
  RolesController.cs
+ SearchController.cs
  SitesController.cs
  SlaCalendarsController.cs
  SoftwareInventoryController.cs
