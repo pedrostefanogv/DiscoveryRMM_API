@@ -16,7 +16,10 @@ public record TicketFilterQuery(
     string? Text = null,
     string? Cursor = null,
     int Limit = 100,
-    int Offset = 0
+    int Offset = 0,
+    bool HasGlobalAccess = true,
+    IReadOnlyList<Guid>? AllowedClientIds = null,
+    IReadOnlyList<Guid>? AllowedSiteIds = null
 );
 
 public record CreateTicketSavedViewRequest(

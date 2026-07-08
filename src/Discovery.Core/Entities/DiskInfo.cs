@@ -11,4 +11,13 @@ public class DiskInfo
     public long FreeSpaceBytes { get; set; }
     public string? MediaType { get; set; }
     public DateTime CollectedAt { get; set; }
+
+    // ── Report field aliases ────────────────────────────────────────────
+    public string Name => DriveLetter;
+    public long SizeBytes => TotalSizeBytes;
+    public long FreeBytes => FreeSpaceBytes;
+    public string? Interface => MediaType;
+    public string? Type => MediaType;
+    public string? SerialNumber => null;
+    public string? HealthStatus => null;
 }

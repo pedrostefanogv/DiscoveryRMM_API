@@ -11,6 +11,7 @@ public sealed record LogScopeFacetCountDto(
     string? Name,
     int Count);
 
+[Obsolete("Será substituído por CursorPageDto<LogEntry> + campos opcionais. Remover na v2.")]
 public sealed record LogCursorPageDto(
     IReadOnlyList<LogEntry> Items,
     int ReturnedItems,

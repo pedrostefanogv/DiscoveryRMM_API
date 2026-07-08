@@ -6,6 +6,7 @@ public interface IChocolateyPackageRepository
 {
     Task<ChocolateyPackage?> GetByPackageIdAsync(string packageId);
 
+    [Obsolete("Use SearchPageAsync (cursor-based). Será removido na v2.")]
     Task<(IReadOnlyList<ChocolateyPackage> Items, int TotalCount)> SearchAsync(
         string? search,
         int limit,

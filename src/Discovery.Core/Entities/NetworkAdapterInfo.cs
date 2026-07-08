@@ -14,4 +14,9 @@ public class NetworkAdapterInfo
     public string? AdapterType { get; set; }
     public string? Speed { get; set; }
     public DateTime CollectedAt { get; set; }
+
+    // ── Report field aliases ────────────────────────────────────────────
+    public List<string> IpAddresses => IpAddress is not null ? [IpAddress] : [];
+    public int? SpeedMbps => int.TryParse(Speed?.Replace(" Mbps", "").Replace(" Gbps", ""), out var v) ? v : null;
+    public bool IsDefault => false;
 }

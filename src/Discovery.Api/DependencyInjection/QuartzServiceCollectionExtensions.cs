@@ -144,7 +144,7 @@ public static class QuartzServiceCollectionExtensions
 
         // Expose the root IServiceProvider so jobs can resolve scoped services
         // via JobExecutionContextExtensions.GetScopedService<T>().
-        scheduler.Context.Put(JobExecutionContextExtensions.ServiceProviderKey, services);
+        scheduler.Context[JobExecutionContextExtensions.ServiceProviderKey] = services;
 
         var listener = services.GetRequiredService<JobExecutionHistoryListener>();
         scheduler.ListenerManager.AddJobListener(listener, Quartz.Impl.Matchers.GroupMatcher<JobKey>.AnyGroup());

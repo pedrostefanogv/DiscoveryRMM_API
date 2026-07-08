@@ -328,17 +328,15 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         if (!string.IsNullOrWhiteSpace(category))
             query = query.Where(a => a.Category != null && a.Category.ToLower() == category.ToLower());
 
-        // Paginação cursor-based: cursor = base64(cursor_value)
+        // Paginação cursor-based: cursor = base64(name|guid)
         // Usamos Title + Id como chave composta (ordena por Title, desempata por Id)
         if (!string.IsNullOrWhiteSpace(cursor))
         {
-            var cursorValue = DecodePaginationCursor(cursor);
-            if (cursorValue is not null)
+            if (CursorPaginationHelper.TryDecodeNameCursor(cursor, out var cursorName, out var cursorId))
             {
-                var parsedCursor = cursorValue.Value;
                 query = query.Where(a =>
-                    string.Compare(a.Title, parsedCursor.Title) > 0 ||
-                    (a.Title == parsedCursor.Title && a.Id.CompareTo(parsedCursor.Id) > 0));
+                    string.Compare(a.Title, cursorName) > 0 ||
+                    (a.Title == cursorName && a.Id.CompareTo(cursorId) > 0));
             }
         }
 
@@ -352,7 +350,7 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         if (hasMore && items.Count > 0)
         {
             var last = items[^1];
-            nextCursor = EncodePaginationCursor(last.Title, last.Id);
+            nextCursor = CursorPaginationHelper.EncodeNameCursor(last.Title, last.Id);
         }
 
         return new ArticleListPageData
@@ -399,29 +397,4 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         return await query.OrderBy(a => a.Title).Take(20).ToListAsync(ct);
     }
 
-    // ─── Helpers de cursor ─────────────────────────────────────
-
-    private static string EncodePaginationCursor(string title, Guid id)
-    {
-        var combined = $"{title}|||{id:N}";
-        var bytes = System.Text.Encoding.UTF8.GetBytes(combined);
-        return Convert.ToBase64String(bytes);
     }
-
-    private static (string Title, Guid Id)? DecodePaginationCursor(string cursor)
-    {
-        try
-        {
-            var bytes = Convert.FromBase64String(cursor);
-            var combined = System.Text.Encoding.UTF8.GetString(bytes);
-            var parts = combined.Split("|||");
-            if (parts.Length == 2 && Guid.TryParse(parts[1], out var id))
-                return (parts[0], id);
-            return null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-}

@@ -11,4 +11,7 @@ public class ListeningPortInfo
     public string? Address { get; set; }
     public int Port { get; set; }
     public DateTime CollectedAt { get; set; }
+
+    // ── Report field aliases ────────────────────────────────────────────
+    public string? State => "LISTEN";
 }

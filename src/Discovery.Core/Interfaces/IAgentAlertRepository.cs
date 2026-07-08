@@ -7,6 +7,7 @@ public interface IAgentAlertRepository
 {
     Task<AgentAlertDefinition?> GetByIdAsync(Guid id);
 
+    [Obsolete("Use GetByFiltersPageAsync (cursor-based). Será removido na v2.")]
     Task<IReadOnlyList<AgentAlertDefinition>> GetByFiltersAsync(
         AlertDefinitionStatus? status = null,
         AlertScopeType? scopeType = null,

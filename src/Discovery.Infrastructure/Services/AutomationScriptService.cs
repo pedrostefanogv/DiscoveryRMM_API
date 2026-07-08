@@ -1,3 +1,5 @@
+#pragma warning disable CS0618 // Obsolete: remover na v2
+
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;

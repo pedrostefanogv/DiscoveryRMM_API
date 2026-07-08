@@ -71,7 +71,7 @@ public class AppApprovalAuditService : IAppApprovalAuditService
             safeLimit,
             cursor);
 
-        var hasMore = history.Count > safeLimit - 1;
+        var hasMore = history.Count > safeLimit;
         var pageItems = history.Take(safeLimit).ToList();
         var items = pageItems.Select(x => new AppApprovalAuditEntryDto
         {

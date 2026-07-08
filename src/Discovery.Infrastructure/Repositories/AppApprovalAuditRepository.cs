@@ -39,7 +39,7 @@ public class AppApprovalAuditRepository : IAppApprovalAuditRepository
             .Where(x => x.InstallationType == installationType);
 
         if (cursor.HasValue)
-            query = query.Where(x => x.Id.CompareTo(cursor.Value) < 0);
+            query = CursorPaginationHelper.ApplyGuidCursor(query, cursor, x => x.Id);
 
         if (!string.IsNullOrWhiteSpace(packageId))
             query = query.Where(x => x.PackageId == packageId.Trim());

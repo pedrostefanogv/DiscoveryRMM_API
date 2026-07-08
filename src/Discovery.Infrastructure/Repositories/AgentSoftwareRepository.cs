@@ -42,7 +42,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
 
     public async Task<IReadOnlyList<AgentInstalledSoftware>> GetCurrentByAgentIdPagedAsync(
         Guid agentId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending)
@@ -56,11 +56,11 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             where inv.AgentId == agentId && inv.IsPresent
             select new { inv, catalog };
 
-        if (cursor.HasValue)
+        if (CursorPaginationHelper.TryDecodeGuidCursor(cursor, out var cursorId))
         {
             query = descending
-                ? query.Where(x => x.inv.Id.CompareTo(cursor.Value) < 0)
-                : query.Where(x => x.inv.Id.CompareTo(cursor.Value) > 0);
+                ? query.Where(x => x.inv.Id.CompareTo(cursorId) < 0)
+                : query.Where(x => x.inv.Id.CompareTo(cursorId) > 0);
         }
 
         if (pattern is not null)
@@ -135,7 +135,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
     }
 
     public async Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryGlobalPagedAsync(
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending)
@@ -143,7 +143,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
 
     public async Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryByClientPagedAsync(
         Guid clientId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending)
@@ -151,14 +151,14 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
 
     public async Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryBySitePagedAsync(
         Guid siteId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending)
         => await GetInventoryPagedInternalAsync(null, siteId, cursor, limit, search, descending);
 
     public async Task<IReadOnlyList<SoftwareInventoryCatalogItem>> GetInventoryCatalogGlobalPagedAsync(
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending)
@@ -166,7 +166,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
 
     public async Task<IReadOnlyList<SoftwareInventoryCatalogItem>> GetInventoryCatalogByClientPagedAsync(
         Guid clientId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending)
@@ -293,7 +293,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
     private async Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryPagedInternalAsync(
         Guid? clientId,
         Guid? siteId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending)
@@ -310,11 +310,11 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             where inv.IsPresent
             select new { inv, agent, site, client, catalog };
 
-        if (cursor.HasValue)
+        if (CursorPaginationHelper.TryDecodeGuidCursor(cursor, out var cursorId))
         {
             query = descending
-                ? query.Where(x => x.inv.Id.CompareTo(cursor.Value) < 0)
-                : query.Where(x => x.inv.Id.CompareTo(cursor.Value) > 0);
+                ? query.Where(x => x.inv.Id.CompareTo(cursorId) < 0)
+                : query.Where(x => x.inv.Id.CompareTo(cursorId) > 0);
         }
 
         if (clientId.HasValue)
@@ -406,7 +406,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
 
     private async Task<IReadOnlyList<SoftwareInventoryCatalogItem>> GetInventoryCatalogPagedInternalAsync(
         Guid? clientId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending)
@@ -426,11 +426,11 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         if (clientId.HasValue)
             query = query.Where(x => x.client.Id == clientId.Value);
 
-        if (cursor.HasValue)
+        if (CursorPaginationHelper.TryDecodeGuidCursor(cursor, out var cursorId))
         {
             query = descending
-                ? query.Where(x => x.catalog.Id.CompareTo(cursor.Value) < 0)
-                : query.Where(x => x.catalog.Id.CompareTo(cursor.Value) > 0);
+                ? query.Where(x => x.catalog.Id.CompareTo(cursorId) < 0)
+                : query.Where(x => x.catalog.Id.CompareTo(cursorId) > 0);
         }
 
         if (pattern is not null)

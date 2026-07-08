@@ -33,6 +33,9 @@ public class KnowledgeArticle
     // Autor original — imutável após criação
     public string? CreatedBy { get; set; }
 
+    /// <summary>Alias para compatibilidade com reports.</summary>
+    public string? Author => CreatedBy;
+
     // Último editor — atualizado a cada save
     public string? LastEditedBy { get; set; }
     public DateTime? LastEditedAt { get; set; }

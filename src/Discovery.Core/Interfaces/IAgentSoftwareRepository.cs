@@ -7,36 +7,36 @@ public interface IAgentSoftwareRepository
     Task<IEnumerable<AgentInstalledSoftware>> GetCurrentByAgentIdAsync(Guid agentId);
     Task<IReadOnlyList<AgentInstalledSoftware>> GetCurrentByAgentIdPagedAsync(
         Guid agentId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending);
     Task<AgentSoftwareSnapshot> GetSnapshotByAgentIdAsync(Guid agentId);
     Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryGlobalPagedAsync(
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending);
     Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryByClientPagedAsync(
         Guid clientId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending);
     Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryBySitePagedAsync(
         Guid siteId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending);
     Task<IReadOnlyList<SoftwareInventoryCatalogItem>> GetInventoryCatalogGlobalPagedAsync(
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending);
     Task<IReadOnlyList<SoftwareInventoryCatalogItem>> GetInventoryCatalogByClientPagedAsync(
         Guid clientId,
-        Guid? cursor,
+        string? cursor,
         int limit,
         string? search,
         bool descending);

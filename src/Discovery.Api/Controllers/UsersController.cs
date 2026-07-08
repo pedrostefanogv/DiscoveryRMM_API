@@ -1,430 +1,62 @@
-using Discovery.Core.DTOs.Mfa;
-using Discovery.Core.DTOs.Users;
-using Discovery.Core.Entities.Identity;
-using Discovery.Core.Enums.Identity;
-using Discovery.Core.Helpers;
-using Discovery.Core.Interfaces;
-using Discovery.Core.Interfaces.Auth;
-using Discovery.Core.Interfaces.Identity;
-using Discovery.Core.Interfaces.Security;
-using Discovery.Api.Filters;
-using Discovery.Api.Services;
+﻿using Discovery.Core.Cqrs.Users.Commands;
+using Discovery.Core.Cqrs.Users.Queries;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/users")]
-[RequireUserAuth]
-public class UsersController : ControllerBase
+public class UsersController(IMediator mediator) : ControllerBase
 {
-    private readonly IUserRepository _userRepo;
-    private readonly IPasswordService _passwordService;
-    private readonly IUserAuthService _userAuthService;
-    private readonly IUserMfaKeyRepository _userMfaKeyRepository;
-    private readonly MeshCentralIdentitySyncTriggerService _meshCentralSyncTrigger;
-    private readonly IUserGroupRepository _userGroupRepo;
-
-    public UsersController(
-        IUserRepository userRepo,
-        IPasswordService passwordService,
-        IUserAuthService userAuthService,
-        IUserMfaKeyRepository userMfaKeyRepository,
-        MeshCentralIdentitySyncTriggerService meshCentralSyncTrigger,
-        IUserGroupRepository userGroupRepo)
-    {
-        _userRepo = userRepo;
-        _passwordService = passwordService;
-        _userAuthService = userAuthService;
-        _userMfaKeyRepository = userMfaKeyRepository;
-        _meshCentralSyncTrigger = meshCentralSyncTrigger;
-        _userGroupRepo = userGroupRepo;
-    }
-
     [HttpGet]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
-    public async Task<IActionResult> GetAll()
+    public async Task<IActionResult> GetAll([FromQuery] string? cursor = null, [FromQuery] int limit = 50)
     {
-        var users = await _userRepo.GetAllAsync();
-        var result = users.Select(u => new UserSummaryDto
-        {
-            Id = u.Id,
-            Login = u.Login,
-            Email = u.Email,
-            FullName = u.FullName,
-            IsActive = u.IsActive,
-            MfaConfigured = u.MfaConfigured
-        });
-        return Ok(result);
+        var result = await mediator.Send(new ListUsersQuery(cursor, limit));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-
-        var groupIds = await _userGroupRepo.GetGroupIdsForUserAsync(user.Id);
-
-        return Ok(new UserDto
-        {
-            Id = user.Id,
-            Login = user.Login,
-            Email = user.Email,
-            FullName = user.FullName,
-            IsActive = user.IsActive,
-            MfaRequired = user.MfaRequired,
-            MfaConfigured = user.MfaConfigured,
-            CreatedAt = user.CreatedAt,
-            LastLoginAt = user.LastLoginAt,
-            Groups = groupIds.Select(gid => new UserGroupSummaryDto { Id = gid, Name = string.Empty })
-        });
-    }
-
-    [HttpGet("me")]
-    public async Task<IActionResult> GetMyProfile()
-    {
-        var userId = (Guid)HttpContext.Items["UserId"]!;
-        var user = await _userRepo.GetByIdAsync(userId);
-        if (user is null) return NotFound();
-
-        var groupIds = await _userGroupRepo.GetGroupIdsForUserAsync(user.Id);
-
-        return Ok(new UserDto
-        {
-            Id = user.Id,
-            Login = user.Login,
-            Email = user.Email,
-            FullName = user.FullName,
-            IsActive = user.IsActive,
-            MfaRequired = user.MfaRequired,
-            MfaConfigured = user.MfaConfigured,
-            CreatedAt = user.CreatedAt,
-            LastLoginAt = user.LastLoginAt,
-            Groups = groupIds.Select(gid => new UserGroupSummaryDto { Id = gid, Name = string.Empty })
-        });
-    }
-
-    [HttpPut("me")]
-    public async Task<IActionResult> UpdateMyProfile([FromBody] UpdateMyProfileDto dto)
-    {
-        var userId = (Guid)HttpContext.Items["UserId"]!;
-        var user = await _userRepo.GetByIdAsync(userId);
-        if (user is null) return NotFound();
-
-        if (!string.IsNullOrWhiteSpace(dto.Email) &&
-            !string.Equals(user.Email, dto.Email, StringComparison.OrdinalIgnoreCase) &&
-            await _userRepo.ExistsByEmailAsync(dto.Email))
-            return Conflict(new { message = "E-mail já em uso." });
-
-        user.FullName = string.IsNullOrWhiteSpace(dto.FullName) ? user.FullName : dto.FullName;
-        user.Email = string.IsNullOrWhiteSpace(dto.Email) ? user.Email : dto.Email;
-        user.UpdatedAt = DateTime.UtcNow;
-
-        await _userRepo.UpdateAsync(user);
-        await _meshCentralSyncTrigger.OnUserUpdatedBestEffortAsync(user.Id, HttpContext.RequestAborted);
-        return NoContent();
-    }
-
-    [HttpGet("me/security")]
-    public async Task<IActionResult> GetMySecurityProfile()
-    {
-        var userId = (Guid)HttpContext.Items["UserId"]!;
-        var user = await _userRepo.GetByIdAsync(userId);
-        if (user is null) return NotFound();
-
-        var roleMfaRequirement = await _userAuthService.GetEffectiveMfaRequirementAsync(userId);
-        var keys = await _userMfaKeyRepository.GetActiveByUserIdAsync(userId);
-
-        return Ok(new MySecurityProfileDto
-        {
-            MfaRequired = user.MfaRequired,
-            MfaConfigured = user.MfaConfigured,
-            RoleMfaRequirement = roleMfaRequirement,
-            Keys = keys.Select(k => new MyMfaKeySummaryDto
-            {
-                Id = k.Id,
-                Name = k.Name,
-                KeyType = k.KeyType,
-                IsActive = k.IsActive,
-                CreatedAt = k.CreatedAt,
-                LastUsedAt = k.LastUsedAt
-            }).ToList()
-        });
-    }
-
-    [HttpPost("me/change-password")]
-    public async Task<IActionResult> ChangeMyPassword([FromBody] ChangePasswordDto dto)
-    {
-        var userId = (Guid)HttpContext.Items["UserId"]!;
-        var user = await _userRepo.GetByIdAsync(userId);
-        if (user is null) return NotFound();
-
-        if (!_passwordService.VerifyPassword(dto.CurrentPassword, user.PasswordSalt, user.PasswordHash))
-            return BadRequest(new { message = "Senha atual incorreta." });
-
-        var (policyValid, policyReason) = _passwordService.ValidatePolicy(dto.NewPassword);
-        if (!policyValid)
-            return BadRequest(new { message = policyReason });
-
-        var salt = _passwordService.GenerateSalt();
-        var hash = _passwordService.HashPassword(dto.NewPassword, salt);
-
-        user.PasswordHash = hash;
-        user.PasswordSalt = salt;
-        user.UpdatedAt = DateTime.UtcNow;
-        await _userRepo.UpdateAsync(user);
-        return NoContent();
+        var result = await mediator.Send(new GetUserByIdQuery(id));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Users, ActionType.Create)]
-    public async Task<IActionResult> Create([FromBody] CreateUserDto dto)
+    public async Task<IActionResult> Create([FromBody] CreateUserCommand cmd)
     {
-        if (await _userRepo.ExistsByLoginAsync(dto.Login))
-            return Conflict(new { message = "Login já em uso." });
-        if (await _userRepo.ExistsByEmailAsync(dto.Email))
-            return Conflict(new { message = "E-mail já em uso." });
-
-        var (policyValid, policyReason) = _passwordService.ValidatePolicy(dto.Password);
-        if (!policyValid)
-            return BadRequest(new { message = policyReason });
-
-        var salt = _passwordService.GenerateSalt();
-        var hash = _passwordService.HashPassword(dto.Password, salt);
-
-        var now = DateTime.UtcNow;
-        var user = new User
-        {
-            Id = IdGenerator.NewId(),
-            Login = dto.Login,
-            Email = dto.Email,
-            FullName = dto.FullName,
-            PasswordHash = hash,
-            PasswordSalt = salt,
-            IsActive = true,
-            MfaRequired = true,
-            MfaConfigured = false,
-            MustChangePassword = true,
-            MustChangeProfile = true,
-            CreatedAt = now,
-            UpdatedAt = now
-        };
-
-        await _userRepo.CreateAsync(user);
-
-        var meshSync = await _meshCentralSyncTrigger.OnUserCreatedAsync(user.Id, HttpContext.RequestAborted);
-        return CreatedAtAction(nameof(GetById), new { id = user.Id }, new
-        {
-            id = user.Id,
-            meshCentralSync = new
-            {
-                synced = meshSync.Synced,
-                meshUsername = meshSync.MeshUsername,
-                siteBindingsApplied = meshSync.SiteBindingsApplied,
-                error = meshSync.Error
-            }
-        });
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
-    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserDto dto)
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserCommand cmd)
     {
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-
-        if (!string.IsNullOrWhiteSpace(dto.Email) &&
-            !string.Equals(user.Email, dto.Email, StringComparison.OrdinalIgnoreCase) &&
-            await _userRepo.ExistsByEmailAsync(dto.Email))
-            return Conflict(new { message = "E-mail já em uso." });
-
-        user.FullName = string.IsNullOrWhiteSpace(dto.FullName) ? user.FullName : dto.FullName;
-        user.Email = string.IsNullOrWhiteSpace(dto.Email) ? user.Email : dto.Email;
-        user.IsActive = dto.IsActive ?? user.IsActive;
-        user.MfaRequired = dto.MfaRequired ?? user.MfaRequired;
-        user.UpdatedAt = DateTime.UtcNow;
-
-        await _userRepo.UpdateAsync(user);
-        await _meshCentralSyncTrigger.OnUserUpdatedBestEffortAsync(user.Id, HttpContext.RequestAborted);
-        return NoContent();
+        var result = await mediator.Send(cmd with { Id = id });
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
-
-    [HttpPost("{id:guid}/change-password")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
-    public async Task<IActionResult> ChangePassword(Guid id, [FromBody] ChangePasswordDto dto)
-    {
-        var requestingUserId = (Guid)HttpContext.Items["UserId"]!;
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-
-        // Admin trocando senha de outro usuário: exige permissão Users.Edit (já verificada pelo filter)
-        // Usuário trocando própria senha: permitido mesmo sem permissão Users.Edit
-        if (requestingUserId == id)
-        {
-            // Self password change — verificar senha atual
-            if (!_passwordService.VerifyPassword(dto.CurrentPassword, user.PasswordSalt, user.PasswordHash))
-                return BadRequest(new { message = "Senha atual incorreta." });
-        }
-
-        var (policyValid, policyReason) = _passwordService.ValidatePolicy(dto.NewPassword);
-        if (!policyValid)
-            return BadRequest(new { message = policyReason });
-
-        var salt = _passwordService.GenerateSalt();
-        var hash = _passwordService.HashPassword(dto.NewPassword, salt);
-
-        user.PasswordHash = hash;
-        user.PasswordSalt = salt;
-        user.UpdatedAt = DateTime.UtcNow;
-        await _userRepo.UpdateAsync(user);
-        return NoContent();
-    }
-
-    // ── Admin MFA management ──────────────────────────────────────────────────
-
-    [HttpGet("{id:guid}/mfa/keys")]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
-    public async Task<IActionResult> GetUserMfaKeys(Guid id)
-    {
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-
-        var keys = await _userMfaKeyRepository.GetActiveByUserIdAsync(id);
-        var result = keys.Select(k => new AdminUserMfaKeyDto
-        {
-            Id = k.Id,
-            Name = k.Name,
-            KeyType = k.KeyType,
-            CreatedAt = k.CreatedAt,
-            LastUsedAt = k.LastUsedAt
-        });
-        return Ok(result);
-    }
-
-    [HttpDelete("{id:guid}/mfa")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
-    public async Task<IActionResult> ResetUserMfa(Guid id)
-    {
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-
-        await _userMfaKeyRepository.DeactivateAllByUserIdAsync(id);
-        await _userRepo.SetMfaConfiguredAsync(id, false);
-        return NoContent();
-    }
-
-    [HttpDelete("{id:guid}/mfa/keys/{keyId:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
-    public async Task<IActionResult> RemoveUserMfaKey(Guid id, Guid keyId)
-    {
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-
-        var key = await _userMfaKeyRepository.GetByIdAsync(keyId);
-        if (key is null || key.UserId != id || !key.IsActive) return NotFound();
-
-        await _userMfaKeyRepository.DeactivateAsync(keyId, id);
-
-        var remaining = await _userMfaKeyRepository.CountActiveByUserIdAsync(id);
-        if (remaining == 0)
-            await _userRepo.SetMfaConfiguredAsync(id, false);
-
-        return NoContent();
-    }
-
-    [HttpPost("{id:guid}/force-password-reset")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
-    public async Task<IActionResult> ForcePasswordReset(Guid id)
-    {
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-
-        user.MustChangePassword = true;
-        user.UpdatedAt = DateTime.UtcNow;
-        await _userRepo.UpdateAsync(user);
-        return NoContent();
-    }
-
-    [HttpPost("{id:guid}/unlock")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
-    public async Task<IActionResult> Unlock(Guid id)
-    {
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-
-        if (!user.IsActive)
-            return BadRequest(new { message = "Não é possível desbloquear uma conta desativada." });
-
-        await _userAuthService.UnlockAsync(id);
-        return NoContent();
-    }
-
-    // ── Effective Permissions ──────────────────────────────────────────────
-
-    [HttpGet("me/permissions")]
-    public async Task<IActionResult> GetMyPermissions()
-    {
-        var userId = (Guid)HttpContext.Items["UserId"]!;
-        return await GetUserEffectivePermissions(userId);
-    }
-
-    [HttpGet("{id:guid}/effective-permissions")]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
-    public async Task<IActionResult> GetEffectivePermissions(Guid id)
-    {
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-        return await GetUserEffectivePermissions(id);
-    }
-
-    private async Task<IActionResult> GetUserEffectivePermissions(Guid userId)
-    {
-        var assignments = await _userGroupRepo.GetRolesWithPermissionsForUserAsync(userId);
-        var result = assignments
-            .SelectMany(a => a.Permissions.Select(p => new
-            {
-                Permission = $"{p.ResourceType}:{p.ActionType}",
-                RoleId = a.Assignment.RoleId,
-                ScopeLevel = a.Assignment.ScopeLevel.ToString(),
-                ScopeId = a.Assignment.ScopeId
-            }))
-            .GroupBy(x => x.Permission)
-            .Select(g => new
-            {
-                Permission = g.Key,
-                Assignments = g.Select(x => new
-                {
-                    x.RoleId,
-                    x.ScopeLevel,
-                    x.ScopeId
-                }).Distinct().ToList()
-            })
-            .OrderBy(x => x.Permission)
-            .ToList();
-
-        return Ok(result);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
-        var requestingUserId = (Guid)HttpContext.Items["UserId"]!;
-        if (requestingUserId == id)
-            return BadRequest(new { message = "Não é possível excluir a própria conta." });
-
-        var user = await _userRepo.GetByIdAsync(id);
-        if (user is null) return NotFound();
-
-        // Soft-delete: desativa o usuário
-        user.IsActive = false;
-        user.UpdatedAt = DateTime.UtcNow;
-        await _userRepo.UpdateAsync(user);
-        await _meshCentralSyncTrigger.OnUserDeprovisionBestEffortAsync(user.Id, deleteRemoteUser: false, HttpContext.RequestAborted);
-        return NoContent();
+        var result = await mediator.Send(new DeleteUserCommand(id));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 }

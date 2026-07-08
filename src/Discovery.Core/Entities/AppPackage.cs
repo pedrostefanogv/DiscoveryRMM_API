@@ -7,8 +7,9 @@ public class AppPackage
     public Guid Id { get; set; }
     public AppInstallationType InstallationType { get; set; }
     public string PackageId { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public string? Publisher { get; set; }
+    public string Name { get; set; } = string.Empty;    public string? Source => InstallationType.ToString();
+    public string? Category => null;
+    public bool IsActive => true;    public string? Publisher { get; set; }
     public string? Version { get; set; }
     public string? Description { get; set; }
     public string? IconUrl { get; set; }

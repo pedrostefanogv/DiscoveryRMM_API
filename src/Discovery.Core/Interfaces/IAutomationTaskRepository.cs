@@ -8,6 +8,7 @@ public interface IAutomationTaskRepository
     Task<AutomationTaskDefinition> CreateAsync(AutomationTaskDefinition task);
     Task<AutomationTaskDefinition?> GetByIdAsync(Guid id, bool includeInactive = false);
     Task<AutomationTaskDefinition?> GetByIdIncludingDeletedAsync(Guid id, bool includeInactive = false);
+    [Obsolete("Use GetListPageAsync (cursor-based). Será removido na v2.")]
     Task<IReadOnlyList<AutomationTaskDefinition>> GetListAsync(
         AppApprovalScopeType? scopeType,
         Guid? scopeId,

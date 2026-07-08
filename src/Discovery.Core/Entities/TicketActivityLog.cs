@@ -35,6 +35,11 @@ public class TicketActivityLog
     /// Comentário adicional sobre a atividade.
     /// </summary>
     public string? Comment { get; set; }
-    
+
+    // ── Report fields ───────────────────────────────────────────────────
+    public Guid? ClientId => null;
+    public string? Action => Type.ToString();
+    public string? ChangedBy => ChangedByUserId?.ToString();
+
     public DateTime CreatedAt { get; set; }
 }

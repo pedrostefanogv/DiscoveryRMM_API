@@ -4,6 +4,7 @@ namespace Discovery.Core.Interfaces;
 
 public interface IAutomationScriptService
 {
+    [Obsolete("Use GetListPageAsync (cursor-based). Será removido na v2.")]
     Task<AutomationScriptPageDto> GetListAsync(Guid? clientId, bool activeOnly, int limit, int offset, CancellationToken cancellationToken = default);
     Task<AutomationScriptPageDto> GetListPageAsync(Guid? clientId, bool activeOnly, string? cursor, int limit, CancellationToken cancellationToken = default);
     Task<AutomationScriptDetailDto?> GetByIdAsync(Guid id, bool includeInactive = false, CancellationToken cancellationToken = default);

@@ -1,74 +1,37 @@
-using Discovery.Api.Filters;
-using Discovery.Core.Interfaces;
+﻿using Discovery.Core.Cqrs.Notifications.Commands;
+using Discovery.Core.Cqrs.Notifications.Queries;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
-using Discovery.Core.Enums;
-using Discovery.Core.Enums.Identity;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/notifications")]
-public class NotificationsController : ControllerBase
+public class NotificationsController(IMediator mediator) : ControllerBase
 {
-    private readonly INotificationService _notificationService;
-
-    public NotificationsController(INotificationService notificationService)
-    {
-        _notificationService = notificationService;
-    }
-
     [HttpGet]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
-    public async Task<IActionResult> GetRecent(
-        [FromQuery] Guid? recipientUserId,
-        [FromQuery] Guid? recipientAgentId,
-        [FromQuery] string? recipientKey,
-        [FromQuery] string? topic,
-        [FromQuery] NotificationSeverity? severity,
-        [FromQuery] bool? isRead,
+    public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? recipientUserId = null,
+        [FromQuery] Guid? recipientAgentId = null,
+        [FromQuery] string? topic = null,
+        [FromQuery] bool? isRead = null,
         [FromQuery] int limit = 50)
     {
-        var notifications = await _notificationService.GetRecentAsync(recipientUserId, recipientAgentId, recipientKey, topic, severity, isRead, limit);
-        return Ok(notifications);
+        var result = await mediator.Send(new ListNotificationsQuery(
+            recipientUserId, recipientAgentId, topic, isRead, limit));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
-    [HttpPost]
-    [RequirePermission(ResourceType.Dashboard, ActionType.Create)]
-    public async Task<IActionResult> Publish([FromBody] PublishNotificationRequest request, CancellationToken cancellationToken)
+    [HttpPut("{id:guid}/read")]
+    public async Task<IActionResult> MarkAsRead(Guid id, [FromQuery] Guid? userId = null)
     {
-        var notification = await _notificationService.PublishAsync(new NotificationPublishRequest(
-            EventType: request.EventType,
-            Topic: request.Topic,
-            Title: request.Title,
-            Message: request.Message,
-            Severity: request.Severity,
-            Payload: request.Payload,
-            RecipientUserId: request.RecipientUserId,
-            RecipientAgentId: request.RecipientAgentId,
-            RecipientKey: request.RecipientKey,
-            CreatedBy: request.CreatedBy),
-            cancellationToken);
-
-        return CreatedAtAction(nameof(GetRecent), new { notification.Id }, notification);
-    }
-
-    [HttpPatch("{id:guid}/read")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.Edit)]
-    public async Task<IActionResult> MarkAsRead(Guid id, [FromQuery] Guid? recipientUserId, [FromQuery] Guid? recipientAgentId, [FromQuery] string? recipientKey)
-    {
-        var marked = await _notificationService.MarkAsReadAsync(id, recipientUserId, recipientAgentId, recipientKey);
-        return marked ? NoContent() : NotFound();
+        var result = await mediator.Send(new MarkNotificationReadCommand(id, userId));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 }
-
-public record PublishNotificationRequest(
-    string EventType,
-    string Topic,
-    string Title,
-    string Message,
-    NotificationSeverity Severity = NotificationSeverity.Informational,
-    object? Payload = null,
-    Guid? RecipientUserId = null,
-    Guid? RecipientAgentId = null,
-    string? RecipientKey = null,
-    string? CreatedBy = null);

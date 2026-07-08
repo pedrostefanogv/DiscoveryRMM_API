@@ -29,14 +29,18 @@ public class UserRepository : IUserRepository
 
     public async Task<IReadOnlyList<User>> GetAllPageAsync(string? cursor, int take = 50)
     {
-        var query = _db.Users.AsNoTracking().OrderBy(u => u.FullName);
+        var query = _db.Users.AsNoTracking();
         if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorCreatedAtUtc, out var cursorId))
         {
-            query = (IOrderedQueryable<User>)CursorPaginationHelper.ApplyCreatedAtCursor(
+            query = CursorPaginationHelper.ApplyCreatedAtCursor(
                 query, cursorCreatedAtUtc, cursorId, u => u.CreatedAt, u => u.Id);
         }
         var safeTake = Math.Clamp(take, 1, 200);
-        return await query.Take(safeTake + 1).ToListAsync();
+        return await query
+            .OrderByDescending(u => u.CreatedAt)
+            .ThenByDescending(u => u.Id)
+            .Take(safeTake + 1)
+            .ToListAsync();
     }
 
     public async Task<User> CreateAsync(User user)

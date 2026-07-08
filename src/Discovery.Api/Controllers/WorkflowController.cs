@@ -1,121 +1,67 @@
-using Discovery.Api.Filters;
-using Discovery.Core.Entities;
-using Discovery.Core.Enums.Identity;
-using Discovery.Core.Interfaces;
+﻿using Discovery.Core.Cqrs.WorkflowState.Commands;
+using Discovery.Core.Cqrs.WorkflowState.Queries;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/v{version:apiVersion}/[controller]")]
-public class WorkflowController : ControllerBase
+[Route("api/v{version:apiVersion}/workflow")]
+public class WorkflowController(IMediator mediator) : ControllerBase
 {
-    private readonly IWorkflowRepository _repo;
-
-    public WorkflowController(IWorkflowRepository repo) => _repo = repo;
-
-    // --- States ---
-
     [HttpGet("states")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetStates([FromQuery] Guid? clientId)
+    public async Task<IActionResult> GetStates([FromQuery] Guid? clientId = null)
     {
-        var states = await _repo.GetStatesAsync(clientId);
-        return Ok(states);
+        var result = await mediator.Send(new ListWorkflowStatesQuery(clientId));
+        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpGet("states/{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetState(Guid id)
+    public async Task<IActionResult> GetStateById(Guid id)
     {
-        var state = await _repo.GetStateByIdAsync(id);
-        return state is null ? NotFound() : Ok(state);
+        var result = await mediator.Send(new GetWorkflowStateByIdQuery(id));
+        return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPost("states")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
-    public async Task<IActionResult> CreateState([FromBody] CreateWorkflowStateRequest request)
+    public async Task<IActionResult> CreateState([FromBody] CreateWorkflowStateCommand cmd)
     {
-        var state = new WorkflowState
-        {
-            ClientId = request.ClientId,
-            Name = request.Name,
-            Color = request.Color,
-            IsInitial = request.IsInitial,
-            IsFinal = request.IsFinal,
-            SortOrder = request.SortOrder
-        };
-        var created = await _repo.CreateStateAsync(state);
-        return CreatedAtAction(nameof(GetState), new { id = created.Id }, created);
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(success: dto => CreatedAtAction(nameof(GetStateById), new { id = dto.Id }, dto), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     [HttpPut("states/{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> UpdateState(Guid id, [FromBody] UpdateStateRequest request)
+    public async Task<IActionResult> UpdateState(Guid id, [FromBody] UpdateWorkflowStateCommand cmd)
     {
-        var state = await _repo.GetStateByIdAsync(id);
-        if (state is null) return NotFound();
-
-        state.Name = request.Name;
-        state.Color = request.Color;
-        state.IsInitial = request.IsInitial;
-        state.IsFinal = request.IsFinal;
-        state.SortOrder = request.SortOrder;
-
-        await _repo.UpdateStateAsync(state);
-        return Ok(state);
+        var result = await mediator.Send(cmd with { Id = id });
+        return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     [HttpDelete("states/{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> DeleteState(Guid id)
     {
-        await _repo.DeleteStateAsync(id);
-        return NoContent();
+        var result = await mediator.Send(new DeleteWorkflowStateCommand(id));
+        return result.Match<IActionResult>(success: _ => NoContent(), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
-
-    // --- Transitions ---
 
     [HttpGet("transitions")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetTransitions([FromQuery] Guid? clientId)
+    public async Task<IActionResult> GetTransitions([FromQuery] Guid? clientId = null)
     {
-        var transitions = await _repo.GetTransitionsAsync(clientId);
-        return Ok(transitions);
-    }
-
-    [HttpGet("transitions/from/{fromStateId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetTransitionsFromState(Guid fromStateId, [FromQuery] Guid? clientId)
-    {
-        var transitions = await _repo.GetTransitionsFromStateAsync(fromStateId, clientId);
-        return Ok(transitions);
+        var result = await mediator.Send(new ListWorkflowTransitionsQuery(clientId));
+        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPost("transitions")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
-    public async Task<IActionResult> CreateTransition([FromBody] CreateWorkflowTransitionRequest request)
+    public async Task<IActionResult> CreateTransition([FromBody] CreateWorkflowTransitionCommand cmd)
     {
-        var transition = new WorkflowTransition
-        {
-            ClientId = request.ClientId,
-            FromStateId = request.FromStateId,
-            ToStateId = request.ToStateId,
-            Name = request.Name
-        };
-        var created = await _repo.CreateTransitionAsync(transition);
-        return Created($"api/workflow/transitions", created);
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(success: dto => Created("", dto), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     [HttpDelete("transitions/{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> DeleteTransition(Guid id)
     {
-        await _repo.DeleteTransitionAsync(id);
-        return NoContent();
+        var result = await mediator.Send(new DeleteWorkflowTransitionCommand(id));
+        return result.Match<IActionResult>(success: _ => NoContent(), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 }
-
-public record CreateWorkflowStateRequest(Guid? ClientId, string Name, string? Color, bool IsInitial, bool IsFinal, int SortOrder);
-public record UpdateStateRequest(string Name, string? Color, bool IsInitial, bool IsFinal, int SortOrder);
-public record CreateWorkflowTransitionRequest(Guid? ClientId, Guid FromStateId, Guid ToStateId, string Name);

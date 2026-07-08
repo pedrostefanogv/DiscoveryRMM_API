@@ -33,7 +33,12 @@ public class CustomFieldDefinition
     /// Se false, o campo aparece no formulário público de abertura de chamado.
     /// </summary>
     public bool IsInternal { get; set; }
-    
+
+    // ── Report fields ───────────────────────────────────────────────────
+    public Guid? ClientId { get; set; }
+    public string? EntityName => ScopeType.ToString();
+    public CustomFieldDataType ValueType => DataType;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

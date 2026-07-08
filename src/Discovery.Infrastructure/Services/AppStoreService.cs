@@ -13,8 +13,6 @@ public class AppStoreService : IAppStoreService
     private readonly IConfigurationResolver _configurationResolver;
     private readonly ISiteRepository _siteRepository;
     private readonly IAgentRepository _agentRepository;
-    private readonly IWingetPackageRepository _wingetRepo;
-    private readonly IChocolateyPackageRepository _chocolateyRepo;
     private readonly IAppPackageRepository _appPackageRepo;
 
     public AppStoreService(
@@ -23,8 +21,6 @@ public class AppStoreService : IAppStoreService
         IConfigurationResolver configurationResolver,
         ISiteRepository siteRepository,
         IAgentRepository agentRepository,
-        IWingetPackageRepository wingetRepo,
-        IChocolateyPackageRepository chocolateyRepo,
         IAppPackageRepository appPackageRepo)
     {
         _approvalRepo = approvalRepo;
@@ -32,8 +28,6 @@ public class AppStoreService : IAppStoreService
         _configurationResolver = configurationResolver;
         _siteRepository = siteRepository;
         _agentRepository = agentRepository;
-        _wingetRepo = wingetRepo;
-        _chocolateyRepo = chocolateyRepo;
         _appPackageRepo = appPackageRepo;
     }
 
@@ -1079,161 +1073,6 @@ public class AppStoreService : IAppStoreService
             EffectiveSourceScope = null,
             EffectiveReason = reason,
             Levels = []
-        };
-    }
-
-    // ── Winget helpers ───────────────────────────────────────────────────────
-
-    private async Task<AppCatalogSearchResultDto> SearchWingetCatalogAsync(
-        string? search,
-        string? architecture,
-        int limit,
-        string? cursor,
-        CancellationToken cancellationToken)
-    {
-        var (items, total) = await _wingetRepo.SearchPageAsync(search, architecture, cursor, limit + 1, cancellationToken);
-
-        var hasMore = items.Count > limit;
-        var page = hasMore ? items.Take(limit).ToList() : (IReadOnlyList<Discovery.Core.Entities.WingetPackage>)items;
-        var lastItem = hasMore ? page[^1] : null;
-        var nextCursor = hasMore && lastItem is not null
-            ? CursorPaginationHelper.EncodeNameCursor(lastItem.Name, lastItem.Id)
-            : null;
-
-        return new AppCatalogSearchResultDto
-        {
-            GeneratedAt = page.FirstOrDefault()?.SourceGeneratedAt,
-            TotalPackagesInSource = total,
-            ReturnedItems = page.Count,
-            Cursor = cursor,
-            NextCursor = nextCursor,
-            Limit = limit,
-            HasMore = hasMore,
-            Search = search,
-            Architecture = architecture,
-            Items = page.Select(MapWingetToDto).ToList()
-        };
-    }
-
-    private async Task<AppCatalogPackageDto?> GetWingetPackageByIdAsync(
-        string packageId,
-        CancellationToken cancellationToken)
-    {
-        _ = cancellationToken;
-        var pkg = await _wingetRepo.GetByPackageIdAsync(packageId);
-        return pkg is null ? null : MapWingetToDto(pkg);
-    }
-
-    private async Task<IReadOnlyDictionary<string, AppCatalogPackageDto>> BuildWingetPackageIndexAsync(
-        CancellationToken cancellationToken)
-    {
-        var (items, _) = await _wingetRepo.SearchAsync(null, null, int.MaxValue, 0, cancellationToken);
-        return items.ToDictionary(
-            x => x.PackageId,
-            MapWingetToDto,
-            StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static AppCatalogPackageDto MapWingetToDto(Discovery.Core.Entities.WingetPackage pkg)
-    {
-        Dictionary<string, string>? installerUrls;
-        try
-        {
-            installerUrls = JsonSerializer.Deserialize<Dictionary<string, string>>(pkg.InstallerUrlsJson);
-        }
-        catch (JsonException)
-        {
-            installerUrls = null;
-        }
-
-        return new AppCatalogPackageDto
-        {
-            Id = pkg.PackageId,
-            Name = pkg.Name,
-            Publisher = pkg.Publisher,
-            Version = pkg.Version,
-            Description = pkg.Description,
-            Homepage = pkg.Homepage,
-            License = pkg.License,
-            Category = pkg.Category,
-            Icon = ResolveIconUrl(pkg.Icon, pkg.Homepage),
-            InstallCommand = pkg.InstallCommand,
-            LastUpdated = pkg.LastUpdated,
-            Tags = pkg.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
-            InstallerUrlsByArch = installerUrls ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        };
-    }
-
-    // ── Chocolatey helpers ───────────────────────────────────────────────────
-
-    private async Task<AppCatalogSearchResultDto> SearchChocolateyCatalogAsync(
-        string? search,
-        int limit,
-        string? cursor,
-        CancellationToken cancellationToken)
-    {
-        var (items, total) = await _chocolateyRepo.SearchPageAsync(search, cursor, limit + 1, cancellationToken);
-
-        var hasMore = items.Count > limit;
-        var page = hasMore ? items.Take(limit).ToList() : (IReadOnlyList<Discovery.Core.Entities.ChocolateyPackage>)items;
-        var lastItem = hasMore ? page[^1] : null;
-        var nextCursor = hasMore && lastItem is not null
-            ? CursorPaginationHelper.EncodeLongCountCursor(lastItem.DownloadCount, lastItem.Id)
-            : null;
-
-        return new AppCatalogSearchResultDto
-        {
-            GeneratedAt = null,
-            TotalPackagesInSource = total,
-            ReturnedItems = page.Count,
-            Cursor = cursor,
-            NextCursor = nextCursor,
-            Limit = limit,
-            HasMore = hasMore,
-            Search = search,
-            Architecture = null,
-            Items = page.Select(MapChocolateyToDto).ToList()
-        };
-    }
-
-    private async Task<AppCatalogPackageDto?> GetChocolateyPackageByIdAsync(
-        string packageId,
-        CancellationToken cancellationToken)
-    {
-        _ = cancellationToken;
-        var pkg = await _chocolateyRepo.GetByPackageIdAsync(packageId);
-        return pkg is null ? null : MapChocolateyToDto(pkg);
-    }
-
-    private async Task<IReadOnlyDictionary<string, AppCatalogPackageDto>> BuildChocolateyPackageIndexAsync(
-        CancellationToken cancellationToken)
-    {
-        // Build a full dictionary for packages already approved (IDs known from rules).
-        // We search without filter to get all available packages, using large limit.
-        var (items, _) = await _chocolateyRepo.SearchAsync(null, int.MaxValue, 0, cancellationToken);
-        return items.ToDictionary(
-            x => x.PackageId,
-            MapChocolateyToDto,
-            StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static AppCatalogPackageDto MapChocolateyToDto(Discovery.Core.Entities.ChocolateyPackage pkg)
-    {
-        return new AppCatalogPackageDto
-        {
-            Id = pkg.PackageId,
-            Name = pkg.Name,
-            Publisher = pkg.Publisher,
-            Version = pkg.Version,
-            Description = pkg.Description,
-            Homepage = pkg.Homepage,
-            License = pkg.LicenseUrl,
-            Category = string.Empty,
-            Icon = ResolveIconUrl(null, pkg.Homepage),
-            InstallCommand = $"choco install {pkg.PackageId}",
-            LastUpdated = pkg.LastUpdated,
-            Tags = pkg.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
-            InstallerUrlsByArch = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         };
     }
 

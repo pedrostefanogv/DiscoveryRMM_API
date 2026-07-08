@@ -86,6 +86,14 @@ public class AgentAlertDefinition
     /// <summary>Ticket de suporte vinculado (opcional).</summary>
     public Guid? TicketId { get; set; }
 
+    // ── Report fields (compatibilidade com ReportDatasetQueryService) ─────
+    public Guid? ClientId => ScopeClientId;
+    public string Name => Title;
+    public string Severity => Icon;
+    public bool IsEnabled => Status != AlertDefinitionStatus.Cancelled && Status != AlertDefinitionStatus.Expired;
+    public string? MetricKey => null;
+    public double? Threshold => null;
+
     public string? CreatedBy { get; set; }
 
     public DateTime CreatedAt { get; set; }

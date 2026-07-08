@@ -1,107 +1,46 @@
-using Discovery.Api.Filters;
-using Discovery.Core.Entities;
-using Discovery.Core.Enums.Identity;
-using Discovery.Core.Interfaces;
+﻿using Discovery.Core.Cqrs.EscalationRules.Commands;
+using Discovery.Core.Cqrs.EscalationRules.Queries;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/escalation-rules")]
-public class EscalationRulesController : ControllerBase
+public class EscalationRulesController(IMediator mediator) : ControllerBase
 {
-    private readonly ITicketEscalationRuleRepository _repo;
-
-    public EscalationRulesController(ITicketEscalationRuleRepository repo) => _repo = repo;
-
     [HttpGet]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetAll() =>
-        Ok(await _repo.GetAllActiveAsync());
-
-    [HttpGet("by-profile/{workflowProfileId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetByProfile(Guid workflowProfileId) =>
-        Ok(await _repo.GetByWorkflowProfileIdAsync(workflowProfileId));
+    public async Task<IActionResult> GetAll([FromQuery] Guid? workflowProfileId = null)
+    {
+        var result = await mediator.Send(new ListEscalationRulesQuery(workflowProfileId));
+        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var rule = await _repo.GetByIdAsync(id);
-        return rule is null ? NotFound() : Ok(rule);
+        var result = await mediator.Send(new GetEscalationRuleByIdQuery(id));
+        return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
-    public async Task<IActionResult> Create([FromBody] CreateEscalationRuleRequest request)
+    public async Task<IActionResult> Create([FromBody] CreateEscalationRuleCommand cmd)
     {
-        var rule = new TicketEscalationRule
-        {
-            WorkflowProfileId = request.WorkflowProfileId,
-            Name = request.Name,
-            TriggerAtSlaPercent = request.TriggerAtSlaPercent,
-            TriggerAtHoursBefore = request.TriggerAtHoursBefore,
-            ReassignToUserId = request.ReassignToUserId,
-            ReassignToDepartmentId = request.ReassignToDepartmentId,
-            BumpPriority = request.BumpPriority,
-            NotifyAssignee = request.NotifyAssignee,
-            IsActive = true
-        };
-
-        var created = await _repo.CreateAsync(rule);
-        return Created($"api/escalation-rules/{created.Id}", created);
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateEscalationRuleRequest request)
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateEscalationRuleCommand cmd)
     {
-        var rule = await _repo.GetByIdAsync(id);
-        if (rule is null) return NotFound();
-
-        rule.Name = request.Name;
-        rule.TriggerAtSlaPercent = request.TriggerAtSlaPercent;
-        rule.TriggerAtHoursBefore = request.TriggerAtHoursBefore;
-        rule.ReassignToUserId = request.ReassignToUserId;
-        rule.ReassignToDepartmentId = request.ReassignToDepartmentId;
-        rule.BumpPriority = request.BumpPriority;
-        rule.NotifyAssignee = request.NotifyAssignee;
-        rule.IsActive = request.IsActive;
-
-        await _repo.UpdateAsync(rule);
-        return Ok(rule);
+        var result = await mediator.Send(cmd with { Id = id });
+        return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
-        var rule = await _repo.GetByIdAsync(id);
-        if (rule is null) return NotFound();
-        await _repo.DeleteAsync(id);
-        return NoContent();
+        var result = await mediator.Send(new DeleteEscalationRuleCommand(id));
+        return result.Match<IActionResult>(success: _ => NoContent(), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 }
-
-public record CreateEscalationRuleRequest(
-    Guid WorkflowProfileId,
-    string Name,
-    int TriggerAtSlaPercent = 0,
-    int TriggerAtHoursBefore = 0,
-    Guid? ReassignToUserId = null,
-    Guid? ReassignToDepartmentId = null,
-    bool BumpPriority = false,
-    bool NotifyAssignee = true
-);
-
-public record UpdateEscalationRuleRequest(
-    string Name,
-    int TriggerAtSlaPercent = 0,
-    int TriggerAtHoursBefore = 0,
-    Guid? ReassignToUserId = null,
-    Guid? ReassignToDepartmentId = null,
-    bool BumpPriority = false,
-    bool NotifyAssignee = true,
-    bool IsActive = true
-);

@@ -1,52 +1,32 @@
-using Discovery.Core.DTOs.ApiTokens;
-using Discovery.Core.Enums.Identity;
-using Discovery.Core.Interfaces.Auth;
-using Discovery.Api.Filters;
+﻿using Discovery.Core.Cqrs.ApiTokens.Commands;
+using Discovery.Core.Cqrs.ApiTokens.Queries;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/api-tokens")]
-[RequireUserAuth]
-public class ApiTokensController : ControllerBase
+public class ApiTokensController(IMediator mediator) : ControllerBase
 {
-    private readonly IApiTokenService _tokenService;
-
-    public ApiTokensController(IApiTokenService tokenService)
-    {
-        _tokenService = tokenService;
-    }
-
-    /// <summary>Lista os tokens do usuário autenticado (sem exposição da accessKey).</summary>
     [HttpGet]
-    public async Task<IActionResult> List()
+    public async Task<IActionResult> GetAll([FromQuery] Guid userId)
     {
-        var userId = (Guid)HttpContext.Items["UserId"]!;
-        var tokens = await _tokenService.GetByUserAsync(userId);
-        return Ok(tokens);
+        var result = await mediator.Send(new ListApiTokensQuery(userId));
+        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
-    /// <summary>
-    /// Cria um novo token de API.
-    /// A accessKey retornada é exibida apenas uma vez — não pode ser recuperada depois.
-    /// </summary>
     [HttpPost]
-    [RequirePermission(ResourceType.Users, ActionType.Create)]
-    public async Task<IActionResult> Create([FromBody] CreateApiTokenRequestDto dto)
+    public async Task<IActionResult> Create([FromBody] CreateApiTokenCommand cmd)
     {
-        var userId = (Guid)HttpContext.Items["UserId"]!;
-        var result = await _tokenService.CreateTokenAsync(userId, dto.Name, dto.ExpiresAt);
-        return CreatedAtAction(nameof(List), null, result);
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(success: dto => Created("", dto), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
-    /// <summary>Revoga (desativa) um token de API.</summary>
-    [HttpDelete("{tokenId:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Delete)]
-    public async Task<IActionResult> Revoke(Guid tokenId)
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Revoke(Guid id, [FromQuery] Guid userId)
     {
-        var userId = (Guid)HttpContext.Items["UserId"]!;
-        var revoked = await _tokenService.RevokeAsync(tokenId, userId);
-        return revoked ? NoContent() : NotFound();
+        var result = await mediator.Send(new RevokeApiTokenCommand(id, userId));
+        return result.Match<IActionResult>(success: _ => NoContent(), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 }

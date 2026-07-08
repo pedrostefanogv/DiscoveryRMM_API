@@ -1,3 +1,5 @@
+#pragma warning disable CS0618 // Obsolete: remover na v2
+
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Entities.Identity;

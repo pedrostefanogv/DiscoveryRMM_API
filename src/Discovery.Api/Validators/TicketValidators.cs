@@ -1,11 +1,11 @@
 using FluentValidation;
-using Discovery.Api.Controllers;
+using Discovery.Core.Cqrs.Tickets.Commands;
 
 namespace Discovery.Api.Validators;
 
-public class CreateTicketRequestValidator : AbstractValidator<CreateTicketRequest>
+public class CreateTicketCommandValidator : AbstractValidator<CreateTicketCommand>
 {
-    public CreateTicketRequestValidator()
+    public CreateTicketCommandValidator()
     {
         RuleFor(x => x.ClientId).NotEmpty();
         RuleFor(x => x.Title).NotEmpty().Length(3, 200);
@@ -15,9 +15,9 @@ public class CreateTicketRequestValidator : AbstractValidator<CreateTicketReques
     }
 }
 
-public class UpdateTicketRequestValidator : AbstractValidator<UpdateTicketRequest>
+public class UpdateTicketCommandValidator : AbstractValidator<UpdateTicketCommand>
 {
-    public UpdateTicketRequestValidator()
+    public UpdateTicketCommandValidator()
     {
         RuleFor(x => x.Title).NotEmpty().Length(3, 200);
         RuleFor(x => x.Description).NotEmpty().Length(3, 10000);
@@ -26,19 +26,19 @@ public class UpdateTicketRequestValidator : AbstractValidator<UpdateTicketReques
     }
 }
 
-public class UpdateWorkflowStateRequestValidator : AbstractValidator<UpdateWorkflowStateRequest>
+public class TransitionTicketStateCommandValidator : AbstractValidator<TransitionTicketStateCommand>
 {
-    public UpdateWorkflowStateRequestValidator()
+    public TransitionTicketStateCommandValidator()
     {
-        RuleFor(x => x.WorkflowStateId).NotEmpty();
+        RuleFor(x => x.TargetStateId).NotEmpty();
     }
 }
 
-public class AddCommentRequestValidator : AbstractValidator<AddCommentRequest>
+public class AddTicketCommentCommandValidator : AbstractValidator<AddTicketCommentCommand>
 {
-    public AddCommentRequestValidator()
+    public AddTicketCommentCommandValidator()
     {
-        RuleFor(x => x.Author).NotEmpty().Length(2, 100);
+        RuleFor(x => x.UserName).NotEmpty().Length(2, 100);
         RuleFor(x => x.Content).NotEmpty().Length(3, 4000);
     }
 }

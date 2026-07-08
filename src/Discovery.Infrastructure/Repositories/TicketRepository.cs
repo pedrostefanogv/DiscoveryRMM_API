@@ -75,6 +75,20 @@ public class TicketRepository : ITicketRepository
     {
         var query = BuildFilteredTicketQuery(filter);
 
+        // Filtro de escopo ACL (mesmo padrão do LogRepository)
+        if (!filter.HasGlobalAccess)
+        {
+            var allowedClientIds = (filter.AllowedClientIds ?? []).Distinct().ToArray();
+            var allowedSiteIds = (filter.AllowedSiteIds ?? []).Distinct().ToArray();
+
+            if (allowedClientIds.Length == 0 && allowedSiteIds.Length == 0)
+                return [];
+
+            query = query.Where(t =>
+                allowedClientIds.Contains(t.ClientId) ||
+                (t.SiteId.HasValue && allowedSiteIds.Contains(t.SiteId.Value)));
+        }
+
         if (CursorPaginationHelper.TryDecodeCreatedAtCursor(filter.Cursor, out var cursorCreatedAtUtc, out var cursorId))
         {
             query = CursorPaginationHelper.ApplyCreatedAtCursor(

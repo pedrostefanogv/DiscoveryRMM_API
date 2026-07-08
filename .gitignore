@@ -625,3 +625,4 @@ $RECYCLE.BIN/
 .github/
 appsettings.Development.json
 *.lscache
+*.csproj.lscache

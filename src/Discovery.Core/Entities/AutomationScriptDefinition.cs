@@ -9,6 +9,7 @@ public class AutomationScriptDefinition
     public string Name { get; set; } = string.Empty;
     public string Summary { get; set; } = string.Empty;
     public AutomationScriptType ScriptType { get; set; } = AutomationScriptType.PowerShell;
+    public string Language => ScriptType.ToString();
     public string Version { get; set; } = "1.0.0";
     public string ExecutionFrequency { get; set; } = "manual";
     public string TriggerModesJson { get; set; } = "[]";

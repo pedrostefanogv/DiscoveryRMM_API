@@ -65,6 +65,145 @@ Configuration/
  ReportingOptions.cs
  RetentionSettings.cs
  SecretEncryptionOptions.cs
+Cqrs/AgentAuth/
+ AiChat/AgentAiChatCommands.cs
+ Automation/AgentAutomationCommands.cs
+ Configuration/AgentConfigurationCommands.cs
+ Hardware/AgentHardwareCommands.cs
+ Knowledge/AgentKnowledgeCommands.cs
+ MeshCentral/AgentMeshCentralCommands.cs
+ Misc/AgentMiscCommands.cs
+ Software/AgentSoftwareCommands.cs
+ Status/AgentStatusCommands.cs
+ Tickets/AgentTicketCommands.cs
+Cqrs/
+ AgentDownload/Queries/AgentDownloadQueries.cs
+ AgentInstall/Queries/AgentInstallQueries.cs
+ AgentLabels/
+  Commands/AgentLabelCommands.cs
+  Queries/AgentLabelQueries.cs
+ AgentP2p/Queries/AgentP2pQueries.cs
+ Agents/Automation/
+  Commands/AgentAutomationCommands.cs
+  Queries/AgentAutomationQueries.cs
+ Agents/
+  Commands/AgentCommands.cs
+  CommandsTokens/
+   Commands/AgentCommandsTokensCommands.cs
+   Queries/AgentCommandsTokensQueries.cs
+  Crud/
+   Commands/AgentCrudCommands.cs
+   Queries/AgentCrudQueries.cs
+  Fanout/Commands/AgentFanoutCommands.cs
+  Inventory/Queries/AgentInventoryQueries.cs
+  Maintenance/Commands/AgentMaintenanceCommands.cs
+  PowerManagement/Commands/AgentPowerCommands.cs
+  Queries/AgentQueries.cs
+  RemoteDebug/Commands/AgentRemoteDebugCommands.cs
+  Transfer/Commands/AgentTransferCommands.cs
+ AgentUpdates/
+  Commands/AgentUpdateCommands.cs
+  Queries/AgentUpdateQueries.cs
+ Alerts/
+  Commands/AlertCommands.cs
+  Queries/AlertQueries.cs
+ ApiTokens/
+  Commands/ApiTokenCommands.cs
+  Queries/ApiTokenQueries.cs
+ AppStore/Queries/AppStoreQueries.cs
+ Auth/
+  Commands/PasswordCommands.cs
+  Queries/AuthQueries.cs
+ Automation/
+  Commands/AutomationCommands.cs
+  Queries/AutomationQueries.cs
+ AutomationScripts/Queries/AutomationScriptQueries.cs
+ AutomationTasks/Queries/AutomationTaskQueries.cs
+ AutoTicketRules/
+  Commands/AutoTicketRuleCommands.cs
+  Queries/AutoTicketRuleQueries.cs
+ Configuration/
+  Commands/ConfigCommands.cs
+  Queries/ConfigQueries.cs
+ Configurations/CqrsConfiguration.cs
+ CustomFields/
+  Commands/CustomFieldCommands.cs
+  Queries/CustomFieldQueries.cs
+ Dashboard/
+  Dtos/DashboardSummaryDto.cs
+  Queries/
+   GetClientSummaryQuery.cs
+   GetGlobalSummaryQuery.cs
+   GetSiteSummaryQuery.cs
+ Departments/
+  Commands/DepartmentCommands.cs
+  Queries/DepartmentQueries.cs
+ DeployTokens/
+  Commands/DeployTokenCommands.cs
+  Queries/DeployTokenQueries.cs
+ Error.cs
+ EscalationRules/
+  Commands/EscalationRuleCommands.cs
+  Queries/EscalationRuleQueries.cs
+ ICommand.cs
+ IQuery.cs
+ Jobs/Queries/JobQueries.cs
+ Knowledge/Queries/KnowledgeQueries.cs
+ Logs/Queries/LogQueries.cs
+ MeshCentral/Queries/MeshCentralQueries.cs
+ Mfa/Queries/MfaQueries.cs
+ MonitoringEvents/Queries/MonitoringEventQueries.cs
+ NatsAuth/Queries/NatsAuthQueries.cs
+ Notes/
+  Commands/NoteCommands.cs
+  Queries/NoteQueries.cs
+ Notifications/
+  Commands/NotificationCommands.cs
+  Queries/NotificationQueries.cs
+ Realtime/Queries/RealtimeQueries.cs
+ Reports/Queries/ReportQueries.cs
+ Result.cs
+ Roles/
+  Commands/RoleCommands.cs
+  Queries/RoleQueries.cs
+ Search/Queries/SearchQueries.cs
+ SlaCalendars/
+  Commands/SlaCalendarCommands.cs
+  Queries/SlaCalendarQueries.cs
+ SoftwareInventory/
+  Commands/SoftwareInventoryCommands.cs
+  Queries/SoftwareInventoryQueries.cs
+ Tickets/Commands/
+  AddTicketCommentCommand.cs
+  AssignTicketCommand.cs
+  CreateTicketCommand.cs
+  MergeTicketsCommand.cs
+  TransitionTicketStateCommand.cs
+  UpdateTicketCommand.cs
+ Tickets/
+  Dtos/TicketDetailDto.cs
+  Events/TicketEvents.cs
+  Queries/
+   GetTicketByIdQuery.cs
+   GetTicketCommentsQuery.cs
+   GetTicketSlaStatusQuery.cs
+   ListTicketsQuery.cs
+ UserGroups/
+  Commands/UserGroupCommands.cs
+  Queries/UserGroupQueries.cs
+ Users/
+  Commands/UserCommands.cs
+  Queries/UserQueries.cs
+ VoidResult.cs
+ Workflow/
+  Commands/WorkflowCommands.cs
+  Queries/WorkflowQueries.cs
+ WorkflowProfiles/
+  Commands/WorkflowProfileCommands.cs
+  Queries/WorkflowProfileQueries.cs
+ WorkflowState/
+  Commands/WorkflowStateCommands.cs
+  Queries/WorkflowStateQueries.cs
 DTOs/
  AgentHeartbeat.cs
  AgentLabelRuleDtos.cs
@@ -309,6 +448,7 @@ Interfaces/Auth/
  IPermissionService.cs
  IScopeContext.cs
  IUserAuthService.cs
+ IUserPasswordManagementService.cs
 Interfaces/
  IActivityLogService.cs
  IAgentAlertRepository.cs
@@ -374,14 +514,18 @@ Interfaces/
  IDedupFingerprintService.cs
  Identity/
   IRoleRepository.cs
+  IRoleService.cs
   IUserGroupRepository.cs
+  IUserGroupService.cs
   IUserRepository.cs
  IDepartmentCustomFieldService.cs
  IDepartmentRepository.cs
+ IDepartmentService.cs
  IDeployTokenRepository.cs
  IDeployTokenService.cs
  IEmbeddingProvider.cs
  IEntityNoteRepository.cs
+ IEscalationRuleService.cs
  IHeartbeatCacheService.cs
  IKnowledgeArticleRepository.cs
  IKnowledgeChunkingService.cs
@@ -389,6 +533,7 @@ Interfaces/
  IKnowledgeEmbeddingQueueRepository.cs
  IKnowledgeEmbeddingResetService.cs
  IKnowledgeMcpTool.cs
+ ILabelService.cs
  ILlmProvider.cs
  ILoggingService.cs
  ILogRepository.cs
@@ -408,6 +553,7 @@ Interfaces/
  IMonitoringEventNormalizationService.cs
  INatsConnectionValidator.cs
  INatsCredentialsService.cs
+ INoteService.cs
  INotificationRepository.cs
  INotificationService.cs
  IObjectStorageProviderFactory.cs
@@ -427,17 +573,21 @@ Interfaces/
  ISearchService.cs
  ISiteRepository.cs
  ISlaCalendarRepository.cs
+ ISlaCalendarService.cs
  ISlaService.cs
+ ISoftwareInventoryService.cs
  ISyncInvalidationPublisher.cs
  ISyncPingDeliveryRepository.cs
  ISyncPingDispatchQueue.cs
  ITicketActivityLogRepository.cs
  ITicketAlertRuleRepository.cs
  ITicketAutomationLinkRepository.cs
+ ITicketCommandService.cs
  ITicketEscalationRuleRepository.cs
  ITicketKnowledgeLinkRepository.cs
  ITicketKpiCacheService.cs
  ITicketMergeService.cs
+ ITicketQueryService.cs
  ITicketRelationService.cs
  ITicketRemoteSessionRepository.cs
  ITicketRepository.cs
@@ -447,6 +597,7 @@ Interfaces/
  IWingetPackageRepository.cs
  IWingetPackageSyncService.cs
  IWorkflowProfileRepository.cs
+ IWorkflowProfileService.cs
  IWorkflowRepository.cs
  Security/
   IApiTokenRepository.cs
@@ -647,8 +798,14 @@ ValueObjects/
  System.Xml.XPath.XDocument.dll
  WindowsBase.dll
 <NUGET>/
- microsoft.extensions.dependencyinjection.abstractions/8.0.0/lib/net8.0/Microsoft.Extensions.DependencyInjection.Abstractions.dll
- microsoft.extensions.logging.abstractions/8.0.0/lib/net8.0/Microsoft.Extensions.Logging.Abstractions.dll
+ mediatr.contracts/2.0.1/lib/netstandard2.0/MediatR.Contracts.dll
+ mediatr/14.2.0/lib/net10.0/MediatR.dll
+ microsoft.extensions.dependencyinjection.abstractions/10.0.0/lib/net10.0/Microsoft.Extensions.DependencyInjection.Abstractions.dll
+ microsoft.extensions.logging.abstractions/10.0.0/lib/net10.0/Microsoft.Extensions.Logging.Abstractions.dll
+ microsoft.identitymodel.abstractions/8.14.0/lib/net9.0/Microsoft.IdentityModel.Abstractions.dll
+ microsoft.identitymodel.jsonwebtokens/8.14.0/lib/net9.0/Microsoft.IdentityModel.JsonWebTokens.dll
+ microsoft.identitymodel.logging/8.14.0/lib/net9.0/Microsoft.IdentityModel.Logging.dll
+ microsoft.identitymodel.tokens/8.14.0/lib/net9.0/Microsoft.IdentityModel.Tokens.dll
  npgsql/8.0.5/lib/net8.0/Npgsql.dll
  pgvector/0.3.2/lib/net6.0/Pgvector.dll
 
@@ -663,7 +820,7 @@ ValueObjects/
 <DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/
  Microsoft.CodeAnalysis.CSharp.NetAnalyzers.dll
  Microsoft.CodeAnalysis.NetAnalyzers.dll
-<NUGET>/microsoft.extensions.logging.abstractions/8.0.0/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Logging.Generators.dll
+<NUGET>/microsoft.extensions.logging.abstractions/10.0.0/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Logging.Generators.dll
 
 [analyzerConfigFiles]
 <DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig

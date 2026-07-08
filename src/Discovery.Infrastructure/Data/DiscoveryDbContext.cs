@@ -94,6 +94,12 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<TicketRelation> TicketRelations => Set<TicketRelation>();
     public DbSet<KnowledgeEmbeddingQueueItem> KnowledgeEmbeddingQueueItems => Set<KnowledgeEmbeddingQueueItem>();
 
+    // Hardware inventory (reports)
+    public DbSet<DiskInfo> DiskInfos => Set<DiskInfo>();
+    public DbSet<NetworkAdapterInfo> NetworkAdapterInfos => Set<NetworkAdapterInfo>();
+    public DbSet<ListeningPortInfo> ListeningPortInfos => Set<ListeningPortInfo>();
+    public DbSet<PrinterInfo> PrinterInfos => Set<PrinterInfo>();
+
     // AI Provider Credentials
     public DbSet<AiProviderCredential> AiProviderCredentials => Set<AiProviderCredential>();
 

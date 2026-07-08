@@ -1,0 +1,10 @@
+using Discovery.Core.Cqrs;
+namespace Discovery.Core.Cqrs.Auth.Queries;
+public sealed record LoginQuery(string Email, string Password, string? IpAddress, string? UserAgent) : IQuery<Result<LoginResultDto>>;
+public sealed record LoginResultDto(Guid UserId, string AccessToken, string RefreshToken, string MfaToken, bool MfaRequired, DateTime ExpiresAt);
+public sealed record RefreshTokenQuery(string RefreshToken) : IQuery<Result<RefreshResultDto>>;
+public sealed record RefreshResultDto(string AccessToken, string RefreshToken, DateTime ExpiresAt);
+public sealed record LogoutCommand(string RefreshToken) : ICommand<Result<VoidResult>>;
+public sealed record ListUsersQuery(string? SearchTerm, string? Cursor, int Limit = 50) : IQuery<Result<ListUsersResult>>;
+public sealed record ListUsersResult(IReadOnlyList<UserDto> Users, string? NextCursor, bool HasMore);
+public sealed record UserDto(Guid Id, string Email, string Name, string Role, bool IsActive, DateTime CreatedAt);

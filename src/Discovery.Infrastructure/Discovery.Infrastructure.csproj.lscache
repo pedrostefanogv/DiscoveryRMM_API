@@ -54,6 +54,86 @@ TemporaryDependencyNodeTargetIdentifier=net10.0
 /warnaserror+:NU1605,SYSLIB0011
 
 [sourceFiles]
+Cqrs/AgentAuth/Handlers/
+ AgentAiChatHandlers.cs
+ AgentAutomationHandlers.cs
+ AgentConfigurationHandlers.cs
+ AgentKnowledgeHandlers.cs
+ AgentMeshCentralHandlers.cs
+ AgentMiscHandlers.cs
+ AgentSoftwareHandlers.cs
+ AgentStatusHandlers.cs
+ AgentTicketHandlers.cs
+Cqrs/
+ AgentDownload/AgentDownloadHandlers.cs
+ AgentInstall/AgentInstallHandlers.cs
+ AgentLabels/AddAgentLabelCommandHandler.cs
+ AgentP2p/AgentP2pHandlers.cs
+ Agents/CommandHandlers/
+  AgentAutomationCommandHandlers.cs
+  AgentCommandHandlers.cs
+  AgentCommandsTokensCommandHandlers.cs
+  AgentCrudCommandHandlers.cs
+  AgentFanoutCommandHandlers.cs
+  AgentMaintenanceCommandHandlers.cs
+  AgentPowerCommandHandlers.cs
+  AgentTransferCommandHandlers.cs
+ Agents/QueryHandlers/
+  AgentAutomationQueryHandlers.cs
+  AgentCommandsTokensQueryHandlers.cs
+  AgentCrudQueryHandlers.cs
+  AgentInventoryQueryHandlers.cs
+  AgentQueryHandlers.cs
+  AgentQueryHelper.cs
+  AgentTransferQueryHandlers.cs
+ AgentUpdates/
+  CommandHandlers/AgentUpdateCommandHandlers.cs
+  QueryHandlers/AgentUpdateQueryHandlers.cs
+ Alerts/
+  CommandHandlers/AlertCommandHandlers.cs
+  QueryHandlers/AlertQueryHandlers.cs
+ ApiTokens/ApiTokenHandlers.cs
+ AppStore/AppStoreHandlers.cs
+ Auth/
+  CommandHandlers/AuthCommandHandlers.cs
+  QueryHandlers/AuthQueryHandlers.cs
+ AutomationScripts/AutomationScriptHandlers.cs
+ AutomationTasks/AutomationTaskHandlers.cs
+ AutoTicketRules/AutoTicketRuleHandlers.cs
+ Behaviors/
+  LoggingBehavior.cs
+  PerformanceBehavior.cs
+  TransactionBehavior.cs
+  ValidationBehavior.cs
+ CustomFields/CustomFieldHandlers.cs
+ Dashboard/QueryHandlers/DashboardQueryHandlers.cs
+ Departments/DepartmentHandlers.cs
+ DeployTokens/DeployTokenHandlers.cs
+ EscalationRules/EscalationRuleHandlers.cs
+ Jobs/JobHandlers.cs
+ Knowledge/KnowledgeHandlers.cs
+ Logs/LogHandlers.cs
+ MeshCentral/MeshCentralHandlers.cs
+ Mfa/MfaHandlers.cs
+ MonitoringEvents/MonitoringEventHandlers.cs
+ NatsAuth/NatsAuthHandlers.cs
+ Notes/NoteHandlers.cs
+ Notifications/NotificationHandlers.cs
+ Realtime/RealtimeHandlers.cs
+ Reports/ReportHandlers.cs
+ Roles/RoleHandlers.cs
+ Search/QueryHandlers/SearchQueryHandlers.cs
+ SlaCalendars/SlaCalendarHandlers.cs
+ SoftwareInventory/SoftwareInventoryHandlers.cs
+ Tickets/
+  CommandHandlers/TicketCommandHandlers.cs
+  EventHandlers/TicketEventHandlers.cs
+  QueryHandlers/TicketQueryHandlers.cs
+ UserGroups/UserGroupHandlers.cs
+ Users/UserHandlers.cs
+ Workflow/QueryHandlers/WorkflowQueryHandlers.cs
+ WorkflowProfiles/WorkflowProfileHandlers.cs
+ WorkflowState/WorkflowStateHandlers.cs
 Data/
  DiscoveryDbContext.cs
  DiscoveryDbContext.Identity.cs
@@ -180,13 +260,16 @@ Services/
  DashboardService.cs
  DedupFingerprintService.cs
  DepartmentCustomFieldService.cs
+ DepartmentService.cs
  DeployTokenService.cs
+ EscalationRuleService.cs
  Fido2AuthService.cs
  HeartbeatCacheService.cs
  JwtService.cs
  KnowledgeChunkingService.cs
  KnowledgeEmbeddingResetService.cs
  KnowledgeMcpTool.cs
+ LabelService.cs
  LocalObjectStorageProvider.cs
  LoggingService.cs
  MarkdownReportRenderer.cs
@@ -208,6 +291,7 @@ Services/
  MonitoringEventNormalizationService.cs
  NatsConnectionValidator.cs
  NatsCredentialsService.cs
+ NoteService.cs
  ObjectStorageProviderFactory.cs
  OpenAiEmbeddingProvider.cs
  OpenAiProvider.cs
@@ -219,18 +303,26 @@ Services/
  ReportDatasetQueryService.cs
  ReportHtmlComposer.cs
  ReportService.cs
+ RoleService.cs
  ScopeContext.cs
  SearchService.cs
  SecretProtector.cs
+ SlaCalendarService.cs
  SlaService.cs
+ SoftwareInventoryService.cs
+ TicketCommandService.cs
  TicketKpiCacheService.cs
  TicketMergeService.cs
+ TicketQueryService.cs
  TicketRelationService.cs
  TicketWorkflowService.cs
  UserAuthService.cs
+ UserGroupService.cs
+ UserPasswordManagementService.cs
  UserPasswordService.cs
  WingetFeedClient.cs
  WingetPackageSyncService.cs
+ WorkflowProfileService.cs
  XlsxReportRenderer.cs
 
 [metadataReferences]
@@ -410,55 +502,59 @@ Services/
  documentformat.openxml.framework/3.1.1/lib/net8.0/DocumentFormat.OpenXml.Framework.dll
  documentformat.openxml/3.1.1/lib/net8.0/DocumentFormat.OpenXml.dll
  excelnumberformat/1.1.0/lib/netstandard2.0/ExcelNumberFormat.dll
- fido2.models/4.0.0/lib/net8.0/Fido2.Models.dll
- fido2/4.0.0/lib/net8.0/Fido2.dll
+ fido2.models/4.0.1/lib/net8.0/Fido2.Models.dll
+ fido2/4.0.1/lib/net8.0/Fido2.dll
+ fluentvalidation/12.1.1/lib/net8.0/FluentValidation.dll
  konscious.security.cryptography.argon2/1.3.1/lib/net8.0/Konscious.Security.Cryptography.Argon2.dll
  konscious.security.cryptography.blake2/1.1.1/lib/net8.0/Konscious.Security.Cryptography.Blake2.dll
- microsoft.aspnetcore.cryptography.internal/10.0.7/lib/net10.0/Microsoft.AspNetCore.Cryptography.Internal.dll
- microsoft.aspnetcore.dataprotection.abstractions/10.0.7/lib/net10.0/Microsoft.AspNetCore.DataProtection.Abstractions.dll
- microsoft.aspnetcore.dataprotection/10.0.7/lib/net10.0/Microsoft.AspNetCore.DataProtection.dll
+ mediatr.contracts/2.0.1/lib/netstandard2.0/MediatR.Contracts.dll
+ mediatr/14.2.0/lib/net10.0/MediatR.dll
+ microsoft.aspnetcore.cryptography.internal/10.0.9/lib/net10.0/Microsoft.AspNetCore.Cryptography.Internal.dll
+ microsoft.aspnetcore.dataprotection.abstractions/10.0.9/lib/net10.0/Microsoft.AspNetCore.DataProtection.Abstractions.dll
+ microsoft.aspnetcore.dataprotection/10.0.9/lib/net10.0/Microsoft.AspNetCore.DataProtection.dll
  microsoft.bcl.asyncinterfaces/6.0.0/lib/netstandard2.1/Microsoft.Bcl.AsyncInterfaces.dll
- microsoft.bcl.memory/10.0.5/lib/net10.0/Microsoft.Bcl.Memory.dll
- microsoft.entityframeworkcore.abstractions/10.0.5/lib/net10.0/Microsoft.EntityFrameworkCore.Abstractions.dll
+ microsoft.bcl.cryptography/10.0.2/lib/net10.0/Microsoft.Bcl.Cryptography.dll
+ microsoft.bcl.memory/10.0.9/lib/net10.0/Microsoft.Bcl.Memory.dll
+ microsoft.entityframeworkcore.abstractions/10.0.9/lib/net10.0/Microsoft.EntityFrameworkCore.Abstractions.dll
  microsoft.entityframeworkcore.relational/10.0.4/lib/net10.0/Microsoft.EntityFrameworkCore.Relational.dll
- microsoft.entityframeworkcore/10.0.5/lib/net10.0/Microsoft.EntityFrameworkCore.dll
- microsoft.extensions.caching.abstractions/10.0.5/lib/net10.0/Microsoft.Extensions.Caching.Abstractions.dll
- microsoft.extensions.caching.memory/10.0.5/lib/net10.0/Microsoft.Extensions.Caching.Memory.dll
- microsoft.extensions.configuration.abstractions/10.0.7/lib/net10.0/Microsoft.Extensions.Configuration.Abstractions.dll
+ microsoft.entityframeworkcore/10.0.9/lib/net10.0/Microsoft.EntityFrameworkCore.dll
+ microsoft.extensions.caching.abstractions/10.0.9/lib/net10.0/Microsoft.Extensions.Caching.Abstractions.dll
+ microsoft.extensions.caching.memory/10.0.9/lib/net10.0/Microsoft.Extensions.Caching.Memory.dll
+ microsoft.extensions.configuration.abstractions/10.0.9/lib/net10.0/Microsoft.Extensions.Configuration.Abstractions.dll
  microsoft.extensions.configuration.binder/9.0.0/lib/net9.0/Microsoft.Extensions.Configuration.Binder.dll
  microsoft.extensions.configuration/9.0.0/lib/net9.0/Microsoft.Extensions.Configuration.dll
- microsoft.extensions.dependencyinjection.abstractions/10.0.7/lib/net10.0/Microsoft.Extensions.DependencyInjection.Abstractions.dll
- microsoft.extensions.dependencyinjection/10.0.5/lib/net10.0/Microsoft.Extensions.DependencyInjection.dll
- microsoft.extensions.diagnostics.abstractions/10.0.7/lib/net10.0/Microsoft.Extensions.Diagnostics.Abstractions.dll
+ microsoft.extensions.dependencyinjection.abstractions/10.0.9/lib/net10.0/Microsoft.Extensions.DependencyInjection.Abstractions.dll
+ microsoft.extensions.dependencyinjection/10.0.9/lib/net10.0/Microsoft.Extensions.DependencyInjection.dll
+ microsoft.extensions.diagnostics.abstractions/10.0.9/lib/net10.0/Microsoft.Extensions.Diagnostics.Abstractions.dll
  microsoft.extensions.diagnostics/9.0.0/lib/net9.0/Microsoft.Extensions.Diagnostics.dll
- microsoft.extensions.fileproviders.abstractions/10.0.7/lib/net10.0/Microsoft.Extensions.FileProviders.Abstractions.dll
- microsoft.extensions.hosting.abstractions/10.0.7/lib/net10.0/Microsoft.Extensions.Hosting.Abstractions.dll
+ microsoft.extensions.fileproviders.abstractions/10.0.9/lib/net10.0/Microsoft.Extensions.FileProviders.Abstractions.dll
+ microsoft.extensions.hosting.abstractions/10.0.9/lib/net10.0/Microsoft.Extensions.Hosting.Abstractions.dll
  microsoft.extensions.http/9.0.0/lib/net9.0/Microsoft.Extensions.Http.dll
- microsoft.extensions.logging.abstractions/10.0.7/lib/net10.0/Microsoft.Extensions.Logging.Abstractions.dll
- microsoft.extensions.logging/10.0.5/lib/net10.0/Microsoft.Extensions.Logging.dll
+ microsoft.extensions.logging.abstractions/10.0.9/lib/net10.0/Microsoft.Extensions.Logging.Abstractions.dll
+ microsoft.extensions.logging/10.0.9/lib/net10.0/Microsoft.Extensions.Logging.dll
  microsoft.extensions.options.configurationextensions/9.0.0/lib/net9.0/Microsoft.Extensions.Options.ConfigurationExtensions.dll
- microsoft.extensions.options/10.0.7/lib/net10.0/Microsoft.Extensions.Options.dll
- microsoft.extensions.primitives/10.0.7/lib/net10.0/Microsoft.Extensions.Primitives.dll
- microsoft.identitymodel.abstractions/8.16.0/lib/net10.0/Microsoft.IdentityModel.Abstractions.dll
- microsoft.identitymodel.jsonwebtokens/8.16.0/lib/net10.0/Microsoft.IdentityModel.JsonWebTokens.dll
- microsoft.identitymodel.logging/8.16.0/lib/net10.0/Microsoft.IdentityModel.Logging.dll
- microsoft.identitymodel.tokens/8.16.0/lib/net10.0/Microsoft.IdentityModel.Tokens.dll
- microsoft.playwright/1.58.0/lib/netstandard2.0/Microsoft.Playwright.dll
+ microsoft.extensions.options/10.0.9/lib/net10.0/Microsoft.Extensions.Options.dll
+ microsoft.extensions.primitives/10.0.9/lib/net10.0/Microsoft.Extensions.Primitives.dll
+ microsoft.identitymodel.abstractions/8.19.1/lib/net10.0/Microsoft.IdentityModel.Abstractions.dll
+ microsoft.identitymodel.jsonwebtokens/8.19.1/lib/net10.0/Microsoft.IdentityModel.JsonWebTokens.dll
+ microsoft.identitymodel.logging/8.19.1/lib/net10.0/Microsoft.IdentityModel.Logging.dll
+ microsoft.identitymodel.tokens/8.19.1/lib/net10.0/Microsoft.IdentityModel.Tokens.dll
+ microsoft.playwright/1.61.0/lib/netstandard2.0/Microsoft.Playwright.dll
  minio/7.0.0/lib/net8.0/Minio.dll
- nats.client.abstractions/2.7.3/lib/net8.0/NATS.Client.Abstractions.dll
- nats.client.core/2.7.3/lib/net8.0/NATS.Client.Core.dll
- nats.client.hosting/2.7.3/lib/net8.0/NATS.Client.Hosting.dll
- nats.client.jetstream/2.7.3/lib/net8.0/NATS.Client.JetStream.dll
- nats.client.keyvaluestore/2.7.3/lib/net8.0/NATS.Client.KeyValueStore.dll
- nats.client.objectstore/2.7.3/lib/net8.0/NATS.Client.ObjectStore.dll
- nats.client.serializers.json/2.7.3/lib/net8.0/NATS.Client.Serializers.Json.dll
- nats.client.services/2.7.3/lib/net8.0/NATS.Client.Services.dll
- nats.client.simplified/2.7.3/lib/net8.0/NATS.Client.Simplified.dll
- nats.jwt/1.0.0/lib/net10.0/NATS.Jwt.dll
- nats.net/2.7.3/lib/net8.0/NATS.Net.dll
- nats.nkeys/1.0.0/lib/net10.0/NATS.NKeys.dll
- npgsql.entityframeworkcore.postgresql/10.0.1/lib/net10.0/Npgsql.EntityFrameworkCore.PostgreSQL.dll
- npgsql/10.0.2/lib/net10.0/Npgsql.dll
+ nats.client.abstractions/2.8.2/lib/net8.0/NATS.Client.Abstractions.dll
+ nats.client.core/2.8.2/lib/net8.0/NATS.Client.Core.dll
+ nats.client.hosting/2.8.2/lib/net8.0/NATS.Client.Hosting.dll
+ nats.client.jetstream/2.8.2/lib/net8.0/NATS.Client.JetStream.dll
+ nats.client.keyvaluestore/2.8.2/lib/net8.0/NATS.Client.KeyValueStore.dll
+ nats.client.objectstore/2.8.2/lib/net8.0/NATS.Client.ObjectStore.dll
+ nats.client.serializers.json/2.8.2/lib/net8.0/NATS.Client.Serializers.Json.dll
+ nats.client.services/2.8.2/lib/net8.0/NATS.Client.Services.dll
+ nats.client.simplified/2.8.2/lib/net8.0/NATS.Client.Simplified.dll
+ nats.jwt/1.0.1/lib/net10.0/NATS.Jwt.dll
+ nats.net/2.8.2/lib/net8.0/NATS.Net.dll
+ nats.nkeys/1.0.2/lib/net10.0/NATS.NKeys.dll
+ npgsql.entityframeworkcore.postgresql/10.0.2/lib/net10.0/Npgsql.EntityFrameworkCore.PostgreSQL.dll
+ npgsql/10.0.3/lib/net10.0/Npgsql.dll
  nsec.cryptography/25.4.0/lib/net8.0/NSec.Cryptography.dll
  otp.net/1.4.1/lib/net10.0/Otp.NET.dll
  pgvector.entityframeworkcore/0.3.0/lib/net8.0/Pgvector.EntityFrameworkCore.dll
@@ -466,12 +562,12 @@ Services/
  rbush.signed/4.0.0/lib/net8.0/RBush.dll
  sixlabors.fonts/1.0.0/lib/netcoreapp3.1/SixLabors.Fonts.dll
  system.formats.cbor/9.0.0/lib/net9.0/System.Formats.Cbor.dll
- system.identitymodel.tokens.jwt/8.16.0/lib/net10.0/System.IdentityModel.Tokens.Jwt.dll
+ system.identitymodel.tokens.jwt/8.19.1/lib/net10.0/System.IdentityModel.Tokens.Jwt.dll
  system.io.hashing/9.0.4/lib/net9.0/System.IO.Hashing.dll
  system.io.packaging/8.0.1/lib/net8.0/System.IO.Packaging.dll
  system.reactive/6.0.1/lib/net6.0/System.Reactive.dll
- system.security.cryptography.pkcs/10.0.7/lib/net10.0/System.Security.Cryptography.Pkcs.dll
- system.security.cryptography.xml/10.0.7/lib/net10.0/System.Security.Cryptography.Xml.dll
+ system.security.cryptography.pkcs/10.0.9/lib/net10.0/System.Security.Cryptography.Pkcs.dll
+ system.security.cryptography.xml/10.0.9/lib/net10.0/System.Security.Cryptography.Xml.dll
 
 [analyzerReferences]
 <DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.9/analyzers/dotnet/cs/
@@ -485,9 +581,9 @@ Services/
  Microsoft.CodeAnalysis.CSharp.NetAnalyzers.dll
  Microsoft.CodeAnalysis.NetAnalyzers.dll
 <NUGET>/
- microsoft.entityframeworkcore.analyzers/10.0.5/analyzers/dotnet/cs/Microsoft.EntityFrameworkCore.Analyzers.dll
- microsoft.extensions.logging.abstractions/10.0.7/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Logging.Generators.dll
- microsoft.extensions.options/10.0.7/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Options.SourceGeneration.dll
+ microsoft.entityframeworkcore.analyzers/10.0.9/analyzers/dotnet/cs/Microsoft.EntityFrameworkCore.Analyzers.dll
+ microsoft.extensions.logging.abstractions/10.0.9/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Logging.Generators.dll
+ microsoft.extensions.options/10.0.9/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Options.SourceGeneration.dll
 
 [analyzerConfigFiles]
 <DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig

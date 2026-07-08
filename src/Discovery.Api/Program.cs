@@ -4,12 +4,13 @@ using FluentValidation.AspNetCore;
 using Polly;
 using Polly.Extensions.Http;
 using Discovery.Api;
+using Discovery.Api.Cqrs.DependencyInjection;
+using Discovery.Api.DependencyInjection;
 using Discovery.Api.Filters;
 using Discovery.Api.Validators;
 using FluentMigrator.Runner;
 using Discovery.Api.Middleware;
 using Discovery.Api.Services;
-using Discovery.Api.DependencyInjection;
 using Discovery.Core.Configuration;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
@@ -192,11 +193,14 @@ builder.Services.AddControllers(options =>
     });
 
 builder.Services.AddFluentValidationAutoValidation();
-builder.Services.AddValidatorsFromAssemblyContaining<CreateAgentRequestValidator>();
+builder.Services.AddValidatorsFromAssemblyContaining<Discovery.Api.Validators.CreateTicketCommandValidator>();
 
 // OpenAPI + Scalar
 builder.Services.AddOpenApi();
 builder.Services.AddDiscoveryApiVersioning();
+
+// CQRS infrastructure (MediatR, pipeline behaviors)
+builder.Services.AddDiscoveryCqrs();
 
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
@@ -225,7 +229,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     var allNetworks = trustedNetworks.Length > 0 ? trustedNetworks : defaultTrustedProxies.Where(p => p.Contains('/')).ToArray();
 
     options.KnownProxies.Clear();
-    options.KnownNetworks.Clear();
+    options.KnownIPNetworks.Clear();
 
     foreach (var ip in allProxies.Where(p => !p.Contains('/')).Distinct())
     {
@@ -240,7 +244,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
             && int.TryParse(parts[1], out var prefix)
             && prefix >= 0 && prefix <= 128)
         {
-            options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(netAddr, prefix));
+            options.KnownIPNetworks.Add(new System.Net.IPNetwork(netAddr, prefix));
         }
     }
 });

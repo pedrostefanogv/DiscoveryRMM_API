@@ -6,6 +6,7 @@ public interface IWingetPackageRepository
 {
     Task<WingetPackage?> GetByPackageIdAsync(string packageId);
 
+    [Obsolete("Use SearchPageAsync (cursor-based). Será removido na v2.")]
     Task<(IReadOnlyList<WingetPackage> Items, int TotalCount)> SearchAsync(
         string? search,
         string? architecture,

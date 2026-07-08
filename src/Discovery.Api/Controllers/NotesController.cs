@@ -1,176 +1,65 @@
-using Discovery.Api.Filters;
-using Discovery.Core.Entities;
-using Discovery.Core.Enums.Identity;
-using Discovery.Core.Interfaces;
+﻿using Discovery.Core.Cqrs.Notes.Commands;
+using Discovery.Core.Cqrs.Notes.Queries;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
-[Route("api/v{version:apiVersion}")]
-public class NotesController : ControllerBase
+[Route("api/v{version:apiVersion}/notes")]
+public class NotesController(IMediator mediator) : ControllerBase
 {
-    private readonly IEntityNoteRepository _notes;
-    private readonly IClientRepository _clients;
-    private readonly ISiteRepository _sites;
-    private readonly IAgentRepository _agents;
-
-    public NotesController(
-        IEntityNoteRepository notes,
-        IClientRepository clients,
-        ISiteRepository sites,
-        IAgentRepository agents)
+    [HttpGet]
+    public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] Guid? agentId = null)
     {
-        _notes = notes;
-        _clients = clients;
-        _sites = sites;
-        _agents = agents;
+        var result = await mediator.Send(new ListNotesQuery(clientId, siteId, agentId));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
-    // ============ Client notes ============
-
-    [HttpGet("clients/{clientId:guid}/notes")]
-    [RequirePermission(ResourceType.Clients, ActionType.View)]
-    public async Task<IActionResult> GetClientNotes(Guid clientId)
-    {
-        var client = await _clients.GetByIdAsync(clientId);
-        if (client is null) return NotFound(new { error = "Client not found." });
-
-        var notes = await _notes.GetByClientIdAsync(clientId);
-        return Ok(notes);
-    }
-
-    [HttpPost("clients/{clientId:guid}/notes")]
-    [RequirePermission(ResourceType.Clients, ActionType.Create)]
-    public async Task<IActionResult> CreateClientNote(Guid clientId, [FromBody] CreateNoteRequest request)
-    {
-        var client = await _clients.GetByIdAsync(clientId);
-        if (client is null) return NotFound(new { error = "Client not found." });
-
-        if (string.IsNullOrWhiteSpace(request.Content))
-            return BadRequest(new { error = "Content is required." });
-
-        var note = new EntityNote
-        {
-            ClientId = clientId,
-            Content = request.Content.Trim(),
-            Author = request.Author,
-            IsPinned = request.IsPinned
-        };
-
-        var created = await _notes.CreateAsync(note);
-        return Created($"/api/v1/notes/{created.Id}", created);
-    }
-
-    // ============ Site notes ============
-
-    [HttpGet("sites/{siteId:guid}/notes")]
-    [RequirePermission(ResourceType.Sites, ActionType.View)]
-    public async Task<IActionResult> GetSiteNotes(Guid siteId)
-    {
-        var site = await _sites.GetByIdAsync(siteId);
-        if (site is null) return NotFound(new { error = "Site not found." });
-
-        var notes = await _notes.GetBySiteIdAsync(siteId);
-        return Ok(notes);
-    }
-
-    [HttpPost("sites/{siteId:guid}/notes")]
-    [RequirePermission(ResourceType.Sites, ActionType.Create)]
-    public async Task<IActionResult> CreateSiteNote(Guid siteId, [FromBody] CreateNoteRequest request)
-    {
-        var site = await _sites.GetByIdAsync(siteId);
-        if (site is null) return NotFound(new { error = "Site not found." });
-
-        if (string.IsNullOrWhiteSpace(request.Content))
-            return BadRequest(new { error = "Content is required." });
-
-        var note = new EntityNote
-        {
-            SiteId = siteId,
-            Content = request.Content.Trim(),
-            Author = request.Author,
-            IsPinned = request.IsPinned
-        };
-
-        var created = await _notes.CreateAsync(note);
-        return Created($"/api/v1/notes/{created.Id}", created);
-    }
-
-    // ============ Agent notes ============
-
-    [HttpGet("agents/{agentId:guid}/notes")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetAgentNotes(Guid agentId)
-    {
-        var agent = await _agents.GetByIdAsync(agentId);
-        if (agent is null) return NotFound(new { error = "Agent not found." });
-
-        var notes = await _notes.GetByAgentIdAsync(agentId);
-        return Ok(notes);
-    }
-
-    [HttpPost("agents/{agentId:guid}/notes")]
-    [RequirePermission(ResourceType.Agents, ActionType.Create)]
-    public async Task<IActionResult> CreateAgentNote(Guid agentId, [FromBody] CreateNoteRequest request)
-    {
-        var agent = await _agents.GetByIdAsync(agentId);
-        if (agent is null) return NotFound(new { error = "Agent not found." });
-
-        if (string.IsNullOrWhiteSpace(request.Content))
-            return BadRequest(new { error = "Content is required." });
-
-        var note = new EntityNote
-        {
-            AgentId = agentId,
-            Content = request.Content.Trim(),
-            Author = request.Author,
-            IsPinned = request.IsPinned
-        };
-
-        var created = await _notes.CreateAsync(note);
-        return Created($"/api/v1/notes/{created.Id}", created);
-    }
-
-    // ============ Shared note operations ============
-
-    [HttpGet("notes/{id:guid}")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var note = await _notes.GetByIdAsync(id);
-        return note is null ? NotFound() : Ok(note);
+        var result = await mediator.Send(new GetNoteByIdQuery(id));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
-    [HttpPut("notes/{id:guid}")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.Edit)]
-    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateNoteRequest request)
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateNoteCommand cmd)
     {
-        var note = await _notes.GetByIdAsync(id);
-        if (note is null) return NotFound();
-
-        if (string.IsNullOrWhiteSpace(request.Content))
-            return BadRequest(new { error = "Content is required." });
-
-        note.Content = request.Content.Trim();
-        note.Author = request.Author;
-        note.IsPinned = request.IsPinned;
-
-        await _notes.UpdateAsync(note);
-        return Ok(note);
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
-    [HttpDelete("notes/{id:guid}")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.Delete)]
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateNoteCommand cmd)
+    {
+        var result = await mediator.Send(cmd with { Id = id });
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id)
     {
-        var note = await _notes.GetByIdAsync(id);
-        if (note is null) return NotFound();
-
-        await _notes.DeleteAsync(id);
-        return NoContent();
+        var result = await mediator.Send(new DeleteNoteCommand(id));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 }
-
-public record CreateNoteRequest(string Content, string? Author, bool IsPinned = false);
-public record UpdateNoteRequest(string Content, string? Author, bool IsPinned = false);

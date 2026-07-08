@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Text;
 
 namespace Discovery.Core.Helpers;
@@ -107,18 +108,38 @@ public static class CursorPaginationHelper
         IQueryable<T> query,
         string? cursorName,
         Guid? cursorId,
-        Func<T, string> nameSelector,
-        Func<T, Guid> idSelector) where T : class
+        Expression<Func<T, string>> nameSelector,
+        Expression<Func<T, Guid>> idSelector) where T : class
     {
         if (string.IsNullOrEmpty(cursorName) || !cursorId.HasValue)
             return query;
 
-        var targetName = cursorName;
-        var targetId = cursorId.Value;
+        var targetName = Expression.Constant(cursorName, typeof(string));
+        var targetId = Expression.Constant(cursorId.Value, typeof(Guid));
 
-        return query.Where(item =>
-            string.Compare(nameSelector(item), targetName, StringComparison.OrdinalIgnoreCase) > 0 ||
-            (string.Equals(nameSelector(item), targetName, StringComparison.OrdinalIgnoreCase) && idSelector(item).CompareTo(targetId) > 0));
+        var param = nameSelector.Parameters[0];
+
+        // string.Compare(name, targetName, OrdinalIgnoreCase) > 0
+        var compareCall = Expression.Call(
+            typeof(string).GetMethod(nameof(string.Compare), [typeof(string), typeof(string), typeof(StringComparison)])!,
+            nameSelector.Body, targetName,
+            Expression.Constant(StringComparison.OrdinalIgnoreCase));
+
+        var nameGreater = Expression.GreaterThan(compareCall, Expression.Constant(0));
+
+        // name == targetName (OrdinalIgnoreCase) AND id > targetId
+        var nameEqualsCall = Expression.Call(
+            typeof(string).GetMethod(nameof(string.Equals), [typeof(string), typeof(string), typeof(StringComparison)])!,
+            nameSelector.Body, targetName,
+            Expression.Constant(StringComparison.OrdinalIgnoreCase));
+
+        var idGreater = Expression.GreaterThan(idSelector.Body, targetId);
+        var nameEqualsAndIdGreater = Expression.AndAlso(nameEqualsCall, idGreater);
+
+        var predicate = Expression.Lambda<Func<T, bool>>(
+            Expression.OrElse(nameGreater, nameEqualsAndIdGreater), param);
+
+        return query.Where(predicate);
     }
 
     // ── Type D: long (DownloadCount) + Id (Guid) — para Chocolatey ──────────
@@ -158,18 +179,28 @@ public static class CursorPaginationHelper
         IQueryable<T> query,
         long? cursorCount,
         Guid? cursorId,
-        Func<T, long> countSelector,
-        Func<T, Guid> idSelector) where T : class
+        Expression<Func<T, long>> countSelector,
+        Expression<Func<T, Guid>> idSelector) where T : class
     {
         if (!cursorCount.HasValue || !cursorId.HasValue)
             return query;
 
-        var targetCount = cursorCount.Value;
-        var targetId = cursorId.Value;
+        var targetCount = Expression.Constant(cursorCount.Value, typeof(long));
+        var targetId = Expression.Constant(cursorId.Value, typeof(Guid));
+        var param = countSelector.Parameters[0];
 
-        return query.Where(item =>
-            countSelector(item) < targetCount ||
-            (countSelector(item) == targetCount && idSelector(item).CompareTo(targetId) > 0));
+        // count < targetCount
+        var countLess = Expression.LessThan(countSelector.Body, targetCount);
+
+        // count == targetCount AND id > targetId
+        var countEqual = Expression.Equal(countSelector.Body, targetCount);
+        var idGreater = Expression.GreaterThan(idSelector.Body, targetId);
+        var countEqualAndIdGreater = Expression.AndAlso(countEqual, idGreater);
+
+        var predicate = Expression.Lambda<Func<T, bool>>(
+            Expression.OrElse(countLess, countEqualAndIdGreater), param);
+
+        return query.Where(predicate);
     }
 
     /// <summary>
@@ -179,18 +210,28 @@ public static class CursorPaginationHelper
         IQueryable<T> query,
         DateTime? cursorCreatedAtUtc,
         Guid? cursorId,
-        Func<T, DateTime> createdAtSelector,
-        Func<T, Guid> idSelector) where T : class
+        Expression<Func<T, DateTime>> createdAtSelector,
+        Expression<Func<T, Guid>> idSelector) where T : class
     {
         if (!cursorCreatedAtUtc.HasValue || !cursorId.HasValue)
             return query;
 
-        var targetCreatedAt = cursorCreatedAtUtc.Value;
-        var targetId = cursorId.Value;
+        var targetCreatedAt = Expression.Constant(cursorCreatedAtUtc.Value, typeof(DateTime));
+        var targetId = Expression.Constant(cursorId.Value, typeof(Guid));
+        var param = createdAtSelector.Parameters[0];
 
-        return query.Where(item =>
-            createdAtSelector(item) < targetCreatedAt ||
-            (createdAtSelector(item) == targetCreatedAt && idSelector(item).CompareTo(targetId) < 0));
+        // createdAt < targetCreatedAt
+        var createdAtLess = Expression.LessThan(createdAtSelector.Body, targetCreatedAt);
+
+        // createdAt == targetCreatedAt AND id < targetId
+        var createdAtEqual = Expression.Equal(createdAtSelector.Body, targetCreatedAt);
+        var idLess = Expression.LessThan(idSelector.Body, targetId);
+        var createdAtEqualAndIdLess = Expression.AndAlso(createdAtEqual, idLess);
+
+        var predicate = Expression.Lambda<Func<T, bool>>(
+            Expression.OrElse(createdAtLess, createdAtEqualAndIdLess), param);
+
+        return query.Where(predicate);
     }
 
     /// <summary>
@@ -199,12 +240,18 @@ public static class CursorPaginationHelper
     public static IQueryable<T> ApplyGuidCursor<T>(
         IQueryable<T> query,
         Guid? cursorId,
-        Func<T, Guid> idSelector) where T : class
+        Expression<Func<T, Guid>> idSelector) where T : class
     {
         if (!cursorId.HasValue)
             return query;
 
-        return query.Where(item => idSelector(item).CompareTo(cursorId.Value) < 0);
+        var targetId = Expression.Constant(cursorId.Value, typeof(Guid));
+        var param = idSelector.Parameters[0];
+
+        var predicate = Expression.Lambda<Func<T, bool>>(
+            Expression.LessThan(idSelector.Body, targetId), param);
+
+        return query.Where(predicate);
     }
 
     /// <summary>Retorna página com hasMore = items.Count > limit.</summary>

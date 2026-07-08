@@ -38,6 +38,11 @@ public class TicketEscalationRule
     public bool NotifyAssignee { get; set; } = true;
 
     public bool IsActive { get; set; } = true;
+
+    // ── Report fields ───────────────────────────────────────────────────
+    public Guid? ClientId => null;
+    public int EscalationLevel => TriggerAtSlaPercent > 0 ? TriggerAtSlaPercent / 20 + 1 : 1;
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

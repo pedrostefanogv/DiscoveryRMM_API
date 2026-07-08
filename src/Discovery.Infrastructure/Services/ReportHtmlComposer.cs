@@ -539,7 +539,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
             decimal sumIf = 0;
             foreach (var row in rows)
             {
-                if (EvaluateConditionAgainstSummary(row, summary.Field!, summary.Condition))
+                if (summary.Condition is { } conditionValue && EvaluateConditionAgainstSummary(row, summary.Field!, conditionValue))
                 {
                     if (row.TryGetValue(summary.Field, out var v) && v is not null && TryConvertToDecimal(v, out var dv))
                         sumIf += dv;

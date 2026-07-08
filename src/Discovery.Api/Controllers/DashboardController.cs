@@ -1,6 +1,7 @@
-using Discovery.Core.Interfaces;
+using Discovery.Core.Cqrs.Dashboard.Queries;
 using Discovery.Core.Enums.Identity;
 using Discovery.Api.Filters;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -9,18 +10,12 @@ namespace Discovery.Api.Controllers;
 [Route("api/v{version:apiVersion}")]
 public class DashboardController : ControllerBase
 {
-    private readonly IDashboardService _dashboardService;
-    private readonly IClientRepository _clientRepository;
-    private readonly ISiteRepository _siteRepository;
+    private readonly IMediator _mediator;
 
     public DashboardController(
-        IDashboardService dashboardService,
-        IClientRepository clientRepository,
-        ISiteRepository siteRepository)
+        IMediator mediator)
     {
-        _dashboardService = dashboardService;
-        _clientRepository = clientRepository;
-        _siteRepository = siteRepository;
+        _mediator = mediator;
     }
 
     [HttpGet("dashboard/global/summary")]
@@ -30,8 +25,12 @@ public class DashboardController : ControllerBase
         if (!TryParseWindow(window, out var parsedWindow, out var error))
             return BadRequest(new { error });
 
-        var summary = await _dashboardService.GetGlobalSummaryAsync(parsedWindow, cancellationToken);
-        return Ok(summary);
+        var query = new GetGlobalSummaryQuery(parsedWindow);
+        var result = await _mediator.Send(query, cancellationToken);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+        );
     }
 
     [HttpGet("clients/{clientId:guid}/dashboard/summary")]
@@ -41,12 +40,12 @@ public class DashboardController : ControllerBase
         if (!TryParseWindow(window, out var parsedWindow, out var error))
             return BadRequest(new { error });
 
-        var client = await _clientRepository.GetByIdAsync(clientId);
-        if (client is null)
-            return NotFound(new { error = "Client not found." });
-
-        var summary = await _dashboardService.GetClientSummaryAsync(clientId, parsedWindow, cancellationToken);
-        return Ok(summary);
+        var query = new GetClientSummaryQuery(clientId, parsedWindow);
+        var result = await _mediator.Send(query, cancellationToken);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+        );
     }
 
     [HttpGet("clients/{clientId:guid}/sites/{siteId:guid}/dashboard/summary")]
@@ -60,12 +59,12 @@ public class DashboardController : ControllerBase
         if (!TryParseWindow(window, out var parsedWindow, out var error))
             return BadRequest(new { error });
 
-        var site = await _siteRepository.GetByIdAsync(siteId);
-        if (site is null || site.ClientId != clientId)
-            return NotFound(new { error = "Site not found for this client." });
-
-        var summary = await _dashboardService.GetSiteSummaryAsync(clientId, siteId, parsedWindow, cancellationToken);
-        return Ok(summary);
+        var query = new GetSiteSummaryQuery(clientId, siteId, parsedWindow);
+        var result = await _mediator.Send(query, cancellationToken);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+        );
     }
 
     private static bool TryParseWindow(string? window, out TimeSpan parsedWindow, out string? error)

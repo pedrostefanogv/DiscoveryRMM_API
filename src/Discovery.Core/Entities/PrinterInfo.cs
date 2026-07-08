@@ -14,4 +14,7 @@ public class PrinterInfo
     public string? ShareName { get; set; }
     public string? Location { get; set; }
     public DateTime CollectedAt { get; set; }
+
+    // ── Report field aliases ────────────────────────────────────────────
+    public bool IsShared => Shared;
 }
