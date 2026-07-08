@@ -7,15 +7,6 @@ public interface IAppPackageRepository
 {
     Task<AppPackage?> GetByInstallationTypeAndPackageIdAsync(AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default);
 
-    [Obsolete("Use SearchPageAsync (cursor-based). Será removido na v2.")]
-    Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchAsync(
-        AppInstallationType installationType,
-        string? search,
-        string? architecture,
-        int limit,
-        int offset,
-        CancellationToken cancellationToken = default);
-
     Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchPageAsync(
         AppInstallationType installationType,
         string? search,

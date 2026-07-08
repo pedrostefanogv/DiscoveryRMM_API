@@ -16,47 +16,6 @@ public class AgentAlertRepository : IAgentAlertRepository
     public async Task<AgentAlertDefinition?> GetByIdAsync(Guid id)
         => await _db.AgentAlertDefinitions.AsNoTracking().FirstOrDefaultAsync(a => a.Id == id);
 
-    public async Task<IReadOnlyList<AgentAlertDefinition>> GetByFiltersAsync(
-        AlertDefinitionStatus? status = null,
-        AlertScopeType? scopeType = null,
-        Guid? scopeClientId = null,
-        Guid? scopeSiteId = null,
-        Guid? scopeAgentId = null,
-        Guid? ticketId = null,
-        int limit = 100,
-        int offset = 0)
-    {
-        var safeLimit = Math.Clamp(limit, 1, 500);
-        var safeOffset = Math.Max(0, offset);
-
-        var query = _db.AgentAlertDefinitions.AsNoTracking().AsQueryable();
-
-        if (status.HasValue)
-            query = query.Where(a => a.Status == status.Value);
-
-        if (scopeType.HasValue)
-            query = query.Where(a => a.ScopeType == scopeType.Value);
-
-        if (scopeClientId.HasValue)
-            query = query.Where(a => a.ScopeClientId == scopeClientId.Value);
-
-        if (scopeSiteId.HasValue)
-            query = query.Where(a => a.ScopeSiteId == scopeSiteId.Value);
-
-        if (scopeAgentId.HasValue)
-            query = query.Where(a => a.ScopeAgentId == scopeAgentId.Value);
-
-        if (ticketId.HasValue)
-            query = query.Where(a => a.TicketId == ticketId.Value);
-
-        return await query
-            .OrderByDescending(a => a.CreatedAt)
-            .ThenByDescending(a => a.Id)
-            .Skip(safeOffset)
-            .Take(safeLimit)
-            .ToListAsync();
-    }
-
     public async Task<IReadOnlyList<AgentAlertDefinition>> GetByFiltersPageAsync(
         AlertDefinitionStatus? status = null,
         AlertScopeType? scopeType = null,

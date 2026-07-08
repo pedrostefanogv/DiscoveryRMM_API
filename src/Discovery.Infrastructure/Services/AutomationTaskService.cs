@@ -1,5 +1,3 @@
-#pragma warning disable CS0618 // Obsolete: remover na v2
-
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -13,8 +11,6 @@ namespace Discovery.Infrastructure.Services;
 
 public class AutomationTaskService : IAutomationTaskService
 {
-    private const int LabelFilterMaxScan = 5000;
-
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -44,105 +40,6 @@ public class AutomationTaskService : IAutomationTaskService
         _siteRepository = siteRepository;
         _agentLabelRepository = agentLabelRepository;
         _loggingService = loggingService;
-    }
-
-    public async Task<AutomationTaskPageDto> GetListAsync(
-        AppApprovalScopeType? scopeType,
-        Guid? scopeId,
-        bool activeOnly,
-        bool deletedOnly,
-        bool includeDeleted,
-        string? search,
-        Guid? clientId,
-        Guid? siteId,
-        Guid? agentId,
-        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
-        IReadOnlyList<AutomationTaskActionType>? actionTypes,
-        IReadOnlyList<string>? labels,
-        int limit,
-        int offset,
-        CancellationToken cancellationToken = default)
-    {
-        _ = cancellationToken;
-        var safeLimit = Math.Clamp(limit, 1, 200);
-        var safeOffset = Math.Max(0, offset);
-
-        var normalizedLabels = labels?
-            .Where(label => !string.IsNullOrWhiteSpace(label))
-            .Select(label => label.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        List<AutomationTaskDefinition> items;
-        int total;
-
-        if (normalizedLabels is { Count: > 0 })
-        {
-            // Evita filtros de string em colunas jsonb no SQL; aplica labels em memória.
-            var candidates = await _taskRepository.GetListAsync(
-                scopeType,
-                scopeId,
-                activeOnly,
-                deletedOnly,
-                includeDeleted,
-                search,
-                clientId,
-                siteId,
-                agentId,
-                scopeTypes,
-                actionTypes,
-                limit: LabelFilterMaxScan,
-                offset: 0);
-
-            var filtered = candidates
-                .Where(task => MatchesTaskLabels(task, normalizedLabels))
-                .ToList();
-
-            total = filtered.Count;
-            items = filtered
-                .Skip(safeOffset)
-                .Take(safeLimit)
-                .ToList();
-        }
-        else
-        {
-            items = (await _taskRepository.GetListAsync(
-                scopeType,
-                scopeId,
-                activeOnly,
-                deletedOnly,
-                includeDeleted,
-                search,
-                clientId,
-                siteId,
-                agentId,
-                scopeTypes,
-                actionTypes,
-                safeLimit,
-                safeOffset)).ToList();
-
-            total = await _taskRepository.CountAsync(
-                scopeType,
-                scopeId,
-                activeOnly,
-                deletedOnly,
-                includeDeleted,
-                search,
-                clientId,
-                siteId,
-                agentId,
-                scopeTypes,
-                actionTypes);
-        }
-
-        return new AutomationTaskPageDto
-        {
-            Items = items.Select(ToSummaryDto).ToList(),
-            Count = items.Count,
-            Total = total,
-            Limit = safeLimit,
-            Offset = safeOffset
-        };
     }
 
     public async Task<AutomationTaskPageDto> GetListPageAsync(
@@ -656,10 +553,10 @@ public class AutomationTaskService : IAutomationTaskService
             .Select(label => label.Label)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var globalTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Global, null, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
-        var clientTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Client, site.ClientId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
-        var siteTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Site, site.Id, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
-        var agentTasks = await _taskRepository.GetListAsync(AppApprovalScopeType.Agent, agentId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, limit: 1000, offset: 0);
+        var globalTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Global, null, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, cursor: null, limit: 1000);
+        var clientTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Client, site.ClientId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, cursor: null, limit: 1000);
+        var siteTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Site, site.Id, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, cursor: null, limit: 1000);
+        var agentTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Agent, agentId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, cursor: null, limit: 1000);
 
         var applicable = globalTasks
             .Concat(clientTasks)

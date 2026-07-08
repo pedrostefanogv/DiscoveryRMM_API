@@ -5,24 +5,6 @@ namespace Discovery.Core.Interfaces;
 
 public interface IAutomationTaskService
 {
-    [Obsolete("Use GetListPageAsync (cursor-based). Será removido na v2.")]
-    Task<AutomationTaskPageDto> GetListAsync(
-        AppApprovalScopeType? scopeType,
-        Guid? scopeId,
-        bool activeOnly,
-        bool deletedOnly,
-        bool includeDeleted,
-        string? search,
-        Guid? clientId,
-        Guid? siteId,
-        Guid? agentId,
-        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
-        IReadOnlyList<AutomationTaskActionType>? actionTypes,
-        IReadOnlyList<string>? labels,
-        int limit,
-        int offset,
-        CancellationToken cancellationToken = default);
-
     Task<AutomationTaskPageDto> GetListPageAsync(
         AppApprovalScopeType? scopeType,
         Guid? scopeId,

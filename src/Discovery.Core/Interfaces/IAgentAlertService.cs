@@ -7,16 +7,6 @@ public interface IAgentAlertService
 {
     Task<AgentAlertDefinition> CreateAsync(CreateAgentAlertRequest request, CancellationToken cancellationToken = default);
     Task<AgentAlertDefinition?> GetByIdAsync(Guid id);
-    [Obsolete("Use GetAllPageAsync (cursor-based). Será removido na v2.")]
-    Task<IReadOnlyList<AgentAlertDefinition>> GetAllAsync(
-        AlertDefinitionStatus? status = null,
-        AlertScopeType? scopeType = null,
-        Guid? scopeClientId = null,
-        Guid? scopeSiteId = null,
-        Guid? scopeAgentId = null,
-        Guid? ticketId = null,
-        int limit = 100,
-        int offset = 0);
 
     Task<IReadOnlyList<AgentAlertDefinition>> GetAllPageAsync(
         AlertDefinitionStatus? status = null,

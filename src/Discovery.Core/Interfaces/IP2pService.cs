@@ -30,14 +30,6 @@ public interface IP2pService
     /// <summary>
     /// Retorna status de distribuição de artifacts para o site do agente.
     /// </summary>
-    [Obsolete("Use GetDistributionStatusPageAsync (cursor-based). Será removido na v2.")]
-    Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusAsync(
-        Guid agentId,
-        Guid? artifactId,
-        int limit,
-        int offset,
-        CancellationToken ct = default);
-
     Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusPageAsync(
         Guid agentId,
         Guid? artifactId,
@@ -75,15 +67,6 @@ public interface IP2pService
     /// <summary>
     /// Lista artifacts com distribuição por escopo (site/tenant).
     /// </summary>
-    [Obsolete("Use GetArtifactDistributionPageOpsAsync (cursor-based). Será removido na v2.")]
-    Task<(List<P2pDistributionStatusItem> Items, int Total)> GetArtifactDistributionOpsAsync(
-        string scope,
-        Guid? tenantId,
-        Guid? siteId,
-        Guid? artifactId,
-        int limit,
-        int offset,
-        CancellationToken ct = default);
     Task<(List<P2pDistributionStatusItem> Items, int Total)> GetArtifactDistributionPageOpsAsync(
         string scope,
         Guid? tenantId,

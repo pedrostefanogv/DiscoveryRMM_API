@@ -20,26 +20,6 @@ public class WingetPackageRepository : IWingetPackageRepository
             .SingleOrDefaultAsync(x => x.PackageId == normalized);
     }
 
-    public async Task<(IReadOnlyList<WingetPackage> Items, int TotalCount)> SearchAsync(
-        string? search,
-        string? architecture,
-        int limit,
-        int offset,
-        CancellationToken cancellationToken = default)
-    {
-        var query = ApplyFilters(_db.WingetPackages.AsNoTracking(), search, architecture);
-        var total = await query.CountAsync(cancellationToken);
-
-        var items = await query
-            .OrderBy(x => x.Name)
-            .ThenBy(x => x.PackageId)
-            .Skip(offset)
-            .Take(limit)
-            .ToListAsync(cancellationToken);
-
-        return (items, total);
-    }
-
     public async Task<(IReadOnlyList<WingetPackage> Items, int TotalCount)> SearchPageAsync(
         string? search,
         string? architecture,

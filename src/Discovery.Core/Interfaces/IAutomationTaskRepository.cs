@@ -8,21 +8,6 @@ public interface IAutomationTaskRepository
     Task<AutomationTaskDefinition> CreateAsync(AutomationTaskDefinition task);
     Task<AutomationTaskDefinition?> GetByIdAsync(Guid id, bool includeInactive = false);
     Task<AutomationTaskDefinition?> GetByIdIncludingDeletedAsync(Guid id, bool includeInactive = false);
-    [Obsolete("Use GetListPageAsync (cursor-based). Será removido na v2.")]
-    Task<IReadOnlyList<AutomationTaskDefinition>> GetListAsync(
-        AppApprovalScopeType? scopeType,
-        Guid? scopeId,
-        bool activeOnly,
-        bool deletedOnly,
-        bool includeDeleted,
-        string? search,
-        Guid? clientId,
-        Guid? siteId,
-        Guid? agentId,
-        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
-        IReadOnlyList<AutomationTaskActionType>? actionTypes,
-        int limit,
-        int offset);
 
     Task<IReadOnlyList<AutomationTaskDefinition>> GetListPageAsync(
         AppApprovalScopeType? scopeType,

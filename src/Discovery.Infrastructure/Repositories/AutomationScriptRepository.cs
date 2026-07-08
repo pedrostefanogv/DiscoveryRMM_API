@@ -34,21 +34,6 @@ public class AutomationScriptRepository : IAutomationScriptRepository
         return await query.SingleOrDefaultAsync();
     }
 
-    public async Task<IReadOnlyList<AutomationScriptDefinition>> GetListAsync(Guid? clientId, bool activeOnly, int limit, int offset)
-    {
-        var safeLimit = Math.Clamp(limit, 1, 500);
-        var safeOffset = Math.Max(0, offset);
-
-        var query = BuildScriptQuery(clientId, activeOnly);
-
-        return await query
-            .OrderByDescending(script => script.UpdatedAt)
-            .ThenByDescending(script => script.Id)
-            .Skip(safeOffset)
-            .Take(safeLimit)
-            .ToListAsync();
-    }
-
     public async Task<IReadOnlyList<AutomationScriptDefinition>> GetListPageAsync(Guid? clientId, bool activeOnly, string? cursor, int limit)
     {
         var safeLimit = Math.Clamp(limit, 1, 500);

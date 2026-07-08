@@ -24,9 +24,6 @@ public class UserRepository : IUserRepository
         => _db.Users.AsNoTracking().SingleOrDefaultAsync(
             u => u.Login == loginOrEmail || u.Email == loginOrEmail);
 
-    public async Task<IEnumerable<User>> GetAllAsync(int skip = 0, int take = 50)
-        => await _db.Users.AsNoTracking().OrderBy(u => u.FullName).Skip(skip).Take(take).ToListAsync();
-
     public async Task<IReadOnlyList<User>> GetAllPageAsync(string? cursor, int take = 50)
     {
         var query = _db.Users.AsNoTracking();

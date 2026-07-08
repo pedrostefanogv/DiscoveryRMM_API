@@ -29,28 +29,6 @@ public class AppPackageRepository : IAppPackageRepository
                 cancellationToken);
     }
 
-    public async Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchAsync(
-        AppInstallationType installationType,
-        string? search,
-        string? architecture,
-        int limit,
-        int offset,
-        CancellationToken cancellationToken = default)
-    {
-        var query = ApplyFilters(_db.AppPackages.AsNoTracking(), installationType, search, architecture);
-
-        var total = await query.CountAsync(cancellationToken);
-
-        var items = await query
-            .OrderBy(x => x.Name)
-            .ThenBy(x => x.PackageId)
-            .Skip(offset)
-            .Take(limit)
-            .ToListAsync(cancellationToken);
-
-        return (items, total);
-    }
-
     public async Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchPageAsync(
         AppInstallationType installationType,
         string? search,

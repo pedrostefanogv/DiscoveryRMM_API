@@ -1,5 +1,3 @@
-#pragma warning disable CS0618 // Obsolete: remover na v2
-
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
@@ -53,17 +51,6 @@ public class AgentAlertService : IAgentAlertService
 
     public Task<AgentAlertDefinition?> GetByIdAsync(Guid id)
         => _repo.GetByIdAsync(id);
-
-    public Task<IReadOnlyList<AgentAlertDefinition>> GetAllAsync(
-        AlertDefinitionStatus? status = null,
-        AlertScopeType? scopeType = null,
-        Guid? scopeClientId = null,
-        Guid? scopeSiteId = null,
-        Guid? scopeAgentId = null,
-        Guid? ticketId = null,
-        int limit = 100,
-        int offset = 0)
-        => _repo.GetByFiltersAsync(status, scopeType, scopeClientId, scopeSiteId, scopeAgentId, ticketId, limit, offset);
 
     public Task<IReadOnlyList<AgentAlertDefinition>> GetAllPageAsync(
         AlertDefinitionStatus? status = null,

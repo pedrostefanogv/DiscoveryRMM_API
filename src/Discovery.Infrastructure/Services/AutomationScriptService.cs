@@ -1,5 +1,3 @@
-#pragma warning disable CS0618 // Obsolete: remover na v2
-
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -30,31 +28,6 @@ public class AutomationScriptService : IAutomationScriptService
         _scriptRepository = scriptRepository;
         _auditRepository = auditRepository;
         _loggingService = loggingService;
-    }
-
-    public async Task<AutomationScriptPageDto> GetListAsync(
-        Guid? clientId,
-        bool activeOnly,
-        int limit,
-        int offset,
-        CancellationToken cancellationToken = default)
-    {
-        _ = cancellationToken;
-
-        var safeLimit = Math.Clamp(limit, 1, 200);
-        var safeOffset = Math.Max(0, offset);
-
-        var items = await _scriptRepository.GetListAsync(clientId, activeOnly, safeLimit, safeOffset);
-        var total = await _scriptRepository.CountAsync(clientId, activeOnly);
-
-        return new AutomationScriptPageDto
-        {
-            Items = items.Select(ToSummaryDto).ToList(),
-            Count = items.Count,
-            Total = total,
-            Limit = safeLimit,
-            Offset = safeOffset
-        };
     }
 
     public async Task<AutomationScriptPageDto> GetListPageAsync(

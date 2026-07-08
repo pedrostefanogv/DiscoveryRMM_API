@@ -1,9 +1,8 @@
-#pragma warning disable CS0618 // Obsolete: remover na v2
-
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Identity;
 using Microsoft.Extensions.Logging;
@@ -226,10 +225,18 @@ public class MeshCentralIdentitySyncService : IMeshCentralIdentitySyncService
         var count = await _userRepository.CountAsync();
         var users = new List<User>(count);
 
-        for (var skip = 0; skip < count; skip += 200)
+        string? cursor = null;
+        while (true)
         {
-            var page = await _userRepository.GetAllAsync(skip, 200);
-            users.AddRange(page);
+            var page = await _userRepository.GetAllPageAsync(cursor, 200);
+            if (page.Count == 0) break;
+
+            var hasMore = page.Count > 200;
+            var chunk = hasMore ? page.Take(200).ToList() : page.ToList();
+            users.AddRange(chunk);
+
+            if (!hasMore || chunk.Count == 0) break;
+            cursor = CursorPaginationHelper.EncodeCreatedAtCursor(chunk[^1].CreatedAt, chunk[^1].Id);
         }
 
         var items = new List<MeshCentralIdentityBackfillItem>();

@@ -46,63 +46,6 @@ public class AutomationTaskRepository : IAutomationTaskRepository
             .SingleOrDefaultAsync();
     }
 
-    public async Task<IReadOnlyList<AutomationTaskDefinition>> GetListAsync(
-        AppApprovalScopeType? scopeType,
-        Guid? scopeId,
-        bool activeOnly,
-        bool deletedOnly,
-        bool includeDeleted,
-        string? search,
-        Guid? clientId,
-        Guid? siteId,
-        Guid? agentId,
-        IReadOnlyList<AppApprovalScopeType>? scopeTypes,
-        IReadOnlyList<AutomationTaskActionType>? actionTypes,
-        int limit,
-        int offset)
-    {
-        var safeLimit = Math.Clamp(limit, 1, 500);
-        var safeOffset = Math.Max(0, offset);
-
-        var query = _db.AutomationTaskDefinitions.AsNoTracking().AsQueryable();
-
-        if (deletedOnly)
-        {
-            query = query.Where(t => t.DeletedAt != null);
-        }
-        else if (!includeDeleted)
-        {
-            query = query.Where(t => t.DeletedAt == null);
-        }
-
-        if (scopeType.HasValue)
-        {
-            query = query.Where(t => t.ScopeType == scopeType.Value);
-            if (scopeId.HasValue)
-            {
-                query = scopeType.Value switch
-                {
-                    AppApprovalScopeType.Client => query.Where(t => t.ClientId == scopeId.Value),
-                    AppApprovalScopeType.Site => query.Where(t => t.SiteId == scopeId.Value),
-                    AppApprovalScopeType.Agent => query.Where(t => t.AgentId == scopeId.Value),
-                    _ => query
-                };
-            }
-        }
-
-        if (activeOnly)
-            query = query.Where(t => t.IsActive);
-
-        query = ApplyAdvancedFilters(query, search, clientId, siteId, agentId, scopeTypes, actionTypes);
-
-        return await query
-            .OrderByDescending(t => t.UpdatedAt)
-            .ThenByDescending(t => t.Id)
-            .Skip(safeOffset)
-            .Take(safeLimit)
-            .ToListAsync();
-    }
-
     public async Task<IReadOnlyList<AutomationTaskDefinition>> GetListPageAsync(
         AppApprovalScopeType? scopeType,
         Guid? scopeId,

@@ -247,27 +247,6 @@ public class P2pService : IP2pService
     // DISTRIBUTION STATUS (agent endpoint)
     // ──────────────────────────────────────────────────────────────────────
 
-    public async Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusAsync(
-        Guid agentId,
-        Guid? artifactId,
-        int limit,
-        int offset,
-        CancellationToken ct = default)
-    {
-        var agent = await _agentRepo.GetByIdAsync(agentId)
-            ?? throw new InvalidOperationException("Agent not found");
-
-        return await QueryDistributionByScope(
-            siteId: agent.SiteId,
-            clientId: null,
-            global: false,
-            artifactId: artifactId,
-            limit: limit,
-            offset: offset,
-            cursor: null,
-            ct: ct);
-    }
-
     public async Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusPageAsync(
         Guid agentId,
         Guid? artifactId,
@@ -437,26 +416,6 @@ public class P2pService : IP2pService
                 Total = values.Sum()
             }
         };
-    }
-
-    public async Task<(List<P2pDistributionStatusItem> Items, int Total)> GetArtifactDistributionOpsAsync(
-        string scope,
-        Guid? tenantId,
-        Guid? siteId,
-        Guid? artifactId,
-        int limit,
-        int offset,
-        CancellationToken ct = default)
-    {
-        return await QueryDistributionByScope(
-            siteId: scope == "site" ? siteId : null,
-            clientId: scope == "tenant" ? tenantId : null,
-            global: scope == "global",
-            artifactId: artifactId,
-            limit: limit,
-            offset: offset,
-            cursor: null,
-            ct: ct);
     }
 
     public async Task<(List<P2pDistributionStatusItem> Items, int Total)> GetArtifactDistributionPageOpsAsync(

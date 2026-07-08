@@ -20,25 +20,6 @@ public class ChocolateyPackageRepository : IChocolateyPackageRepository
             .SingleOrDefaultAsync(x => x.PackageId == normalized);
     }
 
-    public async Task<(IReadOnlyList<ChocolateyPackage> Items, int TotalCount)> SearchAsync(
-        string? search,
-        int limit,
-        int offset,
-        CancellationToken cancellationToken = default)
-    {
-        var query = ApplyFilters(_db.ChocolateyPackages.AsNoTracking(), search);
-        var total = await query.CountAsync(cancellationToken);
-
-        var items = await query
-            .OrderByDescending(x => x.DownloadCount)
-            .ThenBy(x => x.PackageId)
-            .Skip(offset)
-            .Take(limit)
-            .ToListAsync(cancellationToken);
-
-        return (items, total);
-    }
-
     public async Task<(IReadOnlyList<ChocolateyPackage> Items, int TotalCount)> SearchPageAsync(
         string? search,
         string? cursor,
