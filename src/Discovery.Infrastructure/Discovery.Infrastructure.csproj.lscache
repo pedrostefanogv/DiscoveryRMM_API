@@ -257,6 +257,7 @@ Services/
  ConfigurationService.cs
  CsvReportRenderer.cs
  CustomFieldService.cs
+ DashboardEventContractNormalizer.cs
  DashboardService.cs
  DedupFingerprintService.cs
  DepartmentCustomFieldService.cs

@@ -134,7 +134,7 @@ public class AgentTokenAuthService : IAgentAuthService
     // ── Fase 1: Detecção de conexão duplicada via Redis ───────────────────────
 
     /// <summary>TTL da trava de sessão NATS. Após este tempo sem renovação, a sessão é considerada expirada.</summary>
-    private static readonly TimeSpan DefaultNatsSessionTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultNatsSessionTtl = TimeSpan.FromMinutes(3);
 
     public async Task<bool> TryAcquireNatsSessionAsync(Guid tokenId, Guid agentId, string userNkey, TimeSpan sessionTtl)
     {

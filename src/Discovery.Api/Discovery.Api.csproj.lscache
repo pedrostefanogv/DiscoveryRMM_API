@@ -141,7 +141,6 @@ Services/
  BackgroundServices/
   BackgroundServiceMetrics.cs
   BackgroundServiceRegistry.cs
- DashboardEventContractNormalizer.cs
  DatabaseSeeder.cs
  HeartbeatExpiryBackgroundService.cs
  IRemoteDebugSessionManager.cs
@@ -170,7 +169,6 @@ Services/
   ReportScheduleDispatchJob.cs
   SlaMonitoringJob.cs
   WingetCatalogSyncJob.cs
- RealtimeContractOptions.cs
  RedisService.cs
  RemoteDebugSessionCleanupService.cs
  RemoteDebugSessionManager.cs

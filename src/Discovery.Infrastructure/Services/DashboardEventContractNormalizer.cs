@@ -1,15 +1,11 @@
 using System.Globalization;
 using System.Text.Json;
+using Discovery.Core.Configuration;
+using Discovery.Core.DTOs;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Discovery.Api.Services;
-
-public sealed record NormalizedDashboardEvent(
-    string EventType,
-    JsonElement? Data,
-    DateTime TimestampUtc,
-    Guid? ClientId,
-    Guid? SiteId);
+namespace Discovery.Infrastructure.Services;
 
 public sealed class DashboardEventContractNormalizer
 {
@@ -20,7 +16,8 @@ public sealed class DashboardEventContractNormalizer
         "CommandCompleted",
         "AgentHardwareReported",
         "AgentConnected",
-        "AgentDisconnected"
+        "AgentDisconnected",
+        "AgentTransferred"
     };
 
     // REMOVE_AFTER_2026-06-01
@@ -192,7 +189,7 @@ public sealed class DashboardEventContractNormalizer
             {
                 LogViolation(
                     field: "eventType",
-                    expected: "enum(6) PascalCase",
+                    expected: "PascalCase canonical",
                     received: rawEventType,
                     source: source,
                     strictMode: strictMode,
@@ -214,7 +211,7 @@ public sealed class DashboardEventContractNormalizer
 
         LogViolation(
             field: "eventType",
-            expected: "enum(6)",
+            expected: "canonical enum",
             received: rawEventType,
             source: source,
             strictMode: strictMode,

@@ -20,10 +20,26 @@ public static class NatsServiceCollectionExtensions
 
         services.AddSingleton(_ =>
         {
-            var opts = new NatsOpts { Url = natsUrl };
+            var opts = new NatsOpts
+            {
+                Url = natsUrl,
+                // Reconexao: max 10 tentativas com backoff exponencial (1s -> 2s -> 4s -> ... ate 60s).
+                ReconnectWaitMin = TimeSpan.FromSeconds(1),
+                ReconnectWaitMax = TimeSpan.FromSeconds(60),
+                MaxReconnectRetry = 10,
+                // Ping interval para detectar conexoes mortas rapidamente.
+                PingInterval = TimeSpan.FromMinutes(2),
+            };
 
             if (!string.IsNullOrWhiteSpace(natsAuthUser) && !string.IsNullOrWhiteSpace(natsAuthPassword))
                 opts = opts with { AuthOpts = new NatsAuthOpts { Username = natsAuthUser, Password = natsAuthPassword } };
+
+            // TLS: quando a URL usa prefixo tls:// ou wss://, ativa TLS automaticamente.
+            if (natsUrl.StartsWith("tls://", StringComparison.OrdinalIgnoreCase)
+                || natsUrl.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
+            {
+                opts = opts with { TlsOpts = new NatsTlsOpts() };
+            }
 
             return new NatsConnection(opts);
         });

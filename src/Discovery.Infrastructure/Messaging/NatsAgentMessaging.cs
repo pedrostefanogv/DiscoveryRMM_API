@@ -1,10 +1,13 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Discovery.Core.Configuration;
 using Discovery.Core.DTOs;
+using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NATS.Client.Core;
@@ -32,6 +35,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private readonly ISiteRepository _siteRepo;
     private readonly IAgentAuthService _agentAuthService;
     private readonly IHeartbeatCacheService _heartbeatCache;
+    private readonly IAgentHardwareRepository _hardwareRepo;
+    private readonly DashboardEventContractNormalizer _contractNormalizer;
     private readonly ILogger<NatsAgentMessaging> _logger;
     private readonly IOptionsMonitor<NatsGlobalPongOptions> _globalPongOptions;
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -39,6 +44,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new JsonStringEnumConverter() }
     };
+    // Cache local de autorizacao de agent (TTL 30s) para reduzir DB/Redis hit por heartbeat.
+    private readonly ConcurrentDictionary<Guid, (bool Authorized, DateTime ExpiresAt)> _authCache = new();
+    private static readonly TimeSpan AuthCacheTtl = TimeSpan.FromSeconds(30);
 
     public NatsAgentMessaging(
         NatsConnection connection,
@@ -47,6 +55,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         ISiteRepository siteRepo,
         IAgentAuthService agentAuthService,
         IHeartbeatCacheService heartbeatCache,
+        IAgentHardwareRepository hardwareRepo,
+        DashboardEventContractNormalizer contractNormalizer,
         IOptionsMonitor<NatsGlobalPongOptions> globalPongOptions,
         ILogger<NatsAgentMessaging> logger)
     {
@@ -56,6 +66,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         _siteRepo = siteRepo;
         _agentAuthService = agentAuthService;
         _heartbeatCache = heartbeatCache;
+        _hardwareRepo = hardwareRepo;
+        _contractNormalizer = contractNormalizer;
         _globalPongOptions = globalPongOptions;
         _logger = logger;
     }
@@ -66,8 +78,24 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     /// </summary>
     private async Task<bool> IsAgentAuthorizedAsync(Guid agentId)
     {
+        // Cache local (TTL 30s) para evitar DB/Redis hit por heartbeat em alta carga.
+        var now = DateTime.UtcNow;
+        if (_authCache.TryGetValue(agentId, out var cached) && now < cached.ExpiresAt)
+            return cached.Authorized;
+
         var tokens = await _agentAuthService.GetTokensByAgentIdAsync(agentId);
-        return tokens.Any(t => t.IsValid);
+        var authorized = tokens.Any(t => t.IsValid);
+
+        _authCache[agentId] = (authorized, now.Add(AuthCacheTtl));
+
+        // Limpeza periodica do cache (remove entradas expiradas a cada ~100 acessos).
+        if (_authCache.Count > 10_000)
+        {
+            foreach (var kv in _authCache.Where(kv => now >= kv.Value.ExpiresAt).ToList())
+                _authCache.TryRemove(kv.Key, out _);
+        }
+
+        return authorized;
     }
 
     public bool IsConnected => _connection.ConnectionState == NatsConnectionState.Open;
@@ -133,9 +161,30 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             return;
 
         var payload = JsonSerializer.Serialize(message, JsonOptions);
-        var subject = NatsSubjectBuilder.DashboardSubject(message.ClientId, message.SiteId);
 
-        await _connection.PublishAsync(subject, payload);
+        // Aplica validacao/normalizacao de contrato antes de cada publish.
+        var source = $"nats:{NatsSubjectBuilder.DashboardSubject(message.ClientId, message.SiteId)}";
+        if (_contractNormalizer.TryNormalize(payload, source, out var normalized))
+        {
+            // Se a normalizacao foi bem-sucedida, usa o payload normalizado.
+            var normalizedPayload = JsonSerializer.Serialize(new
+            {
+                eventType = normalized!.EventType,
+                data = normalized.Data,
+                timestampUtc = normalized.TimestampUtc.ToString("O"),
+                clientId = normalized.ClientId,
+                siteId = normalized.SiteId,
+            }, JsonOptions);
+            var subject = NatsSubjectBuilder.DashboardSubject(normalized.ClientId, normalized.SiteId);
+            await _connection.PublishAsync(subject, normalizedPayload);
+        }
+        else
+        {
+            // Normalizacao falhou — publica o payload original (comportamento degracioso).
+            // Violacoes ja foram logadas pelo normalizador.
+            var subject = NatsSubjectBuilder.DashboardSubject(message.ClientId, message.SiteId);
+            await _connection.PublishAsync(subject, payload);
+        }
     }
 
     public async Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, CancellationToken cancellationToken = default)
@@ -196,22 +245,29 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                             {
                                 try
                                 {
+                                    var clientId = heartbeat.ClientId ?? Guid.Empty;
+                                    // Sequence monotonicamente crescente por cliente via timestamp Unix ms.
+                                    // Idealmente usaria Redis INCR, mas para manter zero dependencia extra,
+                                    // usamos Unix ms (crescente, nao garantidamente gap-free mas suficiente para dedupe).
+                                    var sequence = (int)(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % int.MaxValue);
+
                                     var onlineEvent = new P2pPeerOnlineEvent
                                     {
                                         EventType = "peer.online",
-                                        ClientId = heartbeat.ClientId ?? Guid.Empty,
+                                        ClientId = clientId,
                                         SiteId = heartbeat.SiteId,
                                         AgentId = agentId.Value,
                                         PeerId = heartbeat.PeerId!,
                                         Addrs = heartbeat.Addrs ?? Array.Empty<string>(),
                                         Port = heartbeat.Port ?? 0,
-                                        GeneratedAtUtc = DateTime.UtcNow
+                                        GeneratedAtUtc = DateTime.UtcNow,
+                                        Sequence = sequence,
                                     };
 
                                     var eventJson = JsonSerializer.Serialize(onlineEvent, JsonOptions);
-                                    var subject = NatsSubjectBuilder.P2pClientEventsSubject(heartbeat.ClientId ?? Guid.Empty);
+                                    var subject = NatsSubjectBuilder.P2pClientEventsSubject(clientId);
                                     await _connection.PublishAsync(subject, eventJson);
-                                    _logger.LogInformation("Published peer.online for agent {AgentId} (PeerId: {PeerId})", agentId.Value, heartbeat.PeerId);
+                                    _logger.LogInformation("Published peer.online for agent {AgentId} (PeerId: {PeerId}, Sequence: {Sequence})", agentId.Value, heartbeat.PeerId, sequence);
                                 }
                                 catch (Exception ex)
                                 {
@@ -246,6 +302,11 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                             var dashboardMessage = DashboardEventMessage.Create(
                                 "AgentHeartbeat", eventPayload,
                                 heartbeat.ClientId, heartbeat.SiteId);
+
+                            // Valida conformidade do contrato antes de publicar.
+                            if (!IsValidHeartbeatPayload(heartbeat))
+                                _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=AgentHeartbeat reason=InvalidPayload agentId={AgentId} subject={Subject}", agentId.Value, msg.Subject);
+
                             await PublishDashboardEventAsync(dashboardMessage, CancellationToken.None);
                         }
                     }
@@ -275,23 +336,42 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                     try
                     {
                         var agentId = ExtractAgentId(msg.Subject);
-                        if (agentId.HasValue && !await IsAgentAuthorizedAsync(agentId.Value))
+                        if (!agentId.HasValue)
+                        {
+                            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=subject reason=MissingAgentId subject={Subject}", msg.Subject);
+                            continue;
+                        }
+
+                        if (!await IsAgentAuthorizedAsync(agentId.Value))
                         {
                             _logger.LogWarning("NATS: command result rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
                             continue;
                         }
                         var result = JsonSerializer.Deserialize<CommandResultMessage>(msg.Data ?? "", JsonOptions);
-                        if (result is not null)
+                        if (result is null)
                         {
-                            var status = result.ExitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
-                            await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
-                            await PublishDashboardEventForAgentAsync(
-                                agentId,
-                                "CommandCompleted",
-                                result,
-                                cancellationToken);
-                            _logger.LogDebug("Command result processed: {CommandId} - Exit Code: {ExitCode}", result.CommandId, result.ExitCode);
+                            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=CommandResult reason=DeserializationFailed agentId={AgentId} subject={Subject}", agentId.Value, msg.Subject);
+                            continue;
                         }
+
+                        var status = result.ExitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
+                        await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
+
+                        // Publica dashboard event com dispatchId para agregacao de campanha (contrato secao 2.3).
+                        var resultData = new
+                        {
+                            CommandId = result.CommandId,
+                            result.ExitCode,
+                            result.Output,
+                            result.ErrorMessage,
+                            DispatchId = result.DispatchId,
+                        };
+                        await PublishDashboardEventForAgentAsync(
+                            agentId,
+                            "CommandCompleted",
+                            resultData,
+                            cancellationToken);
+                        _logger.LogDebug("Command result processed: {CommandId} - Exit Code: {ExitCode} (DispatchId: {DispatchId})", result.CommandId, result.ExitCode, result.DispatchId);
                     }
                     catch (Exception ex)
                     {
@@ -327,11 +407,78 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 continue;
                             }
                             _logger.LogDebug("Hardware report received from agent {AgentId}", agentId.Value);
-                            // Propaga para dashboards via NATS dashboard.events
+
+                            // Persiste inventario de hardware (contrato: hardware report deve ser persistido).
+                            try
+                            {
+                                var hwData = msg.Data ?? "";
+                                if (!string.IsNullOrWhiteSpace(hwData))
+                                {
+                                    using var doc = System.Text.Json.JsonDocument.Parse(hwData);
+                                    var root = doc.RootElement;
+
+                                    var hardwareInfo = new AgentHardwareInfo
+                                    {
+                                        AgentId = agentId.Value,
+                                        InventoryCollectedAt = DateTime.UtcNow,
+                                    };
+
+                                    // Extrai campos do payload do agent (Go) — nomes camelCase.
+                                    if (root.TryGetProperty("hostname", out var h)) hardwareInfo.Model = h.GetString();
+                                    if (root.TryGetProperty("operatingSystem", out var os)) hardwareInfo.BiosVersion = os.GetString();
+                                    if (root.TryGetProperty("osVersion", out var osv)) _ = osv.GetString(); // guarda para log
+
+                                    if (root.TryGetProperty("hardware", out var hw) && hw.ValueKind == JsonValueKind.Object)
+                                    {
+                                        if (hw.TryGetProperty("manufacturer", out var mfr)) hardwareInfo.Manufacturer = mfr.GetString();
+                                        if (hw.TryGetProperty("model", out var mdl)) hardwareInfo.Model = mdl.GetString();
+                                        if (hw.TryGetProperty("serialNumber", out var sn)) hardwareInfo.SerialNumber = sn.GetString();
+                                        if (hw.TryGetProperty("motherboardManufacturer", out var mb)) hardwareInfo.MotherboardManufacturer = mb.GetString();
+                                        if (hw.TryGetProperty("motherboardModel", out var mbMdl)) hardwareInfo.MotherboardModel = mbMdl.GetString();
+                                        if (hw.TryGetProperty("motherboardSerialNumber", out var mbSn)) hardwareInfo.MotherboardSerialNumber = mbSn.GetString();
+                                        if (hw.TryGetProperty("processor", out var cpu)) hardwareInfo.Processor = cpu.GetString();
+                                        if (hw.TryGetProperty("processorCores", out var pc) && pc.TryGetInt32(out var pcVal)) hardwareInfo.ProcessorCores = pcVal;
+                                        if (hw.TryGetProperty("processorThreads", out var pt) && pt.TryGetInt32(out var ptVal)) hardwareInfo.ProcessorThreads = ptVal;
+                                        if (hw.TryGetProperty("processorArchitecture", out var arch)) hardwareInfo.ProcessorArchitecture = arch.GetString();
+                                        if (hw.TryGetProperty("processorTdpWatts", out var tdp) && tdp.TryGetInt32(out var tdpVal)) hardwareInfo.ProcessorTdpWatts = tdpVal;
+                                        if (hw.TryGetProperty("processorSocket", out var sock)) hardwareInfo.ProcessorSocket = sock.GetString();
+                                        if (hw.TryGetProperty("processorFrequencyGhz", out var freq) && freq.TryGetDecimal(out var freqVal)) hardwareInfo.ProcessorFrequencyGhz = freqVal;
+                                        if (hw.TryGetProperty("processorReleaseDate", out var prd)) hardwareInfo.ProcessorReleaseDate = prd.GetString();
+                                        if (hw.TryGetProperty("totalMemoryBytes", out var mem) && mem.TryGetInt64(out var memVal)) hardwareInfo.TotalMemoryBytes = memVal;
+                                        if (hw.TryGetProperty("gpuModel", out var gpu)) hardwareInfo.GpuModel = gpu.GetString();
+                                        if (hw.TryGetProperty("gpuMemoryBytes", out var gpuMem) && gpuMem.TryGetInt64(out var gpuMemVal)) hardwareInfo.GpuMemoryBytes = gpuMemVal;
+                                        if (hw.TryGetProperty("gpuDriverVersion", out var gpuDrv)) hardwareInfo.GpuDriverVersion = gpuDrv.GetString();
+                                        if (hw.TryGetProperty("totalDisksCount", out var dsk) && dsk.TryGetInt32(out var dskVal)) hardwareInfo.TotalDisksCount = dskVal;
+                                        if (hw.TryGetProperty("biosVersion", out var biosV)) hardwareInfo.BiosVersion = biosV.GetString();
+                                        if (hw.TryGetProperty("biosManufacturer", out var biosMfr)) hardwareInfo.BiosManufacturer = biosMfr.GetString();
+                                        if (hw.TryGetProperty("biosDate", out var biosDt)) hardwareInfo.BiosDate = biosDt.GetString();
+                                        if (hw.TryGetProperty("biosSerialNumber", out var biosSn)) hardwareInfo.BiosSerialNumber = biosSn.GetString();
+                                    }
+
+                                    if (root.TryGetProperty("machineScore", out var ms) && ms.TryGetInt32(out var msVal))
+                                        hardwareInfo.MachineScore = msVal;
+
+                                    if (root.TryGetProperty("inventoryRaw", out var inv))
+                                        hardwareInfo.InventoryRaw = inv.GetString();
+
+                                    await _hardwareRepo.UpsertAsync(hardwareInfo);
+                                    _logger.LogDebug("Hardware report persisted for agent {AgentId} (model={Model}, cpu={Cpu})",
+                                        agentId.Value, hardwareInfo.Model, hardwareInfo.Processor);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Failed to persist hardware report for agent {AgentId}", agentId.Value);
+                            }
+
+                            // Propaga para dashboards via NATS dashboard.events (mesmo payload original como data)
+                            var hwEventData = msg.Data is not null && msg.Data.Length > 0
+                                ? System.Text.Json.JsonSerializer.Deserialize<object>(msg.Data, JsonOptions)
+                                : new { AgentId = agentId.Value };
                             await PublishDashboardEventForAgentAsync(
                                 agentId.Value,
                                 "AgentHardwareReported",
-                                new { AgentId = agentId.Value },
+                                hwEventData ?? new { AgentId = agentId.Value },
                                 CancellationToken.None);
                         }
                     }
@@ -567,5 +714,20 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         await PublishDashboardEventAsync(message, cancellationToken);
     }
 
-    private record CommandResultMessage(Guid CommandId, int ExitCode, string? Output, string? ErrorMessage);
+    /// <summary>
+    /// Valida que o payload de heartbeat contem os campos minimos esperados pelo contrato canonico.
+    /// </summary>
+    private static bool IsValidHeartbeatPayload(AgentHeartbeat heartbeat)
+    {
+        // Eventos com campos NaN ou negativos indicam bug no agent e sao reportados como violacao.
+        if (heartbeat.CpuPercent.HasValue && (double.IsNaN(heartbeat.CpuPercent.Value) || heartbeat.CpuPercent.Value < 0))
+            return false;
+        if (heartbeat.MemoryPercent.HasValue && (double.IsNaN(heartbeat.MemoryPercent.Value) || heartbeat.MemoryPercent.Value < 0))
+            return false;
+        if (heartbeat.DiskPercent.HasValue && (double.IsNaN(heartbeat.DiskPercent.Value) || heartbeat.DiskPercent.Value < 0))
+            return false;
+        return true;
+    }
+
+    private record CommandResultMessage(Guid CommandId, int ExitCode, string? Output, string? ErrorMessage, Guid? DispatchId);
 }

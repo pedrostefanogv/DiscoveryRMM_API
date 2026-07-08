@@ -75,8 +75,8 @@ public class NatsIsolationTests
 
         Assert.That(pub, Has.Count.EqualTo(5),
             "Agente deve publicar em 5 subjects: 4 telemetrias canônicas + lookup de stream JetStream.");
-        Assert.That(sub, Has.Count.EqualTo(7),
-            "Agente deve assinar em 7 subjects: 6 canônicos + inbox para respostas de request/reply.");
+        Assert.That(sub, Has.Count.EqualTo(8),
+            "Agente deve assinar em 8 subjects: 6 canônicos + p2p.events + inbox para respostas de request/reply.");
     }
 
     [Test]
@@ -443,7 +443,6 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.ServerPongSubject(),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
-                NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
                 "_INBOX.>",
             ]);
     }

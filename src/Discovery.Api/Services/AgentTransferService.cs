@@ -136,7 +136,7 @@ public sealed class AgentTransferService : IAgentTransferService
         try
         {
             var dashboardEvent = DashboardEventMessage.Create(
-                "agent.transferred",
+                "AgentTransferred",
                 new
                 {
                     AgentId = agentId,

@@ -80,7 +80,12 @@ public class HeartbeatExpiryBackgroundService : BackgroundService
         {
             try
             {
-                var agent = onlineAgents.First(a => a.Id == agentId);
+                var agent = onlineAgents.FirstOrDefault(a => a.Id == agentId);
+                if (agent is null)
+                {
+                    _logger.LogDebug("Agent {AgentId} not found in online list (race with status change) — skipping", agentId);
+                    continue;
+                }
                 await agentRepo.UpdateStatusAsync(agentId, AgentStatus.Offline, null);
 
                 if (messaging.IsConnected)

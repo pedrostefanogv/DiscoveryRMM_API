@@ -1,4 +1,4 @@
-namespace Discovery.Api.Services;
+namespace Discovery.Core.Configuration;
 
 public sealed class RealtimeContractOptions
 {

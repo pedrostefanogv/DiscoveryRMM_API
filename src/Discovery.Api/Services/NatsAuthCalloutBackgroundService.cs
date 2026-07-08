@@ -119,31 +119,29 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
                 if (!string.IsNullOrWhiteSpace(xKeySeedPlain))
                 {
-                    // xkey habilitado: decripta payload usando DH curve25519
+                    // xkey habilitado: decripta payload usando DH curve25519.
+                    // Se o header xkey nao estiver presente ou vazio, rejeita a requisicao
+                    // para evitar bypass de criptografia.
                     if (msg.Headers == null || !msg.Headers.TryGetValue(ServerXKeyHeader, out var xkeyValue))
                     {
                         _logger.LogWarning(
-                            "xkey configurado mas header {Header} ausente na requisicao. Fallback para payload sem criptografia; verifique auth_callout.xkey no nats-server.",
+                            "xkey configurado mas header {Header} ausente na requisicao. Requisicao rejeitada.",
                             ServerXKeyHeader);
-                        requestJwt = Encoding.UTF8.GetString(rawData);
+                        continue;
                     }
-                    else
+
+                    serverXKey = xkeyValue.ToString();
+                    if (string.IsNullOrWhiteSpace(serverXKey))
                     {
-                        serverXKey = xkeyValue.ToString();
-                        if (string.IsNullOrWhiteSpace(serverXKey))
-                        {
-                            _logger.LogWarning(
-                                "xkey configurado mas header {Header} esta vazio na requisicao. Fallback para payload sem criptografia.",
-                                ServerXKeyHeader);
-                            requestJwt = Encoding.UTF8.GetString(rawData);
-                        }
-                        else
-                        {
-                            using var xKeyPair = KeyPair.FromSeed(xKeySeedPlain);
-                            var decrypted = xKeyPair.Open(rawData, serverXKey);
-                            requestJwt = Encoding.UTF8.GetString(decrypted);
-                        }
+                        _logger.LogWarning(
+                            "xkey configurado mas header {Header} esta vazio na requisicao. Requisicao rejeitada.",
+                            ServerXKeyHeader);
+                        continue;
                     }
+
+                    using var xKeyPair = KeyPair.FromSeed(xKeySeedPlain);
+                    var decrypted = xKeyPair.Open(rawData, serverXKey);
+                    requestJwt = Encoding.UTF8.GetString(decrypted);
                 }
                 else
                 {

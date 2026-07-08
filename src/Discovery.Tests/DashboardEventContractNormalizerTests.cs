@@ -1,5 +1,7 @@
 using System.Text.Json;
-using Discovery.Api.Services;
+using Discovery.Core.Configuration;
+using Discovery.Core.DTOs;
+using Discovery.Infrastructure.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 

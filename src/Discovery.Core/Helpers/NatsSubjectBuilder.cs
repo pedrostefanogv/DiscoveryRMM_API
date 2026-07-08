@@ -63,10 +63,11 @@ public static class NatsSubjectBuilder
         => $"tenant.{clientId}.p2p.events";
 
     /// <summary>
-    /// Subject de descoberta P2P por site.
-    /// Agents assinam este subject para receber snapshots de peers do mesmo site.
-    /// tenant.{clientId}.site.{siteId}.p2p.discovery
+    /// Subject de descoberta P2P por site — DESCONTINUADO desde v4.4.0.
+    /// Migrado para P2pClientEventsSubject (tenant.{clientId}.p2p.events).
+    /// Nao utilizar em novas implementacoes.
     /// </summary>
+    [Obsolete("Migrado para P2pClientEventsSubject. Nao utilizar em novas implementacoes.")]
     public static string P2pSiteDiscoverySubject(Guid clientId, Guid siteId)
         => $"tenant.{clientId}.site.{siteId}.p2p.discovery";
 }

@@ -134,20 +134,22 @@ public class HeartbeatCacheService : IHeartbeatCacheService
 
             var json = JsonSerializer.Serialize(entry, JsonOptions);
             var key = $"{KeyPrefix}{agentId:N}";
+            var ttlSeconds = (int)DefaultTtl.TotalSeconds;
 
-            // Verifica se a chave já existe (se não, é uma transição Offline→Online)
-            var existed = await _redis.GetAsync(key);
-            await _redis.SetAsync(key, json, (int)DefaultTtl.TotalSeconds);
-
-            if (string.IsNullOrWhiteSpace(existed))
+            // Atomico: tenta SET NX primeiro. Se ja existir, apenas atualiza TTL.
+            // Isso elimina a race condition TOCTOU do padrao GET→SET anterior.
+            var acquired = await _redis.SetIfNotExistsAsync(key, json, ttlSeconds);
+            if (acquired)
             {
-                // Transição Offline → Online: escreve no DB e adiciona ao set
+                // Chave NAO existia → transicao Offline→Online.
                 _logger.LogDebug("Agent {AgentId} transitioned Offline → Online — persisting to DB", agentId);
                 try { await UseScopedAsync(repo => repo.UpdateStatusAsync(agentId, AgentStatus.Online, heartbeat.IpAddress)); }
                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to persist Online status for {AgentId}", agentId); }
                 return true;
             }
 
+            // Chave ja existe → agente ja estava online, apenas renova TTL e atualiza dados.
+            await _redis.SetAsync(key, json, ttlSeconds);
             return false;
         }
         catch (Exception ex)

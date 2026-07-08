@@ -62,6 +62,7 @@ Configuration/
  NatsFanoutStreamOptions.cs
  NatsGlobalPongOptions.cs
  P2pOptions.cs
+ RealtimeContractOptions.cs
  ReportingOptions.cs
  RetentionSettings.cs
  SecretEncryptionOptions.cs
@@ -238,6 +239,7 @@ DTOs/
   MfaKeyDtos.cs
  NatsCredentialsRequest.cs
  NatsCredentialsResponse.cs
+ NormalizedDashboardEvent.cs
  P2pArtifactSourceDtos.cs
  P2pDiscoverySnapshot.cs
  P2pDtos.cs

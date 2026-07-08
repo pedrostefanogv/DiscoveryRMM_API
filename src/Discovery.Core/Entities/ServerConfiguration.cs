@@ -79,10 +79,10 @@ public class ServerConfiguration
     public bool NatsAuthEnabled { get; set; } = true;
 
     /// <summary>TTL em minutos para JWT de agentes.</summary>
-    public int NatsAgentJwtTtlMinutes { get; set; } = 1440; // 24h
+    public int NatsAgentJwtTtlMinutes { get; set; } = 60; // 1h
 
     /// <summary>TTL em minutos para JWT de usuarios.</summary>
-    public int NatsUserJwtTtlMinutes { get; set; } = 1440; // 24h
+    public int NatsUserJwtTtlMinutes { get; set; } = 60; // 1h
 
     /// <summary>Usa subjects com tenant/client/site (novo formato).</summary>
     [JsonIgnore]
