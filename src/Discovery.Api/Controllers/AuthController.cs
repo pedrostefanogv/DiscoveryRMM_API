@@ -1,11 +1,7 @@
+using Discovery.Core.Cqrs.Auth.Commands;
 using Discovery.Core.Cqrs.Auth.Queries;
 using Discovery.Core.DTOs.Auth;
 using Discovery.Core.DTOs.Mfa;
-using Discovery.Core.Entities.Security;
-using Discovery.Core.Enums.Identity;
-using Discovery.Core.Enums.Security;
-using Discovery.Core.Interfaces.Auth;
-using Discovery.Core.Interfaces.Security;
 using Discovery.Api.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -16,30 +12,9 @@ namespace Discovery.Api.Controllers;
 [ApiController]
 [Route("api/v{version:apiVersion}/auth")]
 [AllowAnonymous]
-public class AuthController : ControllerBase
+public class AuthController(IMediator mediator) : ControllerBase
 {
-    private readonly IMediator _mediator;
-    private readonly IUserAuthService _authService;
-    private readonly IFido2Service _fido2Service;
-    private readonly IOtpService _otpService;
-    private readonly IUserMfaKeyRepository _mfaKeyRepo;
-    private readonly ISecretProtector _secretProtector;
-
-    public AuthController(
-        IMediator mediator,
-        IUserAuthService authService,
-        IFido2Service fido2Service,
-        IOtpService otpService,
-        IUserMfaKeyRepository mfaKeyRepo,
-        ISecretProtector secretProtector)
-    {
-        _mediator = mediator;
-        _authService = authService;
-        _fido2Service = fido2Service;
-        _otpService = otpService;
-        _mfaKeyRepo = mfaKeyRepo;
-        _secretProtector = secretProtector;
-    }
+    private readonly IMediator _mediator = mediator;
 
     private IActionResult UnauthorizedAuth(string message, string code = "auth_failed")
         => Unauthorized(new { code, message });
@@ -94,7 +69,7 @@ public class AuthController : ControllerBase
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
-    // ── MFA FIDO2 ────────────────────────────────────────────────────────
+    // ── MFA FIDO2 (CQRS via MediatR) ────────────────────────────────────
 
     /// <summary>
     /// Etapa 2a — MFA via FIDO2: inicia o desafio de asserção.
@@ -105,13 +80,12 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> BeginFido2Assertion()
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
-        var requirement = await _authService.GetEffectiveMfaRequirementAsync(userId);
-        if (requirement == RoleMfaRequirement.Totp)
-            return ForbiddenAuth("Esta conta exige MFA via OTP para login.", "mfa_method_mismatch");
-
-        var activeKeys = await _mfaKeyRepo.GetActiveByUserIdAsync(userId);
-        var optionsJson = await _fido2Service.BeginAssertionAsync(userId, activeKeys);
-        return Ok(new { options = optionsJson });
+        var result = await _mediator.Send(new BeginFido2AssertionQuery(userId));
+        return result.Match<IActionResult>(
+            success: r => Ok(new { options = r.OptionsJson }),
+            failure: errors => errors[0].Code == "Forbidden"
+                ? ForbiddenAuth(errors[0].Message, "mfa_method_mismatch")
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     /// <summary>
@@ -122,26 +96,21 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> CompleteFido2Assertion([FromBody] CompleteFido2AssertionDto dto)
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
-        var requirement = await _authService.GetEffectiveMfaRequirementAsync(userId);
-        if (requirement == RoleMfaRequirement.Totp)
-            return ForbiddenAuth("Esta conta exige MFA via OTP para login.", "mfa_method_mismatch");
-
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var ua = HttpContext.Request.Headers.UserAgent.ToString();
-
-        var activeKeys = await _mfaKeyRepo.GetActiveByUserIdAsync(userId);
-        var result = await _fido2Service.CompleteAssertionAsync(userId, dto.AssertionResponseJson, activeKeys);
-        if (!result.Success)
-            return UnauthorizedAuth(result.ErrorMessage ?? "MFA inválido.", "mfa_invalid");
-
-        await _mfaKeyRepo.UpdateSignCountAsync(result.KeyId, result.NewSignCount);
-        await _mfaKeyRepo.UpdateLastUsedAsync(result.KeyId);
-
-        var session = await _authService.IssueFullSessionAsync(userId, true, ip, ua);
-        return Ok(session);
+        var cmd = new CompleteFido2AssertionCommand(userId, dto.AssertionResponseJson, ip, ua);
+        var result = await _mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code switch
+            {
+                "Forbidden" => ForbiddenAuth(errors[0].Message, "mfa_method_mismatch"),
+                "Unauthorized" => UnauthorizedAuth(errors[0].Message, "mfa_invalid"),
+                _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+            });
     }
 
-    // ── MFA OTP/TOTP ─────────────────────────────────────────────────────
+    // ── MFA OTP/TOTP (CQRS via MediatR) ──────────────────────────────────
 
     /// <summary>
     /// Etapa 2b — MFA via OTP/TOTP: valida o código e emite a sessão completa.
@@ -151,45 +120,21 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> CompleteOtpAssertion([FromBody] CompleteOtpAssertionDto dto)
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
-        var requirement = await _authService.GetEffectiveMfaRequirementAsync(userId);
-        if (requirement == RoleMfaRequirement.Fido2)
-            return ForbiddenAuth("Esta conta exige MFA via chave de segurança (FIDO2).", "mfa_method_mismatch");
-
-        if (string.IsNullOrWhiteSpace(dto.Code))
-            return BadRequest(new { message = "Código OTP é obrigatório." });
-
-        var activeKeys = await _mfaKeyRepo.GetActiveByUserIdAsync(userId);
-        var otpKeys = activeKeys
-            .Where(k => k.KeyType == MfaKeyType.Totp && !string.IsNullOrWhiteSpace(k.OtpSecretEncrypted))
-            .ToList();
-
-        if (otpKeys.Count == 0)
-            return UnauthorizedAuth("Nenhuma credencial OTP ativa encontrada para o usuário.", "otp_not_configured");
-
-        var normalizedCode = dto.Code.Trim();
-        UserMfaKey? matchedKey = null;
-        foreach (var key in otpKeys)
-        {
-            var secret = _secretProtector.UnprotectOrSelf(key.OtpSecretEncrypted);
-            if (_otpService.ValidateTotp(secret, normalizedCode))
-            {
-                matchedKey = key;
-                break;
-            }
-        }
-
-        if (matchedKey is null)
-            return UnauthorizedAuth("OTP inválido.", "otp_invalid");
-
-        await _mfaKeyRepo.UpdateLastUsedAsync(matchedKey.Id);
-
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var ua = HttpContext.Request.Headers.UserAgent.ToString();
-        var session = await _authService.IssueFullSessionAsync(userId, true, ip, ua);
-        return Ok(session);
+        var cmd = new CompleteOtpAssertionCommand(userId, dto.Code, ip, ua);
+        var result = await _mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code switch
+            {
+                "Forbidden" => ForbiddenAuth(errors[0].Message, "mfa_method_mismatch"),
+                "Unauthorized" => UnauthorizedAuth(errors[0].Message, "otp_invalid"),
+                _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+            });
     }
 
-    // ── First Access / Onboarding ────────────────────────────────────────
+    // ── First Access / Onboarding (CQRS via MediatR) ─────────────────────
 
     /// <summary>
     /// Conclui o onboarding de primeiro acesso (troca de login/perfil/senha).
@@ -200,20 +145,15 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> CompleteFirstAccess([FromBody] CompleteFirstAccessRequestDto dto)
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
-        try
-        {
-            await _authService.CompleteFirstAccessAsync(userId, dto);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return UnauthorizedAuth(ex.Message, "first_access_not_allowed");
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { message = ex.Message });
-        }
-
-        return Ok(new { message = "Primeiro acesso concluído. Finalize o cadastro do MFA para liberar o login completo." });
+        var cmd = new CompleteFirstAccessCommand(userId, dto);
+        var result = await _mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: _ => Ok(new { message = "Primeiro acesso concluído. Finalize o cadastro do MFA para liberar o login completo." }),
+            failure: errors => errors[0].Code switch
+            {
+                "Unauthorized" => UnauthorizedAuth(errors[0].Message, "first_access_not_allowed"),
+                _ => BadRequest(new { message = errors[0].Message })
+            });
     }
 
     /// <summary>
@@ -225,7 +165,9 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> GetFirstAccessStatus()
     {
         var userId = (Guid)HttpContext.Items["UserId"]!;
-        var status = await _authService.GetFirstAccessStatusAsync(userId);
-        return Ok(status);
+        var result = await _mediator.Send(new GetFirstAccessStatusQuery(userId));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 }
