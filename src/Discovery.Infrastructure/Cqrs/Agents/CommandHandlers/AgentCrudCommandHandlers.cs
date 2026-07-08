@@ -6,6 +6,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
 using MediatR;
 using Microsoft.Extensions.Logging;
 
@@ -37,7 +38,7 @@ public sealed class ApproveZeroTouchCommandHandler(
         return Result<AgentDto>.Success(MapToDto(agent));
     }
 
-    private static AgentDto MapToDto(Agent a) => new(a.Id, a.DisplayName ?? a.Hostname, Guid.Empty, a.SiteId, a.EffectiveStatus.ToString(), a.AgentVersion, a.MacAddress, a.CreatedAt, a.LastSeenAt);
+    private static AgentDto MapToDto(Agent a) => AgentQueryHelper.MapToDto(a);
 }
 
 public sealed class CreateAgentCommandHandler(
@@ -81,7 +82,7 @@ public sealed class CreateAgentCommandHandler(
         }
     }
 
-    internal static AgentDto MapToDto(Agent a) => new(a.Id, a.DisplayName ?? a.Hostname, Guid.Empty, a.SiteId, a.EffectiveStatus.ToString(), a.AgentVersion, a.MacAddress, a.CreatedAt, a.LastSeenAt);
+    internal static AgentDto MapToDto(Agent a) => AgentQueryHelper.MapToDto(a);
 }
 
 public sealed class UpdateAgentCommandHandler(

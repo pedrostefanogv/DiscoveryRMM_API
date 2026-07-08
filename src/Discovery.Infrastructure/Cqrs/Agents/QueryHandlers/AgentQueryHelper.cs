@@ -11,14 +11,48 @@ internal static class AgentQueryHelper
 
     internal static AgentDto MapToDto(Agent a) => new(
         a.Id,
-        a.DisplayName ?? a.Hostname,
+        a.Hostname,
+        a.DisplayName,
         Guid.Empty,
         a.SiteId,
         a.EffectiveStatus.ToString(),
+        a.OperatingSystem,
+        a.OsVersion,
         a.AgentVersion,
         a.MacAddress,
+        a.LastIpAddress,
+        a.EffectiveStatus == AgentStatus.Online,
+        a.LastSeenAt,
+        a.ZeroTouchPending,
+        a.MeshCentralNodeId,
         a.CreatedAt,
-        a.LastSeenAt);
+        a.UpdatedAt,
+        null);
+
+    internal static AgentDto MapToDto(Agent a, HeartbeatCacheEntry? hb) => new(
+        a.Id,
+        hb?.Hostname ?? a.Hostname,
+        a.DisplayName,
+        Guid.Empty,
+        a.SiteId,
+        a.EffectiveStatus.ToString(),
+        a.OperatingSystem,
+        a.OsVersion,
+        hb?.AgentVersion ?? a.AgentVersion,
+        a.MacAddress,
+        hb?.IpAddress ?? a.LastIpAddress,
+        a.EffectiveStatus == AgentStatus.Online,
+        hb?.LastHeartbeatAt ?? a.LastSeenAt,
+        a.ZeroTouchPending,
+        a.MeshCentralNodeId,
+        a.CreatedAt,
+        a.UpdatedAt,
+        hb is null ? null : new HeartbeatMetricsDto(
+            hb.CpuPercent, hb.MemoryPercent, hb.DiskPercent,
+            hb.MemoryTotalGb, hb.MemoryUsedGb, hb.DiskTotalGb, hb.DiskUsedGb,
+            hb.P2pPeers, hb.UptimeSeconds, hb.ProcessCount,
+            hb.IpAddress, hb.Hostname, hb.AgentVersion,
+            hb.LastHeartbeatAt, hb.LastHeartbeatAt));
 
     internal static void ApplyRealtimeHeartbeat(Agent agent, HeartbeatCacheEntry? heartbeat)
     {
