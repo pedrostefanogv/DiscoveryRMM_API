@@ -1391,7 +1391,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var descending = GetSortDescending(filters, defaultValue: false);
 
         var query = _db.AppPackages.AsNoTracking().AsQueryable();
-        if (!string.IsNullOrWhiteSpace(source)) query = query.Where(x => x.Source.ToLowerInvariant() == source.ToLowerInvariant());
+        if (!string.IsNullOrWhiteSpace(source)) query = query.Where(x => x.Source != null && x.Source.ToLowerInvariant() == source.ToLowerInvariant());
         if (!string.IsNullOrWhiteSpace(category)) query = query.Where(x => x.Category == category);
 
         query = descending

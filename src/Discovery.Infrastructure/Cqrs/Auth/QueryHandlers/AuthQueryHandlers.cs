@@ -50,9 +50,11 @@ public sealed class ListUsersQueryHandler(
 {
     public async Task<Result<ListUsersResult>> Handle(ListUsersQuery q, CancellationToken ct)
     {
-        // Como o repositório define busca paginada, mas sem cursor nativo, usamos GetListAsync.
-        // Idealmente o repo teria suporte a cursor. Por enquando usamos busca básica.
+        // Usamos GetAllPageAsync sem cursor para obter todos os usuários.
+        // O repositório será migrado para suporte nativo a busca por termo no futuro.
+#pragma warning disable CS0618 // Obsoleto — caminho de migração conhecido
         var users = await userRepo.GetAllAsync();
+#pragma warning restore CS0618
         var filtered = users.AsEnumerable();
 
         if (!string.IsNullOrWhiteSpace(q.SearchTerm))

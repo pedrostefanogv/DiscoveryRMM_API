@@ -1129,7 +1129,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                 int count = 0;
                 foreach (var row in rows)
                 {
-                    if (row.TryGetValue(valueField, out var v) && TryConvertToDecimal(v, out var dv))
+                    if (row.TryGetValue(valueField, out var v) && v is not null && TryConvertToDecimal(v, out var dv))
                     {
                         sum += dv;
                         count++;
@@ -1227,7 +1227,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                 int count = 0;
                 foreach (var row in groupRows)
                 {
-                    if (row.TryGetValue(valueField, out var v) && TryConvertToDecimal(v, out var dv))
+                    if (row.TryGetValue(valueField, out var v) && v is not null && TryConvertToDecimal(v, out var dv))
                     {
                         total += dv;
                         count++;
@@ -1240,7 +1240,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                 decimal? min = null;
                 foreach (var row in groupRows)
                 {
-                    if (row.TryGetValue(valueField, out var v) && TryConvertToDecimal(v, out var dv))
+                    if (row.TryGetValue(valueField, out var v) && v is not null && TryConvertToDecimal(v, out var dv))
                         min = min is null ? dv : dv < min ? dv : min;
                 }
                 return min.HasValue ? (double)min.Value : null;
@@ -1249,7 +1249,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                 decimal? max = null;
                 foreach (var row in groupRows)
                 {
-                    if (row.TryGetValue(valueField, out var v) && TryConvertToDecimal(v, out var dv))
+                    if (row.TryGetValue(valueField, out var v) && v is not null && TryConvertToDecimal(v, out var dv))
                         max = max is null ? dv : dv > max ? dv : max;
                 }
                 return max.HasValue ? (double)max.Value : null;

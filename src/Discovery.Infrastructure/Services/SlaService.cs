@@ -302,7 +302,7 @@ public class SlaService : ISlaService
         var breached = now > effectiveExpiry;
 
         return (
-            hrsRemaining: Math.Max(0, (int)Math.Ceiling(remaining)),
+            Math.Max(0, (int)Math.Ceiling(remaining)),
             percentUsed,
             breached
         );
@@ -334,7 +334,7 @@ public class SlaService : ISlaService
         var breached = now > expiry;
 
         return (
-            hrsRemaining: Math.Max(0, (int)Math.Ceiling(remaining)),
+            Math.Max(0, (int)Math.Ceiling(remaining)),
             percentUsed,
             breached,
             false

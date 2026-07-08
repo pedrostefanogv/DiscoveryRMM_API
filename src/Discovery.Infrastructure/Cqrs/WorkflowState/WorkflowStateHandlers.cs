@@ -21,7 +21,7 @@ public sealed class ListWorkflowTransitionsQueryHandler(IWorkflowRepository repo
     public async Task<Result<IReadOnlyList<WorkflowTransitionDto>>> Handle(ListWorkflowTransitionsQuery q, CancellationToken ct)
     {
         var trans = await repo.GetTransitionsAsync(q.ClientId);
-        return Result<IReadOnlyList<WorkflowTransitionDto>>.Success(trans.Select(t => new WorkflowTransitionDto(t.Id, t.ClientId, t.FromStateId, t.ToStateId, t.Name, t.CreatedAt)).ToList().AsReadOnly());
+        return Result<IReadOnlyList<WorkflowTransitionDto>>.Success(trans.Select(t => new WorkflowTransitionDto(t.Id, t.ClientId, t.FromStateId, t.ToStateId, t.Name ?? string.Empty, t.CreatedAt)).ToList().AsReadOnly());
     }
 }
 
@@ -77,7 +77,7 @@ public sealed class CreateWorkflowTransitionCommandHandler(IWorkflowRepository r
     {
         var t = new CoreEntities.WorkflowTransition { ClientId = cmd.ClientId, FromStateId = cmd.FromStateId, ToStateId = cmd.ToStateId, Name = cmd.Name, CreatedAt = DateTime.UtcNow };
         var created = await repo.CreateTransitionAsync(t);
-        return Result<WorkflowTransitionDto>.Success(new WorkflowTransitionDto(created.Id, created.ClientId, created.FromStateId, created.ToStateId, created.Name, created.CreatedAt));
+        return Result<WorkflowTransitionDto>.Success(new WorkflowTransitionDto(created.Id, created.ClientId, created.FromStateId, created.ToStateId, created.Name ?? string.Empty, created.CreatedAt));
     }
 }
 
