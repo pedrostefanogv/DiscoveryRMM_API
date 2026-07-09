@@ -46,7 +46,7 @@ public sealed class GetAgentConfigurationHandler(
             ["knowledgeBaseEnabled"] = siteConfig?.KnowledgeBaseEnabled ?? clientConfig?.KnowledgeBaseEnabled ?? serverConfig.KnowledgeBaseEnabled,
             ["chatAIEnabled"] = siteConfig?.ChatAIEnabled ?? clientConfig?.ChatAIEnabled ?? serverConfig.ChatAIEnabled,
             ["p2pFilesEnabled"] = siteConfig?.P2PFilesEnabled ?? clientConfig?.P2PFilesEnabled ?? serverConfig.P2PFilesEnabled,
-            ["cloudBootstrapEnabled"] = siteConfig?.CloudBootstrapEnabled ?? clientConfig?.CloudBootstrapEnabled ?? serverConfig.CloudBootstrapEnabled,
+            ["cloudBootstrapEnabled"] = clientConfig?.CloudBootstrapEnabled ?? serverConfig.CloudBootstrapEnabled,
 
             // App store
             ["appStoreEnabled"] = serverConfig.AppStorePolicy != Core.Enums.AppStorePolicyType.Disabled,
@@ -71,7 +71,7 @@ public sealed class GetAgentConfigurationHandler(
             ["agentUpdatePolicy"] = TryDeserializeJson(clientConfig?.AgentUpdatePolicyJson ?? serverConfig.AgentUpdatePolicyJson),
 
             // Branding & notification
-            ["brandingSettings"] = TryDeserializeJson(clientConfig?.BrandingSettingsJson ?? serverConfig.BrandingSettingsJson),
+            ["brandingSettings"] = TryDeserializeJson(serverConfig.BrandingSettingsJson),
 
             // PSADT settings (from server config)
             ["psadtEnabled"] = false,
