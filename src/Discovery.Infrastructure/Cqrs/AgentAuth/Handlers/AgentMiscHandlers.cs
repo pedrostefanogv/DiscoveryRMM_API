@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Misc;
+using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using MediatR;
 
@@ -92,7 +93,7 @@ public sealed class UpsertCollectedCustomFieldHandler(
         var input = System.Text.Json.JsonSerializer.Deserialize<Core.DTOs.AgentCustomFieldCollectedValueInput>(inputJson);
 
         if (input is null)
-            return Result<object>.Failure(Error.Validation("Invalid custom field payload."));
+            return Result<object>.Failure(Error.Validation("customField", "Invalid custom field payload."));
 
         var result = await customFieldService.UpsertAgentCollectedValueAsync(cmd.AgentId, input, ct);
         return Result<object>.Success(new { saved = true, definitionId = result.DefinitionId });
@@ -123,7 +124,7 @@ public sealed class IssueZeroTouchDeployTokenHandler(
             rawToken,
             clientId = token.ClientId,
             siteId = token.SiteId,
-            expiresAtUtc = token.ExpiresAtUtc
+            expiresAtUtc = token.ExpiresAt
         });
     }
 }
@@ -134,13 +135,12 @@ public sealed class GetAgentUpdateManifestHandler(
 {
     public async Task<Result<object>> Handle(GetAgentUpdateManifestQuery q, CancellationToken ct)
     {
-        var manifest = await updateService.GetManifestAsync(q.AgentId, new Core.DTOs.AgentUpdateManifestRequest
-        {
-            CurrentVersion = q.CurrentVersion,
-            Platform = q.Platform,
-            Architecture = q.Architecture,
-            ArtifactType = TryParseArtifactType(q.ArtifactType)
-        }, ct);
+        var manifest = await updateService.GetManifestAsync(q.AgentId, new Core.DTOs.AgentUpdateManifestRequest(
+            q.CurrentVersion,
+            q.Platform,
+            q.Architecture,
+            TryParseArtifactType(q.ArtifactType)
+        ), ct);
 
         return Result<object>.Success(manifest);
     }
@@ -158,14 +158,13 @@ public sealed class DownloadAgentUpdateHandler(
 {
     public async Task<Result<object>> Handle(DownloadAgentUpdateQuery q, CancellationToken ct)
     {
-        var download = await updateService.GetPresignedDownloadUrlAsync(q.AgentId, new Core.DTOs.AgentUpdateDownloadRequest
-        {
-            ReleaseId = q.ReleaseId,
-            Version = q.Version,
-            Platform = q.Platform,
-            Architecture = q.Architecture,
-            ArtifactType = Enum.TryParse<Core.Enums.AgentReleaseArtifactType>(q.ArtifactType, ignoreCase: true, out var at) ? at : null
-        }, ct);
+        var download = await updateService.GetPresignedDownloadUrlAsync(q.AgentId, new Core.DTOs.AgentUpdateDownloadRequest(
+            q.ReleaseId,
+            q.Version,
+            q.Platform,
+            q.Architecture,
+            Enum.TryParse<Core.Enums.AgentReleaseArtifactType>(q.ArtifactType, ignoreCase: true, out var at) ? at : null
+        ), ct);
 
         if (download is null)
             return Result<object>.Failure(Error.NotFound("No update download available."));
@@ -180,8 +179,12 @@ public sealed class ReportAgentUpdateHandler(
 {
     public async Task<Result<object>> Handle(ReportAgentUpdateCommand cmd, CancellationToken ct)
     {
-        // The payload is an object, try to deserialize it as an update report
-        var eventRecord = await updateService.RecordEventAsync(cmd.AgentId, new Core.DTOs.AgentUpdateReportRequest(), ct);
+        // Deserialize the payload into an update report
+        var reportJson = System.Text.Json.JsonSerializer.Serialize(cmd.Request);
+        var report = System.Text.Json.JsonSerializer.Deserialize<Core.DTOs.AgentUpdateReportRequest>(reportJson);
+        if (report is null)
+            return Result<object>.Failure(Error.Validation("request", "Invalid update report payload."));
+        var eventRecord = await updateService.RecordEventAsync(cmd.AgentId, report, ct);
         return Result<object>.Success(eventRecord);
     }
 }

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Configuration;
 using Discovery.Core.DTOs;
+using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.Extensions.Logging;
@@ -123,9 +124,7 @@ public sealed class ReportAgentTlsMismatchHandler(
 }
 
 public sealed class GetAgentSyncManifestHandler(
-    IAgentRepository agentRepo,
-    ISiteRepository siteRepo,
-    IConfigurationService configService
+    IAgentRepository agentRepo
 ) : IRequestHandler<GetAgentSyncManifestQuery, Result<object>>
 {
     public async Task<Result<object>> Handle(GetAgentSyncManifestQuery q, CancellationToken ct)
