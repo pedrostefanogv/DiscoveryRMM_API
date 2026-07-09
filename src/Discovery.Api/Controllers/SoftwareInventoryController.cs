@@ -14,4 +14,11 @@ public class SoftwareInventoryController(IMediator mediator) : ControllerBase
         var result = await mediator.Send(new ListAgentSoftwareQuery(agentId));
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
+
+    [HttpGet("snapshot")]
+    public async Task<IActionResult> GetSnapshot()
+    {
+        var result = await mediator.Send(new GetSoftwareInventorySnapshotQuery());
+        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
 }

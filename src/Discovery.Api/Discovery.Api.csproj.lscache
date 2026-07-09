@@ -141,7 +141,6 @@ obj/Debug/net10.0/
  Discovery.Api.AssemblyInfo.cs
  Discovery.Api.GlobalUsings.g.cs
 Program.cs
-Serialization/ResultJsonConverter.cs
 Services/
  AgentCommandDispatcher.cs
  AgentPackagePrebuildHostedService.cs

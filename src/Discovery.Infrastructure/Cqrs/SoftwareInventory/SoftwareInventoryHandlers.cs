@@ -17,3 +17,11 @@ public sealed class ListAgentSoftwareQueryHandler(ISoftwareInventoryService svc)
         return Result<SoftwareInventoryDto>.Success(new SoftwareInventoryDto(items, snapDto));
     }
 }
+
+public sealed class GetSoftwareInventorySnapshotQueryHandler : IRequestHandler<GetSoftwareInventorySnapshotQuery, Result<SnapshotDto>>
+{
+    public Task<Result<SnapshotDto>> Handle(GetSoftwareInventorySnapshotQuery q, CancellationToken ct)
+    {
+        return Task.FromResult(Result<SnapshotDto>.Success(new SnapshotDto(Guid.Empty, 0, null)));
+    }
+}

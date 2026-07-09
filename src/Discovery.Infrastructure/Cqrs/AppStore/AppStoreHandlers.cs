@@ -9,3 +9,6 @@ public sealed class SearchAppStoreQueryHandler : IRequestHandler<SearchAppStoreQ
 
 public sealed class GetAppStoreEffectiveAppsQueryHandler : IRequestHandler<GetAppStoreEffectiveAppsQuery, Result<IReadOnlyList<AppStoreDto>>>
 { public Task<Result<IReadOnlyList<AppStoreDto>>> Handle(GetAppStoreEffectiveAppsQuery q, CancellationToken ct) => Task.FromResult(Result<IReadOnlyList<AppStoreDto>>.Success(Array.Empty<AppStoreDto>())); }
+
+public sealed class GetAppStoreCatalogQueryHandler : IRequestHandler<GetAppStoreCatalogQuery, Result<IReadOnlyList<AppStoreDto>>>
+{ public Task<Result<IReadOnlyList<AppStoreDto>>> Handle(GetAppStoreCatalogQuery q, CancellationToken ct) => Task.FromResult(Result<IReadOnlyList<AppStoreDto>>.Success(Array.Empty<AppStoreDto>())); }
