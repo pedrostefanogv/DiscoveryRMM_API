@@ -7,7 +7,6 @@ using Discovery.Api;
 using Discovery.Api.Cqrs.DependencyInjection;
 using Discovery.Api.DependencyInjection;
 using Discovery.Api.Filters;
-using Discovery.Api.Serialization;
 using Discovery.Api.Validators;
 using FluentMigrator.Runner;
 using Discovery.Api.Middleware;
@@ -187,7 +186,6 @@ builder.Services.AddControllers(options =>
         // Permite que a API aceite JSON em camelCase ou PascalCase
         opts.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
         opts.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
-        opts.JsonSerializerOptions.Converters.Add(new ResultJsonConverterFactory());
         opts.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
         // Previne recursão infinita em navigation properties cíclicas (ex: Article ↔ Chunks)
         opts.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
