@@ -1,113 +1,62 @@
-using Discovery.Core.Entities;
-using Discovery.Core.Interfaces;
+using Discovery.Core.Cqrs.Tickets.Commands;
+using Discovery.Core.Cqrs.Tickets.Queries;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/ticket-alert-rules")]
-public class TicketAlertRulesController(ITicketAlertRuleRepository repo) : ControllerBase
+public class TicketAlertRulesController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
-        var rules = await repo.GetAllAsync();
-        return Ok(rules);
+        var result = await mediator.Send(new ListTicketAlertRulesQuery());
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
     }
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var rule = await repo.GetByIdAsync(id);
-        return rule is null ? NotFound() : Ok(rule);
+        var result = await mediator.Send(new GetTicketAlertRuleByIdQuery(id));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     [HttpGet("by-workflow-state/{workflowStateId:guid}")]
     public async Task<IActionResult> GetByWorkflowState(Guid workflowStateId)
     {
-        var rules = await repo.GetByWorkflowStateIdAsync(workflowStateId);
-        return Ok(rules);
+        var result = await mediator.Send(new GetTicketAlertRulesByWorkflowStateQuery(workflowStateId));
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
     }
 
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateTicketAlertRuleRequest request)
+    public async Task<IActionResult> Create([FromBody] CreateTicketAlertRuleRequest req)
     {
-        var entity = new TicketAlertRule
-        {
-            WorkflowStateId = request.WorkflowStateId,
-            Title = request.Title,
-            Message = request.Message,
-            AlertType = request.AlertType,
-            TimeoutSeconds = request.TimeoutSeconds,
-            ActionsJson = request.ActionsJson,
-            DefaultAction = request.DefaultAction,
-            Icon = request.Icon,
-            ScopePreference = request.ScopePreference,
-            IsEnabled = request.IsEnabled
-        };
-        var created = await repo.CreateAsync(entity);
-        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
+        var result = await mediator.Send(new CreateTicketAlertRuleCommand(req.WorkflowStateId, req.Title, req.Message, req.AlertType, req.TimeoutSeconds, req.ActionsJson, req.DefaultAction, req.Icon, req.ScopePreference, req.IsEnabled));
+        return result.Match<IActionResult>(success: r => CreatedAtAction(nameof(GetById), new { id = r.Id }, r), failure: BadRequest);
     }
 
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketAlertRuleRequest request)
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketAlertRuleRequest req)
     {
-        var existing = await repo.GetByIdAsync(id);
-        if (existing is null) return NotFound();
-        existing.WorkflowStateId = request.WorkflowStateId;
-        existing.Title = request.Title;
-        existing.Message = request.Message;
-        existing.AlertType = request.AlertType;
-        existing.TimeoutSeconds = request.TimeoutSeconds;
-        existing.ActionsJson = request.ActionsJson;
-        existing.DefaultAction = request.DefaultAction;
-        existing.Icon = request.Icon;
-        existing.ScopePreference = request.ScopePreference;
-        existing.IsEnabled = request.IsEnabled;
-        var updated = await repo.UpdateAsync(existing);
-        return Ok(updated);
+        var result = await mediator.Send(new UpdateTicketAlertRuleCommand(id, req.WorkflowStateId, req.Title, req.Message, req.AlertType, req.TimeoutSeconds, req.ActionsJson, req.DefaultAction, req.Icon, req.ScopePreference, req.IsEnabled));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     [HttpPatch("{id:guid}/toggle")]
     public async Task<IActionResult> Toggle(Guid id)
     {
-        var existing = await repo.GetByIdAsync(id);
-        if (existing is null) return NotFound();
-        existing.IsEnabled = !existing.IsEnabled;
-        var updated = await repo.UpdateAsync(existing);
-        return Ok(updated);
+        var result = await mediator.Send(new ToggleTicketAlertRuleCommand(id));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id)
-    {
-        await repo.DeleteAsync(id);
-        return NoContent();
-    }
+    public async Task<IActionResult> Delete(Guid id) { await mediator.Send(new DeleteTicketAlertRuleCommand(id)); return NoContent(); }
+
+    private IActionResult BadRequest(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) });
+    private IActionResult NotFound(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => errors[0].Code == "NotFound" ? NotFound() : BadRequest(errors);
 }
 
-public record CreateTicketAlertRuleRequest(
-    Guid WorkflowStateId,
-    string Title,
-    string Message,
-    Discovery.Core.Enums.PsadtAlertType AlertType = Discovery.Core.Enums.PsadtAlertType.Toast,
-    int? TimeoutSeconds = 15,
-    string? ActionsJson = null,
-    string? DefaultAction = null,
-    string Icon = "info",
-    Discovery.Core.Enums.AlertScopeType ScopePreference = Discovery.Core.Enums.AlertScopeType.Agent,
-    bool IsEnabled = true
-);
-
-public record UpdateTicketAlertRuleRequest(
-    Guid WorkflowStateId,
-    string Title,
-    string Message,
-    Discovery.Core.Enums.PsadtAlertType AlertType,
-    int? TimeoutSeconds,
-    string? ActionsJson,
-    string? DefaultAction,
-    string Icon,
-    Discovery.Core.Enums.AlertScopeType ScopePreference,
-    bool IsEnabled
-);
+public record CreateTicketAlertRuleRequest(Guid WorkflowStateId, string Title, string Message, Discovery.Core.Enums.PsadtAlertType AlertType = Discovery.Core.Enums.PsadtAlertType.Toast, int? TimeoutSeconds = 15, string? ActionsJson = null, string? DefaultAction = null, string Icon = "info", Discovery.Core.Enums.AlertScopeType ScopePreference = Discovery.Core.Enums.AlertScopeType.Agent, bool IsEnabled = true);
+public record UpdateTicketAlertRuleRequest(Guid WorkflowStateId, string Title, string Message, Discovery.Core.Enums.PsadtAlertType AlertType, int? TimeoutSeconds, string? ActionsJson, string? DefaultAction, string Icon, Discovery.Core.Enums.AlertScopeType ScopePreference, bool IsEnabled);

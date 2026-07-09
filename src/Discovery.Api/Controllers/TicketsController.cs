@@ -16,13 +16,6 @@ namespace Discovery.Api.Controllers;
 [Route("api/v{version:apiVersion}/[controller]")]
 public class TicketsController(
     IMediator mediator,
-    ITicketWatcherRepository watcherRepo,
-    ITicketRemoteSessionRepository remoteSessionRepo,
-    ITicketAutomationLinkRepository automationLinkRepo,
-    ITicketKnowledgeLinkRepository knowledgeLinkRepo,
-    ITicketActivityLogRepository activityLogRepo,
-    ITicketKpiCacheService kpiCache,
-    ITicketRepository ticketRepo,
     ISlaService slaService,
     ICustomFieldService customFieldService,
     ITicketQueryService queryService) : ControllerBase
@@ -34,38 +27,24 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] TicketFilterQuery filter)
     {
-        var query = new ListTicketsQuery(filter);
-        var result = await mediator.Send(query, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        var result = await mediator.Send(new ListTicketsQuery(filter), HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
     }
 
     [HttpGet("page")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetPage([FromQuery] TicketFilterQuery filter)
     {
-        var query = new ListTicketsQuery(filter);
-        var result = await mediator.Send(query, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        var result = await mediator.Send(new ListTicketsQuery(filter), HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
     }
 
     [HttpGet("{id:guid}")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var query = new GetTicketByIdQuery(id);
-        var result = await mediator.Send(query, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound()
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        var result = await mediator.Send(new GetTicketByIdQuery(id), HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     [HttpPost]
@@ -73,94 +52,55 @@ public class TicketsController(
     public async Task<IActionResult> Create([FromBody] CreateTicketCommand command)
     {
         var result = await mediator.Send(command, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto),
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) })
-        );
+        return result.Match<IActionResult>(success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto), failure: BadRequest);
     }
 
     [HttpPut("{id:guid}")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketCommand command)
     {
-        var cmd = command with { Id = id };
-        var result = await mediator.Send(cmd, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound()
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) })
-        );
+        var result = await mediator.Send(command with { Id = id }, HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     [HttpPatch("{id:guid}/workflow-state")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> UpdateWorkflowState(Guid id, [FromBody] TransitionTicketStateCommand command)
     {
-        var cmd = command with { TicketId = id };
-        var result = await mediator.Send(cmd, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: r => Ok(new { message = "Workflow state updated", r.TicketId, r.PreviousStateId, r.NewStateId, r.ClosedAt }),
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound()
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        var result = await mediator.Send(command with { TicketId = id }, HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     [HttpGet("{id:guid}/comments")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetComments(Guid id, [FromQuery] string? cursor = null, [FromQuery] int limit = 50)
     {
-        var commentQuery = new GetTicketCommentsQuery(id, cursor, Math.Clamp(limit, 1, 200));
-        var result = await mediator.Send(commentQuery, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound()
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        var result = await mediator.Send(new GetTicketCommentsQuery(id, cursor, Math.Clamp(limit, 1, 200)), HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     [HttpPost("{id:guid}/comments")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> AddComment(Guid id, [FromBody] AddTicketCommentCommand command)
     {
-        var cmd = command with { TicketId = id };
-        var result = await mediator.Send(cmd, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: r => CreatedAtAction(nameof(GetComments), new { id }, r),
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound()
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        var result = await mediator.Send(command with { TicketId = id }, HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: r => CreatedAtAction(nameof(GetComments), new { id }, r), failure: NotFound);
     }
 
     [HttpPost("{id:guid}/merge")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> MergeTickets(Guid id, [FromBody] MergeTicketsCommand command)
     {
-        var cmd = command with { TargetTicketId = id };
-        var result = await mediator.Send(cmd, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound()
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        var result = await mediator.Send(command with { TargetTicketId = id }, HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     [HttpGet("{id:guid}/sla")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetSlaStatus(Guid id)
     {
-        var query = new GetTicketSlaStatusQuery(id);
-        var result = await mediator.Send(query, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound()
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        var result = await mediator.Send(new GetTicketSlaStatusQuery(id), HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     // ── By Client ───────────────────────────────────────────────────────
@@ -178,25 +118,21 @@ public class TicketsController(
 
     [HttpGet("{id:guid}/watchers")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetWatchers(Guid id)
-    {
-        var watchers = await watcherRepo.GetByTicketAsync(id);
-        return Ok(watchers);
-    }
+    public async Task<IActionResult> GetWatchers(Guid id) => Ok(await mediator.Send(new GetTicketWatchersQuery(id)));
 
     [HttpPost("{id:guid}/watchers")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> AddWatcher(Guid id, [FromBody] AddWatcherRequest request)
     {
-        var watcher = await watcherRepo.AddAsync(id, request.UserId, Username);
-        return CreatedAtAction(nameof(GetWatchers), new { id }, watcher);
+        var result = await mediator.Send(new AddTicketWatcherCommand(id, request.UserId, Username));
+        return result.Match<IActionResult>(success: w => CreatedAtAction(nameof(GetWatchers), new { id }, w), failure: BadRequest);
     }
 
     [HttpDelete("{id:guid}/watchers/{userId:guid}")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> RemoveWatcher(Guid id, Guid userId)
     {
-        await watcherRepo.RemoveAsync(id, userId);
+        await mediator.Send(new RemoveTicketWatcherCommand(id, userId));
         return NoContent();
     }
 
@@ -204,88 +140,61 @@ public class TicketsController(
 
     [HttpGet("{id:guid}/remote-sessions")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetRemoteSessions(Guid id)
-    {
-        var sessions = await remoteSessionRepo.GetByTicketAsync(id, HttpContext.RequestAborted);
-        return Ok(sessions);
-    }
+    public async Task<IActionResult> GetRemoteSessions(Guid id) => Ok(await mediator.Send(new GetTicketRemoteSessionsQuery(id)));
 
     [HttpPost("{id:guid}/remote-sessions")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> CreateRemoteSession(Guid id, [FromBody] TicketRemoteSession session)
+    public async Task<IActionResult> CreateRemoteSession(Guid id, [FromBody] TicketRemoteSession body)
     {
-        session.TicketId = id;
-        var created = await remoteSessionRepo.CreateAsync(session, HttpContext.RequestAborted);
-        return CreatedAtAction(nameof(GetRemoteSessions), new { id }, created);
+        var result = await mediator.Send(new CreateTicketRemoteSessionCommand(id, body.AgentId, body.MeshNodeId, Username, body.Note));
+        return result.Match<IActionResult>(success: s => CreatedAtAction(nameof(GetRemoteSessions), new { id }, s), failure: BadRequest);
     }
 
     [HttpPatch("{id:guid}/remote-sessions/{sessionId:guid}/end")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> EndRemoteSession(Guid id, Guid sessionId)
     {
-        var sessions = await remoteSessionRepo.GetByTicketAsync(id, HttpContext.RequestAborted);
-        var session = sessions.FirstOrDefault(s => s.Id == sessionId);
-        if (session is null) return NotFound();
-        session.EndedAt = DateTime.UtcNow;
-        var updated = await remoteSessionRepo.UpdateAsync(session, HttpContext.RequestAborted);
-        return Ok(updated);
+        var result = await mediator.Send(new EndTicketRemoteSessionCommand(id, sessionId));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
 
     // ── Automation Links ─────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/automation-links")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetAutomationLinks(Guid id)
-    {
-        var links = await automationLinkRepo.GetByTicketAsync(id, HttpContext.RequestAborted);
-        return Ok(links);
-    }
+    public async Task<IActionResult> GetAutomationLinks(Guid id) => Ok(await mediator.Send(new GetTicketAutomationLinksQuery(id)));
 
     [HttpPost("{id:guid}/automation-links")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> CreateAutomationLink(Guid id, [FromBody] TicketAutomationLink link)
+    public async Task<IActionResult> CreateAutomationLink(Guid id, [FromBody] TicketAutomationLink body)
     {
-        link.TicketId = id;
-        var created = await automationLinkRepo.CreateAsync(link, HttpContext.RequestAborted);
-        return CreatedAtAction(nameof(GetAutomationLinks), new { id }, created);
+        var result = await mediator.Send(new CreateTicketAutomationLinkCommand(id, body.AutomationTaskDefinitionId, Username, body.Note));
+        return result.Match<IActionResult>(success: l => CreatedAtAction(nameof(GetAutomationLinks), new { id }, l), failure: BadRequest);
     }
 
     // ── Knowledge Links ──────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/knowledge-links")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetKnowledgeLinks(Guid id)
-    {
-        var links = await knowledgeLinkRepo.GetByTicketAsync(id, HttpContext.RequestAborted);
-        return Ok(links);
-    }
+    public async Task<IActionResult> GetKnowledgeLinks(Guid id) => Ok(await mediator.Send(new GetTicketKnowledgeLinksQuery(id)));
 
     [HttpPost("{id:guid}/knowledge-links")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> CreateKnowledgeLink(Guid id, [FromBody] TicketKnowledgeLink link)
+    public async Task<IActionResult> CreateKnowledgeLink(Guid id, [FromBody] TicketKnowledgeLink body)
     {
-        link.TicketId = id;
-        var created = await knowledgeLinkRepo.CreateAsync(link, HttpContext.RequestAborted);
-        return CreatedAtAction(nameof(GetKnowledgeLinks), new { id }, created);
+        var result = await mediator.Send(new CreateTicketKnowledgeLinkCommand(id, body.ArticleId, null, body.Note));
+        return result.Match<IActionResult>(success: l => CreatedAtAction(nameof(GetKnowledgeLinks), new { id }, l), failure: BadRequest);
     }
 
     [HttpDelete("{id:guid}/knowledge-links/{linkId:guid}")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> DeleteKnowledgeLink(Guid id, Guid linkId)
-    {
-        await knowledgeLinkRepo.DeleteAsync(linkId, HttpContext.RequestAborted);
-        return NoContent();
-    }
+    public async Task<IActionResult> DeleteKnowledgeLink(Guid id, Guid linkId) { await mediator.Send(new DeleteTicketKnowledgeLinkCommand(linkId)); return NoContent(); }
 
     // ── Audit Timeline ───────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/audit/timeline")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetAuditTimeline(Guid id)
-    {
-        var logs = await activityLogRepo.GetByTicketAsync(id);
-        return Ok(logs);
-    }
+    public async Task<IActionResult> GetAuditTimeline(Guid id) => Ok(await mediator.Send(new GetTicketAuditTimelineQuery(id)));
 
     // ── SLA Details ──────────────────────────────────────────────────────
 
@@ -295,32 +204,21 @@ public class TicketsController(
     {
         var (slaHours, slaPercent, slaBreached) = await slaService.GetSlaStatusAsync(id);
         var (frtHours, frtPercent, frtBreached, frtAchieved) = await slaService.GetFrtStatusAsync(id);
-        return Ok(new
-        {
-            resolution = new { hoursRemaining = slaHours, percentUsed = slaPercent, breached = slaBreached },
-            firstResponse = new { hoursRemaining = frtHours, percentUsed = frtPercent, breached = frtBreached, achieved = frtAchieved }
-        });
+        return Ok(new { resolution = new { hoursRemaining = slaHours, percentUsed = slaPercent, breached = slaBreached }, firstResponse = new { hoursRemaining = frtHours, percentUsed = frtPercent, breached = frtBreached, achieved = frtAchieved } });
     }
 
     // ── Custom Fields ────────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/custom-fields")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetCustomFields(Guid id, [FromQuery] bool includeSecrets = false)
-    {
-        var values = await customFieldService.GetValuesAsync(
-            CustomFieldScopeType.Ticket, id, includeSecrets, HttpContext.RequestAborted);
-        return Ok(values);
-    }
+    public async Task<IActionResult> GetCustomFields(Guid id, [FromQuery] bool includeSecrets = false) => Ok(await customFieldService.GetValuesAsync(CustomFieldScopeType.Ticket, id, includeSecrets, HttpContext.RequestAborted));
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomField(Guid id, Guid definitionId, [FromBody] JsonElement body)
     {
         var valueJson = body.TryGetProperty("value", out var prop) ? prop.GetRawText() : body.GetRawText();
-        var input = new UpsertCustomFieldValueInput(
-            definitionId, CustomFieldScopeType.Ticket, id, valueJson, Username);
-        var result = await customFieldService.UpsertValueAsync(input, HttpContext.RequestAborted);
+        var result = await customFieldService.UpsertValueAsync(new UpsertCustomFieldValueInput(definitionId, CustomFieldScopeType.Ticket, id, valueJson, Username), HttpContext.RequestAborted);
         return Ok(result);
     }
 
@@ -328,17 +226,14 @@ public class TicketsController(
 
     [HttpGet("kpi")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetKpi(
-        [FromQuery] Guid? clientId = null,
-        [FromQuery] Guid? departmentId = null,
-        [FromQuery] DateTime? since = null)
+    public async Task<IActionResult> GetKpi([FromQuery] Guid? clientId = null, [FromQuery] Guid? departmentId = null, [FromQuery] DateTime? since = null)
     {
-        var result = await kpiCache.GetOrComputeAsync(
-            clientId, departmentId, since,
-            () => ticketRepo.GetKpiAsync(clientId, departmentId, since),
-            HttpContext.RequestAborted);
-        return Ok(result);
+        var result = await mediator.Send(new GetTicketKpiQuery(clientId, departmentId, since));
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
     }
+
+    private IActionResult BadRequest(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) });
+    private IActionResult NotFound(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => errors[0].Code == "NotFound" ? NotFound() : BadRequest(errors);
 }
 
 public record AddWatcherRequest(Guid UserId);

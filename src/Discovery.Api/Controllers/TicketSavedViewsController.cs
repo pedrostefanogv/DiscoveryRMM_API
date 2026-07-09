@@ -1,67 +1,44 @@
-using Discovery.Core.Entities;
-using Discovery.Core.Interfaces;
+using Discovery.Core.Cqrs.Tickets.Commands;
+using Discovery.Core.Cqrs.Tickets.Queries;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/ticket-saved-views")]
-public class TicketSavedViewsController(ITicketSavedViewRepository repo) : ControllerBase
+public class TicketSavedViewsController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> List()
     {
         var userId = HttpContext.Items["UserId"] as Guid?;
-        var views = await repo.GetByUserAsync(userId);
-        return Ok(views);
+        var result = await mediator.Send(new ListTicketSavedViewsQuery(userId));
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
     }
-
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var view = await repo.GetByIdAsync(id);
-        if (view is null) return NotFound();
-        return Ok(view);
+        var result = await mediator.Send(new GetTicketSavedViewByIdQuery(id));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
-
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateTicketSavedViewRequest request)
+    public async Task<IActionResult> Create([FromBody] CreateTicketSavedViewRequest req)
     {
         var userId = HttpContext.Items["UserId"] as Guid?;
-        var view = new TicketSavedView
-        {
-            Id = Guid.NewGuid(),
-            UserId = userId,
-            Name = request.Name,
-            FilterJson = request.FilterJson ?? "{}",
-            IsShared = request.IsShared,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
-        var created = await repo.CreateAsync(view);
-        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
+        var result = await mediator.Send(new CreateTicketSavedViewCommand(req.Name, req.FilterJson, req.IsShared, userId));
+        return result.Match<IActionResult>(success: v => CreatedAtAction(nameof(GetById), new { id = v.Id }, v), failure: BadRequest);
     }
-
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketSavedViewRequest request)
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketSavedViewRequest req)
     {
-        var existing = await repo.GetByIdAsync(id);
-        if (existing is null) return NotFound();
-        if (request.Name is not null) existing.Name = request.Name;
-        if (request.FilterJson is not null) existing.FilterJson = request.FilterJson;
-        if (request.IsShared.HasValue) existing.IsShared = request.IsShared.Value;
-        existing.UpdatedAt = DateTime.UtcNow;
-        await repo.UpdateAsync(existing);
-        return Ok(existing);
+        var result = await mediator.Send(new UpdateTicketSavedViewCommand(id, req.Name, req.FilterJson, req.IsShared));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
     }
-
     [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id)
-    {
-        await repo.DeleteAsync(id);
-        return NoContent();
-    }
+    public async Task<IActionResult> Delete(Guid id) { await mediator.Send(new DeleteTicketSavedViewCommand(id)); return NoContent(); }
+    private IActionResult BadRequest(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) });
+    private IActionResult NotFound(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => errors[0].Code == "NotFound" ? NotFound() : BadRequest(errors);
 }
-
 public record CreateTicketSavedViewRequest(string Name, string? FilterJson, bool IsShared = false);
 public record UpdateTicketSavedViewRequest(string? Name, string? FilterJson, bool? IsShared);
