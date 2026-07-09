@@ -118,7 +118,11 @@ public class TicketsController(
 
     [HttpGet("{id:guid}/watchers")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetWatchers(Guid id) => Ok(await mediator.Send(new GetTicketWatchersQuery(id)));
+    public async Task<IActionResult> GetWatchers(Guid id)
+    {
+        var result = await mediator.Send(new GetTicketWatchersQuery(id));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+    }
 
     [HttpPost("{id:guid}/watchers")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
@@ -140,7 +144,11 @@ public class TicketsController(
 
     [HttpGet("{id:guid}/remote-sessions")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetRemoteSessions(Guid id) => Ok(await mediator.Send(new GetTicketRemoteSessionsQuery(id)));
+    public async Task<IActionResult> GetRemoteSessions(Guid id)
+    {
+        var result = await mediator.Send(new GetTicketRemoteSessionsQuery(id));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+    }
 
     [HttpPost("{id:guid}/remote-sessions")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
@@ -162,7 +170,11 @@ public class TicketsController(
 
     [HttpGet("{id:guid}/automation-links")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetAutomationLinks(Guid id) => Ok(await mediator.Send(new GetTicketAutomationLinksQuery(id)));
+    public async Task<IActionResult> GetAutomationLinks(Guid id)
+    {
+        var result = await mediator.Send(new GetTicketAutomationLinksQuery(id));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+    }
 
     [HttpPost("{id:guid}/automation-links")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
@@ -176,7 +188,11 @@ public class TicketsController(
 
     [HttpGet("{id:guid}/knowledge-links")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetKnowledgeLinks(Guid id) => Ok(await mediator.Send(new GetTicketKnowledgeLinksQuery(id)));
+    public async Task<IActionResult> GetKnowledgeLinks(Guid id)
+    {
+        var result = await mediator.Send(new GetTicketKnowledgeLinksQuery(id));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+    }
 
     [HttpPost("{id:guid}/knowledge-links")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
@@ -194,7 +210,11 @@ public class TicketsController(
 
     [HttpGet("{id:guid}/audit/timeline")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetAuditTimeline(Guid id) => Ok(await mediator.Send(new GetTicketAuditTimelineQuery(id)));
+    public async Task<IActionResult> GetAuditTimeline(Guid id)
+    {
+        var result = await mediator.Send(new GetTicketAuditTimelineQuery(id));
+        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+    }
 
     // ── SLA Details ──────────────────────────────────────────────────────
 
