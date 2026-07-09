@@ -6,6 +6,7 @@ using Discovery.Core.Cqrs.AgentAuth.Hardware;
 using Discovery.Core.Cqrs.AgentAuth.Knowledge;
 using Discovery.Core.Cqrs.AgentAuth.MeshCentral;
 using Discovery.Core.Cqrs.AgentAuth.Misc;
+using Discovery.Core.Cqrs.AgentAuth.P2P;
 using Discovery.Core.Cqrs.AgentAuth.Software;
 using Discovery.Core.Cqrs.AgentAuth.Status;
 using Discovery.Core.Cqrs.AgentAuth.Tickets;
@@ -66,7 +67,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAgentHardwareQuery()), Ok);
+        return MapResult(await _mediator.Send(new GetAgentHardwareQuery(id)), Ok);
     }
 
     [HttpPost("me/hardware")]
@@ -75,7 +76,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, true);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd), _ => Ok());
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }), _ => Ok());
     }
 
     [HttpPut("me/hardware")]
@@ -89,7 +90,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAgentSoftwareQuery()), Ok);
+        return MapResult(await _mediator.Send(new GetAgentSoftwareQuery(id)), Ok);
     }
 
     [HttpPost("me/software")]
@@ -98,7 +99,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, true);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd), _ => Ok(new { Message = "Software inventory updated." }));
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }), _ => Ok(new { Message = "Software inventory updated." }));
     }
 
     [HttpPut("me/software")]
@@ -121,7 +122,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd, ct), Ok);
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), Ok);
     }
 
     [HttpGet("me/commands")]
@@ -130,7 +131,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAgentCommandsQuery(limit)), Ok);
+        return MapResult(await _mediator.Send(new GetAgentCommandsQuery(id, limit)), Ok);
     }
 
     [HttpPost("me/automation/executions/{commandId:guid}/ack")]
@@ -139,7 +140,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { CommandId = commandId }), _ => Ok(new { acknowledged = true, commandId }));
+        return MapResult(await _mediator.Send(cmd with { AgentId = id, CommandId = commandId }), _ => Ok(new { acknowledged = true, commandId }));
     }
 
     [HttpPost("me/automation/executions/{commandId:guid}/result")]
@@ -148,7 +149,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { CommandId = commandId }), _ => Ok(new { completed = true, commandId }));
+        return MapResult(await _mediator.Send(cmd with { AgentId = id, CommandId = commandId }), _ => Ok(new { completed = true, commandId }));
     }
 
     // ── Configuration ─────────────────────────────────────────────────────
@@ -159,7 +160,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, true);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAgentConfigurationQuery()), Ok);
+        return MapResult(await _mediator.Send(new GetAgentConfigurationQuery(id)), Ok);
     }
 
     [HttpPost("me/tls-mismatch")]
@@ -175,7 +176,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAgentSyncManifestQuery(), ct), Ok);
+        return MapResult(await _mediator.Send(new GetAgentSyncManifestQuery(id), ct), Ok);
     }
 
     // ── Tickets ───────────────────────────────────────────────────────────
@@ -186,7 +187,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetMyTicketsQuery(workflowStateId)), Ok);
+        return MapResult(await _mediator.Send(new GetMyTicketsQuery(id, workflowStateId)), Ok);
     }
 
     [HttpGet("me/tickets/{ticketId:guid}")]
@@ -195,7 +196,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetMyTicketQuery(ticketId)), Ok);
+        return MapResult(await _mediator.Send(new GetMyTicketQuery(id, ticketId)), Ok);
     }
 
     [HttpPost("me/tickets")]
@@ -204,7 +205,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd), dto => CreatedAtAction(nameof(GetMyTicket), new { ticketId = (dto as dynamic)?.Id }, dto));
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }), dto => CreatedAtAction(nameof(GetMyTicket), new { ticketId = (dto as dynamic)?.Id }, dto));
     }
 
     [HttpPost("me/tickets/{ticketId:guid}/comments")]
@@ -213,7 +214,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { TicketId = ticketId }), Ok);
+        return MapResult(await _mediator.Send(cmd with { AgentId = id, TicketId = ticketId }), Ok);
     }
 
     [HttpGet("me/tickets/{ticketId:guid}/comments")]
@@ -222,7 +223,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetMyTicketCommentsQuery(ticketId)), Ok);
+        return MapResult(await _mediator.Send(new GetMyTicketCommentsQuery(id, ticketId)), Ok);
     }
 
     [HttpPatch("me/tickets/{ticketId:guid}/workflow-state")]
@@ -231,7 +232,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { TicketId = ticketId }), Ok);
+        return MapResult(await _mediator.Send(cmd with { AgentId = id, TicketId = ticketId }), Ok);
     }
 
     [HttpPost("me/tickets/{ticketId:guid}/close")]
@@ -240,7 +241,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { TicketId = ticketId }), Ok);
+        return MapResult(await _mediator.Send(cmd with { AgentId = id, TicketId = ticketId }), Ok);
     }
 
     // ── MeshCentral ───────────────────────────────────────────────────────
@@ -251,7 +252,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd), Ok);
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }), Ok);
     }
 
     [HttpGet("me/support/meshcentral/install")]
@@ -260,18 +261,29 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetMeshCentralInstallQuery()), Ok);
+        return MapResult(await _mediator.Send(new GetMeshCentralInstallQuery(id)), Ok);
+    }
+
+    // ── P2P ───────────────────────────────────────────────────────────────
+
+    [HttpGet("me/p2p/seed-plan")]
+    public async Task<IActionResult> GetP2pSeedPlan(CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(new GetAgentP2pSeedPlanQuery(id), ct), Ok);
     }
 
     // ── Knowledge ─────────────────────────────────────────────────────────
 
     [HttpGet("knowledge")]
-    public async Task<IActionResult> GetKnowledgeArticles(CancellationToken ct)
+    public async Task<IActionResult> GetKnowledgeArticles([FromQuery] string? category = null, CancellationToken ct = default)
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetKnowledgeArticlesQuery(), ct), Ok);
+        return MapResult(await _mediator.Send(new GetKnowledgeArticlesQuery(id, category), ct), Ok);
     }
 
     [HttpGet("knowledge/{articleId:guid}")]
@@ -280,7 +292,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetKnowledgeArticleQuery(articleId), ct), Ok);
+        return MapResult(await _mediator.Send(new GetKnowledgeArticleQuery(id, articleId), ct), Ok);
     }
 
     // ── Misc ──────────────────────────────────────────────────────────────
@@ -291,7 +303,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, true);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAgentIdentityQuery()), Ok);
+        return MapResult(await _mediator.Send(new GetAgentIdentityQuery(id)), Ok);
     }
 
     [HttpGet("me/app-store")]
@@ -300,7 +312,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAppStoreEffectiveQuery(installationType), ct), Ok);
+        return MapResult(await _mediator.Send(new GetAppStoreEffectiveQuery(id, installationType), ct), Ok);
     }
 
     [HttpGet("me/custom-fields/runtime")]
@@ -309,7 +321,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetRuntimeCustomFieldsQuery(taskId, scriptId), ct), Ok);
+        return MapResult(await _mediator.Send(new GetRuntimeCustomFieldsQuery(id, taskId, scriptId), ct), Ok);
     }
 
     [HttpPost("me/custom-fields/collected")]
@@ -318,7 +330,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd, ct), Ok);
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), Ok);
     }
 
     [HttpPost("me/zero-touch/deploy-token")]
@@ -327,7 +339,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new IssueZeroTouchDeployTokenCommand()), Ok);
+        return MapResult(await _mediator.Send(new IssueZeroTouchDeployTokenCommand(id)), Ok);
     }
 
     [HttpGet("me/update/manifest")]
@@ -338,7 +350,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAgentUpdateManifestQuery(currentVersion, platform, architecture, artifactType), ct), Ok);
+        return MapResult(await _mediator.Send(new GetAgentUpdateManifestQuery(id, currentVersion, platform, architecture, artifactType), ct), Ok);
     }
 
     [HttpGet("me/update/download")]
@@ -350,7 +362,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new DownloadAgentUpdateQuery(releaseId, version, platform, architecture, artifactType), ct), Ok);
+        return MapResult(await _mediator.Send(new DownloadAgentUpdateQuery(id, releaseId, version, platform, architecture, artifactType), ct), Ok);
     }
 
     [HttpPost("me/update/report")]
@@ -359,7 +371,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd, ct), Ok);
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), Ok);
     }
 
     // ── AI Chat ───────────────────────────────────────────────────────────
@@ -370,7 +382,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd, ct), Ok);
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), Ok);
     }
 
     [HttpPost("me/ai-chat/async")]
@@ -379,7 +391,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd, ct), dto => Accepted(dto));
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), dto => Accepted(dto));
     }
 
     [HttpPost("me/ai-chat/stream")]
@@ -437,6 +449,6 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAiChatJobQuery(jobId), ct), Ok);
+        return MapResult(await _mediator.Send(new GetAiChatJobQuery(id, jobId), ct), Ok);
     }
 }

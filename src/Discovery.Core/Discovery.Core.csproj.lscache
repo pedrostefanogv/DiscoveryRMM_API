@@ -74,6 +74,7 @@ Cqrs/AgentAuth/
  Knowledge/AgentKnowledgeCommands.cs
  MeshCentral/AgentMeshCentralCommands.cs
  Misc/AgentMiscCommands.cs
+ P2P/AgentP2pCommands.cs
  Software/AgentSoftwareCommands.cs
  Status/AgentStatusCommands.cs
  Tickets/AgentTicketCommands.cs

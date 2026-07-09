@@ -58,9 +58,11 @@ Cqrs/AgentAuth/Handlers/
  AgentAiChatHandlers.cs
  AgentAutomationHandlers.cs
  AgentConfigurationHandlers.cs
+ AgentHardwareHandlers.cs
  AgentKnowledgeHandlers.cs
  AgentMeshCentralHandlers.cs
  AgentMiscHandlers.cs
+ AgentP2pHandlers.cs
  AgentSoftwareHandlers.cs
  AgentStatusHandlers.cs
  AgentTicketHandlers.cs

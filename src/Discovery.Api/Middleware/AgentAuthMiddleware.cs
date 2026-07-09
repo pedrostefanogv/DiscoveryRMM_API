@@ -1,25 +1,35 @@
 using Discovery.Core.Interfaces;
+using Microsoft.Extensions.Configuration;
 
 namespace Discovery.Api.Middleware;
 
 /// <summary>
 /// Middleware que valida tokens de agent para endpoints protegidos.
 /// Espera header: Authorization: Bearer mdz_... (para /api/agent-auth/)
+///
+/// O prefixo pode ser configurado via appsettings.json:
+///   "AgentAuth": { "PathPrefix": "/api/v2/agent-auth" }
+/// O default é "/api/v1/agent-auth".
 /// </summary>
 public class AgentAuthMiddleware
 {
     private readonly RequestDelegate _next;
-    private const string AgentAuthPathPrefix = "/api/v1/agent-auth";
+    private readonly string _agentAuthPathPrefix;
     private const string AgentIdHeader = "X-Agent-ID";
+    private const string DefaultPathPrefix = "/api/v1/agent-auth";
 
-    public AgentAuthMiddleware(RequestDelegate next) => _next = next;
+    public AgentAuthMiddleware(RequestDelegate next, IConfiguration configuration)
+    {
+        _next = next;
+        _agentAuthPathPrefix = configuration.GetValue<string>("AgentAuth:PathPrefix") ?? DefaultPathPrefix;
+    }
 
     public async Task InvokeAsync(
         HttpContext context,
         IAgentAuthService authService)
     {
         var path = context.Request.Path;
-        var isAgentApi = path.StartsWithSegments(AgentAuthPathPrefix);
+        var isAgentApi = path.StartsWithSegments(_agentAuthPathPrefix);
 
         if (!isAgentApi)
         {
