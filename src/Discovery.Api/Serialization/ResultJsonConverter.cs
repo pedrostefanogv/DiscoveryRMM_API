@@ -58,7 +58,7 @@ internal sealed class ResultJsonConverter<T> : JsonConverter<Core.Cqrs.Result<T>
         var fallback = JsonSerializer.Deserialize<T>(ref reader, options);
         return fallback is not null
             ? Core.Cqrs.Result<T>.Success(fallback)
-            : Core.Cqrs.Result<T>.Failure(new Core.Cqrs.Error("Deserialization", "Could not deserialize result."));
+            : Core.Cqrs.Result<T>.Failure(Core.Cqrs.Error.Internal("Could not deserialize result."));
     }
 
     public override void Write(Utf8JsonWriter writer, Core.Cqrs.Result<T> result, JsonSerializerOptions options)
