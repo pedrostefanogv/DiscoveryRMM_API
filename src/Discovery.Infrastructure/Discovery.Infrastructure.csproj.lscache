@@ -69,7 +69,9 @@ Cqrs/AgentAuth/Handlers/
 Cqrs/
  AgentDownload/AgentDownloadHandlers.cs
  AgentInstall/AgentInstallHandlers.cs
- AgentLabels/AddAgentLabelCommandHandler.cs
+ AgentLabels/
+  AddAgentLabelCommandHandler.cs
+  AgentLabelQueryHandlers.cs
  AgentP2p/AgentP2pHandlers.cs
  Agents/CommandHandlers/
   AgentAutomationCommandHandlers.cs

@@ -161,7 +161,7 @@ public class LogRepository : ILogRepository
             var allowedSiteIds = query.AllowedSiteIds.Distinct().ToArray();
 
             if (allowedClientIds.Length == 0 && allowedSiteIds.Length == 0)
-                return Enumerable.Empty<LogEntry>().AsQueryable();
+                return _db.Logs.Where(_ => false);
 
             logQuery = logQuery.Where(log =>
                 (log.ClientId.HasValue && allowedClientIds.Contains(log.ClientId.Value)) ||

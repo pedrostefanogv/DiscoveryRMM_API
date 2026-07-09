@@ -17,7 +17,8 @@ public sealed class DashboardEventContractNormalizer
         "AgentHardwareReported",
         "AgentConnected",
         "AgentDisconnected",
-        "AgentTransferred"
+        "AgentTransferred",
+        "LogCreated"
     };
 
     // REMOVE_AFTER_2026-06-01

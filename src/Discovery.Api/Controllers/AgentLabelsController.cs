@@ -16,6 +16,13 @@ public class AgentLabelsController(IMediator mediator) : ControllerBase
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
+    [HttpGet("agents/{agentId:guid}")]
+    public async Task<IActionResult> GetByAgentId(Guid agentId)
+    {
+        var result = await mediator.Send(new ListAgentLabelsQuery(agentId));
+        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
     [HttpPost]
     public async Task<IActionResult> Add([FromBody] AddAgentLabelCommand cmd)
     {

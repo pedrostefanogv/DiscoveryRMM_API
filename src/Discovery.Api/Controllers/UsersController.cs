@@ -59,4 +59,19 @@ public class UsersController(IMediator mediator) : ControllerBase
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
+
+    [HttpGet("me")]
+    public async Task<IActionResult> GetCurrentUser()
+    {
+        if (HttpContext.Items["UserId"] is Guid userId)
+        {
+            var result = await mediator.Send(new GetUserByIdQuery(userId));
+            return result.Match<IActionResult>(
+                success: Ok,
+                failure: errors => errors[0].Code == "NotFound"
+                    ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                    : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        }
+        return Unauthorized(new { error = "Not authenticated." });
+    }
 }
