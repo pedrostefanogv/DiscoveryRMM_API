@@ -59,7 +59,6 @@ AgentPackageStartup.cs
 Controllers/
  AgentAlertsController.cs
  AgentAuth/
-  AgentAuthRequestDtos.cs
   HardwareInventoryParser.cs
   ParseJson.cs
   SoftwareInventoryParser.cs
@@ -155,7 +154,6 @@ Services/
  DatabaseSeeder.cs
  HeartbeatExpiryBackgroundService.cs
  IRemoteDebugSessionManager.cs
- MeshCentralIdentitySyncTriggerService.cs
  NatsAuthCalloutBackgroundService.cs
  NatsAuthCalloutReloadSignal.cs
  NatsBackgroundService.cs

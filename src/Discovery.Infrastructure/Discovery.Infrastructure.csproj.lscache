@@ -326,9 +326,7 @@ Services/
  SoftwareInventoryService.cs
  TicketCommandService.cs
  TicketKpiCacheService.cs
- TicketMergeService.cs
  TicketQueryService.cs
- TicketRelationService.cs
  TicketWorkflowService.cs
  UserAuthService.cs
  UserGroupService.cs

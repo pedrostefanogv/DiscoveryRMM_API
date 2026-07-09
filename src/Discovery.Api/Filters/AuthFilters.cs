@@ -85,41 +85,6 @@ internal class RequireMfaPendingFilter : IAsyncActionFilter
 }
 
 /// <summary>
-/// Garante que o JWT seja um mfaSetupToken (claim mfa_setup=true).
-/// Usado nos endpoints de registro do primeiro fator MFA.
-/// </summary>
-[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
-public class RequireMfaSetupAttribute : Attribute, IFilterFactory
-{
-    public bool IsReusable => false;
-
-    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
-        => new RequireMfaSetupFilter();
-}
-
-internal class RequireMfaSetupFilter : IAsyncActionFilter
-{
-    public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
-    {
-        var items = context.HttpContext.Items;
-
-        if (items["UserId"] is not Guid)
-        {
-            context.Result = new UnauthorizedObjectResult(new { message = "Token de setup MFA necessário." });
-            return;
-        }
-
-        if (items["MfaSetup"] is not true)
-        {
-            context.Result = new UnauthorizedObjectResult(new { message = "Este endpoint requer um token mfa_setup." });
-            return;
-        }
-
-        await next();
-    }
-}
-
-/// <summary>
 /// Garante que o JWT seja um mfaSetupToken OU uma sessão completa.
 /// Usado nos endpoints de adição de nova chave MFA (tanto setup inicial quanto adição posterior).
 /// </summary>
