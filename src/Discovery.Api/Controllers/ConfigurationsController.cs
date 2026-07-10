@@ -95,6 +95,17 @@ public class ConfigurationsController(IMediator mediator) : ControllerBase
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
+    /// <summary>
+    /// Obtém as configurações globais de anexos de tickets (habilitado, tamanho máximo, tipos permitidos).
+    /// </summary>
+    [HttpGet("server/ticket-attachments")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    public async Task<IActionResult> GetTicketAttachmentSettings()
+    {
+        var result = await mediator.Send(new GetTicketAttachmentSettingsQuery());
+        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
     // ── Clients ────────────────────────────────────────────────────────
 
     [HttpGet("clients/{clientId:guid}")]
@@ -169,6 +180,17 @@ public class ConfigurationsController(IMediator mediator) : ControllerBase
     {
         await mediator.Send(new DeleteSiteConfigCommand(siteId));
         return NoContent();
+    }
+
+    /// <summary>
+    /// Resolve a configuração efetiva (merged: server → client → site) para um site específico.
+    /// </summary>
+    [HttpGet("sites/{siteId:guid}/effective")]
+    [RequirePermission(ResourceType.SiteConfig, ActionType.View)]
+    public async Task<IActionResult> GetSiteEffective(Guid siteId)
+    {
+        var result = await mediator.Send(new GetSiteEffectiveConfigQuery(siteId));
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
     }
 
     // ── AI ─────────────────────────────────────────────────────────────

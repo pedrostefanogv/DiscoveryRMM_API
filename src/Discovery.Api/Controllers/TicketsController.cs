@@ -201,6 +201,22 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> DeleteKnowledgeLink(Guid id, Guid linkId) { await mediator.Send(new DeleteTicketKnowledgeLinkCommand(linkId)); return NoContent(); }
 
+    // ── Attachments ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lista anexos de um ticket com paginação por cursor.
+    /// </summary>
+    [HttpGet("{id:guid}/attachments")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> GetAttachments(
+        Guid id,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50)
+    {
+        var result = await mediator.Send(new GetTicketAttachmentsQuery(id, cursor, limit));
+        return result.ToActionResult();
+    }
+
     // ── Audit Timeline ───────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/audit/timeline")]

@@ -146,6 +146,7 @@ Cqrs/
   TicketSubResourceCommandHandlers.cs
  Tickets/
   EventHandlers/TicketEventHandlers.cs
+  GetTicketAttachmentsQueryHandler.cs
   QueryHandlers/
    TicketAlertRuleQueryHandlers.cs
    TicketQueryHandlers.cs

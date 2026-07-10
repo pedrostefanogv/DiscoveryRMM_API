@@ -5,6 +5,7 @@ using Discovery.Core.Cqrs.Configurations.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
+using Discovery.Core.ValueObjects;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Configurations;
@@ -189,5 +190,28 @@ public sealed class TestNatsConnectionCommandHandler(INatsConnectionValidator va
     {
         var (ok, errors) = await validator.ValidateConnectionAsync(cmd.Url, cmd.User, cmd.Password, ct);
         return Result<NatsConnectionTestResult>.Success(new NatsConnectionTestResult(ok, errors));
+    }
+}
+
+// ── Effective Config / Ticket Attachments ──────────────────────────
+
+public sealed class GetSiteEffectiveConfigQueryHandler(IConfigurationResolver resolver)
+    : IRequestHandler<GetSiteEffectiveConfigQuery, Result<ResolvedConfiguration>>
+{
+    public async Task<Result<ResolvedConfiguration>> Handle(GetSiteEffectiveConfigQuery q, CancellationToken ct)
+    {
+        var resolved = await resolver.ResolveForSiteAsync(q.SiteId);
+        return Result<ResolvedConfiguration>.Success(resolved);
+    }
+}
+
+public sealed class GetTicketAttachmentSettingsQueryHandler(IConfigurationService config)
+    : IRequestHandler<GetTicketAttachmentSettingsQuery, Result<TicketAttachmentSettings>>
+{
+    public async Task<Result<TicketAttachmentSettings>> Handle(GetTicketAttachmentSettingsQuery q, CancellationToken ct)
+    {
+        var server = await config.GetServerConfigAsync();
+        var settings = TicketAttachmentSettings.FromJson(server.TicketAttachmentSettingsJson);
+        return Result<TicketAttachmentSettings>.Success(settings);
     }
 }

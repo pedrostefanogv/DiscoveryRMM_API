@@ -197,6 +197,7 @@ Cqrs/
   Dtos/TicketDetailDto.cs
   Events/TicketEvents.cs
   Queries/
+   GetTicketAttachmentsQuery.cs
    GetTicketByIdQuery.cs
    GetTicketCommentsQuery.cs
    GetTicketSlaStatusQuery.cs
