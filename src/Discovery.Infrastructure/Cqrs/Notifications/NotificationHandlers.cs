@@ -28,7 +28,20 @@ public sealed class MarkNotificationReadCommandHandler(
 {
     public async Task<Result<VoidResult>> Handle(MarkNotificationReadCommand cmd, CancellationToken ct)
     {
-        var ok = await service.MarkAsReadAsync(cmd.Id, cmd.RecipientUserId);
+        var ok = await service.MarkAsReadAsync(cmd.Id, cmd.RecipientUserId, cmd.RecipientAgentId);
+        return ok
+            ? Result<VoidResult>.Success(VoidResult.Value)
+            : Result<VoidResult>.Failure(Error.NotFound($"Notification {cmd.Id} not found"));
+    }
+}
+
+public sealed class DeleteNotificationCommandHandler(
+    INotificationService service
+) : IRequestHandler<DeleteNotificationCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(DeleteNotificationCommand cmd, CancellationToken ct)
+    {
+        var ok = await service.DeleteAsync(cmd.Id, cmd.RecipientUserId, cmd.RecipientAgentId);
         return ok
             ? Result<VoidResult>.Success(VoidResult.Value)
             : Result<VoidResult>.Failure(Error.NotFound($"Notification {cmd.Id} not found"));

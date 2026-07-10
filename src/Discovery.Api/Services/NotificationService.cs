@@ -168,4 +168,7 @@ public class NotificationService : INotificationService
 
     public Task<bool> MarkAsReadAsync(Guid id, Guid? recipientUserId = null, Guid? recipientAgentId = null, string? recipientKey = null)
         => _repository.MarkAsReadAsync(id, recipientUserId, recipientAgentId, recipientKey);
+
+    public Task<bool> DeleteAsync(Guid id, Guid? recipientUserId = null, Guid? recipientAgentId = null)
+        => _repository.DeleteAsync(id, recipientUserId, recipientAgentId);
 }

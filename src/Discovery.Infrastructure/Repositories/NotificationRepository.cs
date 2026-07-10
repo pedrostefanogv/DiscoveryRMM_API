@@ -79,4 +79,23 @@ public class NotificationRepository : INotificationRepository
 
         return true;
     }
+
+    public async Task<bool> DeleteAsync(Guid id, Guid? recipientUserId = null, Guid? recipientAgentId = null)
+    {
+        var query = _db.AppNotifications.Where(notification => notification.Id == id);
+
+        if (recipientUserId.HasValue)
+            query = query.Where(notification => notification.RecipientUserId == recipientUserId.Value);
+
+        if (recipientAgentId.HasValue)
+            query = query.Where(notification => notification.RecipientAgentId == recipientAgentId.Value);
+
+        var notification = await query.FirstOrDefaultAsync();
+        if (notification is null)
+            return false;
+
+        _db.AppNotifications.Remove(notification);
+        await _db.SaveChangesAsync();
+        return true;
+    }
 }
