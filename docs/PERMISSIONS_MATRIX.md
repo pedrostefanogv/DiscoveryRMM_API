@@ -216,13 +216,13 @@
 ### Custom Fields
 | Endpoint | Permissão | Scope |
 |---|---|---|
-| `GET /api/v1/custom-fields/definitions` | `ServerConfig.View` | G |
-| `GET /api/v1/custom-fields/definitions/{id}` | `ServerConfig.View` | G |
-| `POST /api/v1/custom-fields/definitions` | `ServerConfig.Create` | G |
-| `PUT /api/v1/custom-fields/definitions/{id}` | `ServerConfig.Edit` | G |
-| `DELETE /api/v1/custom-fields/definitions/{id}` | `ServerConfig.Delete` | G |
+| `GET /api/v1/custom-fields` | `ServerConfig.View` | G |
+| `GET /api/v1/custom-fields/{id}` | `ServerConfig.View` | G |
+| `POST /api/v1/custom-fields` | `ServerConfig.Create` | G |
+| `PUT /api/v1/custom-fields/{id}` | `ServerConfig.Edit` | G |
+| `DELETE /api/v1/custom-fields/{id}` | `ServerConfig.Delete` | G |
 | `GET /api/v1/custom-fields/values/{scopeType}` | `ServerConfig.View` | G |
-| `GET /api/v1/custom-fields/schema/{scopeType}` | `ServerConfig.View` | G |
+| `PUT /api/v1/custom-fields/values/{definitionId}` | `ServerConfig.Edit` | G |
 
 ### Auto Ticket Rules
 | Endpoint | Permissão | Scope |
