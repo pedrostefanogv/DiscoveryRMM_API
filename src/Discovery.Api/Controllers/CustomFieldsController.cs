@@ -25,6 +25,18 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
+    [HttpGet("values/{scopeType}")]
+    public async Task<IActionResult> GetValues(
+        string scopeType,
+        [FromQuery] Guid? entityId = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        [FromQuery] bool includeSecrets = true)
+    {
+        var result = await mediator.Send(new ListCustomFieldValuesQuery(scopeType, entityId, cursor, limit, includeSecrets));
+        return result.ToActionResult();
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateCustomFieldCommand cmd)
     {
@@ -37,6 +49,13 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     {
         var result = await mediator.Send(cmd with { Id = id });
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    [HttpPut("values/{definitionId:guid}")]
+    public async Task<IActionResult> UpsertValue(Guid definitionId, [FromBody] UpsertCustomFieldValueCommand cmd)
+    {
+        var result = await mediator.Send(cmd with { DefinitionId = definitionId });
+        return result.ToActionResult();
     }
 
     [HttpDelete("{id:guid}")]

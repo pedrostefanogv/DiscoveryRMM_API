@@ -240,6 +240,87 @@ public class CustomFieldService : ICustomFieldService
         return result;
     }
 
+    public async Task<CursorPageDto<CustomFieldResolvedValueDto>> GetValuesPageAsync(
+        CustomFieldScopeType scopeType,
+        Guid? entityId,
+        string? cursor,
+        int limit,
+        bool includeSecrets = true,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateScopeEntity(scopeType, entityId);
+
+        var safeLimit = Math.Clamp(limit, 1, 200);
+        var entityKey = BuildEntityKey(scopeType, entityId);
+
+        // Query definitions with cursor-based pagination on UpdatedAt + Id
+        var definitionsQuery = _db.CustomFieldDefinitions
+            .AsNoTracking()
+            .Where(d => d.ScopeType == scopeType && d.IsActive);
+
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorUpdatedAtUtc, out var cursorId))
+        {
+            definitionsQuery = CursorPaginationHelper.ApplyCreatedAtCursor(
+                definitionsQuery, cursorUpdatedAtUtc, cursorId,
+                d => d.UpdatedAt, d => d.Id);
+        }
+
+        var definitions = await definitionsQuery
+            .OrderByDescending(d => d.UpdatedAt)
+            .ThenByDescending(d => d.Id)
+            .Take(safeLimit + 1)
+            .ToListAsync(cancellationToken);
+
+        var slice = CursorPaginationHelper.SlicePage(definitions, safeLimit);
+
+        // Fetch values for the paginated definitions
+        var definitionIds = slice.Page.Select(d => d.Id).ToList();
+        var values = await _db.CustomFieldValues
+            .AsNoTracking()
+            .Where(v => definitionIds.Contains(v.DefinitionId) && v.EntityKey == entityKey)
+            .ToDictionaryAsync(v => v.DefinitionId, cancellationToken);
+
+        // Resolve DTOs
+        var items = new List<CustomFieldResolvedValueDto>(slice.Page.Count);
+        foreach (var definition in slice.Page)
+        {
+            if (!values.TryGetValue(definition.Id, out var value))
+            {
+                items.Add(new CustomFieldResolvedValueDto(
+                    definition.Id,
+                    definition.Name,
+                    definition.Label,
+                    scopeType,
+                    entityId,
+                    "null",
+                    definition.UpdatedAt,
+                    definition.IsSecret));
+                continue;
+            }
+
+            var outputJson = includeSecrets || !definition.IsSecret ? value.ValueJson : JsonSerializer.Serialize("***", JsonOptions);
+            items.Add(new CustomFieldResolvedValueDto(
+                definition.Id,
+                definition.Name,
+                definition.Label,
+                scopeType,
+                entityId,
+                outputJson,
+                value.UpdatedAt,
+                definition.IsSecret));
+        }
+
+        return new CursorPageDto<CustomFieldResolvedValueDto>(
+            items.AsReadOnly(),
+            items.Count,
+            cursor,
+            slice.HasMore && slice.LastItem is not null
+                ? CursorPaginationHelper.EncodeCreatedAtCursor(slice.LastItem.UpdatedAt, slice.LastItem.Id)
+                : null,
+            slice.HasMore,
+            safeLimit);
+    }
+
     public async Task<IReadOnlyList<CustomFieldSchemaItemDto>> GetSchemaAsync(
         CustomFieldScopeType scopeType,
         Guid? entityId,

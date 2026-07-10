@@ -13,6 +13,7 @@ public interface ICustomFieldService
     Task<bool> DeactivateDefinitionAsync(Guid id, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<CustomFieldResolvedValueDto>> GetValuesAsync(CustomFieldScopeType scopeType, Guid? entityId, bool includeSecrets = true, CancellationToken cancellationToken = default);
+    Task<CursorPageDto<CustomFieldResolvedValueDto>> GetValuesPageAsync(CustomFieldScopeType scopeType, Guid? entityId, string? cursor, int limit, bool includeSecrets = true, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<CustomFieldSchemaItemDto>> GetSchemaAsync(CustomFieldScopeType scopeType, Guid? entityId, bool includeInactive = false, bool includeSecrets = true, CancellationToken cancellationToken = default);
     Task<CustomFieldResolvedValueDto> UpsertValueAsync(UpsertCustomFieldValueInput input, CancellationToken cancellationToken = default);
 

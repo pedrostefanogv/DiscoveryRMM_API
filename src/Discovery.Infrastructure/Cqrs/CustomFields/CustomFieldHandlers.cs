@@ -63,3 +63,28 @@ public sealed class DeactivateCustomFieldCommandHandler(ICustomFieldService svc)
         return ok ? Result<VoidResult>.Success(VoidResult.Value) : Result<VoidResult>.Failure(Error.NotFound($"CustomField {cmd.Id} not found"));
     }
 }
+
+public sealed class ListCustomFieldValuesQueryHandler(ICustomFieldService svc) : IRequestHandler<ListCustomFieldValuesQuery, Result<CursorPageDto<CustomFieldResolvedValueDto>>>
+{
+    public async Task<Result<CursorPageDto<CustomFieldResolvedValueDto>>> Handle(ListCustomFieldValuesQuery q, CancellationToken ct)
+    {
+        if (!Enum.TryParse<CustomFieldScopeType>(q.ScopeType, true, out var scopeType))
+            return Result<CursorPageDto<CustomFieldResolvedValueDto>>.Failure(Error.Validation("scopeType", $"Invalid scopeType: {q.ScopeType}"));
+
+        var page = await svc.GetValuesPageAsync(scopeType, q.EntityId, q.Cursor, q.Limit, q.IncludeSecrets, ct);
+        return Result<CursorPageDto<CustomFieldResolvedValueDto>>.Success(page);
+    }
+}
+
+public sealed class UpsertCustomFieldValueCommandHandler(ICustomFieldService svc) : IRequestHandler<UpsertCustomFieldValueCommand, Result<CustomFieldResolvedValueDto>>
+{
+    public async Task<Result<CustomFieldResolvedValueDto>> Handle(UpsertCustomFieldValueCommand cmd, CancellationToken ct)
+    {
+        if (!Enum.TryParse<CustomFieldScopeType>(cmd.ScopeType, true, out var scopeType))
+            return Result<CustomFieldResolvedValueDto>.Failure(Error.Validation("scopeType", $"Invalid scopeType: {cmd.ScopeType}"));
+
+        var input = new UpsertCustomFieldValueInput(cmd.DefinitionId, scopeType, cmd.EntityId, cmd.ValueJson, cmd.UpdatedBy);
+        var result = await svc.UpsertValueAsync(input, ct);
+        return Result<CustomFieldResolvedValueDto>.Success(result);
+    }
+}
