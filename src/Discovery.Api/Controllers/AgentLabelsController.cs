@@ -80,4 +80,12 @@ public class AgentLabelsController(IMediator mediator) : ControllerBase
         var result = await mediator.Send(new DeleteLabelRuleCommand(id));
         return result.Match<IActionResult>(success: _ => NoContent(), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
+
+    /// <summary>Lists available Agent-scoped custom fields usable in label rule expressions.</summary>
+    [HttpGet("rules/available-custom-fields")]
+    public async Task<IActionResult> GetAvailableCustomFields()
+    {
+        var result = await mediator.Send(new GetAvailableCustomFieldsQuery());
+        return result.ToActionResult();
+    }
 }

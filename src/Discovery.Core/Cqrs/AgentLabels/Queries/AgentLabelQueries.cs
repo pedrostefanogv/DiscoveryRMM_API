@@ -7,3 +7,8 @@ public sealed record ListAgentLabelsQuery(Guid? AgentId) : IQuery<Result<IReadOn
 public sealed record ListLabelRulesQuery(bool IncludeDisabled = true) : IQuery<Result<IReadOnlyList<LabelRuleDto>>>;
 public sealed record GetLabelRuleByIdQuery(Guid Id) : IQuery<Result<LabelRuleDto>>;
 public sealed record GetDistinctLabelsQuery : IQuery<Result<IReadOnlyList<string>>>;
+public sealed record GetAvailableCustomFieldsQuery : IQuery<Result<IReadOnlyList<AvailableCustomFieldDto>>>;
+
+public sealed record AvailableCustomFieldDto(
+    Guid Id, string Name, string FieldType, string? Description
+);

@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.Cqrs.AgentLabels.Queries;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using MediatR;
 
@@ -39,5 +40,49 @@ public sealed class RemoveAgentLabelCommandHandler(ILabelService svc)
     {
         await svc.DeleteAsync(cmd.LabelId, ct);
         return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
+public sealed class ListLabelRulesQueryHandler(ILabelService svc)
+    : IRequestHandler<ListLabelRulesQuery, Result<IReadOnlyList<LabelRuleDto>>>
+{
+    public async Task<Result<IReadOnlyList<LabelRuleDto>>> Handle(ListLabelRulesQuery q, CancellationToken ct)
+    {
+        var rules = await svc.GetRulesAsync(q.IncludeDisabled, ct);
+        var dtos = rules.Select(r => new LabelRuleDto(
+            r.Id, r.Name, r.Label, r.Description, r.IsEnabled,
+            r.ApplyMode.ToString(), r.ExpressionJson,
+            r.CreatedBy, r.CreatedAt, r.UpdatedAt
+        )).ToList().AsReadOnly();
+        return Result<IReadOnlyList<LabelRuleDto>>.Success(dtos);
+    }
+}
+
+public sealed class GetLabelRuleByIdQueryHandler(ILabelService svc)
+    : IRequestHandler<GetLabelRuleByIdQuery, Result<LabelRuleDto>>
+{
+    public async Task<Result<LabelRuleDto>> Handle(GetLabelRuleByIdQuery q, CancellationToken ct)
+    {
+        var rule = await svc.GetRuleByIdAsync(q.Id, ct);
+        if (rule is null)
+            return Result<LabelRuleDto>.Failure(Error.NotFound($"Label rule {q.Id} not found"));
+
+        return Result<LabelRuleDto>.Success(new LabelRuleDto(
+            rule.Id, rule.Name, rule.Label, rule.Description, rule.IsEnabled,
+            rule.ApplyMode.ToString(), rule.ExpressionJson,
+            rule.CreatedBy, rule.CreatedAt, rule.UpdatedAt));
+    }
+}
+
+public sealed class GetAvailableCustomFieldsQueryHandler(ICustomFieldService svc)
+    : IRequestHandler<GetAvailableCustomFieldsQuery, Result<IReadOnlyList<AvailableCustomFieldDto>>>
+{
+    public async Task<Result<IReadOnlyList<AvailableCustomFieldDto>>> Handle(GetAvailableCustomFieldsQuery q, CancellationToken ct)
+    {
+        var definitions = await svc.GetDefinitionsAsync(CustomFieldScopeType.Agent, includeInactive: false, ct);
+        var dtos = definitions.Select(d => new AvailableCustomFieldDto(
+            d.Id, d.Name, d.DataType.ToString(), d.Description
+        )).ToList().AsReadOnly();
+        return Result<IReadOnlyList<AvailableCustomFieldDto>>.Success(dtos);
     }
 }
