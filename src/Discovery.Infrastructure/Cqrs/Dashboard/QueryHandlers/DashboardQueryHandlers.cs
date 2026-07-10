@@ -20,6 +20,8 @@ public sealed class GetGlobalSummaryQueryHandler(IDashboardService svc)
     internal static CqrsDto Map(LegacyDto d) => new(
         new DashboardScopeDto(d.Scope.Level, d.Scope.ClientId, d.Scope.SiteId),
         new DashboardPeriodDto(d.Period.FromUtc, d.Period.ToUtc, d.Period.WindowHours),
+        new DashboardClientsSummaryDto(d.Clients.Total, d.Clients.Active),
+        new DashboardSitesSummaryDto(d.Sites.Total),
         new DashboardAgentsSummaryDto(d.Agents.Total, d.Agents.Online, d.Agents.Offline, d.Agents.Stale, d.Agents.Maintenance, d.Agents.Error, d.Agents.OnlineGraceSeconds),
         new DashboardCommandsSummaryDto(d.Commands.Total, d.Commands.Pending, d.Commands.Sent, d.Commands.Running, d.Commands.Completed, d.Commands.Failed, d.Commands.SuccessRate),
         new DashboardTicketsSummaryDto(d.Tickets.Total, d.Tickets.Open, d.Tickets.Closed, d.Tickets.SlaBreachedOpen),

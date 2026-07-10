@@ -166,9 +166,31 @@ public class DashboardService : IDashboardService
         var automationTotal = automationCounts.Values.Sum();
         var automationSuccessRate = CalculateSuccessRate(automationCompleted, automationFailed);
 
+        // ── Clients & Sites counts ────────────────────────────────────
+        var (clientsTotal, clientsActive) = level switch
+        {
+            DashboardScopeLevel.Global => (
+                await _db.Clients.AsNoTracking().CountAsync(cancellationToken),
+                await _db.Clients.AsNoTracking().CountAsync(c => c.IsActive, cancellationToken)),
+            DashboardScopeLevel.Client => (1, 1),
+            DashboardScopeLevel.Site => (1, 1),
+            _ => (0, 0)
+        };
+
+        var sitesTotal = level switch
+        {
+            DashboardScopeLevel.Global => await _db.Sites.AsNoTracking().CountAsync(cancellationToken),
+            DashboardScopeLevel.Client when clientId.HasValue =>
+                await _db.Sites.AsNoTracking().CountAsync(s => s.ClientId == clientId.Value, cancellationToken),
+            DashboardScopeLevel.Site => 1,
+            _ => 0
+        };
+
         return new DashboardSummaryDto(
             Scope: new DashboardScopeDto(level.ToString().ToLowerInvariant(), clientId, siteId),
             Period: new DashboardPeriodDto(windowStartUtc, now, (int)Math.Round(window.TotalHours)),
+            Clients: new DashboardClientsSummaryDto(Total: clientsTotal, Active: clientsActive),
+            Sites: new DashboardSitesSummaryDto(Total: sitesTotal),
             Agents: new DashboardAgentsSummaryDto(
                 Total: agentsTotal,
                 Online: agentsOnline,

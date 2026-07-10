@@ -40,7 +40,8 @@ public sealed record GetSoftwareInventoryScopeSnapshotQuery(
 
 public sealed record SoftwareInventoryListDto(
     IReadOnlyList<SoftwareInventoryItemDto> Items,
-    string? NextCursor
+    string? NextCursor,
+    bool HasMore
 );
 
 public sealed record SoftwareInventoryItemDto(

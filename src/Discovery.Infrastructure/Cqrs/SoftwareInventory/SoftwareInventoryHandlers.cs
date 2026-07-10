@@ -27,10 +27,15 @@ public sealed class ListSoftwareInventoryQueryHandler(ISoftwareInventoryService 
     {
         var (clientId, siteId) = ResolveScope(q.Scope, q.ScopeId);
 
-        var items = await svc.GetInventoryPagedAsync(clientId, siteId, q.Cursor, q.Limit, q.Search, q.Descending, ct);
+        // Fetch limit + 1 to detect hasMore
+        var items = await svc.GetInventoryPagedAsync(clientId, siteId, q.Cursor, q.Limit + 1, q.Search, q.Descending, ct);
+
+        var hasMore = items.Count > q.Limit;
+        if (hasMore)
+            items = items.Take(q.Limit).ToList();
 
         string? nextCursor = null;
-        if (items.Count > 0)
+        if (hasMore && items.Count > 0)
         {
             var last = items[^1];
             nextCursor = CursorPaginationHelper.EncodeGuidCursor(last.InventoryId);
@@ -44,7 +49,7 @@ public sealed class ListSoftwareInventoryQueryHandler(ISoftwareInventoryService 
             i.CollectedAt
         )).ToList().AsReadOnly();
 
-        return Result<SoftwareInventoryListDto>.Success(new SoftwareInventoryListDto(dtos, nextCursor));
+        return Result<SoftwareInventoryListDto>.Success(new SoftwareInventoryListDto(dtos, nextCursor, hasMore));
     }
 
     private static (Guid? clientId, Guid? siteId) ResolveScope(SoftwareInventoryScope scope, Guid? scopeId)

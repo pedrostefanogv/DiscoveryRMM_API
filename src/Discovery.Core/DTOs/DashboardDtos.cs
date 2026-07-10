@@ -3,6 +3,8 @@ namespace Discovery.Core.DTOs;
 public record DashboardSummaryDto(
     DashboardScopeDto Scope,
     DashboardPeriodDto Period,
+    DashboardClientsSummaryDto Clients,
+    DashboardSitesSummaryDto Sites,
     DashboardAgentsSummaryDto Agents,
     DashboardCommandsSummaryDto Commands,
     DashboardTicketsSummaryDto Tickets,
@@ -19,6 +21,13 @@ public record DashboardPeriodDto(
     DateTime FromUtc,
     DateTime ToUtc,
     int WindowHours);
+
+public record DashboardClientsSummaryDto(
+    int Total,
+    int Active);
+
+public record DashboardSitesSummaryDto(
+    int Total);
 
 public record DashboardAgentsSummaryDto(
     int Total,
