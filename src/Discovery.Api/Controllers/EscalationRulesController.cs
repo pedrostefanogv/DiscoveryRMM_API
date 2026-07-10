@@ -18,6 +18,17 @@ public class EscalationRulesController(IMediator mediator) : ControllerBase
         return result.ToActionResult();
     }
 
+    /// <summary>
+    /// Lista regras de escalation pelo perfil de workflow.
+    /// Rota semântica alternativa ao query parameter ?workflowProfileId=.
+    /// </summary>
+    [HttpGet("by-profile/{profileId:guid}")]
+    public async Task<IActionResult> GetByProfile(Guid profileId)
+    {
+        var result = await mediator.Send(new ListEscalationRulesQuery(profileId));
+        return result.ToActionResult();
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
