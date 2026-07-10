@@ -50,6 +50,11 @@ public partial class DiscoveryDbContext
 
             entity.HasIndex(d => d.DepartmentId).HasDatabaseName("ix_custom_field_definitions_department_id");
             entity.HasOne<Department>().WithMany().HasForeignKey(d => d.DepartmentId).OnDelete(DeleteBehavior.Cascade);
+
+            // Propriedades computadas / não mapeadas no banco
+            entity.Ignore(d => d.ClientId);
+            entity.Ignore(d => d.EntityName);
+            entity.Ignore(d => d.ValueType);
         });
 
         modelBuilder.Entity<CustomFieldValue>(entity =>
