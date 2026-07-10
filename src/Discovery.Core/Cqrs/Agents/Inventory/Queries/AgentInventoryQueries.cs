@@ -7,7 +7,26 @@ public sealed record GetAgentHardwareQuery(Guid AgentId) : IQuery<Result<AgentHa
 public sealed record GetAgentSoftwareQuery(Guid AgentId, string? Cursor = null, int Limit = 100, string? Search = null, bool Descending = false) : IQuery<Result<CursorPageDto<AgentSoftwareItemDto>>>;
 public sealed record GetAgentSoftwareSnapshotQuery(Guid AgentId) : IQuery<Result<AgentSoftwareSnapshotDto>>;
 
-public sealed record AgentHardwareDto(string Manufacturer, string Model, string? SerialNumber, string? BiosVersion, int? TotalRamMb, int? CpuCores, string? CpuName, string? OsName, string? OsVersion);
+public sealed record AgentHardwareDto(
+    string Manufacturer,
+    string Model,
+    string? SerialNumber,
+    string? BiosVersion,
+    string? BiosManufacturer,
+    string? BiosDate,
+    long? TotalMemoryBytes,
+    int? ProcessorCores,
+    int? ProcessorThreads,
+    string? Processor,
+    string? ProcessorArchitecture,
+    decimal? ProcessorFrequencyGhz,
+    int? MachineScore,
+    string? GpuModel,
+    long? GpuMemoryBytes,
+    string? OsName,
+    string? OsVersion,
+    string? OsArchitecture
+);
 public sealed record AgentSoftwareItemDto(
     Guid InventoryId,
     string Name,

@@ -27,12 +27,21 @@ public sealed class GetAgentHardwareQueryHandler(
             hardware.Manufacturer ?? string.Empty,
             hardware.Model ?? string.Empty,
             hardware.SerialNumber,
-            null, // BiosVersion
-            null, // TotalRamMb
+            hardware.BiosVersion,
+            hardware.BiosManufacturer,
+            hardware.BiosDate,
+            hardware.TotalMemoryBytes,
             hardware.ProcessorCores,
+            hardware.ProcessorThreads,
             hardware.Processor,
-            null, // OsName
-            null  // OsVersion
+            hardware.ProcessorArchitecture,
+            hardware.ProcessorFrequencyGhz,
+            hardware.MachineScore,
+            hardware.GpuModel,
+            hardware.GpuMemoryBytes,
+            hardware.OsName,
+            hardware.OsVersion,
+            hardware.OsArchitecture
         ));
     }
 }
