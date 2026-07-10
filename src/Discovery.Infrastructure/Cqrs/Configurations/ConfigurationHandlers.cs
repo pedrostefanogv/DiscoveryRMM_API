@@ -19,29 +19,39 @@ public sealed class GetServerConfigQueryHandler(IConfigurationService config)
 }
 
 public sealed class GetClientConfigQueryHandler(IConfigurationService config)
-    : IRequestHandler<GetClientConfigQuery, Result<ClientConfiguration?>>
+    : IRequestHandler<GetClientConfigQuery, Result<ClientConfiguration>>
 {
-    public async Task<Result<ClientConfiguration?>> Handle(GetClientConfigQuery q, CancellationToken ct)
-        => Result<ClientConfiguration?>.Success(await config.GetClientConfigAsync(q.ClientId));
+    public async Task<Result<ClientConfiguration>> Handle(GetClientConfigQuery q, CancellationToken ct)
+    {
+        var c = await config.GetClientConfigAsync(q.ClientId);
+        return c is null
+            ? Result<ClientConfiguration>.Failure(new[] { Error.NotFound($"Client config for {q.ClientId} not found") })
+            : Result<ClientConfiguration>.Success(c);
+    }
 }
 
 public sealed class GetSiteConfigQueryHandler(IConfigurationService config)
-    : IRequestHandler<GetSiteConfigQuery, Result<SiteConfiguration?>>
+    : IRequestHandler<GetSiteConfigQuery, Result<SiteConfiguration>>
 {
-    public async Task<Result<SiteConfiguration?>> Handle(GetSiteConfigQuery q, CancellationToken ct)
-        => Result<SiteConfiguration?>.Success(await config.GetSiteConfigAsync(q.SiteId));
+    public async Task<Result<SiteConfiguration>> Handle(GetSiteConfigQuery q, CancellationToken ct)
+    {
+        var c = await config.GetSiteConfigAsync(q.SiteId);
+        return c is null
+            ? Result<SiteConfiguration>.Failure(new[] { Error.NotFound($"Site config for {q.SiteId} not found") })
+            : Result<SiteConfiguration>.Success(c);
+    }
 }
 
 public sealed class GetServerReportingQueryHandler(IConfigurationService config)
-    : IRequestHandler<GetServerReportingQuery, Result<object?>>
+    : IRequestHandler<GetServerReportingQuery, Result<object>>
 {
-    public async Task<Result<object?>> Handle(GetServerReportingQuery q, CancellationToken ct)
+    public async Task<Result<object>> Handle(GetServerReportingQuery q, CancellationToken ct)
     {
         var c = await config.GetServerConfigAsync();
         var result = string.IsNullOrWhiteSpace(c.ReportingSettingsJson)
-            ? null
-            : JsonSerializer.Deserialize<object>(c.ReportingSettingsJson);
-        return Result<object?>.Success(result);
+            ? new { } as object
+            : JsonSerializer.Deserialize<object>(c.ReportingSettingsJson)!;
+        return Result<object>.Success(result);
     }
 }
 

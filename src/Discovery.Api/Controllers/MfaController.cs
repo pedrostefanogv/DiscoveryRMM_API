@@ -16,4 +16,15 @@ public class MfaController(IMediator mediator) : ControllerBase
         var result = await mediator.Send(new ListMfaKeysQuery(userId));
         return result.ToActionResult();
     }
+
+    [HttpGet("keys")]
+    public async Task<IActionResult> GetMyKeys()
+    {
+        if (HttpContext.Items["UserId"] is Guid userId)
+        {
+            var result = await mediator.Send(new ListMfaKeysQuery(userId));
+            return result.ToActionResult();
+        }
+        return Unauthorized(new { error = "Not authenticated." });
+    }
 }

@@ -58,7 +58,9 @@ public class ConfigurationsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetServerReporting()
     {
         var result = await mediator.Send(new GetServerReportingQuery());
-        return result.Match<IActionResult>(success: value => Ok(value ?? new { }), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: value => Ok(value),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPut("server/reporting")]
@@ -100,7 +102,11 @@ public class ConfigurationsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetClient(Guid clientId)
     {
         var result = await mediator.Send(new GetClientConfigQuery(clientId));
-        return result.Match<IActionResult>(success: c => c is null ? NotFound() : Ok(c), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: c => Ok(c),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPut("clients/{clientId:guid}")]
@@ -134,7 +140,11 @@ public class ConfigurationsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetSite(Guid siteId)
     {
         var result = await mediator.Send(new GetSiteConfigQuery(siteId));
-        return result.Match<IActionResult>(success: c => c is null ? NotFound() : Ok(c), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: c => Ok(c),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPut("sites/{siteId:guid}")]

@@ -25,6 +25,7 @@ public abstract class TicketAiHandlerBase(ITicketRepository ticketRepo, IAiChatS
     protected async Task<Result<T>> ExecutePromptAsync<T>(
         Guid ticketId, string systemPrompt, string userMessage,
         int maxTokens, double temperature, Func<LlmResponse, T> map, CancellationToken ct)
+        where T : notnull
     {
         var (ticket, siteId) = await GetTicketContextAsync(ticketId, ct);
         if (ticket is null)

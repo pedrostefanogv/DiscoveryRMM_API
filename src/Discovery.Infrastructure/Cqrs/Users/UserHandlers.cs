@@ -26,7 +26,10 @@ public sealed class ListUsersQueryHandler(
     }
 
     private static UserDto Map(User u) => new(u.Id, u.Login, u.Email, u.FullName,
-        u.IsActive, u.MfaRequired, u.MfaConfigured, u.CreatedAt, u.LastLoginAt);
+        u.IsActive, u.MfaRequired, u.MfaConfigured,
+        u.MustChangePassword, u.MustChangeProfile,
+        u.FailedLoginAttempts, u.LockoutUntil,
+        u.CreatedAt, u.UpdatedAt, u.LastLoginAt);
 }
 
 public sealed class GetUserByIdQueryHandler(
@@ -40,7 +43,9 @@ public sealed class GetUserByIdQueryHandler(
             ? Result<UserDto>.Failure(Error.NotFound($"User {q.Id} not found"))
             : Result<UserDto>.Success(new UserDto(user.Id, user.Login, user.Email,
                 user.FullName, user.IsActive, user.MfaRequired, user.MfaConfigured,
-                user.CreatedAt, user.LastLoginAt));
+                user.MustChangePassword, user.MustChangeProfile,
+                user.FailedLoginAttempts, user.LockoutUntil,
+                user.CreatedAt, user.UpdatedAt, user.LastLoginAt));
     }
 }
 
@@ -75,7 +80,9 @@ public sealed class CreateUserCommandHandler(
 
         return Result<UserDto>.Success(new UserDto(created.Id, created.Login, created.Email,
             created.FullName, created.IsActive, created.MfaRequired, created.MfaConfigured,
-            created.CreatedAt, created.LastLoginAt));
+            created.MustChangePassword, created.MustChangeProfile,
+            created.FailedLoginAttempts, created.LockoutUntil,
+            created.CreatedAt, created.UpdatedAt, created.LastLoginAt));
     }
 }
 
@@ -99,7 +106,9 @@ public sealed class UpdateUserCommandHandler(
         var updated = await repo.UpdateAsync(user);
         return Result<UserDto>.Success(new UserDto(updated.Id, updated.Login, updated.Email,
             updated.FullName, updated.IsActive, updated.MfaRequired, updated.MfaConfigured,
-            updated.CreatedAt, updated.LastLoginAt));
+            updated.MustChangePassword, updated.MustChangeProfile,
+            updated.FailedLoginAttempts, updated.LockoutUntil,
+            updated.CreatedAt, updated.UpdatedAt, updated.LastLoginAt));
     }
 }
 

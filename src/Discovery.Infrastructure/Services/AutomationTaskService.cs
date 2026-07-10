@@ -401,9 +401,11 @@ public class AutomationTaskService : IAutomationTaskService
             })
             .ToList();
 
+#pragma warning disable CS0618 // TaskId is obsolete — still used in offset-based preview; will be migrated to cursor in v2
         return new AutomationTaskTargetPreviewPageDto
         {
             TaskId = task.Id,
+#pragma warning restore CS0618
             TaskName = task.Name,
             ScopeType = task.ScopeType,
             IncludeTags = includeTags,

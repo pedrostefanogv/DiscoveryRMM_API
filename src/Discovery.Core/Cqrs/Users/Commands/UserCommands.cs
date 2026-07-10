@@ -16,5 +16,7 @@ public sealed record DeleteUserCommand(Guid Id) : ICommand<Result<VoidResult>>;
 public sealed record UserDto(
     Guid Id, string Login, string Email, string FullName,
     bool IsActive, bool MfaRequired, bool MfaConfigured,
-    DateTime CreatedAt, DateTime? LastLoginAt
+    bool MustChangePassword, bool MustChangeProfile,
+    int FailedLoginAttempts, DateTime? LockoutUntil,
+    DateTime CreatedAt, DateTime UpdatedAt, DateTime? LastLoginAt
 );
