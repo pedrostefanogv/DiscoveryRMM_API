@@ -112,7 +112,9 @@ Cqrs/
  ApiTokens/
   Commands/ApiTokenCommands.cs
   Queries/ApiTokenQueries.cs
- AppStore/Queries/AppStoreQueries.cs
+ AppStore/
+  Commands/AppStoreCommands.cs
+  Queries/AppStoreQueries.cs
  Auth/Commands/
   AuthMfaCommands.cs
   PasswordCommands.cs

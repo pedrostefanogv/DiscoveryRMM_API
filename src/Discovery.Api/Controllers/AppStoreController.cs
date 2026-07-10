@@ -1,3 +1,4 @@
+using Discovery.Core.Cqrs.AppStore.Commands;
 using Discovery.Core.Cqrs.AppStore.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
@@ -12,27 +13,68 @@ namespace Discovery.Api.Controllers;
 [Route("api/v{version:apiVersion}/app-store")]
 public class AppStoreController(IMediator mediator) : ControllerBase
 {
+    // ═══════════════════════════════════════════════════════════════
+    // Catalog
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Search/browse catalog by installation type (0=Winget, 1=Chocolatey, 2=Custom).</summary>
     [HttpGet]
-    public async Task<IActionResult> Search([FromQuery] string? search = null, [FromQuery] string? architecture = null, [FromQuery] string? cursor = null, [FromQuery] int limit = 20)
+    public async Task<IActionResult> Search(
+        [FromQuery] int installationType = 0,
+        [FromQuery] string? search = null,
+        [FromQuery] string? architecture = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 20)
     {
-        var result = await mediator.Send(new SearchAppStoreQuery(search, architecture, cursor, limit));
+        var result = await mediator.Send(new SearchAppStoreQuery(
+            (AppInstallationType)installationType, search, architecture, cursor, limit));
         return result.ToActionResult();
     }
 
+    /// <summary>List catalog with pagination by cursor.</summary>
     [HttpGet("catalog")]
-    public async Task<IActionResult> GetCatalog([FromQuery] int installationType = 0, [FromQuery] string? search = null, [FromQuery] string? architecture = null, [FromQuery] string? cursor = null, [FromQuery] int limit = 20)
+    public async Task<IActionResult> GetCatalog(
+        [FromQuery] int installationType = 0,
+        [FromQuery] string? search = null,
+        [FromQuery] string? architecture = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 20)
     {
         var result = await mediator.Send(new GetAppStoreCatalogQuery(installationType, search, architecture, cursor, limit));
         return result.ToActionResult();
     }
 
-    [HttpGet("effective")]
-    public async Task<IActionResult> GetEffective([FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] Guid? agentId = null)
+    /// <summary>Get a single package by ID and installation type.</summary>
+    [HttpGet("catalog/{packageId}")]
+    public async Task<IActionResult> GetPackageById(
+        string packageId,
+        [FromQuery] int installationType = 0)
     {
-        var result = await mediator.Send(new GetAppStoreEffectiveAppsQuery(clientId, siteId, agentId));
-        return result.ToActionResult();
+        var result = await mediator.Send(new GetCatalogPackageByIdQuery(installationType, packageId));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Custom packages (CRUD)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Create or update a custom package (InstallationType=Custom).</summary>
+    [HttpPost("custom")]
+    public async Task<IActionResult> UpsertCustomPackage([FromBody] UpsertCustomAppPackageCommand cmd)
+    {
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Sync
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Sync catalog from Winget (0) or Chocolatey (1). Custom (2) is manual.</summary>
     [HttpPost("sync")]
     public async Task<IActionResult> SyncCatalog([FromQuery] int installationType = 0)
     {
@@ -40,6 +82,28 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         return result.ToActionResult();
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Effective (approved) apps
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Get approved/effective apps for a scope.</summary>
+    [HttpGet("effective")]
+    public async Task<IActionResult> GetEffective(
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] Guid? agentId = null,
+        [FromQuery] int installationType = 0)
+    {
+        var result = await mediator.Send(new GetAppStoreEffectiveAppsQuery(
+            clientId, siteId, agentId, (AppInstallationType)installationType));
+        return result.ToActionResult();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Approval rules
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>List approval rules by scope and installation type.</summary>
     [HttpGet("approvals")]
     public async Task<IActionResult> GetApprovals(
         [FromQuery] int? scopeType = null,
@@ -47,11 +111,39 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         [FromQuery] int? installationType = null)
     {
         var sc = scopeType.HasValue ? (AppApprovalScopeType)scopeType.Value : default(AppApprovalScopeType?);
-        var inst = installationType;
-        var result = await mediator.Send(new GetAppStoreApprovalsQuery(sc, scopeId, inst));
+        var result = await mediator.Send(new GetAppStoreApprovalsQuery(sc, scopeId, installationType));
         return result.ToActionResult();
     }
 
+    /// <summary>Create/update an approval rule.</summary>
+    [HttpPost("approvals")]
+    public async Task<IActionResult> UpsertApproval([FromBody] UpsertAppApprovalRuleCommand cmd)
+    {
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    /// <summary>Delete an approval rule.</summary>
+    [HttpDelete("approvals/{ruleId:guid}")]
+    public async Task<IActionResult> DeleteApproval(
+        Guid ruleId,
+        [FromQuery] string? reason = null,
+        [FromQuery] string? changedBy = null,
+        [FromQuery] string? ipAddress = null)
+    {
+        var result = await mediator.Send(new DeleteAppApprovalRuleCommand(ruleId, reason, changedBy, ipAddress));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Audit
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Audit history for approval changes.</summary>
     [HttpGet("approvals/audit")]
     public async Task<IActionResult> GetApprovalAudit(
         [FromQuery] int? installationType = null,
@@ -72,6 +164,11 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         return result.ToActionResult();
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Package diff
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Get diff for a single package across scope hierarchy.</summary>
     [HttpGet("diff/{packageId}")]
     public async Task<IActionResult> GetPackageDiff(
         string packageId,
@@ -84,6 +181,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         return result.ToActionResult();
     }
 
+    /// <summary>Get effective diffs across a scope.</summary>
     [HttpGet("diff/effective")]
     public async Task<IActionResult> GetEffectiveDiffs(
         [FromQuery] int scopeType = 0,
