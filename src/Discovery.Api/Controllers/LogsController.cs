@@ -11,7 +11,22 @@ namespace Discovery.Api.Controllers;
 public class LogsController(IMediator mediator) : ControllerBase
 {
     /// <summary>
-    /// Lista paginada de logs com suporte a filtros e paginação por cursor.
+    /// Lista paginada de logs (legado) — compatível com chamadas sem subpath.
+    /// </summary>
+    [HttpGet]
+    public async Task<IActionResult> GetAll(
+        [FromQuery] string? agentId = null,
+        [FromQuery] string? siteId = null,
+        [FromQuery] string? clientId = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50)
+    {
+        var result = await mediator.Send(new ListLogsQuery(agentId, siteId, clientId, cursor, limit));
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Lista paginada de logs com suporte a filtros expandidos e paginação por cursor.
     /// </summary>
     [HttpGet("page")]
     public async Task<IActionResult> GetPage(
