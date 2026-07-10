@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Inventory.Queries;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
@@ -39,21 +40,40 @@ public sealed class GetAgentHardwareQueryHandler(
 public sealed class GetAgentSoftwareQueryHandler(
     IAgentRepository agentRepo,
     IAgentSoftwareRepository softwareRepo
-) : IRequestHandler<GetAgentSoftwareQuery, Result<IReadOnlyList<AgentSoftwareItemDto>>>
+) : IRequestHandler<GetAgentSoftwareQuery, Result<CursorPageDto<AgentSoftwareItemDto>>>
 {
-    public async Task<Result<IReadOnlyList<AgentSoftwareItemDto>>> Handle(GetAgentSoftwareQuery q, CancellationToken ct)
+    public async Task<Result<CursorPageDto<AgentSoftwareItemDto>>> Handle(GetAgentSoftwareQuery q, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
-            return Result<IReadOnlyList<AgentSoftwareItemDto>>.Failure(Error.NotFound("Agent not found."));
+            return Result<CursorPageDto<AgentSoftwareItemDto>>.Failure(Error.NotFound("Agent not found."));
 
         var limit = Math.Clamp(q.Limit, 1, 500);
         var page = await softwareRepo.GetCurrentByAgentIdPagedAsync(q.AgentId, q.Cursor, limit + 1, q.Search, q.Descending);
 
         var hasMore = page.Count > limit;
-        var items = hasMore ? page.Take(limit).ToList() : page.ToList();
-        var dtos = items.Select(s => new AgentSoftwareItemDto(s.Name, s.Version, s.Publisher, s.InstallDate)).ToList();
-        return Result<IReadOnlyList<AgentSoftwareItemDto>>.Success(dtos);
+        var items = (hasMore ? page.Take(limit) : page)
+            .Select(s => new AgentSoftwareItemDto(
+                s.InventoryId,
+                s.Name,
+                s.Version,
+                s.Publisher,
+                s.Source,
+                s.InstallId,
+                s.Serial,
+                s.InstallDate,
+                s.CollectedAt))
+            .ToList().AsReadOnly();
+
+        string? nextCursor = null;
+        if (hasMore && items.Count > 0)
+        {
+            var last = page[limit];
+            nextCursor = last.InventoryId.ToString();
+        }
+
+        return Result<CursorPageDto<AgentSoftwareItemDto>>.Success(
+            new CursorPageDto<AgentSoftwareItemDto>(items, items.Count, q.Cursor, nextCursor, hasMore, q.Limit));
     }
 }
 
