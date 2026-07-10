@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.ApiTokens.Commands;
+using Discovery.Core.Cqrs.ApiTokens.Commands;
 using Discovery.Core.Cqrs.ApiTokens.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,7 +15,7 @@ public class ApiTokensController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] Guid userId)
     {
         var result = await mediator.Send(new ListApiTokensQuery(userId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpPost]

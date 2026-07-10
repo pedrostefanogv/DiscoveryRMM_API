@@ -44,6 +44,7 @@ public class AutomationScriptConsumeDto
 
 public class AutomationScriptPageDto
 {
+    [Obsolete("Substituído por CursorPageDto<AutomationScriptSummaryDto>. Remover na v2.")]
     public IReadOnlyList<AutomationScriptSummaryDto> Items { get; set; } = [];
     public int Count { get; set; }
     public int Total { get; set; }

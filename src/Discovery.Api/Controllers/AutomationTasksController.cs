@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.AutomationTasks.Queries;
+using Discovery.Core.Cqrs.AutomationTasks.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,7 +14,7 @@ public class AutomationTasksController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null, [FromQuery] string? cursor = null, [FromQuery] int limit = 50)
     {
         var result = await mediator.Send(new ListAutomationTasksQuery(clientId, cursor, limit));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)

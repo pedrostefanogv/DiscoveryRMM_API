@@ -4,6 +4,8 @@ using Discovery.Api.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
+using Discovery.Api;
+
 namespace Discovery.Api.Controllers;
 
 [ApiController]
@@ -27,10 +29,7 @@ public class DashboardController : ControllerBase
 
         var query = new GetGlobalSummaryQuery(parsedWindow);
         var result = await _mediator.Send(query, cancellationToken);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        return result.ToActionResult();
     }
 
     [HttpGet("clients/{clientId:guid}/dashboard/summary")]
@@ -42,10 +41,7 @@ public class DashboardController : ControllerBase
 
         var query = new GetClientSummaryQuery(clientId, parsedWindow);
         var result = await _mediator.Send(query, cancellationToken);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        return result.ToActionResult();
     }
 
     [HttpGet("clients/{clientId:guid}/sites/{siteId:guid}/dashboard/summary")]
@@ -61,10 +57,7 @@ public class DashboardController : ControllerBase
 
         var query = new GetSiteSummaryQuery(clientId, siteId, parsedWindow);
         var result = await _mediator.Send(query, cancellationToken);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-        );
+        return result.ToActionResult();
     }
 
     private static bool TryParseWindow(string? window, out TimeSpan parsedWindow, out string? error)

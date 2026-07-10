@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.NatsAuth.Queries;
+using Discovery.Core.Cqrs.NatsAuth.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,6 +14,6 @@ public class NatsAuthController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetStatus()
     {
         var result = await mediator.Send(new GetNatsStatusQuery());
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 }

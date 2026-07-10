@@ -2,6 +2,8 @@ using Discovery.Core.Cqrs.AgentP2p.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
+using Discovery.Api;
+
 namespace Discovery.Api.Controllers;
 
 [ApiController]
@@ -14,7 +16,7 @@ public class OpsP2pController(IMediator mediator) : ControllerBase
         [FromQuery] Guid? agentId = null, [FromQuery] int windowHours = 24, CancellationToken ct = default)
     {
         var result = await mediator.Send(new GetP2pOverviewQuery(scope, tenantId, siteId, agentId, windowHours), ct);
-        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+        return result.ToActionResult();
     }
 
     [HttpGet("timeseries")]
@@ -24,7 +26,7 @@ public class OpsP2pController(IMediator mediator) : ControllerBase
         CancellationToken ct = default)
     {
         var result = await mediator.Send(new GetP2pTimeseriesQuery(scope, tenantId, siteId, agentId, metric, windowHours), ct);
-        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+        return result.ToActionResult();
     }
 
     [HttpGet("agents/ranking")]
@@ -33,7 +35,7 @@ public class OpsP2pController(IMediator mediator) : ControllerBase
         [FromQuery] int windowHours = 24, [FromQuery] string sortBy = "peers", CancellationToken ct = default)
     {
         var result = await mediator.Send(new GetP2pAgentRankingQuery(scope, tenantId, siteId, windowHours, sortBy), ct);
-        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+        return result.ToActionResult();
     }
 
     [HttpGet("seed-plan")]
@@ -42,6 +44,6 @@ public class OpsP2pController(IMediator mediator) : ControllerBase
         CancellationToken ct = default)
     {
         var result = await mediator.Send(new GetP2pSeedPlanQuery(scope, tenantId, siteId), ct);
-        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+        return result.ToActionResult();
     }
 }

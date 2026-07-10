@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.Jobs.Queries;
+using Discovery.Core.Cqrs.Jobs.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,6 +14,6 @@ public class JobsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll()
     {
         var result = await mediator.Send(new ListBackgroundJobsQuery());
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 }

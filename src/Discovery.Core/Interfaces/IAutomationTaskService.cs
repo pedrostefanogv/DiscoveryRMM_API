@@ -5,7 +5,7 @@ namespace Discovery.Core.Interfaces;
 
 public interface IAutomationTaskService
 {
-    Task<AutomationTaskPageDto> GetListPageAsync(
+    Task<CursorPageDto<AutomationTaskSummaryDto>> GetListPageAsync(
         AppApprovalScopeType? scopeType,
         Guid? scopeId,
         bool activeOnly,

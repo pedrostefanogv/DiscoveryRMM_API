@@ -3,6 +3,8 @@ using Discovery.Core.Cqrs.Tickets.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
+using Discovery.Api;
+
 namespace Discovery.Api.Controllers;
 
 [ApiController]
@@ -13,21 +15,21 @@ public class TicketAlertRulesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll()
     {
         var result = await mediator.Send(new ListTicketAlertRulesQuery());
-        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetTicketAlertRuleByIdQuery(id));
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpGet("by-workflow-state/{workflowStateId:guid}")]
     public async Task<IActionResult> GetByWorkflowState(Guid workflowStateId)
     {
         var result = await mediator.Send(new GetTicketAlertRulesByWorkflowStateQuery(workflowStateId));
-        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+        return result.ToActionResult();
     }
 
     [HttpPost]
@@ -41,14 +43,14 @@ public class TicketAlertRulesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketAlertRuleRequest req)
     {
         var result = await mediator.Send(new UpdateTicketAlertRuleCommand(id, req.WorkflowStateId, req.Title, req.Message, req.AlertType, req.TimeoutSeconds, req.ActionsJson, req.DefaultAction, req.Icon, req.ScopePreference, req.IsEnabled));
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpPatch("{id:guid}/toggle")]
     public async Task<IActionResult> Toggle(Guid id)
     {
         var result = await mediator.Send(new ToggleTicketAlertRuleCommand(id));
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpDelete("{id:guid}")]

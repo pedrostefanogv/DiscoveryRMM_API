@@ -3,6 +3,8 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
+using Discovery.Api;
+
 namespace Discovery.Api.Controllers;
 
 [ApiController]
@@ -15,8 +17,6 @@ public class SearchController(IMediator mediator) : ControllerBase
     {
         var userId = HttpContext.Items["UserId"] is Guid uid ? uid : Guid.Empty;
         var result = await mediator.Send(new UniversalSearchQuery(userId, q, maxResults));
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => Problem(errors[0].Message, statusCode: 400));
+        return result.ToActionResult();
     }
 }

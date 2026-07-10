@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.AutoTicketRules.Commands;
+using Discovery.Core.Cqrs.AutoTicketRules.Commands;
 using Discovery.Core.Cqrs.AutoTicketRules.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,7 +15,7 @@ public class AutoTicketRulesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] string? scopeLevel = null, [FromQuery] Guid? scopeId = null, [FromQuery] bool? isEnabled = null)
     {
         var result = await mediator.Send(new ListAutoTicketRulesQuery(scopeLevel, scopeId, isEnabled));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]

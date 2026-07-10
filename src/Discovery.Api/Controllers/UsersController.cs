@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.Users.Commands;
+using Discovery.Core.Cqrs.Users.Commands;
 using Discovery.Core.Cqrs.Users.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,9 +15,7 @@ public class UsersController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] string? cursor = null, [FromQuery] int limit = 50)
     {
         var result = await mediator.Send(new ListUsersQuery(cursor, limit));
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]

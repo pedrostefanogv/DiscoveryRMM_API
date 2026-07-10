@@ -30,7 +30,7 @@ public class AutomationScriptService : IAutomationScriptService
         _loggingService = loggingService;
     }
 
-    public async Task<AutomationScriptPageDto> GetListPageAsync(
+    public async Task<CursorPageDto<AutomationScriptSummaryDto>> GetListPageAsync(
         Guid? clientId,
         bool activeOnly,
         string? cursor,
@@ -40,18 +40,15 @@ public class AutomationScriptService : IAutomationScriptService
         _ = cancellationToken;
         var safeLimit = Math.Clamp(limit, 1, 200);
         var items = await _scriptRepository.GetListPageAsync(clientId, activeOnly, cursor, safeLimit);
-        var total = await _scriptRepository.CountAsync(clientId, activeOnly);
         var slice = CursorPaginationHelper.SlicePage<AutomationScriptDefinition>(items, safeLimit);
-        return new AutomationScriptPageDto
-        {
-            Items = slice.Page.Select(ToSummaryDto).ToList(),
-            Count = slice.Page.Count,
-            Total = total,
-            Cursor = cursor,
-            NextCursor = slice.HasMore && slice.LastItem is not null ? CursorPaginationHelper.EncodeCreatedAtCursor(slice.LastItem.UpdatedAt, slice.LastItem.Id) : null,
-            HasMore = slice.HasMore,
-            Limit = safeLimit
-        };
+        var pageItems = slice.Page.Select(ToSummaryDto).ToList();
+        return new CursorPageDto<AutomationScriptSummaryDto>(
+            pageItems.AsReadOnly(),
+            pageItems.Count,
+            cursor,
+            slice.HasMore && slice.LastItem is not null ? CursorPaginationHelper.EncodeCreatedAtCursor(slice.LastItem.UpdatedAt, slice.LastItem.Id) : null,
+            slice.HasMore,
+            safeLimit);
     }
 
     public async Task<AutomationScriptDetailDto?> GetByIdAsync(

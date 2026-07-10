@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.AgentDownload.Queries;
+using Discovery.Core.Cqrs.AgentDownload.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 

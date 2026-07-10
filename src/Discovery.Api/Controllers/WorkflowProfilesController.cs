@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.WorkflowProfiles.Commands;
+using Discovery.Core.Cqrs.WorkflowProfiles.Commands;
 using Discovery.Core.Cqrs.WorkflowProfiles.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,7 +15,7 @@ public class WorkflowProfilesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null, [FromQuery] bool includeGlobal = true)
     {
         var result = await mediator.Send(new ListWorkflowProfilesQuery(clientId, includeGlobal));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]

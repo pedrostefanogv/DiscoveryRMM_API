@@ -6,6 +6,8 @@ using Discovery.Api.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
+using Discovery.Api;
+
 namespace Discovery.Api.Controllers;
 
 [ApiController]
@@ -18,7 +20,7 @@ public class ClientsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] bool includeInactive = false)
     {
         var result = await mediator.Send(new GetAllClientsQuery(includeInactive));
-        return result.Match<IActionResult>(success: Ok, failure: Problem);
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]
@@ -37,9 +39,7 @@ public class ClientsController(IMediator mediator) : ControllerBase
     {
         var cmd = new CreateClientCommand(request.Name, request.Notes);
         var result = await mediator.Send(cmd);
-        return result.Match<IActionResult>(
-            success: created => CreatedAtAction(nameof(GetById), new { id = created.Id }, created),
-            failure: Problem);
+        return result.ToCreatedAtActionResult(nameof(GetById), new { id = result.Value!.Id }, this);
     }
 
     [HttpPut("{id:guid}")]
@@ -81,9 +81,7 @@ public class ClientsController(IMediator mediator) : ControllerBase
         var username = HttpContext.Items["Username"] as string ?? "api";
         var cmd = new UpsertClientCustomFieldCommand(id, definitionId, request.Value.GetRawText(), username);
         var result = await mediator.Send(cmd, ct);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+        return result.ToActionResult();
     }
 
     private IActionResult Problem(IReadOnlyList<Discovery.Core.Cqrs.Error> errors)

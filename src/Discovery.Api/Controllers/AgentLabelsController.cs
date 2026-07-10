@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.AgentLabels.Commands;
+using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.Cqrs.AgentLabels.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,14 +15,14 @@ public class AgentLabelsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetByAgent([FromQuery] Guid agentId)
     {
         var result = await mediator.Send(new ListAgentLabelsQuery(agentId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("agents/{agentId:guid}")]
     public async Task<IActionResult> GetByAgentId(Guid agentId)
     {
         var result = await mediator.Send(new ListAgentLabelsQuery(agentId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpPost]
@@ -41,14 +43,14 @@ public class AgentLabelsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetDistinct()
     {
         var result = await mediator.Send(new GetDistinctLabelsQuery());
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("rules")]
     public async Task<IActionResult> GetRules([FromQuery] bool includeDisabled = true)
     {
         var result = await mediator.Send(new ListLabelRulesQuery(includeDisabled));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("rules/{id:guid}")]

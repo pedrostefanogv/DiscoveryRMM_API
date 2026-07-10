@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.SlaCalendars.Commands;
+using Discovery.Core.Cqrs.SlaCalendars.Commands;
 using Discovery.Core.Cqrs.SlaCalendars.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,7 +15,7 @@ public class SlaCalendarsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new ListSlaCalendarsQuery(clientId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]

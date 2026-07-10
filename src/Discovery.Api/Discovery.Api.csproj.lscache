@@ -112,6 +112,9 @@ Controllers/
  WorkflowProfilesController.cs
 Cqrs/
  Agents/CommandHandlers/AgentRemoteDebugCommandHandlers.cs
+ BackgroundServices/
+  BackgroundServiceQueries.cs
+  BackgroundServiceQueryHandlers.cs
  DependencyInjection/CqrsServiceCollectionExtensions.cs
 DependencyInjection/
  ApiVersioningServiceCollectionExtensions.cs
@@ -141,6 +144,7 @@ obj/Debug/net10.0/
  Discovery.Api.AssemblyInfo.cs
  Discovery.Api.GlobalUsings.g.cs
 Program.cs
+ResultExtensions.cs
 Services/
  AgentCommandDispatcher.cs
  AgentPackagePrebuildHostedService.cs

@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.WorkflowState.Commands;
+using Discovery.Core.Cqrs.WorkflowState.Commands;
 using Discovery.Core.Cqrs.WorkflowState.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,7 +15,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetStates([FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new ListWorkflowStatesQuery(clientId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("states/{id:guid}")]
@@ -48,7 +50,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetTransitions([FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new ListWorkflowTransitionsQuery(clientId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpPost("transitions")]

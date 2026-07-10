@@ -72,6 +72,7 @@ Cqrs/
  AgentLabels/
   AddAgentLabelCommandHandler.cs
   AgentLabelQueryHandlers.cs
+  AgentLabelRuleCommandHandlers.cs
  AgentP2p/AgentP2pHandlers.cs
  Agents/CommandHandlers/
   AgentAutomationCommandHandlers.cs
@@ -113,6 +114,8 @@ Cqrs/
   TransactionBehavior.cs
   ValidationBehavior.cs
  Clients/ClientHandlers.cs
+ ConfigurationAudit/ConfigurationAuditQueryHandlers.cs
+ Configurations/ConfigurationHandlers.cs
  CustomFields/CustomFieldHandlers.cs
  Dashboard/QueryHandlers/DashboardQueryHandlers.cs
  Departments/DepartmentHandlers.cs
@@ -134,7 +137,9 @@ Cqrs/
  Sites/SiteHandlers.cs
  SlaCalendars/SlaCalendarHandlers.cs
  SoftwareInventory/SoftwareInventoryHandlers.cs
+ TicketAi/TicketAiCommandHandlers.cs
  Tickets/CommandHandlers/
+  MergeTicketsCommandHandler.cs
   TicketAlertRuleCommandHandlers.cs
   TicketCommandHandlers.cs
   TicketSavedViewCommandHandlers.cs

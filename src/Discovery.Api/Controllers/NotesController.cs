@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.Notes.Commands;
+using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -16,9 +18,7 @@ public class NotesController(IMediator mediator) : ControllerBase
         [FromQuery] Guid? agentId = null)
     {
         var result = await mediator.Send(new ListNotesQuery(clientId, siteId, agentId));
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]

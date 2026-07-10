@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.Knowledge.Queries;
+using Discovery.Core.Cqrs.Knowledge.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,13 +14,13 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] string? cursor = null, [FromQuery] int limit = 50)
     {
         var result = await mediator.Send(new ListKnowledgeArticlesQuery(clientId, siteId, cursor, limit));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
     [HttpGet("search")]
     public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] int maxResults = 10)
     {
         var result = await mediator.Send(new SearchKnowledgeQuery(q, clientId, siteId, maxResults));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)

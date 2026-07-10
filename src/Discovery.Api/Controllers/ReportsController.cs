@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.Reports.Queries;
+using Discovery.Core.Cqrs.Reports.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,7 +14,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new ListReportsQuery(clientId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
     [HttpGet("{executionId:guid}")]
     public async Task<IActionResult> GetById(Guid executionId, [FromQuery] Guid? clientId = null)

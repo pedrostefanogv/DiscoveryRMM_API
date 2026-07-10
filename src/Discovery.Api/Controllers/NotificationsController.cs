@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.Notifications.Commands;
+using Discovery.Core.Cqrs.Notifications.Commands;
 using Discovery.Core.Cqrs.Notifications.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -19,9 +21,7 @@ public class NotificationsController(IMediator mediator) : ControllerBase
     {
         var result = await mediator.Send(new ListNotificationsQuery(
             recipientUserId, recipientAgentId, topic, isRead, limit));
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpPut("{id:guid}/read")]

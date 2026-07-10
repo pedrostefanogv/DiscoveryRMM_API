@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.DeployTokens.Commands;
+using Discovery.Core.Cqrs.DeployTokens.Commands;
 using Discovery.Core.Cqrs.DeployTokens.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,7 +15,7 @@ public class DeployTokensController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] Guid clientId, [FromQuery] Guid siteId)
     {
         var result = await mediator.Send(new ListDeployTokensQuery(clientId, siteId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpPost]

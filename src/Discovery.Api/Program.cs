@@ -183,6 +183,8 @@ builder.Services.AddControllers(options =>
 })
     .AddJsonOptions(opts =>
     {
+        // Serializa todas as propriedades em camelCase (ex: Items → items, NextCursor → nextCursor)
+        opts.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
         // Permite que a API aceite JSON em camelCase ou PascalCase
         opts.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
         opts.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());

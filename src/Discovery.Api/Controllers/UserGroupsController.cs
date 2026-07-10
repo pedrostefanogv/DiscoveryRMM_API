@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.UserGroups.Commands;
+using Discovery.Core.Cqrs.UserGroups.Commands;
 using Discovery.Core.Cqrs.UserGroups.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,9 +15,7 @@ public class UserGroupsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll()
     {
         var result = await mediator.Send(new ListUserGroupsQuery());
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]

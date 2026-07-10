@@ -128,6 +128,10 @@ Cqrs/
  Clients/
   Commands/ClientCommands.cs
   Queries/ClientQueries.cs
+ ConfigurationAudit/Queries/ConfigurationAuditQueries.cs
+ Configurations/
+  Commands/ConfigurationCommands.cs
+  Queries/ConfigurationQueries.cs
  CustomFields/
   Commands/CustomFieldCommands.cs
   Queries/CustomFieldQueries.cs
@@ -178,6 +182,7 @@ Cqrs/
  SoftwareInventory/
   Commands/SoftwareInventoryCommands.cs
   Queries/SoftwareInventoryQueries.cs
+ TicketAi/Commands/TicketAiCommands.cs
  Tickets/Commands/
   AddTicketCommentCommand.cs
   AssignTicketCommand.cs
@@ -259,6 +264,7 @@ DTOs/
  SyncInvalidationPingMessage.cs
  SyncManifestDtos.cs
  SyncPingAckDtos.cs
+ TicketAiDtos.cs
  TicketDtos.cs
  Users/UserDtos.cs
 Entities/

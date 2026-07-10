@@ -36,6 +36,7 @@ public class AutomationTaskDetailDto : AutomationTaskSummaryDto
 
 public class AutomationTaskPageDto
 {
+    [Obsolete("Substituído por CursorPageDto<AutomationTaskSummaryDto>. Remover na v2.")]
     public IReadOnlyList<AutomationTaskSummaryDto> Items { get; set; } = [];
     public int Count { get; set; }
     public int Total { get; set; }
@@ -72,6 +73,7 @@ public class AutomationTaskTargetPreviewItemDto
 
 public class AutomationTaskTargetPreviewPageDto
 {
+    [Obsolete("Preview de targets mantém offset temporariamente. Migrar para cursor na v2.")]
     public Guid TaskId { get; set; }
     public string TaskName { get; set; } = string.Empty;
     public AppApprovalScopeType ScopeType { get; set; }

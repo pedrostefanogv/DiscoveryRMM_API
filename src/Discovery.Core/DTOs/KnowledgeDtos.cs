@@ -65,6 +65,7 @@ public record ArticleListItem(
     DateTime UpdatedAt);
 
 /// <summary>Resposta paginada (cursor-based) para listagem de artigos.</summary>
+[Obsolete("Substituído por CursorPageDto<ArticleListItem>. Remover na v2.")]
 public record ArticleListPage(
     IReadOnlyList<ArticleListItem> Items,
     int Count,

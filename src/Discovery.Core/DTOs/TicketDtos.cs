@@ -16,6 +16,7 @@ public record TicketFilterQuery(
     string? Text = null,
     string? Cursor = null,
     int Limit = 100,
+    // Offset não é mais suportado. Use Cursor para paginação cursor-based.
     int Offset = 0,
     bool HasGlobalAccess = true,
     IReadOnlyList<Guid>? AllowedClientIds = null,

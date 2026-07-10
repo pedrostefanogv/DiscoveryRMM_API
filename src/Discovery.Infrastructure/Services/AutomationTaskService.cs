@@ -42,7 +42,7 @@ public class AutomationTaskService : IAutomationTaskService
         _loggingService = loggingService;
     }
 
-    public async Task<AutomationTaskPageDto> GetListPageAsync(
+    public async Task<CursorPageDto<AutomationTaskSummaryDto>> GetListPageAsync(
         AppApprovalScopeType? scopeType,
         Guid? scopeId,
         bool activeOnly,
@@ -65,28 +65,23 @@ public class AutomationTaskService : IAutomationTaskService
         var items = await _taskRepository.GetListPageAsync(
             scopeType, scopeId, activeOnly, deletedOnly, includeDeleted,
             search, clientId, siteId, agentId, scopeTypes, actionTypes, cursor, safeLimit);
-        var total = await _taskRepository.CountAsync(
-            scopeType, scopeId, activeOnly, deletedOnly, includeDeleted,
-            search, clientId, siteId, agentId, scopeTypes, actionTypes);
 
         var filteredItems = labels is { Count: > 0 }
             ? items.Where(task => MatchesTaskLabels(task, labels)).ToList()
             : (IReadOnlyList<AutomationTaskDefinition>)items;
 
         var slice = CursorPaginationHelper.SlicePage(filteredItems, safeLimit);
+        var pageItems = slice.Page.Select(ToSummaryDto).ToList();
 
-        return new AutomationTaskPageDto
-        {
-            Items = slice.Page.Select(ToSummaryDto).ToList(),
-            Count = slice.Page.Count,
-            Total = total,
-            Cursor = cursor,
-            NextCursor = slice.HasMore && slice.LastItem is not null
+        return new CursorPageDto<AutomationTaskSummaryDto>(
+            pageItems.AsReadOnly(),
+            pageItems.Count,
+            cursor,
+            slice.HasMore && slice.LastItem is not null
                 ? CursorPaginationHelper.EncodeCreatedAtCursor(slice.LastItem.UpdatedAt, slice.LastItem.Id)
                 : null,
-            HasMore = slice.HasMore,
-            Limit = safeLimit
-        };
+            slice.HasMore,
+            safeLimit);
     }
 
     public async Task<AutomationTaskDetailDto?> GetByIdAsync(Guid id, bool includeInactive = false, CancellationToken cancellationToken = default)

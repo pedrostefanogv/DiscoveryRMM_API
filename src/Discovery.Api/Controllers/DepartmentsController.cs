@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.Departments.Commands;
+using Discovery.Core.Cqrs.Departments.Commands;
 using Discovery.Core.Cqrs.Departments.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -15,9 +17,7 @@ public class DepartmentsController(IMediator mediator) : ControllerBase
         [FromQuery] bool includeGlobal = true)
     {
         var result = await mediator.Send(new ListDepartmentsQuery(clientId, includeGlobal));
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]

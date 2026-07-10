@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.EscalationRules.Commands;
+using Discovery.Core.Cqrs.EscalationRules.Commands;
 using Discovery.Core.Cqrs.EscalationRules.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,7 +15,7 @@ public class EscalationRulesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] Guid? workflowProfileId = null)
     {
         var result = await mediator.Send(new ListEscalationRulesQuery(workflowProfileId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]

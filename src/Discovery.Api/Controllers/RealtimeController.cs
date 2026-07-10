@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.Realtime.Queries;
+using Discovery.Core.Cqrs.Realtime.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,13 +14,13 @@ public class RealtimeController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetStatus()
     {
         var result = await mediator.Send(new GetRealtimeStatusQuery());
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("stats")]
     public async Task<IActionResult> GetStats()
     {
         var result = await mediator.Send(new GetRealtimeStatsQuery());
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 }

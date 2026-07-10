@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.MeshCentral.Queries;
+using Discovery.Core.Cqrs.MeshCentral.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,6 +14,6 @@ public class MeshCentralController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetStatus()
     {
         var result = await mediator.Send(new GetMeshCentralStatusQuery());
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 }

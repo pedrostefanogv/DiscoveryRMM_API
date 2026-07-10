@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.AgentP2p.Queries;
+using Discovery.Core.Cqrs.AgentP2p.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,6 +14,6 @@ public class AgentP2pController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetOverview([FromQuery] string scope = "global", [FromQuery] Guid? tenantId = null, [FromQuery] Guid? siteId = null, [FromQuery] Guid? agentId = null)
     {
         var result = await mediator.Send(new GetP2pOverviewQuery(scope, tenantId, siteId, agentId));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 }

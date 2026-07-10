@@ -10,6 +10,8 @@ using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
+using Discovery.Api;
+
 namespace Discovery.Api.Controllers;
 
 [ApiController]
@@ -22,21 +24,14 @@ public class TicketsController(
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
 
-    [Obsolete("Use GET /page (cursor-based) em vez deste endpoint offset.")]
+    // ── Listagem com paginação cursor ─────────────────────────────────
+
     [HttpGet]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] TicketFilterQuery filter)
     {
         var result = await mediator.Send(new ListTicketsQuery(filter), HttpContext.RequestAborted);
-        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
-    }
-
-    [HttpGet("page")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetPage([FromQuery] TicketFilterQuery filter)
-    {
-        var result = await mediator.Send(new ListTicketsQuery(filter), HttpContext.RequestAborted);
-        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]
@@ -44,7 +39,7 @@ public class TicketsController(
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetTicketByIdQuery(id), HttpContext.RequestAborted);
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpPost]
@@ -52,7 +47,7 @@ public class TicketsController(
     public async Task<IActionResult> Create([FromBody] CreateTicketCommand command)
     {
         var result = await mediator.Send(command, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto), failure: BadRequest);
+        return result.ToCreatedAtActionResult(nameof(GetById), new { id = result.Value!.Id }, this);
     }
 
     [HttpPut("{id:guid}")]
@@ -60,7 +55,7 @@ public class TicketsController(
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketCommand command)
     {
         var result = await mediator.Send(command with { Id = id }, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpPatch("{id:guid}/workflow-state")]
@@ -68,7 +63,7 @@ public class TicketsController(
     public async Task<IActionResult> UpdateWorkflowState(Guid id, [FromBody] TransitionTicketStateCommand command)
     {
         var result = await mediator.Send(command with { TicketId = id }, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}/comments")]
@@ -76,7 +71,7 @@ public class TicketsController(
     public async Task<IActionResult> GetComments(Guid id, [FromQuery] string? cursor = null, [FromQuery] int limit = 50)
     {
         var result = await mediator.Send(new GetTicketCommentsQuery(id, cursor, Math.Clamp(limit, 1, 200)), HttpContext.RequestAborted);
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpPost("{id:guid}/comments")]
@@ -92,7 +87,7 @@ public class TicketsController(
     public async Task<IActionResult> MergeTickets(Guid id, [FromBody] MergeTicketsCommand command)
     {
         var result = await mediator.Send(command with { TargetTicketId = id }, HttpContext.RequestAborted);
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}/sla")]
@@ -100,7 +95,7 @@ public class TicketsController(
     public async Task<IActionResult> GetSlaStatus(Guid id)
     {
         var result = await mediator.Send(new GetTicketSlaStatusQuery(id), HttpContext.RequestAborted);
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     // ── By Client ───────────────────────────────────────────────────────
@@ -121,7 +116,7 @@ public class TicketsController(
     public async Task<IActionResult> GetWatchers(Guid id)
     {
         var result = await mediator.Send(new GetTicketWatchersQuery(id));
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpPost("{id:guid}/watchers")]
@@ -147,7 +142,7 @@ public class TicketsController(
     public async Task<IActionResult> GetRemoteSessions(Guid id)
     {
         var result = await mediator.Send(new GetTicketRemoteSessionsQuery(id));
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpPost("{id:guid}/remote-sessions")]
@@ -163,7 +158,7 @@ public class TicketsController(
     public async Task<IActionResult> EndRemoteSession(Guid id, Guid sessionId)
     {
         var result = await mediator.Send(new EndTicketRemoteSessionCommand(id, sessionId));
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     // ── Automation Links ─────────────────────────────────────────────────
@@ -173,7 +168,7 @@ public class TicketsController(
     public async Task<IActionResult> GetAutomationLinks(Guid id)
     {
         var result = await mediator.Send(new GetTicketAutomationLinksQuery(id));
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpPost("{id:guid}/automation-links")]
@@ -191,7 +186,7 @@ public class TicketsController(
     public async Task<IActionResult> GetKnowledgeLinks(Guid id)
     {
         var result = await mediator.Send(new GetTicketKnowledgeLinksQuery(id));
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     [HttpPost("{id:guid}/knowledge-links")]
@@ -213,7 +208,7 @@ public class TicketsController(
     public async Task<IActionResult> GetAuditTimeline(Guid id)
     {
         var result = await mediator.Send(new GetTicketAuditTimelineQuery(id));
-        return result.Match<IActionResult>(success: Ok, failure: NotFound);
+        return result.ToActionResult();
     }
 
     // ── SLA Details ──────────────────────────────────────────────────────
@@ -249,7 +244,7 @@ public class TicketsController(
     public async Task<IActionResult> GetKpi([FromQuery] Guid? clientId = null, [FromQuery] Guid? departmentId = null, [FromQuery] DateTime? since = null)
     {
         var result = await mediator.Send(new GetTicketKpiQuery(clientId, departmentId, since));
-        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+        return result.ToActionResult();
     }
 
     private IActionResult BadRequest(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) });

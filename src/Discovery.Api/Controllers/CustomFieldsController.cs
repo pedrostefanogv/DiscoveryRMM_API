@@ -1,7 +1,9 @@
-﻿using Discovery.Core.Cqrs.CustomFields.Commands;
+using Discovery.Core.Cqrs.CustomFields.Commands;
 using Discovery.Core.Cqrs.CustomFields.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -13,7 +15,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll([FromQuery] string? scopeType = null, [FromQuery] bool includeInactive = false)
     {
         var result = await mediator.Send(new ListCustomFieldsQuery(scopeType, includeInactive));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]

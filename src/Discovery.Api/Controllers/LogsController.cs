@@ -1,6 +1,8 @@
-﻿using Discovery.Core.Cqrs.Logs.Queries;
+using Discovery.Core.Cqrs.Logs.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+
+using Discovery.Api;
 
 namespace Discovery.Api.Controllers;
 
@@ -17,8 +19,6 @@ public class LogsController(IMediator mediator) : ControllerBase
         [FromQuery] int limit = 50)
     {
         var result = await mediator.Send(new ListLogsQuery(agentId, siteId, clientId, cursor, limit));
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.ToActionResult();
     }
 }

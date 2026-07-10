@@ -6,6 +6,8 @@ using Discovery.Api.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
+using Discovery.Api;
+
 namespace Discovery.Api.Controllers;
 
 [ApiController]
@@ -17,7 +19,7 @@ public class SitesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetByClient(Guid clientId, [FromQuery] bool includeInactive = false)
     {
         var result = await mediator.Send(new GetSitesByClientQuery(clientId, includeInactive));
-        return result.Match<IActionResult>(success: Ok, failure: Problem);
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}")]
@@ -74,9 +76,7 @@ public class SitesController(IMediator mediator) : ControllerBase
         var username = HttpContext.Items["Username"] as string ?? "api";
         var cmd = new UpsertSiteCustomFieldCommand(clientId, id, definitionId, request.Value.GetRawText(), username);
         var result = await mediator.Send(cmd, ct);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+        return result.ToActionResult();
     }
 
     private IActionResult Problem(IReadOnlyList<Discovery.Core.Cqrs.Error> errors)

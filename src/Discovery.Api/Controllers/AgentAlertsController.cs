@@ -9,8 +9,8 @@ namespace Discovery.Api.Controllers;
 [Route("api/v{version:apiVersion}/agent-alerts")]
 public class AgentAlertsController(IMediator mediator) : ControllerBase
 {
-    [HttpGet("page")]
-    public async Task<IActionResult> GetPage(
+    [HttpGet]
+    public async Task<IActionResult> GetAll(
         [FromQuery] string? status, [FromQuery] string? scopeType,
         [FromQuery] Guid? scopeClientId, [FromQuery] Guid? scopeSiteId,
         [FromQuery] Guid? scopeAgentId, [FromQuery] Guid? ticketId,
