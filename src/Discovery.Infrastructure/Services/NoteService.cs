@@ -1,3 +1,4 @@
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 
@@ -25,6 +26,12 @@ public sealed class NoteService : INoteService
     {
         var notes = await _repo.GetByAgentIdAsync(agentId);
         return notes.ToList().AsReadOnly();
+    }
+
+    public Task<CursorPageDto<EntityNote>> GetPageAsync(Guid? clientId, Guid? siteId, Guid? agentId, string? cursor, int limit, CancellationToken ct = default)
+    {
+        _ = ct;
+        return _repo.GetPageAsync(clientId, siteId, agentId, cursor, limit);
     }
 
     public Task<EntityNote?> GetByIdAsync(Guid id, CancellationToken ct = default)

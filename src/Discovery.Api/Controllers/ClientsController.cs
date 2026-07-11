@@ -70,6 +70,18 @@ public class ClientsController(IMediator mediator) : ControllerBase
         return result.ToActionResult();
     }
 
+    [HttpGet("{id:guid}/notes/page")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    public async Task<IActionResult> GetNotesPage(
+        Guid id,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new ListNotesPageQuery(id, null, null, cursor, limit), ct);
+        return result.ToActionResult();
+    }
+
     [HttpGet("{id:guid}/custom-fields")]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, CancellationToken ct = default)

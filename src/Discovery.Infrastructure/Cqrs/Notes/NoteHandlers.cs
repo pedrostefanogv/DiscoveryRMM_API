@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using MediatR;
@@ -25,6 +26,29 @@ public sealed class ListNotesQueryHandler(
 
     private static NoteDto Map(EntityNote n) => new(n.Id, n.ClientId, n.SiteId, n.AgentId,
         n.Content, n.Author, n.IsPinned, n.CreatedAt, n.UpdatedAt);
+}
+
+public sealed class ListNotesPageQueryHandler(
+    INoteService service
+) : IRequestHandler<ListNotesPageQuery, Result<CursorPageDto<NoteDto>>>
+{
+    public async Task<Result<CursorPageDto<NoteDto>>> Handle(ListNotesPageQuery q, CancellationToken ct)
+    {
+        var page = await service.GetPageAsync(q.ClientId, q.SiteId, q.AgentId, q.Cursor, q.Limit, ct);
+        var dtos = page.Items.Select(n => new NoteDto(
+            n.Id, n.ClientId, n.SiteId, n.AgentId,
+            n.Content, n.Author, n.IsPinned,
+            n.CreatedAt, n.UpdatedAt)).ToList();
+
+        return Result<CursorPageDto<NoteDto>>.Success(
+            new CursorPageDto<NoteDto>(
+                dtos.AsReadOnly(),
+                dtos.Count,
+                page.Cursor,
+                page.NextCursor,
+                page.HasMore,
+                page.Limit));
+    }
 }
 
 public sealed class GetNoteByIdQueryHandler(

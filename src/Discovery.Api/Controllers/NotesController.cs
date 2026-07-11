@@ -21,6 +21,19 @@ public class NotesController(IMediator mediator) : ControllerBase
         return result.ToActionResult();
     }
 
+    [HttpGet("page")]
+    public async Task<IActionResult> GetPage(
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] Guid? agentId = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new ListNotesPageQuery(clientId, siteId, agentId, cursor, limit), ct);
+        return result.ToActionResult();
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {

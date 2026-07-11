@@ -427,4 +427,16 @@ public class AgentsController : ControllerBase
             success: Ok,
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
+
+    [HttpGet("{id:guid}/notes/page")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetNotesPage(
+        Guid id,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        CancellationToken ct = default)
+    {
+        var result = await _mediator.Send(new ListNotesPageQuery(null, null, id, cursor, limit), ct);
+        return result.ToActionResult();
+    }
 }
