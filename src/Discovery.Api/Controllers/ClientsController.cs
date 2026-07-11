@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs.Clients.Commands;
 using Discovery.Core.Cqrs.Clients.Queries;
+using Discovery.Core.Cqrs.Notes.Queries;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Api.Filters;
@@ -59,6 +60,14 @@ public class ClientsController(IMediator mediator) : ControllerBase
     {
         await mediator.Send(new DeleteClientCommand(id));
         return NoContent();
+    }
+
+    [HttpGet("{id:guid}/notes")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    public async Task<IActionResult> GetNotes(Guid id, CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new ListNotesQuery(id, null, null), ct);
+        return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}/custom-fields")]
