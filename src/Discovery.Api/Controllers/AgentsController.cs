@@ -414,20 +414,6 @@ public class AgentsController : ControllerBase
         return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
     }
 
-    /// <summary>
-    /// GET /api/v1/agents/{id}/notes — retorna as notas do agente.
-    /// Redireciona para o handler de ListNotesQuery com filtro por agentId.
-    /// </summary>
-    [HttpGet("{id:guid}/notes")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetNotes(Guid id, CancellationToken ct = default)
-    {
-        var result = await _mediator.Send(new ListNotesQuery(null, null, id), ct);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
-    }
-
     [HttpGet("{id:guid}/notes/page")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetNotesPage(

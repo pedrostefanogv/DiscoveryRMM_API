@@ -62,14 +62,6 @@ public class ClientsController(IMediator mediator) : ControllerBase
         return NoContent();
     }
 
-    [HttpGet("{id:guid}/notes")]
-    [RequirePermission(ResourceType.Clients, ActionType.View)]
-    public async Task<IActionResult> GetNotes(Guid id, CancellationToken ct = default)
-    {
-        var result = await mediator.Send(new ListNotesQuery(id, null, null), ct);
-        return result.ToActionResult();
-    }
-
     [HttpGet("{id:guid}/notes/page")]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
     public async Task<IActionResult> GetNotesPage(

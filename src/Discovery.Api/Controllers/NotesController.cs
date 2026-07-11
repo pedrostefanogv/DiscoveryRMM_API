@@ -12,16 +12,6 @@ namespace Discovery.Api.Controllers;
 public class NotesController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetAll(
-        [FromQuery] Guid? clientId = null,
-        [FromQuery] Guid? siteId = null,
-        [FromQuery] Guid? agentId = null)
-    {
-        var result = await mediator.Send(new ListNotesQuery(clientId, siteId, agentId));
-        return result.ToActionResult();
-    }
-
-    [HttpGet("page")]
     public async Task<IActionResult> GetPage(
         [FromQuery] Guid? clientId = null,
         [FromQuery] Guid? siteId = null,

@@ -4,9 +4,6 @@ using Discovery.Core.DTOs;
 
 namespace Discovery.Core.Cqrs.Notes.Queries;
 
-public sealed record ListNotesQuery(Guid? ClientId, Guid? SiteId, Guid? AgentId)
-    : IQuery<Result<IReadOnlyList<NoteDto>>>;
-
 public sealed record ListNotesPageQuery(
     Guid? ClientId = null,
     Guid? SiteId = null,

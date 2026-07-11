@@ -8,26 +8,6 @@ using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Notes;
 
-public sealed class ListNotesQueryHandler(
-    INoteService service
-) : IRequestHandler<ListNotesQuery, Result<IReadOnlyList<NoteDto>>>
-{
-    public async Task<Result<IReadOnlyList<NoteDto>>> Handle(ListNotesQuery q, CancellationToken ct)
-    {
-        IReadOnlyList<EntityNote> notes;
-        if (q.ClientId.HasValue) notes = await service.GetByClientIdAsync(q.ClientId.Value, ct);
-        else if (q.SiteId.HasValue) notes = await service.GetBySiteIdAsync(q.SiteId.Value, ct);
-        else if (q.AgentId.HasValue) notes = await service.GetByAgentIdAsync(q.AgentId.Value, ct);
-        else notes = Array.Empty<EntityNote>();
-
-        return Result<IReadOnlyList<NoteDto>>.Success(
-            notes.Select(Map).ToList().AsReadOnly());
-    }
-
-    private static NoteDto Map(EntityNote n) => new(n.Id, n.ClientId, n.SiteId, n.AgentId,
-        n.Content, n.Author, n.IsPinned, n.CreatedAt, n.UpdatedAt);
-}
-
 public sealed class ListNotesPageQueryHandler(
     INoteService service
 ) : IRequestHandler<ListNotesPageQuery, Result<CursorPageDto<NoteDto>>>

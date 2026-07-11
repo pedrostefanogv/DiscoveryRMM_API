@@ -20,36 +20,6 @@ public class EntityNoteRepository : IEntityNoteRepository
             .SingleOrDefaultAsync(note => note.Id == id);
     }
 
-    public async Task<IEnumerable<EntityNote>> GetByClientIdAsync(Guid clientId)
-    {
-        return await _db.EntityNotes
-            .AsNoTracking()
-            .Where(note => note.ClientId == clientId)
-            .OrderByDescending(note => note.IsPinned)
-            .ThenByDescending(note => note.CreatedAt)
-            .ToListAsync();
-    }
-
-    public async Task<IEnumerable<EntityNote>> GetBySiteIdAsync(Guid siteId)
-    {
-        return await _db.EntityNotes
-            .AsNoTracking()
-            .Where(note => note.SiteId == siteId)
-            .OrderByDescending(note => note.IsPinned)
-            .ThenByDescending(note => note.CreatedAt)
-            .ToListAsync();
-    }
-
-    public async Task<IEnumerable<EntityNote>> GetByAgentIdAsync(Guid agentId)
-    {
-        return await _db.EntityNotes
-            .AsNoTracking()
-            .Where(note => note.AgentId == agentId)
-            .OrderByDescending(note => note.IsPinned)
-            .ThenByDescending(note => note.CreatedAt)
-            .ToListAsync();
-    }
-
     public async Task<CursorPageDto<EntityNote>> GetPageAsync(Guid? clientId, Guid? siteId, Guid? agentId, string? cursor, int limit)
     {
         var safeLimit = Math.Clamp(limit, 1, 200);

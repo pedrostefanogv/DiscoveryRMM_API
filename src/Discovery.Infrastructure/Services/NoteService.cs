@@ -10,24 +10,6 @@ public sealed class NoteService : INoteService
 
     public NoteService(IEntityNoteRepository repo) => _repo = repo;
 
-    public async Task<IReadOnlyList<EntityNote>> GetByClientIdAsync(Guid clientId, CancellationToken ct = default)
-    {
-        var notes = await _repo.GetByClientIdAsync(clientId);
-        return notes.ToList().AsReadOnly();
-    }
-
-    public async Task<IReadOnlyList<EntityNote>> GetBySiteIdAsync(Guid siteId, CancellationToken ct = default)
-    {
-        var notes = await _repo.GetBySiteIdAsync(siteId);
-        return notes.ToList().AsReadOnly();
-    }
-
-    public async Task<IReadOnlyList<EntityNote>> GetByAgentIdAsync(Guid agentId, CancellationToken ct = default)
-    {
-        var notes = await _repo.GetByAgentIdAsync(agentId);
-        return notes.ToList().AsReadOnly();
-    }
-
     public Task<CursorPageDto<EntityNote>> GetPageAsync(Guid? clientId, Guid? siteId, Guid? agentId, string? cursor, int limit, CancellationToken ct = default)
     {
         _ = ct;
