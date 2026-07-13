@@ -381,7 +381,7 @@ public class AgentsController : ControllerBase
                 : BadRequest(new { error = errors[0].Message }));
     }
 
-    [HttpGet("{id:guid}/remote-debug/{sessionId:guid}/credentials")]
+    [HttpPost("{id:guid}/remote-debug/{sessionId:guid}/nats-credentials")]
     public async Task<IActionResult> GetRemoteDebugCredentials(Guid id, Guid sessionId)
     {
         if (HttpContext.Items["UserId"] is not Guid userId)
