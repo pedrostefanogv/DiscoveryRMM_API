@@ -106,6 +106,12 @@ public class ServerConfiguration
     public bool NatsUseWssExternal { get; set; } = false;
 
     /// <summary>
+    /// URL WebSocket externa do NATS para o dashboard/browser conectar.
+    /// Exemplo: wss://tngplacas.com.br/nats
+    /// </summary>
+    public string NatsWebSocketExternalUrl { get; set; } = string.Empty;
+
+    /// <summary>
     /// Configurações globais de reporting (JSON).
     /// Exemplo: {"enablePdf":true,"processingTimeoutSeconds":300,...}
     /// </summary>

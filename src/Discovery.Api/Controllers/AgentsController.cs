@@ -10,6 +10,7 @@ using Discovery.Core.Cqrs.Agents.Inventory.Queries;
 using Discovery.Core.Cqrs.Agents.Maintenance.Commands;
 using Discovery.Core.Cqrs.Agents.PowerManagement.Commands;
 using Discovery.Core.Cqrs.Agents.RemoteDebug.Commands;
+using Discovery.Core.Cqrs.Agents.RemoteDebug.Queries;
 using Discovery.Core.Cqrs.Agents.Transfer.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
 using Discovery.Core.Enums.Identity;
@@ -378,6 +379,16 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message })
                 : errors[0].Code == "Forbidden" ? StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message })
                 : BadRequest(new { error = errors[0].Message }));
+    }
+
+    [HttpGet("{id:guid}/remote-debug/{sessionId:guid}/credentials")]
+    public async Task<IActionResult> GetRemoteDebugCredentials(Guid id, Guid sessionId)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var result = await _mediator.Send(new GetRemoteDebugCredentialsQuery(id, sessionId, userId));
+        return result.ToActionResult();
     }
 
     // ── Transfer ──────────────────────────────────────────────────────────

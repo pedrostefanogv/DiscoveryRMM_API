@@ -101,7 +101,9 @@ Cqrs/
   Maintenance/Commands/AgentMaintenanceCommands.cs
   PowerManagement/Commands/AgentPowerCommands.cs
   Queries/AgentQueries.cs
-  RemoteDebug/Commands/AgentRemoteDebugCommands.cs
+  RemoteDebug/
+   Commands/AgentRemoteDebugCommands.cs
+   Queries/AgentRemoteDebugQueries.cs
   Transfer/Commands/AgentTransferCommands.cs
  AgentUpdates/
   Commands/AgentUpdateCommands.cs

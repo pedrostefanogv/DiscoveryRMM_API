@@ -110,12 +110,13 @@ Controllers/
  UsersController.cs
  WorkflowController.cs
  WorkflowProfilesController.cs
-Cqrs/
- Agents/CommandHandlers/AgentRemoteDebugCommandHandlers.cs
- BackgroundServices/
-  BackgroundServiceQueries.cs
-  BackgroundServiceQueryHandlers.cs
- DependencyInjection/CqrsServiceCollectionExtensions.cs
+Cqrs/Agents/
+ CommandHandlers/AgentRemoteDebugCommandHandlers.cs
+ QueryHandlers/AgentRemoteDebugQueryHandlers.cs
+Cqrs/BackgroundServices/
+ BackgroundServiceQueries.cs
+ BackgroundServiceQueryHandlers.cs
+Cqrs/DependencyInjection/CqrsServiceCollectionExtensions.cs
 DependencyInjection/
  ApiVersioningServiceCollectionExtensions.cs
  BackgroundServicesCollectionExtensions.cs

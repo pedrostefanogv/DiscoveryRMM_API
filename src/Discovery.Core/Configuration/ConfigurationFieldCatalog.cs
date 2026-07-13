@@ -25,7 +25,8 @@ public static class ConfigurationFieldCatalog
         "NatsUserJwtTtlMinutes",
         "NatsServerHostInternal",
         "NatsServerHostExternal",
-        "NatsUseWssExternal"
+        "NatsUseWssExternal",
+        "NatsWebSocketExternalUrl"
     ];
 
     /// <summary>

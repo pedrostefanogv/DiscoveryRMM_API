@@ -14,7 +14,8 @@ public sealed class StartRemoteDebugCommandHandler(
     ISiteRepository siteRepo,
     IRemoteDebugSessionManager sessionManager,
     IAgentCommandDispatcher dispatcher,
-    SpecialCommandPayloadValidator payloadValidator
+    SpecialCommandPayloadValidator payloadValidator,
+    IConfigurationService configurationService
 ) : IRequestHandler<StartRemoteDebugCommand, Result<RemoteDebugResponseDto>>
 {
     public async Task<Result<RemoteDebugResponseDto>> Handle(StartRemoteDebugCommand cmd, CancellationToken ct)
@@ -42,8 +43,19 @@ public sealed class StartRemoteDebugCommandHandler(
         var command = new AgentCommand { AgentId = cmd.AgentId, CommandType = CommandType.RemoteDebug, Payload = normalizedPayload };
         await dispatcher.DispatchAsync(command, ct);
 
+        var serverConfig = await configurationService.GetServerConfigAsync();
+        var natsWsUrl = !string.IsNullOrWhiteSpace(serverConfig.NatsWebSocketExternalUrl)
+            ? serverConfig.NatsWebSocketExternalUrl
+            : null;
+
         return Result<RemoteDebugResponseDto>.Success(new RemoteDebugResponseDto(
-            session.SessionId, session.NatsSubject, 0, "started"));
+            session.SessionId,
+            session.NatsSubject,
+            0,
+            "started",
+            session.AgentId,
+            session.ExpiresAtUtc,
+            natsWsUrl));
     }
 }
 
