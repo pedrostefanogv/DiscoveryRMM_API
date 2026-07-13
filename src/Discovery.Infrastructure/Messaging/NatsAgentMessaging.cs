@@ -424,8 +424,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                     };
 
                                     // Extrai campos do payload do agent (Go) — nomes camelCase.
-                                    if (root.TryGetProperty("hostname", out var h)) hardwareInfo.Model = h.GetString();
-                                    if (root.TryGetProperty("operatingSystem", out var os)) hardwareInfo.BiosVersion = os.GetString();
+                                    // NOTA: hostname e operatingSystem do root NÃO são mapeados para Model/BiosVersion;
+                                    // esses campos vêm dentro do objeto aninhado "hardware" (parsed abaixo).
                                     if (root.TryGetProperty("osVersion", out var osv)) _ = osv.GetString(); // guarda para log
 
                                     if (root.TryGetProperty("hardware", out var hw) && hw.ValueKind == JsonValueKind.Object)

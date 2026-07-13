@@ -139,9 +139,20 @@ public sealed class ReportAgentHardwareCommandHandler(
             if (hw.TryGetProperty("osVersion", out var ov)) hardwareInfo.OsVersion = ov.GetString();
             if (hw.TryGetProperty("osBuild", out var ob)) hardwareInfo.OsBuild = ob.GetString();
             if (hw.TryGetProperty("osArchitecture", out var oa)) hardwareInfo.OsArchitecture = oa.GetString();
-            if (hw.TryGetProperty("machineScore", out var ms2) && ms2.TryGetInt32(out var ms2v)) hardwareInfo.MachineScore = ms2v;
         }
-        else if (cmd.Hardware is not null)
+
+        // MachineScore: enviado pelo agent no nível raiz do envelope (cmd.MachineScore),
+        // e também suportado dentro do objeto "hardware" aninhado para compatibilidade.
+        if (cmd.MachineScore.HasValue)
+            hardwareInfo.MachineScore = cmd.MachineScore.Value;
+
+        if (cmd.Hardware is JsonElement hw2)
+        {
+            if (hw2.TryGetProperty("machineScore", out var ms2) && ms2.TryGetInt32(out var ms2v))
+                hardwareInfo.MachineScore ??= ms2v;
+        }
+
+        if (cmd.Hardware is not null && hardwareInfo.MachineScore is null)
         {
             // Fallback: try to deserialize from object
             try
