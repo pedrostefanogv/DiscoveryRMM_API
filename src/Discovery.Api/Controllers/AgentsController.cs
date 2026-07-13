@@ -129,6 +129,16 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
     }
 
+    [HttpGet("{id:guid}/hardware/components")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetHardwareComponents(Guid id)
+    {
+        var result = await _mediator.Send(new GetAgentHardwareComponentsQuery(id));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+    }
+
     [HttpGet("{id:guid}/software")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetSoftware(Guid id, [FromQuery] string? cursor = null, [FromQuery] int limit = 100, [FromQuery] string? search = null, [FromQuery] string order = "asc")

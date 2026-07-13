@@ -163,9 +163,22 @@ public class LogRepository : ILogRepository
             if (allowedClientIds.Length == 0 && allowedSiteIds.Length == 0)
                 return _db.Logs.Where(_ => false);
 
-            logQuery = logQuery.Where(log =>
-                (log.ClientId.HasValue && allowedClientIds.Contains(log.ClientId.Value)) ||
-                (log.SiteId.HasValue && allowedSiteIds.Contains(log.SiteId.Value)));
+            // When filtering by a specific agent, include logs that match the agent
+            // even if they lack client_id/site_id (agent-scoped logs).
+            // The controller enforces permission checks separately.
+            if (query.AgentId.HasValue)
+            {
+                logQuery = logQuery.Where(log =>
+                    log.AgentId == query.AgentId.Value ||
+                    (log.ClientId.HasValue && allowedClientIds.Contains(log.ClientId.Value)) ||
+                    (log.SiteId.HasValue && allowedSiteIds.Contains(log.SiteId.Value)));
+            }
+            else
+            {
+                logQuery = logQuery.Where(log =>
+                    (log.ClientId.HasValue && allowedClientIds.Contains(log.ClientId.Value)) ||
+                    (log.SiteId.HasValue && allowedSiteIds.Contains(log.SiteId.Value)));
+            }
         }
 
         if (query.ClientId.HasValue)

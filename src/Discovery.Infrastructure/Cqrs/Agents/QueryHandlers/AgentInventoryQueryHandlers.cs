@@ -102,3 +102,50 @@ public sealed class GetAgentSoftwareSnapshotQueryHandler(
             q.AgentId, snapshot?.TotalInstalled ?? 0, snapshot?.LastCollectedAt));
     }
 }
+
+public sealed class GetAgentHardwareComponentsQueryHandler(
+    IAgentRepository agentRepo,
+    IAgentHardwareRepository hardwareRepo
+) : IRequestHandler<GetAgentHardwareComponentsQuery, Result<AgentHardwareComponentsDto>>
+{
+    public async Task<Result<AgentHardwareComponentsDto>> Handle(GetAgentHardwareComponentsQuery q, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<AgentHardwareComponentsDto>.Failure(Error.NotFound("Agent not found."));
+
+        var components = await hardwareRepo.GetComponentsAsync(q.AgentId);
+        var hardware = await hardwareRepo.GetByAgentIdAsync(q.AgentId);
+
+        return Result<AgentHardwareComponentsDto>.Success(new AgentHardwareComponentsDto(
+            components.Printers.Select(p => new AgentHardwarePrinterDto(
+                p.Name, p.DriverName, p.PortName, p.PrinterStatus,
+                p.IsDefault, p.IsNetworkPrinter, p.Shared, p.ShareName, p.Location
+            )).ToList(),
+            components.ListeningPorts.Select(lp => new AgentHardwareListeningPortDto(
+                lp.ProcessName, lp.ProcessId, lp.ProcessPath, lp.Protocol,
+                lp.Address, lp.Port, lp.State
+            )).ToList(),
+            components.OpenSockets.Select(os => new AgentHardwareOpenSocketDto(
+                os.ProcessName, os.ProcessId, os.ProcessPath,
+                os.LocalAddress, os.LocalPort, os.RemoteAddress, os.RemotePort,
+                os.Protocol, os.Family
+            )).ToList(),
+            components.Disks.Select(d => new AgentHardwareDiskDto(
+                d.DriveLetter, d.Label, d.FileSystem,
+                d.TotalSizeBytes, d.FreeSpaceBytes, d.MediaType
+            )).ToList(),
+            components.NetworkAdapters.Select(na => new AgentHardwareNetworkAdapterDto(
+                na.Name, na.MacAddress, na.IpAddress, na.SubnetMask,
+                na.Gateway, na.DnsServers is not null ? [.. na.DnsServers.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)] : null,
+                na.IsDhcpEnabled, na.AdapterType, na.Speed
+            )).ToList(),
+            components.MemoryModules.Select(mm => new AgentHardwareMemoryModuleDto(
+                mm.Manufacturer, mm.PartNumber, mm.SerialNumber,
+                mm.CapacityBytes, mm.SpeedMhz, mm.MemoryType, mm.Slot,
+                null, null
+            )).ToList(),
+            hardware?.CollectedAt
+        ));
+    }
+}
