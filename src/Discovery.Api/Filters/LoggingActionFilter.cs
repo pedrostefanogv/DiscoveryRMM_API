@@ -257,6 +257,8 @@ public class LoggingActionFilter : IAsyncActionFilter
             var p when p.Contains("/agents", StringComparison.OrdinalIgnoreCase) => LogType.Agent,
             var p when p.Contains("/clients", StringComparison.OrdinalIgnoreCase) => LogType.Agent,
             var p when p.Contains("/sites", StringComparison.OrdinalIgnoreCase) => LogType.Agent,
+            var p when p.Contains("/deploy-tokens", StringComparison.OrdinalIgnoreCase) => LogType.Agent,
+            var p when p.Contains("/download/agent", StringComparison.OrdinalIgnoreCase) => LogType.Agent,
             var p when p.Contains("/tickets", StringComparison.OrdinalIgnoreCase) => LogType.Ticket,
             var p when p.Contains("/workflows", StringComparison.OrdinalIgnoreCase) => LogType.Workflow,
             var p when p.Contains("/software-inventory", StringComparison.OrdinalIgnoreCase) => LogType.Inventory,
