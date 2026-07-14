@@ -61,9 +61,13 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("agents/{agentId:guid}/force-update")]
-    public async Task<IActionResult> ForceUpdate(Guid agentId, [FromBody] ForceAgentUpdateCommand cmd, CancellationToken ct)
+    public async Task<IActionResult> ForceUpdate(
+        Guid agentId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] ForceAgentUpdateCommand? cmd = null,
+        CancellationToken ct = default)
     {
-        var r = await mediator.Send(cmd with { AgentId = agentId }, ct);
+        var command = (cmd ?? new ForceAgentUpdateCommand(agentId, null, null)) with { AgentId = agentId };
+        var r = await mediator.Send(command, ct);
         return r.Match<IActionResult>(_ => Ok(new { triggered = true }), e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
 }
