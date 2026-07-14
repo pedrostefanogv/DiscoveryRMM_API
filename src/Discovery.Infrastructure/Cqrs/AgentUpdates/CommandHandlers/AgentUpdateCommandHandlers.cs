@@ -3,10 +3,8 @@ using Discovery.Core.Cqrs.AgentUpdates.Commands;
 using Discovery.Core.Cqrs.AgentUpdates.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
-using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using MediatR;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Cqrs.AgentUpdates.CommandHandlers;
@@ -70,112 +68,43 @@ public sealed class RebuildAgentCommandHandler(
     IAgentPackageService agentPackageService,
     IAgentUpdateService agentUpdateService,
     ISyncInvalidationPublisher syncInvalidationPublisher,
-    IConfiguration configuration,
     ILogger<RebuildAgentCommandHandler> logger
-) : IRequestHandler<RebuildAgentCommand, Result<AgentBuildDto>>
+) : IRequestHandler<RebuildAgentCommand, Result<VoidResult>>
 {
-    public async Task<Result<AgentBuildDto>> Handle(RebuildAgentCommand cmd, CancellationToken ct)
+    public async Task<Result<VoidResult>> Handle(RebuildAgentCommand cmd, CancellationToken ct)
     {
-        var platform = string.IsNullOrWhiteSpace(cmd.Platform) ? "windows" : cmd.Platform.Trim();
-        var architecture = string.IsNullOrWhiteSpace(cmd.Architecture) ? "amd64" : cmd.Architecture.Trim();
-        var artifactType = string.IsNullOrWhiteSpace(cmd.ArtifactType) ? AgentReleaseArtifactType.Installer :
-            (Enum.TryParse<AgentReleaseArtifactType>(cmd.ArtifactType, true, out var parsedArtifactType)
-                ? parsedArtifactType
-                : AgentReleaseArtifactType.Installer);
+        logger.LogInformation("Agent rebuild: starting binary build from source...");
+        await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, ct);
 
-        try
-        {
-            await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, ct);
+        logger.LogInformation("Agent rebuild: generating update installer...");
+        var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync(ct);
 
-            var (content, fileName) = artifactType == AgentReleaseArtifactType.Installer
-                ? await agentPackageService.BuildUpdateInstallerAsync(ct)
-                : await agentPackageService.BuildUpdateInstallerAsync(ct);
+        // Publish the newly built installer as the current stage2 build
+        var now = DateTime.UtcNow;
+        var version = now.ToString("yyyy.MM.dd") + ".0"; // date-based version for CI rebuilds
+        await using var stream = new MemoryStream(content, writable: false);
 
-            var version = await ResolveBuildVersionAsync(cmd, agentUpdateService, ct);
-            var contentType = ResolveInstallerContentType();
-
-            await using var stream = new MemoryStream(content, writable: false);
-            var build = await agentUpdateService.RefreshCurrentBuildAsync(
-                version,
-                platform,
-                architecture,
-                artifactType,
-                fileName,
-                contentType,
-                stream,
-                cmd.SignatureThumbprint,
-                cmd.Actor,
-                ct);
-
-            await syncInvalidationPublisher.PublishGlobalAsync(
-                SyncResourceType.AgentUpdate,
-                "agent-build-refreshed-manual",
-                cancellationToken: ct);
-
-            return Result<AgentBuildDto>.Success(new AgentBuildDto(
-                build.Id,
-                build.Version,
-                build.Platform,
-                build.Architecture,
-                build.FileName,
-                build.Sha256,
-                build.CreatedAt,
-                build.SignatureThumbprint));
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Manual agent rebuild/refresh failed.");
-            return Result<AgentBuildDto>.Failure(Error.Internal($"Falha ao gerar e publicar o build do agente: {ex.Message}"));
-        }
-    }
-
-    private async Task<string> ResolveBuildVersionAsync(
-        RebuildAgentCommand cmd,
-        IAgentUpdateService agentUpdateService,
-        CancellationToken ct)
-    {
-        var configured = NormalizeSemanticVersion(cmd.Version);
-        if (!string.IsNullOrWhiteSpace(configured))
-            return configured;
-
-        var currentBuild = await agentUpdateService.GetCurrentBuildAsync(
-            platform: string.IsNullOrWhiteSpace(cmd.Platform) ? "windows" : cmd.Platform,
-            architecture: string.IsNullOrWhiteSpace(cmd.Architecture) ? "amd64" : cmd.Architecture,
+        var build = await agentUpdateService.RefreshCurrentBuildAsync(
+            version: version,
+            platform: "windows",
+            architecture: "amd64",
             artifactType: AgentReleaseArtifactType.Installer,
+            fileName: fileName,
+            contentType: "application/x-msdownload",
+            content: stream,
+            signatureThumbprint: null,
+            actor: "api-rebuild",
             cancellationToken: ct);
 
-        if (!string.IsNullOrWhiteSpace(currentBuild?.Version))
-            return currentBuild.Version;
+        logger.LogInformation(
+            "Agent rebuild completed. BuildId={BuildId}, Version={Version}, File={FileName}, Size={SizeBytes}",
+            build.Id, build.Version, build.FileName, build.SizeBytes);
 
-        var configuredStartupVersion = NormalizeSemanticVersion(configuration["AgentPackage:StartupStage2Version"]);
-        if (!string.IsNullOrWhiteSpace(configuredStartupVersion))
-            return configuredStartupVersion;
+        await syncInvalidationPublisher.PublishGlobalAsync(
+            SyncResourceType.AgentUpdate,
+            "agent-build-rebuilt",
+            cancellationToken: ct);
 
-        var assemblyVersion = typeof(RebuildAgentCommandHandler).Assembly.GetName().Version;
-        if (assemblyVersion is not null)
-        {
-            var fallback = $"{Math.Max(assemblyVersion.Major, 1)}.{Math.Max(assemblyVersion.Minor, 0)}.{Math.Max(assemblyVersion.Build, 0)}";
-            if (SemanticVersion.TryParse(fallback, out _))
-                return fallback;
-        }
-
-        return "1.0.0";
-    }
-
-    private string ResolveInstallerContentType()
-        => configuration["AgentPackage:InstallerContentType"] is { Length: > 0 } configuredContentType
-            ? configuredContentType
-            : "application/x-msdownload";
-
-    private static string? NormalizeSemanticVersion(string? rawVersion)
-    {
-        if (string.IsNullOrWhiteSpace(rawVersion))
-            return null;
-
-        var normalized = rawVersion.Trim();
-        if (normalized.StartsWith("v", StringComparison.OrdinalIgnoreCase))
-            normalized = normalized[1..];
-
-        return SemanticVersion.TryParse(normalized, out _) ? normalized : null;
+        return Result<VoidResult>.Success(VoidResult.Value);
     }
 }

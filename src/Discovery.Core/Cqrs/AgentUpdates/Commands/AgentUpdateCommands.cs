@@ -21,11 +21,4 @@ public sealed record SyncAndBuildAgentCommand(
     string Source, string? Branch
 ) : ICommand<Result<VoidResult>>;
 
-public sealed record RebuildAgentCommand(
-    string? Version = null,
-    string? Platform = null,
-    string? Architecture = null,
-    string? ArtifactType = null,
-    string? SignatureThumbprint = null,
-    string? Actor = null
-) : ICommand<Result<AgentBuildDto>>;
+public sealed record RebuildAgentCommand() : ICommand<Result<VoidResult>>;
