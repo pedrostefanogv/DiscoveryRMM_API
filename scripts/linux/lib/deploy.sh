@@ -43,11 +43,18 @@ ensure_discovery_tree_writable() {
   fi
 }
 
+ensure_discovery_api_working_directory() {
+  if ! sudo -u discovery-api test -x . 2>/dev/null; then
+    cd /
+  fi
+}
+
 publish_api() {
   log "Publicando Discovery.Api"
   local release_id; release_id="$(date +%Y%m%d%H%M%S)-initial"
   local release_dir="$DISCOVERY_API_RELEASES/$release_id"
 
+  ensure_discovery_api_working_directory
   ensure_discovery_tree_writable "$DISCOVERY_API_SOURCE" "source da API"
   sudo -u discovery-api mkdir -p "$release_dir"
   if [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]]; then
@@ -78,6 +85,7 @@ publish_site() {
   local release_id; release_id="$(date +%Y%m%d%H%M%S)-initial"
   local release_dir="$DISCOVERY_SITE_RELEASES/$release_id"
 
+  ensure_discovery_api_working_directory
   ensure_discovery_tree_writable "$DISCOVERY_SITE_SOURCE" "source do portal web"
   sudo -u discovery-api mkdir -p "$release_dir"
   if [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]]; then

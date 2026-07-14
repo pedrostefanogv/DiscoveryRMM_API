@@ -71,6 +71,10 @@ if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
   fail "Nao execute este script como root. Use 'systemctl start discovery-selfupdate.service' ou 'sudo -u discovery-api /opt/discovery-ops/selfupdate-discovery-api.sh'."
 fi
 
+if [[ ! -x . ]]; then
+  cd /
+fi
+
 DISCOVERY_API_BASE="${DISCOVERY_API_BASE:-/opt/discovery-api}"
 DISCOVERY_API_SOURCE="${DISCOVERY_API_SOURCE:-$DISCOVERY_API_BASE/source}"
 DISCOVERY_API_RELEASES="${DISCOVERY_API_RELEASES:-$DISCOVERY_API_BASE/releases}"
