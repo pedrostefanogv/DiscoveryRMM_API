@@ -38,12 +38,16 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateDeployTokenCommand cmd, CancellationToken ct)
+    public async Task<IActionResult> Create([FromBody] CreateDeployTokenRequest request, CancellationToken ct)
     {
+        var cmd = new CreateDeployTokenCommand(
+            request.ClientId, request.SiteId, request.Description,
+            request.ExpiresInHours, request.MultiUse, request.Delivery);
+
         var result = await _mediator.Send(cmd, ct);
 
         // Se não for entrega com installer, retorna o DTO normalmente (comportamento legado)
-        var delivery = cmd.Delivery?.Trim().ToLowerInvariant();
+        var delivery = request.Delivery?.Trim().ToLowerInvariant();
         if (delivery != "installer" && delivery != "full-installer")
         {
             return result.Match<IActionResult>(
@@ -155,6 +159,23 @@ public class DeployTokensController : ControllerBase
             new { type = "offline", label = "Pacote portátil (.zip)", description = "Download único com binário e configuração" }
         });
     }
+}
+
+/// <summary>
+/// Request body for creating a deploy token. Supports optional delivery field
+/// for combined token + installer download in a single request.
+/// </summary>
+public class CreateDeployTokenRequest
+{
+    [Required]
+    public Guid ClientId { get; set; }
+    [Required]
+    public Guid SiteId { get; set; }
+    public string? Description { get; set; }
+    public int? ExpiresInHours { get; set; }
+    public bool MultiUse { get; set; }
+    /// <summary>"token" (default) | "installer" (bootstrap) | "full-installer" (offline)</summary>
+    public string? Delivery { get; set; }
 }
 
 /// <summary>
