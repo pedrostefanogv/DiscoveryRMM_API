@@ -101,6 +101,38 @@ public class DownloadController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Returns the SHA256 hash of the current stage2 installer.
+    /// Called by: bootstrap installers for payload integrity verification at install time.
+    /// </summary>
+    [HttpGet("sha256")]
+    public async Task<IActionResult> GetSha256(
+        [FromQuery] string? platform = null,
+        [FromQuery] string? architecture = null,
+        CancellationToken ct = default)
+    {
+        var localPath = await _agentUpdateService.GetCurrentBuildLocalPathAsync(platform, architecture, artifactType: null, ct);
+
+        if (localPath is null || !System.IO.File.Exists(localPath))
+        {
+            _logger.LogWarning("SHA256 requested but no current build found (platform={Platform}, arch={Architecture})", platform, architecture);
+            return NotFound(new { message = "No active agent build available." });
+        }
+
+        var hash = await ComputeSha256Async(localPath, ct);
+        _logger.LogInformation("SHA256 served for {FileName}: {Hash}", Path.GetFileName(localPath), hash);
+
+        return Content(hash, "text/plain");
+    }
+
+    private static async Task<string> ComputeSha256Async(string filePath, CancellationToken ct)
+    {
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var hashBytes = await sha.ComputeHashAsync(stream, ct);
+        return Convert.ToHexStringLower(hashBytes);
+    }
+
     private static string GetContentType(string fileName)
     {
         var ext = Path.GetExtension(fileName).ToLowerInvariant();

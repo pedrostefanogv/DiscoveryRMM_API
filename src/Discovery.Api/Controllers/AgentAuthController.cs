@@ -276,6 +276,15 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetAgentP2pSeedPlanQuery(id), ct), Ok);
     }
 
+    [HttpPost("me/p2p/telemetry")]
+    public async Task<IActionResult> IngestP2pTelemetry([FromBody] P2pTelemetryRequest request, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(new IngestP2pTelemetryCommand(id, request), ct), Ok);
+    }
+
     // ── Knowledge ─────────────────────────────────────────────────────────
 
     [HttpGet("knowledge")]
