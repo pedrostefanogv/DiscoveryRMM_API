@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs.AgentUpdates.Commands;
 using Discovery.Core.Cqrs.AgentUpdates.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Discovery.Api.Controllers;
 
@@ -9,6 +10,14 @@ namespace Discovery.Api.Controllers;
 [Route("api/v{version:apiVersion}/agent-updates")]
 public class AgentUpdatesController(IMediator mediator) : ControllerBase
 {
+    public sealed record RefreshBuildRequest(
+        string? Version,
+        string? Platform,
+        string? Architecture,
+        string? ArtifactType,
+        string? SignatureThumbprint,
+        string? Actor);
+
     [HttpGet("build/current")]
     public async Task<IActionResult> GetCurrentBuild([FromQuery] string? platform, [FromQuery] string? architecture, [FromQuery] string? artifactType, CancellationToken ct)
     {
@@ -17,8 +26,18 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("build/refresh")]
-    public async Task<IActionResult> RefreshBuild([FromBody] RefreshAgentBuildCommand cmd, CancellationToken ct)
+    public async Task<IActionResult> RefreshBuild(
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] RefreshBuildRequest? request,
+        CancellationToken ct)
     {
+        var cmd = new RebuildAgentCommand(
+            request?.Version,
+            request?.Platform,
+            request?.Architecture,
+            request?.ArtifactType,
+            request?.SignatureThumbprint,
+            request?.Actor);
+
         var r = await mediator.Send(cmd, ct);
         return r.Match<IActionResult>(Ok, e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
