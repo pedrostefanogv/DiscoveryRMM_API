@@ -63,7 +63,7 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     [HttpPost("agents/{agentId:guid}/force-update")]
     public async Task<IActionResult> ForceUpdate(
         Guid agentId,
-        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] ForceAgentUpdateCommand? cmd = null,
+        [FromBody] ForceAgentUpdateCommand? cmd = null,
         CancellationToken ct = default)
     {
         var command = (cmd ?? new ForceAgentUpdateCommand(agentId, null, null)) with { AgentId = agentId };

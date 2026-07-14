@@ -4,6 +4,8 @@ using Discovery.Core.Cqrs.Configurations.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Interfaces;
+using Discovery.Core.ValueObjects;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -11,7 +13,7 @@ namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/configurations")]
-public class ConfigurationsController(IMediator mediator) : ControllerBase
+public class ConfigurationsController(IMediator mediator, IAiModelCatalogService aiCatalog, ILogger<ConfigurationsController> logger) : ControllerBase
 {
     private string? CurrentUser => HttpContext.Items["Username"] as string;
 
@@ -225,6 +227,67 @@ public class ConfigurationsController(IMediator mediator) : ControllerBase
     {
         var result = await mediator.Send(new GetAiModelsQuery(clientId, siteId, search), ct);
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    // ── AI Key Validation ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Valida uma API key contra o provider (faz GET /models com Authorization Bearer).
+    /// </summary>
+    [HttpPost("ai/validate-key")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute)]
+    public async Task<IActionResult> ValidateAiKey([FromBody] AiKeyValidationRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.ApiKey))
+            return BadRequest(new { errors = new[] { new { Code = "VALIDATION", Message = "API key é obrigatória." } } });
+
+        var provider = !string.IsNullOrWhiteSpace(request.Provider)
+            ? request.Provider
+            : AIIntegrationSettings.ProviderOpenRouter;
+
+        var baseUrl = !string.IsNullOrWhiteSpace(request.BaseUrl)
+            ? request.BaseUrl
+            : provider.ToLowerInvariant() switch
+            {
+                AIIntegrationSettings.ProviderOpenRouter => AIIntegrationSettings.OpenRouterDefaultBaseUrl,
+                _ => AIIntegrationSettings.OpenAiDefaultBaseUrl
+            };
+
+        try
+        {
+            var valid = await aiCatalog.ValidateApiKeyAsync(provider, baseUrl, request.ApiKey, ct);
+            return Ok(new { valid, provider, message = valid ? "API key validada com sucesso." : "API key inválida." });
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            return Ok(new { valid = false, provider, message = "API key não autorizada (401)." });
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            return Ok(new { valid = false, provider, message = "Acesso negado (403). Verifique as permissões da API key." });
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao validar API key para provider {Provider}", provider);
+            return Ok(new { valid = false, provider, message = $"Erro ao validar: {ex.Message}" });
+        }
+    }
+
+    // ── OpenRouter Models ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lista modelos disponíveis diretamente da API OpenRouter (chat, embeddings, rerank).
+    /// Cache de 60 minutos, use ?forceRefresh=true para forçar atualização.
+    /// </summary>
+    [HttpGet("ai/openrouter-models")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    public async Task<IActionResult> GetOpenRouterModels(
+        [FromQuery] string? modality = null,
+        [FromQuery] bool forceRefresh = false,
+        CancellationToken ct = default)
+    {
+        var result = await aiCatalog.ListOpenRouterModelsAsync(modality, forceRefresh, ct);
+        return Ok(result);
     }
 }
 
