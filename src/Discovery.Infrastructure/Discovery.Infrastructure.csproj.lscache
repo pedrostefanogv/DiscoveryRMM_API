@@ -74,6 +74,7 @@ Cqrs/
   AgentLabelQueryHandlers.cs
   AgentLabelRuleCommandHandlers.cs
  AgentP2p/AgentP2pHandlers.cs
+ AgentRegistration/RegisterAgentFromDeployTokenCommandHandler.cs
  Agents/CommandHandlers/
   AgentAutomationCommandHandlers.cs
   AgentCommandHandlers.cs

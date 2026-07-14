@@ -85,6 +85,7 @@ Cqrs/
   Commands/AgentLabelCommands.cs
   Queries/AgentLabelQueries.cs
  AgentP2p/Queries/AgentP2pQueries.cs
+ AgentRegistration/RegisterAgentFromDeployTokenCommand.cs
  Agents/Automation/
   Commands/AgentAutomationCommands.cs
   Queries/AgentAutomationQueries.cs

@@ -67,6 +67,7 @@ Controllers/
  AgentInstallController.cs
  AgentLabelsController.cs
  AgentP2pController.cs
+ AgentRegistrationController.cs
  Agents/AgentRequestDtos.cs
  AgentsController.cs
  AgentUpdatesController.cs
