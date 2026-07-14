@@ -105,7 +105,7 @@ public sealed class ReportAgentHardwareCommandHandler(
         var hardwareInfo = new AgentHardwareInfo
         {
             AgentId = cmd.AgentId,
-            InventoryRaw = cmd.InventoryRaw,
+            InventoryRaw = cmd.InventoryRaw?.GetRawText(),
             InventorySchemaVersion = cmd.InventorySchemaVersion,
             InventoryCollectedAt = cmd.InventoryCollectedAt
         };

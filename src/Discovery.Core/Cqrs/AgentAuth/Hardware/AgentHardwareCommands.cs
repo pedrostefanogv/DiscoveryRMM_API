@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Discovery.Core.Cqrs;
 
 namespace Discovery.Core.Cqrs.AgentAuth.Hardware;
@@ -14,6 +15,6 @@ public sealed record ReportAgentHardwareCommand(
     string? Hostname, string? DisplayName, string? MeshCentralNodeId,
     string? Status, string? OperatingSystem, string? OsVersion, string? AgentVersion,
     string? LastIpAddress, string? MacAddress,
-    object? Hardware, object? Components, string? InventoryRaw,
+    object? Hardware, object? Components, JsonElement? InventoryRaw,
     string? InventorySchemaVersion, DateTime? InventoryCollectedAt, int? MachineScore
 ) : ICommand<Result<VoidResult>>;

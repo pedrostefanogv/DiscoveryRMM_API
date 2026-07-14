@@ -29,12 +29,17 @@ public sealed class ReportAgentSoftwareHandler(
 
     public async Task<Result<VoidResult>> Handle(ReportAgentSoftwareCommand cmd, CancellationToken ct)
     {
-        var collectedAt = cmd.CollectedAt ?? DateTime.UtcNow;
-
-        var entries = ParseSoftwareEntries(cmd.Software);
-        await softwareRepo.ReplaceInventoryAsync(cmd.AgentId, collectedAt, entries);
-
-        return Result<VoidResult>.Success(VoidResult.Value);
+        try
+        {
+            var collectedAt = cmd.CollectedAt ?? DateTime.UtcNow;
+            var entries = ParseSoftwareEntries(cmd.Software);
+            await softwareRepo.ReplaceInventoryAsync(cmd.AgentId, collectedAt, entries);
+            return Result<VoidResult>.Success(VoidResult.Value);
+        }
+        catch (Exception ex)
+        {
+            return Result<VoidResult>.Failure($"Erro ao processar inventário de software: {ex.Message}");
+        }
     }
 
     private static List<SoftwareInventoryEntry> ParseSoftwareEntries(object? software)

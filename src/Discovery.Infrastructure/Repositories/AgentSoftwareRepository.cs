@@ -223,6 +223,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             .Where(catalog => fingerprints.Contains(catalog.Fingerprint))
             .ToDictionaryAsync(catalog => catalog.Fingerprint, catalog => catalog);
 
+        var newFingerprints = new Dictionary<string, SoftwareCatalog>();
         foreach (var row in uniqueByFingerprint)
         {
             if (catalogs.ContainsKey(row.Fingerprint))
@@ -241,11 +242,30 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 UpdatedAt = now
             };
 
+            newFingerprints[row.Fingerprint] = catalog;
             catalogs[row.Fingerprint] = catalog;
             _db.SoftwareCatalogs.Add(catalog);
         }
 
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // Race condition: outro request concorrente pode ter inserido o mesmo fingerprint.
+            // Desacopla as entidades que falharam e reconsulta do banco.
+            foreach (var catalog in newFingerprints.Values)
+                _db.Entry(catalog).State = EntityState.Detached;
+
+            var missingFingerprints = newFingerprints.Keys.ToList();
+            var resolved = await _db.SoftwareCatalogs
+                .Where(c => missingFingerprints.Contains(c.Fingerprint))
+                .ToDictionaryAsync(c => c.Fingerprint, c => c);
+
+            foreach (var (fingerprint, resolvedCatalog) in resolved)
+                catalogs[fingerprint] = resolvedCatalog;
+        }
 
         var softwareIds = catalogs.Values.Select(catalog => catalog.Id).ToList();
 
