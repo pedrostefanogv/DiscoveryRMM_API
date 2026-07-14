@@ -38,7 +38,7 @@ public sealed class ReportAgentSoftwareHandler(
         }
         catch (Exception ex)
         {
-            return Result<VoidResult>.Failure($"Erro ao processar inventário de software: {ex.Message}");
+            return Result<VoidResult>.Failure(Error.Internal($"Erro ao processar inventário de software: {ex.Message}"));
         }
     }
 
