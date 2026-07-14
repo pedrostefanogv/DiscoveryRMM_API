@@ -1,4 +1,5 @@
 using Asp.Versioning;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -18,15 +19,18 @@ public class DownloadController : ControllerBase
 {
     private readonly IAgentUpdateService _agentUpdateService;
     private readonly IAgentPackageService _agentPackageService;
+    private readonly ILoggingService _loggingService;
     private readonly ILogger<DownloadController> _logger;
 
     public DownloadController(
         IAgentUpdateService agentUpdateService,
         IAgentPackageService agentPackageService,
+        ILoggingService loggingService,
         ILogger<DownloadController> logger)
     {
         _agentUpdateService = agentUpdateService;
         _agentPackageService = agentPackageService;
+        _loggingService = loggingService;
         _logger = logger;
     }
 
@@ -50,8 +54,16 @@ public class DownloadController : ControllerBase
 
         var fileName = Path.GetFileName(localPath);
         var contentType = GetContentType(fileName);
+        var fileSize = new FileInfo(localPath).Length;
 
-        _logger.LogInformation("Serving stage2 installer: {FileName} ({Size} bytes)", fileName, new FileInfo(localPath).Length);
+        _logger.LogInformation("Serving stage2 installer: {FileName} ({Size} bytes)", fileName, fileSize);
+
+        await _loggingService.LogInfoAsync(
+            LogType.Agent,
+            LogSource.Api,
+            "deploy.installer.stage2_download",
+            new { fileName, fileSize, platform, architecture },
+            cancellationToken: ct);
 
         return PhysicalFile(localPath, contentType, fileName, enableRangeProcessing: true);
     }
@@ -67,6 +79,14 @@ public class DownloadController : ControllerBase
         try
         {
             var (content, fileName) = await _agentPackageService.BuildGenericInstallerAsync(cancellationToken: ct);
+
+            await _loggingService.LogInfoAsync(
+                LogType.Agent,
+                LogSource.Api,
+                "deploy.installer.generic_download",
+                new { fileName, sizeBytes = content.LongLength },
+                cancellationToken: ct);
+
             return File(content, "application/x-msdownload", fileName);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("project path does not exist", StringComparison.OrdinalIgnoreCase))
