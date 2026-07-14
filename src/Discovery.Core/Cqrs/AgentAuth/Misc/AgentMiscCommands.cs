@@ -1,4 +1,5 @@
 using Discovery.Core.Cqrs;
+using Discovery.Core.DTOs;
 
 namespace Discovery.Core.Cqrs.AgentAuth.Misc;
 
@@ -9,4 +10,4 @@ public sealed record UpsertCollectedCustomFieldCommand(Guid AgentId, object Requ
 public sealed record IssueZeroTouchDeployTokenCommand(Guid AgentId) : ICommand<Result<object>>;
 public sealed record GetAgentUpdateManifestQuery(Guid AgentId, string? CurrentVersion, string? Platform, string? Architecture, string? ArtifactType) : IQuery<Result<object>>;
 public sealed record DownloadAgentUpdateQuery(Guid AgentId, Guid? ReleaseId, string? Version, string? Platform, string? Architecture, string? ArtifactType) : IQuery<Result<object>>;
-public sealed record ReportAgentUpdateCommand(Guid AgentId, object Request) : ICommand<Result<object>>;
+public sealed record ReportAgentUpdateCommand(Guid AgentId, AgentUpdateReportRequest Request) : ICommand<Result<object>>;

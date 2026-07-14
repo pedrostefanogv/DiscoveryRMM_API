@@ -10,6 +10,7 @@ using Discovery.Core.Cqrs.AgentAuth.P2P;
 using Discovery.Core.Cqrs.AgentAuth.Software;
 using Discovery.Core.Cqrs.AgentAuth.Status;
 using Discovery.Core.Cqrs.AgentAuth.Tickets;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using MediatR;
@@ -366,12 +367,12 @@ public class AgentAuthController : ControllerBase
     }
 
     [HttpPost("me/update/report")]
-    public async Task<IActionResult> ReportAgentUpdate([FromBody] ReportAgentUpdateCommand cmd, CancellationToken ct)
+    public async Task<IActionResult> ReportAgentUpdate([FromBody] AgentUpdateReportRequest report, CancellationToken ct)
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), Ok);
+        return MapResult(await _mediator.Send(new ReportAgentUpdateCommand(id, report), ct), Ok);
     }
 
     // ── AI Chat ───────────────────────────────────────────────────────────

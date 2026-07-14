@@ -43,6 +43,13 @@ public partial class DiscoveryDbContext
             entity.Property(catalog => catalog.UpdatedAt)
                 .HasColumnName("updated_at")
                 .HasColumnType("timestamptz");
+
+            // Report fields — ainda não existem colunas no banco; ignorar até a migração ser criada
+            entity.Ignore(catalog => catalog.Category);
+            entity.Ignore(catalog => catalog.LatestVersion);
+            entity.Ignore(catalog => catalog.EolDate);
+            entity.Ignore(catalog => catalog.IsEol);
+            entity.Ignore(catalog => catalog.LicenseType);
         });
 
         modelBuilder.Entity<AgentSoftwareInventory>(entity =>

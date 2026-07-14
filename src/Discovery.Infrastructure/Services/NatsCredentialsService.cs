@@ -236,6 +236,7 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishHardware));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishRemoteDebugLog));
         publishSubjects.Add("$JS.API.STREAM.NAMES");
+        publishSubjects.Add("$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>");
 
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeCommand));
         subscribeSubjects.Add(NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId));
@@ -243,7 +244,10 @@ public class NatsCredentialsService : INatsCredentialsService
         subscribeSubjects.Add(NatsSubjectBuilder.GlobalAgentsCommandSubject());
         subscribeSubjects.Add(NatsSubjectBuilder.ServerPongSubject());
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeSyncPing));
-subscribeSubjects.Add(NatsSubjectBuilder.P2pClientEventsSubject(clientId));
+        subscribeSubjects.Add(NatsSubjectBuilder.P2pClientEventsSubject(clientId));
+#pragma warning disable CS0618 // P2pSiteDiscoverySubject é obsoleto mas necessário para compatibilidade com agents antigos
+        subscribeSubjects.Add(NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId));
+#pragma warning restore CS0618
         subscribeSubjects.Add("_INBOX.>");
 
         return (publishSubjects, subscribeSubjects);

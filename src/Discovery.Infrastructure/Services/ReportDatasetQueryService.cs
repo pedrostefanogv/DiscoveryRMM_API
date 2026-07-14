@@ -1324,12 +1324,11 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
     private async Task<ReportQueryResult> QuerySoftwareCatalogAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
-        var category = GetString(filters, "category");
         var publisher = GetString(filters, "publisher");
         var descending = GetSortDescending(filters, defaultValue: false);
 
         var query = _db.SoftwareCatalogs.AsNoTracking().AsQueryable();
-        if (!string.IsNullOrWhiteSpace(category)) query = query.Where(x => x.Category == category);
+        // Filtro por categoria desabilitado — coluna 'category' ainda não existe no banco (Ignored no EF)
         if (!string.IsNullOrWhiteSpace(publisher)) query = query.Where(x => x.Publisher == publisher);
 
         query = descending
@@ -1341,9 +1340,13 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
         {
             ["id"] = x.Id, ["name"] = x.Name, ["publisher"] = x.Publisher,
-            ["category"] = x.Category, ["latestVersion"] = x.LatestVersion,
-            ["eolDate"] = x.EolDate, ["isEol"] = x.IsEol,
-            ["licenseType"] = x.LicenseType, ["updatedAt"] = x.UpdatedAt
+            // Report fields — colunas ainda não existem no banco; retornar null até migração
+            ["category"] = (object?)null,
+            ["latestVersion"] = (object?)null,
+            ["eolDate"] = (object?)null,
+            ["isEol"] = (object?)null,
+            ["licenseType"] = (object?)null,
+            ["updatedAt"] = x.UpdatedAt
         }).ToList();
 
         return new ReportQueryResult

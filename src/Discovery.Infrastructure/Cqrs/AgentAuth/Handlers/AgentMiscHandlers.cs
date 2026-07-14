@@ -179,12 +179,7 @@ public sealed class ReportAgentUpdateHandler(
 {
     public async Task<Result<object>> Handle(ReportAgentUpdateCommand cmd, CancellationToken ct)
     {
-        // Deserialize the payload into an update report
-        var reportJson = System.Text.Json.JsonSerializer.Serialize(cmd.Request);
-        var report = System.Text.Json.JsonSerializer.Deserialize<Core.DTOs.AgentUpdateReportRequest>(reportJson);
-        if (report is null)
-            return Result<object>.Failure(Error.Validation("request", "Invalid update report payload."));
-        var eventRecord = await updateService.RecordEventAsync(cmd.AgentId, report, ct);
+        var eventRecord = await updateService.RecordEventAsync(cmd.AgentId, cmd.Request, ct);
         return Result<object>.Success(eventRecord);
     }
 }
