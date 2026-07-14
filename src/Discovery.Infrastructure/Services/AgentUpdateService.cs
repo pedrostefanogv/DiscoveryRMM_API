@@ -691,6 +691,19 @@ public class AgentUpdateService(
         return created;
     }
 
+    public async Task<string?> GetCurrentBuildLocalPathAsync(
+        string? platform = null,
+        string? architecture = null,
+        AgentReleaseArtifactType? artifactType = null,
+        CancellationToken cancellationToken = default)
+    {
+        var build = await GetCurrentBuildAsync(platform, architecture, artifactType, cancellationToken);
+        if (build is null || string.IsNullOrWhiteSpace(build.StorageObjectKey))
+            return null;
+
+        return ResolveStage2ArtifactPath(build.StorageObjectKey);
+    }
+
     private async Task<(AgentRelease? Release, AgentReleaseArtifact? Artifact, SemanticVersion Version)> SelectReleaseAsync(
         AgentUpdatePolicy policy,
         string platform,

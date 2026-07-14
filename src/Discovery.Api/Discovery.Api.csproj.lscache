@@ -84,6 +84,7 @@ Controllers/
  DashboardController.cs
  DepartmentsController.cs
  DeployTokensController.cs
+ DownloadController.cs
  EscalationRulesController.cs
  JobsController.cs
  KnowledgeController.cs

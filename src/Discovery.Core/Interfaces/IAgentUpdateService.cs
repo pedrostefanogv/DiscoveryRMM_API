@@ -49,4 +49,14 @@ public interface IAgentUpdateService
     Task<AgentUpdateRedirectPayload?> GetPresignedDownloadUrlAsync(Guid agentId, AgentUpdateDownloadRequest request, CancellationToken cancellationToken = default);
     Task<AgentUpdateRedirectPayload?> GetDirectDownloadUrlAsync(Guid agentId, AgentUpdateDownloadRequest request, CancellationToken cancellationToken = default);
     Task<AgentUpdateEvent> RecordEventAsync(Guid agentId, AgentUpdateReportRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves the local file path for the current active build (stage2 installer).
+    /// Returns null if no active build exists.
+    /// </summary>
+    Task<string?> GetCurrentBuildLocalPathAsync(
+        string? platform = null,
+        string? architecture = null,
+        AgentReleaseArtifactType? artifactType = null,
+        CancellationToken cancellationToken = default);
 }
