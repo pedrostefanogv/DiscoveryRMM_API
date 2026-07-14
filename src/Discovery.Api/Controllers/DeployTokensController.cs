@@ -38,10 +38,54 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateDeployTokenCommand cmd)
+    public async Task<IActionResult> Create([FromBody] CreateDeployTokenCommand cmd, CancellationToken ct)
     {
-        var result = await _mediator.Send(cmd);
-        return result.Match<IActionResult>(success: dto => Created("", dto), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+        var result = await _mediator.Send(cmd, ct);
+
+        // Se não for entrega com installer, retorna o DTO normalmente (comportamento legado)
+        var delivery = cmd.Delivery?.Trim().ToLowerInvariant();
+        if (delivery != "installer" && delivery != "full-installer")
+        {
+            return result.Match<IActionResult>(
+                success: dto => Created("", dto),
+                failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+        }
+
+        // Delivery mode: token foi criado, agora gera o instalador binário
+        if (result.IsFailure)
+        {
+            return BadRequest(new { errors = result.Errors.Select(e => new { e.Code, e.Message, e.Field }) });
+        }
+
+        var dto = result.Value;
+        if (dto == null || string.IsNullOrWhiteSpace(dto.RawToken))
+        {
+            return StatusCode(500, new { message = "Falha ao gerar instalador: token não retornado." });
+        }
+
+        var rawToken = dto.RawToken;
+        try
+        {
+            if (delivery == "full-installer")
+            {
+                // Instalador completo (offline) — não precisa de internet para instalar
+                var (content, fileName) = await _agentPackageService.BuildInstallerAsync(rawToken, cancellationToken: ct);
+                _logger.LogInformation("Full installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
+                    fileName, content.Length, dto.TokenPrefix);
+                return File(content, "application/vnd.microsoft.portable-executable", fileName);
+            }
+
+            // installer = bootstrap (minimal) — baixa o stage2 da API durante instalação
+            var (bootstrapContent, bootstrapFileName) = await _agentPackageService.BuildBootstrapInstallerAsync(rawToken, cancellationToken: ct);
+            _logger.LogInformation("Bootstrap installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
+                bootstrapFileName, bootstrapContent.Length, dto.TokenPrefix);
+            return File(bootstrapContent, "application/vnd.microsoft.portable-executable", bootstrapFileName);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogError(ex, "Failed to build installer for deploy token prefix={Prefix}", dto.TokenPrefix);
+            return StatusCode(503, new { message = "Instalador indisponível temporariamente. Tente novamente em instantes." });
+        }
     }
 
     [HttpDelete("{id:guid}")]

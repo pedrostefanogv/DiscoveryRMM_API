@@ -12,7 +12,7 @@ public sealed class ListDeployTokensQueryHandler(IDeployTokenRepository repo) : 
     public async Task<Result<IReadOnlyList<DeployTokenDto>>> Handle(ListDeployTokensQuery q, CancellationToken ct)
     {
         var tokens = await repo.GetByClientSiteAsync(q.ClientId, q.SiteId);
-        var items = tokens.Select(t => new DeployTokenDto(t.Id, t.ClientId, t.SiteId, t.TokenPrefix, t.Description, t.CreatedAt, t.ExpiresAt, t.IsRevoked, t.IsExpired, t.UsedCount)).ToList().AsReadOnly();
+        var items = tokens.Select(t => new DeployTokenDto(t.Id, t.ClientId, t.SiteId, t.TokenPrefix, null, t.Description, t.CreatedAt, t.ExpiresAt, t.IsRevoked, t.IsExpired, t.UsedCount)).ToList().AsReadOnly();
         return Result<IReadOnlyList<DeployTokenDto>>.Success(items);
     }
 }
@@ -21,7 +21,7 @@ public sealed class CreateDeployTokenCommandHandler(IDeployTokenService svc, ILo
 {
     public async Task<Result<DeployTokenDto>> Handle(CreateDeployTokenCommand cmd, CancellationToken ct)
     {
-        var (token, _) = await svc.CreateTokenAsync(cmd.ClientId, cmd.SiteId, cmd.Description, cmd.ExpiresInHours, cmd.MultiUse);
+        var (token, rawToken) = await svc.CreateTokenAsync(cmd.ClientId, cmd.SiteId, cmd.Description, cmd.ExpiresInHours, cmd.MultiUse);
 
         await loggingService.LogInfoAsync(
             LogType.Agent,
@@ -32,7 +32,7 @@ public sealed class CreateDeployTokenCommandHandler(IDeployTokenService svc, ILo
             siteId: cmd.SiteId.ToString(),
             cancellationToken: ct);
 
-        return Result<DeployTokenDto>.Success(new DeployTokenDto(token.Id, token.ClientId, token.SiteId, token.TokenPrefix, token.Description, token.CreatedAt, token.ExpiresAt, token.IsRevoked, token.IsExpired, 0));
+        return Result<DeployTokenDto>.Success(new DeployTokenDto(token.Id, token.ClientId, token.SiteId, token.TokenPrefix, rawToken, token.Description, token.CreatedAt, token.ExpiresAt, token.IsRevoked, token.IsExpired, 0));
     }
 }
 
