@@ -67,6 +67,10 @@ validate_dotnet_runtime() {
   esac
 }
 
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+  fail "Nao execute este script como root. Use 'systemctl start discovery-selfupdate.service' ou 'sudo -u discovery-api /opt/discovery-ops/selfupdate-discovery-api.sh'."
+fi
+
 DISCOVERY_API_BASE="${DISCOVERY_API_BASE:-/opt/discovery-api}"
 DISCOVERY_API_SOURCE="${DISCOVERY_API_SOURCE:-$DISCOVERY_API_BASE/source}"
 DISCOVERY_API_RELEASES="${DISCOVERY_API_RELEASES:-$DISCOVERY_API_BASE/releases}"
@@ -156,20 +160,39 @@ cleanup_old_releases() {
   fi
 }
 
+ensure_tree_writable_by_current_user() {
+  local tree_dir="$1"
+  local label="$2"
+  local current_user
+  current_user="$(id -un)"
+
+  [[ -d "$tree_dir" ]] || fail "Diretorio esperado nao encontrado para ${label}: $tree_dir"
+
+  local mismatch_path
+  mismatch_path="$(find "$tree_dir" -not -user "$current_user" -print -quit 2>/dev/null || true)"
+  if [[ -n "$mismatch_path" ]]; then
+    fail "Ownership inconsistente em ${label}: $mismatch_path. Corrija com 'chown -R ${current_user}:${current_user} $tree_dir' ou execute o fluxo oficial de update."
+  fi
+
+  [[ -w "$tree_dir" ]] || fail "Sem permissao de escrita em ${label}: $tree_dir"
+}
+
 clean_api_build_cache() {
   if [[ "${DISCOVERY_CLEAN_BUILD:-1}" != "1" ]]; then
     return
   fi
+  ensure_tree_writable_by_current_user "$DISCOVERY_API_SOURCE" "source da API"
   log "Limpando cache de build da API (obj/ bin/)"
-  find "$DISCOVERY_API_SOURCE" -maxdepth 4 \( -name obj -o -name bin \) -type d -exec rm -rf {} + 2>/dev/null || true
+  find "$DISCOVERY_API_SOURCE" -maxdepth 4 \( -name obj -o -name bin \) -type d -exec rm -rf {} +
 }
 
 clean_site_build_cache() {
   if [[ "${DISCOVERY_CLEAN_BUILD:-1}" != "1" ]]; then
     return
   fi
+  ensure_tree_writable_by_current_user "$DISCOVERY_SITE_SOURCE" "source do portal web"
   log "Limpando cache de build do portal web (node_modules/.cache e dist/)"
-  rm -rf "$DISCOVERY_SITE_SOURCE/node_modules/.cache" "$DISCOVERY_SITE_SOURCE/dist" 2>/dev/null || true
+  rm -rf "$DISCOVERY_SITE_SOURCE/node_modules/.cache" "$DISCOVERY_SITE_SOURCE/dist"
 }
 
 publish_api_release() {

@@ -175,6 +175,18 @@ ensure_repo_git_ownership() {
   sudo chown -R discovery-api:discovery-api "$repo_dir/.git"
 }
 
+ensure_repo_tree_ownership() {
+  local repo_dir="$1"
+  if ! sudo test -d "$repo_dir"; then return 0; fi
+
+  local mismatch_path
+  mismatch_path="$(sudo find "$repo_dir" -not -user discovery-api -print -quit 2>/dev/null || true)"
+  [[ -n "$mismatch_path" ]] || return 0
+
+  warn "Ownership inconsistente no working tree de $repo_dir detectado ($mismatch_path). Corrigindo para discovery-api."
+  sudo chown -R discovery-api:discovery-api "$repo_dir"
+}
+
 setup_git_askpass() {
   if [[ -z "${GITHUB_PAT:-}" ]]; then
     log "GITHUB_PAT vazio; seguindo sem autenticacao GitHub (repo publico)"
@@ -223,6 +235,7 @@ clone_or_update_repo() {
     log "Clonando repositorio: $repo_url"
     sudo -u discovery-api "${git_env[@]}" git clone --branch "$DISCOVERY_GIT_BRANCH" "$repo_url" "$repo_dir"
   else
+    ensure_repo_tree_ownership "$repo_dir"
     ensure_repo_git_ownership "$repo_dir"
     # Verifica se ha mudancas locais antes do reset destrutivo (apenas em modo interativo)
     if [[ "${NON_INTERACTIVE:-0}" -eq 0 ]]; then
@@ -247,5 +260,6 @@ clone_or_update_repo() {
     # Limpa arquivos residuais (untracked) que podem causar conflitos de compilacao
     # Ex: command_handler.go que foi deletado do repo mas sobreviveu como untracked
     sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" clean -fd 2>/dev/null || true
+    ensure_repo_tree_ownership "$repo_dir"
   fi
 }

@@ -23,15 +23,36 @@ cleanup_old_releases() {
   done
 }
 
+ensure_discovery_tree_writable() {
+  local tree_dir="$1"
+  local label="$2"
+
+  if ! sudo test -d "$tree_dir"; then
+    fail "Diretorio esperado nao encontrado para ${label}: $tree_dir"
+  fi
+
+  local mismatch_path
+  mismatch_path="$(sudo find "$tree_dir" -not -user discovery-api -print -quit 2>/dev/null || true)"
+  if [[ -n "$mismatch_path" ]]; then
+    warn "Ownership inconsistente em ${label} detectado ($mismatch_path). Corrigindo para discovery-api."
+    sudo chown -R discovery-api:discovery-api "$tree_dir"
+  fi
+
+  if ! sudo -u discovery-api test -w "$tree_dir"; then
+    fail "Usuario discovery-api sem permissao de escrita em ${label}: $tree_dir"
+  fi
+}
+
 publish_api() {
   log "Publicando Discovery.Api"
   local release_id; release_id="$(date +%Y%m%d%H%M%S)-initial"
   local release_dir="$DISCOVERY_API_RELEASES/$release_id"
 
+  ensure_discovery_tree_writable "$DISCOVERY_API_SOURCE" "source da API"
   sudo -u discovery-api mkdir -p "$release_dir"
   if [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]]; then
     log "Limpando cache de build da API (obj/ bin/)"
-    sudo -u discovery-api find "$DISCOVERY_API_SOURCE" -maxdepth 4 \( -name obj -o -name bin \) -type d -exec rm -rf {} + 2>/dev/null || true
+    sudo -u discovery-api find "$DISCOVERY_API_SOURCE" -maxdepth 4 \( -name obj -o -name bin \) -type d -exec rm -rf {} +
   fi
   sudo -u discovery-api dotnet publish "$DISCOVERY_API_SOURCE/src/Discovery.Api/Discovery.Api.csproj" \
     -c Release -r "$DISCOVERY_DOTNET_RUNTIME" --self-contained false -o "$release_dir" /p:UseAppHost=true
@@ -57,10 +78,11 @@ publish_site() {
   local release_id; release_id="$(date +%Y%m%d%H%M%S)-initial"
   local release_dir="$DISCOVERY_SITE_RELEASES/$release_id"
 
+  ensure_discovery_tree_writable "$DISCOVERY_SITE_SOURCE" "source do portal web"
   sudo -u discovery-api mkdir -p "$release_dir"
   if [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]]; then
     log "Limpando cache de build do portal web (node_modules/.cache e dist/)"
-    sudo -u discovery-api rm -rf "$DISCOVERY_SITE_SOURCE/node_modules/.cache" "$DISCOVERY_SITE_SOURCE/dist" 2>/dev/null || true
+    sudo -u discovery-api rm -rf "$DISCOVERY_SITE_SOURCE/node_modules/.cache" "$DISCOVERY_SITE_SOURCE/dist"
   fi
   sudo -u discovery-api -H npm --prefix "$DISCOVERY_SITE_SOURCE" ci
   sudo -u discovery-api -H env \
