@@ -1,4 +1,6 @@
 using Discovery.Core.Cqrs.Logs.Queries;
+using Discovery.Core.Enums.Identity;
+using Discovery.Api.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -8,6 +10,7 @@ namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/logs")]
+[RequirePermission(ResourceType.Logs, ActionType.View, ScopeSource.AccessList)]
 public class LogsController(IMediator mediator) : ControllerBase
 {
     /// <summary>

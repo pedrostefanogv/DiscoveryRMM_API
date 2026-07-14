@@ -3,17 +3,22 @@ using Discovery.Core.Cqrs.Logs.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Logs;
 
 public sealed class ListLogsQueryHandler(
-    ILogRepository repo
+    ILogRepository repo,
+    IScopeContext scopeContext
 ) : IRequestHandler<ListLogsQuery, Result<CursorPageDto<LogDto>>>
 {
     public async Task<Result<CursorPageDto<LogDto>>> Handle(ListLogsQuery q, CancellationToken ct)
     {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.Logs, ActionType.View);
+
         var query = new LogQuery
         {
             AgentId = q.AgentId is not null && Guid.TryParse(q.AgentId, out var aid) ? aid : null,
@@ -24,7 +29,10 @@ public sealed class ListLogsQueryHandler(
             Type = q.Type.HasValue ? (LogType)q.Type.Value : null,
             Source = q.Source.HasValue ? (LogSource)q.Source.Value : null,
             PeriodPreset = q.Period,
-            SearchText = q.Search
+            SearchText = q.Search,
+            HasGlobalAccess = scope.HasGlobalAccess,
+            AllowedClientIds = scope.AllowedClientIds,
+            AllowedSiteIds = scope.AllowedSiteIds
         };
 
         if (!string.IsNullOrWhiteSpace(q.Cursor))
@@ -100,11 +108,14 @@ public sealed class ListLogsQueryHandler(
 }
 
 public sealed class GetLogsSummaryQueryHandler(
-    ILogRepository repo
+    ILogRepository repo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetLogsSummaryQuery, Result<LogSummaryDto>>
 {
     public async Task<Result<LogSummaryDto>> Handle(GetLogsSummaryQuery q, CancellationToken ct)
     {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.Logs, ActionType.View);
+
         var query = new LogQuery
         {
             AgentId = q.AgentId is not null && Guid.TryParse(q.AgentId, out var aid) ? aid : null,
@@ -115,7 +126,10 @@ public sealed class GetLogsSummaryQueryHandler(
             Type = q.Type.HasValue ? (LogType)q.Type.Value : null,
             Source = q.Source.HasValue ? (LogSource)q.Source.Value : null,
             PeriodPreset = q.Period,
-            SearchText = q.Search
+            SearchText = q.Search,
+            HasGlobalAccess = scope.HasGlobalAccess,
+            AllowedClientIds = scope.AllowedClientIds,
+            AllowedSiteIds = scope.AllowedSiteIds
         };
 
         if (!string.IsNullOrWhiteSpace(q.Period))
@@ -151,16 +165,22 @@ public sealed class GetLogsSummaryQueryHandler(
 }
 
 public sealed class GetLogsScopeOptionsQueryHandler(
-    ILogRepository repo
+    ILogRepository repo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetLogsScopeOptionsQuery, Result<LogsScopeOptionsDto>>
 {
     public async Task<Result<LogsScopeOptionsDto>> Handle(GetLogsScopeOptionsQuery q, CancellationToken ct)
     {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.Logs, ActionType.View);
+
         // Buscar logs recentes (últimas 24h) para extrair escopos distintos
         var query = new LogQuery
         {
             Limit = 500,
-            From = DateTime.UtcNow.AddHours(-24)
+            From = DateTime.UtcNow.AddHours(-24),
+            HasGlobalAccess = scope.HasGlobalAccess,
+            AllowedClientIds = scope.AllowedClientIds,
+            AllowedSiteIds = scope.AllowedSiteIds
         };
 
         var raw = await repo.GetSummaryAsync(query);
