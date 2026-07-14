@@ -38,58 +38,29 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateDeployTokenRequest request, CancellationToken ct)
+    public async Task<IActionResult> Create([FromBody] CreateDeployTokenCommand cmd)
     {
-        var cmd = new CreateDeployTokenCommand(
-            request.ClientId, request.SiteId, request.Description,
-            request.ExpiresInHours, request.MultiUse, request.Delivery);
+        var result = await _mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: dto => Created("", dto),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
 
+    /// <summary>
+    /// Cria um deploy token e já retorna o instalador compilado com o token embutido.
+    /// O token NUNCA transita pelo frontend — é gerado internamente e injetado no binário.
+    /// installerType: "online" = bootstrap mínimo (.exe), "offline" = ZIP portátil com binário + config.
+    /// </summary>
+    [HttpPost("create-and-download")]
+    [RequestSizeLimit(500_000_000)]
+    public async Task<IActionResult> CreateAndDownload([FromBody] CreateDeployTokenAndDownloadCommand cmd, CancellationToken ct)
+    {
         var result = await _mediator.Send(cmd, ct);
-
-        // Se não for entrega com installer, retorna o DTO normalmente (comportamento legado)
-        var delivery = request.Delivery?.Trim().ToLowerInvariant();
-        if (delivery != "installer" && delivery != "full-installer")
-        {
-            return result.Match<IActionResult>(
-                success: dto => Created("", dto),
-                failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
-        }
-
-        // Delivery mode: token foi criado, agora gera o instalador binário
-        if (result.IsFailure)
-        {
-            return BadRequest(new { errors = result.Errors.Select(e => new { e.Code, e.Message, e.Field }) });
-        }
-
-        var dto = result.Value;
-        if (dto == null || string.IsNullOrWhiteSpace(dto.RawToken))
-        {
-            return StatusCode(500, new { message = "Falha ao gerar instalador: token não retornado." });
-        }
-
-        var rawToken = dto.RawToken;
-        try
-        {
-            if (delivery == "full-installer")
-            {
-                // Instalador completo (offline) — não precisa de internet para instalar
-                var (content, fileName) = await _agentPackageService.BuildInstallerAsync(rawToken, cancellationToken: ct);
-                _logger.LogInformation("Full installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
-                    fileName, content.Length, dto.TokenPrefix);
-                return File(content, "application/vnd.microsoft.portable-executable", fileName);
-            }
-
-            // installer = bootstrap (minimal) — baixa o stage2 da API durante instalação
-            var (bootstrapContent, bootstrapFileName) = await _agentPackageService.BuildBootstrapInstallerAsync(rawToken, cancellationToken: ct);
-            _logger.LogInformation("Bootstrap installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
-                bootstrapFileName, bootstrapContent.Length, dto.TokenPrefix);
-            return File(bootstrapContent, "application/vnd.microsoft.portable-executable", bootstrapFileName);
-        }
-        catch (InvalidOperationException ex)
-        {
-            _logger.LogError(ex, "Failed to build installer for deploy token prefix={Prefix}", dto.TokenPrefix);
-            return StatusCode(503, new { message = "Instalador indisponível temporariamente. Tente novamente em instantes." });
-        }
+        return result.Match<IActionResult>(
+            success: dto => File(dto.Content, dto.ContentType, dto.FileName),
+            failure: errors => errors[0].Code == "Internal"
+                ? StatusCode(503, new { message = errors[0].Message })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpDelete("{id:guid}")]
@@ -162,8 +133,7 @@ public class DeployTokensController : ControllerBase
 }
 
 /// <summary>
-/// Request body for creating a deploy token. Supports optional delivery field
-/// for combined token + installer download in a single request.
+/// Request body for creating a deploy token.
 /// </summary>
 public class CreateDeployTokenRequest
 {
@@ -174,8 +144,6 @@ public class CreateDeployTokenRequest
     public string? Description { get; set; }
     public int? ExpiresInHours { get; set; }
     public bool MultiUse { get; set; }
-    /// <summary>"token" (default) | "installer" (bootstrap) | "full-installer" (offline)</summary>
-    public string? Delivery { get; set; }
 }
 
 /// <summary>
