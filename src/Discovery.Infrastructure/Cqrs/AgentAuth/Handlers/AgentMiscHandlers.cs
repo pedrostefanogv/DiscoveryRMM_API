@@ -40,7 +40,8 @@ public sealed class GetAgentIdentityHandler(
 public sealed class GetAppStoreEffectiveHandler(
     IAgentRepository agentRepo,
     IConfigurationService configService,
-    ISiteRepository siteRepo
+    ISiteRepository siteRepo,
+    IAppStoreService appStoreService
 ) : IRequestHandler<GetAppStoreEffectiveQuery, Result<object>>
 {
     public async Task<Result<object>> Handle(GetAppStoreEffectiveQuery q, CancellationToken ct)
@@ -53,8 +54,10 @@ public sealed class GetAppStoreEffectiveHandler(
         var serverConfig = await configService.GetServerConfigAsync();
         ClientConfiguration? clientConfig = null;
         SiteConfiguration? siteConfig = null;
+        Guid? clientId = null;
         if (site is not null)
         {
+            clientId = site.ClientId;
             clientConfig = await configService.GetClientConfigAsync(site.ClientId);
             siteConfig = await configService.GetSiteConfigAsync(agent.SiteId);
         }
@@ -62,11 +65,35 @@ public sealed class GetAppStoreEffectiveHandler(
         var policy = siteConfig?.AppStorePolicy ?? clientConfig?.AppStorePolicy ?? serverConfig.AppStorePolicy;
         var enabled = serverConfig.AppStorePolicy != Core.Enums.AppStorePolicyType.Disabled;
 
+        if (!enabled)
+            return Result<object>.Success(new { enabled = false, policy = policy.ToString(), installationType = q.InstallationType, count = 0, items = Array.Empty<object>() });
+
+        // Busca os apps efetivos aprovados para o escopo do agent
+        var apps = await appStoreService.GetEffectiveAppsAsync(clientId, agent.SiteId, agent.Id, 
+            Enum.TryParse<Core.Enums.AppInstallationType>(q.InstallationType, true, out var instType) ? instType : Core.Enums.AppInstallationType.Winget, 
+            ct);
+        var items = apps.Select(a => new
+        {
+            installationType = a.InstallationType,
+            packageId = a.PackageId,
+            name = a.Name,
+            description = a.Description,
+            iconUrl = a.IconUrl,
+            publisher = a.Publisher,
+            version = a.Version,
+            installCommand = a.InstallCommand,
+            installerUrlsByArch = a.InstallerUrlsByArch,
+            autoUpdateEnabled = a.AutoUpdateEnabled,
+            sourceScope = a.SourceScope
+        }).ToList();
+
         return Result<object>.Success(new
         {
             enabled,
             policy = policy.ToString(),
-            installationType = q.InstallationType
+            installationType = q.InstallationType,
+            count = items.Count,
+            items
         });
     }
 }
