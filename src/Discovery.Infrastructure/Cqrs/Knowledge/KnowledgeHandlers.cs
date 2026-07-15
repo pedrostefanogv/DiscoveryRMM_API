@@ -11,36 +11,138 @@ using MediatR;
 namespace Discovery.Infrastructure.Cqrs.Knowledge;
 
 public sealed class SearchKnowledgeQueryHandler(IKnowledgeArticleRepository repo)
-    : IRequestHandler<SearchKnowledgeQuery, Result<IReadOnlyList<KnowledgeArticleDto>>>
+    : IRequestHandler<SearchKnowledgeQuery, Result<IReadOnlyList<ArticleResponse>>>
 {
-    public async Task<Result<IReadOnlyList<KnowledgeArticleDto>>> Handle(SearchKnowledgeQuery q, CancellationToken ct)
+    public async Task<Result<IReadOnlyList<ArticleResponse>>> Handle(SearchKnowledgeQuery q, CancellationToken ct)
     {
         var articles = await repo.SearchKeywordAsync(q.Query, q.ClientId, q.SiteId, null, ct);
-        var dtos = articles.Select(a => new KnowledgeArticleDto(a.Id, a.Title, null, a.Category, a.CreatedAt, a.UpdatedAt)).ToList();
-        return Result<IReadOnlyList<KnowledgeArticleDto>>.Success(dtos);
+        var dtos = articles.Select(MapToResponse).ToList();
+        return Result<IReadOnlyList<ArticleResponse>>.Success(dtos);
     }
+
+    private static ArticleResponse MapToResponse(KnowledgeArticle a) => new(
+        Id: a.Id, Title: a.Title, Content: a.Content, Category: a.Category,
+        Tags: ParseTags(a.TagsJson), CreatedBy: a.CreatedBy, LastEditedBy: a.LastEditedBy,
+        LastEditedAt: a.LastEditedAt, Status: a.Status,
+        Scope: ResolveScope(a.ClientId, a.SiteId), ScopeOrigin: ResolveScopeOrigin(a.ClientId, a.SiteId),
+        ClientId: a.ClientId, SiteId: a.SiteId, ClientName: null, SiteName: null,
+        DepartmentId: a.DepartmentId, CurrentVersionNumber: a.CurrentVersionNumber,
+        PublishedAt: a.PublishedAt, ChunkCount: a.Chunks?.Count ?? 0,
+        EmbeddingsReady: a.LastChunkedAt.HasValue,
+        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt);
+
+    private static List<string> ParseTags(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
+        catch { return []; }
+    }
+
+    private static string ResolveScope(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "Global",
+            (not null, null) => "Client",
+            _ => "Site"
+        };
+
+    private static string ResolveScopeOrigin(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "global",
+            (not null, null) => "client",
+            _ => "site"
+        };
 }
 
 public sealed class ListKnowledgeArticlesQueryHandler(IKnowledgeArticleRepository repo)
-    : IRequestHandler<ListKnowledgeArticlesQuery, Result<IReadOnlyList<KnowledgeArticleDto>>>
+    : IRequestHandler<ListKnowledgeArticlesQuery, Result<IReadOnlyList<ArticleResponse>>>
 {
-    public async Task<Result<IReadOnlyList<KnowledgeArticleDto>>> Handle(ListKnowledgeArticlesQuery q, CancellationToken ct)
+    public async Task<Result<IReadOnlyList<ArticleResponse>>> Handle(ListKnowledgeArticlesQuery q, CancellationToken ct)
     {
         var articles = await repo.ListByScopeAsync(q.ClientId, q.SiteId, null, null, null, ct);
-        var dtos = articles.Select(a => new KnowledgeArticleDto(a.Id, a.Title, null, a.Category, a.CreatedAt, a.UpdatedAt)).ToList();
-        return Result<IReadOnlyList<KnowledgeArticleDto>>.Success(dtos);
+        var dtos = articles.Select(MapToResponse).ToList();
+        return Result<IReadOnlyList<ArticleResponse>>.Success(dtos);
     }
+
+    private static ArticleResponse MapToResponse(KnowledgeArticle a) => new(
+        Id: a.Id, Title: a.Title, Content: a.Content, Category: a.Category,
+        Tags: ParseTags(a.TagsJson), CreatedBy: a.CreatedBy, LastEditedBy: a.LastEditedBy,
+        LastEditedAt: a.LastEditedAt, Status: a.Status,
+        Scope: ResolveScope(a.ClientId, a.SiteId), ScopeOrigin: ResolveScopeOrigin(a.ClientId, a.SiteId),
+        ClientId: a.ClientId, SiteId: a.SiteId, ClientName: null, SiteName: null,
+        DepartmentId: a.DepartmentId, CurrentVersionNumber: a.CurrentVersionNumber,
+        PublishedAt: a.PublishedAt, ChunkCount: a.Chunks?.Count ?? 0,
+        EmbeddingsReady: a.LastChunkedAt.HasValue,
+        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt);
+
+    private static List<string> ParseTags(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
+        catch { return []; }
+    }
+
+    private static string ResolveScope(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "Global",
+            (not null, null) => "Client",
+            _ => "Site"
+        };
+
+    private static string ResolveScopeOrigin(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "global",
+            (not null, null) => "client",
+            _ => "site"
+        };
 }
 
 public sealed class GetKnowledgeArticleByIdQueryHandler(IKnowledgeArticleRepository repo)
-    : IRequestHandler<GetKnowledgeArticleByIdQuery, Result<KnowledgeArticleDto>>
+    : IRequestHandler<GetKnowledgeArticleByIdQuery, Result<ArticleResponse>>
 {
-    public async Task<Result<KnowledgeArticleDto>> Handle(GetKnowledgeArticleByIdQuery q, CancellationToken ct)
+    public async Task<Result<ArticleResponse>> Handle(GetKnowledgeArticleByIdQuery q, CancellationToken ct)
     {
         var a = await repo.GetByIdAsync(q.Id, ct);
-        if (a is null) return Result<KnowledgeArticleDto>.Failure(Error.NotFound($"Article {q.Id} not found"));
-        return Result<KnowledgeArticleDto>.Success(new KnowledgeArticleDto(a.Id, a.Title, null, a.Category, a.CreatedAt, a.UpdatedAt));
+        if (a is null) return Result<ArticleResponse>.Failure(Error.NotFound($"Article {q.Id} not found"));
+        return Result<ArticleResponse>.Success(MapToResponse(a));
     }
+
+    private static ArticleResponse MapToResponse(KnowledgeArticle a) => new(
+        Id: a.Id, Title: a.Title, Content: a.Content, Category: a.Category,
+        Tags: ParseTags(a.TagsJson), CreatedBy: a.CreatedBy, LastEditedBy: a.LastEditedBy,
+        LastEditedAt: a.LastEditedAt, Status: a.Status,
+        Scope: ResolveScope(a.ClientId, a.SiteId), ScopeOrigin: ResolveScopeOrigin(a.ClientId, a.SiteId),
+        ClientId: a.ClientId, SiteId: a.SiteId, ClientName: null, SiteName: null,
+        DepartmentId: a.DepartmentId, CurrentVersionNumber: a.CurrentVersionNumber,
+        PublishedAt: a.PublishedAt, ChunkCount: a.Chunks?.Count ?? 0,
+        EmbeddingsReady: a.LastChunkedAt.HasValue,
+        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt);
+
+    private static List<string> ParseTags(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
+        catch { return []; }
+    }
+
+    private static string ResolveScope(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "Global",
+            (not null, null) => "Client",
+            _ => "Site"
+        };
+
+    private static string ResolveScopeOrigin(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "global",
+            (not null, null) => "client",
+            _ => "site"
+        };
 }
 
 // ── Command Handlers ──────────────────────────────────────────────────
