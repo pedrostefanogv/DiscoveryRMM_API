@@ -108,6 +108,7 @@ public class CustomFieldService : ICustomFieldService
             AllowRuntimeRead = input.AllowRuntimeRead,
             AllowAgentWrite = input.AllowAgentWrite,
             RuntimeAccessMode = input.RuntimeAccessMode,
+            DepartmentId = input.DepartmentId,
             CreatedAt = now,
             UpdatedAt = now
         };
@@ -162,6 +163,7 @@ public class CustomFieldService : ICustomFieldService
         definition.AllowRuntimeRead = input.AllowRuntimeRead;
         definition.AllowAgentWrite = input.AllowAgentWrite;
         definition.RuntimeAccessMode = input.RuntimeAccessMode;
+        definition.DepartmentId = input.DepartmentId;
         definition.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(cancellationToken);

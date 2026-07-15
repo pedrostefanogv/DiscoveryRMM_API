@@ -26,7 +26,8 @@ public sealed record UpsertCustomFieldDefinitionInput(
     bool AllowRuntimeRead,
     bool AllowAgentWrite,
     CustomFieldRuntimeAccessMode RuntimeAccessMode,
-    IReadOnlyList<CustomFieldAccessBindingInput>? AccessBindings);
+    IReadOnlyList<CustomFieldAccessBindingInput>? AccessBindings,
+    Guid? DepartmentId = null);
 
 public sealed record UpsertCustomFieldValueInput(
     Guid DefinitionId,

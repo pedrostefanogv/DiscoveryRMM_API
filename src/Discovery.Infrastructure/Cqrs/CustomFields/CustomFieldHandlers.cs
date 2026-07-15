@@ -1,4 +1,5 @@
-﻿using Discovery.Core.Cqrs;
+﻿using System.Text.Json;
+using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.CustomFields.Commands;
 using Discovery.Core.Cqrs.CustomFields.Queries;
 using Discovery.Core.DTOs;
@@ -35,7 +36,8 @@ public sealed class CreateCustomFieldCommandHandler(ICustomFieldService svc) : I
     {
         Enum.TryParse<CustomFieldScopeType>(cmd.ScopeType, true, out var st);
         Enum.TryParse<CustomFieldDataType>(cmd.DataType, true, out var dt);
-        var input = new UpsertCustomFieldDefinitionInput(cmd.Name, cmd.Label, cmd.Description, st, dt, cmd.IsRequired, true, cmd.IsSecret, null, cmd.ValidationRegex, null, null, null, null, false, false, CustomFieldRuntimeAccessMode.Disabled, null);
+        var options = CustomFieldHandlerHelper.ParseOptionsJson(cmd.OptionsJson);
+        var input = new UpsertCustomFieldDefinitionInput(cmd.Name, cmd.Label, cmd.Description, st, dt, cmd.IsRequired, true, cmd.IsSecret, options, cmd.ValidationRegex, null, null, null, null, false, false, CustomFieldRuntimeAccessMode.Disabled, null, cmd.DepartmentId);
         var d = await svc.CreateDefinitionAsync(input, cmd.UpdatedBy, ct);
         if (d is null) return Result<CustomFieldDto>.Failure(Error.Internal("Failed to create custom field"));
         return Result<CustomFieldDto>.Success(new CustomFieldDto(d.Id, d.Name, d.Label, d.Description, d.ScopeType.ToString(), d.DataType.ToString(), d.IsRequired, d.IsSecret, d.IsActive, d.DepartmentId, d.CreatedAt, d.UpdatedAt));
@@ -48,7 +50,8 @@ public sealed class UpdateCustomFieldCommandHandler(ICustomFieldService svc) : I
     {
         var d = await svc.GetDefinitionByIdAsync(cmd.Id, ct);
         if (d is null) return Result<CustomFieldDto>.Failure(Error.NotFound($"CustomField {cmd.Id} not found"));
-        var input = new UpsertCustomFieldDefinitionInput(cmd.Name ?? d.Name, cmd.Label ?? d.Label, cmd.Description ?? d.Description, d.ScopeType, d.DataType, cmd.IsRequired ?? d.IsRequired, cmd.IsActive ?? d.IsActive, cmd.IsSecret ?? d.IsSecret, null, cmd.ValidationRegex, null, null, null, null, false, false, CustomFieldRuntimeAccessMode.Disabled, null);
+        var options = CustomFieldHandlerHelper.ParseOptionsJson(cmd.OptionsJson);
+        var input = new UpsertCustomFieldDefinitionInput(cmd.Name ?? d.Name, cmd.Label ?? d.Label, cmd.Description ?? d.Description, d.ScopeType, d.DataType, cmd.IsRequired ?? d.IsRequired, cmd.IsActive ?? d.IsActive, cmd.IsSecret ?? d.IsSecret, options, cmd.ValidationRegex, null, null, null, null, false, false, CustomFieldRuntimeAccessMode.Disabled, null, cmd.DepartmentId ?? d.DepartmentId);
         var updated = await svc.UpdateDefinitionAsync(cmd.Id, input, cmd.UpdatedBy, ct);
         if (updated is null) return Result<CustomFieldDto>.Failure(Error.NotFound($"CustomField {cmd.Id} not found"));
         return Result<CustomFieldDto>.Success(new CustomFieldDto(updated.Id, updated.Name, updated.Label, updated.Description, updated.ScopeType.ToString(), updated.DataType.ToString(), updated.IsRequired, updated.IsSecret, updated.IsActive, updated.DepartmentId, updated.CreatedAt, updated.UpdatedAt));
@@ -86,5 +89,35 @@ public sealed class UpsertCustomFieldValueCommandHandler(ICustomFieldService svc
         var input = new UpsertCustomFieldValueInput(cmd.DefinitionId, scopeType, cmd.EntityId, cmd.ValueJson, cmd.UpdatedBy);
         var result = await svc.UpsertValueAsync(input, ct);
         return Result<CustomFieldResolvedValueDto>.Success(result);
+    }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+/// <summary>
+/// Converte uma string JSON de opções (ex: "opcao1,opcao2") ou array JSON em IReadOnlyList&lt;string&gt;.
+/// </summary>
+internal static class CustomFieldHandlerHelper
+{
+    public static IReadOnlyList<string>? ParseOptionsJson(string? optionsJson)
+    {
+        if (string.IsNullOrWhiteSpace(optionsJson))
+            return null;
+
+        // Tenta parse como array JSON primeiro: ["a","b"]
+        try
+        {
+            var arr = JsonSerializer.Deserialize<List<string>>(optionsJson);
+            if (arr is { Count: > 0 })
+                return arr.AsReadOnly();
+        }
+        catch { /* fallback para split por vírgula */ }
+
+        // Fallback: string separada por vírgula
+        return optionsJson
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => s.Length > 0)
+            .ToList()
+            .AsReadOnly();
     }
 }
