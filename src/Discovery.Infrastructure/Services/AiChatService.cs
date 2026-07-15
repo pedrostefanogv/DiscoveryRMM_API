@@ -1108,6 +1108,36 @@ Responda de forma profissional e prestativa.";
     /// Guardrails de saída: detecta e redige PII/secrets na resposta do LLM.
     /// </summary>
     private static string ApplyOutputGuardrails(string content, AIIntegrationSettings settings)
+    {
+        if (!settings.OutputGuardrailsEnabled || string.IsNullOrWhiteSpace(content))
+            return content;
+
+        var result = content;
+
+        // Detectar API keys no formato comum (sk-..., key-..., etc.)
+        result = Regex.Replace(result,
+            @"\b(sk-[a-zA-Z0-9]{20,})\b",
+            "***REDACTED_API_KEY***",
+            RegexOptions.IgnoreCase);
+
+        // Detectar tokens JWT
+        result = Regex.Replace(result,
+            @"\b(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})\b",
+            "***REDACTED_JWT***");
+
+        // Detectar senhas em padrão chave=valor
+        result = Regex.Replace(result,
+            @"(password|senha|passwd|secret|api[_-]?key)\s*[:=]\s*\S+",
+            "$1: ***REDACTED***",
+            RegexOptions.IgnoreCase);
+
+        // Detectar CPF (formato brasileiro)
+        result = Regex.Replace(result,
+            @"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b",
+            "***.###.###-**");
+
+        return result;
+    }
 
     /// <summary>
     /// Detecta tool calls em formato XML (ex: &lt;knowledgesearch&gt;{"query":"x"}&lt;/knowledge_search&gt;)
@@ -1203,41 +1233,6 @@ Responda de forma profissional e prestativa.";
             _logger.LogInformation("[{TraceId}] {Count} XML tool(s) executadas e removidas do output",
                 traceId, executedCount);
         }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Guardrails de saída: detecta e redige PII/secrets na resposta do LLM.
-    /// </summary>
-    private static string ApplyOutputGuardrails(string content, AIIntegrationSettings settings)
-    {
-        if (!settings.OutputGuardrailsEnabled || string.IsNullOrWhiteSpace(content))
-            return content;
-
-        var result = content;
-
-        // Detectar API keys no formato comum (sk-..., key-..., etc.)
-        result = Regex.Replace(result,
-            @"\b(sk-[a-zA-Z0-9]{20,})\b",
-            "***REDACTED_API_KEY***",
-            RegexOptions.IgnoreCase);
-
-        // Detectar tokens JWT
-        result = Regex.Replace(result,
-            @"\b(eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,})\b",
-            "***REDACTED_JWT***");
-
-        // Detectar senhas em padrão chave=valor
-        result = Regex.Replace(result,
-            @"(password|senha|passwd|secret|api[_-]?key)\s*[:=]\s*\S+",
-            "$1: ***REDACTED***",
-            RegexOptions.IgnoreCase);
-
-        // Detectar CPF (formato brasileiro)
-        result = Regex.Replace(result,
-            @"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b",
-            "***.###.###-**");
 
         return result;
     }
