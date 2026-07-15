@@ -12,6 +12,7 @@ using Discovery.Core.Cqrs.Agents.PowerManagement.Commands;
 using Discovery.Core.Cqrs.Agents.RemoteDebug.Commands;
 using Discovery.Core.Cqrs.Agents.RemoteDebug.Queries;
 using Discovery.Core.Cqrs.Agents.Transfer.Commands;
+using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
 using Discovery.Core.Enums.Identity;
 using MediatR;
@@ -445,5 +446,51 @@ public class AgentsController : ControllerBase
     {
         var result = await _mediator.Send(new ListNotesPageQuery(null, null, id, cursor, limit), ct);
         return result.ToActionResult();
+    }
+
+    [HttpGet("{id:guid}/notes/{noteId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetNoteById(Guid id, Guid noteId)
+    {
+        var result = await _mediator.Send(new GetNoteByIdQuery(noteId));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    [HttpPost("{id:guid}/notes")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> CreateNote(Guid id, [FromBody] CreateNoteCommand cmd)
+    {
+        var result = await _mediator.Send(cmd with { AgentId = id });
+        return result.Match<IActionResult>(
+            success: dto => CreatedAtAction(nameof(GetNoteById), new { id, noteId = dto.Id }, dto),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    [HttpPut("{id:guid}/notes/{noteId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> UpdateNote(Guid id, Guid noteId, [FromBody] UpdateNoteCommand cmd)
+    {
+        var result = await _mediator.Send(cmd with { Id = noteId });
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    [HttpDelete("{id:guid}/notes/{noteId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> DeleteNote(Guid id, Guid noteId)
+    {
+        var result = await _mediator.Send(new DeleteNoteCommand(noteId));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 }
