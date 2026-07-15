@@ -265,4 +265,30 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         await _db.SaveChangesAsync();
         return existing;
     }
+
+    public async Task<IReadOnlyList<AutomationTaskDefinition>> GetActiveTasksForAgentAsync(
+        Guid agentId,
+        Guid? agentSiteId,
+        Guid? siteClientId,
+        int limit = 200)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+
+        var query = _db.AutomationTaskDefinitions
+            .AsNoTracking()
+            .Where(t => t.DeletedAt == null && t.IsActive);
+
+        // Hierarchical scope resolution: Global(0) -> Client(1) -> Site(2) -> Agent(3)
+        query = query.Where(t =>
+            t.ScopeType == AppApprovalScopeType.Global
+            || (t.ScopeType == AppApprovalScopeType.Client && siteClientId.HasValue && t.ClientId == siteClientId.Value)
+            || (t.ScopeType == AppApprovalScopeType.Site && agentSiteId.HasValue && t.SiteId == agentSiteId.Value)
+            || (t.ScopeType == AppApprovalScopeType.Agent && t.AgentId == agentId));
+
+        return await query
+            .OrderByDescending(t => t.UpdatedAt)
+            .ThenByDescending(t => t.Id)
+            .Take(safeLimit + 1)
+            .ToListAsync();
+    }
 }

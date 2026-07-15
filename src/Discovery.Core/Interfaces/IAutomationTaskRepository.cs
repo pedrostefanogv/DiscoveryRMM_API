@@ -38,4 +38,13 @@ public interface IAutomationTaskRepository
     Task UpdateAsync(AutomationTaskDefinition task);
     Task DeleteAsync(Guid id);
     Task<AutomationTaskDefinition?> RestoreAsync(Guid id);
+
+    /// <summary>
+    /// Returns active tasks for an agent, resolving hierarchical scope (Global → Client → Site → Agent).
+    /// </summary>
+    Task<IReadOnlyList<AutomationTaskDefinition>> GetActiveTasksForAgentAsync(
+        Guid agentId,
+        Guid? agentSiteId,
+        Guid? siteClientId,
+        int limit = 200);
 }
