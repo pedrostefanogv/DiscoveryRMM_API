@@ -159,7 +159,9 @@ Cqrs/
  ICommand.cs
  IQuery.cs
  Jobs/Queries/JobQueries.cs
- Knowledge/Queries/KnowledgeQueries.cs
+ Knowledge/
+  Commands/KnowledgeCommands.cs
+  Queries/KnowledgeQueries.cs
  Logs/Queries/LogQueries.cs
  MeshCentral/Queries/MeshCentralQueries.cs
  Mfa/Queries/MfaQueries.cs
