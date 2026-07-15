@@ -4,6 +4,7 @@ using Discovery.Core.DTOs;
 namespace Discovery.Core.Cqrs.Agents.Inventory.Queries;
 
 public sealed record GetAgentHardwareQuery(Guid AgentId) : IQuery<Result<AgentHardwareDto>>;
+public sealed record GetAgentHardwareReportQuery(Guid AgentId) : IQuery<Result<AgentHardwareReportDto>>;
 public sealed record GetAgentHardwareComponentsQuery(Guid AgentId) : IQuery<Result<AgentHardwareComponentsDto>>;
 public sealed record GetAgentSoftwareQuery(Guid AgentId, string? Cursor = null, int Limit = 100, string? Search = null, bool Descending = false) : IQuery<Result<CursorPageDto<AgentSoftwareItemDto>>>;
 public sealed record GetAgentSoftwareSnapshotQuery(Guid AgentId) : IQuery<Result<AgentSoftwareSnapshotDto>>;
@@ -26,7 +27,23 @@ public sealed record AgentHardwareDto(
     long? GpuMemoryBytes,
     string? OsName,
     string? OsVersion,
+    string? OsBuild,
     string? OsArchitecture
+);
+
+/// <summary>
+/// DTO agregado que combina hardware info + components em um unico payload.
+/// Alinhado com o contrato <c>HardwareReport</c> do frontend (DiscoveryRMM_Site).
+/// </summary>
+public sealed record AgentHardwareReportDto(
+    AgentHardwareDto? Hardware,
+    List<AgentHardwarePrinterDto> Printers,
+    List<AgentHardwareListeningPortDto> ListeningPorts,
+    List<AgentHardwareOpenSocketDto> OpenSockets,
+    List<AgentHardwareDiskDto> Disks,
+    List<AgentHardwareNetworkAdapterDto> NetworkAdapters,
+    List<AgentHardwareMemoryModuleDto> MemoryModules,
+    DateTime? CollectedAt
 );
 public sealed record AgentSoftwareItemDto(
     Guid InventoryId,

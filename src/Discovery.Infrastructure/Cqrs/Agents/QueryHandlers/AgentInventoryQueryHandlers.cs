@@ -41,7 +41,85 @@ public sealed class GetAgentHardwareQueryHandler(
             hardware.GpuMemoryBytes,
             hardware.OsName,
             hardware.OsVersion,
+            hardware.OsBuild,
             hardware.OsArchitecture
+        ));
+    }
+}
+
+/// <summary>
+/// Handler para o DTO agregado <see cref="AgentHardwareReportDto"/>.
+/// Combina hardware info + components em um unico payload, alinhado ao contrato
+/// <c>HardwareReport</c> do frontend DiscoveryRMM_Site.
+/// </summary>
+public sealed class GetAgentHardwareReportQueryHandler(
+    IAgentRepository agentRepo,
+    IAgentHardwareRepository hardwareRepo
+) : IRequestHandler<GetAgentHardwareReportQuery, Result<AgentHardwareReportDto>>
+{
+    public async Task<Result<AgentHardwareReportDto>> Handle(GetAgentHardwareReportQuery q, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<AgentHardwareReportDto>.Failure(Error.NotFound("Agent not found."));
+
+        var hardware = await hardwareRepo.GetByAgentIdAsync(q.AgentId);
+        AgentHardwareDto? hwDto = null;
+        if (hardware is not null)
+        {
+            hwDto = new AgentHardwareDto(
+                hardware.Manufacturer ?? string.Empty,
+                hardware.Model ?? string.Empty,
+                hardware.SerialNumber,
+                hardware.BiosVersion,
+                hardware.BiosManufacturer,
+                hardware.BiosDate,
+                hardware.TotalMemoryBytes,
+                hardware.ProcessorCores,
+                hardware.ProcessorThreads,
+                hardware.Processor,
+                hardware.ProcessorArchitecture,
+                hardware.ProcessorFrequencyGhz,
+                hardware.MachineScore,
+                hardware.GpuModel,
+                hardware.GpuMemoryBytes,
+                hardware.OsName,
+                hardware.OsVersion,                hardware.OsBuild,                hardware.OsArchitecture
+            );
+        }
+
+        var components = await hardwareRepo.GetComponentsAsync(q.AgentId);
+
+        return Result<AgentHardwareReportDto>.Success(new AgentHardwareReportDto(
+            Hardware: hwDto,
+            Printers: components.Printers.Select(p => new AgentHardwarePrinterDto(
+                p.Name, p.DriverName, p.PortName, p.PrinterStatus,
+                p.IsDefault, p.IsNetworkPrinter, p.Shared, p.ShareName, p.Location
+            )).ToList(),
+            ListeningPorts: components.ListeningPorts.Select(lp => new AgentHardwareListeningPortDto(
+                lp.ProcessName, lp.ProcessId, lp.ProcessPath,
+                lp.Protocol, lp.Address, lp.Port, lp.State
+            )).ToList(),
+            OpenSockets: components.OpenSockets.Select(os => new AgentHardwareOpenSocketDto(
+                os.ProcessName, os.ProcessId, os.ProcessPath,
+                os.LocalAddress, os.LocalPort, os.RemoteAddress, os.RemotePort,
+                os.Protocol, os.Family
+            )).ToList(),
+            Disks: components.Disks.Select(d => new AgentHardwareDiskDto(
+                d.DriveLetter, d.Label, d.FileSystem,
+                d.TotalSizeBytes, d.FreeSpaceBytes, d.MediaType
+            )).ToList(),
+            NetworkAdapters: components.NetworkAdapters.Select(na => new AgentHardwareNetworkAdapterDto(
+                na.Name, na.MacAddress, na.IpAddress, na.SubnetMask, na.Gateway,
+                na.DnsServers is not null ? [na.DnsServers] : null,
+                na.IsDhcpEnabled, na.AdapterType, na.Speed
+            )).ToList(),
+            MemoryModules: components.MemoryModules.Select(mm => new AgentHardwareMemoryModuleDto(
+                mm.Manufacturer, mm.PartNumber, mm.SerialNumber,
+                mm.CapacityBytes, mm.SpeedMhz, mm.MemoryType,
+                mm.Slot, null, null
+            )).ToList(),
+            CollectedAt: hardware?.InventoryCollectedAt
         ));
     }
 }

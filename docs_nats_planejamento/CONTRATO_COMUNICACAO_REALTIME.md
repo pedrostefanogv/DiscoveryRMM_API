@@ -360,6 +360,18 @@ Valores legados como `agent_connected`, `agent_disconnected`, `command_result`, 
 | Campo | Tipo | Obrigatorio |
 |---|---|---|
 | `agentId` | `Guid` | sim |
+| `processor` | `string?` | nao |
+| `processorCores` | `int?` | nao |
+| `processorThreads` | `int?` | nao |
+| `processorArchitecture` | `string?` | nao |
+| `totalMemoryBytes` | `long?` | nao |
+| `machineScore` | `int?` | nao |
+| `model` | `string?` | nao |
+| `manufacturer` | `string?` | nao |
+| `gpuModel` | `string?` | nao |
+| `gpuMemoryBytes` | `long?` | nao |
+| `biosVersion` | `string?` | nao |
+| `serialNumber` | `string?` | nao |
 
 #### 2.8.5 Envelope entregue ao frontend
 

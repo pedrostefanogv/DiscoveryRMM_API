@@ -124,7 +124,7 @@ public class AgentsController : ControllerBase
     [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetHardware(Guid id)
     {
-        var result = await _mediator.Send(new GetAgentHardwareQuery(id));
+        var result = await _mediator.Send(new GetAgentHardwareReportQuery(id));
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());

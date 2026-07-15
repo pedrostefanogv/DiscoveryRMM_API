@@ -471,14 +471,28 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 _logger.LogWarning(ex, "Failed to persist hardware report for agent {AgentId}", agentId.Value);
                             }
 
-                            // Propaga para dashboards via NATS dashboard.events (mesmo payload original como data)
-                            var hwEventData = msg.Data is not null && msg.Data.Length > 0
-                                ? System.Text.Json.JsonSerializer.Deserialize<object>(msg.Data, JsonOptions)
-                                : new { AgentId = agentId.Value };
+                            // Propaga para dashboards via NATS dashboard.events com payload enriquecido
+                            // (campos de hardware mapeados explicitamente para consumo direto do frontend).
+                            var hwEventData = new
+                            {
+                                AgentId = agentId.Value,
+                                Processor = hardwareInfo.Processor,
+                                ProcessorCores = hardwareInfo.ProcessorCores,
+                                ProcessorThreads = hardwareInfo.ProcessorThreads,
+                                ProcessorArchitecture = hardwareInfo.ProcessorArchitecture,
+                                TotalMemoryBytes = hardwareInfo.TotalMemoryBytes,
+                                MachineScore = hardwareInfo.MachineScore,
+                                Model = hardwareInfo.Model,
+                                Manufacturer = hardwareInfo.Manufacturer,
+                                GpuModel = hardwareInfo.GpuModel,
+                                GpuMemoryBytes = hardwareInfo.GpuMemoryBytes,
+                                BiosVersion = hardwareInfo.BiosVersion,
+                                SerialNumber = hardwareInfo.SerialNumber,
+                            };
                             await PublishDashboardEventForAgentAsync(
                                 agentId.Value,
                                 "AgentHardwareReported",
-                                hwEventData ?? new { AgentId = agentId.Value },
+                                hwEventData,
                                 CancellationToken.None);
                         }
                     }
