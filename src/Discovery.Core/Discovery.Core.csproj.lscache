@@ -125,8 +125,12 @@ Cqrs/
   AuthMfaQueries.cs
   AuthQueries.cs
  Automation/Queries/AutomationQueries.cs
- AutomationScripts/Queries/AutomationScriptQueries.cs
- AutomationTasks/Queries/AutomationTaskQueries.cs
+ AutomationScripts/
+  Commands/AutomationScriptCommands.cs
+  Queries/AutomationScriptQueries.cs
+ AutomationTasks/
+  Commands/AutomationTaskCommands.cs
+  Queries/AutomationTaskQueries.cs
  AutoTicketRules/
   Commands/AutoTicketRuleCommands.cs
   Queries/AutoTicketRuleQueries.cs
