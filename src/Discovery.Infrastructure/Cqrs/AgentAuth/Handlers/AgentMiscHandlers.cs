@@ -148,7 +148,7 @@ public sealed class IssueZeroTouchDeployTokenHandler(
         return Result<object>.Success(new
         {
             tokenId = token.Id,
-            rawToken,
+            deployKey = rawToken,
             clientId = token.ClientId,
             siteId = token.SiteId,
             expiresAtUtc = token.ExpiresAt

@@ -347,7 +347,7 @@ public class AgentAuthController : ControllerBase
     public async Task<IActionResult> IssueZeroTouchDeployToken()
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
-        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        var (_, blocked) = await GetAgentOrBlockAsync(id, true);
         if (blocked is not null) return blocked;
         return MapResult(await _mediator.Send(new IssueZeroTouchDeployTokenCommand(id)), Ok);
     }
