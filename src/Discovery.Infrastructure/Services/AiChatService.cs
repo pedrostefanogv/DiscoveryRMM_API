@@ -43,6 +43,34 @@ public class AiChatService : IAiChatService
     private const int DefaultMaxKbContextTokens = 2000;
     private const int DefaultMaxTokens = 1000;
     private const double DefaultTemperature = 0.7;
+
+    /// <summary>
+    /// Regex para detectar tool calls em formato texto (XML-like) geradas por
+    /// modelos que não suportam function calling nativo (ex: Llama via certos providers).
+    /// Ex: &lt;knowledgesearch&gt;{"query":"teste","maxresults":5}&lt;/knowledge_search&gt;
+    /// NOTA: abertura e fechamento podem ter nomes diferentes (com/sem underscore).
+    /// </summary>
+    private static readonly Regex XmlToolCallRegex = new(
+        @"<(\w+)>\s*(\{[^}]*\})\s*</\w+>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(200));
+
+    /// <summary>
+    /// Mapeia aliases de nome de tool (ex: "knowledgesearch" → "knowledge_search").
+    /// </summary>
+    private static readonly Dictionary<string, string> XmlToolAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["knowledgesearch"] = "knowledge_search",
+        ["searchknowledge"] = "knowledge_search",
+        ["kbsearch"] = "knowledge_search",
+        ["filesystemread"] = "filesystem.read_file",
+        ["readfile"] = "filesystem.read_file",
+        ["timecurrent"] = "time.current",
+        ["gettime"] = "time.current",
+        ["memorysearch"] = "memory.search",
+        ["sequentialthinking"] = "sequential_thinking",
+        ["postgresquery"] = "postgres.query",
+    };
     
     public AiChatService(
         IAiChatSessionRepository sessionRepository,
@@ -755,6 +783,17 @@ public class AiChatService : IAiChatService
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
+        // ── Fallback: parse XML tool calls no texto final (modelos sem function calling nativo) ──
+        // Ex: Llama 3.1 via certos providers gera <knowledgesearch>{"query":"x"}</knowledgesearch>
+        // em vez de tool_calls no protocolo JSON nativo.
+        fullContent = await ParseAndExecuteXmlToolCallsAsync(
+            fullContent, availableTools,
+            scopeClientId, scopeSiteId, agentId,
+            aiSettings, departmentId,
+            llmMessages, toolMessagesToPersist,
+            session.Id, ref nextSeq, traceId,
+            ct);
+
         // ── Persistência pós-stream (lote transacional) ───────────────────────
         try
         {
@@ -915,6 +954,7 @@ public class AiChatService : IAiChatService
 - Identifique riscos e peça confirmação para operações críticas
 - Se precisar executar ferramentas (comandos, scripts), informe claramente antes
 - Mantenha o foco no problema relatado
+- IMPORTANTE: use APENAS function calls nativas JSON para invocar ferramentas. NUNCA escreva tags XML como <knowledgesearch> ou <tool> no texto da resposta.
 
 Responda de forma profissional e prestativa.";
     }
@@ -1004,7 +1044,7 @@ Responda de forma profissional e prestativa.";
             }
 
             kbSection.AppendLine();
-            kbSection.AppendLine("*Use a tool `knowledge_search` se precisar buscar mais informações específicas na base de conhecimento.*");
+            kbSection.AppendLine("*Caso as informações acima não sejam suficientes, utilize a function call nativa `knowledge_search` para buscar mais artigos.*");
 
             return (basePrompt + kbSection.ToString(), injected);
         }
@@ -1063,6 +1103,109 @@ Responda de forma profissional e prestativa.";
 
     private static double ClampTemperature(AIIntegrationSettings settings)
         => settings.Temperature is >= 0 and <= 2 ? settings.Temperature : DefaultTemperature;
+
+    /// <summary>
+    /// Guardrails de saída: detecta e redige PII/secrets na resposta do LLM.
+    /// </summary>
+    private static string ApplyOutputGuardrails(string content, AIIntegrationSettings settings)
+
+    /// <summary>
+    /// Detecta tool calls em formato XML (ex: &lt;knowledgesearch&gt;{"query":"x"}&lt;/knowledge_search&gt;)
+    /// geradas por modelos que não suportam function calling nativo (ex: Llama via certos providers).
+    /// Executa as tools encontradas e retorna o texto limpo (sem os blocos XML).
+    /// </summary>
+    private async Task<string> ParseAndExecuteXmlToolCallsAsync(
+        string content,
+        List<LlmTool> availableTools,
+        Guid scopeClientId,
+        Guid scopeSiteId,
+        Guid agentId,
+        AIIntegrationSettings aiSettings,
+        Guid? departmentId,
+        List<LlmMessage> llmMessages,
+        List<AiChatMessage> toolMessagesToPersist,
+        Guid sessionId,
+        ref int nextSeq,
+        string traceId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return content;
+
+        var matches = XmlToolCallRegex.Matches(content);
+        if (matches.Count == 0)
+            return content;
+
+        var knownToolNames = availableTools.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var result = content;
+        var executedCount = 0;
+
+        foreach (Match match in matches)
+        {
+            var rawToolName = match.Groups[1].Value;
+            var argsJson = match.Groups[2].Value;
+
+            // Resolve alias (ex: "knowledgesearch" → "knowledge_search")
+            var toolName = XmlToolAliases.TryGetValue(rawToolName, out var resolved)
+                ? resolved
+                : rawToolName;
+
+            if (!knownToolNames.Contains(toolName))
+            {
+                _logger.LogDebug("[{TraceId}] XML tool call ignorada (tool desconhecida): {ToolName}",
+                    traceId, toolName);
+                continue;
+            }
+
+            _logger.LogInformation("[{TraceId}] XML tool call detectada: {ToolName} args={Args}",
+                traceId, toolName, argsJson);
+
+            try
+            {
+                var toolResult = await _mcpToolExecutor.ExecuteAsync(
+                    toolName, argsJson,
+                    scopeClientId, scopeSiteId, agentId,
+                    aiSettings, null, departmentId, ct);
+
+                var toolCallId = $"xml_{Guid.NewGuid():N}";
+
+                llmMessages.Add(new LlmMessage("assistant", string.Empty));
+                llmMessages.Add(new LlmMessage("tool", toolResult, toolCallId, toolName));
+
+                toolMessagesToPersist.Add(new AiChatMessage
+                {
+                    Id = Guid.NewGuid(),
+                    SessionId = sessionId,
+                    SequenceNumber = nextSeq++,
+                    Role = "tool",
+                    Content = toolResult,
+                    ToolCallId = toolCallId,
+                    ToolName = toolName,
+                    CreatedAt = DateTime.UtcNow,
+                    TraceId = traceId
+                });
+
+                _logger.LogDebug("[{TraceId}] XML tool '{ToolName}' executada com sucesso",
+                    traceId, toolName);
+                executedCount++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[{TraceId}] XML tool '{ToolName}' falhou", traceId, toolName);
+            }
+
+            // Remove o bloco XML do texto
+            result = result.Replace(match.Value, string.Empty);
+        }
+
+        if (executedCount > 0)
+        {
+            _logger.LogInformation("[{TraceId}] {Count} XML tool(s) executadas e removidas do output",
+                traceId, executedCount);
+        }
+
+        return result;
+    }
 
     /// <summary>
     /// Guardrails de saída: detecta e redige PII/secrets na resposta do LLM.

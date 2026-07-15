@@ -409,6 +409,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                             _logger.LogDebug("Hardware report received from agent {AgentId}", agentId.Value);
 
                             // Persiste inventario de hardware (contrato: hardware report deve ser persistido).
+                            AgentHardwareInfo? hardwareInfo = null;
                             try
                             {
                                 var hwData = msg.Data ?? "";
@@ -417,7 +418,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                     using var doc = System.Text.Json.JsonDocument.Parse(hwData);
                                     var root = doc.RootElement;
 
-                                    var hardwareInfo = new AgentHardwareInfo
+                                    hardwareInfo = new AgentHardwareInfo
                                     {
                                         AgentId = agentId.Value,
                                         InventoryCollectedAt = DateTime.UtcNow,
@@ -476,18 +477,18 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                             var hwEventData = new
                             {
                                 AgentId = agentId.Value,
-                                Processor = hardwareInfo.Processor,
-                                ProcessorCores = hardwareInfo.ProcessorCores,
-                                ProcessorThreads = hardwareInfo.ProcessorThreads,
-                                ProcessorArchitecture = hardwareInfo.ProcessorArchitecture,
-                                TotalMemoryBytes = hardwareInfo.TotalMemoryBytes,
-                                MachineScore = hardwareInfo.MachineScore,
-                                Model = hardwareInfo.Model,
-                                Manufacturer = hardwareInfo.Manufacturer,
-                                GpuModel = hardwareInfo.GpuModel,
-                                GpuMemoryBytes = hardwareInfo.GpuMemoryBytes,
-                                BiosVersion = hardwareInfo.BiosVersion,
-                                SerialNumber = hardwareInfo.SerialNumber,
+                                Processor = hardwareInfo?.Processor,
+                                ProcessorCores = hardwareInfo?.ProcessorCores,
+                                ProcessorThreads = hardwareInfo?.ProcessorThreads,
+                                ProcessorArchitecture = hardwareInfo?.ProcessorArchitecture,
+                                TotalMemoryBytes = hardwareInfo?.TotalMemoryBytes,
+                                MachineScore = hardwareInfo?.MachineScore,
+                                Model = hardwareInfo?.Model,
+                                Manufacturer = hardwareInfo?.Manufacturer,
+                                GpuModel = hardwareInfo?.GpuModel,
+                                GpuMemoryBytes = hardwareInfo?.GpuMemoryBytes,
+                                BiosVersion = hardwareInfo?.BiosVersion,
+                                SerialNumber = hardwareInfo?.SerialNumber,
                             };
                             await PublishDashboardEventForAgentAsync(
                                 agentId.Value,
