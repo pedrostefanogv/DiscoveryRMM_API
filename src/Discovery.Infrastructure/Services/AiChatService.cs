@@ -786,13 +786,15 @@ public class AiChatService : IAiChatService
         // ── Fallback: parse XML tool calls no texto final (modelos sem function calling nativo) ──
         // Ex: Llama 3.1 via certos providers gera <knowledgesearch>{"query":"x"}</knowledgesearch>
         // em vez de tool_calls no protocolo JSON nativo.
-        fullContent = await ParseAndExecuteXmlToolCallsAsync(
+        var (cleanedContent, updatedNextSeq) = await ParseAndExecuteXmlToolCallsAsync(
             fullContent, availableTools,
             scopeClientId, scopeSiteId, agentId,
             aiSettings, departmentId,
             llmMessages, toolMessagesToPersist,
-            session.Id, ref nextSeq, traceId,
+            session.Id, nextSeq, traceId,
             ct);
+        fullContent = cleanedContent;
+        nextSeq = updatedNextSeq;
 
         // ── Persistência pós-stream (lote transacional) ───────────────────────
         try
@@ -1144,7 +1146,7 @@ Responda de forma profissional e prestativa.";
     /// geradas por modelos que não suportam function calling nativo (ex: Llama via certos providers).
     /// Executa as tools encontradas e retorna o texto limpo (sem os blocos XML).
     /// </summary>
-    private async Task<string> ParseAndExecuteXmlToolCallsAsync(
+    private async Task<(string Content, int NextSeq)> ParseAndExecuteXmlToolCallsAsync(
         string content,
         List<LlmTool> availableTools,
         Guid scopeClientId,
@@ -1155,16 +1157,16 @@ Responda de forma profissional e prestativa.";
         List<LlmMessage> llmMessages,
         List<AiChatMessage> toolMessagesToPersist,
         Guid sessionId,
-        ref int nextSeq,
+        int nextSeq,
         string traceId,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(content))
-            return content;
+            return (content, nextSeq);
 
         var matches = XmlToolCallRegex.Matches(content);
         if (matches.Count == 0)
-            return content;
+            return (content, nextSeq);
 
         var knownToolNames = availableTools.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var result = content;
@@ -1234,6 +1236,6 @@ Responda de forma profissional e prestativa.";
                 traceId, executedCount);
         }
 
-        return result;
+        return (result, nextSeq);
     }
 }
