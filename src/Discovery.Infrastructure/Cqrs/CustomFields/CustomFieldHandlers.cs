@@ -13,8 +13,7 @@ public sealed class ListCustomFieldsQueryHandler(ICustomFieldService svc) : IReq
 {
     public async Task<Result<IReadOnlyList<CustomFieldDto>>> Handle(ListCustomFieldsQuery q, CancellationToken ct)
     {
-        CustomFieldScopeType? st = q.ScopeType is not null && Enum.TryParse<CustomFieldScopeType>(q.ScopeType, true, out var t) ? t : null;
-        var defs = await svc.GetDefinitionsAsync(st, q.IncludeInactive, ct);
+        var defs = await svc.GetDefinitionsAsync(q.ScopeType, q.IncludeInactive, ct);
         var items = defs.Select(d => new CustomFieldDto(d.Id, d.Name, d.Label, d.Description, d.ScopeType.ToString(), d.DataType.ToString(), d.IsRequired, d.IsSecret, d.IsActive, d.DepartmentId, d.CreatedAt, d.UpdatedAt)).ToList().AsReadOnly();
         return Result<IReadOnlyList<CustomFieldDto>>.Success(items);
     }
@@ -34,10 +33,8 @@ public sealed class CreateCustomFieldCommandHandler(ICustomFieldService svc) : I
 {
     public async Task<Result<CustomFieldDto>> Handle(CreateCustomFieldCommand cmd, CancellationToken ct)
     {
-        Enum.TryParse<CustomFieldScopeType>(cmd.ScopeType, true, out var st);
-        Enum.TryParse<CustomFieldDataType>(cmd.DataType, true, out var dt);
         var options = CustomFieldHandlerHelper.ParseOptionsJson(cmd.OptionsJson);
-        var input = new UpsertCustomFieldDefinitionInput(cmd.Name, cmd.Label, cmd.Description, st, dt, cmd.IsRequired, true, cmd.IsSecret, options, cmd.ValidationRegex, null, null, null, null, false, false, CustomFieldRuntimeAccessMode.Disabled, null, cmd.DepartmentId);
+        var input = new UpsertCustomFieldDefinitionInput(cmd.Name, cmd.Label, cmd.Description, cmd.ScopeType, cmd.DataType, cmd.IsRequired, true, cmd.IsSecret, options, cmd.ValidationRegex, null, null, null, null, false, false, CustomFieldRuntimeAccessMode.Disabled, null, cmd.DepartmentId);
         var d = await svc.CreateDefinitionAsync(input, cmd.UpdatedBy, ct);
         if (d is null) return Result<CustomFieldDto>.Failure(Error.Internal("Failed to create custom field"));
         return Result<CustomFieldDto>.Success(new CustomFieldDto(d.Id, d.Name, d.Label, d.Description, d.ScopeType.ToString(), d.DataType.ToString(), d.IsRequired, d.IsSecret, d.IsActive, d.DepartmentId, d.CreatedAt, d.UpdatedAt));
@@ -71,10 +68,7 @@ public sealed class ListCustomFieldValuesQueryHandler(ICustomFieldService svc) :
 {
     public async Task<Result<CursorPageDto<CustomFieldResolvedValueDto>>> Handle(ListCustomFieldValuesQuery q, CancellationToken ct)
     {
-        if (!Enum.TryParse<CustomFieldScopeType>(q.ScopeType, true, out var scopeType))
-            return Result<CursorPageDto<CustomFieldResolvedValueDto>>.Failure(Error.Validation("scopeType", $"Invalid scopeType: {q.ScopeType}"));
-
-        var page = await svc.GetValuesPageAsync(scopeType, q.EntityId, q.Cursor, q.Limit, q.IncludeSecrets, ct);
+        var page = await svc.GetValuesPageAsync(q.ScopeType, q.EntityId, q.Cursor, q.Limit, q.IncludeSecrets, ct);
         return Result<CursorPageDto<CustomFieldResolvedValueDto>>.Success(page);
     }
 }
@@ -83,10 +77,7 @@ public sealed class UpsertCustomFieldValueCommandHandler(ICustomFieldService svc
 {
     public async Task<Result<CustomFieldResolvedValueDto>> Handle(UpsertCustomFieldValueCommand cmd, CancellationToken ct)
     {
-        if (!Enum.TryParse<CustomFieldScopeType>(cmd.ScopeType, true, out var scopeType))
-            return Result<CustomFieldResolvedValueDto>.Failure(Error.Validation("scopeType", $"Invalid scopeType: {cmd.ScopeType}"));
-
-        var input = new UpsertCustomFieldValueInput(cmd.DefinitionId, scopeType, cmd.EntityId, cmd.ValueJson, cmd.UpdatedBy);
+        var input = new UpsertCustomFieldValueInput(cmd.DefinitionId, cmd.ScopeType, cmd.EntityId, cmd.ValueJson, cmd.UpdatedBy);
         var result = await svc.UpsertValueAsync(input, ct);
         return Result<CustomFieldResolvedValueDto>.Success(result);
     }

@@ -31,13 +31,22 @@ public sealed class ListAutomationTasksQueryHandler(IAutomationTaskService svc) 
     }
 }
 
-public sealed class GetAutomationTaskByIdQueryHandler(IAutomationTaskService svc) : IRequestHandler<GetAutomationTaskByIdQuery, Result<AutomationTaskDto>>
+public sealed class GetAutomationTaskByIdQueryHandler(IAutomationTaskService svc) : IRequestHandler<GetAutomationTaskByIdQuery, Result<AutomationTaskDetailDto>>
 {
-    public async Task<Result<AutomationTaskDto>> Handle(GetAutomationTaskByIdQuery q, CancellationToken ct)
+    public async Task<Result<AutomationTaskDetailDto>> Handle(GetAutomationTaskByIdQuery q, CancellationToken ct)
     {
         var t = await svc.GetByIdAsync(q.Id, false, ct);
-        if (t is null) return Result<AutomationTaskDto>.Failure(Error.NotFound($"Task {q.Id} not found"));
-        return Result<AutomationTaskDto>.Success(new AutomationTaskDto(t.Id, t.Name, t.Description, t.IsActive, t.CreatedAt, t.UpdatedAt));
+        if (t is null) return Result<AutomationTaskDetailDto>.Failure(Error.NotFound($"Task {q.Id} not found"));
+        return Result<AutomationTaskDetailDto>.Success(t);
+    }
+}
+
+public sealed class GetAutomationTaskAuditQueryHandler(IAutomationTaskService svc) : IRequestHandler<GetAutomationTaskAuditQuery, Result<IReadOnlyList<AutomationTaskAuditDto>>>
+{
+    public async Task<Result<IReadOnlyList<AutomationTaskAuditDto>>> Handle(GetAutomationTaskAuditQuery q, CancellationToken ct)
+    {
+        var audit = await svc.GetAuditAsync(q.Id, q.Limit, ct);
+        return Result<IReadOnlyList<AutomationTaskAuditDto>>.Success(audit);
     }
 }
 

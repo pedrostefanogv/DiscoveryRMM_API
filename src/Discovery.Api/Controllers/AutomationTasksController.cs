@@ -25,6 +25,13 @@ public class AutomationTasksController(IMediator mediator) : ControllerBase
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
+    [HttpGet("{id:guid}/audit")]
+    public async Task<IActionResult> GetAudit(Guid id, [FromQuery] int limit = 50)
+    {
+        var result = await mediator.Send(new GetAutomationTaskAuditQuery(id, limit));
+        return result.ToActionResult();
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateAutomationTaskCommand cmd)
     {

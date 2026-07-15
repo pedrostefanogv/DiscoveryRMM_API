@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs.CustomFields.Commands;
 using Discovery.Core.Cqrs.CustomFields.Queries;
+using Discovery.Core.Enums;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,7 +13,7 @@ namespace Discovery.Api.Controllers;
 public class CustomFieldsController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] string? scopeType = null, [FromQuery] bool includeInactive = false)
+    public async Task<IActionResult> GetAll([FromQuery] CustomFieldScopeType? scopeType = null, [FromQuery] bool includeInactive = false)
     {
         var result = await mediator.Send(new ListCustomFieldsQuery(scopeType, includeInactive));
         return result.ToActionResult();
@@ -27,7 +28,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
 
     [HttpGet("values/{scopeType}")]
     public async Task<IActionResult> GetValues(
-        string scopeType,
+        CustomFieldScopeType scopeType,
         [FromQuery] Guid? entityId = null,
         [FromQuery] string? cursor = null,
         [FromQuery] int limit = 50,
