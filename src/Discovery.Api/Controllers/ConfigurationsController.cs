@@ -256,20 +256,20 @@ public class ConfigurationsController(IMediator mediator, IAiModelCatalogService
         try
         {
             var valid = await aiCatalog.ValidateApiKeyAsync(provider, baseUrl, request.ApiKey, ct);
-            return Ok(new { valid, provider, message = valid ? "API key validada com sucesso." : "API key inválida." });
+            return Ok(new { valid, provider });
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
         {
-            return Ok(new { valid = false, provider, message = "API key não autorizada (401)." });
+            return Ok(new { valid = false, provider, error = "API key não autorizada (401)." });
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
         {
-            return Ok(new { valid = false, provider, message = "Acesso negado (403). Verifique as permissões da API key." });
+            return Ok(new { valid = false, provider, error = "Acesso negado (403). Verifique as permissões da API key." });
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Falha ao validar API key para provider {Provider}", provider);
-            return Ok(new { valid = false, provider, message = $"Erro ao validar: {ex.Message}" });
+            return Ok(new { valid = false, provider, error = $"Erro ao validar: {ex.Message}" });
         }
     }
 
@@ -277,16 +277,16 @@ public class ConfigurationsController(IMediator mediator, IAiModelCatalogService
 
     /// <summary>
     /// Lista modelos disponíveis diretamente da API OpenRouter (chat, embeddings, rerank).
-    /// Cache de 60 minutos, use ?forceRefresh=true para forçar atualização.
+    /// Cache de 60 minutos, use ?refresh=true para forçar atualização.
     /// </summary>
-    [HttpGet("ai/openrouter-models")]
+    [HttpGet("ai/openrouter/models")]
     [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetOpenRouterModels(
         [FromQuery] string? modality = null,
-        [FromQuery] bool forceRefresh = false,
+        [FromQuery] bool refresh = false,
         CancellationToken ct = default)
     {
-        var result = await aiCatalog.ListOpenRouterModelsAsync(modality, forceRefresh, ct);
+        var result = await aiCatalog.ListOpenRouterModelsAsync(modality, refresh, ct);
         return Ok(result);
     }
 }
