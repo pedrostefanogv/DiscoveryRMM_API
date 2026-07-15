@@ -342,7 +342,7 @@ public class TicketRepository : ITicketRepository
         var openQuery = baseQuery.Where(t => !t.ClosedAt.HasValue);
         var closedQuery = baseQuery.Where(t => t.ClosedAt.HasValue);
 
-        // Executar contagens e agregações em paralelo
+        // Executar contagens em paralelo (LOTE 1: apenas CountAsync)
         var totalOpenTask = openQuery.CountAsync();
         var totalClosedTask = closedQuery.CountAsync();
         var slaBreachedTask = openQuery.CountAsync(t => t.SlaBreached);
@@ -358,7 +358,13 @@ public class TicketRepository : ITicketRepository
         var frtAchievedCountTask = frtQuery.CountAsync(t => t.FirstRespondedAt!.Value <= t.SlaFirstResponseExpiresAt!.Value);
         var frtTotalCountTask = frtQuery.CountAsync();
 
-        // Avg resolution (closed only) - projeto para DB e agrega em C# após materialização limitada
+        // Aguarda TODAS as CountAsync antes de iniciar qualquer ToListAsync
+        await Task.WhenAll(
+            totalOpenTask, totalClosedTask, slaBreachedTask, slaWarningTask, onHoldTask,
+            frtAchievedCountTask, frtTotalCountTask);
+
+        // LOTE 2: ToListAsync — sequencial para evitar concorrência no DbContext
+        // (DbContext não é thread-safe; serializamos após o WhenAll acima)
         var closedDurations = await closedQuery
             .Select(t => new { t.CreatedAt, t.ClosedAt })
             .ToListAsync();
@@ -374,22 +380,18 @@ public class TicketRepository : ITicketRepository
             ? openDurations.Average(t => (now - t).TotalHours)
             : 0.0;
 
-        // By assignee (open tickets, agrupado no banco)
+        // LOTE 3: GroupBy assíncronos em paralelo
         var byAssigneeTask = openQuery
             .GroupBy(t => t.AssignedToUserId)
             .Select(g => new { AssignedToUserId = g.Key, Open = g.Count(), Breached = g.Count(t => t.SlaBreached) })
             .ToListAsync();
 
-        // By department (open tickets, agrupado no banco)
         var byDepartmentTask = openQuery
             .GroupBy(t => t.DepartmentId)
             .Select(g => new { DepartmentId = g.Key, Open = g.Count(), Breached = g.Count(t => t.SlaBreached) })
             .ToListAsync();
 
-        await Task.WhenAll(
-            totalOpenTask, totalClosedTask, slaBreachedTask, slaWarningTask, onHoldTask,
-            frtAchievedCountTask, frtTotalCountTask,
-            byAssigneeTask, byDepartmentTask);
+        await Task.WhenAll(byAssigneeTask, byDepartmentTask);
 
         var totalOpen = totalOpenTask.Result;
         var totalClosed = totalClosedTask.Result;
