@@ -58,6 +58,15 @@ public interface IAgentPackageService
     Task<string> GetAgentCommitHashAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Resolves the agent version from the source repository.
+    /// Uses a 2-level fallback:
+    /// 1. Read productVersion from wails.json in the configured DiscoveryProjectPath
+    /// 2. Read agent-version.json from build output
+    /// 3. Return "unknown"
+    /// </summary>
+    Task<string> GetAgentSourceVersionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Synchronizes the agent source repository with the configured branch.
     /// Executes git fetch + git reset --hard to the target branch on origin.
     /// Only allows branches from the configured safe list (dev, release, beta, lts).

@@ -72,7 +72,7 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
 
             _logger.LogInformation("Agent prebuild: generating update installer artifact...");
             var (content, fileName) = await packageService.BuildUpdateInstallerAsync(stoppingToken);
-            var version = await ResolveStartupBuildVersionAsync(agentUpdateService, activeProfile, stoppingToken);
+            var version = await ResolveStartupBuildVersionAsync(packageService, agentUpdateService, activeProfile, stoppingToken);
             var contentType = ResolveConfigForProfile(activeProfile, "InstallerContentType")
                 ?? "application/x-msdownload";
 
@@ -168,15 +168,31 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
     }
 
     private async Task<string> ResolveStartupBuildVersionAsync(
+        IAgentPackageService packageService,
         IAgentUpdateService agentUpdateService,
         string activeProfile,
         CancellationToken cancellationToken)
     {
+        // Level 1: explicit config override
         var configuredVersion = ResolveConfigForProfile(activeProfile, "StartupStage2Version");
         var normalizedConfigured = NormalizeSemanticVersion(configuredVersion);
         if (!string.IsNullOrWhiteSpace(normalizedConfigured))
+        {
+            _logger.LogInformation("Agent stage2 version from config override: {Version}", normalizedConfigured);
             return normalizedConfigured;
+        }
 
+        // Level 2: read from agent source code (wails.json → agent-version.json)
+        var sourceVersion = await packageService.GetAgentSourceVersionAsync(cancellationToken);
+        if (!string.IsNullOrWhiteSpace(sourceVersion)
+            && !string.Equals(sourceVersion, "unknown", StringComparison.OrdinalIgnoreCase)
+            && SemanticVersion.TryParse(sourceVersion, out _))
+        {
+            _logger.LogInformation("Agent stage2 version from source: {Version}", sourceVersion);
+            return sourceVersion;
+        }
+
+        // Level 3: keep current DB version if no source version is available
         var currentBuild = await agentUpdateService.GetCurrentBuildAsync(
             platform: "windows",
             architecture: "amd64",
@@ -184,16 +200,24 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
             cancellationToken: cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(currentBuild?.Version))
+        {
+            _logger.LogInformation("Agent stage2 version from current DB build: {Version}", currentBuild.Version);
             return currentBuild.Version;
+        }
 
+        // Level 4: assembly version (last resort before hardcoded default)
         var assemblyVersion = typeof(AgentPackagePrebuildHostedService).Assembly.GetName().Version;
         if (assemblyVersion is not null)
         {
             var fallback = $"{Math.Max(assemblyVersion.Major, 1)}.{Math.Max(assemblyVersion.Minor, 0)}.{Math.Max(assemblyVersion.Build, 0)}";
             if (SemanticVersion.TryParse(fallback, out _))
+            {
+                _logger.LogWarning("Agent stage2 version from API assembly (fallback): {Version}", fallback);
                 return fallback;
+            }
         }
 
+        _logger.LogWarning("Agent stage2 version: all sources exhausted, using hardcoded '1.0.0'");
         return "1.0.0";
     }
 
