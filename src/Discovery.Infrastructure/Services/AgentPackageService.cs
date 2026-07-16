@@ -95,6 +95,10 @@ public class AgentPackageService : IAgentPackageService
         var outDir = GetAgentPackageSetting("OutputDirectory") ?? Path.Combine(projectPath, "src", "build", "bin");
         var outputName = GetAgentPackageSetting("OutputName") ?? "discovery-agent.exe";
 
+        // Detect version from wails.json so the build script injects it via ldflags.
+        // This ensures buildinfo.Version/Commit are set correctly in the binary.
+        var agentVersion = DetectAgentVersion(projectPath);
+
         _logger.LogInformation("Building agent on Linux using script: {BuildScript}", buildScriptPath);
 
         // CGO cross-compilation caches can become stale between builds (Go 1.22 + MinGW bug).
@@ -114,10 +118,26 @@ public class AgentPackageService : IAgentPackageService
 
         try
         {
+            var buildArgs = new List<string>
+            {
+                buildScriptPath,
+                "--project-root", projectPath,
+                "--out-dir", outDir,
+                "--output-name", outputName,
+                "--write-installer-json", "0"
+            };
+
+            if (!string.IsNullOrWhiteSpace(agentVersion))
+            {
+                buildArgs.Add("--version");
+                buildArgs.Add(agentVersion);
+                _logger.LogInformation("Passing --version {Version} to build script", agentVersion);
+            }
+
             await RunProcessAsync(
                 fileName: "bash",
                 workingDirectory: projectPath,
-                arguments: [buildScriptPath, "--project-root", projectPath, "--out-dir", outDir, "--output-name", outputName, "--write-installer-json", "0"],
+                arguments: [.. buildArgs],
                 extraEnvironment: extraEnv,
                 cancellationToken: cancellationToken);
         }
@@ -777,6 +797,65 @@ public class AgentPackageService : IAgentPackageService
     }
 
     // ── Repository sync ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Reads productVersion from the agent source wails.json.
+    /// Returns empty string if the file doesn't exist or can't be parsed.
+    /// </summary>
+    private static string DetectAgentVersion(string projectPath)
+    {
+        var wailsJsonPath = Path.Combine(projectPath, "src", "wails.json");
+        if (!File.Exists(wailsJsonPath))
+            return string.Empty;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(wailsJsonPath));
+            if (doc.RootElement.TryGetProperty("info", out var info) &&
+                info.TryGetProperty("productVersion", out var ver))
+            {
+                var v = ver.GetString();
+                return string.IsNullOrWhiteSpace(v) ? string.Empty : v;
+            }
+        }
+        catch
+        {
+            // Best-effort — version not critical for build.
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Reads agent-version.json from the build output directory.
+    /// Returns (version, commitHash) tuple, or ("unknown", "unknown") on failure.
+    /// </summary>
+    private static (string Version, string CommitHash) ReadAgentVersionJson(string projectPath)
+    {
+        var outDir = Path.Combine(projectPath, "src", "build", "bin");
+        var versionJsonPath = Path.Combine(outDir, "agent-version.json");
+
+        if (!File.Exists(versionJsonPath))
+            return ("unknown", "unknown");
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(versionJsonPath));
+            var version = "unknown";
+            var commitHash = "unknown";
+
+            if (doc.RootElement.TryGetProperty("version", out var v))
+                version = v.GetString() ?? "unknown";
+            if (doc.RootElement.TryGetProperty("commitHash", out var c))
+                commitHash = c.GetString() ?? "unknown";
+
+            return (version, commitHash);
+        }
+        catch
+        {
+            return ("unknown", "unknown");
+        }
+    }
 
     public async Task<Discovery.Core.DTOs.AgentRepositorySyncResult> SyncRepositoryAsync(
         string branch,
