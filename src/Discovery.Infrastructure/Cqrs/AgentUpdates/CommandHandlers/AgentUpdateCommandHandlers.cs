@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentUpdates.Commands;
 using Discovery.Core.Cqrs.AgentUpdates.Queries;
@@ -94,14 +93,14 @@ public sealed class RebuildAgentCommandHandler(
             contentType: "application/x-msdownload",
             content: stream,
             signatureThumbprint: null,
-            commitHash: GetAgentCommit(),
+            commitHash: await agentPackageService.GetAgentCommitHashAsync(ct),
             actor: "api-rebuild",
             cancellationToken: ct);
 
 
         logger.LogInformation(
-            "Agent rebuild completed. BuildId={BuildId}, Version={Version}, File={FileName}, Size={SizeBytes}",
-            build.Id, build.Version, build.FileName, build.SizeBytes);
+            "Agent rebuild completed. BuildId={BuildId}, Version={Version}, CommitHash={CommitHash}, File={FileName}, Size={SizeBytes}",
+            build.Id, build.Version, build.CommitHash, build.FileName, build.SizeBytes);
 
         await syncInvalidationPublisher.PublishGlobalAsync(
             SyncResourceType.AgentUpdate,
@@ -109,27 +108,5 @@ public sealed class RebuildAgentCommandHandler(
             cancellationToken: ct);
 
         return Result<VoidResult>.Success(VoidResult.Value);
-    }
-
-    private static string GetAgentCommit()
-    {
-        try
-        {
-            var psi = new ProcessStartInfo("git", "-C /opt/discovery-agent-src rev-parse --short=8 HEAD")
-            {
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            using var proc = Process.Start(psi);
-            if (proc is null) return "unknown";
-            var output = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit(5000);
-            return string.IsNullOrWhiteSpace(output) ? "unknown" : output;
-        }
-        catch
-        {
-            return "unknown";
-        }
     }
 }

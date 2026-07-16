@@ -77,6 +77,7 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
                 ?? "application/x-msdownload";
 
             await using var stream = new MemoryStream(content, writable: false);
+            var commitHash = await packageService.GetAgentCommitHashAsync(stoppingToken);
             var publishedBuild = await agentUpdateService.RefreshCurrentBuildAsync(
                 version: version,
                 platform: "windows",
@@ -86,6 +87,7 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
                 contentType: contentType,
                 content: stream,
                 signatureThumbprint: null,
+                commitHash: commitHash,
                 actor: StartupBuildActor,
                 cancellationToken: stoppingToken);
 
@@ -95,9 +97,10 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
                 cancellationToken: stoppingToken);
 
             _logger.LogInformation(
-                "Agent prebuild startup published stage2 build successfully. BuildId={BuildId}, version={Version}, file={FileName}",
+                "Agent prebuild startup published stage2 build successfully. BuildId={BuildId}, version={Version}, commitHash={CommitHash}, file={FileName}",
                 publishedBuild.Id,
                 publishedBuild.Version,
+                publishedBuild.CommitHash,
                 publishedBuild.FileName);
 
             try
