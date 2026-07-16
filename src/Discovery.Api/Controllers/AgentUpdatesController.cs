@@ -34,7 +34,7 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
         var cmd = new RefreshAgentBuildCommand(
             request.Version, request.Platform, request.Architecture,
             request.ArtifactType, file.FileName, file.ContentType,
-            stream, request.SignatureThumbprint, null);
+            stream, request.SignatureThumbprint, request.CommitHash, null);
 
         var r = await mediator.Send(cmd, ct);
         return r.Match<IActionResult>(Ok, e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
@@ -83,4 +83,5 @@ public sealed record RefreshAgentBuildFormRequest
     public string Architecture { get; init; } = string.Empty;
     public string ArtifactType { get; init; } = "Installer";
     public string? SignatureThumbprint { get; init; }
+    public string? CommitHash { get; init; }
 }

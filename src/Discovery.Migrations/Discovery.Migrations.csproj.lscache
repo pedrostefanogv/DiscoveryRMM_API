@@ -192,6 +192,7 @@ Migrations/
  M131_AddMachineScore.cs
  M132_AddAgentTokenLastNatsConnectedAt.cs
  M133_SeedMcpToolPolicies.cs
+ M134_AddCommitHashToAgentUpdateBuilds.cs
 obj/Debug/net10.0/
  .NETCoreApp,Version=v10.0.AssemblyAttributes.cs
  Discovery.Migrations.AssemblyInfo.cs

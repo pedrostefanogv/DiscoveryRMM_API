@@ -21,7 +21,7 @@ public sealed class RefreshAgentBuildCommandHandler(
         var build = await agentUpdateService.RefreshCurrentBuildAsync(
             cmd.Version, cmd.Platform, cmd.Architecture, artifactType,
             cmd.FileName, cmd.ContentType, cmd.Content,
-            cmd.SignatureThumbprint, cmd.Actor, ct);
+            cmd.SignatureThumbprint, null, cmd.Actor, ct);
 
         return Result<AgentBuildResult>.Success(new AgentBuildResult(
             build.Id, build.Version, build.Sha256, build.CreatedAt));

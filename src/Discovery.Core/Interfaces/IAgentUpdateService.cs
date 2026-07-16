@@ -21,6 +21,7 @@ public interface IAgentUpdateService
         string contentType,
         Stream content,
         string? signatureThumbprint = null,
+        string? commitHash = null,
         string? actor = null,
         CancellationToken cancellationToken = default);
 

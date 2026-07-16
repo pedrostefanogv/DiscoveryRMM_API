@@ -1,4 +1,5 @@
 using Asp.Versioning;
+using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -99,6 +100,27 @@ public class DownloadController : ControllerBase
             _logger.LogError(ex, "Failed to build generic installer");
             return StatusCode(500, new { message = "Failed to build generic installer." });
         }
+    }
+
+    /// <summary>
+    /// Returns lightweight metadata (version, commitHash, sha256) of the
+    /// current agent build. Used for self-update check to avoid downloading
+    /// the full installer when version+commit match the running agent.
+    /// </summary>
+    [HttpGet("version")]
+    public async Task<IActionResult> GetVersion(
+        [FromQuery] string? platform = null,
+        [FromQuery] string? architecture = null,
+        CancellationToken ct = default)
+    {
+        var build = await _agentUpdateService.GetCurrentBuildAsync(platform, architecture, artifactType: null, ct);
+        if (build is null)
+            return NotFound(new { message = "No active agent build available." });
+
+        return Ok(new AgentVersionInfoDto(
+            build.Version,
+            build.CommitHash,
+            build.Sha256));
     }
 
     /// <summary>

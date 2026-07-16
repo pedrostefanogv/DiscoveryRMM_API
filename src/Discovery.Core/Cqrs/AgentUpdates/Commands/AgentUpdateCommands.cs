@@ -6,7 +6,7 @@ namespace Discovery.Core.Cqrs.AgentUpdates.Commands;
 public sealed record RefreshAgentBuildCommand(
     string Version, string Platform, string Architecture,
     string ArtifactType, string FileName, string ContentType,
-    Stream Content, string? SignatureThumbprint, string? Actor
+    Stream Content, string? SignatureThumbprint, string? CommitHash, string? Actor
 ) : ICommand<Result<AgentBuildDto>>;
 
 public sealed record ForceAgentUpdateCommand(

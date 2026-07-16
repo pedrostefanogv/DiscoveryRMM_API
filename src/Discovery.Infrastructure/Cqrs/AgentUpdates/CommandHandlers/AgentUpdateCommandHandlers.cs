@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentUpdates.Commands;
 using Discovery.Core.Cqrs.AgentUpdates.Queries;
@@ -21,7 +22,7 @@ public sealed class RefreshAgentBuildCommandHandler(
         var build = await agentUpdateService.RefreshCurrentBuildAsync(
             cmd.Version, cmd.Platform, cmd.Architecture, artifactType,
             cmd.FileName, cmd.ContentType, cmd.Content,
-            cmd.SignatureThumbprint, cmd.Actor, ct);
+            cmd.SignatureThumbprint, cmd.CommitHash, cmd.Actor, ct);
 
         return Result<AgentBuildDto>.Success(new AgentBuildDto(
             build.Id, build.Version, build.Platform, build.Architecture,
@@ -93,8 +94,10 @@ public sealed class RebuildAgentCommandHandler(
             contentType: "application/x-msdownload",
             content: stream,
             signatureThumbprint: null,
+            commitHash: GetAgentCommit(),
             actor: "api-rebuild",
             cancellationToken: ct);
+
 
         logger.LogInformation(
             "Agent rebuild completed. BuildId={BuildId}, Version={Version}, File={FileName}, Size={SizeBytes}",
@@ -106,5 +109,27 @@ public sealed class RebuildAgentCommandHandler(
             cancellationToken: ct);
 
         return Result<VoidResult>.Success(VoidResult.Value);
+    }
+
+    private static string GetAgentCommit()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git", "-C /opt/discovery-agent-src rev-parse --short=8 HEAD")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psi);
+            if (proc is null) return "unknown";
+            var output = proc.StandardOutput.ReadToEnd().Trim();
+            proc.WaitForExit(5000);
+            return string.IsNullOrWhiteSpace(output) ? "unknown" : output;
+        }
+        catch
+        {
+            return "unknown";
+        }
     }
 }

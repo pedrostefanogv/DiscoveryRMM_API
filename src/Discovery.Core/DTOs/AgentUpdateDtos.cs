@@ -4,6 +4,12 @@ using Discovery.Core.Enums;
 
 namespace Discovery.Core.DTOs;
 
+/// <summary>
+/// Lightweight version info returned by GET /api/v1/download/agent/version.
+/// Used by agents for self-update check without downloading the full installer.
+/// </summary>
+public sealed record AgentVersionInfoDto(string Version, string CommitHash, string Sha256);
+
 public sealed record AgentUpdateManifestRequest(
     string? CurrentVersion,
     string? Platform,

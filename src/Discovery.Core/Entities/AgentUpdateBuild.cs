@@ -21,5 +21,6 @@ public class AgentUpdateBuild
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public string? CreatedBy { get; set; }
+    public string CommitHash { get; set; } = "unknown";
     public string? UpdatedBy { get; set; }
 }

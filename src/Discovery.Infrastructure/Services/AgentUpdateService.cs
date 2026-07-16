@@ -51,6 +51,7 @@ public class AgentUpdateService(
         string contentType,
         Stream content,
         string? signatureThumbprint = null,
+        string? commitHash = null,
         string? actor = null,
         CancellationToken cancellationToken = default)
     {
@@ -111,6 +112,7 @@ public class AgentUpdateService(
             Sha256 = sha256,
             SizeBytes = bytes.LongLength,
             SignatureThumbprint = string.IsNullOrWhiteSpace(signatureThumbprint) ? null : signatureThumbprint.Trim(),
+            CommitHash = string.IsNullOrWhiteSpace(commitHash) ? "unknown" : commitHash.Trim(),
             IsActive = true,
             CreatedBy = actor,
             UpdatedBy = actor
