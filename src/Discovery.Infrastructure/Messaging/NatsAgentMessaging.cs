@@ -294,6 +294,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 heartbeat.DiskPercent,
                                 heartbeat.DiskTotalGb,
                                 heartbeat.DiskUsedGb,
+                                heartbeat.DiskReadPercent,
+                                heartbeat.DiskWritePercent,
+                                heartbeat.DiskResponseMs,
                                 heartbeat.P2pPeers,
                                 heartbeat.UptimeSeconds,
                                 heartbeat.ProcessCount

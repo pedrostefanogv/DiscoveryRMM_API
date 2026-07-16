@@ -50,6 +50,7 @@ internal static class AgentQueryHelper
         hb is null ? null : new HeartbeatMetricsDto(
             hb.CpuPercent, hb.MemoryPercent, hb.DiskPercent,
             hb.MemoryTotalGb, hb.MemoryUsedGb, hb.DiskTotalGb, hb.DiskUsedGb,
+            hb.DiskReadPercent, hb.DiskWritePercent, hb.DiskResponseMs,
             hb.P2pPeers, hb.UptimeSeconds, hb.ProcessCount,
             hb.IpAddress, hb.Hostname, hb.AgentVersion,
             hb.LastHeartbeatAt, hb.LastHeartbeatAt));

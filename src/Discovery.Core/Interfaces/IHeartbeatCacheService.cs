@@ -68,6 +68,9 @@ public class HeartbeatCacheEntry
     public double? DiskPercent { get; init; }
     public double? DiskTotalGb { get; init; }
     public double? DiskUsedGb { get; init; }
+    public double? DiskReadPercent { get; init; }
+    public double? DiskWritePercent { get; init; }
+    public double? DiskResponseMs { get; init; }
     public int? P2pPeers { get; init; }
     public long? UptimeSeconds { get; init; }
     public int? ProcessCount { get; init; }
