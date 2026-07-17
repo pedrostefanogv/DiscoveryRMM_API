@@ -157,7 +157,11 @@ public sealed class RefreshAgentDataCommandHandler(
         var payload = JsonSerializer.Serialize(new
         {
             Operation = "refresh-on-demand",
-            Categories = cmd.Categories ?? [],
+            Ports = cmd.ListeningPorts,
+            Connections = cmd.OpenConnections,
+            Software = cmd.Software,
+            Printers = cmd.Printers,
+            Hardware = cmd.Hardware,
             RequestedAt = DateTime.UtcNow
         });
 

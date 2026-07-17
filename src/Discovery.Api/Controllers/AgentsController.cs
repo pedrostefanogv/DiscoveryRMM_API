@@ -199,9 +199,17 @@ public class AgentsController : ControllerBase
 
     [HttpPost("{id:guid}/refresh-data")]
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
-    public async Task<IActionResult> RefreshAgentData(Guid id, [FromBody] RefreshAgentDataCommand cmd, CancellationToken ct = default)
+    public async Task<IActionResult> RefreshAgentData(Guid id, [FromBody] RefreshAgentDataRequest request, CancellationToken ct = default)
     {
-        var result = await _mediator.Send(cmd with { AgentId = id }, ct);
+        var cmd = new RefreshAgentDataCommand(
+            AgentId: id,
+            ListeningPorts: request.ListeningPorts,
+            OpenConnections: request.OpenConnections,
+            Software: request.Software,
+            Printers: request.Printers,
+            Hardware: request.Hardware
+        );
+        var result = await _mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
             success: _ => Ok(new { success = true }),
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
