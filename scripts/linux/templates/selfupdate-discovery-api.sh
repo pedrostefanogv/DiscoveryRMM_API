@@ -366,7 +366,7 @@ if [[ -n "$DISCOVERY_AGENT_GIT_REPO" ]] && [[ -d "$DISCOVERY_AGENT_SRC/.git" ]];
     git -C "$DISCOVERY_AGENT_SRC" reset --hard "origin/$DISCOVERY_GIT_BRANCH" 2>/dev/null || true
     log "Agent atualizado; disparando rebuild via API..."
     if sudo systemctl is-active --quiet discovery-api.service 2>/dev/null; then
-      curl -s -X POST "http://127.0.0.1:8080/api/v1/agent-updates/rebuild" \
+      curl -s -X POST "http://127.0.0.1:8080/api/v1/agent-updates/build/rebuild" \
         -H "Content-Type: application/json" \
         --max-time 300 >/dev/null 2>&1 \
         && log "Rebuild do agent disparado com sucesso." \

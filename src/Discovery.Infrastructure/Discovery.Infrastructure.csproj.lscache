@@ -350,7 +350,7 @@ Services/
 
 [metadataReferences]
 ../Discovery.Core/obj/Debug/net10.0/ref/Discovery.Core.dll
-<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.9/ref/net10.0/
+<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.10/ref/net10.0/
  Microsoft.CSharp.dll
  Microsoft.VisualBasic.Core.dll
  Microsoft.VisualBasic.dll
@@ -593,14 +593,14 @@ Services/
  system.security.cryptography.xml/10.0.9/lib/net10.0/System.Security.Cryptography.Xml.dll
 
 [analyzerReferences]
-<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.9/analyzers/dotnet/cs/
+<DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.10/analyzers/dotnet/cs/
  Microsoft.Interop.ComInterfaceGenerator.dll
  Microsoft.Interop.JavaScript.JSImportGenerator.dll
  Microsoft.Interop.LibraryImportGenerator.dll
  Microsoft.Interop.SourceGeneration.dll
  System.Text.Json.SourceGeneration.dll
  System.Text.RegularExpressions.Generator.dll
-<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/
+<DOTNET>/sdk/10.0.302/Sdks/Microsoft.NET.Sdk/analyzers/
  Microsoft.CodeAnalysis.CSharp.NetAnalyzers.dll
  Microsoft.CodeAnalysis.NetAnalyzers.dll
 <NUGET>/
@@ -609,5 +609,5 @@ Services/
  microsoft.extensions.options/10.0.9/analyzers/dotnet/roslyn4.4/cs/Microsoft.Extensions.Options.SourceGeneration.dll
 
 [analyzerConfigFiles]
-<DOTNET>/sdk/10.0.301/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
+<DOTNET>/sdk/10.0.302/Sdks/Microsoft.NET.Sdk/analyzers/build/config/analysislevel_10_default.globalconfig
 obj/Debug/net10.0/Discovery.Infrastructure.GeneratedMSBuildEditorConfig.editorconfig

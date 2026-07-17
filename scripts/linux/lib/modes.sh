@@ -85,7 +85,7 @@ update_agent() {
 
 _trigger_agent_rebuild_via_api() {
   local api_url="http://127.0.0.1:8080"
-  local rebuild_endpoint="${api_url}/api/v1/agent-updates/rebuild"
+  local rebuild_endpoint="${api_url}/api/v1/agent-updates/build/rebuild"
   local curl_timeout=300
 
   if sudo systemctl is-active --quiet discovery-api.service 2>/dev/null; then :; else
