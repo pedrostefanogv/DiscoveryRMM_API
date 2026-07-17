@@ -219,9 +219,13 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
 
         var fingerprints = uniqueByFingerprint.Select(x => x.Fingerprint).ToList();
 
-        var catalogs = await _db.SoftwareCatalogs
+        var catalogList = await _db.SoftwareCatalogs
             .Where(catalog => fingerprints.Contains(catalog.Fingerprint))
-            .ToDictionaryAsync(catalog => catalog.Fingerprint, catalog => catalog);
+            .ToListAsync();
+
+        var catalogs = catalogList
+            .GroupBy(c => c.Fingerprint)
+            .ToDictionary(g => g.Key, g => g.First());
 
         var newFingerprints = new Dictionary<string, SoftwareCatalog>();
         foreach (var row in uniqueByFingerprint)
@@ -269,9 +273,13 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
 
         var softwareIds = catalogs.Values.Select(catalog => catalog.Id).ToList();
 
-        var existingInventories = await _db.AgentSoftwareInventories
+        var existingInventoryList = await _db.AgentSoftwareInventories
             .Where(inv => inv.AgentId == agentId && softwareIds.Contains(inv.SoftwareId))
-            .ToDictionaryAsync(inv => inv.SoftwareId, inv => inv);
+            .ToListAsync();
+
+        var existingInventories = existingInventoryList
+            .GroupBy(inv => inv.SoftwareId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.UpdatedAt).First());
 
         foreach (var row in uniqueByFingerprint)
         {
