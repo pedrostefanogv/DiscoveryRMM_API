@@ -115,6 +115,7 @@ internal static class HardwareInventoryParser
                 Name = name,
                 MacAddress = ParseJson.GetString(item, "macAddress"),
                 IpAddress = ParseJson.GetString(item, "ipAddress"),
+                Ipv6Address = ParseJson.GetString(item, "ipv6Address"),
                 SubnetMask = ParseJson.GetString(item, "subnetMask"),
                 Gateway = ParseJson.GetString(item, "gateway"),
                 DnsServers = ParseJson.GetString(item, "dnsServers"),

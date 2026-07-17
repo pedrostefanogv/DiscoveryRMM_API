@@ -13,10 +13,26 @@ namespace Discovery.Api.Controllers;
 public class KnowledgeController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] string? cursor = null, [FromQuery] int limit = 50)
+    public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] string? scopeMode = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        [FromQuery] string? status = null,
+        [FromQuery] Guid? departmentId = null,
+        [FromQuery] string? category = null)
     {
-        var result = await mediator.Send(new ListKnowledgeArticlesQuery(clientId, siteId, cursor, limit));
-        return result.ToActionResult();
+        // scopeMode=all-visible: usa ACL do usuário + cursor pagination → ArticleListPage
+        if (string.Equals(scopeMode, "all-visible", StringComparison.OrdinalIgnoreCase))
+        {
+            var result = await mediator.Send(new ListKnowledgeArticlesByUserScopeQuery(cursor, limit, status, departmentId, category));
+            return result.ToActionResult();
+        }
+
+        // Legacy: escopo fixo clientId/siteId → IReadOnlyList<ArticleResponse>
+        var legacyResult = await mediator.Send(new ListKnowledgeArticlesQuery(clientId, siteId, cursor, limit));
+        return legacyResult.ToActionResult();
     }
 
     [HttpGet("search")]

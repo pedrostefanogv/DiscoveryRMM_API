@@ -7,6 +7,7 @@ public class NetworkAdapterInfo
     public string Name { get; set; } = string.Empty;
     public string? MacAddress { get; set; }
     public string? IpAddress { get; set; }
+    public string? Ipv6Address { get; set; }
     public string? SubnetMask { get; set; }
     public string? Gateway { get; set; }
     public string? DnsServers { get; set; }
@@ -17,6 +18,9 @@ public class NetworkAdapterInfo
 
     // ── Report field aliases ────────────────────────────────────────────
     public List<string> IpAddresses => IpAddress is not null ? [IpAddress] : [];
+    public List<string> Ipv6Addresses => Ipv6Address is not null
+        ? Ipv6Address.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList()
+        : [];
     public int? SpeedMbps => int.TryParse(Speed?.Replace(" Mbps", "").Replace(" Gbps", ""), out var v) ? v : null;
     public bool IsDefault => false;
 }

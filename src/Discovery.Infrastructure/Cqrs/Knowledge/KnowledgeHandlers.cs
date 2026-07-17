@@ -5,7 +5,9 @@ using Discovery.Core.Cqrs.Knowledge.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Knowledge;
@@ -98,6 +100,48 @@ public sealed class ListKnowledgeArticlesQueryHandler(IKnowledgeArticleRepositor
             (not null, null) => "client",
             _ => "site"
         };
+}
+
+public sealed class ListKnowledgeArticlesByUserScopeQueryHandler(
+    IKnowledgeArticleRepository repo,
+    IScopeContext scopeContext
+) : IRequestHandler<ListKnowledgeArticlesByUserScopeQuery, Result<ArticleListPage>>
+{
+    public async Task<Result<ArticleListPage>> Handle(ListKnowledgeArticlesByUserScopeQuery q, CancellationToken ct)
+    {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.KnowledgeBase, ActionType.View);
+        var hasGlobal = scope.HasGlobalAccess;
+        var allowedClientIds = scope.AllowedClientIds.ToHashSet();
+        var allowedSiteIds = scope.AllowedSiteIds.ToHashSet();
+
+        var data = await repo.ListByUserScopeAsync(
+            hasGlobal, allowedClientIds, allowedSiteIds,
+            q.Status, q.DepartmentId, q.Category, q.Cursor, q.Limit, ct);
+
+        var items = data.Items.Select(a => new ArticleListItem(
+            Id: a.Id, Title: a.Title, Category: a.Category,
+            Tags: ParseTags(a.TagsJson), CreatedBy: a.CreatedBy, LastEditedBy: a.LastEditedBy,
+            Status: a.Status,
+            Scope: ResolveScope(a.ClientId, a.SiteId),
+            ScopeOrigin: ResolveScopeOrigin(a.ClientId, a.SiteId),
+            ClientId: a.ClientId, SiteId: a.SiteId,
+            ClientName: null, SiteName: null,
+            DepartmentId: a.DepartmentId,
+            CurrentVersionNumber: a.CurrentVersionNumber,
+            PublishedAt: a.PublishedAt,
+            ChunkCount: a.Chunks?.Count ?? 0,
+            CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt
+        )).ToList();
+
+        return Result<ArticleListPage>.Success(new ArticleListPage(
+            Items: items,
+            Count: data.Count,
+            Cursor: null,             // cursor da página atual (não usamos cursor reverso)
+            NextCursor: data.NextCursor,
+            HasMore: data.HasMore,
+            Limit: q.Limit
+        ));
+    }
 }
 
 public sealed class GetKnowledgeArticleByIdQueryHandler(IKnowledgeArticleRepository repo)
