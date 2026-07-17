@@ -92,6 +92,8 @@ public sealed class ReportAgentHardwareCommandHandler(
             agent.OsVersion = cmd.OsVersion;
         if (!string.IsNullOrWhiteSpace(cmd.AgentVersion))
             agent.AgentVersion = cmd.AgentVersion;
+        if (!string.IsNullOrWhiteSpace(cmd.CommitHash))
+            agent.CommitHash = cmd.CommitHash;
         if (!string.IsNullOrWhiteSpace(cmd.LastIpAddress))
             agent.LastIpAddress = cmd.LastIpAddress;
         if (!string.IsNullOrWhiteSpace(cmd.MacAddress))

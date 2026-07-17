@@ -17,6 +17,7 @@ public sealed record AgentDto(
     string? OperatingSystem,
     string? OsVersion,
     string? AgentVersion,
+    string? CommitHash,
     string? MacAddress,
     string? LastIpAddress,
     bool IsOnline,
@@ -45,6 +46,7 @@ public sealed record HeartbeatMetricsDto(
     string? IpAddress,
     string? Hostname,
     string? AgentVersion,
+    string? CommitHash,
     DateTime? TimestampUtc,
     DateTime? ReceivedAtUtc
 );

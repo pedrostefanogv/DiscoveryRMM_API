@@ -19,6 +19,7 @@ internal static class AgentQueryHelper
         a.OperatingSystem,
         a.OsVersion,
         a.AgentVersion,
+        a.CommitHash,
         a.MacAddress,
         a.LastIpAddress,
         a.EffectiveStatus == AgentStatus.Online,
@@ -39,6 +40,7 @@ internal static class AgentQueryHelper
         a.OperatingSystem,
         a.OsVersion,
         hb?.AgentVersion ?? a.AgentVersion,
+        a.CommitHash,
         a.MacAddress,
         hb?.IpAddress ?? a.LastIpAddress,
         a.EffectiveStatus == AgentStatus.Online,
@@ -52,7 +54,7 @@ internal static class AgentQueryHelper
             hb.MemoryTotalGb, hb.MemoryUsedGb, hb.DiskTotalGb, hb.DiskUsedGb,
             hb.DiskReadPercent, hb.DiskWritePercent, hb.DiskResponseMs,
             hb.P2pPeers, hb.UptimeSeconds, hb.ProcessCount,
-            hb.IpAddress, hb.Hostname, hb.AgentVersion,
+            hb.IpAddress, hb.Hostname, hb.AgentVersion, null,
             hb.LastHeartbeatAt, hb.LastHeartbeatAt));
 
     internal static void ApplyRealtimeHeartbeat(Agent agent, HeartbeatCacheEntry? heartbeat)

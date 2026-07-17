@@ -62,7 +62,7 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
 
         try
         {
-            using var scope = _serviceProvider.CreateScope();
+            await using var scope = _serviceProvider.CreateAsyncScope();
             var packageService = scope.ServiceProvider.GetRequiredService<IAgentPackageService>();
             var agentUpdateService = scope.ServiceProvider.GetRequiredService<IAgentUpdateService>();
             var syncInvalidationPublisher = scope.ServiceProvider.GetRequiredService<ISyncInvalidationPublisher>();

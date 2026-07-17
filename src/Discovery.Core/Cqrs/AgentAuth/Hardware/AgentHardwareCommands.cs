@@ -13,7 +13,7 @@ public sealed record AgentHardwarePayloadDto(
 public sealed record ReportAgentHardwareCommand(
     Guid AgentId,
     string? Hostname, string? DisplayName, string? MeshCentralNodeId,
-    string? Status, string? OperatingSystem, string? OsVersion, string? AgentVersion,
+    string? Status, string? OperatingSystem, string? OsVersion, string? AgentVersion, string? CommitHash,
     string? LastIpAddress, string? MacAddress,
     object? Hardware, object? Components, JsonElement? InventoryRaw,
     string? InventorySchemaVersion, DateTime? InventoryCollectedAt, int? MachineScore

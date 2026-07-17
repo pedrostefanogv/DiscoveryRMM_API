@@ -15,6 +15,7 @@ public class HardwareReportRequestValidator : AbstractValidator<HardwareReportRe
         RuleFor(x => x.OperatingSystem).MaximumLength(100).When(x => x.OperatingSystem is not null);
         RuleFor(x => x.OsVersion).MaximumLength(100).When(x => x.OsVersion is not null);
         RuleFor(x => x.AgentVersion).MaximumLength(100).When(x => x.AgentVersion is not null);
+        RuleFor(x => x.CommitHash).MaximumLength(64).When(x => x.CommitHash is not null);
         RuleFor(x => x.LastIpAddress).MaximumLength(45).When(x => x.LastIpAddress is not null);
         RuleFor(x => x.MacAddress).MaximumLength(17).When(x => x.MacAddress is not null);
 

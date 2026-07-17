@@ -106,6 +106,9 @@ public partial class DiscoveryDbContext
             entity.Property(agent => agent.AgentVersion)
                 .HasColumnName("agent_version")
                 .HasMaxLength(50);
+            entity.Property(agent => agent.CommitHash)
+                .HasColumnName("commit_hash")
+                .HasMaxLength(64);
             entity.Property(agent => agent.LastIpAddress)
                 .HasColumnName("last_ip_address")
                 .HasMaxLength(45);

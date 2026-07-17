@@ -27,6 +27,7 @@ public sealed class GetAgentIdentityHandler(
             agent.OperatingSystem,
             agent.OsVersion,
             agent.AgentVersion,
+            agent.CommitHash,
             agent.Status,
             ClientId = site?.ClientId,
             agent.SiteId,

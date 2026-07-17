@@ -14,6 +14,7 @@ public class Agent
     public string? OperatingSystem { get; set; }
     public string? OsVersion { get; set; }
     public string? AgentVersion { get; set; }
+    public string? CommitHash { get; set; }
     public string? LastIpAddress { get; set; }
     public string? MacAddress { get; set; }
     public DateTime? LastSeenAt { get; set; }
