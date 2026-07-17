@@ -32,7 +32,7 @@ public class JwtService : IJwtService
         var section = configuration.GetSection("Authentication:Jwt");
         _issuer = section.GetValue<string>("Issuer", "Discovery")!;
         _audience = section.GetValue<string>("Audience", "Discovery")!;
-        _accessTokenMinutes = section.GetValue<int>("AccessTokenExpirationMinutes", 15);
+        _accessTokenMinutes = section.GetValue<int>("AccessTokenExpirationMinutes", 30);
         _refreshTokenDays = section.GetValue<int>("RefreshTokenExpirationDays", 7);
         _mfaTokenMinutes = section.GetValue<int>("MfaTokenExpirationMinutes", 3);
         _mfaSetupTokenMinutes = section.GetValue<int>("MfaSetupTokenExpirationMinutes", 10);

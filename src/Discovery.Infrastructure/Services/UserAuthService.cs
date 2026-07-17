@@ -7,6 +7,7 @@ using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Core.Helpers;
+using Microsoft.Extensions.Configuration;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -24,6 +25,7 @@ public class UserAuthService : IUserAuthService
     private readonly IRoleRepository _roles;
     private readonly IUserMfaKeyRepository _mfaKeys;
     private readonly IAuthAuditLogRepository _auditLog;
+    private readonly int _accessTokenSeconds;
 
     public UserAuthService(
         IUserRepository users,
@@ -33,7 +35,8 @@ public class UserAuthService : IUserAuthService
         IUserGroupRepository userGroups,
         IRoleRepository roles,
         IUserMfaKeyRepository mfaKeys,
-        IAuthAuditLogRepository auditLog)
+        IAuthAuditLogRepository auditLog,
+        IConfiguration configuration)
     {
         _users = users;
         _sessions = sessions;
@@ -43,6 +46,7 @@ public class UserAuthService : IUserAuthService
         _roles = roles;
         _mfaKeys = mfaKeys;
         _auditLog = auditLog;
+        _accessTokenSeconds = configuration.GetValue<int>("Authentication:Jwt:AccessTokenExpirationMinutes", 30) * 60;
     }
 
     public async Task<LoginResponseDto> LoginAsync(
@@ -337,7 +341,7 @@ public class UserAuthService : IUserAuthService
         {
             AccessToken = accessToken,
             RefreshToken = refreshBase64,
-            ExpiresInSeconds = 900 // 15 min
+            ExpiresInSeconds = _accessTokenSeconds
         };
     }
 
