@@ -168,6 +168,41 @@ bootstrap_header() {
 }
 
 choose_branch_interactive() {
+  local current_mode="${1:-}"
+
+  local detected_branch=""
+  local detected_label=""
+  local default_idx="2"
+
+  if [[ "$current_mode" == "update" || "$current_mode" == "nats" ]]; then
+    if command -v sudo >/dev/null 2>&1 && sudo test -f /etc/discovery-api/discovery.env 2>/dev/null; then
+      detected_branch="$(sudo awk -F= '/^DISCOVERY_GIT_BRANCH=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+      if [[ -z "$detected_branch" ]]; then
+        detected_branch="$(sudo awk -F= '/^DISCOVERY_RELEASE_CHANNEL=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+      fi
+      if [[ -z "$detected_branch" ]]; then
+        local api_source="/opt/discovery-api/source"
+        if sudo test -d "$api_source/.git" 2>/dev/null; then
+          detected_branch="$(sudo git -C "$api_source" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+          [[ "$detected_branch" == "HEAD" ]] && detected_branch=""
+        fi
+      fi
+    fi
+    if [[ -n "$detected_branch" ]]; then
+      detected_label="$detected_branch"
+      case "$(printf '%s' "$detected_branch" | tr '[:upper:]' '[:lower:]')" in
+        lts)     default_idx="1" ;;
+        release) default_idx="2" ;;
+        beta)    default_idx="3" ;;
+        dev)     default_idx="4" ;;
+        *)
+          default_idx="5"
+          detected_label="$detected_branch (custom)"
+          ;;
+      esac
+    fi
+  fi
+
   while true; do
     bootstrap_header "Canal/branch de instalacao" "2/2"
     echo "Selecione o canal/branch:" >&2
@@ -177,12 +212,17 @@ choose_branch_interactive() {
     echo " 4) dev     - desenvolvimento" >&2
     echo " 5) custom  - informar branch manualmente" >&2
     echo "----------------------------------------" >&2
-    echo "Dica: digite o numero ou o nome (ex: release)." >&2
-    echo "Padrao: [2] release (pressione Enter)." >&2
+    if [[ -n "$detected_branch" ]]; then
+      echo "Branch atual detectado: ${detected_label}" >&2
+      echo "Pressione Enter para manter ou digite nova opcao para alterar." >&2
+    else
+      echo "Dica: digite o numero ou o nome (ex: release)." >&2
+    fi
+    echo "Padrao: [${default_idx}] (pressione Enter)." >&2
 
     local selected_option
-    read -r -p "Opcao [2]: " selected_option
-    selected_option="${selected_option:-2}"
+    read -r -p "Opcao [${default_idx}]: " selected_option
+    selected_option="${selected_option:-$default_idx}"
     selected_option="$(printf '%s' "$selected_option" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
     case "$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]')" in
@@ -204,8 +244,13 @@ choose_branch_interactive() {
         ;;
       5|custom)
         local custom_branch
-        read -r -p "Informe a branch custom: " custom_branch
-        custom_branch="$(printf '%s' "$custom_branch" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        if [[ -n "$detected_branch" && "$default_idx" == "5" ]]; then
+          read -r -p "Informe a branch custom [${detected_branch}]: " custom_branch
+          custom_branch="$(printf '%s' "${custom_branch:-$detected_branch}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        else
+          read -r -p "Informe a branch custom: " custom_branch
+          custom_branch="$(printf '%s' "$custom_branch" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        fi
         [[ -n "$custom_branch" ]] || {
           echo "Branch custom nao informada. Tente novamente." >&2
           continue
@@ -221,10 +266,23 @@ choose_branch_interactive() {
 }
 
 choose_operation_mode_interactive() {
+  local installed=0
+  if command -v sudo >/dev/null 2>&1 && sudo test -f /etc/discovery-api/discovery.env 2>/dev/null && \
+     sudo systemctl list-unit-files discovery-api.service &>/dev/null; then
+    installed=1
+  fi
+
+  local default_option="1"
+  [[ "$installed" -eq 1 ]] && default_option="3"
+
   while true; do
     bootstrap_header "Modo de Operacao" "1/2"
     echo "Escolha o que sera executado neste momento:" >&2
-    echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)" >&2
+    if [[ "$installed" -eq 1 ]]; then
+      echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos) [ja instalado]" >&2
+    else
+      echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)" >&2
+    fi
     echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)" >&2
     echo "3) Atualizar instalacao existente (repositorios + rebuild API/portal + restart servicos)" >&2
     echo "4) Ver dados do servidor (instalacao atual, usuario, senha, chaves e afins)" >&2
@@ -232,14 +290,26 @@ choose_operation_mode_interactive() {
     echo "----------------------------------------" >&2
 
     local selected_option
-    read -r -p "Opcao [1]: " selected_option
-    selected_option="${selected_option:-1}"
+    read -r -p "Opcao [${default_option}]: " selected_option
+    selected_option="${selected_option:-$default_option}"
     selected_option="$(printf '%s' "$selected_option" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
     case "$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]')" in
       1|full|install|complete)
-        printf 'full'
-        return
+        if [[ "$installed" -eq 1 ]]; then
+          echo "Sistema ja instalado. Use a opcao 3 para atualizar ou a opcao 1 apenas se quiser reinstalar do zero." >&2
+          echo "Para reinstalar do zero, digite 'full' novamente para confirmar." >&2
+          local confirm
+          read -r -p "Confirmar reinstalacao completa? (s/N): " confirm
+          confirm="$(printf '%s' "${confirm:-n}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          case "$confirm" in
+            s|sim|y|yes|1) printf 'full'; return ;;
+            *) echo "Reinstalacao cancelada. Voltando ao menu..." >&2 ;;
+          esac
+        else
+          printf 'full'
+          return
+        fi
         ;;
       2|nats|nats-only|update-nats)
         printf 'nats'
@@ -336,7 +406,7 @@ if [[ -z "${DISCOVERY_BOOTSTRAP_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}
       BOOTSTRAP_BRANCH="dev"
       log "Modo maintenance: usando branch 'dev' (unica com suporte a manutencao)"
     else
-      BOOTSTRAP_BRANCH="$(choose_branch_interactive)"
+      BOOTSTRAP_BRANCH="$(choose_branch_interactive "$BOOTSTRAP_INSTALL_MODE")"
     fi
   fi
 fi

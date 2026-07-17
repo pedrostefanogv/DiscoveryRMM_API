@@ -254,10 +254,20 @@ select_operation_mode() {
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then return; fi
 
+  local installed=0
+  is_discovery_installed && installed=1
+
+  local default_option="1"
+  [[ "$installed" -eq 1 ]] && default_option="3"
+
   while true; do
     wizard_header "Modo de Operacao" "$(wizard_step_label "2/8" "1/7")"
     echo "Escolha o que sera executado neste momento:"
-    echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)"
+    if [[ "$installed" -eq 1 ]]; then
+      echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos) [ja instalado]"
+    else
+      echo "1) Instalacao completa (API + portal web + Postgres + NATS + servicos)"
+    fi
     echo "2) Atualizar somente configuracao do NATS (inclui issuer/auth_callout)"
     echo "3) Atualizar instalacao existente (repositorios + rebuild API/portal + restart servicos)"
     echo "4) Ver dados do servidor (instalacao atual, usuario, senha, chaves e afins)"
@@ -265,11 +275,22 @@ select_operation_mode() {
     echo "----------------------------------------"
 
     local selected_option
-    read -r -p "Opcao [1]: " selected_option
-    selected_option="${selected_option:-1}"
+    read -r -p "Opcao [${default_option}]: " selected_option
+    selected_option="${selected_option:-$default_option}"
     selected_option="$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     case "$selected_option" in
       1|full|install|complete)
+        if [[ "$installed" -eq 1 ]]; then
+          echo "Sistema ja instalado. Use a opcao 3 para atualizar ou a opcao 1 apenas se quiser reinstalar do zero."
+          echo "Para reinstalar do zero, digite 'full' novamente para confirmar."
+          local confirm
+          read -r -p "Confirmar reinstalacao completa? (s/N): " confirm
+          confirm="$(printf '%s' "${confirm:-n}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          case "$confirm" in
+            s|sim|y|yes|1) ;;
+            *) echo "Reinstalacao cancelada. Voltando ao menu..."; continue ;;
+          esac
+        fi
         UPDATE_NATS_CONFIG_ONLY=0
         UPDATE_STACK_ONLY=0
         MAINTENANCE_MODE=0

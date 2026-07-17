@@ -142,6 +142,43 @@ generate_random_password() {
   printf '%s' "$generated"
 }
 
+# ── Installation detection ─────────────────────────────────────────────────
+
+is_discovery_installed() {
+  if sudo test -f /etc/discovery-api/discovery.env 2>/dev/null && \
+     sudo systemctl list-unit-files discovery-api.service &>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+detect_current_branch() {
+  local branch
+
+  branch="$(sudo awk -F= '/^DISCOVERY_GIT_BRANCH=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+  if [[ -n "$branch" ]]; then
+    printf '%s' "$branch"
+    return
+  fi
+
+  branch="$(sudo awk -F= '/^DISCOVERY_RELEASE_CHANNEL=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+  if [[ -n "$branch" ]]; then
+    printf '%s' "$branch"
+    return
+  fi
+
+  local api_source="${DISCOVERY_API_SOURCE:-/opt/discovery-api/source}"
+  if sudo test -d "$api_source/.git" 2>/dev/null; then
+    branch="$(sudo git -C "$api_source" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ -n "$branch" && "$branch" != "HEAD" ]]; then
+      printf '%s' "$branch"
+      return
+    fi
+  fi
+
+  printf 'release'
+}
+
 is_valid_repo_url() {
   local url="$1"
   if [[ "$url" =~ ^(https?|ssh):// ]]; then
