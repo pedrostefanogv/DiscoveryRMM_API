@@ -97,12 +97,14 @@ public class DeployTokensController : ControllerBase
                     fileName, content.Length, token.TokenPrefix);
                 return File(content, "application/vnd.microsoft.portable-executable", fileName);
             }
-
-            // Default: online = bootstrap (minimal) installer
-            (byte[] content, string fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(request.RawToken, cancellationToken: ct);
-            _logger.LogInformation("Bootstrap installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
-                fileName, content.Length, token.TokenPrefix);
-            return File(content, "application/vnd.microsoft.portable-executable", fileName);
+            else
+            {
+                // Default: online = bootstrap (minimal) installer
+                (byte[] content, string fileName) = await _agentPackageService.BuildBootstrapInstallerAsync(request.RawToken, cancellationToken: ct);
+                _logger.LogInformation("Bootstrap installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
+                    fileName, content.Length, token.TokenPrefix);
+                return File(content, "application/vnd.microsoft.portable-executable", fileName);
+            }
         }
         catch (InvalidOperationException ex)
         {

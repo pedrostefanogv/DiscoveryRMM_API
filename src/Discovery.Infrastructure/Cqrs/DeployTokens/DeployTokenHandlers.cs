@@ -68,13 +68,15 @@ public sealed class CreateDeployTokenAndDownloadHandler(
                 return Result<DeployTokenDownloadResult>.Success(new DeployTokenDownloadResult(
                     content, fileName, "application/vnd.microsoft.portable-executable"));
             }
-
-            // Default: online = bootstrap (minimal) installer
-            var (content, fileName) = await agentPackageService.BuildBootstrapInstallerAsync(rawToken, cancellationToken: ct);
-            logger.LogInformation("Bootstrap installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
-                fileName, content.Length, token.TokenPrefix);
-            return Result<DeployTokenDownloadResult>.Success(new DeployTokenDownloadResult(
-                content, fileName, "application/vnd.microsoft.portable-executable"));
+            else
+            {
+                // Default: online = bootstrap (minimal) installer
+                var (content, fileName) = await agentPackageService.BuildBootstrapInstallerAsync(rawToken, cancellationToken: ct);
+                logger.LogInformation("Bootstrap installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
+                    fileName, content.Length, token.TokenPrefix);
+                return Result<DeployTokenDownloadResult>.Success(new DeployTokenDownloadResult(
+                    content, fileName, "application/vnd.microsoft.portable-executable"));
+            }
         }
         catch (InvalidOperationException ex)
         {
