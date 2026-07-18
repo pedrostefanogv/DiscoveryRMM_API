@@ -1,7 +1,43 @@
 # Plano de Melhoria — AI Chat (Agent ↔ API)
 
-> **Data:** 2026-07-17
-> **Status:** Em execução — Fase 1 ✅, Fase 2 ~75%, Fase 3 ~25%
+> **Data:** 2026-07-18
+> **Status:** Fase 1 ✅ | Fase 2 ✅ | Fase 3 ✅ (API) / 🟡 (Agent iniciado)
+> **Commits:** ~11 commits no branch `dev` | **Servidor:** 192.168.1.120 deployed
+
+### ✅ Concluído & Deployed
+
+| # | Item | Status |
+|---|------|--------|
+| 2.1 | Encoding UTF-8 | ✅ |
+| 2.2 | Retry respostas vazias + fallback | ✅ |
+| 2.3 | SessionId no stream | ✅ |
+| 2.4 | System prompt melhorado | ✅ |
+| 2.5 | Loop tools: dedup KB, maxIter=2, break-early | ✅ |
+| 2.6 | XML fallback condicional | ✅ |
+| 2.7 | Campos feedback (M060) | ✅ |
+| 2.8 | KB embedding: 401 corrigido, auto-sync dimensão | ✅ |
+| 2.9 | Quick-reply cache | ✅ |
+| 2.16 | time.current + sequential_thinking | ✅ |
+| 2.13 | API: ChatStreamCommand, StreamMultiRoundAsync, agent-tools/registry | ✅ |
+| — | SSE: tool_call, round_end | ✅ |
+
+### 🟡 Em andamento (Agent — C:\Projetos\Discovery)
+
+| # | Item | Status |
+|---|------|--------|
+| 2.14 | Agent SendStream multi-round | 🟡 `chat_multi_round.go` criado |
+| 2.15 | Unificar parser SSE | 🟡 pendente |
+
+### ❌ Pendente
+
+| # | Item |
+|---|------|
+| 2.8 | Popular KB com artigos (3 artigos, 0 publicados) |
+| 2.8 | Ajustar MinSimilarityScore 0.65→0.55 |
+| 2.14 | Agent: integrar MCP executor no SendStream + registrar tools no startup |
+| 2.15 | Unificar chat_bridge.go |
+| 2.16 | memory.search handler |
+
 > **Escopo:** `DiscoveryRMM_API` (servidor) + `Discovery` (agent)
 
 ---
