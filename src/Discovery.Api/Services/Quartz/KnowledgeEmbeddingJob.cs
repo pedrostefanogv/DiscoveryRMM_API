@@ -44,9 +44,6 @@ public sealed class KnowledgeEmbeddingJob : IJob
     // contra calls de trigger manual enquanto um ciclo já está rodando.
     private static readonly SemaphoreSlim EmbeddingSemaphore = new(1, 1);
 
-    // Dimensão já sincronizada (evita reset repetido quando aiSettings recarrega do default)
-    private static int _lastSyncedDim;
-
     public async Task Execute(IJobExecutionContext context)
     {
         if (!await EmbeddingSemaphore.WaitAsync(TimeSpan.Zero))

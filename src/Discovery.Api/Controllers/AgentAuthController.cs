@@ -408,7 +408,7 @@ public class AgentAuthController : ControllerBase
     }
 
     [HttpPost("me/ai-chat/stream")]
-    public async Task ChatStream([FromBody] ChatAsyncCommand cmd, CancellationToken ct)
+    public async Task ChatStream([FromBody] ChatStreamCommand cmd, CancellationToken ct)
     {
         if (!TryGetAgentId(out var agentId))
         {
@@ -432,8 +432,16 @@ public class AgentAuthController : ControllerBase
 
         try
         {
+            // ToolResults != null → round 2+ (agent executou tools)
+            // Message != null → round 1 (nova mensagem do usuário)
             var sessionGuid = Guid.TryParse(cmd.SessionId, out var g) ? g : (Guid?)null;
-            await foreach (var chunk in _aiChat.StreamAsync(agentId, cmd.Message, sessionGuid, cmd.DepartmentId, ct))
+            var toolResults = cmd.ToolResults?.Select(tr => new ToolResultItem(tr.CallId, tr.Name, tr.Result)).ToList();
+
+            IAsyncEnumerable<AiChatStreamChunk> stream = (cmd.Message != null)
+                ? _aiChat.StreamAsync(agentId, cmd.Message, sessionGuid, cmd.DepartmentId, ct)
+                : _aiChat.StreamMultiRoundAsync(agentId, null, sessionGuid, toolResults, cmd.DepartmentId, ct);
+
+            await foreach (var chunk in stream)
             {
                 if (chunk.Type == "error")
                 {
@@ -443,7 +451,7 @@ public class AgentAuthController : ControllerBase
                 }
                 await WriteSseJsonAsync(HttpContext, chunk, ct);
                 await HttpContext.Response.Body.FlushAsync(ct);
-                if (chunk.Type == "done") break;
+                if (chunk.Type is "done" or "round_end") break;
             }
         }
         catch (OperationCanceledException) { }
@@ -452,6 +460,19 @@ public class AgentAuthController : ControllerBase
             if (!ct.IsCancellationRequested)
                 await WriteSseJsonAsync(HttpContext, new { type = "error", error = ex.Message }, ct);
         }
+    }
+
+    [HttpPost("me/agent-tools/registry")]
+    public async Task<IActionResult> RegisterAgentTools([FromBody] RegisterAgentToolsCommand cmd, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var agentId)) return Unauthorized();
+        var (agent, blocked) = await GetAgentOrBlockAsync(agentId, false);
+        if (blocked is not null) return blocked;
+
+        var tools = cmd.Tools.Select(t => new AgentToolRegistration(
+            t.Name, t.Description, t.ParametersSchema.GetRawText())).ToList();
+        await _aiChat.RegisterAgentToolsAsync(agentId, agent!.SiteId, tools, ct);
+        return Ok(new { registered = tools.Count });
     }
 
     private static readonly JsonSerializerOptions SseJsonOptions = new()

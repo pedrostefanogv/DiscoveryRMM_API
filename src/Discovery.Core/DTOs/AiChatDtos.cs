@@ -44,7 +44,9 @@ public record AgentChatJobStatus(
 /// Type = "tool_call_start"  → ToolCallId + ToolName preenchidos (início de tool call).
 /// Type = "tool_call_delta"  → ToolArgumentsDelta com fragmento incremental de argumentos.
 /// Type = "tool_call_end"    → ToolCallId preenchido (fim de tool call).
+/// Type = "tool_call"        → ToolCallId + ToolName + ToolArgumentsDelta (args JSON completo). Agent deve executar.
 /// Type = "tool_result"      → ToolCallId + ToolResult preenchidos (resultado da tool).
+/// Type = "round_end"        → SessionId preenchido. Stream fecha, agent deve enviar próximo POST com ToolResults.
 /// Type = "done"             → SessionId, TokensUsed e LatencyMs estão preenchidos.
 /// Type = "error"            → Error contém a mensagem de erro.
 /// </summary>

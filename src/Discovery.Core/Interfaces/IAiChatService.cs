@@ -63,5 +63,35 @@ public interface IAiChatService
         Guid? sessionId,
         Guid? departmentId = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Registra as tools MCP disponíveis de um agent para exposição à IA.
+    /// </summary>
+    Task RegisterAgentToolsAsync(Guid agentId, Guid siteId, List<AgentToolRegistration> tools, CancellationToken ct = default);
+
+    /// <summary>
+    /// Multi-round streaming (Server-Managed Agent Loop).
+    /// Round 1: message != null, toolResults null.
+    /// Rounds 2+: message null, toolResults preenchido.
+    /// </summary>
+    IAsyncEnumerable<AiChatStreamChunk> StreamMultiRoundAsync(
+        Guid agentId, string? message, Guid? sessionId,
+        List<ToolResultItem>? toolResults, Guid? departmentId = null, CancellationToken ct = default);
 }
+
+/// <summary>
+/// Registro de uma tool MCP do agent para exposição à IA.
+/// </summary>
+public record AgentToolRegistration(
+    string Name,
+    string Description,
+    string ParametersSchemaJson);
+
+/// <summary>
+/// Resultado de uma tool executada pelo agent no fluxo multi-round.
+/// </summary>
+public record ToolResultItem(
+    string CallId,
+    string Name,
+    string Result);
 

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -35,6 +36,11 @@ public class AiChatService : IAiChatService
     private readonly IAiCredentialResolver _credentialResolver;
     private readonly IMcpToolExecutor _mcpToolExecutor;
     private readonly IAiCostControlService _costControl;
+    
+    // Cache de tools registradas por agent (para multi-round com tools do agent)
+    private static readonly ConcurrentDictionary<Guid, List<LlmTool>> _agentToolsCache = new();
+    private static readonly ConcurrentDictionary<Guid, DateTime> _agentToolsCacheExpiry = new();
+    private static readonly TimeSpan AgentToolsCacheTtl = TimeSpan.FromMinutes(5);
     
     private const int MaxMessageSizeBytes = 2048; // 2KB
     private const int SessionExpirationDays = 180;
@@ -1403,5 +1409,197 @@ Responda de forma profissional, prestativa e sempre em português.";
         }
 
         return (result, nextSeq);
+    }
+
+    // ── Multi-Round Agent Tools ─────────────────────────────────────────────
+
+    public async Task RegisterAgentToolsAsync(Guid agentId, Guid siteId,
+        List<AgentToolRegistration> tools, CancellationToken ct = default)
+    {
+        var llmTools = tools.Select(t =>
+        {
+            object schema;
+            try { schema = JsonSerializer.Deserialize<object>(t.ParametersSchemaJson)!; }
+            catch { schema = new { type = "object", properties = new { } }; }
+            return new LlmTool(t.Name, t.Description, schema);
+        }).ToList();
+
+        _agentToolsCache[agentId] = llmTools;
+        _agentToolsCacheExpiry[agentId] = DateTime.UtcNow.Add(AgentToolsCacheTtl);
+        _logger.LogInformation("[AgentTools] {Count} tools registradas para AgentId={AgentId}", llmTools.Count, agentId);
+        await Task.CompletedTask;
+    }
+
+    private static List<LlmTool>? GetCachedAgentTools(Guid agentId)
+    {
+        if (_agentToolsCacheExpiry.TryGetValue(agentId, out var expiry) && expiry > DateTime.UtcNow)
+            return _agentToolsCache.TryGetValue(agentId, out var tools) ? tools : null;
+        return null;
+    }
+
+    public async IAsyncEnumerable<AiChatStreamChunk> StreamMultiRoundAsync(
+        Guid agentId, string? message, Guid? sessionId,
+        List<ToolResultItem>? toolResults, Guid? departmentId = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
+        var stopwatch = Stopwatch.StartNew();
+
+        if (toolResults is not { Count: > 0 } && string.IsNullOrWhiteSpace(message))
+        {
+            yield return new AiChatStreamChunk(Type: "error", Error: "ToolResults ou Message requeridos.");
+            yield break;
+        }
+        if (!sessionId.HasValue)
+        {
+            yield return new AiChatStreamChunk(Type: "error", Error: "SessionId requerido em multi-round.");
+            yield break;
+        }
+
+        var session = await _sessionRepository.GetByIdAsync(sessionId.Value, agentId, ct);
+        if (session == null)
+        {
+            yield return new AiChatStreamChunk(Type: "error", Error: $"Sessão {sessionId} não encontrada.");
+            yield break;
+        }
+
+        var aiSettings = await ResolveAiSettingsAsync(session.SiteId, ct);
+        if (!aiSettings.Enabled || !aiSettings.ChatAIEnabled)
+        {
+            yield return new AiChatStreamChunk(Type: "error", Error: "Chat IA desabilitado.");
+            yield break;
+        }
+
+        var history = await _messageRepository.GetRecentBySessionAsync(session.Id, ClampHistoryMessages(aiSettings), ct);
+        var nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
+
+        var llmMessages = history.OrderBy(m => m.SequenceNumber)
+            .Select(m => new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName)).ToList();
+
+        if (toolResults is { Count: > 0 })
+        {
+            foreach (var tr in toolResults)
+            {
+                llmMessages.Add(new LlmMessage("tool", tr.Result, $"agent_{tr.CallId}", tr.Name));
+            }
+        }
+
+        var agent = await _agentRepository.GetByIdAsync(agentId);
+        if (agent == null) { yield return new AiChatStreamChunk(Type: "error", Error: "Agent não encontrado."); yield break; }
+
+        var (systemPrompt, _) = await BuildSystemPromptAsync(agent, session,
+            message ?? toolResults?.FirstOrDefault()?.Result ?? "", aiSettings, departmentId, ct);
+
+        var availableTools = aiSettings.KnowledgeBaseEnabled
+            ? await _mcpToolExecutor.GetAvailableToolsAsync(session.ClientId, session.SiteId, agentId, ct)
+            : new List<LlmTool>();
+        var agentTools = GetCachedAgentTools(agentId);
+        if (agentTools is { Count: > 0 }) availableTools.AddRange(agentTools);
+
+        var maxIterations = aiSettings.MaxToolCallIterations is >= 1 and <= 10
+            ? aiSettings.MaxToolCallIterations : DefaultMaxToolCallIterations;
+
+        var contentBuilder = new StringBuilder();
+        var toolIterations = 0;
+        int? totalTokens = null;
+        var executedKbQueries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var consecutiveEmptyKbSearches = 0;
+        bool hasToolCalls = false;
+        var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
+
+        while (true)
+        {
+            var streamOptions = new LlmOptions(
+                ClampMaxTokens(aiSettings), ClampTemperature(aiSettings),
+                string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
+                string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
+                string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
+                availableTools.Count > 0, availableTools,
+                aiSettings.Provider, aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories);
+
+            hasToolCalls = false;
+            bool hasAgentToolCall = false;
+
+            await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
+            {
+                if (evt.Type == "token" && !string.IsNullOrWhiteSpace(evt.Content))
+                {
+                    contentBuilder.Append(evt.Content);
+                    yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
+                }
+                else if (evt.Type == "tool_calls" && evt.ToolCalls is { Count: > 0 })
+                {
+                    hasToolCalls = true;
+                    totalTokens = evt.TokensUsed;
+                    llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString()));
+
+                    foreach (var tc in evt.ToolCalls)
+                    {
+                        if (agentToolCallNames.Contains(tc.Name))
+                        {
+                            hasAgentToolCall = true;
+                            yield return new AiChatStreamChunk(Type: "tool_call",
+                                ToolCallId: tc.Id, ToolName: tc.Name, ToolArgumentsDelta: tc.ArgumentsJson);
+                        }
+                        else
+                        {
+                            if (tc.Name == "knowledge_search")
+                            {
+                                var kbQuery = ExtractKbQuery(tc.ArgumentsJson);
+                                if (!string.IsNullOrEmpty(kbQuery) && !executedKbQueries.Add(kbQuery)) continue;
+                            }
+
+                            var toolResult = await _mcpToolExecutor.ExecuteAsync(tc.Name, tc.ArgumentsJson,
+                                session.ClientId, session.SiteId, agentId, aiSettings, null, departmentId, ct);
+
+                            yield return new AiChatStreamChunk(Type: "tool_result",
+                                ToolCallId: tc.Id, ToolResult: toolResult);
+                            llmMessages.Add(new LlmMessage("tool", toolResult, tc.Id, tc.Name));
+
+                            if (tc.Name == "knowledge_search" && toolResult.Contains("\"found\":false"))
+                                consecutiveEmptyKbSearches++;
+                        }
+                    }
+
+                    if (hasAgentToolCall)
+                    {
+                        yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
+                        yield break;
+                    }
+                }
+                else if (evt.Type == "done") { totalTokens = evt.TokensUsed; }
+            }
+
+            if (!hasToolCalls || toolIterations >= maxIterations - 1 || consecutiveEmptyKbSearches >= 2)
+                break;
+            toolIterations++;
+        }
+
+        stopwatch.Stop();
+        var fullContent = contentBuilder.ToString();
+
+        if (string.IsNullOrWhiteSpace(fullContent))
+        {
+            fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta.";
+            yield return new AiChatStreamChunk(Type: "token", Content: fullContent);
+        }
+
+        try
+        {
+            await _messageRepository.CreateBatchAsync(new[]
+            {
+                new AiChatMessage
+                {
+                    Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq,
+                    Role = "assistant", Content = fullContent, TokensUsed = totalTokens,
+                    LatencyMs = (int)stopwatch.ElapsedMilliseconds,
+                    ModelVersion = aiSettings.ChatModel, CreatedAt = DateTime.UtcNow, TraceId = traceId
+                }
+            }, ct);
+        }
+        catch (Exception ex) { _logger.LogError(ex, "[{TraceId}] Erro ao persistir multi-round", traceId); }
+
+        yield return new AiChatStreamChunk(Type: "done", SessionId: session.Id,
+            TokensUsed: totalTokens, LatencyMs: (int)stopwatch.ElapsedMilliseconds);
     }
 }
