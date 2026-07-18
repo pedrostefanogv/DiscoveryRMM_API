@@ -325,22 +325,23 @@ public sealed class KnowledgeEmbeddingJob : IJob
         Guid? siteId,
         Discovery.Core.ValueObjects.AIIntegrationSettings aiSettings)
     {
-        if (clientId.HasValue || siteId.HasValue)
-        {
-            var credentialResolver = scope.ServiceProvider.GetRequiredService<IAiCredentialResolver>();
-            var resolved = await credentialResolver.ResolveAsync(clientId, siteId);
+        var credentialResolver = scope.ServiceProvider.GetRequiredService<IAiCredentialResolver>();
 
-            if (resolved is not null)
-            {
-                var baseUrl = resolved.EffectiveEmbeddingBaseUrl
-                    ?? (string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl);
-                var apiKey = resolved.EffectiveEmbeddingApiKey
-                    ?? (string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey);
-                return (baseUrl, apiKey);
-            }
+        // Sempre tenta o resolver primeiro (scope-specific ou global)
+        var resolved = await credentialResolver.ResolveAsync(clientId, siteId);
+
+        if (resolved is not null && !string.IsNullOrWhiteSpace(resolved.ApiKey))
+        {
+            var baseUrl = resolved.EffectiveEmbeddingBaseUrl
+                ?? resolved.BaseUrl
+                ?? (string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl);
+            var apiKey = resolved.EffectiveEmbeddingApiKey
+                ?? resolved.ApiKey
+                ?? (string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey) ? aiSettings.ApiKey : aiSettings.EmbeddingApiKey);
+            return (baseUrl, apiKey);
         }
 
-        // Fallback: usa configuração global de AI
+        // Fallback: usa configuração de AI
         var embBaseUrl = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl)
             ? aiSettings.BaseUrl
             : aiSettings.EmbeddingBaseUrl;
