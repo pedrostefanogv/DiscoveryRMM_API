@@ -433,6 +433,9 @@ public sealed class KnowledgeEmbeddingJob : IJob
             if (actualDim == dbDim)
             {
                 _autoSyncedDim = actualDim;
+                // Sincroniza aiSettings também — evita que GenerateBatch dispare reset falso
+                if (aiSettings.EmbeddingDimensions != actualDim)
+                    aiSettings.EmbeddingDimensions = actualDim;
                 return;
             }
 
@@ -482,11 +485,20 @@ public sealed class KnowledgeEmbeddingJob : IJob
         _resetPerformedThisCycle = true;
         _lastResetAt = DateTime.UtcNow;
 
-        var resetSvc = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingResetService>();
-        await resetSvc.ResetAsync(newDimensions, reason, ct: default);
-        ResetsCounter.Add(1);
-
-        logger.LogInformation("Reset KB executado: dimensão={Dim}, motivo={Reason}", newDimensions, reason);
-        return true;
+        try
+        {
+            var resetSvc = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingResetService>();
+            await resetSvc.ResetAsync(newDimensions, reason, ct: default);
+            ResetsCounter.Add(1);
+            logger.LogInformation("Reset KB executado: dimensão={Dim}, motivo={Reason}", newDimensions, reason);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Reset KB falhou (passos 1-4 OK, pode ter falhado no step 5). Dimensão={Dim}", newDimensions);
+            // O reset parcial (steps 1-4) já ocorreu — o importante é não quebrar o ciclo
+            ResetsCounter.Add(1);
+            return true;
+        }
     }
 }
