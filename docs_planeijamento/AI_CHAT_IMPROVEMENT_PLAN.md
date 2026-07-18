@@ -1,10 +1,10 @@
 # Plano de Melhoria — AI Chat (Agent ↔ API)
 
 > **Data:** 2026-07-18
-> **Status:** Fase 1 ✅ | Fase 2 ✅ | Fase 3 ✅ (API) / 🟡 (Agent iniciado)
-> **Commits:** ~11 commits no branch `dev` | **Servidor:** 192.168.1.120 deployed
+> **Status:** Fase 1 ✅ | Fase 2 ✅ | Fase 3 ✅ (API + Agent código)
+> **Commits:** ~13 commits no branch `dev` | **Servidor:** 192.168.1.120 deployed
 
-### ✅ Concluído & Deployed
+### ✅ Concluído & Deployed (API)
 
 | # | Item | Status |
 |---|------|--------|
@@ -18,15 +18,18 @@
 | 2.8 | KB embedding: 401 corrigido, auto-sync dimensão | ✅ |
 | 2.9 | Quick-reply cache | ✅ |
 | 2.16 | time.current + sequential_thinking | ✅ |
-| 2.13 | API: ChatStreamCommand, StreamMultiRoundAsync, agent-tools/registry | ✅ |
+| 2.13 | API: ChatStreamCommand, StreamMultiRoundAsync, /me/agent-tools/registry | ✅ |
 | — | SSE: tool_call, round_end | ✅ |
 
-### 🟡 Em andamento (Agent — C:\Projetos\Discovery)
+### ✅ Código pronto (Agent — C:\Projetos\Discovery, commit `32ca534`)
 
 | # | Item | Status |
 |---|------|--------|
-| 2.14 | Agent SendStream multi-round | 🟡 `chat_multi_round.go` criado |
-| 2.15 | Unificar parser SSE | 🟡 pendente |
+| 2.14 | `chat_multi_round.go`: SendStreamMultiRound, executeRound, parseMultiRoundSSE | ✅ |
+| 2.14 | `mcpExecuteForChat` usa MCP registry local (~30 tools) | ✅ |
+| 2.14 | `RegisterAgentToolsOnServer` envia tools para API | ✅ |
+| 2.14 | `StartChatStream` usa `SendStreamMultiRound` | ✅ |
+| 2.14 | `chat_stream.go` atualizado com fields: ToolCallID, ToolName, ToolArguments | ✅ |
 
 ### ❌ Pendente
 
@@ -34,9 +37,9 @@
 |---|------|
 | 2.8 | Popular KB com artigos (3 artigos, 0 publicados) |
 | 2.8 | Ajustar MinSimilarityScore 0.65→0.55 |
-| 2.14 | Agent: integrar MCP executor no SendStream + registrar tools no startup |
 | 2.15 | Unificar chat_bridge.go |
 | 2.16 | memory.search handler |
+| — | Compilar e testar o agent com as mudanças |
 
 > **Escopo:** `DiscoveryRMM_API` (servidor) + `Discovery` (agent)
 
