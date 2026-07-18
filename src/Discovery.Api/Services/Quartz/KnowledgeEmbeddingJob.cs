@@ -7,6 +7,7 @@ using Pgvector;
 using Quartz;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Threading;
 
 namespace Discovery.Api.Services.Quartz;
 
@@ -42,6 +43,9 @@ public sealed class KnowledgeEmbeddingJob : IJob
     // que uma única instância executa por vez. O semáforo abaixo protege
     // contra calls de trigger manual enquanto um ciclo já está rodando.
     private static readonly SemaphoreSlim EmbeddingSemaphore = new(1, 1);
+
+    // Dimensão já sincronizada (evita reset repetido quando aiSettings recarrega do default)
+    private static int _lastSyncedDim;
 
     public async Task Execute(IJobExecutionContext context)
     {
@@ -391,28 +395,30 @@ public sealed class KnowledgeEmbeddingJob : IJob
 
             if (string.IsNullOrWhiteSpace(apiKey)) return;
 
-            // Gera um embedding de teste com texto mínimo para detectar a dimensão real
+            // Gera um embedding de teste para detectar a dimensão real do modelo
             var testEmbedding = await embeddingProvider.GenerateEmbeddingAsync(
                 "test", aiSettings.EmbeddingModel, apiKey, baseUrl, CancellationToken.None);
             var actualDim = testEmbedding.Length;
 
-            var server = await serverRepo.GetOrCreateDefaultAsync();
-            // Compara contra a dimensão REAL do banco (CurrentEmbeddingDimensions), não contra aiSettings
-            var configuredDim = server.CurrentEmbeddingDimensions > 0
-                ? server.CurrentEmbeddingDimensions
-                : aiSettings.EmbeddingDimensions;
+            // Evita reset repetido: flag estática persiste entre ciclos
+            var prev = Interlocked.Exchange(ref _lastSyncedDim, actualDim);
+            if (prev == actualDim)
+                return;
 
-            if (actualDim == configuredDim)
-                return; // Já está sincronizado — pular
+            if (actualDim == aiSettings.EmbeddingDimensions)
+            {
+                Interlocked.Exchange(ref _lastSyncedDim, actualDim);
+                return;
+            }
 
             logger.LogWarning(
-                "Divergência de dimensão detectada: banco={Configured}, real={Actual}. Auto-corrigindo...",
-                configuredDim, actualDim);
+                "Dimensão real ({Actual}) != configurada ({Configured}). Auto-corrigindo e resetando KB...",
+                actualDim, aiSettings.EmbeddingDimensions);
 
             await resetService.ResetAsync(actualDim, "KnowledgeEmbeddingJob (auto-sync)", ct: CancellationToken.None);
             aiSettings.EmbeddingDimensions = actualDim;
 
-            logger.LogInformation("Dimensão auto-corrigida para {Dim}. KB será reprocessada.", actualDim);
+            logger.LogInformation("KB reset concluída para dimensão={Dim}. Chunks serão reprocessados.", actualDim);
         }
         catch (Exception ex)
         {
