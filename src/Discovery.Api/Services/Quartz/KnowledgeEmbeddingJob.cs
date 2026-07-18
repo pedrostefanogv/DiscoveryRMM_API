@@ -163,7 +163,8 @@ public sealed class KnowledgeEmbeddingJob : IJob
                     logger.LogWarning(
                         "Dimensão do embedding ({Actual}) difere da configurada ({Expected}). Auto-corrigindo...",
                         allEmbeddings[0].Length, aiSettings.EmbeddingDimensions);
-                    await resetService.ResetAsync(allEmbeddings[0].Length, "KnowledgeEmbeddingJob (auto-detect)", ct: default);
+                    var resetSvc = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingResetService>();
+                    await resetSvc.ResetAsync(allEmbeddings[0].Length, "KnowledgeEmbeddingJob (auto-detect)", ct: default);
                     aiSettings.EmbeddingDimensions = allEmbeddings[0].Length;
                     // Reprocessa o artigo no próximo ciclo após reset
                     await queueRepository.MarkFailedAsync(item.Id,
