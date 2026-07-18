@@ -20,6 +20,9 @@
 | 2.16 | time.current + sequential_thinking | ✅ |
 | 2.13 | API: ChatStreamCommand, StreamMultiRoundAsync, /me/agent-tools/registry | ✅ |
 | — | SSE: tool_call, round_end | ✅ |
+| 2.1 | Encoding UTF-8 no StreamAsync (sem tools) | ✅ |
+| 2.8 | MinSimilarityScore 0.65→0.55 | ✅ |
+| 2.16 | memory.search handler funcional (busca em ai_chat_messages) | ✅ |
 
 ### ✅ Código pronto (Agent — C:\Projetos\Discovery, commit `32ca534`)
 
@@ -35,11 +38,8 @@
 
 | # | Item |
 |---|------|
-| 2.8 | Popular KB com artigos (3 artigos, 0 publicados) |
-| 2.8 | Ajustar MinSimilarityScore 0.65→0.55 |
-| 2.15 | Unificar chat_bridge.go |
-| 2.16 | memory.search handler |
-| — | Compilar e testar o agent com as mudanças |
+| 2.8 | Popular KB com artigos (3 artigos de teste existentes no site) |
+| — | Deploy do agent compilado nos endpoints |
 
 > **Escopo:** `DiscoveryRMM_API` (servidor) + `Discovery` (agent)
 

@@ -262,7 +262,7 @@ public class OpenAiProvider : ILlmProvider
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var reader = new System.IO.StreamReader(stream);
+        using var reader = new System.IO.StreamReader(stream, Encoding.UTF8);
 
         string? line;
         while ((line = await reader.ReadLineAsync(cancellationToken)) != null)

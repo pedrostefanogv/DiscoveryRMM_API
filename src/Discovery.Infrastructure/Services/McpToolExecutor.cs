@@ -31,6 +31,7 @@ public interface IMcpToolExecutor
         AIIntegrationSettings aiSettings,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
+        Guid? sessionId = null,
         CancellationToken ct = default);
 
     /// <summary>
@@ -54,12 +55,14 @@ public record McpToolCallContext(
     AIIntegrationSettings AiSettings,
     IReadOnlyCollection<Guid>? ExcludeArticleIds,
     Guid? DepartmentId,
+    Guid? SessionId,
     CancellationToken CancellationToken);
 
 public class McpToolExecutor : IMcpToolExecutor
 {
     private readonly IMcpToolPolicyRepository _policyRepo;
     private readonly IKnowledgeMcpTool _knowledgeMcpTool;
+    private readonly IAiChatMessageRepository _messageRepo;
     private readonly ILogger<McpToolExecutor> _logger;
     private readonly ConcurrentDictionary<string, Func<McpToolCallContext, Task<string>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, int> _rateLimitCounters = new(StringComparer.OrdinalIgnoreCase);
@@ -67,16 +70,19 @@ public class McpToolExecutor : IMcpToolExecutor
     public McpToolExecutor(
         IMcpToolPolicyRepository policyRepo,
         IKnowledgeMcpTool knowledgeMcpTool,
+        IAiChatMessageRepository messageRepo,
         ILogger<McpToolExecutor> logger)
     {
         _policyRepo = policyRepo;
         _knowledgeMcpTool = knowledgeMcpTool;
+        _messageRepo = messageRepo;
         _logger = logger;
 
         // Handler padrão: knowledge_search (backward compat)
         RegisterHandler("knowledge_search", HandleKnowledgeSearchAsync);
         RegisterHandler("time.current", ctx => HandleTimeCurrentAsync(ctx));
         RegisterHandler("sequential_thinking", ctx => HandleSequentialThinkingAsync(ctx));
+        RegisterHandler("memory.search", HandleMemorySearchAsync);
     }
 
     public void RegisterHandler(string toolName, Func<McpToolCallContext, Task<string>> handler)
@@ -94,6 +100,7 @@ public class McpToolExecutor : IMcpToolExecutor
         AIIntegrationSettings aiSettings,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
+        Guid? sessionId = null,
         CancellationToken ct = default)
     {
         // 1. Validar política
@@ -142,7 +149,7 @@ public class McpToolExecutor : IMcpToolExecutor
                 toolName, argumentsJson, argsDoc,
                 clientId, siteId, agentId,
                 policy, aiSettings, excludeArticleIds,
-                departmentId, ct);
+                departmentId, sessionId, ct);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(policy.TimeoutSeconds));
@@ -231,14 +238,14 @@ public class McpToolExecutor : IMcpToolExecutor
 
     private static Task<string> HandleTimeCurrentAsync(McpToolCallContext ctx)
     {
-        var utc = DateTimeOffset.UtcNow;
-        var local = DateTimeOffset.Now;
+        var now = DateTimeOffset.UtcNow;
+        var local = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(now, "E. South America Standard Time");
         var result = new
         {
-            utc = utc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
-            local = local.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz"),
-            timezone = TimeZoneInfo.Local.Id,
-            unix_seconds = utc.ToUnixTimeSeconds()
+            utc = now.ToString("O"),
+            local = local.ToString("O"),
+            timezone = "America/Sao_Paulo",
+            unix_timestamp = now.ToUnixTimeSeconds()
         };
         return Task.FromResult(JsonSerializer.Serialize(result));
     }
@@ -249,18 +256,72 @@ public class McpToolExecutor : IMcpToolExecutor
         var thought = ctx.Arguments.RootElement.TryGetProperty("thought", out var tProp)
             ? tProp.GetString() ?? string.Empty
             : string.Empty;
-        var thoughtNumber = ctx.Arguments.RootElement.TryGetProperty("thought_number", out var tnProp)
-            ? tnProp.GetInt32() : 0;
-        var totalThoughts = ctx.Arguments.RootElement.TryGetProperty("total_thoughts", out var ttProp)
-            ? ttProp.GetInt32() : 0;
+        var step = ctx.Arguments.RootElement.TryGetProperty("step", out var sProp)
+            ? sProp.GetInt32() : 0;
 
         var result = new
         {
             acknowledged = true,
-            thought_number = thoughtNumber,
-            total_thoughts = totalThoughts,
-            message = "Pensamento registrado. Continue seu raciocínio."
+            step,
+            message = $"Pensamento registrado no passo {step}. Continue a análise."
         };
         return Task.FromResult(JsonSerializer.Serialize(result));
+    }
+
+    private async Task<string> HandleMemorySearchAsync(McpToolCallContext ctx)
+    {
+        var query = ctx.Arguments.RootElement.TryGetProperty("query", out var qProp)
+            ? qProp.GetString() ?? string.Empty
+            : string.Empty;
+        var maxResults = ctx.Arguments.RootElement.TryGetProperty("max_results", out var mrProp)
+            ? mrProp.GetInt32()
+            : 5;
+
+        if (!ctx.SessionId.HasValue)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                results = Array.Empty<object>(),
+                message = "SessionId não disponível para busca em memória."
+            });
+        }
+
+        try
+        {
+            var messages = await _messageRepo.GetRecentBySessionAsync(
+                ctx.SessionId.Value,
+                limit: 50,
+                ct: ctx.CancellationToken);
+
+            var matches = messages
+                .Where(m => !string.IsNullOrWhiteSpace(m.Content) &&
+                            m.Content.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(m => m.SequenceNumber)
+                .Take(maxResults)
+                .Select(m => new
+                {
+                    role = m.Role,
+                    content = m.Content.Length > 500 ? m.Content[..500] + "..." : m.Content,
+                    sequence = m.SequenceNumber,
+                    created_at = m.CreatedAt.ToString("O")
+                })
+                .ToList();
+
+            return JsonSerializer.Serialize(new
+            {
+                results = matches,
+                total = matches.Count,
+                query
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Erro ao buscar memória para SessionId={SessionId}", ctx.SessionId);
+            return JsonSerializer.Serialize(new
+            {
+                results = Array.Empty<object>(),
+                error = "Erro ao buscar na memória da conversa."
+            });
+        }
     }
 }

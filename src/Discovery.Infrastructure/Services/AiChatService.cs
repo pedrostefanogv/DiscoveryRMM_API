@@ -292,6 +292,7 @@ public class AiChatService : IAiChatService
                         aiSettings,
                         injectedArticleIds,
                         departmentId,
+                        session.Id,
                         ct);
 
                     _logger.LogDebug("[{TraceId}] MCP tool '{ToolName}' executada ({Iter}/{Max})",
@@ -773,6 +774,7 @@ public class AiChatService : IAiChatService
                                 aiSettings,
                                 null,
                                 departmentId,
+                                session.Id,
                                 ct);
 
                             // Rastreia resultados vazios consecutivos de knowledge_search
@@ -1369,7 +1371,7 @@ Responda de forma profissional, prestativa e sempre em português.";
                 var toolResult = await _mcpToolExecutor.ExecuteAsync(
                     toolName, argsJson,
                     scopeClientId, scopeSiteId, agentId,
-                    aiSettings, null, departmentId, ct);
+                    aiSettings, null, departmentId, sessionId, ct);
 
                 var toolCallId = $"xml_{Guid.NewGuid():N}";
 
@@ -1550,7 +1552,7 @@ Responda de forma profissional, prestativa e sempre em português.";
                             }
 
                             var toolResult = await _mcpToolExecutor.ExecuteAsync(tc.Name, tc.ArgumentsJson,
-                                session.ClientId, session.SiteId, agentId, aiSettings, null, departmentId, ct);
+                                session.ClientId, session.SiteId, agentId, aiSettings, null, departmentId, session.Id, ct);
 
                             yield return new AiChatStreamChunk(Type: "tool_result",
                                 ToolCallId: tc.Id, ToolResult: toolResult);

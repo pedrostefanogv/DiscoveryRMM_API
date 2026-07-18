@@ -75,7 +75,7 @@ public class AIIntegrationSettings
     public bool CostControlEnabled { get; set; } = false;
 
     /// <summary>Score mínimo de similaridade (0.0–1.0) para incluir chunk no contexto RAG. Chunks abaixo são descartados.</summary>
-    public double MinSimilarityScore { get; set; } = 0.65;
+    public double MinSimilarityScore { get; set; } = 0.55;
 
     /// <summary>Número máximo de chunks da KB injetados no system prompt via RAG (1–10)</summary>
     public int MaxKbChunks { get; set; } = 3;
