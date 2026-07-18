@@ -75,6 +75,8 @@ public class McpToolExecutor : IMcpToolExecutor
 
         // Handler padrão: knowledge_search (backward compat)
         RegisterHandler("knowledge_search", HandleKnowledgeSearchAsync);
+        RegisterHandler("time.current", ctx => HandleTimeCurrentAsync(ctx));
+        RegisterHandler("sequential_thinking", ctx => HandleSequentialThinkingAsync(ctx));
     }
 
     public void RegisterHandler(string toolName, Func<McpToolCallContext, Task<string>> handler)
@@ -225,5 +227,40 @@ public class McpToolExecutor : IMcpToolExecutor
             maxResults: maxRes,
             departmentId: ctx.DepartmentId,
             ct: ctx.CancellationToken);
+    }
+
+    private static Task<string> HandleTimeCurrentAsync(McpToolCallContext ctx)
+    {
+        var utc = DateTimeOffset.UtcNow;
+        var local = DateTimeOffset.Now;
+        var result = new
+        {
+            utc = utc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            local = local.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz"),
+            timezone = TimeZoneInfo.Local.Id,
+            unix_seconds = utc.ToUnixTimeSeconds()
+        };
+        return Task.FromResult(JsonSerializer.Serialize(result));
+    }
+
+    private static Task<string> HandleSequentialThinkingAsync(McpToolCallContext ctx)
+    {
+        // No-op: registra o pensamento no log para debug/trace, mas não afeta a execução.
+        var thought = ctx.Arguments.RootElement.TryGetProperty("thought", out var tProp)
+            ? tProp.GetString() ?? string.Empty
+            : string.Empty;
+        var thoughtNumber = ctx.Arguments.RootElement.TryGetProperty("thought_number", out var tnProp)
+            ? tnProp.GetInt32() : 0;
+        var totalThoughts = ctx.Arguments.RootElement.TryGetProperty("total_thoughts", out var ttProp)
+            ? ttProp.GetInt32() : 0;
+
+        var result = new
+        {
+            acknowledged = true,
+            thought_number = thoughtNumber,
+            total_thoughts = totalThoughts,
+            message = "Pensamento registrado. Continue seu raciocínio."
+        };
+        return Task.FromResult(JsonSerializer.Serialize(result));
     }
 }

@@ -382,7 +382,7 @@ public class OpenAiProvider : ILlmProvider
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var reader = new StreamReader(stream);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
 
         // Acumuladores de tool calls (delta.tool_calls chega em chunks incrementais)
         var pendingToolCalls = new Dictionary<int, (string Id, string Name, StringBuilder Args)>();

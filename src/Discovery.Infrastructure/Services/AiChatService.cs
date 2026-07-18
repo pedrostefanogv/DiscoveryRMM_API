@@ -38,7 +38,7 @@ public class AiChatService : IAiChatService
     
     private const int MaxMessageSizeBytes = 2048; // 2KB
     private const int SessionExpirationDays = 180;
-    private const int DefaultMaxToolCallIterations = 3;
+    private const int DefaultMaxToolCallIterations = 2;
     private const int DefaultMaxHistoryMessages = 10;
     private const int DefaultMaxKbContextTokens = 2000;
     private const int DefaultMaxTokens = 1000;
@@ -669,12 +669,31 @@ public class AiChatService : IAiChatService
             yield break;
         }
 
+        // Quick reply para mensagens curtas e comuns sem histórico
+        // Só aplica se for sessão nova (sessionId era null) — sem histórico no DB
+        if (!sessionId.HasValue)
+        {
+            var quickReply = TryQuickReply(message, null);
+            if (quickReply != null)
+            {
+                await PersistQuickReplyAsync(session.Id, message, quickReply, nextSeq, startTime, traceId, aiSettings, stopwatch, ct);
+                yield return new AiChatStreamChunk(Type: "token", Content: quickReply);
+                yield return new AiChatStreamChunk(Type: "done", SessionId: session.Id, LatencyMs: (int)stopwatch.ElapsedMilliseconds);
+                yield break;
+            }
+        }
+
         // ── Streaming com tool call loop ──────────────────────────────────────
         var contentBuilder = new StringBuilder();
         var toolIterations = 0;
         var injectedArticleIds = new List<Guid>();
         int? totalTokens = null;
         var toolMessagesToPersist = new List<AiChatMessage>();
+
+        // Deduplica chamadas knowledge_search na mesma sessão
+        var executedKbQueries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var consecutiveEmptyKbSearches = 0;
+        bool hasToolCalls = false;
 
         // Tools disponíveis no escopo
         var availableTools = aiSettings.KnowledgeBaseEnabled
@@ -696,7 +715,7 @@ public class AiChatService : IAiChatService
                 OpenRouterTitle: aiSettings.OpenRouterTitle,
                 OpenRouterCategories: aiSettings.OpenRouterCategories);
 
-            bool hasToolCalls = false;
+            hasToolCalls = false;
 
             if (availableTools.Count > 0)
             {
@@ -718,6 +737,22 @@ public class AiChatService : IAiChatService
 
                         foreach (var toolCall in evt.ToolCalls)
                         {
+                            // Deduplica conhecimento: evita chamar knowledge_search com a mesma query
+                            if (toolCall.Name == "knowledge_search")
+                            {
+                                var kbQuery = ExtractKbQuery(toolCall.ArgumentsJson);
+                                if (!string.IsNullOrEmpty(kbQuery) && !executedKbQueries.Add(kbQuery))
+                                {
+                                    _logger.LogDebug("[{TraceId}] knowledge_search duplicada ignorada: '{Query}'", traceId, kbQuery);
+                                    yield return new AiChatStreamChunk(
+                                        Type: "tool_result",
+                                        ToolCallId: toolCall.Id,
+                                        ToolResult: """{"found":false,"message":"Busca já realizada sem resultados. Use seu conhecimento próprio."}""");
+                                    llmMessages.Add(new LlmMessage("tool", """{"found":false,"message":"Busca já realizada sem resultados. Use seu conhecimento próprio."}""", toolCall.Id, toolCall.Name));
+                                    continue;
+                                }
+                            }
+
                             yield return new AiChatStreamChunk(
                                 Type: "tool_call_start",
                                 ToolCallId: toolCall.Id,
@@ -733,6 +768,14 @@ public class AiChatService : IAiChatService
                                 null,
                                 departmentId,
                                 ct);
+
+                            // Rastreia resultados vazios consecutivos de knowledge_search
+                            if (toolCall.Name == "knowledge_search" && toolResult.Contains("\"found\":false"))
+                            {
+                                consecutiveEmptyKbSearches++;
+                                var kbQuery = ExtractKbQuery(toolCall.ArgumentsJson);
+                                _logger.LogDebug("[{TraceId}] knowledge_search sem resultados para '{Query}' ({EmptyCount}/{MaxIter})", traceId, kbQuery, consecutiveEmptyKbSearches, maxIterations);
+                            }
 
                             yield return new AiChatStreamChunk(
                                 Type: "tool_result",
@@ -777,24 +820,72 @@ public class AiChatService : IAiChatService
             if (!hasToolCalls || toolIterations >= maxIterations - 1)
                 break;
 
+            // Break early se knowledge_search retornou vazio 2x consecutivas — força resposta direta
+            if (consecutiveEmptyKbSearches >= 2)
+            {
+                _logger.LogDebug("[{TraceId}] knowledge_search retornou vazio {EmptyCount}x consecutivas. Forçando resposta direta.", traceId, consecutiveEmptyKbSearches);
+                break;
+            }
+
             toolIterations++;
         }
 
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
-        // ── Fallback: parse XML tool calls no texto final (modelos sem function calling nativo) ──
-        // Ex: Llama 3.1 via certos providers gera <knowledgesearch>{"query":"x"}</knowledgesearch>
-        // em vez de tool_calls no protocolo JSON nativo.
-        var (cleanedContent, updatedNextSeq) = await ParseAndExecuteXmlToolCallsAsync(
-            fullContent, availableTools,
-            scopeClientId, scopeSiteId, agentId,
-            aiSettings, departmentId,
-            llmMessages, toolMessagesToPersist,
-            session.Id, nextSeq, traceId,
-            ct);
-        fullContent = cleanedContent;
-        nextSeq = updatedNextSeq;
+        // ── Fallback: parse XML tool calls no texto final ──
+        // Só tenta XML fallback quando: (a) não houver tools disponíveis (modelo sem function calling)
+        // ou (b) o modelo usou texto puro em vez de tool_calls nativos.
+        // Para modelos com function calling nativo que já receberam tools, pula o XML fallback.
+        var shouldTryXmlFallback = availableTools.Count == 0 || !hasToolCalls;
+        if (shouldTryXmlFallback)
+        {
+            var (cleanedContent, updatedNextSeq) = await ParseAndExecuteXmlToolCallsAsync(
+                fullContent, availableTools,
+                scopeClientId, scopeSiteId, agentId,
+                aiSettings, departmentId,
+                llmMessages, toolMessagesToPersist,
+                session.Id, nextSeq, traceId,
+                ct);
+            fullContent = cleanedContent;
+            nextSeq = updatedNextSeq;
+        }
+
+        // ── Retry: resposta vazia após tool calls ──
+        if (string.IsNullOrWhiteSpace(fullContent) && toolIterations > 0)
+        {
+            _logger.LogWarning("[{TraceId}] Resposta vazia após {ToolIter} iterações de tool calls. Tentando retry sem tools.", traceId, toolIterations);
+
+            llmMessages.Add(new LlmMessage("user",
+                "[SISTEMA] Você não forneceu uma resposta visível ao usuário. Forneça uma resposta direta e útil à última pergunta do usuário."));
+
+            var retryOptions = new LlmOptions(
+                MaxTokens: ClampMaxTokens(aiSettings),
+                Temperature: ClampTemperature(aiSettings),
+                Model: string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
+                BaseUrl: string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
+                ApiKey: string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
+                EnableTools: false,
+                Tools: null,
+                Provider: aiSettings.Provider,
+                OpenRouterReferer: aiSettings.OpenRouterReferer,
+                OpenRouterTitle: aiSettings.OpenRouterTitle,
+                OpenRouterCategories: aiSettings.OpenRouterCategories);
+
+            await foreach (var token in _llmProvider.StreamAsync(systemPrompt!, llmMessages, retryOptions, ct))
+            {
+                contentBuilder.Append(token);
+                yield return new AiChatStreamChunk(Type: "token", Content: token);
+            }
+
+            fullContent = contentBuilder.ToString();
+
+            if (string.IsNullOrWhiteSpace(fullContent))
+            {
+                fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta ou entre em contato com o suporte.";
+                yield return new AiChatStreamChunk(Type: "token", Content: fullContent);
+            }
+        }
 
         // ── Persistência pós-stream (lote transacional) ───────────────────────
         try
@@ -943,6 +1034,9 @@ public class AiChatService : IAiChatService
 - Último IP: {agent.LastIpAddress ?? "Desconhecido"}
 - Última comunicação: {agent.LastSeenAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Nunca"}
 
+**Ferramentas disponíveis:**
+- `knowledge_search`: Pesquisa artigos e procedimentos na base de conhecimento da empresa. Use APENAS function calls JSON nativas para invocar esta ferramenta.
+
 **Suas responsabilidades:**
 1. Fornecer suporte técnico claro e direto
 2. Diagnosticar problemas de forma sistemática
@@ -950,15 +1044,20 @@ public class AiChatService : IAiChatService
 4. Priorizar a segurança e estabilidade do sistema
 5. Explicar conceitos técnicos de forma acessível
 
+**O que você NÃO pode fazer:**
+- NÃO pode executar comandos no computador do usuário (não há shell, PowerShell ou acesso remoto).
+- NÃO pode instalar software diretamente — apenas orientar o usuário com os passos manuais.
+- NÃO pode ler ou modificar arquivos do sistema de arquivos.
+- NÃO invente ferramentas que não existem. Se não tiver certeza sobre uma capacidade, assuma que NÃO pode executá-la.
+
 **Diretrizes:**
-- Seja conciso e objetivo
-- Use comandos específicos quando aplicável
-- Identifique riscos e peça confirmação para operações críticas
-- Se precisar executar ferramentas (comandos, scripts), informe claramente antes
-- Mantenha o foco no problema relatado
+- Seja conciso e objetivo. Respostas longas são aceitáveis apenas quando o problema for complexo.
+- Oriente o usuário com passos manuais claros e específicos para o sistema operacional dele.
+- Se o usuário pedir uma ação que você não pode executar, explique educadamente a limitação e ofereça alternativas.
+- Se knowledge_search retornar sem resultados (found: false), NÃO chame novamente. Responda com seu conhecimento próprio.
 - IMPORTANTE: use APENAS function calls nativas JSON para invocar ferramentas. NUNCA escreva tags XML como <knowledgesearch> ou <tool> no texto da resposta.
 
-Responda de forma profissional e prestativa.";
+Responda de forma profissional, prestativa e sempre em português.";
     }
 
     private static string BuildSystemPrompt(Agent agent, AIIntegrationSettings aiSettings)
@@ -1139,6 +1238,73 @@ Responda de forma profissional e prestativa.";
             "***.###.###-**");
 
         return result;
+    }
+
+    /// <summary>
+    /// Extrai a query de uma chamada knowledge_search para deduplicação.
+    /// </summary>
+    private static string ExtractKbQuery(string argumentsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(argumentsJson);
+            if (doc.RootElement.TryGetProperty("query", out var qProp) && qProp.ValueKind == JsonValueKind.String)
+                return qProp.GetString() ?? string.Empty;
+        }
+        catch { }
+        return argumentsJson; // fallback: usa o JSON bruto como chave
+    }
+
+    /// <summary>
+    /// Cache de respostas rápidas para mensagens muito curtas e comuns.
+    /// Só aplicado quando não há histórico na sessão (primeira mensagem).
+    /// </summary>
+    private static readonly Dictionary<string, string> QuickReplies = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["oi"] = "Olá! Como posso ajudar você hoje?",
+        ["olá"] = "Olá! Em que posso ajudar?",
+        ["ola"] = "Olá! Em que posso ajudar?",
+        ["teste"] = "Olá! Como posso ajudar você hoje?",
+        ["test"] = "Olá! Como posso ajudar você hoje?",
+        ["bom dia"] = "Bom dia! Como posso ajudar você hoje?",
+        ["boa tarde"] = "Boa tarde! Como posso ajudar você hoje?",
+        ["boa noite"] = "Boa noite! Como posso ajudar você hoje?",
+    };
+
+    /// <summary>
+    /// Tenta responder via cache rápido. Retorna true se respondeu.
+    /// Só funciona para mensagens curtas, sem histórico, e em modo sync (não stream).
+    /// </summary>
+    internal static string? TryQuickReply(string message, IReadOnlyList<AiChatMessage>? history)
+    {
+        if (history is { Count: > 0 }) return null;
+        var trimmed = message.Trim().ToLowerInvariant();
+        if (QuickReplies.TryGetValue(trimmed, out var quick)) return quick;
+        // Match parcial: "oi, tudo bem?" → "oi" (primeiras 3 palavras)
+        if (trimmed.Length <= 20 && trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries) is { Length: <= 3 } words)
+        {
+            if (QuickReplies.TryGetValue(words[0], out var partial)) return partial;
+        }
+        return null;
+    }
+
+    private async Task PersistQuickReplyAsync(Guid sessionId, string userMessage, string reply,
+        int seq, DateTime startTime, string traceId, AIIntegrationSettings aiSettings,
+        Stopwatch stopwatch, CancellationToken ct)
+    {
+        try
+        {
+            var messages = new List<AiChatMessage>
+            {
+                new() { Id = Guid.NewGuid(), SessionId = sessionId, SequenceNumber = seq, Role = "user", Content = userMessage, CreatedAt = startTime, TraceId = traceId },
+                new() { Id = Guid.NewGuid(), SessionId = sessionId, SequenceNumber = seq + 1, Role = "assistant", Content = reply, TokensUsed = reply.Split(' ').Length, LatencyMs = (int)stopwatch.ElapsedMilliseconds, ModelVersion = aiSettings.ChatModel + " (cached)", CreatedAt = DateTime.UtcNow, TraceId = traceId }
+            };
+            await _messageRepository.CreateBatchAsync(messages, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir quick-reply", traceId);
+        }
     }
 
     /// <summary>

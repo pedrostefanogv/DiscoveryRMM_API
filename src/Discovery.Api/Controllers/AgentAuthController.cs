@@ -1,3 +1,6 @@
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.AiChat;
 using Discovery.Core.Cqrs.AgentAuth.Automation;
@@ -422,23 +425,23 @@ public class AgentAuthController : ControllerBase
             return;
         }
 
-        HttpContext.Response.ContentType = "text/event-stream";
+        HttpContext.Response.ContentType = "text/event-stream; charset=utf-8";
         HttpContext.Response.Headers.Append("Cache-Control", "no-cache");
         HttpContext.Response.Headers.Append("Connection", "keep-alive");
         HttpContext.Response.Headers.Append("X-Accel-Buffering", "no");
 
         try
         {
-            await foreach (var chunk in _aiChat.StreamAsync(agentId, cmd.Message, null, cmd.DepartmentId, ct))
+            var sessionGuid = Guid.TryParse(cmd.SessionId, out var g) ? g : (Guid?)null;
+            await foreach (var chunk in _aiChat.StreamAsync(agentId, cmd.Message, sessionGuid, cmd.DepartmentId, ct))
             {
                 if (chunk.Type == "error")
                 {
-                    await HttpContext.Response.WriteAsync($"data: {{\"type\":\"error\",\"error\":\"{EscapeSse(chunk.Error ?? "unknown")}\"}}\n\n", ct);
+                    await WriteSseJsonAsync(HttpContext, new { type = "error", error = chunk.Error ?? "unknown" }, ct);
                     await HttpContext.Response.Body.FlushAsync(ct);
                     return;
                 }
-                var json = System.Text.Json.JsonSerializer.Serialize(chunk);
-                await HttpContext.Response.WriteAsync($"data: {json}\n\n", ct);
+                await WriteSseJsonAsync(HttpContext, chunk, ct);
                 await HttpContext.Response.Body.FlushAsync(ct);
                 if (chunk.Type == "done") break;
             }
@@ -447,11 +450,21 @@ public class AgentAuthController : ControllerBase
         catch (Exception ex)
         {
             if (!ct.IsCancellationRequested)
-                await HttpContext.Response.WriteAsync($"data: {{\"type\":\"error\",\"error\":\"{EscapeSse(ex.Message)}\"}}\n\n", ct);
+                await WriteSseJsonAsync(HttpContext, new { type = "error", error = ex.Message }, ct);
         }
     }
 
-    private static string EscapeSse(string text) => text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "");
+    private static readonly JsonSerializerOptions SseJsonOptions = new()
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    private static async Task WriteSseJsonAsync(HttpContext httpContext, object value, CancellationToken ct)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(value, SseJsonOptions);
+        await httpContext.Response.WriteAsync($"data: {json}\n\n", ct);
+    }
 
     [HttpGet("me/ai-chat/jobs/{jobId}")]
     public async Task<IActionResult> GetAiChatJob(Guid jobId, CancellationToken ct)
