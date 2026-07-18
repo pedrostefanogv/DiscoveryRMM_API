@@ -397,21 +397,22 @@ public sealed class KnowledgeEmbeddingJob : IJob
             var actualDim = testEmbedding.Length;
 
             var server = await serverRepo.GetOrCreateDefaultAsync();
+            // Compara contra a dimensão REAL do banco (CurrentEmbeddingDimensions), não contra aiSettings
             var configuredDim = server.CurrentEmbeddingDimensions > 0
                 ? server.CurrentEmbeddingDimensions
                 : aiSettings.EmbeddingDimensions;
 
-            if (actualDim != configuredDim)
-            {
-                logger.LogWarning(
-                    "Divergência de dimensão detectada: configurada={Configured}, real={Actual}. Auto-corrigindo...",
-                    configuredDim, actualDim);
+            if (actualDim == configuredDim)
+                return; // Já está sincronizado — pular
 
-                await resetService.ResetAsync(actualDim, "KnowledgeEmbeddingJob (auto-sync)", ct: CancellationToken.None);
-                aiSettings.EmbeddingDimensions = actualDim;
+            logger.LogWarning(
+                "Divergência de dimensão detectada: banco={Configured}, real={Actual}. Auto-corrigindo...",
+                configuredDim, actualDim);
 
-                logger.LogInformation("Dimensão auto-corrigida para {Dim}. KB será reprocessada.", actualDim);
-            }
+            await resetService.ResetAsync(actualDim, "KnowledgeEmbeddingJob (auto-sync)", ct: CancellationToken.None);
+            aiSettings.EmbeddingDimensions = actualDim;
+
+            logger.LogInformation("Dimensão auto-corrigida para {Dim}. KB será reprocessada.", actualDim);
         }
         catch (Exception ex)
         {
