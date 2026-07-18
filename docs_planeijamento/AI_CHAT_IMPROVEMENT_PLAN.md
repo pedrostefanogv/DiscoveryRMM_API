@@ -1,7 +1,7 @@
 # Plano de Melhoria — AI Chat (Agent ↔ API)
 
 > **Data:** 2026-07-17
-> **Status:** Proposto (aguardando revisão)
+> **Status:** Em execução — Fase 1 ✅, Fase 2 ~75%, Fase 3 ~25%
 > **Escopo:** `DiscoveryRMM_API` (servidor) + `Discovery` (agent)
 
 ---

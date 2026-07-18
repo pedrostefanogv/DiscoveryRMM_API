@@ -22,6 +22,10 @@ public class AiChatMessage
     
     // Audit
     public string? TraceId { get; set; }
+
+    // Feedback do usuário (1-5 ou null se não avaliado)
+    public int? FeedbackScore { get; set; }
+    public string? FeedbackComment { get; set; }
     
     // Relacionamentos
     public AiChatSession Session { get; set; } = null!;

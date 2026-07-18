@@ -22,6 +22,9 @@ public class AiChatSession
     public DateTime ExpiresAt { get; set; } // CreatedAt + 180 dias
     public DateTime? DeletedAt { get; set; } // Soft delete
     
+    // Feedback da sessão (nota geral da conversa, 1-5)
+    public int? FeedbackScore { get; set; }
+    
     // Relacionamentos
     public Agent Agent { get; set; } = null!;
     public ICollection<AiChatMessage> Messages { get; set; } = new List<AiChatMessage>();

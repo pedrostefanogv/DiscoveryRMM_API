@@ -110,6 +110,7 @@ Migrations/
  M057_CreateAgentLabeling.cs
  M058_AddDescriptionToAgentLabelRules.cs
  M059_AddObjectStorageConfigurationToServer.cs
+ M060_AddAiChatFeedbackFields.cs
  M060_AddArticleStatusAndDepartment.cs
  M060_AddObjectStorageFieldsToReportExecutionAndAttachments.cs
  M061_AddArticleVersioning.cs

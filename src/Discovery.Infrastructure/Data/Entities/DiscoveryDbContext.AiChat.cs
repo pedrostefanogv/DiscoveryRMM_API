@@ -25,6 +25,7 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.TraceId).HasColumnName("trace_id").HasMaxLength(100);
             entity.Property(s => s.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
             entity.Property(s => s.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+            entity.Property(s => s.FeedbackScore).HasColumnName("feedback_score");
 
             entity.HasMany(s => s.Messages).WithOne(m => m.Session).HasForeignKey(m => m.SessionId);
         });
@@ -46,6 +47,8 @@ public partial class DiscoveryDbContext
             entity.Property(m => m.ToolCallId).HasColumnName("tool_call_id").HasMaxLength(100);
             entity.Property(m => m.ToolArgumentsJson).HasColumnName("tool_arguments_json");
             entity.Property(m => m.TraceId).HasColumnName("trace_id").HasMaxLength(100);
+            entity.Property(m => m.FeedbackScore).HasColumnName("feedback_score");
+            entity.Property(m => m.FeedbackComment).HasColumnName("feedback_comment").HasMaxLength(500);
         });
 
         modelBuilder.Entity<AiChatJob>(entity =>
