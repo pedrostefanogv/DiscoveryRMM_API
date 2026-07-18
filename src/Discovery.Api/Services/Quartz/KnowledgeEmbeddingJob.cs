@@ -35,6 +35,9 @@ public sealed class KnowledgeEmbeddingJob : IJob
     private static readonly Counter<long> ErrorsCounter = Meter.CreateCounter<long>(
         "knowledge_embedding_errors", unit: "errors",
         description: "Total de erros no ciclo de embedding");
+    private static readonly Counter<long> ResetsCounter = Meter.CreateCounter<long>(
+        "knowledge_embedding_resets_total", unit: "resets",
+        description: "Total de resets de embedding executados");
     private static readonly Histogram<double> CycleDurationHistogram = Meter.CreateHistogram<double>(
         "knowledge_embedding_cycle_duration_ms", unit: "ms",
         description: "Duração do ciclo de embedding em milissegundos");
@@ -43,6 +46,13 @@ public sealed class KnowledgeEmbeddingJob : IJob
     // que uma única instância executa por vez. O semáforo abaixo protege
     // contra calls de trigger manual enquanto um ciclo já está rodando.
     private static readonly SemaphoreSlim EmbeddingSemaphore = new(1, 1);
+
+    // ── Circuit breaker: evita resets consecutivos ─────────────────────
+    private static DateTime _lastResetAt = DateTime.MinValue;
+    private static readonly TimeSpan ResetCooldown = TimeSpan.FromMinutes(5);
+
+    // ── Flag por ciclo: previne que AutoSync + GenerateBatch disparem 2 resets ──
+    private static bool _resetPerformedThisCycle;
 
     public async Task Execute(IJobExecutionContext context)
     {
@@ -88,6 +98,9 @@ public sealed class KnowledgeEmbeddingJob : IJob
         var serverRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
 
         var aiSettings = await resolver.GetAISettingsAsync();
+
+        // Reseta flag de ciclo
+        _resetPerformedThisCycle = false;
 
         // ── Passo 0: Auto-detectar e corrigir dimensão de embedding ────────
         await AutoSyncEmbeddingDimensionsAsync(scope, aiSettings, embeddingProvider, serverRepo, resetService, logger);
@@ -164,13 +177,13 @@ public sealed class KnowledgeEmbeddingJob : IJob
                     logger.LogWarning(
                         "Dimensão do embedding ({Actual}) difere da configurada ({Expected}). Auto-corrigindo...",
                         allEmbeddings[0].Length, aiSettings.EmbeddingDimensions);
-                    var resetSvc = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingResetService>();
-                    await resetSvc.ResetAsync(allEmbeddings[0].Length, "KnowledgeEmbeddingJob (auto-detect)", ct: default);
-                    aiSettings.EmbeddingDimensions = allEmbeddings[0].Length;
-                    // Reprocessa o artigo no próximo ciclo após reset
+                    var resetOk = await TryResetAsync(scope, allEmbeddings[0].Length, "KnowledgeEmbeddingJob (queue batch)", logger);
+                    if (resetOk)
+                        aiSettings.EmbeddingDimensions = allEmbeddings[0].Length;
+                    // Reprocessa o artigo no próximo ciclo
                     await queueRepository.MarkFailedAsync(item.Id,
                         $"Dimensão auto-corrigida: {allEmbeddings[0].Length} (reprocessando)",
-                        TimeSpan.FromSeconds(30));
+                        TimeSpan.FromSeconds(60));
                     continue;
                 }
 
@@ -281,9 +294,9 @@ public sealed class KnowledgeEmbeddingJob : IJob
                 logger.LogWarning(
                     "Dimensão do embedding ({Actual}) difere da configurada ({Expected}). Auto-corrigindo via reset...",
                     allEmbeddings[0].Length, aiSettings.EmbeddingDimensions);
-                var resetSvc = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingResetService>();
-                await resetSvc.ResetAsync(allEmbeddings[0].Length, "KnowledgeEmbeddingJob (auto-detect)", ct: default);
-                aiSettings.EmbeddingDimensions = allEmbeddings[0].Length;
+                var resetOk = await TryResetAsync(scope, allEmbeddings[0].Length, "KnowledgeEmbeddingJob (batch)", logger);
+                if (resetOk)
+                    aiSettings.EmbeddingDimensions = allEmbeddings[0].Length;
                 return 0; // Chunks serão reprocessados no próximo ciclo com a nova dimensão
             }
 
@@ -300,7 +313,12 @@ public sealed class KnowledgeEmbeddingJob : IJob
             logger.LogError(ex, "Erro no batch de embeddings. Tentando fallback individual...");
             ErrorsCounter.Add(1);
 
-            // Fallback individual
+            // Fallback individual — REUTILIZA as mesmas credenciais resolvidas do batch
+            var firstChunk = chunks[0];
+            var articleFallback = await articleRepository.GetByIdAsync(firstChunk.ArticleId);
+            var (embBaseUrlFallback, embApiKeyFallback) = await ResolveEmbeddingCredentialsAsync(
+                scope, articleFallback?.ClientId, articleFallback?.SiteId, aiSettings);
+
             foreach (var chunk in chunks)
             {
                 try
@@ -309,15 +327,8 @@ public sealed class KnowledgeEmbeddingJob : IJob
                         ? chunk.Content
                         : $"{chunk.SectionTitle}\n\n{chunk.Content}";
 
-                    var embBaseUrl = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl)
-                        ? aiSettings.BaseUrl
-                        : aiSettings.EmbeddingBaseUrl;
-                    var embApiKey = string.IsNullOrWhiteSpace(aiSettings.EmbeddingApiKey)
-                        ? aiSettings.ApiKey
-                        : aiSettings.EmbeddingApiKey;
-
                     var floats = await embeddingProvider.GenerateEmbeddingAsync(
-                        input, aiSettings.EmbeddingModel, embApiKey, embBaseUrl);
+                        input, aiSettings.EmbeddingModel, embApiKeyFallback, embBaseUrlFallback);
 
                     await chunkRepository.UpdateEmbeddingAsync(chunk.Id, new Vector(floats));
                     ChunksProcessedCounter.Add(1);
@@ -429,15 +440,53 @@ public sealed class KnowledgeEmbeddingJob : IJob
                 "Dimensão real ({Actual}) != banco ({DbDim}). Auto-corrigindo e resetando KB...",
                 actualDim, dbDim);
 
-            await resetService.ResetAsync(actualDim, "KnowledgeEmbeddingJob (auto-sync)", ct: CancellationToken.None);
+            await TryResetAsync(scope, actualDim, "KnowledgeEmbeddingJob (auto-sync)", logger);
             aiSettings.EmbeddingDimensions = actualDim;
             _autoSyncedDim = actualDim;
-
-            logger.LogInformation("KB reset concluída para dimensão={Dim}. Chunks serão reprocessados.", actualDim);
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "Auto-sync de dimensão ignorado (API indisponível ou sem credenciais).");
+            // NÃO engolir silenciosamente — usar fallback do aiSettings para evitar loop
+            logger.LogWarning(ex, "Auto-sync de dimensão falhou (API indisponível, sem credenciais ou erro de rede). Usando fallback: {FallbackDim}", aiSettings.EmbeddingDimensions);
+            _autoSyncedDim = aiSettings.EmbeddingDimensions > 0 ? aiSettings.EmbeddingDimensions : 0;
         }
+    }
+
+    /// <summary>
+    /// Executa reset com circuit breaker: bloqueia se cooldown ativo OU se já houve reset neste ciclo.
+    /// Retorna true se o reset foi executado, false se bloqueado.
+    /// </summary>
+    private static async Task<bool> TryResetAsync(
+        AsyncServiceScope scope,
+        int newDimensions,
+        string reason,
+        ILogger logger)
+    {
+        // Circuit breaker: cooldown entre resets
+        if (DateTime.UtcNow - _lastResetAt < ResetCooldown)
+        {
+            logger.LogWarning(
+                "Reset bloqueado: último reset foi em {LastReset} (cooldown={Cooldown}). Motivo: {Reason}",
+                _lastResetAt, ResetCooldown, reason);
+            return false;
+        }
+
+        // Previne reset duplo no mesmo ciclo (AutoSync + GenerateBatch)
+        if (_resetPerformedThisCycle)
+        {
+            logger.LogWarning(
+                "Reset bloqueado: já houve reset neste ciclo. Motivo: {Reason}", reason);
+            return false;
+        }
+
+        _resetPerformedThisCycle = true;
+        _lastResetAt = DateTime.UtcNow;
+
+        var resetSvc = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingResetService>();
+        await resetSvc.ResetAsync(newDimensions, reason, ct: default);
+        ResetsCounter.Add(1);
+
+        logger.LogInformation("Reset KB executado: dimensão={Dim}, motivo={Reason}", newDimensions, reason);
+        return true;
     }
 }

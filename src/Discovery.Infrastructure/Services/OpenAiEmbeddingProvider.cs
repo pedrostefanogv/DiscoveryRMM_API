@@ -26,17 +26,13 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
     }
 
     /// <summary>Aplica headers OpenRouter se a base URL for OpenRouter</summary>
-    private static void ApplyOpenRouterHeaders(HttpRequestMessage request, string? baseUrl, AIIntegrationSettings? settings)
+    private static void ApplyOpenRouterHeaders(HttpRequestMessage request, string? baseUrl)
     {
-        if (settings is null) return;
         if (baseUrl is null || !baseUrl.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase))
             return;
 
-        if (!string.IsNullOrWhiteSpace(settings.OpenRouterReferer))
-            request.Headers.TryAddWithoutValidation("HTTP-Referer", settings.OpenRouterReferer);
-
-        if (!string.IsNullOrWhiteSpace(settings.OpenRouterTitle))
-            request.Headers.TryAddWithoutValidation("X-Title", settings.OpenRouterTitle);
+        request.Headers.TryAddWithoutValidation("HTTP-Referer", "https://discovery-rmm.local");
+        request.Headers.TryAddWithoutValidation("X-Title", "Discovery RMM");
     }
 
     public async Task<float[]> GenerateEmbeddingAsync(string text, string? modelOverride = null, string? apiKeyOverride = null, string? baseUrlOverride = null, CancellationToken ct = default)
@@ -67,6 +63,7 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
             Content = new StringContent(requestBody, Encoding.UTF8, "application/json")
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKeyOverride);
+        ApplyOpenRouterHeaders(request, resolvedBaseUrl);
 
         var httpClient = _httpClientFactory.CreateClient("AiChat");
         var response = await httpClient.SendAsync(request, ct);
@@ -141,13 +138,7 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
             Content = new StringContent(requestBody, Encoding.UTF8, "application/json")
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKeyOverride);
-
-        // Aplica headers OpenRouter se for o provider
-        if (resolvedBaseUrl.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase))
-        {
-            // Não temos settings aqui, mas a URL indica OpenRouter
-            _logger.LogDebug("Batch embedding para OpenRouter detectado pela URL");
-        }
+        ApplyOpenRouterHeaders(request, resolvedBaseUrl);
 
         var httpClient2 = _httpClientFactory.CreateClient("AiChat");
         var response = await httpClient2.SendAsync(request, ct);
