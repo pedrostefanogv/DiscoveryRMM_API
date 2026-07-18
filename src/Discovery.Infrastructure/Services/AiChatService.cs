@@ -40,7 +40,7 @@ public class AiChatService : IAiChatService
     // Cache de tools registradas por agent (para multi-round com tools do agent)
     private static readonly ConcurrentDictionary<Guid, List<LlmTool>> _agentToolsCache = new();
     private static readonly ConcurrentDictionary<Guid, DateTime> _agentToolsCacheExpiry = new();
-    private static readonly TimeSpan AgentToolsCacheTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan AgentToolsCacheTtl = TimeSpan.FromHours(24);
     
     private const int MaxMessageSizeBytes = 2048; // 2KB
     private const int SessionExpirationDays = 180;
@@ -1496,7 +1496,16 @@ Responda de forma profissional, prestativa e sempre em português.";
             ? await _mcpToolExecutor.GetAvailableToolsAsync(session.ClientId, session.SiteId, agentId, ct)
             : new List<LlmTool>();
         var agentTools = GetCachedAgentTools(agentId);
-        if (agentTools is { Count: > 0 }) availableTools.AddRange(agentTools);
+        if (agentTools is { Count: > 0 })
+        {
+            availableTools.AddRange(agentTools);
+        }
+        else
+        {
+            _logger.LogWarning("[AgentTools] Nenhuma tool de agente em cache para AgentId={AgentId} — " +
+                               "o agent pode não ter registrado tools ou o cache expirou (TTL={Ttl})",
+                agentId, AgentToolsCacheTtl);
+        }
 
         var maxIterations = aiSettings.MaxToolCallIterations is >= 1 and <= 10
             ? aiSettings.MaxToolCallIterations : DefaultMaxToolCallIterations;
