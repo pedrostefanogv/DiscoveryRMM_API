@@ -1,4 +1,5 @@
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -82,8 +83,13 @@ public sealed class KnowledgeEmbeddingJob : IJob
         var embeddingProvider = scope.ServiceProvider.GetRequiredService<IEmbeddingProvider>();
         var resolver = scope.ServiceProvider.GetRequiredService<IConfigurationResolver>();
         var queueRepository = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingQueueRepository>();
+        var resetService = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingResetService>();
+        var serverRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
 
         var aiSettings = await resolver.GetAISettingsAsync();
+
+        // ── Passo 0: Auto-detectar e corrigir dimensão de embedding ────────
+        await AutoSyncEmbeddingDimensionsAsync(scope, aiSettings, embeddingProvider, serverRepo, resetService, logger);
         var enabled = aiSettings.EmbeddingEnabled && aiSettings.EmbeddingArticlesEnabled;
         if (!enabled)
         {
@@ -154,12 +160,15 @@ public sealed class KnowledgeEmbeddingJob : IJob
 
                 if (allEmbeddings.Count > 0 && allEmbeddings[0].Length != aiSettings.EmbeddingDimensions)
                 {
-                    logger.LogError(
-                        "Dimensão do embedding ({Actual}) difere da configurada ({Expected}) para ArticleId={ArticleId}. Marcando erro na fila.",
-                        allEmbeddings[0].Length, aiSettings.EmbeddingDimensions, article.Id);
+                    logger.LogWarning(
+                        "Dimensão do embedding ({Actual}) difere da configurada ({Expected}). Auto-corrigindo...",
+                        allEmbeddings[0].Length, aiSettings.EmbeddingDimensions);
+                    await resetService.ResetAsync(allEmbeddings[0].Length, "KnowledgeEmbeddingJob (auto-detect)", ct: default);
+                    aiSettings.EmbeddingDimensions = allEmbeddings[0].Length;
+                    // Reprocessa o artigo no próximo ciclo após reset
                     await queueRepository.MarkFailedAsync(item.Id,
-                        $"Embedding dimension mismatch: {allEmbeddings[0].Length} vs {aiSettings.EmbeddingDimensions}",
-                        TimeSpan.FromMinutes(30));
+                        $"Dimensão auto-corrigida: {allEmbeddings[0].Length} (reprocessando)",
+                        TimeSpan.FromSeconds(30));
                     continue;
                 }
 
@@ -267,10 +276,13 @@ public sealed class KnowledgeEmbeddingJob : IJob
 
             if (allEmbeddings.Count > 0 && allEmbeddings[0].Length != aiSettings.EmbeddingDimensions)
             {
-                logger.LogError(
-                    "Dimensão do embedding ({Actual}) difere da configurada ({Expected}). Abortando batch.",
+                logger.LogWarning(
+                    "Dimensão do embedding ({Actual}) difere da configurada ({Expected}). Auto-corrigindo via reset...",
                     allEmbeddings[0].Length, aiSettings.EmbeddingDimensions);
-                return 0;
+                var resetSvc = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingResetService>();
+                await resetSvc.ResetAsync(allEmbeddings[0].Length, "KnowledgeEmbeddingJob (auto-detect)", ct: default);
+                aiSettings.EmbeddingDimensions = allEmbeddings[0].Length;
+                return 0; // Chunks serão reprocessados no próximo ciclo com a nova dimensão
             }
 
             for (int i = 0; i < chunks.Count && i < allEmbeddings.Count; i++)
@@ -350,5 +362,59 @@ public sealed class KnowledgeEmbeddingJob : IJob
             : aiSettings.EmbeddingApiKey;
 
         return (embBaseUrl, embApiKey);
+    }
+
+    /// <summary>
+    /// Auto-detecta a dimensão real do modelo de embedding e auto-corrige
+    /// a configuração e o banco se houver divergência. Evita erro "Dimensão difere".
+    /// </summary>
+    private static async Task AutoSyncEmbeddingDimensionsAsync(
+        AsyncServiceScope scope,
+        Discovery.Core.ValueObjects.AIIntegrationSettings aiSettings,
+        IEmbeddingProvider embeddingProvider,
+        IServerConfigurationRepository serverRepo,
+        IKnowledgeEmbeddingResetService resetService,
+        ILogger logger)
+    {
+        try
+        {
+            var credentialResolver = scope.ServiceProvider.GetRequiredService<IAiCredentialResolver>();
+            var resolved = await credentialResolver.ResolveAsync(null, null);
+
+            var apiKey = resolved?.EffectiveEmbeddingApiKey
+                ?? resolved?.ApiKey
+                ?? aiSettings.ApiKey;
+            var baseUrl = resolved?.EffectiveEmbeddingBaseUrl
+                ?? resolved?.BaseUrl
+                ?? aiSettings.BaseUrl;
+
+            if (string.IsNullOrWhiteSpace(apiKey)) return;
+
+            // Gera um embedding de teste com texto mínimo para detectar a dimensão real
+            var testEmbedding = await embeddingProvider.GenerateEmbeddingAsync(
+                "test", aiSettings.EmbeddingModel, apiKey, baseUrl, CancellationToken.None);
+            var actualDim = testEmbedding.Length;
+
+            var server = await serverRepo.GetOrCreateDefaultAsync();
+            var configuredDim = server.CurrentEmbeddingDimensions > 0
+                ? server.CurrentEmbeddingDimensions
+                : aiSettings.EmbeddingDimensions;
+
+            if (actualDim != configuredDim)
+            {
+                logger.LogWarning(
+                    "Divergência de dimensão detectada: configurada={Configured}, real={Actual}. Auto-corrigindo...",
+                    configuredDim, actualDim);
+
+                await resetService.ResetAsync(actualDim, "KnowledgeEmbeddingJob (auto-sync)", ct: CancellationToken.None);
+                aiSettings.EmbeddingDimensions = actualDim;
+
+                logger.LogInformation("Dimensão auto-corrigida para {Dim}. KB será reprocessada.", actualDim);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Auto-sync de dimensão ignorado (API indisponível ou sem credenciais).");
+        }
     }
 }
