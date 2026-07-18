@@ -11,12 +11,6 @@ public interface IAgentPackageService
     Task PrebuildBaseBinaryAsync(bool forceRebuild = false, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Builds a ZIP package in memory containing the agent binary and a
-    /// pre-configured debug_config.json with the given deploy token and server URLs.
-    /// </summary>
-    Task<byte[]> BuildPortablePackageAsync(string rawDeployToken, string? publicApiBaseUrl = null, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Builds a NSIS installer executable with defaults embedded at build time.
     /// The deploy token is embedded as ARG_DEFAULT_KEY.
     /// This produces the FULL stage2 installer (the payload that the bootstrap downloads).

@@ -1,5 +1,3 @@
-using System.IO.Compression;
-using System.Text.Json;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services;
@@ -8,93 +6,14 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Discovery.Tests;
 
+/// <summary>
+/// Tests for AgentPackageService.
+/// Note: Full build tests (BuildInstallerAsync, BuildBootstrapInstallerAsync, etc.)
+/// require a real agent source repo with Go/Wails/NSIS toolchain and are exercised
+/// via integration/end-to-end tests on the build server.
+/// </summary>
 public class AgentPackageServiceTests
 {
-    [Test]
-    public async Task BuildPortablePackageAsync_ShouldUsePublicApiOverride_WhenProvided()
-    {
-        using var fixture = new AgentPackageFixture();
-        var service = fixture.CreateService();
-
-        var package = await service.BuildPortablePackageAsync("deploy-token", "https://192-168-1-131.nip.io/api/");
-        var config = fixture.ReadDebugConfig(package);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(config.GetProperty("apiScheme").GetString(), Is.EqualTo("https"));
-            Assert.That(config.GetProperty("apiServer").GetString(), Is.EqualTo("192-168-1-131.nip.io"));
-            Assert.That(config.GetProperty("deployToken").GetString(), Is.EqualTo("deploy-token"));
-        });
-    }
-
-    [Test]
-    public async Task BuildPortablePackageAsync_ShouldUseConfiguredPublicApiEndpoint_WhenOverrideIsMissing()
-    {
-        using var fixture = new AgentPackageFixture();
-        var service = fixture.CreateService();
-
-        var package = await service.BuildPortablePackageAsync("deploy-token");
-        var config = fixture.ReadDebugConfig(package);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(config.GetProperty("apiScheme").GetString(), Is.EqualTo("https"));
-            Assert.That(config.GetProperty("apiServer").GetString(), Is.EqualTo("api.example.com"));
-        });
-    }
-
-    private sealed class AgentPackageFixture : IDisposable
-    {
-        private readonly string _tempRoot;
-        private readonly string _binaryPath;
-
-        public AgentPackageFixture()
-        {
-            _tempRoot = Path.Combine(Path.GetTempPath(), "Discovery.Tests", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(_tempRoot);
-
-            _binaryPath = Path.Combine(_tempRoot, "discovery-agent.exe");
-            File.WriteAllBytes(_binaryPath, [0x44, 0x49, 0x53, 0x43]);
-        }
-
-        public AgentPackageService CreateService()
-        {
-            var config = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["AgentPackage:ActiveProfile"] = "windows",
-                    ["AgentPackage:Profiles:windows:BinaryPath"] = _binaryPath,
-                    ["AgentPackage:PublicApiScheme"] = "https",
-                    ["AgentPackage:PublicApiServer"] = "api.example.com"
-                })
-                .Build();
-
-            return new AgentPackageService(
-                config,
-                new StubConfigurationService(),
-                NullLogger<AgentPackageService>.Instance);
-        }
-
-        public JsonElement ReadDebugConfig(byte[] package)
-        {
-            using var ms = new MemoryStream(package);
-            using var archive = new ZipArchive(ms, ZipArchiveMode.Read);
-            var entry = archive.GetEntry("debug_config.json");
-            Assert.That(entry, Is.Not.Null);
-
-            using var stream = entry!.Open();
-            using var reader = new StreamReader(stream);
-            using var document = JsonDocument.Parse(reader.ReadToEnd());
-            return document.RootElement.Clone();
-        }
-
-        public void Dispose()
-        {
-            if (Directory.Exists(_tempRoot))
-                Directory.Delete(_tempRoot, recursive: true);
-        }
-    }
-
     private sealed class StubConfigurationService : IConfigurationService
     {
         public Task<ServerConfiguration> GetServerConfigAsync() =>

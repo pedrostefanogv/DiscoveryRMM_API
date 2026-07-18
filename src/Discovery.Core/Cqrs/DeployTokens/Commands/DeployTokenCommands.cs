@@ -16,7 +16,7 @@ public sealed record CreateDeployTokenAndDownloadCommand(
     string? Description,
     int? ExpiresInHours,
     bool MultiUse,
-    string InstallerType  // "online" (bootstrap mínimo) | "offline" (ZIP portátil)
+    string InstallerType  // "online" (bootstrap mínimo) | "offline" (instalador NSIS completo)
 ) : ICommand<Result<DeployTokenDownloadResult>>;
 
 public sealed record DeployTokenDownloadResult(byte[] Content, string FileName, string ContentType);

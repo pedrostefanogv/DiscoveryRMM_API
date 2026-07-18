@@ -62,10 +62,11 @@ public sealed class CreateDeployTokenAndDownloadHandler(
         {
             if (string.Equals(cmd.InstallerType, "offline", StringComparison.OrdinalIgnoreCase))
             {
-                var zipBytes = await agentPackageService.BuildPortablePackageAsync(rawToken, cancellationToken: ct);
-                logger.LogInformation("Portable package generated for deploy token prefix={Prefix}", token.TokenPrefix);
+                var (content, fileName) = await agentPackageService.BuildInstallerAsync(rawToken, cancellationToken: ct);
+                logger.LogInformation("Offline NSIS installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
+                    fileName, content.Length, token.TokenPrefix);
                 return Result<DeployTokenDownloadResult>.Success(new DeployTokenDownloadResult(
-                    zipBytes, "discovery-installer-offline.zip", "application/zip"));
+                    content, fileName, "application/vnd.microsoft.portable-executable"));
             }
 
             // Default: online = bootstrap (minimal) installer

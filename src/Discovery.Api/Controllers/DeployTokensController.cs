@@ -91,10 +91,11 @@ public class DeployTokensController : ControllerBase
 
             if (installerType == "offline")
             {
-                // Portable ZIP package for offline install
-                var zipBytes = await _agentPackageService.BuildPortablePackageAsync(request.RawToken, cancellationToken: ct);
-                _logger.LogInformation("Portable package generated for deploy token prefix={Prefix}", token.TokenPrefix);
-                return File(zipBytes, "application/zip", "discovery-installer-offline.zip");
+                // Full NSIS installer with token & URL embedded — no internet required
+                (byte[] content, string fileName) = await _agentPackageService.BuildInstallerAsync(request.RawToken, cancellationToken: ct);
+                _logger.LogInformation("Offline NSIS installer generated: {FileName} ({Size} bytes) for deploy token prefix={Prefix}",
+                    fileName, content.Length, token.TokenPrefix);
+                return File(content, "application/vnd.microsoft.portable-executable", fileName);
             }
 
             // Default: online = bootstrap (minimal) installer
@@ -127,7 +128,7 @@ public class DeployTokensController : ControllerBase
         return Ok(new[]
         {
             new { type = "online", label = "Instalador mínimo (.exe)", description = "Baixa o instalador completo automaticamente" },
-            new { type = "offline", label = "Pacote portátil (.zip)", description = "Download único com binário e configuração" }
+            new { type = "offline", label = "Instalador completo offline (.exe)", description = "Instalador autossuficiente, não requer internet" }
         });
     }
 }

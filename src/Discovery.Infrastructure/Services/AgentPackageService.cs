@@ -1,8 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.IO.Compression;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -188,72 +186,6 @@ public class AgentPackageService : IAgentPackageService
             }
             throw;
         }
-    }
-
-    public async Task<byte[]> BuildPortablePackageAsync(string rawDeployToken, string? publicApiBaseUrl = null, CancellationToken cancellationToken = default)
-    {
-        var binaryPath = GetBinaryPath();
-        var (apiScheme, apiServer) = ResolvePublicApiEndpoint(publicApiBaseUrl);
-
-        var serverConfig = await _configurationService.GetServerConfigAsync();
-        var natsHost = !string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal)
-            ? serverConfig.NatsServerHostExternal
-            : serverConfig.NatsServerHostInternal;
-
-        string? natsUrl = null;
-        if (!string.IsNullOrWhiteSpace(natsHost))
-        {
-            var useWss = serverConfig.NatsUseWssExternal
-                && !string.IsNullOrWhiteSpace(serverConfig.NatsServerHostExternal);
-            var scheme = useWss ? "wss" : "nats";
-            var port = useWss ? 443 : 4222;
-            natsUrl = $"{scheme}://{natsHost}:{port}";
-        }
-
-        if (!File.Exists(binaryPath))
-            throw new FileNotFoundException($"Agent binary not found at path: {binaryPath}", binaryPath);
-
-        // Build debug_config.json with deploy token pre-filled.
-        // agentId and authToken are intentionally empty so the agent self-registers.
-        var debugConfig = new
-        {
-            apiScheme,
-            apiServer,
-            natsServer = natsUrl,
-            deployToken = rawDeployToken,
-            agentId = string.Empty,
-            authToken = string.Empty,
-            scheme = string.Empty,
-            server = string.Empty
-        };
-
-        var debugConfigJson = JsonSerializer.Serialize(debugConfig, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        });
-
-        using var ms = new MemoryStream();
-        using (var archive = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
-        {
-            // Agent binary — store without compression (already a compiled binary)
-            var exeEntry = archive.CreateEntry("discovery-discovery.exe", CompressionLevel.NoCompression);
-            using (var entryStream = exeEntry.Open())
-            using (var fs = new FileStream(binaryPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                await fs.CopyToAsync(entryStream, cancellationToken);
-            }
-
-            // Pre-configured settings file
-            var configEntry = archive.CreateEntry("debug_config.json", CompressionLevel.Optimal);
-            using (var entryStream = configEntry.Open())
-            using (var writer = new StreamWriter(entryStream))
-            {
-                await writer.WriteAsync(debugConfigJson.AsMemory(), cancellationToken);
-            }
-        }
-
-        return ms.ToArray();
     }
 
     public async Task<(byte[] Content, string FileName)> BuildInstallerAsync(string rawDeployToken, string? publicApiBaseUrl = null, CancellationToken cancellationToken = default)
@@ -607,14 +539,6 @@ public class AgentPackageService : IAgentPackageService
         await using var fs = new FileStream(webview2Path, FileMode.Create, FileAccess.Write, FileShare.None);
         await response.Content.CopyToAsync(fs, cancellationToken);
         _logger.LogInformation("WebView2 bootstrapper downloaded to {Path}", webview2Path);
-    }
-
-    private async Task<(byte[] Content, string FileName)> BuildInstallerFromBinaryAsync(string rawDeployToken)
-    {
-        var content = await BuildPortablePackageAsync(rawDeployToken);
-        var outputName = GetAgentPackageSetting("OutputName") ?? "discovery-agent.exe";
-        var zipName = Path.ChangeExtension(outputName, ".zip");
-        return (content, zipName);
     }
 
     private (string ApiScheme, string ApiServer) ResolvePublicApiEndpoint(string? publicApiBaseUrl)
