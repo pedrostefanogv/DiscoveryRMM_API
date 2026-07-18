@@ -368,8 +368,10 @@ public sealed class KnowledgeEmbeddingJob : IJob
 
     /// <summary>
     /// Auto-detecta a dimensão real do modelo de embedding e auto-corrige
-    /// a configuração e o banco se houver divergência. Evita erro "Dimensão difere".
+    /// a configuração e o banco se houver divergência. Roda uma vez por ciclo de vida do processo.
     /// </summary>
+    private static int _autoSyncedDim;
+
     private static async Task AutoSyncEmbeddingDimensionsAsync(
         AsyncServiceScope scope,
         Discovery.Core.ValueObjects.AIIntegrationSettings aiSettings,
@@ -378,31 +380,50 @@ public sealed class KnowledgeEmbeddingJob : IJob
         IKnowledgeEmbeddingResetService resetService,
         ILogger logger)
     {
+        // Já sincronizado neste ciclo de vida do processo
+        if (_autoSyncedDim > 0) return;
+
         try
         {
             var credentialResolver = scope.ServiceProvider.GetRequiredService<IAiCredentialResolver>();
+            
+            // Tenta resolver credencial global primeiro, depois site-specific
             var resolved = await credentialResolver.ResolveAsync(null, null);
-
+            
             var apiKey = resolved?.EffectiveEmbeddingApiKey
-                ?? resolved?.ApiKey
-                ?? aiSettings.ApiKey;
+                ?? resolved?.ApiKey;
             var baseUrl = resolved?.EffectiveEmbeddingBaseUrl
-                ?? resolved?.BaseUrl
-                ?? aiSettings.BaseUrl;
+                ?? resolved?.BaseUrl;
 
-            if (string.IsNullOrWhiteSpace(apiKey)) return;
+            // Se não tem credencial, usa fallback do aiSettings (que pode ter vindo do credential resolver via GetAISettingsAsync)
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                apiKey = aiSettings.EmbeddingApiKey;
+                baseUrl ??= aiSettings.EmbeddingBaseUrl;
+            }
+            if (string.IsNullOrWhiteSpace(apiKey))
+                apiKey = aiSettings.ApiKey;
+            if (string.IsNullOrWhiteSpace(baseUrl))
+                baseUrl = aiSettings.BaseUrl;
 
-            // Gera um embedding de teste para detectar a dimensão real do modelo
+            if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(baseUrl))
+            {
+                logger.LogDebug("Auto-sync ignorado: sem credenciais de embedding disponíveis.");
+                return;
+            }
+
             var testEmbedding = await embeddingProvider.GenerateEmbeddingAsync(
                 "test", aiSettings.EmbeddingModel, apiKey, baseUrl, CancellationToken.None);
             var actualDim = testEmbedding.Length;
 
-            // Recarrega server config do DB fresco (sem cache)
             var server = await serverRepo.GetAsync() ?? await serverRepo.GetOrCreateDefaultAsync();
             var dbDim = server.CurrentEmbeddingDimensions > 0 ? server.CurrentEmbeddingDimensions : 0;
 
             if (actualDim == dbDim)
-                return; // Já sincronizado
+            {
+                _autoSyncedDim = actualDim;
+                return;
+            }
 
             logger.LogWarning(
                 "Dimensão real ({Actual}) != banco ({DbDim}). Auto-corrigindo e resetando KB...",
@@ -410,6 +431,7 @@ public sealed class KnowledgeEmbeddingJob : IJob
 
             await resetService.ResetAsync(actualDim, "KnowledgeEmbeddingJob (auto-sync)", ct: CancellationToken.None);
             aiSettings.EmbeddingDimensions = actualDim;
+            _autoSyncedDim = actualDim;
 
             logger.LogInformation("KB reset concluída para dimensão={Dim}. Chunks serão reprocessados.", actualDim);
         }

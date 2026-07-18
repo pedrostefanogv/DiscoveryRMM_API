@@ -57,11 +57,18 @@ public class AiCredentialResolver : IAiCredentialResolver
             Provider = best.Provider,
             BaseUrl = best.BaseUrl,
             EmbeddingBaseUrl = best.EmbeddingBaseUrl,
-            ApiKey = _secretProtector.UnprotectOrSelf(best.ApiKeyEncrypted),
-            EmbeddingApiKey = _secretProtector.UnprotectOrSelf(best.EmbeddingApiKeyEncrypted),
+            ApiKey = DecryptOrNull(best.ApiKeyEncrypted),
+            EmbeddingApiKey = DecryptOrNull(best.EmbeddingApiKeyEncrypted),
             SourceScope = best.ScopeType,
             CredentialId = best.Id
         };
+    }
+
+    private string? DecryptOrNull(string? encrypted)
+    {
+        if (string.IsNullOrWhiteSpace(encrypted)) return null;
+        try { return _secretProtector.UnprotectOrSelf(encrypted); }
+        catch { return null; }
     }
 
     /// <summary>
