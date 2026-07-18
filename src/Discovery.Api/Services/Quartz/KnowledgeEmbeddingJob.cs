@@ -400,20 +400,16 @@ public sealed class KnowledgeEmbeddingJob : IJob
                 "test", aiSettings.EmbeddingModel, apiKey, baseUrl, CancellationToken.None);
             var actualDim = testEmbedding.Length;
 
-            // Evita reset repetido: flag estática persiste entre ciclos
-            var prev = Interlocked.Exchange(ref _lastSyncedDim, actualDim);
-            if (prev == actualDim)
-                return;
+            // Recarrega server config do DB fresco (sem cache)
+            var server = await serverRepo.GetAsync() ?? await serverRepo.GetOrCreateDefaultAsync();
+            var dbDim = server.CurrentEmbeddingDimensions > 0 ? server.CurrentEmbeddingDimensions : 0;
 
-            if (actualDim == aiSettings.EmbeddingDimensions)
-            {
-                Interlocked.Exchange(ref _lastSyncedDim, actualDim);
-                return;
-            }
+            if (actualDim == dbDim)
+                return; // Já sincronizado
 
             logger.LogWarning(
-                "Dimensão real ({Actual}) != configurada ({Configured}). Auto-corrigindo e resetando KB...",
-                actualDim, aiSettings.EmbeddingDimensions);
+                "Dimensão real ({Actual}) != banco ({DbDim}). Auto-corrigindo e resetando KB...",
+                actualDim, dbDim);
 
             await resetService.ResetAsync(actualDim, "KnowledgeEmbeddingJob (auto-sync)", ct: CancellationToken.None);
             aiSettings.EmbeddingDimensions = actualDim;
