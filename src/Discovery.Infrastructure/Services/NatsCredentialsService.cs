@@ -237,6 +237,8 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishRemoteDebugLog));
         publishSubjects.Add("$JS.API.STREAM.NAMES");
         publishSubjects.Add("$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>");
+        publishSubjects.Add("$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>");
+        publishSubjects.Add("$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>");
 
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeCommand));
         subscribeSubjects.Add(NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId));
