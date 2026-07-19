@@ -154,7 +154,15 @@ public record AgentKnowledgeArticleDto(
     string Content,
     string? Category,
     List<string> Tags,
+    string? TagsJson,
     string Status,
+    string? CreatedBy,
+    string? LastEditedBy,
+    DateTime? LastEditedAt,
+    Guid? ClientId,
+    Guid? SiteId,
+    Guid? DepartmentId,
     int CurrentVersionNumber,
     DateTime? PublishedAt,
-    DateTime? LastEditedAt);
+    DateTime CreatedAt,
+    DateTime UpdatedAt);

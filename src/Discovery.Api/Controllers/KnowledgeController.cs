@@ -16,21 +16,17 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? clientId = null,
         [FromQuery] Guid? siteId = null,
-        [FromQuery] string? scopeMode = null,
         [FromQuery] string? cursor = null,
-        [FromQuery] int limit = 50,
+        [FromQuery] int limit = 20,
         [FromQuery] string? status = null,
         [FromQuery] Guid? departmentId = null,
         [FromQuery] string? category = null)
     {
-        if (string.Equals(scopeMode, "all-visible", StringComparison.OrdinalIgnoreCase))
-        {
-            var result = await mediator.Send(new ListKnowledgeArticlesByUserScopeQuery(cursor, limit, status, departmentId, category));
-            return result.ToActionResult();
-        }
-
-        var legacyResult = await mediator.Send(new ListKnowledgeArticlesQuery(clientId, siteId, cursor, limit));
-        return legacyResult.ToActionResult();
+        // Listagem unificada: sempre usa ACL multi-escopo do usuário.
+        // clientId/siteId refinam o resultado (ex.: dropdown de cliente na UI).
+        var result = await mediator.Send(new ListKnowledgeArticlesByUserScopeQuery(
+            cursor, limit, status, departmentId, category, clientId, siteId));
+        return result.ToActionResult();
     }
 
     [HttpGet("search")]

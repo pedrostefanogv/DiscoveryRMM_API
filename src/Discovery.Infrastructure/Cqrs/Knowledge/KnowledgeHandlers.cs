@@ -12,12 +12,33 @@ using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Knowledge;
 
-public sealed class SearchKnowledgeQueryHandler(IKnowledgeArticleRepository repo)
-    : IRequestHandler<SearchKnowledgeQuery, Result<IReadOnlyList<ArticleResponse>>>
+public sealed class SearchKnowledgeQueryHandler(
+    IKnowledgeArticleRepository repo,
+    IScopeContext scopeContext
+) : IRequestHandler<SearchKnowledgeQuery, Result<IReadOnlyList<ArticleResponse>>>
 {
     public async Task<Result<IReadOnlyList<ArticleResponse>>> Handle(SearchKnowledgeQuery q, CancellationToken ct)
     {
-        var articles = await repo.SearchKeywordAsync(q.Query, q.ClientId, q.SiteId, null, ct);
+        // Se o usuário selecionou um escopo específico (clientId/siteId), usa keyword search legado com escopo.
+        // Caso contrário, usa busca multi-escopo via ACL do usuário.
+        List<KnowledgeArticle> articles;
+
+        if (q.ClientId.HasValue || q.SiteId.HasValue)
+        {
+            articles = await repo.SearchKeywordAsync(q.Query, q.ClientId, q.SiteId, null, ct);
+        }
+        else
+        {
+            var scope = await scopeContext.GetAccessAsync(ResourceType.KnowledgeBase, ActionType.View);
+            articles = await repo.SearchKeywordByUserScopeAsync(
+                q.Query,
+                scope.HasGlobalAccess,
+                scope.AllowedClientIds.ToHashSet(),
+                scope.AllowedSiteIds.ToHashSet(),
+                departmentId: null,
+                ct: ct);
+        }
+
         var dtos = articles.Select(MapToResponse).ToList();
         return Result<IReadOnlyList<ArticleResponse>>.Success(dtos);
     }
@@ -116,7 +137,8 @@ public sealed class ListKnowledgeArticlesByUserScopeQueryHandler(
 
         var data = await repo.ListByUserScopeAsync(
             hasGlobal, allowedClientIds, allowedSiteIds,
-            q.Status, q.DepartmentId, q.Category, q.Cursor, q.Limit, ct);
+            q.Status, q.DepartmentId, q.Category, q.Cursor, q.Limit,
+            q.ClientId, q.SiteId, ct);
 
         var items = data.Items.Select(a => new ArticleListItem(
             Id: a.Id, Title: a.Title, Category: a.Category,

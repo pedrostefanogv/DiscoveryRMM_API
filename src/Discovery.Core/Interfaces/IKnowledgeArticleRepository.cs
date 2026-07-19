@@ -27,6 +27,8 @@ public interface IKnowledgeArticleRepository
     /// Lista artigos de múltiplos escopos (ACL do usuário) com paginação cursor-based.
     /// Quando <paramref name="allowedClientIds"/> e <paramref name="allowedSiteIds"/> estão vazios
     /// e <paramref name="hasGlobalAccess"/> é false, retorna apenas artigos globais (client_id IS NULL, site_id IS NULL).
+    /// <paramref name="filterClientId"/> e <paramref name="filterSiteId"/> refinam o resultado
+    /// (ex.: selecionar um cliente mostra globais + artigos daquele cliente).
     /// </summary>
     Task<ArticleListPageData> ListByUserScopeAsync(
         bool hasGlobalAccess,
@@ -37,6 +39,8 @@ public interface IKnowledgeArticleRepository
         string? category = null,
         string? cursor = null,
         int limit = 20,
+        Guid? filterClientId = null,
+        Guid? filterSiteId = null,
         CancellationToken ct = default);
 
     /// <summary>

@@ -80,6 +80,10 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
                 (a.ClientId == clientId && a.SiteId == null) ||
                 (a.ClientId == null && a.SiteId == null)),
 
+            (null, not null) => query.Where(a =>
+                (a.SiteId == siteId) ||
+                (a.ClientId == null && a.SiteId == null)),
+
             _ => query.Where(a => a.ClientId == null && a.SiteId == null)
         };
 
@@ -285,6 +289,8 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         string? category = null,
         string? cursor = null,
         int limit = 20,
+        Guid? filterClientId = null,
+        Guid? filterSiteId = null,
         CancellationToken ct = default)
     {
         var query = db.KnowledgeArticles
@@ -309,8 +315,25 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             }
         }
 
-        // Filtro multi-escopo via ACL
-        query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
+        // Filtro de escopo: se o usuário selecionou um cliente/site, refina;
+        // caso contrário, aplica ACL multi-escopo (vê tudo que pode acessar).
+        if (filterClientId.HasValue && filterSiteId.HasValue)
+        {
+            query = query.Where(a =>
+                (a.ClientId == null && a.SiteId == null) ||
+                (a.ClientId == filterClientId.Value && a.SiteId == null) ||
+                (a.SiteId == filterSiteId.Value));
+        }
+        else if (filterClientId.HasValue)
+        {
+            query = query.Where(a =>
+                (a.ClientId == null && a.SiteId == null) ||
+                (a.ClientId == filterClientId.Value && a.SiteId == null));
+        }
+        else
+        {
+            query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
+        }
 
         // Filtro de departamento (para artigos Internal)
         if (departmentId.HasValue)
