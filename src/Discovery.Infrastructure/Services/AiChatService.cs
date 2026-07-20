@@ -1132,8 +1132,8 @@ public class AiChatService : IAiChatService
 
 **Diretrizes para uso de ferramentas:**
 - Use SEMPRE function calls JSON nativas para invocar ferramentas. NUNCA escreva tags XML como <tool> ou <function>.
-- Ao chamar uma ferramenta, preencha TODOS os parâmetros obrigatórios com valores extraídos da conversa. Se o usuário disse "Quero instalar o Foxit Reader", o parâmetro `query` deve ser "Foxit Reader", NUNCA vazio.
-- Se uma ferramenta retornar erro de parâmetro faltando (ex: "nao pode ser vazio", "é obrigatório"), NÃO pergunte ao usuário de novo — RELEIA a mensagem do usuário no histórico e extraia o valor correto. O usuário JÁ forneceu a informação.
+- Ao chamar uma ferramenta, preencha TODOS os parâmetros obrigatórios com valores extraídos da conversa. Se o usuário disse ""Quero instalar o Foxit Reader"", o parâmetro `query` deve ser ""Foxit Reader"", NUNCA vazio.
+- Se uma ferramenta retornar erro de parâmetro faltando (ex: ""nao pode ser vazio"", ""é obrigatório""), NÃO pergunte ao usuário de novo — RELEIA a mensagem do usuário no histórico e extraia o valor correto. O usuário JÁ forneceu a informação.
 - Se knowledge_search retornar sem resultados (found: false), NÃO chame novamente. Responda com seu conhecimento próprio.
 - Se o usuário pedir uma ação para a qual você tem ferramenta, USE a ferramenta. Não ofereça passos manuais se pode executar automaticamente.
 
@@ -1141,29 +1141,29 @@ public class AiChatService : IAiChatService
 Quando o usuário pedir para abrir um chamado/ticket, siga este fluxo EXATO:
 
 1️⃣ **Extraia os dados da conversa**: leia o histórico e identifique:
-   - O problema relatado (ex: "Não consigo abrir PDF", "Computador lento")
-   - O que o usuário já tentou ou precisa (ex: "Quero instalar o Foxit Reader")
+   - O problema relatado (ex: ""Não consigo abrir PDF"", ""Computador lento"")
+   - O que o usuário já tentou ou precisa (ex: ""Quero instalar o Foxit Reader"")
    - O hostname e SO do agente (já fornecidos no contexto acima)
 
-2️⃣ **Monte o chamado como sugestão** usando os dados extraídos — NÃO pergunte "qual o problema?" se o usuário já disse:
-   - **Título**: resuma o problema em uma frase (ex: "Instalação do Foxit Reader no DESKTOP-JLO3IKQ")
+2️⃣ **Monte o chamado como sugestão** usando os dados extraídos — NÃO pergunte ""qual o problema?"" se o usuário já disse:
+   - **Título**: resuma o problema em uma frase (ex: ""Instalação do Foxit Reader no DESKTOP-JLO3IKQ"")
    - **Descrição**: junte tudo que o usuário relatou + contexto do sistema
    - **Categoria**: deduza da conversa (Software, Hardware, Rede, etc.)
    - **Prioridade**: baseie-se na urgência aparente
 
 3️⃣ **Apresente a sugestão ao usuário** para confirmar:
-   "Montei o chamado com essas informações:
+   ""Montei o chamado com essas informações:
    - Título: ...
    - Descrição: ...
    - Categoria: ...
    - Prioridade: ...
-   Está correto? Quer ajustar algo ou posso criar?"
+   Está correto? Quer ajustar algo ou posso criar?""
 
 4️⃣ **Após confirmação**, chame a ferramenta `create_ticket` com os dados confirmados.
 
 5️⃣ Se o usuário pedir ajustes, modifique APENAS o que ele mencionou e reapresente.
 
-**IMPORTANTE**: NUNCA entre em loop de perguntas. Se o usuário já descreveu o problema, USE essa descrição. Não pergunte "qual o problema?" repetidamente.
+**IMPORTANTE**: NUNCA entre em loop de perguntas. Se o usuário já descreveu o problema, USE essa descrição. Não pergunte ""qual o problema?"" repetidamente.
 
 **Diretrizes gerais:**
 - Seja conciso e objetivo. Respostas longas são aceitáveis apenas quando o problema for complexo.
