@@ -237,6 +237,22 @@ public class AiChatService : IAiChatService
                 ? await _mcpToolExecutor.GetAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, ct)
                 : [];
 
+            // ── Mesclar agent tools do cache ──
+            var agentTools = GetCachedAgentTools(agentId);
+            if (agentTools is { Count: > 0 })
+            {
+                availableTools.AddRange(agentTools);
+                _logger.LogDebug("[{TraceId}] ProcessSyncAsync: {Count} agent tools mescladas ao stream",
+                    traceId, agentTools.Count);
+            }
+            else
+            {
+                _logger.LogWarning("[{TraceId}] ProcessSyncAsync: Nenhuma agent tool em cache para AgentId={AgentId}. " +
+                    "O agent pode não ter registrado tools ou o cache expirou (TTL={Ttl}). " +
+                    "Verifique se o endpoint /me/agent-tools/registry retorna 200.",
+                    traceId, agentId, AgentToolsCacheTtl);
+            }
+
             var maxIterations = aiSettings.MaxToolCallIterations is >= 1 and <= 10
                 ? aiSettings.MaxToolCallIterations
                 : DefaultMaxToolCallIterations;
@@ -707,6 +723,26 @@ public class AiChatService : IAiChatService
             ? await _mcpToolExecutor.GetAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, ct)
             : [];
 
+        // ── Mesclar agent tools do cache ──
+        var agentTools = GetCachedAgentTools(agentId);
+        if (agentTools is { Count: > 0 })
+        {
+            availableTools.AddRange(agentTools);
+            _logger.LogDebug("[{TraceId}] StreamAsync: {Count} agent tools mescladas ao stream",
+                traceId, agentTools.Count);
+        }
+        else
+        {
+            _logger.LogWarning("[{TraceId}] StreamAsync: Nenhuma agent tool em cache para AgentId={AgentId}. " +
+                "O agent pode não ter registrado tools ou o cache expirou (TTL={Ttl}). " +
+                "Verifique se o endpoint /me/agent-tools/registry retorna 200.",
+                traceId, agentId, AgentToolsCacheTtl);
+        }
+
+        // Nomes das tools do agent (para delegar ao invés de executar no servidor)
+        var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
+        bool hasAgentToolCallPending = false;
+
         while (true)
         {
             var streamOptions = new LlmOptions(
@@ -723,6 +759,7 @@ public class AiChatService : IAiChatService
                 OpenRouterCategories: aiSettings.OpenRouterCategories);
 
             hasToolCalls = false;
+            hasAgentToolCallPending = false;
 
             if (availableTools.Count > 0)
             {
@@ -744,6 +781,17 @@ public class AiChatService : IAiChatService
 
                         foreach (var toolCall in evt.ToolCalls)
                         {
+                            // ── Agent tools: delegar ao agent (multi-round) ──
+                            if (agentToolCallNames.Contains(toolCall.Name))
+                            {
+                                hasAgentToolCallPending = true;
+                                _logger.LogDebug("[{TraceId}] Agent tool '{ToolName}' delegada ao agent", traceId, toolCall.Name);
+                                yield return new AiChatStreamChunk(Type: "tool_call",
+                                    ToolCallId: toolCall.Id, ToolName: toolCall.Name, ToolArgumentsDelta: toolCall.ArgumentsJson);
+                                // Não persiste aqui — o agent vai retornar o resultado no round 2
+                                continue;
+                            }
+
                             // Deduplica conhecimento: evita chamar knowledge_search com a mesma query
                             if (toolCall.Name == "knowledge_search")
                             {
@@ -807,6 +855,27 @@ public class AiChatService : IAiChatService
 
                             _logger.LogDebug("[{TraceId}] MCP tool '{ToolName}' executada via stream ({Iter}/{Max})",
                                 traceId, toolCall.Name, toolIterations + 1, maxIterations);
+                        }
+
+                        // Se houve agent tool call, encerra o round para o agent executar
+                        if (hasAgentToolCallPending)
+                        {
+                            yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
+                            // Persiste só o que foi acumulado até aqui, sem o conteúdo final
+                            stopwatch.Stop();
+                            try
+                            {
+                                await _messageRepository.CreateBatchAsync(new[]
+                                {
+                                    new AiChatMessage
+                                    {
+                                        Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq,
+                                        Role = "user", Content = message, CreatedAt = startTime, TraceId = traceId
+                                    }
+                                }, ct);
+                            }
+                            catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir user message do round 1", traceId); }
+                            yield break;
                         }
                     }
                     else if (evt.Type == "done")
