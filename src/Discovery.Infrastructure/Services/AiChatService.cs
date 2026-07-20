@@ -1132,10 +1132,38 @@ public class AiChatService : IAiChatService
 
 **Diretrizes para uso de ferramentas:**
 - Use SEMPRE function calls JSON nativas para invocar ferramentas. NUNCA escreva tags XML como <tool> ou <function>.
-- Ao chamar uma ferramenta, preencha TODOS os parâmetros obrigatórios com valores extraídos da conversa.
-- Se uma ferramenta retornar erro de parâmetro faltando (ex: nao pode ser vazio, e obrigatorio), REINTERPRETE a solicitação do usuário e tente novamente com os parâmetros corretos — NÃO peça ao usuário para repetir o que ele já disse.
+- Ao chamar uma ferramenta, preencha TODOS os parâmetros obrigatórios com valores extraídos da conversa. Se o usuário disse "Quero instalar o Foxit Reader", o parâmetro `query` deve ser "Foxit Reader", NUNCA vazio.
+- Se uma ferramenta retornar erro de parâmetro faltando (ex: "nao pode ser vazio", "é obrigatório"), NÃO pergunte ao usuário de novo — RELEIA a mensagem do usuário no histórico e extraia o valor correto. O usuário JÁ forneceu a informação.
 - Se knowledge_search retornar sem resultados (found: false), NÃO chame novamente. Responda com seu conhecimento próprio.
 - Se o usuário pedir uma ação para a qual você tem ferramenta, USE a ferramenta. Não ofereça passos manuais se pode executar automaticamente.
+
+**🟢 ABERTURA DE CHAMADO (FLUXO OBRIGATÓRIO):**
+Quando o usuário pedir para abrir um chamado/ticket, siga este fluxo EXATO:
+
+1️⃣ **Extraia os dados da conversa**: leia o histórico e identifique:
+   - O problema relatado (ex: "Não consigo abrir PDF", "Computador lento")
+   - O que o usuário já tentou ou precisa (ex: "Quero instalar o Foxit Reader")
+   - O hostname e SO do agente (já fornecidos no contexto acima)
+
+2️⃣ **Monte o chamado como sugestão** usando os dados extraídos — NÃO pergunte "qual o problema?" se o usuário já disse:
+   - **Título**: resuma o problema em uma frase (ex: "Instalação do Foxit Reader no DESKTOP-JLO3IKQ")
+   - **Descrição**: junte tudo que o usuário relatou + contexto do sistema
+   - **Categoria**: deduza da conversa (Software, Hardware, Rede, etc.)
+   - **Prioridade**: baseie-se na urgência aparente
+
+3️⃣ **Apresente a sugestão ao usuário** para confirmar:
+   "Montei o chamado com essas informações:
+   - Título: ...
+   - Descrição: ...
+   - Categoria: ...
+   - Prioridade: ...
+   Está correto? Quer ajustar algo ou posso criar?"
+
+4️⃣ **Após confirmação**, chame a ferramenta `create_ticket` com os dados confirmados.
+
+5️⃣ Se o usuário pedir ajustes, modifique APENAS o que ele mencionou e reapresente.
+
+**IMPORTANTE**: NUNCA entre em loop de perguntas. Se o usuário já descreveu o problema, USE essa descrição. Não pergunte "qual o problema?" repetidamente.
 
 **Diretrizes gerais:**
 - Seja conciso e objetivo. Respostas longas são aceitáveis apenas quando o problema for complexo.
@@ -1536,6 +1564,10 @@ public class AiChatService : IAiChatService
     {
         var sb = new StringBuilder();
         sb.AppendLine("O agente possui as seguintes ferramentas que podem ser usadas via function calling:");
+        var hasCreateTicket = false;
+        var hasSearchPackages = false;
+        var hasAskUser = false;
+
         foreach (var tool in tools)
         {
             // Extrai primeira linha da descrição para manter conciso
@@ -1544,7 +1576,21 @@ public class AiChatService : IAiChatService
             if (firstLine.Length > 120)
                 firstLine = firstLine[..117] + "...";
             sb.AppendLine($"- `{tool.Name}`: {firstLine}");
+
+            if (tool.Name == "create_ticket") hasCreateTicket = true;
+            if (tool.Name == "search_packages") hasSearchPackages = true;
+            if (tool.Name == "ask_user") hasAskUser = true;
         }
+        sb.AppendLine();
+
+        // Notas específicas para tools críticas que precisam de orientação extra
+        if (hasSearchPackages)
+            sb.AppendLine("⚠️ `search_packages`: o parâmetro `query` é OBRIGATÓRIO. SEMPRE extraia o nome do programa da mensagem do usuário. Se o usuário disser 'Foxit Reader', use query='Foxit Reader'.");
+        if (hasAskUser)
+            sb.AppendLine("⚠️ `ask_user`: o parâmetro `question` é OBRIGATÓRIO. SEMPRE preencha com uma pergunta clara baseada no contexto.");
+        if (hasCreateTicket)
+            sb.AppendLine("⚠️ `create_ticket`: use APÓS o usuário confirmar os dados do chamado. Preencha title, description, category e priority baseado no que foi discutido.");
+
         sb.AppendLine();
         sb.AppendLine("Use estas ferramentas quando o usuário solicitar ações relacionadas. Sempre preencha todos os parâmetros obrigatórios com os valores fornecidos pelo usuário.");
         return sb.ToString();
@@ -1568,11 +1614,21 @@ public class AiChatService : IAiChatService
             || lower.Contains("é obrigatório") || lower.Contains("e obrigatorio")
             || lower.Contains("parameter") && lower.Contains("missing"))
         {
+            // Hints específicos por tool para ajudar o LLM a se autocorrigir
+            var hint = toolName switch
+            {
+                "search_packages" => "O parâmetro 'query' estava vazio. Extraia do histórico da conversa o nome do programa que o usuário quer pesquisar (ex: 'Foxit Reader', 'Chrome', '7-Zip'). Se o usuário disse 'Quero instalar o Foxit', use 'Foxit' como query.",
+                "ask_user" => "O parâmetro 'question' estava vazio. Extraia da conversa o que você precisa perguntar ao usuário. Monte uma pergunta clara e específica baseada no contexto da conversa.",
+                "create_ticket" => "Parâmetros obrigatórios do chamado estavam vazios. Extraia do histórico: título (resuma o problema), descrição (detalhes do que o usuário relatou), categoria (Software/Hardware/Rede/etc.) e prioridade (1-4).",
+                "install_package" => "O parâmetro 'packageId' ou 'packageName' estava vazio. Extraia do histórico o nome/id do programa que o usuário pediu para instalar.",
+                _ => "O LLM enviou parâmetros vazios ou ausentes. Extraia os valores corretos da conversa com o usuário e tente novamente preenchendo TODOS os parâmetros obrigatórios."
+            };
+
             var json = JsonSerializer.Serialize(new
             {
                 error = rawResult.Trim(),
                 tool = toolName,
-                hint = "O LLM enviou parâmetros vazios ou ausentes. Extraia os valores corretos da conversa com o usuário e tente novamente preenchendo TODOS os parâmetros obrigatórios."
+                hint
             });
             return json;
         }
