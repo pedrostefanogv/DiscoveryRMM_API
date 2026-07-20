@@ -45,7 +45,7 @@ public class AiChatService : IAiChatService
     private const int MaxMessageSizeBytes = 2048; // 2KB
     private const int SessionExpirationDays = 180;
     private const int DefaultMaxToolCallIterations = 2;
-    private const int DefaultMaxHistoryMessages = 10;
+    private const int DefaultMaxHistoryMessages = 20;
     private const int DefaultMaxKbContextTokens = 2000;
     private const int DefaultMaxTokens = 1000;
     private const double DefaultTemperature = 0.7;
@@ -273,7 +273,8 @@ public class AiChatService : IAiChatService
                 Provider: aiSettings.Provider,
                 OpenRouterReferer: aiSettings.OpenRouterReferer,
                 OpenRouterTitle: aiSettings.OpenRouterTitle,
-                OpenRouterCategories: aiSettings.OpenRouterCategories);
+                OpenRouterCategories: aiSettings.OpenRouterCategories,
+                SessionId: session.Id.ToString("D"));
             
             LlmResponse llmResponse;
             var toolIterations = 0;
@@ -756,7 +757,8 @@ public class AiChatService : IAiChatService
                 Provider: aiSettings.Provider,
                 OpenRouterReferer: aiSettings.OpenRouterReferer,
                 OpenRouterTitle: aiSettings.OpenRouterTitle,
-                OpenRouterCategories: aiSettings.OpenRouterCategories);
+                OpenRouterCategories: aiSettings.OpenRouterCategories,
+                SessionId: session!.Id.ToString("D"));
 
             hasToolCalls = false;
             hasAgentToolCallPending = false;
@@ -947,7 +949,8 @@ public class AiChatService : IAiChatService
                 Provider: aiSettings.Provider,
                 OpenRouterReferer: aiSettings.OpenRouterReferer,
                 OpenRouterTitle: aiSettings.OpenRouterTitle,
-                OpenRouterCategories: aiSettings.OpenRouterCategories);
+                OpenRouterCategories: aiSettings.OpenRouterCategories,
+                SessionId: session!.Id.ToString("D"));
 
             await foreach (var token in _llmProvider.StreamAsync(systemPrompt!, llmMessages, retryOptions, ct))
             {
@@ -1111,8 +1114,14 @@ public class AiChatService : IAiChatService
 - Último IP: {agent.LastIpAddress ?? "Desconhecido"}
 - Última comunicação: {agent.LastSeenAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Nunca"}
 
-**Ferramentas disponíveis:**
-- `knowledge_search`: Pesquisa artigos e procedimentos na base de conhecimento da empresa. Use APENAS function calls JSON nativas para invocar esta ferramenta.
+**Ferramentas disponíveis no servidor:**
+- `knowledge_search`: Pesquisa artigos e procedimentos na base de conhecimento da empresa.
+- `time.current`: Retorna data/hora atual.
+- `sequential_thinking`: Raciocínio multi-step para diagnósticos complexos.
+- `memory.search`: Pesquisa informações salvas em conversas anteriores.
+
+**Ferramentas do agente (executadas no computador do usuário):**
+{{AGENT_TOOLS_SECTION}}
 
 **Suas responsabilidades:**
 1. Fornecer suporte técnico claro e direto
@@ -1121,20 +1130,18 @@ public class AiChatService : IAiChatService
 4. Priorizar a segurança e estabilidade do sistema
 5. Explicar conceitos técnicos de forma acessível
 
-**O que você NÃO pode fazer:**
-- NÃO pode executar comandos no computador do usuário (não há shell, PowerShell ou acesso remoto).
-- NÃO pode instalar software diretamente — apenas orientar o usuário com os passos manuais.
-- NÃO pode ler ou modificar arquivos do sistema de arquivos.
-- NÃO invente ferramentas que não existem. Se não tiver certeza sobre uma capacidade, assuma que NÃO pode executá-la.
-
-**Diretrizes:**
-- Seja conciso e objetivo. Respostas longas são aceitáveis apenas quando o problema for complexo.
-- Oriente o usuário com passos manuais claros e específicos para o sistema operacional dele.
-- Se o usuário pedir uma ação que você não pode executar, explique educadamente a limitação e ofereça alternativas.
+**Diretrizes para uso de ferramentas:**
+- Use SEMPRE function calls JSON nativas para invocar ferramentas. NUNCA escreva tags XML como <tool> ou <function>.
+- Ao chamar uma ferramenta, preencha TODOS os parâmetros obrigatórios com valores extraídos da conversa.
+- Se uma ferramenta retornar erro de parâmetro faltando (ex: nao pode ser vazio, e obrigatorio), REINTERPRETE a solicitação do usuário e tente novamente com os parâmetros corretos — NÃO peça ao usuário para repetir o que ele já disse.
 - Se knowledge_search retornar sem resultados (found: false), NÃO chame novamente. Responda com seu conhecimento próprio.
-- IMPORTANTE: use APENAS function calls nativas JSON para invocar ferramentas. NUNCA escreva tags XML como <knowledgesearch> ou <tool> no texto da resposta.
+- Se o usuário pedir uma ação para a qual você tem ferramenta, USE a ferramenta. Não ofereça passos manuais se pode executar automaticamente.
 
-Responda de forma profissional, prestativa e sempre em português.";
+**Diretrizes gerais:**
+- Seja conciso e objetivo. Respostas longas são aceitáveis apenas quando o problema for complexo.
+- Oriente o usuário com passos manuais claros e específicos para o sistema operacional dele APENAS quando não houver ferramenta capaz de executar a ação automaticamente.
+- Mantenha o contexto da conversa. Lembre-se do que o usuário já disse nos turnos anteriores.
+- Responda de forma profissional, prestativa e sempre em português.";
     }
 
     private static string BuildSystemPrompt(Agent agent, AIIntegrationSettings aiSettings)
@@ -1163,6 +1170,19 @@ Responda de forma profissional, prestativa e sempre em português.";
         Guid? departmentId, CancellationToken ct)
     {
         var basePrompt = BuildSystemPrompt(agent, aiSettings);
+
+        // Injetar ferramentas do agente no prompt
+        var agentTools = GetCachedAgentTools(agent.Id);
+        if (agentTools is { Count: > 0 })
+        {
+            basePrompt = basePrompt.Replace("{{AGENT_TOOLS_SECTION}}",
+                FormatAgentToolsDescription(agentTools));
+        }
+        else
+        {
+            basePrompt = basePrompt.Replace("{{AGENT_TOOLS_SECTION}}",
+                "Nenhuma ferramenta do agente disponível. Oriente o usuário com passos manuais.");
+        }
         var injected = new List<Guid>();
 
         if (!aiSettings.KnowledgeBaseEnabled || !aiSettings.EmbeddingEnabled || !aiSettings.EmbeddingArticlesEnabled)
@@ -1508,6 +1528,71 @@ Responda de forma profissional, prestativa e sempre em português.";
         return null;
     }
 
+    /// <summary>
+    /// Formata a descrição das tools do agente para inclusão no system prompt.
+    /// Inclui nome e descrição resumida para orientar o LLM sobre capacidades disponíveis.
+    /// </summary>
+    private static string FormatAgentToolsDescription(List<LlmTool> tools)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("O agente possui as seguintes ferramentas que podem ser usadas via function calling:");
+        foreach (var tool in tools)
+        {
+            // Extrai primeira linha da descrição para manter conciso
+            var desc = tool.Description;
+            var firstLine = desc.Split('\n', '\r')[0];
+            if (firstLine.Length > 120)
+                firstLine = firstLine[..117] + "...";
+            sb.AppendLine($"- `{tool.Name}`: {firstLine}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("Use estas ferramentas quando o usuário solicitar ações relacionadas. Sempre preencha todos os parâmetros obrigatórios com os valores fornecidos pelo usuário.");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Detecta erros em respostas de tools do agente e os reformata com instruções
+    /// para o LLM se autocorrigir. Se a resposta não parece um erro, retorna o original.
+    /// </summary>
+    private static string WrapAgentToolError(string rawResult, string toolName)
+    {
+        // Se já é JSON válido, retorna como está
+        if (rawResult.TrimStart().StartsWith("{"))
+            return rawResult;
+
+        var lower = rawResult.ToLowerInvariant();
+
+        // Detecta erros de parâmetro faltando/vazio
+        if (lower.Contains("nao pode ser vazio") || lower.Contains("não pode ser vazio")
+            || lower.Contains("cannot be empty") || lower.Contains("is required")
+            || lower.Contains("é obrigatório") || lower.Contains("e obrigatorio")
+            || lower.Contains("parameter") && lower.Contains("missing"))
+        {
+            var json = JsonSerializer.Serialize(new
+            {
+                error = rawResult.Trim(),
+                tool = toolName,
+                hint = "O LLM enviou parâmetros vazios ou ausentes. Extraia os valores corretos da conversa com o usuário e tente novamente preenchendo TODOS os parâmetros obrigatórios."
+            });
+            return json;
+        }
+
+        // Se o texto é curto e parece erro genérico (< 100 chars)
+        if (rawResult.Length < 100 && (lower.Contains("erro") || lower.Contains("error")
+            || lower.Contains("falha") || lower.Contains("fail")))
+        {
+            var json = JsonSerializer.Serialize(new
+            {
+                error = rawResult.Trim(),
+                tool = toolName,
+                hint = "A ferramenta retornou erro. Analise a mensagem de erro e corrija o problema antes de tentar novamente."
+            });
+            return json;
+        }
+
+        return rawResult;
+    }
+
     public async IAsyncEnumerable<AiChatStreamChunk> StreamMultiRoundAsync(
         Guid agentId, string? message, Guid? sessionId,
         List<ToolResultItem>? toolResults, Guid? departmentId = null,
@@ -1547,11 +1632,61 @@ Responda de forma profissional, prestativa e sempre em português.";
         var llmMessages = history.OrderBy(m => m.SequenceNumber)
             .Select(m => new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName)).ToList();
 
+        // Persistir mensagem do usuário (quando houver) para manter contexto no banco
+        if (!string.IsNullOrWhiteSpace(message))
+        {
+            try
+            {
+                await _messageRepository.CreateAsync(new AiChatMessage
+                {
+                    Id = Guid.NewGuid(),
+                    SessionId = session.Id,
+                    SequenceNumber = nextSeq++,
+                    Role = "user",
+                    Content = message,
+                    CreatedAt = DateTime.UtcNow,
+                    TraceId = traceId
+                }, ct);
+                _logger.LogDebug("[{TraceId}] StreamMultiRound: mensagem do usuário persistida (seq={Seq})", traceId, nextSeq - 1);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir mensagem do usuário no multi-round", traceId);
+            }
+        }
+
         if (toolResults is { Count: > 0 })
         {
+            // Persistir tool results do agente no banco para manter o contexto entre rounds
+            var toolMessagesToCreate = new List<AiChatMessage>();
             foreach (var tr in toolResults)
             {
-                llmMessages.Add(new LlmMessage("tool", tr.Result, $"agent_{tr.CallId}", tr.Name));
+                // Envolve erros em formato JSON com hint para o LLM se autocorrigir
+                var wrappedResult = WrapAgentToolError(tr.Result, tr.Name);
+                llmMessages.Add(new LlmMessage("tool", wrappedResult, $"agent_{tr.CallId}", tr.Name));
+                toolMessagesToCreate.Add(new AiChatMessage
+                {
+                    Id = Guid.NewGuid(),
+                    SessionId = session.Id,
+                    SequenceNumber = nextSeq++,
+                    Role = "tool",
+                    Content = wrappedResult,
+                    ToolCallId = $"agent_{tr.CallId}",
+                    ToolName = tr.Name,
+                    CreatedAt = DateTime.UtcNow,
+                    TraceId = traceId
+                });
+            }
+
+            try
+            {
+                await _messageRepository.CreateBatchAsync(toolMessagesToCreate, ct);
+                _logger.LogDebug("[{TraceId}] StreamMultiRound: {Count} tool results do agente persistidos",
+                    traceId, toolMessagesToCreate.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir tool results do agente no multi-round", traceId);
             }
         }
 
@@ -1595,7 +1730,8 @@ Responda de forma profissional, prestativa e sempre em português.";
                 string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
                 string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
                 availableTools.Count > 0, availableTools,
-                aiSettings.Provider, aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories);
+                aiSettings.Provider, aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
+                SessionId: session.Id.ToString("D"));
 
             hasToolCalls = false;
             bool hasAgentToolCall = false;

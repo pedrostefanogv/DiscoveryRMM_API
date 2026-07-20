@@ -46,6 +46,21 @@ public class OpenAiProvider : ILlmProvider
 
         if (!string.IsNullOrWhiteSpace(options.OpenRouterCategories))
             request.Headers.TryAddWithoutValidation("X-Categories", options.OpenRouterCategories);
+
+        // Sticky session routing: garante mesmo provider em todos os turnos da conversa
+        // e habilita prompt caching para reduzir latência e custo
+        if (!string.IsNullOrWhiteSpace(options.SessionId))
+            request.Headers.TryAddWithoutValidation("x-session-id", options.SessionId);
+    }
+
+    /// <summary>
+    /// Adiciona session_id ao payload JSON para sticky sessions no OpenRouter.
+    /// Funciona para qualquer provider compatível com OpenAI/OpenRouter.
+    /// </summary>
+    private static void AddSessionIdToPayload(Dictionary<string, object?> payloadDict, LlmOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.SessionId))
+            payloadDict["session_id"] = options.SessionId;
     }
 
     public async Task<LlmResponse> CompleteAsync(
@@ -104,29 +119,33 @@ public class OpenAiProvider : ILlmProvider
                 }
             }
 
-            // Montar payload
-            var payload = new
+            // Montar payload como dicionário para suportar campos dinâmicos (session_id)
+            var payloadDict = new Dictionary<string, object?>
             {
-                model,
-                messages = openAiMessages,
-                max_tokens = options.MaxTokens,
-                temperature = options.Temperature,
-                tools = options.EnableTools && options.Tools != null 
-                    ? options.Tools.Select(t => new
-                    {
-                        type = "function",
-                        function = new
-                        {
-                            name = t.Name,
-                            description = t.Description,
-                            parameters = t.Schema
-                        }
-                    }).ToList()
-                    : null
+                ["model"] = model,
+                ["messages"] = openAiMessages,
+                ["max_tokens"] = options.MaxTokens,
+                ["temperature"] = options.Temperature
             };
 
+            if (options.EnableTools && options.Tools != null)
+            {
+                payloadDict["tools"] = options.Tools.Select(t => new
+                {
+                    type = "function",
+                    function = new
+                    {
+                        name = t.Name,
+                        description = t.Description,
+                        parameters = t.Schema
+                    }
+                }).ToList();
+            }
+
+            AddSessionIdToPayload(payloadDict, options);
+
             var content = new StringContent(
-                JsonSerializer.Serialize(payload, new JsonSerializerOptions 
+                JsonSerializer.Serialize(payloadDict, new JsonSerializerOptions 
                 { 
                     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull 
                 }),
@@ -226,17 +245,19 @@ public class OpenAiProvider : ILlmProvider
             openAiMessages.Add(new { role = msg.Role, content = msg.Content });
         }
 
-        var payload = new
+        var payloadDict = new Dictionary<string, object?>
         {
-            model,
-            messages = openAiMessages,
-            max_tokens = options.MaxTokens,
-            temperature = options.Temperature,
-            stream = true
+            ["model"] = model,
+            ["messages"] = openAiMessages,
+            ["max_tokens"] = options.MaxTokens,
+            ["temperature"] = options.Temperature,
+            ["stream"] = true
         };
 
+        AddSessionIdToPayload(payloadDict, options);
+
         var requestBody = new StringContent(
-            JsonSerializer.Serialize(payload),
+            JsonSerializer.Serialize(payloadDict),
             Encoding.UTF8,
             "application/json");
 
@@ -345,24 +366,28 @@ public class OpenAiProvider : ILlmProvider
             }
         }
 
-        var payload = new
+        var payloadDict = new Dictionary<string, object?>
         {
-            model,
-            messages = openAiMessages,
-            max_tokens = options.MaxTokens,
-            temperature = options.Temperature,
-            stream = true,
-            tools = options.EnableTools && options.Tools != null
-                ? options.Tools.Select(t => new
-                {
-                    type = "function",
-                    function = new { name = t.Name, description = t.Description, parameters = t.Schema }
-                }).ToList()
-                : null
+            ["model"] = model,
+            ["messages"] = openAiMessages,
+            ["max_tokens"] = options.MaxTokens,
+            ["temperature"] = options.Temperature,
+            ["stream"] = true
         };
 
+        if (options.EnableTools && options.Tools != null)
+        {
+            payloadDict["tools"] = options.Tools.Select(t => new
+            {
+                type = "function",
+                function = new { name = t.Name, description = t.Description, parameters = t.Schema }
+            }).ToList();
+        }
+
+        AddSessionIdToPayload(payloadDict, options);
+
         var requestBody = new StringContent(
-            JsonSerializer.Serialize(payload, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }),
+            JsonSerializer.Serialize(payloadDict, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }),
             Encoding.UTF8,
             "application/json");
 

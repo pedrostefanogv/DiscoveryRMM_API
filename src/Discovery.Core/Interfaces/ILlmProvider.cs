@@ -46,7 +46,8 @@ public record LlmOptions(
     string? OpenRouterReferer = null,
     string? OpenRouterTitle = null,
     string? OpenRouterCategories = null,
-    string? Provider = null);
+    string? Provider = null,
+    string? SessionId = null);
 
 public record LlmTool(
     string Name, 
