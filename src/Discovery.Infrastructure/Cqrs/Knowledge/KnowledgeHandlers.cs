@@ -78,51 +78,6 @@ public sealed class SearchKnowledgeQueryHandler(
         };
 }
 
-public sealed class ListKnowledgeArticlesQueryHandler(IKnowledgeArticleRepository repo)
-    : IRequestHandler<ListKnowledgeArticlesQuery, Result<IReadOnlyList<ArticleResponse>>>
-{
-    public async Task<Result<IReadOnlyList<ArticleResponse>>> Handle(ListKnowledgeArticlesQuery q, CancellationToken ct)
-    {
-        var articles = await repo.ListByScopeAsync(q.ClientId, q.SiteId, null, null, null, ct);
-        var dtos = articles.Select(MapToResponse).ToList();
-        return Result<IReadOnlyList<ArticleResponse>>.Success(dtos);
-    }
-
-    private static ArticleResponse MapToResponse(KnowledgeArticle a) => new(
-        Id: a.Id, Title: a.Title, Content: a.Content, Category: a.Category,
-        Tags: ParseTags(a.TagsJson), CreatedBy: a.CreatedBy, LastEditedBy: a.LastEditedBy,
-        LastEditedAt: a.LastEditedAt, Status: a.Status,
-        Scope: ResolveScope(a.ClientId, a.SiteId), ScopeOrigin: ResolveScopeOrigin(a.ClientId, a.SiteId),
-        ClientId: a.ClientId, SiteId: a.SiteId, ClientName: null, SiteName: null,
-        DepartmentId: a.DepartmentId, CurrentVersionNumber: a.CurrentVersionNumber,
-        PublishedAt: a.PublishedAt, ChunkCount: a.Chunks?.Count ?? 0,
-        EmbeddingsReady: a.LastChunkedAt.HasValue,
-        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt);
-
-    private static List<string> ParseTags(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return [];
-        try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
-        catch { return []; }
-    }
-
-    private static string ResolveScope(Guid? clientId, Guid? siteId)
-        => (clientId, siteId) switch
-        {
-            (null, null) => "Global",
-            (not null, null) => "Client",
-            _ => "Site"
-        };
-
-    private static string ResolveScopeOrigin(Guid? clientId, Guid? siteId)
-        => (clientId, siteId) switch
-        {
-            (null, null) => "global",
-            (not null, null) => "client",
-            _ => "site"
-        };
-}
-
 public sealed class ListKnowledgeArticlesByUserScopeQueryHandler(
     IKnowledgeArticleRepository repo,
     IScopeContext scopeContext
