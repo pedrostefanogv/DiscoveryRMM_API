@@ -593,8 +593,8 @@ Services/
  system.io.hashing/9.0.4/lib/net9.0/System.IO.Hashing.dll
  system.io.packaging/8.0.1/lib/net8.0/System.IO.Packaging.dll
  system.reactive/6.0.1/lib/net6.0/System.Reactive.dll
- system.security.cryptography.pkcs/10.0.9/lib/net10.0/System.Security.Cryptography.Pkcs.dll
- system.security.cryptography.xml/10.0.9/lib/net10.0/System.Security.Cryptography.Xml.dll
+ system.security.cryptography.pkcs/10.0.10/lib/net10.0/System.Security.Cryptography.Pkcs.dll
+ system.security.cryptography.xml/10.0.10/lib/net10.0/System.Security.Cryptography.Xml.dll
 
 [analyzerReferences]
 <DOTNET>/packs/Microsoft.NETCore.App.Ref/10.0.10/analyzers/dotnet/cs/
