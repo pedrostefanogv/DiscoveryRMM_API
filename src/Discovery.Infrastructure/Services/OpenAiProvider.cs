@@ -32,17 +32,55 @@ public class OpenAiProvider : ILlmProvider
         return AIIntegrationSettings.OpenAiDefaultBaseUrl;
     }
 
+    /// <summary>
+    /// Auto-detecta se o modelo pertence ao OpenRouter (modelos com "/" no nome: org/model)
+    /// e corrige provider/baseUrl automaticamente para evitar erros 404 quando o provider
+    /// está como "openai" mas o modelo é do OpenRouter.
+    /// </summary>
+    internal static (string Provider, string BaseUrl) AutoCorrectProviderAndBaseUrl(
+        string? provider, string? baseUrl, string model)
+    {
+        // Modelos OpenAI nativos NÃO têm "/" no nome (gpt-4o-mini, gpt-4, o1, o3-mini, etc.)
+        // Modelos OpenRouter SEMPRE têm "/" (meta-llama/llama-3.2-1b, nex-agi/nex-n2-mini, etc.)
+        var isOpenRouterModel = model.Contains('/')
+            && !model.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase)
+            && !model.StartsWith("o1", StringComparison.OrdinalIgnoreCase)
+            && !model.StartsWith("o3", StringComparison.OrdinalIgnoreCase)
+            && !model.StartsWith("o4", StringComparison.OrdinalIgnoreCase);
+
+        if (isOpenRouterModel)
+        {
+            var effectiveProvider = AIIntegrationSettings.ProviderOpenRouter;
+            var effectiveBaseUrl = !string.IsNullOrWhiteSpace(baseUrl)
+                ? baseUrl
+                : AIIntegrationSettings.OpenRouterDefaultBaseUrl;
+            return (effectiveProvider, effectiveBaseUrl);
+        }
+
+        var finalBaseUrl = !string.IsNullOrWhiteSpace(baseUrl)
+            ? baseUrl
+            : ResolveDefaultBaseUrl(provider);
+
+        return (provider ?? AIIntegrationSettings.ProviderOpenAi, finalBaseUrl!);
+    }
+
     /// <summary>Aplica headers OpenRouter se o provider for openrouter</summary>
     private static void ApplyOpenRouterHeaders(HttpRequestMessage request, LlmOptions options)
     {
         if (!string.Equals(options.Provider, AIIntegrationSettings.ProviderOpenRouter, StringComparison.OrdinalIgnoreCase))
             return;
 
-        if (!string.IsNullOrWhiteSpace(options.OpenRouterReferer))
-            request.Headers.TryAddWithoutValidation("HTTP-Referer", options.OpenRouterReferer);
+        // Sempre enviar HTTP-Referer e X-Title para identificar o app nos logs do OpenRouter
+        // Fallback para defaults se não configurados (mantém consistência com embeddings)
+        request.Headers.TryAddWithoutValidation("HTTP-Referer",
+            !string.IsNullOrWhiteSpace(options.OpenRouterReferer)
+                ? options.OpenRouterReferer
+                : "https://discovery-rmm.local");
 
-        if (!string.IsNullOrWhiteSpace(options.OpenRouterTitle))
-            request.Headers.TryAddWithoutValidation("X-Title", options.OpenRouterTitle);
+        request.Headers.TryAddWithoutValidation("X-Title",
+            !string.IsNullOrWhiteSpace(options.OpenRouterTitle)
+                ? options.OpenRouterTitle
+                : "Discovery RMM");
 
         if (!string.IsNullOrWhiteSpace(options.OpenRouterCategories))
             request.Headers.TryAddWithoutValidation("X-Categories", options.OpenRouterCategories);
@@ -79,18 +117,14 @@ public class OpenAiProvider : ILlmProvider
             if (string.IsNullOrWhiteSpace(apiKey))
                 throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
 
-            var baseUrl = !string.IsNullOrWhiteSpace(options.BaseUrl)
-                ? options.BaseUrl
-                : ResolveDefaultBaseUrl(options.Provider);
-
-            var hasFallback = options.EnableTools == false
-                && !string.IsNullOrWhiteSpace(options.BaseUrl)
-                && !string.IsNullOrWhiteSpace(options.ApiKey);
+            // Auto-corrigir provider/baseUrl com base no nome do modelo
+            var (effectiveProvider, baseUrl) = AutoCorrectProviderAndBaseUrl(
+                options.Provider, options.BaseUrl, model);
 
             // IMPORTANTE: NUNCA logar _apiKey
             _logger.LogInformation(
                 "Calling LLM provider={Provider} with {MessageCount} messages, maxTokens={MaxTokens}, model={Model}",
-                options.Provider ?? "openai", messages.Count, options.MaxTokens, model);
+                effectiveProvider, messages.Count, options.MaxTokens, model);
 
             // Preparar mensagens no formato OpenAI
             var openAiMessages = new List<object>
@@ -158,7 +192,9 @@ public class OpenAiProvider : ILlmProvider
                 Content = content
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            ApplyOpenRouterHeaders(request, options);
+            // Usa effectiveProvider para decidir headers OpenRouter
+            var openRouterOpts = options with { Provider = effectiveProvider };
+            ApplyOpenRouterHeaders(request, openRouterOpts);
 
             var httpClient = _httpClientFactory.CreateClient("AiChat");
             var response = await httpClient.SendAsync(request, cancellationToken);
@@ -226,13 +262,13 @@ public class OpenAiProvider : ILlmProvider
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
 
-        var baseUrl = !string.IsNullOrWhiteSpace(options.BaseUrl)
-            ? options.BaseUrl
-            : ResolveDefaultBaseUrl(options.Provider);
+        // Auto-corrigir provider/baseUrl com base no nome do modelo
+        var (effectiveProvider, baseUrl) = AutoCorrectProviderAndBaseUrl(
+            options.Provider, options.BaseUrl, model);
 
         _logger.LogInformation(
             "StreamAsync LLM provider={Provider}: {MessageCount} messages, model={Model}",
-            options.Provider ?? "openai", messages.Count, model);
+            effectiveProvider, messages.Count, model);
 
         // Montar mensagens
         var openAiMessages = new List<object>
@@ -267,7 +303,9 @@ public class OpenAiProvider : ILlmProvider
             Content = requestBody
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        ApplyOpenRouterHeaders(request, options);
+        // Usa effectiveProvider para decidir headers OpenRouter
+        var openRouterOpts = options with { Provider = effectiveProvider };
+        ApplyOpenRouterHeaders(request, openRouterOpts);
 
         var httpClient = _httpClientFactory.CreateClient("AiChat");
         using var response = await httpClient.SendAsync(
@@ -345,13 +383,13 @@ public class OpenAiProvider : ILlmProvider
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
 
-        var baseUrl = !string.IsNullOrWhiteSpace(options.BaseUrl)
-            ? options.BaseUrl
-            : ResolveDefaultBaseUrl(options.Provider);
+        // Auto-corrigir provider/baseUrl com base no nome do modelo
+        var (effectiveProvider, baseUrl) = AutoCorrectProviderAndBaseUrl(
+            options.Provider, options.BaseUrl, model);
 
         _logger.LogInformation(
             "StreamWithToolsAsync LLM provider={Provider}: {MessageCount} messages, model={Model}, tools={Tools}",
-            options.Provider ?? "openai", messages.Count, model, options.EnableTools && options.Tools != null);
+            effectiveProvider, messages.Count, model, options.EnableTools && options.Tools != null);
 
         var openAiMessages = new List<object> { new { role = "system", content = systemPrompt } };
         foreach (var msg in messages)
@@ -394,7 +432,9 @@ public class OpenAiProvider : ILlmProvider
         var requestUri = new Uri(new Uri(baseUrl), "chat/completions");
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = requestBody };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        ApplyOpenRouterHeaders(request, options);
+        // Usa effectiveProvider para decidir headers OpenRouter
+        var openRouterOpts = options with { Provider = effectiveProvider };
+        ApplyOpenRouterHeaders(request, openRouterOpts);
 
         var httpClient = _httpClientFactory.CreateClient("AiChat");
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
