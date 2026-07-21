@@ -68,18 +68,18 @@ public class AiChatAgentToolRegistry
         {
             var hint = toolName switch
             {
-                "search_packages" => "O parametro 'query' estava vazio. Extraia do historico da conversa o nome do programa.",
-                "ask_user" => "O parametro 'question' estava vazio. Extraia da conversa o que voce precisa perguntar ao usuario.",
-                "create_ticket" => "Parametros obrigatorios do chamado estavam vazios. Extraia do historico: titulo, descricao, categoria e prioridade.",
-                "install_package" => "O parametro 'packageId' ou 'packageName' estava vazio. Extraia do historico o nome/id do programa.",
-                _ => "O LLM enviou parametros vazios ou ausentes. Extraia os valores corretos da conversa."
+                "search_packages" => "VOCE CHAMOU search_packages COM query VAZIA. ISSO E UM ERRO GRAVE. Leia a mensagem do usuario no historico e extraia o nome do programa. Se o usuario disse \"Quero instalar o Foxit\", voce DEVE chamar search_packages com query=\"Foxit\". NAO desista. NAO mude de assunto. NAO pergunte ao usuario o que ele quer — ele JA disse. CORRIJA o parametro query e chame search_packages novamente AGORA.",
+                "ask_user" => "VOCE CHAMOU ask_user COM question VAZIA. Leia o historico da conversa e formule uma pergunta clara baseada no contexto.",
+                "create_ticket" => "VOCE CHAMOU create_ticket COM PARAMETROS VAZIOS. Extraia do historico: titulo, descricao, categoria e prioridade. NAO pergunte ao usuario — ele JA forneceu as informacoes.",
+                "install_package" => "VOCE CHAMOU install_package COM PARAMETROS VAZIOS. Extraia do historico o nome/id do programa. NAO desista — corrija e tente novamente.",
+                _ => "VOCE ENVIOU PARAMETROS VAZIOS. Leia o historico, extraia os valores corretos e tente novamente AGORA."
             };
             return JsonSerializer.Serialize(new { error = rawResult.Trim(), tool = toolName, hint });
         }
 
         if (rawResult.Length < 100 && (lower.Contains("erro") || lower.Contains("error") || lower.Contains("falha") || lower.Contains("fail")))
         {
-            return JsonSerializer.Serialize(new { error = rawResult.Trim(), tool = toolName, hint = "A ferramenta retornou erro. Analise a mensagem de erro e corrija o problema antes de tentar novamente." });
+            return JsonSerializer.Serialize(new { error = rawResult.Trim(), tool = toolName, hint = "A ferramenta retornou erro. Analise a mensagem de erro, corrija o problema e tente novamente. NAO desista nem mude de assunto." });
         }
 
         return rawResult;

@@ -1548,9 +1548,28 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         var llmTools = tools.Select(t =>
         {
             object schema;
-            try { schema = JsonSerializer.Deserialize<object>(t.ParametersSchemaJson)!; }
-            catch { schema = new { type = "object", properties = new { } }; }
-            return new LlmTool(t.Name, t.Description, schema);
+            try
+            {
+                // Parse do schema enviado pelo agent
+                schema = JsonSerializer.Deserialize<object>(t.ParametersSchemaJson)!;
+
+                // ── Enriquecer schema para tools conhecidas ──
+                schema = EnrichAgentToolSchema(t.Name, t.ParametersSchemaJson, schema);
+
+                // ── Validar campos obrigatórios (warnings) ──
+                ValidateAgentToolSchema(t.Name, t.ParametersSchemaJson);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("[AgentTools] Schema inválido para tool '{ToolName}' do AgentId={AgentId}: {Error}",
+                    t.Name, agentId, ex.Message);
+                schema = new { type = "object", properties = new { } };
+            }
+
+            // ── Melhorar descrição para tools conhecidas ──
+            var description = EnrichAgentToolDescription(t.Name, t.Description);
+
+            return new LlmTool(t.Name, description, schema);
         }).ToList();
 
         _agentToolsCache[agentId] = llmTools;
@@ -1564,6 +1583,154 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         if (_agentToolsCacheExpiry.TryGetValue(agentId, out var expiry) && expiry > DateTime.UtcNow)
             return _agentToolsCache.TryGetValue(agentId, out var tools) ? tools : null;
         return null;
+    }
+
+    /// <summary>
+    /// Enriquece o schema da tool do agent para garantir que o LLM entenda
+    /// corretamente os parâmetros obrigatórios. Corrige schemas mal-formados
+    /// enviados pelo agent (ex: required ausente para query).
+    /// </summary>
+    private static object EnrichAgentToolSchema(string toolName, string rawSchemaJson, object parsedSchema)
+    {
+        // Só processa tools conhecidas que precisam de schema enriquecido
+        if (toolName is not ("search_packages" or "install_package" or "ask_user" or "create_ticket"))
+            return parsedSchema;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawSchemaJson);
+            var root = doc.RootElement;
+
+            // Verifica se required está presente e contém os campos esperados
+            var hasRequired = root.TryGetProperty("required", out var requiredEl);
+            var requiredList = hasRequired && requiredEl.ValueKind == JsonValueKind.Array
+                ? requiredEl.EnumerateArray().Select(e => e.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var missingRequired = toolName switch
+            {
+                "search_packages" => !requiredList.Contains("query"),
+                "install_package" => !requiredList.Contains("packageId") && !requiredList.Contains("package_name"),
+                "ask_user" => !requiredList.Contains("question"),
+                "create_ticket" => !requiredList.Contains("title") || !requiredList.Contains("description"),
+                _ => false
+            };
+
+            if (!missingRequired) return parsedSchema;
+
+            // Reconstrói o JSON adicionando required
+            var enrichedJson = new Dictionary<string, object>
+            {
+                ["type"] = "object"
+            };
+
+            if (root.TryGetProperty("properties", out var props))
+                enrichedJson["properties"] = JsonSerializer.Deserialize<object>(props.GetRawText())!;
+
+            if (root.TryGetProperty("additionalProperties", out var ap))
+                enrichedJson["additionalProperties"] = ap.ValueKind == JsonValueKind.False ? false : true;
+
+            var newRequired = new List<string>(requiredList);
+            var toAdd = toolName switch
+            {
+                "search_packages" => new[] { "query" },
+                "install_package" => new[] { "packageId" },
+                "ask_user" => new[] { "question" },
+                "create_ticket" => new[] { "title", "description", "category", "priority" },
+                _ => Array.Empty<string>()
+            };
+            foreach (var r in toAdd)
+                if (!newRequired.Contains(r, StringComparer.OrdinalIgnoreCase))
+                    newRequired.Add(r);
+
+            enrichedJson["required"] = newRequired;
+
+            return enrichedJson;
+        }
+        catch
+        {
+            return parsedSchema;
+        }
+    }
+
+    /// <summary>
+    /// Valida o schema da tool registrada pelo agent e emite warnings no log
+    /// se campos obrigatórios estiverem ausentes.
+    /// </summary>
+    private void ValidateAgentToolSchema(string toolName, string rawSchemaJson)
+    {
+        if (toolName is not ("search_packages" or "install_package" or "ask_user" or "create_ticket"))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawSchemaJson);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("required", out var requiredEl) ||
+                requiredEl.ValueKind != JsonValueKind.Array)
+            {
+                _logger.LogWarning(
+                    "[AgentTools] Tool '{ToolName}' registrada sem campo 'required' no schema. " +
+                    "O LLM pode enviar parâmetros vazios. Sugira ao agent adicionar required: [\"...\"]. " +
+                    "Schema enviado: {Schema}",
+                    toolName, rawSchemaJson[..Math.Min(rawSchemaJson.Length, 200)]);
+                return;
+            }
+
+            var requiredFields = requiredEl.EnumerateArray()
+                .Select(e => e.GetString() ?? "")
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var expected = toolName switch
+            {
+                "search_packages" => new[] { "query" },
+                "install_package" => new[] { "packageId", "package_name", "packageName" },
+                "ask_user" => new[] { "question" },
+                "create_ticket" => new[] { "title", "description" },
+                _ => Array.Empty<string>()
+            };
+
+            var hasAny = expected.Any(e => requiredFields.Contains(e));
+            if (!hasAny)
+            {
+                _logger.LogWarning(
+                    "[AgentTools] Tool '{ToolName}' não tem campos obrigatórios relevantes em 'required'. " +
+                    "Esperado pelo menos um de: {Expected}. Campos atuais: {Actual}. " +
+                    "Schema: {Schema}",
+                    toolName, string.Join(", ", expected), string.Join(", ", requiredFields),
+                    rawSchemaJson[..Math.Min(rawSchemaJson.Length, 200)]);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[AgentTools] Erro ao validar schema da tool '{ToolName}'", toolName);
+        }
+    }
+
+    /// <summary>
+    /// Enriquece a descrição da tool registrada pelo agent com orientações
+    /// específicas para o LLM. Isso ajuda o modelo a usar a tool corretamente
+    /// mesmo quando o agent envia descrições mínimas.
+    /// </summary>
+    private static string EnrichAgentToolDescription(string toolName, string originalDescription)
+    {
+        var enrichment = toolName switch
+        {
+            "search_packages" => "Busca programas/aplicativos disponíveis para instalação. O parâmetro 'query' é OBRIGATÓRIO — extraia o nome do programa da mensagem do usuário (ex: 'Foxit', 'Firefox', '7-Zip'). NUNCA envie query vazia.",
+            "install_package" => "Instala um programa no computador. Use o packageId retornado por search_packages. Aguarde a confirmação do search_packages antes de instalar.",
+            "ask_user" => "Faz uma pergunta ao usuário quando você precisar de mais informações. O parâmetro 'question' é OBRIGATÓRIO. Use APENAS quando a informação não estiver disponível no histórico da conversa.",
+            "create_ticket" => "Abre um chamado de suporte. Preencha title, description, category e priority. Só chame APÓS o usuário confirmar os dados do chamado.",
+            _ => null
+        };
+
+        if (enrichment == null) return originalDescription;
+
+        // Se a descrição original já é boa, prefixa com o enrichment
+        if (originalDescription.Length > 60)
+            return enrichment + " — " + originalDescription;
+
+        return enrichment;
     }
 
     /// <summary>
@@ -1595,7 +1762,15 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
 
         // Notas específicas para tools críticas que precisam de orientação extra
         if (hasSearchPackages)
-            sb.AppendLine("⚠️ `search_packages`: o parâmetro `query` é OBRIGATÓRIO. SEMPRE extraia o nome do programa da mensagem do usuário. Se o usuário disser 'Foxit Reader', use query='Foxit Reader'.");
+        {
+            sb.AppendLine("⚠️ `search_packages`: o parâmetro `query` é OBRIGATÓRIO e DEVE ser preenchido SEMPRE.");
+            sb.AppendLine("   ❌ NUNCA use: {{\"query\":\"\"}}");
+            sb.AppendLine("   ✅ Exemplo correto: {{\"query\":\"Foxit Reader\"}}");
+            sb.AppendLine("   ✅ Se o usuário diz \"Quero instalar o Foxit\", query=\"Foxit\".");
+            sb.AppendLine("   ✅ Se o usuário diz \"instalar Firefox\", query=\"Firefox\".");
+            sb.AppendLine("   ✅ Se o usuário diz \"preciso do 7-Zip\", query=\"7-Zip\".");
+            sb.AppendLine("   ⚡ NÃO ignore esta regra. Query vazia = erro = perderá um round inteiro.");
+        }
         if (hasAskUser)
             sb.AppendLine("⚠️ `ask_user`: o parâmetro `question` é OBRIGATÓRIO. SEMPRE preencha com uma pergunta clara baseada no contexto.");
         if (hasCreateTicket)
@@ -1625,13 +1800,14 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
             || lower.Contains("parameter") && lower.Contains("missing"))
         {
             // Hints específicos por tool para ajudar o LLM a se autocorrigir
+            // Instrução imperativa de correção — o LLM DEVE corrigir e tentar novamente
             var hint = toolName switch
             {
-                "search_packages" => "O parâmetro 'query' estava vazio. Extraia do histórico da conversa o nome do programa que o usuário quer pesquisar (ex: 'Foxit Reader', 'Chrome', '7-Zip'). Se o usuário disse 'Quero instalar o Foxit', use 'Foxit' como query.",
-                "ask_user" => "O parâmetro 'question' estava vazio. Extraia da conversa o que você precisa perguntar ao usuário. Monte uma pergunta clara e específica baseada no contexto da conversa.",
-                "create_ticket" => "Parâmetros obrigatórios do chamado estavam vazios. Extraia do histórico: título (resuma o problema), descrição (detalhes do que o usuário relatou), categoria (Software/Hardware/Rede/etc.) e prioridade (1-4).",
-                "install_package" => "O parâmetro 'packageId' ou 'packageName' estava vazio. Extraia do histórico o nome/id do programa que o usuário pediu para instalar.",
-                _ => "O LLM enviou parâmetros vazios ou ausentes. Extraia os valores corretos da conversa com o usuário e tente novamente preenchendo TODOS os parâmetros obrigatórios."
+                "search_packages" => "VOCÊ CHAMOU search_packages COM query VAZIA. ISSO É UM ERRO GRAVE. Leia a mensagem do usuário no histórico e extraia o nome do programa. Se o usuário disse \"Quero instalar o Foxit\", você DEVE chamar search_packages com query=\"Foxit\". NÃO desista. NÃO mude de assunto. NÃO pergunte ao usuário o que ele quer — ele JÁ disse. CORRIJA o parâmetro query e chame search_packages novamente AGORA.",
+                "ask_user" => "VOCÊ CHAMOU ask_user COM question VAZIA. Leia o histórico da conversa e formule uma pergunta clara baseada no contexto.",
+                "create_ticket" => "VOCÊ CHAMOU create_ticket COM PARÂMETROS VAZIOS. Extraia do histórico: título, descrição, categoria e prioridade. NÃO pergunte ao usuário — ele JÁ forneceu as informações.",
+                "install_package" => "VOCÊ CHAMOU install_package COM PARÂMETROS VAZIOS. Extraia do histórico o nome/id do programa. NÃO desista — corrija e tente novamente.",
+                _ => "VOCÊ ENVIOU PARÂMETROS VAZIOS. Leia o histórico, extraia os valores corretos e tente novamente AGORA."
             };
 
             var json = JsonSerializer.Serialize(new
