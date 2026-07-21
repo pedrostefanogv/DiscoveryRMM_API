@@ -74,6 +74,12 @@ public interface IKnowledgeArticleRepository
     /// </summary>
     Task<List<KnowledgeArticle>> GetByTicketAsync(Guid ticketId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Verifica rapidamente se existem artigos publicados/internos no escopo.
+    /// Usado como guard clause para evitar chamadas de embedding quando a KB está vazia.
+    /// </summary>
+    Task<bool> HasPublishedArticlesAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default);
+
     // ─── Versionamento ──────────────────────────────────────────
 
     /// <summary>

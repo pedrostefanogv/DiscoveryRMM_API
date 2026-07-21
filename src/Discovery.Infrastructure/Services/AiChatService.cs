@@ -41,6 +41,11 @@ public class AiChatService : IAiChatService
     private static readonly ConcurrentDictionary<Guid, List<LlmTool>> _agentToolsCache = new();
     private static readonly ConcurrentDictionary<Guid, DateTime> _agentToolsCacheExpiry = new();
     private static readonly TimeSpan AgentToolsCacheTtl = TimeSpan.FromHours(24);
+
+    // Cache de contexto RAG por sessão — evita chamada de embedding a cada mensagem.
+    // O LLM ainda pode buscar mais contexto via knowledge_search tool call.
+    private static readonly ConcurrentDictionary<Guid, (string KbSection, List<Guid> ArticleIds, DateTime CachedAt)> _ragCache = new();
+    private static readonly TimeSpan RagCacheTtl = TimeSpan.FromHours(1);
     
     private const int MaxMessageSizeBytes = 2048; // 2KB
     private const int SessionExpirationDays = 180;
@@ -1226,10 +1231,23 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         if (!aiSettings.KnowledgeBaseEnabled || !aiSettings.EmbeddingEnabled || !aiSettings.EmbeddingArticlesEnabled)
             return (basePrompt, injected);
 
+        // Guard clause: não gera embedding se não existem artigos publicados
+        var ragClientId = session.ClientId != Guid.Empty ? (Guid?)session.ClientId : null;
+        if (!await _chunkRepository.HasAnyChunkAsync(ragClientId, session.SiteId, ct))
+            return (basePrompt, injected);
+
+        // ── Cache de RAG por sessão: evita chamada de embedding a cada mensagem ──
+        // O LLM ainda pode buscar contexto adicional via knowledge_search tool call.
+        if (_ragCache.TryGetValue(session.Id, out var cached) && DateTime.UtcNow - cached.CachedAt < RagCacheTtl)
+        {
+            _logger.LogDebug("[RagCache] HIT para SessionId={SessionId}, reutilizando contexto com {Count} artigos",
+                session.Id, cached.ArticleIds.Count);
+            return (basePrompt + cached.KbSection, cached.ArticleIds);
+        }
+
         try
         {
             // RAG: buscar chunks relevantes da KB no escopo do session
-            var clientId = session.ClientId != Guid.Empty ? (Guid?)session.ClientId : null;
             var maxChunks = aiSettings.MaxKbChunks is >= 1 and <= 10 ? aiSettings.MaxKbChunks : 3;
 
             var embBaseUrl = string.IsNullOrWhiteSpace(aiSettings.EmbeddingBaseUrl) ? aiSettings.BaseUrl : aiSettings.EmbeddingBaseUrl;
@@ -1242,7 +1260,7 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
                 ct);
             var kbChunks = await _chunkRepository.SearchSemanticAsync(
                 new Pgvector.Vector(embedding),
-                clientId,
+                ragClientId,
                 session.SiteId,
                 limit: maxChunks,
                 minSimilarity: aiSettings.MinSimilarityScore,
@@ -1282,7 +1300,12 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
             kbSection.AppendLine();
             kbSection.AppendLine("*Caso as informações acima não sejam suficientes, utilize a function call nativa `knowledge_search` para buscar mais artigos.*");
 
-            return (basePrompt + kbSection.ToString(), injected);
+            var kbText = kbSection.ToString();
+
+            // Armazena no cache por sessão (TTL 5 min)
+            _ragCache[session.Id] = (kbText, injected, DateTime.UtcNow);
+
+            return (basePrompt + kbText, injected);
         }
         catch (Exception ex)
         {

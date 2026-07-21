@@ -45,6 +45,12 @@ public interface IKnowledgeChunkRepository
     Task ReplaceAllForArticleAsync(Guid articleId, List<KnowledgeArticleChunk> newChunks, CancellationToken ct = default);
 
     Task UpdateEmbeddingAsync(Guid chunkId, Vector embedding, CancellationToken ct = default);
+
+    /// <summary>
+    /// Verifica rapidamente se existem chunks com embedding no escopo.
+    /// Usado como guard clause para evitar chamadas de embedding quando a KB está vazia.
+    /// </summary>
+    Task<bool> HasAnyChunkAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default);
 }
 
 public record KnowledgeChunkSearchResult(

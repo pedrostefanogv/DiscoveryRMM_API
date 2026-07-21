@@ -156,6 +156,31 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             .Take(limit)
             .ToListAsync(ct);
 
+    public async Task<bool> HasPublishedArticlesAsync(
+        Guid? clientId, Guid? siteId, CancellationToken ct = default)
+    {
+        var query = db.KnowledgeArticles
+            .Where(a => a.DeletedAt == null
+                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()));
+
+        // Herança de escopo: site → client → global
+        query = (clientId, siteId) switch
+        {
+            (not null, not null) => query.Where(a =>
+                (a.SiteId == siteId) ||
+                (a.ClientId == clientId && a.SiteId == null) ||
+                (a.ClientId == null && a.SiteId == null)),
+            (not null, null) => query.Where(a =>
+                (a.ClientId == clientId && a.SiteId == null) ||
+                (a.ClientId == null && a.SiteId == null)),
+            (null, not null) => query.Where(a =>
+                a.SiteId == siteId || (a.ClientId == null && a.SiteId == null)),
+            _ => query.Where(a => a.ClientId == null && a.SiteId == null)
+        };
+
+        return await query.AnyAsync(ct);
+    }
+
     // ─── Versionamento ──────────────────────────────────────────────
 
     public async Task<KnowledgeArticleVersion> CreateVersionAsync(

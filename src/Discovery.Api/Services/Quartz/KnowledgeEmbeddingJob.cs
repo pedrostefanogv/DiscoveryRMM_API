@@ -102,14 +102,16 @@ public sealed class KnowledgeEmbeddingJob : IJob
         // Reseta flag de ciclo
         _resetPerformedThisCycle = false;
 
-        // ── Passo 0: Auto-detectar e corrigir dimensão de embedding ────────
-        await AutoSyncEmbeddingDimensionsAsync(scope, aiSettings, embeddingProvider, serverRepo, resetService, logger);
+        // ── Verifica embedding habilitado ANTES de qualquer chamada ───
         var enabled = aiSettings.EmbeddingEnabled && aiSettings.EmbeddingArticlesEnabled;
         if (!enabled)
         {
             logger.LogDebug("Knowledge embedding desativado para este ciclo.");
             return;
         }
+
+        // ── Passo 0: Auto-detectar e corrigir dimensão de embedding ────────
+        await AutoSyncEmbeddingDimensionsAsync(scope, aiSettings, embeddingProvider, serverRepo, resetService, logger);
 
         // ── Passo 1: Processar fila LISTEN/NOTIFY ────────────────────────
         var queueProcessed = await ProcessQueueBatchAsync(

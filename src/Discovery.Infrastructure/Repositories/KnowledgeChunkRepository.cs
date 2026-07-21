@@ -139,6 +139,33 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task<bool> HasAnyChunkAsync(
+        Guid? clientId, Guid? siteId, CancellationToken ct = default)
+    {
+        var query = db.KnowledgeArticleChunks
+            .Where(c => c.Embedding != null
+                && c.EmbeddingGeneratedAt != null
+                && c.Article != null && c.Article.DeletedAt == null
+                && (c.Article.Status == "Published" || c.Article.Status == "Internal"));
+
+        // Herança de escopo
+        query = (clientId, siteId) switch
+        {
+            (not null, not null) => query.Where(c =>
+                (c.Article!.SiteId == siteId) ||
+                (c.Article!.ClientId == clientId && c.Article!.SiteId == null) ||
+                (c.Article!.ClientId == null && c.Article!.SiteId == null)),
+            (not null, null) => query.Where(c =>
+                (c.Article!.ClientId == clientId && c.Article!.SiteId == null) ||
+                (c.Article!.ClientId == null && c.Article!.SiteId == null)),
+            (null, not null) => query.Where(c =>
+                c.Article!.SiteId == siteId || (c.Article!.ClientId == null && c.Article!.SiteId == null)),
+            _ => query.Where(c => c.Article!.ClientId == null && c.Article!.SiteId == null)
+        };
+
+        return await query.AnyAsync(ct);
+    }
+
     public async Task UpdateEmbeddingAsync(Guid chunkId, Vector embedding, CancellationToken ct = default)
     {
         var chunk = await db.KnowledgeArticleChunks.FindAsync([chunkId], ct);
