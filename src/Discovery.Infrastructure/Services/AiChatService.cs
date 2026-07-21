@@ -1215,17 +1215,17 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         var basePrompt = BuildSystemPrompt(agent, aiSettings);
 
         // Injetar ferramentas do agente no prompt
+        // {{AGENT_TOOLS_SECTION}} no template do banco vira {{...}} literal;
+        // {{AGENT_TOOLS_SECTION}} na BuildDefaultSystemPrompt vira {AGENT_TOOLS_SECTION} (chaves simples via $@"").
+        // Substitui ambos os padrões.
         var agentTools = GetCachedAgentTools(agent.Id);
-        if (agentTools is { Count: > 0 })
-        {
-            basePrompt = basePrompt.Replace("{{AGENT_TOOLS_SECTION}}",
-                FormatAgentToolsDescription(agentTools));
-        }
-        else
-        {
-            basePrompt = basePrompt.Replace("{{AGENT_TOOLS_SECTION}}",
-                "Nenhuma ferramenta do agente disponível. Oriente o usuário com passos manuais.");
-        }
+        var toolsText = agentTools is { Count: > 0 }
+            ? FormatAgentToolsDescription(agentTools)
+            : "Nenhuma ferramenta do agente disponível. Oriente o usuário com passos manuais.";
+
+        // Ordem importa: primeiro duplas (template banco), depois simples (default prompt)
+        basePrompt = basePrompt.Replace("{{AGENT_TOOLS_SECTION}}", toolsText);
+        basePrompt = basePrompt.Replace("{AGENT_TOOLS_SECTION}", toolsText);
         var injected = new List<Guid>();
 
         if (!aiSettings.KnowledgeBaseEnabled || !aiSettings.EmbeddingEnabled || !aiSettings.EmbeddingArticlesEnabled)
