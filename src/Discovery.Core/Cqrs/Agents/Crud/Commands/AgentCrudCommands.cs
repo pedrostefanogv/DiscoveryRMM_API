@@ -31,6 +31,7 @@ public sealed record AgentDto(
 
 public sealed record HeartbeatMetricsDto(
     double? CpuPercent,
+    double? CpuTemperatureCelsius,
     double? MemoryPercent,
     double? DiskPercent,
     double? MemoryTotalGb,

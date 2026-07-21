@@ -62,6 +62,7 @@ public class HeartbeatCacheEntry
 
     // Métricas de saúde (opcionais)
     public double? CpuPercent { get; init; }
+    public double? CpuTemperatureCelsius { get; init; }
     public double? MemoryPercent { get; init; }
     public double? MemoryTotalGb { get; init; }
     public double? MemoryUsedGb { get; init; }

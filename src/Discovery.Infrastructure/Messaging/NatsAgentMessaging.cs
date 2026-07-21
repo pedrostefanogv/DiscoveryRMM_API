@@ -288,6 +288,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 heartbeat.AgentVersion,
                                 heartbeat.TimestampUtc,
                                 heartbeat.CpuPercent,
+                                heartbeat.CpuTemperatureCelsius,
                                 heartbeat.MemoryPercent,
                                 heartbeat.MemoryTotalGb,
                                 heartbeat.MemoryUsedGb,

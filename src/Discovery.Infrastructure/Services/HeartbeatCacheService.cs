@@ -117,6 +117,7 @@ public class HeartbeatCacheService : IHeartbeatCacheService
                 AgentVersion = heartbeat.AgentVersion,
                 LastHeartbeatAt = heartbeat.TimestampUtc ?? DateTime.UtcNow,
                 CpuPercent = heartbeat.CpuPercent,
+                CpuTemperatureCelsius = heartbeat.CpuTemperatureCelsius,
                 MemoryPercent = heartbeat.MemoryPercent,
                 MemoryTotalGb = heartbeat.MemoryTotalGb,
                 MemoryUsedGb = heartbeat.MemoryUsedGb,

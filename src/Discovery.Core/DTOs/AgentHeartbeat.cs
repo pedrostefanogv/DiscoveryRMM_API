@@ -13,6 +13,7 @@ public record AgentHeartbeat(
     string? AgentVersion = null,
     DateTime? TimestampUtc = null,
     double? CpuPercent = null,
+    double? CpuTemperatureCelsius = null,
     double? MemoryPercent = null,
     double? MemoryTotalGb = null,
     double? MemoryUsedGb = null,
