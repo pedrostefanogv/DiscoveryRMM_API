@@ -1109,10 +1109,10 @@ public class AiChatService : IAiChatService
 - AgentId: {agent.Id}
 - Hostname: {agent.Hostname}
 - Sistema Operacional: {agent.OperatingSystem ?? "Desconhecido"} {agent.OsVersion ?? ""}
-- Site: {agent.SiteId}
+- Site: {agent.SiteId} 
 - Status: {agent.Status}
 - Último IP: {agent.LastIpAddress ?? "Desconhecido"}
-- Última comunicação: {agent.LastSeenAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Nunca"}
+- Última comunicação: {agent.LastSeenAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Desconhecido"}
 
 **Ferramentas disponíveis no servidor:**
 - `knowledge_search`: Pesquisa artigos e procedimentos na base de conhecimento da empresa.
