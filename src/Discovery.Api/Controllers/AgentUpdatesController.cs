@@ -1,6 +1,8 @@
+using System.Net;
 using Discovery.Core.Cqrs.AgentUpdates.Commands;
 using Discovery.Core.Cqrs.AgentUpdates.Queries;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -43,10 +45,24 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     /// <summary>
     /// Triggers a full agent rebuild from source (sync + build binary + publish stage2 installer).
     /// Does not require file upload — the server rebuilds from the configured agent repository.
+    /// This endpoint is called from localhost by the selfupdate script (no auth token).
+    /// Only accepts direct loopback connections — requests through a proxy are rejected.
     /// </summary>
     [HttpPost("build/rebuild")]
+    [AllowAnonymous]
     public async Task<IActionResult> Rebuild(CancellationToken ct)
     {
+        var remoteIp = HttpContext.Connection.RemoteIpAddress;
+
+        // Reject if not loopback OR if request came through any proxy (X-Forwarded-For header)
+        var hasProxyHeaders = HttpContext.Request.Headers.ContainsKey("X-Forwarded-For")
+                           || HttpContext.Request.Headers.ContainsKey("X-Forwarded-Host")
+                           || HttpContext.Request.Headers.ContainsKey("X-Real-IP");
+        if (remoteIp is null || !IPAddress.IsLoopback(remoteIp) || hasProxyHeaders)
+        {
+            return StatusCode(403, new { message = "Este endpoint só aceita conexões diretas de localhost." });
+        }
+
         var r = await mediator.Send(new RebuildAgentCommand(), ct);
         return r.Match<IActionResult>(
             _ => Ok(new { message = "Agent rebuild completed successfully." }),
