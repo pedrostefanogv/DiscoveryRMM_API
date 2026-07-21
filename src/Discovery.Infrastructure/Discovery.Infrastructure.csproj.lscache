@@ -259,7 +259,11 @@ Services/
  AgentPackageService.cs
  AgentTokenAuthService.cs
  AgentUpdateService.cs
+ AiChatAgentToolRegistry.cs
+ AiChatGuardrails.cs
  AiChatService.cs
+ AiChatSettingsResolver.cs
+ AiChatXmlToolParser.cs
  AiCostControlService.cs
  AiCredentialResolver.cs
  AiModelCatalogService.cs

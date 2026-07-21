@@ -127,11 +127,14 @@ var isDevelopment = builder.Environment.IsDevelopment();
 
 var backgroundServicesConfig = BackgroundServicesCollectionExtensions.ReadBackgroundServicesConfig(builder.Configuration, isDevelopment);
 
-// AI Chat & MCP (auto-registered via AddDiscoveryAutoRegisteredServices)
-// Only the LLM provider is explicitly registered as singleton.
+// AI Chat & MCP
 builder.Services.AddSingleton<ILlmProvider, OpenAiProvider>();
 builder.Services.AddScoped<IMcpToolExecutor, McpToolExecutor>();
 builder.Services.AddScoped<IAiCostControlService, AiCostControlService>();
+// Sub-services internos do chat IA
+builder.Services.AddScoped<AiChatSettingsResolver>();
+builder.Services.AddScoped<AiChatAgentToolRegistry>();
+builder.Services.AddScoped<AiChatXmlToolParser>();
 
 // Register built-in MCP tool handlers after DI is built (handled at first use via McpToolExecutor constructor)
 
