@@ -786,6 +786,7 @@ public class AiChatService : IAiChatService
 
                         // Adiciona resposta parcial do assistant ao contexto
                         llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString()));
+                        contentBuilder.Clear(); // Limpa para o próximo round — evita concatenação com tokens de iterações anteriores
 
                         foreach (var toolCall in evt.ToolCalls)
                         {
@@ -2155,6 +2156,7 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
                     hasToolCalls = true;
                     totalTokens = evt.TokensUsed;
                     llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString()));
+                    contentBuilder.Clear(); // Limpa para o próximo round — evita concatenação com tokens de iterações anteriores
 
                     foreach (var tc in evt.ToolCalls)
                     {
