@@ -33,7 +33,8 @@ public sealed class GetMyTicketHandler(
 
 public sealed class CreateMyTicketHandler(
     ITicketRepository ticketRepo,
-    IAgentRepository agentRepo
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo
 ) : IRequestHandler<CreateMyTicketCommand, Result<object>>
 {
     public async Task<Result<object>> Handle(CreateMyTicketCommand cmd, CancellationToken ct)
@@ -42,10 +43,15 @@ public sealed class CreateMyTicketHandler(
         if (agent is null)
             return Result<object>.Failure(Error.NotFound("Agent not found."));
 
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null)
+            return Result<object>.Failure(Error.NotFound("Site not found for agent."));
+
         var ticket = new Ticket
         {
             Title = cmd.Title,
             Description = cmd.Description ?? string.Empty,
+            ClientId = site.ClientId,
             AgentId = cmd.AgentId,
             SiteId = agent.SiteId,
             DepartmentId = cmd.DepartmentId,
