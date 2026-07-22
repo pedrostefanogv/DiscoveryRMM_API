@@ -791,6 +791,18 @@ public class AiChatService : IAiChatService
                             // ── Agent tools: delegar ao agent (multi-round) ──
                             if (agentToolCallNames.Contains(toolCall.Name))
                             {
+                                // Valida argumentos no servidor ANTES de delegar ao agent.
+                                // Se inválidos, injeta erro localmente no LLM para correção imediata.
+                                var (isValid, errorJson) = ValidateAgentToolArguments(toolCall.Name, toolCall.ArgumentsJson);
+                                if (!isValid)
+                                {
+                                    _logger.LogWarning("[{TraceId}] Agent tool '{ToolName}' com argumentos inválidos (corrigindo localmente): {Error}",
+                                        traceId, toolCall.Name, errorJson);
+                                    llmMessages.Add(new LlmMessage("tool", errorJson!, toolCall.Id, toolCall.Name));
+                                    // NÃO seta hasAgentToolCallPending — força o LLM a corrigir na mesma iteração
+                                    continue;
+                                }
+
                                 hasAgentToolCallPending = true;
                                 _logger.LogDebug("[{TraceId}] Agent tool '{ToolName}' delegada ao agent", traceId, toolCall.Name);
                                 yield return new AiChatStreamChunk(Type: "tool_call",
@@ -1858,6 +1870,75 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         return rawResult;
     }
 
+    /// <summary>
+    /// Valida os argumentos de uma tool call de agente ANTES de delegar ao agent.
+    /// Se os argumentos estiverem vazios ou mal-formados, retorna (false, errorJson)
+    /// para que o erro seja injetado localmente no histórico do LLM sem desperdiçar
+    /// um round-trip HTTP ao agent.
+    /// </summary>
+    private static (bool IsValid, string? ErrorJson) ValidateAgentToolArguments(string toolName, string argumentsJson)
+    {
+        // Argumentos vazios ou nulos — erro mais comum com modelos baratos (ex: Llama via OpenRouter)
+        if (string.IsNullOrWhiteSpace(argumentsJson) || argumentsJson == "{}" || argumentsJson == "null")
+        {
+            var errorMsg = toolName switch
+            {
+                "search_packages" => "query nao pode ser vazia",
+                "create_ticket" => "title nao pode ser vazio",
+                "ask_user" => "question nao pode ser vazia",
+                "install_package" => "packageId nao pode ser vazio",
+                _ => "parametros obrigatorios nao preenchidos"
+            };
+
+            var hint = toolName switch
+            {
+                "search_packages" => "VOCÊ CHAMOU search_packages COM query VAZIA. ISSO É UM ERRO GRAVE. Leia a mensagem do usuário no histórico e extraia o nome do programa. Se o usuário disse \"Quero instalar o Foxit\", você DEVE chamar search_packages com query=\"Foxit\". NÃO desista. NÃO mude de assunto. NÃO pergunte ao usuário o que ele quer — ele JÁ disse. CORRIJA o parâmetro query e chame search_packages novamente AGORA.",
+                "ask_user" => "VOCÊ CHAMOU ask_user COM question VAZIA. Leia o histórico da conversa e formule uma pergunta clara baseada no contexto.",
+                "create_ticket" => "VOCÊ CHAMOU create_ticket COM PARÂMETROS VAZIOS. Extraia do histórico: título, descrição, categoria e prioridade. NÃO pergunte ao usuário — ele JÁ forneceu as informações.",
+                "install_package" => "VOCÊ CHAMOU install_package COM PARÂMETROS VAZIOS. Extraia do histórico o nome/id do programa. NÃO desista — corrija e tente novamente.",
+                _ => "VOCÊ ENVIOU PARÂMETROS VAZIOS. Leia o histórico, extraia os valores corretos e tente novamente AGORA."
+            };
+
+            return (false, JsonSerializer.Serialize(new { error = errorMsg, tool = toolName, hint }));
+        }
+
+        // Tenta parsear o JSON e verificar se tem pelo menos 1 propriedade não-nula
+        try
+        {
+            using var doc = JsonDocument.Parse(argumentsJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return (false, JsonSerializer.Serialize(new { error = "argumentos devem ser um objeto JSON", tool = toolName, hint = "Forneça argumentos como um objeto JSON com os campos obrigatórios." }));
+
+            // Verifica se todas as propriedades são null
+            var hasNonNull = false;
+            foreach (var prop in root.EnumerateObject())
+            {
+                if (prop.Value.ValueKind != JsonValueKind.Null)
+                {
+                    hasNonNull = true;
+                    break;
+                }
+            }
+
+            if (!hasNonNull)
+            {
+                return (false, JsonSerializer.Serialize(new
+                {
+                    error = "todos os parametros estao nulos",
+                    tool = toolName,
+                    hint = "Preencha os parâmetros obrigatórios com valores reais extraídos do histórico da conversa."
+                }));
+            }
+        }
+        catch (JsonException)
+        {
+            return (false, JsonSerializer.Serialize(new { error = "JSON invalido nos argumentos", tool = toolName, hint = "Corrija a formatação JSON dos argumentos." }));
+        }
+
+        return (true, null);
+    }
+
     public async IAsyncEnumerable<AiChatStreamChunk> StreamMultiRoundAsync(
         Guid agentId, string? message, Guid? sessionId,
         List<ToolResultItem>? toolResults, Guid? departmentId = null,
@@ -2018,6 +2099,19 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
                     {
                         if (agentToolCallNames.Contains(tc.Name))
                         {
+                            // Valida argumentos no servidor ANTES de delegar ao agent.
+                            // Se inválidos, injeta erro localmente no LLM para correção imediata,
+                            // evitando round-trip HTTP desperdiçado ao agent.
+                            var (isValid, errorJson) = ValidateAgentToolArguments(tc.Name, tc.ArgumentsJson);
+                            if (!isValid)
+                            {
+                                _logger.LogWarning("[{TraceId}] Agent tool '{ToolName}' com argumentos inválidos (corrigindo localmente): {Error}",
+                                    traceId, tc.Name, errorJson);
+                                llmMessages.Add(new LlmMessage("tool", errorJson!, tc.Id, tc.Name));
+                                // NÃO seta hasAgentToolCall — força o LLM a corrigir na mesma iteração
+                                continue;
+                            }
+
                             hasAgentToolCall = true;
                             yield return new AiChatStreamChunk(Type: "tool_call",
                                 ToolCallId: tc.Id, ToolName: tc.Name, ToolArgumentsDelta: tc.ArgumentsJson);
