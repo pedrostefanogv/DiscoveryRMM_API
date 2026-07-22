@@ -196,6 +196,7 @@ Migrations/
  M134_AddCommitHashToAgentUpdateBuilds.cs
  M135_AddSoftwareInventoryUniqueConstraint.cs
  M136_AddCommitHashToAgents.cs
+ M137_AddToolCallsJsonToAiChatMessages.cs
 obj/Debug/net10.0/
  .NETCoreApp,Version=v10.0.AssemblyAttributes.cs
  Discovery.Migrations.AssemblyInfo.cs

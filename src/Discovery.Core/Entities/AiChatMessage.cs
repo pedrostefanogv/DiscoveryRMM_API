@@ -20,6 +20,10 @@ public class AiChatMessage
     public string? ToolCallId { get; set; }
     public string? ToolArgumentsJson { get; set; }
     
+    // Tool calls emitidos pelo assistant (JSON array com id/name/arguments)
+    // Necessário para reconstruir a cadeia assistant(tool_calls)→tool(result) no histórico multi-round
+    public string? ToolCallsJson { get; set; }
+    
     // Audit
     public string? TraceId { get; set; }
 

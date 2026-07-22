@@ -33,7 +33,17 @@ public record LlmMessage(
     string Role, 
     string Content, 
     string? ToolCallId = null, 
-    string? ToolName = null);
+    string? ToolName = null,
+    List<LlmAssistantToolCall>? ToolCalls = null);
+
+/// <summary>
+/// Representa um tool call emitido pelo assistant (para serialização no histórico).
+/// Necessário para que o payload OpenAI contenha assistant.tool_calls antes de tool results.
+/// </summary>
+public record LlmAssistantToolCall(
+    string Id,
+    string Name,
+    string ArgumentsJson);
 
 public record LlmOptions(
     int MaxTokens = 1000,

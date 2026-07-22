@@ -46,6 +46,7 @@ public partial class DiscoveryDbContext
             entity.Property(m => m.ToolName).HasColumnName("tool_name").HasMaxLength(100);
             entity.Property(m => m.ToolCallId).HasColumnName("tool_call_id").HasMaxLength(100);
             entity.Property(m => m.ToolArgumentsJson).HasColumnName("tool_arguments_json");
+            entity.Property(m => m.ToolCallsJson).HasColumnName("tool_calls_json");
             entity.Property(m => m.TraceId).HasColumnName("trace_id").HasMaxLength(100);
             entity.Property(m => m.FeedbackScore).HasColumnName("feedback_score");
             entity.Property(m => m.FeedbackComment).HasColumnName("feedback_comment").HasMaxLength(500);

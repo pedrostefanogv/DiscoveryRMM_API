@@ -143,6 +143,26 @@ public class OpenAiProvider : ILlmProvider
                         content = msg.Content
                     });
                 }
+                else if (msg.Role == "assistant" && msg.ToolCalls is { Count: > 0 })
+                {
+                    // Assistant com tool_calls: serializa corretamente para que o LLM
+                    // saiba qual tool foi chamada com quais argumentos.
+                    openAiMessages.Add(new
+                    {
+                        role = "assistant",
+                        content = string.IsNullOrEmpty(msg.Content) ? null : msg.Content,
+                        tool_calls = msg.ToolCalls.Select(tc => new
+                        {
+                            id = tc.Id,
+                            type = "function",
+                            function = new
+                            {
+                                name = tc.Name,
+                                arguments = tc.ArgumentsJson
+                            }
+                        }).ToList()
+                    });
+                }
                 else
                 {
                     openAiMessages.Add(new
@@ -397,6 +417,26 @@ public class OpenAiProvider : ILlmProvider
             if (msg.Role == "tool")
             {
                 openAiMessages.Add(new { role = "tool", tool_call_id = msg.ToolCallId, content = msg.Content });
+            }
+            else if (msg.Role == "assistant" && msg.ToolCalls is { Count: > 0 })
+            {
+                // Assistant com tool_calls: serializa corretamente para que o LLM
+                // saiba qual tool foi chamada com quais argumentos.
+                openAiMessages.Add(new
+                {
+                    role = "assistant",
+                    content = string.IsNullOrEmpty(msg.Content) ? null : msg.Content,
+                    tool_calls = msg.ToolCalls.Select(tc => new
+                    {
+                        id = tc.Id,
+                        type = "function",
+                        function = new
+                        {
+                            name = tc.Name,
+                            arguments = tc.ArgumentsJson
+                        }
+                    }).ToList()
+                });
             }
             else
             {

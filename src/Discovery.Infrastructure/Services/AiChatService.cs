@@ -228,11 +228,8 @@ public class AiChatService : IAiChatService
             var (systemPrompt, injectedArticleIds) = await BuildSystemPromptAsync(
                 agent, session, message, aiSettings, departmentId, ct);
             
-            // 7. Converter histórico para formato LLM
-            var llmMessages = historyMessages
-                .OrderBy(m => m.SequenceNumber)
-                .Select(m => new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName))
-                .ToList();
+            // 7. Converter histórico para formato LLM (inclui tool_calls do assistant)
+            var llmMessages = BuildLlmMessagesFromHistory(historyMessages);
             
             // 8. Adicionar mensagem atual do usuário
             llmMessages.Add(new LlmMessage("user", message));
@@ -300,7 +297,10 @@ public class AiChatService : IAiChatService
                 toolIterations++;
 
                 // Adiciona a resposta do assistant (com tool calls) ao contexto
-                llmMessages.Add(new LlmMessage("assistant", llmResponse.Content ?? string.Empty));
+                var assistantToolCalls = llmResponse.ToolCalls.Select(tc =>
+                    new LlmAssistantToolCall(tc.Id, tc.Name, tc.ArgumentsJson)).ToList();
+                llmMessages.Add(new LlmMessage("assistant", llmResponse.Content ?? string.Empty,
+                    ToolCalls: assistantToolCalls));
 
                 // Processa cada tool call via McpToolExecutor
                 foreach (var toolCall in llmResponse.ToolCalls)
@@ -678,10 +678,7 @@ public class AiChatService : IAiChatService
             (systemPrompt, _) = await BuildSystemPromptAsync(
                 agent, session, message, aiSettings, departmentId, ct);
 
-            llmMessages = history
-                .OrderBy(m => m.SequenceNumber)
-                .Select(m => new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName))
-                .ToList();
+            llmMessages = BuildLlmMessagesFromHistory(history);
             llmMessages.Add(new LlmMessage("user", message));
 
             setupOk = true;
@@ -749,6 +746,8 @@ public class AiChatService : IAiChatService
         // Nomes das tools do agent (para delegar ao invés de executar no servidor)
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
         bool hasAgentToolCallPending = false;
+        // Coleta tool calls do agente para persistir na mensagem assistant
+        var agentToolCallsPending = new List<LlmAssistantToolCall>();
 
         while (true)
         {
@@ -784,8 +783,12 @@ public class AiChatService : IAiChatService
                         hasToolCalls = true;
                         totalTokens = evt.TokensUsed;
 
-                        // Adiciona resposta parcial do assistant ao contexto
-                        llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString()));
+                        // Adiciona resposta parcial do assistant ao contexto (COM tool_calls
+                        // para manter a cadeia assistant→tool válida no protocolo OpenAI)
+                        var assistantToolCalls = evt.ToolCalls.Select(tc =>
+                            new LlmAssistantToolCall(tc.Id, tc.Name, tc.ArgumentsJson)).ToList();
+                        llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString(),
+                            ToolCalls: assistantToolCalls));
                         contentBuilder.Clear(); // Limpa para o próximo round — evita concatenação com tokens de iterações anteriores
 
                         foreach (var toolCall in evt.ToolCalls)
@@ -819,6 +822,8 @@ public class AiChatService : IAiChatService
                                 }
 
                                 hasAgentToolCallPending = true;
+                                agentToolCallsPending.Add(new LlmAssistantToolCall(
+                                    toolCall.Id, toolCall.Name, toolCall.ArgumentsJson));
                                 _logger.LogDebug("[{TraceId}] Agent tool '{ToolName}' delegada ao agent", traceId, toolCall.Name);
                                 yield return new AiChatStreamChunk(Type: "tool_call",
                                     ToolCallId: toolCall.Id, ToolName: toolCall.Name, ToolArgumentsDelta: toolCall.ArgumentsJson);
@@ -895,18 +900,36 @@ public class AiChatService : IAiChatService
                         if (hasAgentToolCallPending)
                         {
                             yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
-                            // Persiste só o que foi acumulado até aqui, sem o conteúdo final
+                            // Persiste a mensagem do usuário E a assistente com tool_calls,
+                            // para que o histórico reconstruído (StreamMultiRoundAsync) mantenha
+                            // a cadeia assistant(tool_calls) → tool(result) válida no protocolo OpenAI.
                             stopwatch.Stop();
                             try
                             {
-                                await _messageRepository.CreateBatchAsync(new[]
+                                var messagesToPersist = new List<AiChatMessage>
                                 {
                                     new AiChatMessage
                                     {
-                                        Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq,
+                                        Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++,
                                         Role = "user", Content = message, CreatedAt = startTime, TraceId = traceId
                                     }
-                                }, ct);
+                                };
+
+                                // Persiste assistant com tool_calls (necessário para reconstrução correta do histórico)
+                                if (agentToolCallsPending.Count > 0)
+                                {
+                                    messagesToPersist.Add(new AiChatMessage
+                                    {
+                                        Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++,
+                                        Role = "assistant",
+                                        Content = contentBuilder.Length > 0 ? contentBuilder.ToString() : string.Empty,
+                                        ToolCallsJson = JsonSerializer.Serialize(agentToolCallsPending.Select(tc =>
+                                            new { id = tc.Id, name = tc.Name, arguments = tc.ArgumentsJson })),
+                                        CreatedAt = DateTime.UtcNow, TraceId = traceId
+                                    });
+                                }
+
+                                await _messageRepository.CreateBatchAsync(messagesToPersist, ct);
                             }
                             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir user message do round 1", traceId); }
                             yield break;
@@ -1165,11 +1188,11 @@ public class AiChatService : IAiChatService
 
 **Diretrizes para uso de ferramentas:**
 - Use SEMPRE function calls JSON nativas para invocar ferramentas. NUNCA escreva tags XML como <tool> ou <function>.
-- Ao chamar uma ferramenta, preencha TODOS os parâmetros obrigatórios com valores extraídos da conversa. Se o usuário disse ""Quero instalar o Foxit Reader"", o parâmetro `query` deve ser ""Foxit Reader"", NUNCA vazio. Isso vale para QUALQUER ferramenta: `search_packages`, `install_package`, `knowledge_search`, `ask_user`, `create_ticket`, etc.
-- Se uma ferramenta retornar erro de parâmetro faltando (ex: ""nao pode ser vazio"", ""é obrigatório"", ""parameter missing""), NÃO pergunte ao usuário de novo — RELEIA a mensagem do usuário no histórico e extraia o valor correto. O usuário JÁ forneceu a informação.
-- Se knowledge_search retornar sem resultados (`found: false`), NÃO chame novamente com a mesma query. Responda com seu conhecimento próprio. Se o problema não puder ser resolvido, oriente o usuário a abrir um chamado de suporte.
-- Se o usuário pedir uma ação para a qual você tem ferramenta, USE a ferramenta. Não ofereça passos manuais se pode executar automaticamente.
-- Se tiver dúvidas sobre algo que não está claro, pergunte ao usuário — mas evite perguntas repetitivas. Se a informação já foi fornecida antes, use-a.
+- Preencha TODOS os parâmetros obrigatórios com valores extraídos da conversa. Ex: se o usuário disse ""Quero instalar o Foxit"", `query` = ""Foxit"". NUNCA envie parâmetros vazios.
+- Se uma ferramenta retornar erro de parâmetro faltando, RELEIA o histórico e corrija — não pergunte ao usuário novamente.
+- Se knowledge_search retornar sem resultados, responda com seu conhecimento próprio ou oriente abrir um chamado.
+- Se você tem ferramenta para executar a ação, USE a ferramenta — não ofereça passos manuais.
+- Evite perguntas repetitivas — se a informação já está no histórico, use-a.
 
 **🟢 ABERTURA DE CHAMADO (FLUXO OBRIGATÓRIO):**
 Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conseguir resolver o problema com as ferramentas disponíveis, siga este fluxo EXATO:
@@ -1811,21 +1834,10 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         }
         sb.AppendLine();
 
-        // Notas específicas para tools críticas que precisam de orientação extra
+        // Notas específicas para tools críticas
         if (hasSearchPackages)
         {
-            sb.AppendLine("🔴 REGRA ABSOLUTA — search_packages:");
-            sb.AppendLine("   1. LEIA a mensagem do usuário com atenção.");
-            sb.AppendLine("   2. EXTRAIA o nome exato do programa que ele quer instalar ou buscar.");
-            sb.AppendLine("   3. USE esse nome como valor do parâmetro 'query'.");
-            sb.AppendLine("   4. NUNCA envie query vazia ou ausente.");
-            sb.AppendLine();
-            sb.AppendLine("   ✅ 'Quero instalar o Adobe Acrobat' → query='Adobe Acrobat'");
-            sb.AppendLine("   ✅ 'Instala o Firefox' → query='Firefox'");
-            sb.AppendLine("   ✅ 'Preciso do 7-Zip' → query='7-Zip'");
-            sb.AppendLine("   ✅ 'Tem o Chrome?' → query='Chrome'");
-            sb.AppendLine("   ❌ query='' → FALHA GARANTIDA. NÃO FAÇA ISSO.");
-            sb.AppendLine("   ❌ query vazia fará você perder rounds e eventualmente falhar totalmente.");
+            sb.AppendLine("🔴 `search_packages`: o parâmetro `query` é OBRIGATÓRIO — extraia o nome do programa da mensagem do usuário. Ex: 'Quero instalar o Adobe Acrobat' → query='Adobe Acrobat'. Query vazia causa falha.");
         }
         if (hasAskUser)
             sb.AppendLine("⚠️ `ask_user`: o parâmetro `question` é OBRIGATÓRIO. SEMPRE preencha com uma pergunta clara baseada no contexto.");
@@ -1889,6 +1901,57 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         }
 
         return rawResult;
+    }
+
+    /// <summary>
+    /// Desserializa o campo ToolCallsJson do banco em uma lista de LlmAssistantToolCall.
+    /// O JSON armazenado é um array de { id, name, arguments }.
+    /// </summary>
+    private static List<LlmAssistantToolCall>? ParseToolCallsFromJson(string? toolCallsJson)
+    {
+        if (string.IsNullOrWhiteSpace(toolCallsJson))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(toolCallsJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Array)
+                return null;
+
+            var result = new List<LlmAssistantToolCall>();
+            foreach (var item in root.EnumerateArray())
+            {
+                var id = item.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String
+                    ? idProp.GetString()! : string.Empty;
+                var name = item.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String
+                    ? nameProp.GetString()! : string.Empty;
+                var args = item.TryGetProperty("arguments", out var argsProp) && argsProp.ValueKind == JsonValueKind.String
+                    ? argsProp.GetString()! : "{}";
+                result.Add(new LlmAssistantToolCall(id, name, args));
+            }
+            return result.Count > 0 ? result : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reconstrói mensagens LLM a partir do histórico do banco, incluindo
+    /// tool_calls do assistant quando disponíveis (campo ToolCallsJson).
+    /// </summary>
+    private static List<LlmMessage> BuildLlmMessagesFromHistory(List<AiChatMessage> history)
+    {
+        return history.OrderBy(m => m.SequenceNumber)
+            .Select(m => new LlmMessage(
+                m.Role,
+                m.Content,
+                m.ToolCallId,
+                m.ToolName,
+                ParseToolCallsFromJson(m.ToolCallsJson)))
+            .ToList();
     }
 
     /// <summary>
@@ -2036,8 +2099,7 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         var history = await _messageRepository.GetRecentBySessionAsync(session.Id, ClampHistoryMessages(aiSettings), ct);
         var nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
 
-        var llmMessages = history.OrderBy(m => m.SequenceNumber)
-            .Select(m => new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName)).ToList();
+        var llmMessages = BuildLlmMessagesFromHistory(history);
 
         // Persistir mensagem do usuário (quando houver) para manter contexto no banco
         if (!string.IsNullOrWhiteSpace(message))
@@ -2155,7 +2217,11 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
                 {
                     hasToolCalls = true;
                     totalTokens = evt.TokensUsed;
-                    llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString()));
+                    // Assistant com tool_calls — mantém a cadeia assistant→tool válida no protocolo OpenAI
+                    var assistantToolCalls = evt.ToolCalls.Select(tc =>
+                        new LlmAssistantToolCall(tc.Id, tc.Name, tc.ArgumentsJson)).ToList();
+                    llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString(),
+                        ToolCalls: assistantToolCalls));
                     contentBuilder.Clear(); // Limpa para o próximo round — evita concatenação com tokens de iterações anteriores
 
                     foreach (var tc in evt.ToolCalls)
@@ -2214,6 +2280,22 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
 
                     if (hasAgentToolCall)
                     {
+                        // Persiste assistant com tool_calls para manter a cadeia completa no banco
+                        try
+                        {
+                            var assistantMsg = new AiChatMessage
+                            {
+                                Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq,
+                                Role = "assistant",
+                                Content = contentBuilder.Length > 0 ? contentBuilder.ToString() : string.Empty,
+                                ToolCallsJson = JsonSerializer.Serialize(assistantToolCalls.Select(tc =>
+                                    new { id = tc.Id, name = tc.Name, arguments = tc.ArgumentsJson })),
+                                CreatedAt = DateTime.UtcNow, TraceId = traceId
+                            };
+                            await _messageRepository.CreateAsync(assistantMsg, ct);
+                        }
+                        catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir assistant no multi-round", traceId); }
+
                         yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
                         yield break;
                     }
