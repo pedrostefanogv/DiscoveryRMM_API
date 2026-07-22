@@ -32,6 +32,19 @@ __REDIRECT_RULES__
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 
+  # AI Chat stream: SSE long-polling exige timeout alto e sem buffering.
+  # O LLM pode demorar >60s para corrigir tool calls + regenerar resposta.
+  location /api/v1/agent-auth/me/ai-chat/stream {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 180s;
+    proxy_buffering off;
+  }
+
   location /hubs/ {
     proxy_pass http://127.0.0.1:8080;
     proxy_http_version 1.1;

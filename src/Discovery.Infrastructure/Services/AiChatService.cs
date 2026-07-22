@@ -723,6 +723,7 @@ public class AiChatService : IAiChatService
         var executedKbQueries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var consecutiveEmptyKbSearches = 0;
         bool hasToolCalls = false;
+        var consecutiveToolErrors = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         // Tools disponíveis no escopo
         var availableTools = aiSettings.KnowledgeBaseEnabled
@@ -796,8 +797,21 @@ public class AiChatService : IAiChatService
                                 var (isValid, errorJson) = ValidateAgentToolArguments(toolCall.Name, toolCall.ArgumentsJson);
                                 if (!isValid)
                                 {
-                                    _logger.LogWarning("[{TraceId}] Agent tool '{ToolName}' com argumentos inválidos (corrigindo localmente): {Error}",
-                                        traceId, toolCall.Name, errorJson);
+                                    var errCount = consecutiveToolErrors.GetValueOrDefault(toolCall.Name, 0) + 1;
+                                    consecutiveToolErrors[toolCall.Name] = errCount;
+                                    _logger.LogWarning("[{TraceId}] AgentToolValidationFailed: Tool={ToolName}, Model={Model}, Reason=empty_args, Attempt={Attempt}, Args={Args}",
+                                        traceId, toolCall.Name, aiSettings.ChatModel, errCount, toolCall.ArgumentsJson);
+
+                                    if (errCount >= 2)
+                                    {
+                                        _logger.LogWarning("[{TraceId}] CircuitBreaker: {ToolName} falhou {Count}x consecutivas. Abortando tool calls.",
+                                            traceId, toolCall.Name, errCount);
+                                        contentBuilder.Clear();
+                                        contentBuilder.Append("Não foi possível processar sua solicitação automaticamente. Tente reformular sua pergunta ou contate o suporte pelo menu de chamados.");
+                                        hasToolCalls = false;
+                                        goto streamDone;
+                                    }
+
                                     llmMessages.Add(new LlmMessage("tool", errorJson!, toolCall.Id, toolCall.Name));
                                     // NÃO seta hasAgentToolCallPending — força o LLM a corrigir na mesma iteração
                                     continue;
@@ -926,6 +940,7 @@ public class AiChatService : IAiChatService
             toolIterations++;
         }
 
+        streamDone:
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
@@ -1798,13 +1813,18 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         // Notas específicas para tools críticas que precisam de orientação extra
         if (hasSearchPackages)
         {
-            sb.AppendLine("⚠️ `search_packages`: o parâmetro `query` é OBRIGATÓRIO e DEVE ser preenchido SEMPRE.");
-            sb.AppendLine("   ❌ NUNCA use: {{\"query\":\"\"}}");
-            sb.AppendLine("   ✅ Exemplo correto: {{\"query\":\"Foxit Reader\"}}");
-            sb.AppendLine("   ✅ Se o usuário diz \"Quero instalar o Foxit\", query=\"Foxit\".");
-            sb.AppendLine("   ✅ Se o usuário diz \"instalar Firefox\", query=\"Firefox\".");
-            sb.AppendLine("   ✅ Se o usuário diz \"preciso do 7-Zip\", query=\"7-Zip\".");
-            sb.AppendLine("   ⚡ NÃO ignore esta regra. Query vazia = erro = perderá um round inteiro.");
+            sb.AppendLine("🔴 REGRA ABSOLUTA — search_packages:");
+            sb.AppendLine("   1. LEIA a mensagem do usuário com atenção.");
+            sb.AppendLine("   2. EXTRAIA o nome exato do programa que ele quer instalar ou buscar.");
+            sb.AppendLine("   3. USE esse nome como valor do parâmetro 'query'.");
+            sb.AppendLine("   4. NUNCA envie query vazia ou ausente.");
+            sb.AppendLine();
+            sb.AppendLine("   ✅ 'Quero instalar o Adobe Acrobat' → query='Adobe Acrobat'");
+            sb.AppendLine("   ✅ 'Instala o Firefox' → query='Firefox'");
+            sb.AppendLine("   ✅ 'Preciso do 7-Zip' → query='7-Zip'");
+            sb.AppendLine("   ✅ 'Tem o Chrome?' → query='Chrome'");
+            sb.AppendLine("   ❌ query='' → FALHA GARANTIDA. NÃO FAÇA ISSO.");
+            sb.AppendLine("   ❌ query vazia fará você perder rounds e eventualmente falhar totalmente.");
         }
         if (hasAskUser)
             sb.AppendLine("⚠️ `ask_user`: o parâmetro `question` é OBRIGATÓRIO. SEMPRE preencha com uma pergunta clara baseada no contexto.");
@@ -1929,6 +1949,46 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
                     tool = toolName,
                     hint = "Preencha os parâmetros obrigatórios com valores reais extraídos do histórico da conversa."
                 }));
+            }
+
+            // Valida strings vazias em propriedades críticas por tool.
+            // O LLM (especialmente modelos mais fracos como gpt-oss-20b) frequentemente
+            // envia {"query":""} em vez de null/ausente, burlando a checagem de null acima.
+            var criticalProps = toolName switch
+            {
+                "search_packages" => new[] { "query" },
+                "ask_user" => new[] { "question" },
+                "create_ticket" => new[] { "title", "description" },
+                "install_package" => new[] { "packageId", "package_name", "packageName" },
+                _ => Array.Empty<string>()
+            };
+
+            foreach (var propName in criticalProps)
+            {
+                if (root.TryGetProperty(propName, out var prop)
+                    && prop.ValueKind == JsonValueKind.String
+                    && string.IsNullOrWhiteSpace(prop.GetString()))
+                {
+                    var errorMsg = propName switch
+                    {
+                        "query" => "query nao pode ser vazia — extraia o nome do programa da mensagem do usuario",
+                        "question" => "question nao pode ser vazia — formule uma pergunta baseada no contexto",
+                        "title" => "title nao pode ser vazio — extraia do historico da conversa",
+                        "description" => "description nao pode ser vazio — extraia do historico da conversa",
+                        _ => $"{propName} nao pode ser vazio"
+                    };
+
+                    var hint = toolName switch
+                    {
+                        "search_packages" => "VOCE CHAMOU search_packages COM query VAZIA. Leia a mensagem do usuario no historico e extraia o nome do programa. Se o usuario disse \"Quero instalar o Adobe Acrobat\", voce DEVE chamar search_packages com query=\"Adobe Acrobat\". NAO desista. CORRIJA o parametro query e chame search_packages novamente AGORA.",
+                        "ask_user" => "VOCE CHAMOU ask_user COM question VAZIA. Leia o historico e formule uma pergunta clara.",
+                        "create_ticket" => "VOCE CHAMOU create_ticket COM PARAMETROS VAZIOS. Extraia do historico: titulo, descricao, categoria e prioridade.",
+                        "install_package" => "VOCE CHAMOU install_package COM PARAMETROS VAZIOS. Extraia do historico o nome/id do programa.",
+                        _ => "VOCE ENVIOU PARAMETROS VAZIOS. Leia o historico, extraia os valores corretos e tente novamente AGORA."
+                    };
+
+                    return (false, JsonSerializer.Serialize(new { error = errorMsg, tool = toolName, hint }));
+                }
             }
         }
         catch (JsonException)
@@ -2067,6 +2127,7 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
         var consecutiveEmptyKbSearches = 0;
         bool hasToolCalls = false;
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
+        var consecutiveToolErrors = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         while (true)
         {
@@ -2105,8 +2166,21 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
                             var (isValid, errorJson) = ValidateAgentToolArguments(tc.Name, tc.ArgumentsJson);
                             if (!isValid)
                             {
-                                _logger.LogWarning("[{TraceId}] Agent tool '{ToolName}' com argumentos inválidos (corrigindo localmente): {Error}",
-                                    traceId, tc.Name, errorJson);
+                                var errCount = consecutiveToolErrors.GetValueOrDefault(tc.Name, 0) + 1;
+                                consecutiveToolErrors[tc.Name] = errCount;
+                                _logger.LogWarning("[{TraceId}] AgentToolValidationFailed: Tool={ToolName}, Model={Model}, Reason=empty_args, Attempt={Attempt}, Args={Args}",
+                                    traceId, tc.Name, aiSettings.ChatModel, errCount, tc.ArgumentsJson);
+
+                                if (errCount >= 2)
+                                {
+                                    _logger.LogWarning("[{TraceId}] CircuitBreaker: {ToolName} falhou {Count}x consecutivas. Abortando tool calls.",
+                                        traceId, tc.Name, errCount);
+                                    contentBuilder.Clear();
+                                    contentBuilder.Append("Não foi possível processar sua solicitação automaticamente. Tente reformular sua pergunta ou contate o suporte pelo menu de chamados.");
+                                    hasToolCalls = false;
+                                    goto streamMultiRoundDone;
+                                }
+
                                 llmMessages.Add(new LlmMessage("tool", errorJson!, tc.Id, tc.Name));
                                 // NÃO seta hasAgentToolCall — força o LLM a corrigir na mesma iteração
                                 continue;
@@ -2150,6 +2224,7 @@ Quando o usuário pedir para abrir um chamado/ticket, OU quando você não conse
             toolIterations++;
         }
 
+        streamMultiRoundDone:
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
