@@ -1,4 +1,5 @@
 using FluentValidation;
+using Discovery.Core.Cqrs.AgentAuth.Tickets;
 using Discovery.Core.Cqrs.Tickets.Commands;
 
 namespace Discovery.Api.Validators;
@@ -44,6 +45,14 @@ public class AddTicketCommentCommandValidator : AbstractValidator<AddTicketComme
     public AddTicketCommentCommandValidator()
     {
         RuleFor(x => x.UserName).NotEmpty().Length(2, 100);
+        RuleFor(x => x.Content).NotEmpty().Length(3, 4000);
+    }
+}
+
+public class AddMyTicketCommentCommandValidator : AbstractValidator<AddMyTicketCommentCommand>
+{
+    public AddMyTicketCommentCommandValidator()
+    {
         RuleFor(x => x.Content).NotEmpty().Length(3, 4000);
     }
 }

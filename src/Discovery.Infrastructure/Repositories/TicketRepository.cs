@@ -272,7 +272,7 @@ public class TicketRepository : ITicketRepository
         comment.Id = IdGenerator.NewId();
         comment.CreatedAt = DateTime.UtcNow;
 
-        await using var tx = await _db.Database.BeginTransactionAsync();
+        // Transaction is managed by the TransactionBehavior pipeline — no nested tx here.
 
         _db.TicketComments.Add(comment);
 
@@ -282,9 +282,9 @@ public class TicketRepository : ITicketRepository
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(ticket => ticket.UpdatedAt, _ => now));
 
+        // SaveChangesAsync is called by TransactionBehavior after the handler returns,
+        // but we need the comment persisted before publishing the dashboard event.
         await _db.SaveChangesAsync();
-
-        await tx.CommitAsync();
 
         var ticket = await _db.Tickets
             .AsNoTracking()

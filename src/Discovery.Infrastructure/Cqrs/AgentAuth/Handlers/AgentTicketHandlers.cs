@@ -3,6 +3,7 @@ using Discovery.Core.Cqrs.AgentAuth.Tickets;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 
@@ -66,25 +67,31 @@ public sealed class CreateMyTicketHandler(
 }
 
 public sealed class AddMyTicketCommentHandler(
-    ITicketRepository ticketRepo
+    ITicketRepository ticketRepo,
+    ITicketCommandService ticketCommandService,
+    ILogger<AddMyTicketCommentHandler> logger
 ) : IRequestHandler<AddMyTicketCommentCommand, Result<object>>
 {
     public async Task<Result<object>> Handle(AddMyTicketCommentCommand cmd, CancellationToken ct)
     {
-        var ticket = await ticketRepo.GetByIdAsync(cmd.TicketId);
-        if (ticket is null)
-            return Result<object>.Failure(Error.NotFound("Ticket not found."));
-
-        var comment = new TicketComment
+        try
         {
-            TicketId = cmd.TicketId,
-            Content = cmd.Content,
-            IsInternal = cmd.IsInternal ?? false,
-            Author = "Agent"
-        };
+            // Usa ITicketCommandService para consistência com o fluxo web UI (activity logging incluso)
+            var comment = await ticketCommandService.AddCommentAsync(
+                cmd.TicketId, cmd.Content, cmd.IsInternal ?? false,
+                userId: null, userName: "Agent", ct);
 
-        var added = await ticketRepo.AddCommentAsync(comment);
-        return Result<object>.Success(added);
+            return Result<object>.Success(comment);
+        }
+        catch (KeyNotFoundException)
+        {
+            return Result<object>.Failure(Error.NotFound("Ticket not found."));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to add agent comment on ticket {TicketId}", cmd.TicketId);
+            return Result<object>.Failure(Error.Internal("Failed to add comment."));
+        }
     }
 }
 

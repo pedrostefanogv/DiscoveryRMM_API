@@ -60,6 +60,8 @@ public class AgentAuthController : ControllerBase
         {
             "NotFound" => NotFound(new { error = errors[0].Message }),
             "Forbidden" => StatusCode(403, new { error = errors[0].Message }),
+            "Validation" => BadRequest(new { error = errors[0].Message, field = errors[0].Field }),
+            "Internal" => StatusCode(500, new { error = "Erro interno do servidor" }),
             _ => BadRequest(new { error = errors[0].Message })
         });
 
