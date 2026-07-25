@@ -135,6 +135,10 @@ builder.Services.AddScoped<IAiCostControlService, AiCostControlService>();
 builder.Services.AddScoped<AiChatSettingsResolver>();
 builder.Services.AddScoped<AiChatAgentToolRegistry>();
 builder.Services.AddScoped<AiChatXmlToolParser>();
+builder.Services.AddScoped<AiChatSystemPromptBuilder>();
+builder.Services.AddScoped<AiChatToolOrchestrator>();
+builder.Services.AddScoped<AiChatQuickReply>();
+builder.Services.AddScoped<AiChatStreamingOrchestrator>();
 
 // Register built-in MCP tool handlers after DI is built (handled at first use via McpToolExecutor constructor)
 

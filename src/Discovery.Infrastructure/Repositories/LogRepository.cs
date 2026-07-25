@@ -4,6 +4,7 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Repositories;
 
@@ -11,11 +12,13 @@ public class LogRepository : ILogRepository
 {
     private readonly DiscoveryDbContext _db;
     private readonly IAgentMessaging _messaging;
+    private readonly ILogger<LogRepository> _logger;
 
-    public LogRepository(DiscoveryDbContext db, IAgentMessaging messaging)
+    public LogRepository(DiscoveryDbContext db, IAgentMessaging messaging, ILogger<LogRepository> logger)
     {
         _db = db;
         _messaging = messaging;
+        _logger = logger;
     }
 
     public async Task<LogEntry> CreateAsync(LogEntry entry)
@@ -25,20 +28,32 @@ public class LogRepository : ILogRepository
 
         _db.Logs.Add(entry);
         await _db.SaveChangesAsync();
-        await _messaging.PublishDashboardEventAsync(
-            DashboardEventMessage.Create(
-                "LogCreated",
-                new
-                {
-                    logId = entry.Id,
+
+        // Publish dashboard event de forma resiliente — falhas de NATS não devem quebrar a request.
+        // Isso pode acontecer quando o agent é órfão (clientId nulo) ou o NATS está indisponível.
+        try
+        {
+            await _messaging.PublishDashboardEventAsync(
+                DashboardEventMessage.Create(
+                    "LogCreated",
+                    new
+                    {
+                        logId = entry.Id,
+                        entry.ClientId,
+                        entry.SiteId,
+                        entry.AgentId,
+                        level = entry.Level.ToString(),
+                        type = entry.Type.ToString()
+                    },
                     entry.ClientId,
-                    entry.SiteId,
-                    entry.AgentId,
-                    level = entry.Level.ToString(),
-                    type = entry.Type.ToString()
-                },
-                entry.ClientId,
-                entry.SiteId));
+                    entry.SiteId));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Falha ao publicar evento dashboard LogCreated para AgentId={AgentId}. Log persistido no DB normalmente.",
+                entry.AgentId);
+        }
 
         return entry;
     }
