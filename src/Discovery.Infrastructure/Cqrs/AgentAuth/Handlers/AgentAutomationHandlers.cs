@@ -1,42 +1,46 @@
+using System.Text.Json;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Automation;
+using Discovery.Core.DTOs;
 using Discovery.Core.Interfaces;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 
 public sealed class SyncAutomationPolicyHandler(
-    IAutomationTaskRepository taskRepo,
-    IAgentRepository agentRepo,
-    ISiteRepository siteRepo
+    IAutomationTaskService taskService
 ) : IRequestHandler<SyncAutomationPolicyCommand, Result<object>>
 {
+    // Reutiliza a mesma instância de JsonSerializerOptions (thread-safe após configuração)
+    // em vez de alocar uma nova a cada chamada de policy-sync (chamada a cada ~5 min por agent).
+    private static readonly JsonSerializerOptions SyncJsonOptions = new(JsonSerializerDefaults.Web);
+
     public async Task<Result<object>> Handle(SyncAutomationPolicyCommand cmd, CancellationToken ct)
     {
-        // Resolve agent's hierarchical scope (SiteId + ClientId)
-        var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
-        Guid? siteId = agent?.SiteId;
-        Guid? clientId = null;
-        if (siteId.HasValue)
+        // Desserializa o request vindo do agent (JsonElement → AgentAutomationPolicySyncRequest)
+        var syncRequest = DeserializeSyncRequest(cmd.Request);
+
+        var response = await taskService.SyncPolicyForAgentAsync(
+            cmd.AgentId,
+            syncRequest,
+            cmd.Username,
+            cmd.IpAddress,
+            cmd.CorrelationId ?? Guid.NewGuid().ToString("N"),
+            ct);
+
+        return Result<object>.Success(response);
+    }
+
+    private static AgentAutomationPolicySyncRequest DeserializeSyncRequest(object? request)
+    {
+        if (request is JsonElement json)
         {
-            var site = await siteRepo.GetByIdAsync(siteId.Value);
-            clientId = site?.ClientId;
+            return JsonSerializer.Deserialize<AgentAutomationPolicySyncRequest>(
+                json.GetRawText(),
+                SyncJsonOptions) ?? new AgentAutomationPolicySyncRequest();
         }
 
-        var tasks = await taskRepo.GetActiveTasksForAgentAsync(
-            agentId: cmd.AgentId,
-            agentSiteId: siteId,
-            siteClientId: clientId,
-            limit: 200);
-
-        return Result<object>.Success(new
-        {
-            upToDate = true,
-            policyFingerprint = Guid.NewGuid().ToString("N"),
-            generatedAt = DateTime.UtcNow,
-            taskCount = tasks.Count,
-            tasks
-        });
+        return new AgentAutomationPolicySyncRequest();
     }
 }
 
