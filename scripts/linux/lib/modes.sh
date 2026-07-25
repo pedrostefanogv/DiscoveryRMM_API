@@ -107,16 +107,14 @@ _trigger_agent_rebuild_via_api() {
   local body; body="$(printf '%s' "$response" | sed '$d')"
 
   if [[ "$http_code" == "200" ]]; then
-    if echo "$body" | grep -q '"success":true'; then
-      local build_id build_version build_file
-      build_id="$(echo "$body" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-      build_version="$(echo "$body" | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-      build_file="$(echo "$body" | grep -o '"fileName":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-      log "Agent rebuild concluido com sucesso (sem downtime da API)"
-      log "Build publicado: version=${build_version:-?}, file=${build_file:-?}, id=${build_id:-?}"
-    else
-      log "Agent rebuild concluido (HTTP 200): ${body}"
-    fi
+    local build_id build_version build_file build_platform build_arch
+    build_id="$(echo "$body" | grep -o '"buildId":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    build_version="$(echo "$body" | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    build_file="$(echo "$body" | grep -o '"fileName":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    build_platform="$(echo "$body" | grep -o '"platform":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    build_arch="$(echo "$body" | grep -o '"architecture":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    log "Agent rebuild concluido com sucesso (sem downtime da API)"
+    log "Build publicado: version=${build_version:-?}, platform=${build_platform:-?}/${build_arch:-?}, file=${build_file:-?}, id=${build_id:-?}"
   elif [[ "$http_code" == "403" ]]; then
     warn "Rebuild do agent rejeitado (HTTP 403) — endpoint so aceita localhost. Resposta: ${body}"
   else

@@ -21,4 +21,4 @@ public sealed record SyncAndBuildAgentCommand(
     string Source, string? Branch
 ) : ICommand<Result<VoidResult>>;
 
-public sealed record RebuildAgentCommand() : ICommand<Result<VoidResult>>;
+public sealed record RebuildAgentCommand(string? Actor = null) : ICommand<Result<AgentBuildDto>>;

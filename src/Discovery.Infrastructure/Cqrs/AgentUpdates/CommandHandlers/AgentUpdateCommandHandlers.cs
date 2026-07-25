@@ -69,9 +69,9 @@ public sealed class RebuildAgentCommandHandler(
     IAgentUpdateService agentUpdateService,
     ISyncInvalidationPublisher syncInvalidationPublisher,
     ILogger<RebuildAgentCommandHandler> logger
-) : IRequestHandler<RebuildAgentCommand, Result<VoidResult>>
+) : IRequestHandler<RebuildAgentCommand, Result<AgentBuildDto>>
 {
-    public async Task<Result<VoidResult>> Handle(RebuildAgentCommand cmd, CancellationToken ct)
+    public async Task<Result<AgentBuildDto>> Handle(RebuildAgentCommand cmd, CancellationToken ct)
     {
         logger.LogInformation("Agent rebuild: starting binary build from source...");
         await agentPackageService.PrebuildBaseBinaryAsync(forceRebuild: true, ct);
@@ -99,7 +99,7 @@ public sealed class RebuildAgentCommandHandler(
             content: stream,
             signatureThumbprint: null,
             commitHash: await agentPackageService.GetAgentCommitHashAsync(ct),
-            actor: "api-rebuild",
+            actor: cmd.Actor ?? "api-rebuild",
             cancellationToken: ct);
 
 
@@ -112,6 +112,8 @@ public sealed class RebuildAgentCommandHandler(
             "agent-build-rebuilt",
             cancellationToken: ct);
 
-        return Result<VoidResult>.Success(VoidResult.Value);
+        return Result<AgentBuildDto>.Success(new AgentBuildDto(
+            build.Id, build.Version, build.Platform, build.Architecture,
+            build.FileName, build.Sha256, build.CreatedAt, null));
     }
 }
