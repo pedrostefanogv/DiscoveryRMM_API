@@ -205,12 +205,18 @@ public class McpToolExecutor : IMcpToolExecutor
 
     private static string GetToolDescription(string toolName) => toolName switch
     {
-        "knowledge_search" => "Pesquisa artigos e procedimentos na base de conhecimento da empresa. Use quando o usuário perguntar sobre procedimentos, políticas, SOPs ou quando precisar de informações específicas documentadas.",
-        "filesystem.read_file" => "Lê o conteúdo de um arquivo do sistema de arquivos do agent. Use com cautela e apenas quando autorizado.",
-        "postgres.query" => "Executa query SQL read-only na base do Discovery RMM para gerar relatórios ad-hoc. Somente SELECT é permitido.",
-        "time.current" => "Retorna data/hora atual em UTC e local, útil para cálculos de SLA e prazos.",
-        "memory.search" => "Pesquisa na memória persistente do chat por informações salvas anteriormente.",
-        "sequential_thinking" => "Executa raciocínio multi-step para diagnosticar problemas complexos de forma estruturada.",
+        "knowledge_search" => "Pesquisa artigos e procedimentos na base de conhecimento corporativa. Use quando o usuário perguntar sobre políticas, SOPs, sistemas internos, procedimentos de TI ou qualquer assunto documentado da empresa. O parâmetro 'query' é OBRIGATÓRIO e deve conter os termos de busca (ex: 'configurar VPN', 'política de senhas', 'instalar impressora HP'). NÃO use para perguntas genéricas de informática que não envolvam sistemas/procedimentos internos da empresa — para essas, responda com seu próprio conhecimento.",
+
+        "filesystem.read_file" => "Lê o conteúdo de um arquivo do sistema de arquivos do computador do usuário. O parâmetro 'path' é OBRIGATÓRIO e deve ser o caminho absoluto do arquivo (ex: 'C:\\Users\\usuario\\Documents\\config.ini'). NÃO use para listar diretórios, escrever ou modificar arquivos — apenas leitura. Use com cautela e apenas sob demanda explícita do usuário.",
+
+        "postgres.query" => "Executa consultas SQL read-only (SELECT) na base de dados do Discovery RMM para gerar relatórios e análises ad-hoc. O parâmetro 'sql' é OBRIGATÓRIO. NÃO use para INSERT, UPDATE, DELETE ou qualquer operação de escrita — apenas SELECT. Use APENAS quando o usuário solicitar dados estruturados que não estão disponíveis via knowledge_search (ex: 'quantos chamados foram abertos este mês?', 'liste os computadores sem antivírus').",
+
+        "time.current" => "Retorna data/hora atual em UTC e horário local (America/Sao_Paulo), além do timestamp Unix. Útil para cálculos de SLA, verificação de prazos e contexto temporal. NÃO requer parâmetros — basta invocar a função. NÃO use para agendar tarefas ou definir alarmes.",
+
+        "memory.search" => "Pesquisa informações salvas em conversas anteriores com este usuário/máquina (memória persistente). Use no INÍCIO de cada conversa para reconhecer o perfil do usuário, preferências e problemas anteriores. O parâmetro 'query' é OBRIGATÓRIO (ex: 'preferências do usuário', 'problemas anteriores com impressora'). NÃO use para buscar artigos da base de conhecimento — para isso use 'knowledge_search'.",
+
+        "sequential_thinking" => "Executa raciocínio estruturado multi-step para diagnosticar problemas complexos de TI. Use APENAS quando o problema exigir análise em etapas (ex: diagnosticar por que um computador está lento considerando CPU, memória, disco e rede). O parâmetro 'thought' é OBRIGATÓRIO e deve conter o raciocínio do passo atual. NÃO use para perguntas simples ou respostas diretas — apenas para diagnósticos que exigem múltiplas camadas de análise.",
+
         _ => $"Executa a tool '{toolName}'."
     };
 
