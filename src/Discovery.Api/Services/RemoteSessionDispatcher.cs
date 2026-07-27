@@ -55,7 +55,7 @@ public class RemoteSessionDispatcher
             natsSubject
         });
 
-        await DispatchToAgentAsync(agentId, CommandType.RemoteDebug, payload, ct);
+        await DispatchToAgentAsync(agentId, CommandType.RemoteSessionStart, payload, ct);
     }
 
     /// <summary>
@@ -64,7 +64,7 @@ public class RemoteSessionDispatcher
     public async Task DispatchStopAsync(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         var payload = JsonSerializer.Serialize(new { action = "stop", sessionId });
-        await DispatchToAgentAsync(agentId, CommandType.RemoteDebug, payload, ct);
+        await DispatchToAgentAsync(agentId, CommandType.RemoteSessionStop, payload, ct);
     }
 
     /// <summary>
@@ -87,7 +87,7 @@ public class RemoteSessionDispatcher
             fps
         });
 
-        await DispatchToAgentAsync(agentId, CommandType.RemoteDebug, payload, ct);
+        await DispatchToAgentAsync(agentId, CommandType.RemoteSessionQuality, payload, ct);
     }
 
     /// <summary>
@@ -96,7 +96,7 @@ public class RemoteSessionDispatcher
     public async Task DispatchRecordingStartAsync(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         var payload = JsonSerializer.Serialize(new { action = "recording_start", sessionId });
-        await DispatchToAgentAsync(agentId, CommandType.RemoteDebug, payload, ct);
+        await DispatchToAgentAsync(agentId, CommandType.RecordingStart, payload, ct);
     }
 
     /// <summary>
@@ -105,7 +105,7 @@ public class RemoteSessionDispatcher
     public async Task DispatchRecordingStopAsync(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         var payload = JsonSerializer.Serialize(new { action = "recording_stop", sessionId });
-        await DispatchToAgentAsync(agentId, CommandType.RemoteDebug, payload, ct);
+        await DispatchToAgentAsync(agentId, CommandType.RecordingStop, payload, ct);
     }
 
     private async Task DispatchToAgentAsync(Guid agentId, CommandType commandType, string payload, CancellationToken ct)

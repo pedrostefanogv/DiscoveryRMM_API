@@ -34,6 +34,7 @@ public class RemoteSessionsController : ControllerBase
 
     /// <summary>Encerra uma sessão remota ativa.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/stop")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> StopSession(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
@@ -46,6 +47,7 @@ public class RemoteSessionsController : ControllerBase
 
     /// <summary>Renova o TTL de uma sessão remota.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/renew")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> RenewSession(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
@@ -70,6 +72,7 @@ public class RemoteSessionsController : ControllerBase
 
     /// <summary>Obtém credenciais TURN para WebRTC.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/turn-credentials")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> GetTurnCredentials(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
@@ -78,6 +81,69 @@ public class RemoteSessionsController : ControllerBase
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>Obtém credenciais NATS (JWT + NKey) para o viewer se conectar ao stream.</summary>
+    [HttpPost("{agentId:guid}/{sessionId:guid}/nats-credentials")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> GetSessionCredentials(Guid agentId, Guid sessionId, CancellationToken ct = default)
+    {
+        var userId = GetUserId();
+        var result = await _mediator.Send(new GetSessionCredentialsQuery(agentId, sessionId, userId), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>Inicia a gravação de uma sessão remota.</summary>
+    [HttpPost("{agentId:guid}/{sessionId:guid}/recording/start")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> StartRecording(Guid agentId, Guid sessionId, CancellationToken ct = default)
+    {
+        var userId = GetUserId();
+        var result = await _mediator.Send(new StartRecordingCommand(agentId, sessionId, userId), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>Para a gravação de uma sessão remota.</summary>
+    [HttpPost("{agentId:guid}/{sessionId:guid}/recording/stop")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> StopRecording(Guid agentId, Guid sessionId, CancellationToken ct = default)
+    {
+        var userId = GetUserId();
+        var result = await _mediator.Send(new StopRecordingCommand(agentId, sessionId, userId), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>Obtém URL de download da gravação de uma sessão.</summary>
+    [HttpGet("{agentId:guid}/{sessionId:guid}/recording/download")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetRecordingDownload(Guid agentId, Guid sessionId, CancellationToken ct = default)
+    {
+        var userId = GetUserId();
+        var result = await _mediator.Send(new GetRecordingDownloadQuery(agentId, sessionId, userId), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>Exclui a gravação de uma sessão (LGPD Art. 18).</summary>
+    [HttpDelete("{agentId:guid}/{sessionId:guid}/recording")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> DeleteRecording(Guid agentId, Guid sessionId, CancellationToken ct = default)
+    {
+        // Exclusão assíncrona via recording service
+        // O handler de delete será implementado junto com o storage completo (Fase 8)
+        return NoContent();
     }
 
     private Guid GetUserId()

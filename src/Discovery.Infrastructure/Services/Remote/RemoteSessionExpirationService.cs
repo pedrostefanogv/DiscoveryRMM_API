@@ -9,13 +9,14 @@ namespace Discovery.Infrastructure.Services.Remote;
 
 /// <summary>
 /// Serviço de expiração de sessões remotas (background hosted service).
-/// Roda a cada 60s e encerra sessões expiradas.
+/// Intervalo configurável via RemoteAccess:Nats:ExpirationCheckIntervalSeconds (default 15s).
 /// </summary>
 public class RemoteSessionExpirationService : BackgroundService
 {
     private readonly IServiceProvider _services;
     private readonly ILogger<RemoteSessionExpirationService> _logger;
     private readonly RemoteAccessOptions _options;
+    private readonly TimeSpan _checkInterval;
 
     public RemoteSessionExpirationService(
         IServiceProvider services,
@@ -25,6 +26,9 @@ public class RemoteSessionExpirationService : BackgroundService
         _services = services;
         _options = options.Value;
         _logger = logger;
+        _checkInterval = _options.Nats.ExpirationCheckIntervalSeconds > 0
+            ? TimeSpan.FromSeconds(_options.Nats.ExpirationCheckIntervalSeconds)
+            : TimeSpan.FromSeconds(15);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -35,13 +39,13 @@ public class RemoteSessionExpirationService : BackgroundService
             return;
         }
 
-        _logger.LogInformation("RemoteSessionExpirationService iniciado — intervalo 60s");
+        _logger.LogInformation("RemoteSessionExpirationService iniciado — intervalo {Seconds}s", _checkInterval.TotalSeconds);
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
+                await Task.Delay(_checkInterval, stoppingToken);
                 await CleanupExpiredSessionsAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

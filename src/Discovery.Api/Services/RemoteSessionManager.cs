@@ -14,15 +14,18 @@ namespace Discovery.Api.Services;
 public sealed class RemoteSessionManager : IRemoteSessionManager
 {
     private readonly IRemoteSessionRepository _repo;
+    private readonly IRemoteSessionAuditRepository _auditRepo;
     private readonly RemoteAccessOptions _options;
     private readonly ILogger<RemoteSessionManager> _logger;
 
     public RemoteSessionManager(
         IRemoteSessionRepository repo,
+        IRemoteSessionAuditRepository auditRepo,
         IOptions<RemoteAccessOptions> options,
         ILogger<RemoteSessionManager> logger)
     {
         _repo = repo;
+        _auditRepo = auditRepo;
         _options = options.Value;
         _logger = logger;
     }
@@ -86,6 +89,14 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         if (session.UserId != userId)
             throw new UnauthorizedAccessException($"User {userId} is not the owner of session {sessionId}.");
 
+        // M2: cap de duração máxima total
+        if (_options.MaxSessionDurationMinutes > 0)
+        {
+            var maxExpiry = session.StartedAt.AddMinutes(_options.MaxSessionDurationMinutes);
+            if (DateTime.UtcNow >= maxExpiry)
+                throw new InvalidOperationException($"Session {sessionId} has reached maximum duration of {_options.MaxSessionDurationMinutes} minutes.");
+        }
+
         session.ExpiresAt = DateTime.UtcNow.AddMinutes(_options.DefaultTtlMinutes);
         var updated = await _repo.UpdateAsync(session, ct);
 
@@ -131,9 +142,18 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
 
     public async Task AuditAsync(Guid sessionId, string eventType, string? details = null, string? actorUserId = null, string? ipAddress = null, CancellationToken ct = default)
     {
-        // Audit is done via direct DbContext insert to avoid circular dependency
-        // This will be called from within repository scope.
-        _logger.LogDebug("Remote session {SessionId} audit: {EventType}", sessionId, eventType);
-        // The actual audit entity is created by the command handler that has access to DbContext.
+        var audit = new RemoteSessionAudit
+        {
+            Id = Guid.NewGuid(),
+            RemoteSessionId = sessionId,
+            EventType = eventType,
+            ActorUserId = actorUserId,
+            Details = details,
+            IpAddress = ipAddress,
+            OccurredAt = DateTime.UtcNow
+        };
+
+        await _auditRepo.AddAsync(audit, ct);
+        _logger.LogDebug("Remote session {SessionId} audit recorded: {EventType}", sessionId, eventType);
     }
 }

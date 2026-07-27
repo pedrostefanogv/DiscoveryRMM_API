@@ -13,5 +13,10 @@ public enum CommandType
     RemoteDebug = 8,
     ShowPsadtAlert = 9,
     Notification = 10,
-    WakeOnLan = 11
+    WakeOnLan = 11,
+    RemoteSessionStart = 12,
+    RemoteSessionStop = 13,
+    RemoteSessionQuality = 14,
+    RecordingStart = 15,
+    RecordingStop = 16
 }

@@ -20,6 +20,11 @@ public static class CommandTypeWireMapper
             CommandType.ShowPsadtAlert => "showpsadtalert",
             CommandType.Notification => "notification",
             CommandType.WakeOnLan => "wakeonlan",
+            CommandType.RemoteSessionStart => "remotesessionstart",
+            CommandType.RemoteSessionStop => "remotesessionstop",
+            CommandType.RemoteSessionQuality => "remotesessionquality",
+            CommandType.RecordingStart => "recordingstart",
+            CommandType.RecordingStop => "recordingstop",
             _ => commandType.ToString().ToLowerInvariant()
         };
     }
@@ -32,6 +37,11 @@ public static class CommandTypeWireMapper
             or CommandType.Update
             or CommandType.Restart
             or CommandType.Shutdown
-            or CommandType.WakeOnLan;
+            or CommandType.WakeOnLan
+            or CommandType.RemoteSessionStart
+            or CommandType.RemoteSessionStop
+            or CommandType.RemoteSessionQuality
+            or CommandType.RecordingStart
+            or CommandType.RecordingStop;
     }
 }

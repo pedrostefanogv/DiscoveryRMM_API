@@ -99,11 +99,14 @@ builder.Services.AddSingleton(TimeProvider.System);
 // Remote access (acesso remoto nativo)
 builder.Services.AddScoped<IRemoteSessionManager, RemoteSessionManager>();
 builder.Services.AddScoped<IRemoteSessionRepository, RemoteSessionRepository>();
+builder.Services.AddScoped<IRemoteSessionAuditRepository, RemoteSessionAuditRepository>();
+builder.Services.AddScoped<IRemoteRecordingService, RemoteRecordingService>();
 builder.Services.AddScoped<RemoteSessionAuditService>();
 builder.Services.AddScoped<WebrtcTurnCredentialIssuer>();
 builder.Services.AddScoped<RemoteSessionJwtIssuer>();
 builder.Services.AddScoped<RemoteSessionDispatcher>();
 builder.Services.AddHostedService<RemoteSessionExpirationService>();
+builder.Services.AddHostedService<RecordingAssemblerService>();
 builder.Services.Configure<RemoteAccessOptions>(builder.Configuration.GetSection("RemoteAccess"));
 
 // Scoped scope context (cache de escopo intra-request para queries filtradas)

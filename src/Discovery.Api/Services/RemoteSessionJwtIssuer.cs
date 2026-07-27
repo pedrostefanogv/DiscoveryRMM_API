@@ -61,8 +61,13 @@ public class RemoteSessionJwtIssuer
                 claims.Add(new Claim("nats_sub_allow", perm[4..]));
         }
 
-        // Usa chave de signing; em produção usar env var / vault
-        var signingKey = "discovery-nats-jwt-secret-dev";
+        // Usa chave de signing da configuração (env var / vault em produção)
+        var signingKey = _options.Nats.JwtSigningKey;
+        if (string.IsNullOrWhiteSpace(signingKey))
+        {
+            _logger.LogWarning("NATS JWT signing key is empty — using development fallback. Configure RemoteAccess:Nats:JwtSigningKey in production.");
+            signingKey = "discovery-nats-jwt-secret-dev";
+        }
 
         var key = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey));
         var creds = new Microsoft.IdentityModel.Tokens.SigningCredentials(key, Microsoft.IdentityModel.Tokens.SecurityAlgorithms.HmacSha256);

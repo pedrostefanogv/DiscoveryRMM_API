@@ -10,6 +10,9 @@ public class RemoteAccessOptions
     /// <summary>TTL padrão de sessão em minutos.</summary>
     public int DefaultTtlMinutes { get; set; } = 30;
 
+    /// <summary>Duração máxima total de uma sessão (inclui renovações). 0 = ilimitado.</summary>
+    public int MaxSessionDurationMinutes { get; set; } = 120;
+
     /// <summary>Máximo de sessões simultâneas por agent.</summary>
     public int MaxConcurrentSessionsPerAgent { get; set; } = 3;
 
@@ -27,6 +30,10 @@ public class RemoteAccessNatsOptions
 {
     public int MaxPayloadBytes { get; set; } = 2097152;
     public string FrameSubjectPrefix { get; set; } = "remote.session";
+    /// <summary>Chave de assinatura JWT para tokens NATS. Obrigatório. Use env var ou vault em produção.</summary>
+    public string JwtSigningKey { get; set; } = string.Empty;
+    /// <summary>Intervalo de verificação de sessões expiradas (segundos).</summary>
+    public int ExpirationCheckIntervalSeconds { get; set; } = 15;
 }
 
 public class RemoteAccessWebRtcOptions
