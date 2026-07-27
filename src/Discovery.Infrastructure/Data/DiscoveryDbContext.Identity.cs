@@ -143,6 +143,7 @@ public partial class DiscoveryDbContext
             e.Property(s => s.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(s => s.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
             e.Property(s => s.RevokedAt).HasColumnName("revoked_at").HasColumnType("timestamptz");
+            e.Property(s => s.RefreshTokenGracePeriodUntil).HasColumnName("refresh_token_grace_period_until").HasColumnType("timestamptz");
             e.HasIndex(s => s.RefreshTokenHash).HasDatabaseName("ix_user_sessions_refresh_token_hash");
             e.HasIndex(s => new { s.UserId, s.RevokedAt }).HasDatabaseName("ix_user_sessions_user_active");
         });

@@ -25,7 +25,21 @@ public class UserSession
     public DateTime ExpiresAt { get; set; }
     public DateTime? RevokedAt { get; set; }
 
+    /// <summary>
+    /// Janela de tolerância (grace period) após rotação do refresh token.
+    /// Durante este período, o refresh token antigo ainda é aceito para permitir
+    /// que múltiplas abas renovem concorrentemente sem se invalidarem.
+    /// </summary>
+    public DateTime? RefreshTokenGracePeriodUntil { get; set; }
+
     public bool IsRevoked => RevokedAt.HasValue;
     public bool IsExpired => DateTime.UtcNow > ExpiresAt;
     public bool IsValid => !IsRevoked && !IsExpired;
+
+    /// <summary>
+    /// Indica se o refresh token está dentro do grace period (ainda aceito
+    /// para renovação mesmo após rotação).
+    /// </summary>
+    public bool IsWithinRefreshGracePeriod
+        => RefreshTokenGracePeriodUntil.HasValue && DateTime.UtcNow < RefreshTokenGracePeriodUntil.Value;
 }

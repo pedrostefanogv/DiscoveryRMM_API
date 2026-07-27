@@ -292,12 +292,28 @@ public class UserAuthService : IUserAuthService
         var refreshBytes = Convert.FromBase64String(refreshToken);
         var refreshHash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(refreshBytes));
 
-        var session = await _sessions.GetByRefreshTokenHashAsync(refreshHash);
-        if (session is null || !session.IsValid)
+        // Busca incluindo sessões revogadas dentro do grace period
+        // (para suportar renovação concorrente de múltiplas abas)
+        var session = await _sessions.GetByRefreshTokenHashWithGracePeriodAsync(refreshHash);
+        if (session is null)
             throw new UnauthorizedAccessException("Refresh token inválido ou expirado.");
 
-        // Rotação: revoga sessão antiga, cria nova
-        await _sessions.RevokeAsync(session.Id);
+        // Sessão revogada fora do grace period
+        if (session.IsRevoked && !session.IsWithinRefreshGracePeriod)
+            throw new UnauthorizedAccessException("Refresh token inválido ou expirado.");
+
+        // Sessão expirada
+        if (session.IsExpired)
+            throw new UnauthorizedAccessException("Refresh token inválido ou expirado.");
+
+        // Rotação com grace period: revoga sessão antiga mas mantém o refresh
+        // token aceito por 60s para permitir que outras abas renovem também.
+        // Se já está revogada (dentro do grace period), não revoga novamente.
+        if (!session.IsRevoked)
+        {
+            await _sessions.RevokeWithGracePeriodAsync(session.Id, TimeSpan.FromSeconds(60));
+        }
+
         return await IssueFullSessionAsync(session.UserId, session.MfaVerified, null, null);
     }
 
