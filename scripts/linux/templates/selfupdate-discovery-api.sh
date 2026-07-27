@@ -199,6 +199,67 @@ clean_site_build_cache() {
   rm -rf "$DISCOVERY_SITE_SOURCE/node_modules/.cache" "$DISCOVERY_SITE_SOURCE/dist"
 }
 
+# ── Merge RemoteAccess settings into /etc/discovery-api/discovery.env ─────
+
+_merge_env_remote_access() {
+  local env_file="/etc/discovery-api/discovery.env"
+  if [[ ! -f "$env_file" ]]; then
+    log "Arquivo $env_file nao encontrado. Pulando merge de RemoteAccess."
+    return
+  fi
+
+  # So executa merge se ainda nao tem RemoteAccess no env (evita overwrite de customizacoes)
+  if grep -q '^RemoteAccess__' "$env_file" 2>/dev/null; then
+    return
+  fi
+
+  # Gera chave JWT aleatoria se nao existir
+  local jwt_key
+  jwt_key="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 64 || true)"
+  if [[ -z "$jwt_key" ]]; then
+    jwt_key="discovery-nats-jwt-secret-dev"
+    warn "Nao foi possivel gerar chave JWT aleatoria; usando fallback inseguro."
+  fi
+
+  log "Adicionando configuracoes RemoteAccess ao $env_file"
+  local tmp_file; tmp_file="$(mktemp)"
+  cp "$env_file" "$tmp_file"
+
+  cat >> "$tmp_file" <<'REMOTEACCESS_EOF'
+RemoteAccess__Enabled=true
+RemoteAccess__DefaultTtlMinutes=30
+RemoteAccess__MaxSessionDurationMinutes=120
+RemoteAccess__MaxConcurrentSessionsPerAgent=3
+RemoteAccess__MaxConcurrentSessionsPerUser=5
+REMOTEACCESS_EOF
+  printf 'RemoteAccess__Nats__JwtSigningKey=%s\n' "$jwt_key" >> "$tmp_file"
+  cat >> "$tmp_file" <<'REMOTEACCESS_EOF'
+RemoteAccess__Nats__FrameSubjectPrefix=remote.session
+RemoteAccess__Nats__MaxPayloadBytes=2097152
+RemoteAccess__Nats__ExpirationCheckIntervalSeconds=15
+RemoteAccess__WebRtc__Enabled=true
+RemoteAccess__WebRtc__StunUrls__0=stun:stun.l.google.com:19302
+RemoteAccess__WebRtc__TurnCredentialTtlMinutes=60
+RemoteAccess__WebRtc__IceTimeoutSeconds=5
+RemoteAccess__Quality__DefaultProfile=high
+RemoteAccess__Quality__AdaptiveEnabled=true
+RemoteAccess__Quality__MinFps=5
+RemoteAccess__Quality__MaxFps=30
+RemoteAccess__Quality__DefaultCodec=auto
+RemoteAccess__Recording__Enabled=true
+RemoteAccess__Recording__DefaultOn=false
+RemoteAccess__Recording__StorageProvider=Local
+RemoteAccess__Recording__Local__BasePath=/var/discovery/recordings
+RemoteAccess__Recording__Local__MaxDiskUsageGb=50
+REMOTEACCESS_EOF
+
+  if ! sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file" 2>/dev/null; then
+    warn "Falha ao instalar $env_file. Merge de RemoteAccess nao aplicado."
+  fi
+  rm -f "$tmp_file"
+  log "Configuracoes RemoteAccess adicionadas ao $env_file"
+}
+
 publish_api_release() {
   local remote_rev="$1"
   local release_id="$(date +%Y%m%d%H%M%S)-${remote_rev:0:8}"
@@ -218,6 +279,10 @@ publish_api_release() {
 
   ln -sfn "$release_dir" "$DISCOVERY_API_CURRENT"
   log "Release ativa da API atualizada para $release_id"
+
+  # ── Merge novas configuracoes no env (RemoteAccess, etc) ──────────────
+  _merge_env_remote_access
+
   cleanup_old_releases "$DISCOVERY_API_RELEASES"
 }
 

@@ -57,6 +57,7 @@ load_update_defaults() {
 update_api() {
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   publish_api
+  update_remote_access_environment_file
   if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-0}" == "1" ]]; then
     log "Atualizando tambem infraestrutura auxiliar (self-update + Nginx) por solicitacao explicita"
     install_selfupdate_script
@@ -127,6 +128,7 @@ update_all_components() {
   clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
   publish_api
+  update_remote_access_environment_file
   publish_site
   if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-0}" == "1" ]]; then
     log "Atualizando tambem infraestrutura auxiliar (self-update + Nginx) por solicitacao explicita"

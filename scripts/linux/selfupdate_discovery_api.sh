@@ -18,6 +18,86 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"
 }
 
+# ── Merge RemoteAccess settings into /etc/discovery-api/discovery.env ─────
+
+_merge_env_remote_access() {
+  local env_file="/etc/discovery-api/discovery.env"
+  if [[ ! -f "$env_file" ]]; then
+    log "Arquivo $env_file nao encontrado. Pulando merge de RemoteAccess."
+    return
+  fi
+
+  # Só executa merge se ainda não tem RemoteAccess no env (evita overwrite de customizações)
+  if grep -q '^RemoteAccess__' "$env_file" 2>/dev/null; then
+    log "RemoteAccess ja configurado no $env_file; pulando merge."
+    return
+  fi
+
+  # Gera chave JWT aleatoria se nao existir
+  local jwt_key
+  jwt_key="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 64 || true)"
+  if [[ -z "$jwt_key" ]]; then
+    jwt_key="$(openssl rand -base64 48 2>/dev/null | tr -d '\n/+=' | head -c 64 || true)"
+  fi
+  if [[ -z "$jwt_key" ]]; then
+    jwt_key="discovery-nats-jwt-secret-dev"
+    warn "Nao foi possivel gerar chave JWT aleatoria; usando fallback inseguro. Configure RemoteAccess__Nats__JwtSigningKey manualmente."
+  fi
+
+  log "Adicionando configuracoes RemoteAccess ao $env_file"
+  local tmp_file; tmp_file="$(mktemp)"
+  cp "$env_file" "$tmp_file"
+
+  cat >> "$tmp_file" <<'REMOTEACCESS_EOF'
+RemoteAccess__Enabled=true
+RemoteAccess__DefaultTtlMinutes=30
+RemoteAccess__MaxSessionDurationMinutes=120
+RemoteAccess__MaxConcurrentSessionsPerAgent=3
+RemoteAccess__MaxConcurrentSessionsPerUser=5
+REMOTEACCESS_EOF
+  printf 'RemoteAccess__Nats__JwtSigningKey=%s\n' "$jwt_key" >> "$tmp_file"
+  cat >> "$tmp_file" <<'REMOTEACCESS_EOF'
+RemoteAccess__Nats__FrameSubjectPrefix=remote.session
+RemoteAccess__Nats__MaxPayloadBytes=2097152
+RemoteAccess__Nats__ExpirationCheckIntervalSeconds=15
+RemoteAccess__WebRtc__Enabled=true
+RemoteAccess__WebRtc__StunUrls__0=stun:stun.l.google.com:19302
+RemoteAccess__WebRtc__TurnCredentialTtlMinutes=60
+RemoteAccess__WebRtc__IceTimeoutSeconds=5
+RemoteAccess__Quality__DefaultProfile=high
+RemoteAccess__Quality__AdaptiveEnabled=true
+RemoteAccess__Quality__MinFps=5
+RemoteAccess__Quality__MaxFps=30
+RemoteAccess__Quality__DefaultCodec=auto
+RemoteAccess__Recording__Enabled=true
+RemoteAccess__Recording__DefaultOn=false
+RemoteAccess__Recording__StorageProvider=Local
+RemoteAccess__Recording__Local__BasePath=/var/discovery/recordings
+RemoteAccess__Recording__Local__MaxDiskUsageGb=50
+REMOTEACCESS_EOF
+
+  # Usa sudo para instalar com as mesmas permissões (640 root:discovery-api)
+  if command -v sudo >/dev/null 2>&1; then
+    sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file" 2>/dev/null || {
+      warn "Nao foi possivel usar sudo para instalar $env_file; tentando sem..."
+      install -m 640 "$tmp_file" "$env_file" 2>/dev/null || {
+        warn "Falha ao instalar $env_file. Merge de RemoteAccess nao aplicado."
+        rm -f "$tmp_file"
+        return
+      }
+    }
+  else
+    install -m 640 "$tmp_file" "$env_file" 2>/dev/null || {
+      warn "Falha ao instalar $env_file. Merge de RemoteAccess nao aplicado."
+      rm -f "$tmp_file"
+      return
+    }
+  fi
+
+  rm -f "$tmp_file"
+  log "Configuracoes RemoteAccess adicionadas ao $env_file"
+}
+
 detect_system_architecture() {
   local arch=""
 
@@ -170,6 +250,25 @@ rm -f "$NEW_RELEASE"/appsettings*.json || true
 
 ln -sfn "$NEW_RELEASE" "$DISCOVERY_API_CURRENT"
 log "Release ativa atualizada para $RELEASE_ID"
+
+# ── Atualiza environment file com novas chaves (RemoteAccess, etc) ─────
+_merge_env_remote_access
+
+# ── Reinicia API para carregar novo binario + novas configuracoes ──────
+if systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
+  if systemctl is-active --quiet discovery-api.service 2>/dev/null; then
+    log "Reiniciando discovery-api para aplicar novo release..."
+    systemctl restart discovery-api.service 2>/dev/null || {
+      warn "Falha ao reiniciar discovery-api via systemctl; tentando reload..."
+      systemctl reload-or-restart discovery-api.service 2>/dev/null || \
+        warn "Nao foi possivel reiniciar discovery-api. Reinicie manualmente."
+    }
+  else
+    log "discovery-api nao esta rodando; iniciando..."
+    systemctl start discovery-api.service 2>/dev/null || \
+      warn "Nao foi possivel iniciar discovery-api."
+  fi
+fi
 
 cleanup_old_releases "$DISCOVERY_API_RELEASES"
 

@@ -246,6 +246,30 @@ ZEROSSL_DNS_POLL_INTERVAL_SECONDS=${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-15}
 ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY=${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-30}
 ZEROSSL_AUTO_RENEW_ENABLED=${ZEROSSL_AUTO_RENEW_ENABLED:-1}
 ZEROSSL_DNS_AUTOMATION_HOOK=${ZEROSSL_DNS_AUTOMATION_HOOK:-}
+# ── Acesso Remoto Nativo (RemoteAccess) ────────────────────────────────────
+RemoteAccess__Enabled=$( [[ "${REMOTE_ACCESS_ENABLED:-1}" == "1" ]] && echo true || echo false )
+RemoteAccess__DefaultTtlMinutes=${REMOTE_ACCESS_DEFAULT_TTL_MINUTES:-30}
+RemoteAccess__MaxSessionDurationMinutes=${REMOTE_ACCESS_MAX_SESSION_DURATION_MINUTES:-120}
+RemoteAccess__MaxConcurrentSessionsPerAgent=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_AGENT:-3}
+RemoteAccess__MaxConcurrentSessionsPerUser=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_USER:-5}
+RemoteAccess__Nats__JwtSigningKey=${REMOTE_ACCESS_NATS_JWT_SIGNING_KEY}
+RemoteAccess__Nats__FrameSubjectPrefix=${REMOTE_ACCESS_NATS_FRAME_SUBJECT_PREFIX:-remote.session}
+RemoteAccess__Nats__MaxPayloadBytes=${REMOTE_ACCESS_NATS_MAX_PAYLOAD_BYTES:-2097152}
+RemoteAccess__Nats__ExpirationCheckIntervalSeconds=${REMOTE_ACCESS_NATS_EXPIRATION_CHECK_INTERVAL_SECONDS:-15}
+RemoteAccess__WebRtc__Enabled=${REMOTE_ACCESS_WEBRTC_ENABLED:-true}
+RemoteAccess__WebRtc__StunUrls__0=${REMOTE_ACCESS_WEBRTC_STUN_URLS_0:-stun:stun.l.google.com:19302}
+RemoteAccess__WebRtc__TurnCredentialTtlMinutes=${REMOTE_ACCESS_WEBRTC_TURN_CREDENTIAL_TTL_MINUTES:-60}
+RemoteAccess__WebRtc__IceTimeoutSeconds=${REMOTE_ACCESS_WEBRTC_ICE_TIMEOUT_SECONDS:-5}
+RemoteAccess__Quality__DefaultProfile=${REMOTE_ACCESS_QUALITY_DEFAULT_PROFILE:-high}
+RemoteAccess__Quality__AdaptiveEnabled=${REMOTE_ACCESS_QUALITY_ADAPTIVE_ENABLED:-true}
+RemoteAccess__Quality__MinFps=${REMOTE_ACCESS_QUALITY_MIN_FPS:-5}
+RemoteAccess__Quality__MaxFps=${REMOTE_ACCESS_QUALITY_MAX_FPS:-30}
+RemoteAccess__Quality__DefaultCodec=${REMOTE_ACCESS_QUALITY_DEFAULT_CODEC:-auto}
+RemoteAccess__Recording__Enabled=${REMOTE_ACCESS_RECORDING_ENABLED:-true}
+RemoteAccess__Recording__DefaultOn=${REMOTE_ACCESS_RECORDING_DEFAULT_ON:-false}
+RemoteAccess__Recording__StorageProvider=${REMOTE_ACCESS_RECORDING_STORAGE_PROVIDER:-Local}
+RemoteAccess__Recording__Local__BasePath=${REMOTE_ACCESS_RECORDING_LOCAL_BASE_PATH:-/var/discovery/recordings}
+RemoteAccess__Recording__Local__MaxDiskUsageGb=${REMOTE_ACCESS_RECORDING_LOCAL_MAX_DISK_USAGE_GB:-50}
 EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
@@ -527,6 +551,60 @@ run_db_migrations() {
 }
 
 # ── NATS env update helpers ────────────────────────────────────────────────
+
+update_remote_access_environment_file() {
+  local env_file="/etc/discovery-api/discovery.env"
+  if ! sudo test -f "$env_file"; then
+    log "Arquivo $env_file nao encontrado. Pulando atualizacao de variaveis RemoteAccess da API."; return
+  fi
+
+  # Gera chave JWT se nao existir
+  local jwt_key="${REMOTE_ACCESS_NATS_JWT_SIGNING_KEY:-}"
+  if [[ -z "$jwt_key" ]]; then
+    jwt_key="$(sudo awk -F= '/^REMOTE_ACCESS_NATS_JWT_SIGNING_KEY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+  fi
+  if [[ -z "$jwt_key" ]]; then
+    log "Gerando chave JWT para RemoteAccess (NATS session tokens)..."
+    jwt_key="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)"
+  fi
+
+  log "Atualizando variaveis RemoteAccess no $env_file"
+  local tmp_file; tmp_file="$(mktemp)"
+
+  sudo awk '
+    !/^RemoteAccess__/
+  ' "$env_file" > "$tmp_file"
+
+  cat >> "$tmp_file" <<EOF
+RemoteAccess__Enabled=$( [[ "${REMOTE_ACCESS_ENABLED:-1}" == "1" ]] && echo true || echo false )
+RemoteAccess__DefaultTtlMinutes=${REMOTE_ACCESS_DEFAULT_TTL_MINUTES:-30}
+RemoteAccess__MaxSessionDurationMinutes=${REMOTE_ACCESS_MAX_SESSION_DURATION_MINUTES:-120}
+RemoteAccess__MaxConcurrentSessionsPerAgent=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_AGENT:-3}
+RemoteAccess__MaxConcurrentSessionsPerUser=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_USER:-5}
+RemoteAccess__Nats__JwtSigningKey=${jwt_key}
+RemoteAccess__Nats__FrameSubjectPrefix=${REMOTE_ACCESS_NATS_FRAME_SUBJECT_PREFIX:-remote.session}
+RemoteAccess__Nats__MaxPayloadBytes=${REMOTE_ACCESS_NATS_MAX_PAYLOAD_BYTES:-2097152}
+RemoteAccess__Nats__ExpirationCheckIntervalSeconds=${REMOTE_ACCESS_NATS_EXPIRATION_CHECK_INTERVAL_SECONDS:-15}
+RemoteAccess__WebRtc__Enabled=${REMOTE_ACCESS_WEBRTC_ENABLED:-true}
+RemoteAccess__WebRtc__StunUrls__0=${REMOTE_ACCESS_WEBRTC_STUN_URLS_0:-stun:stun.l.google.com:19302}
+RemoteAccess__WebRtc__TurnCredentialTtlMinutes=${REMOTE_ACCESS_WEBRTC_TURN_CREDENTIAL_TTL_MINUTES:-60}
+RemoteAccess__WebRtc__IceTimeoutSeconds=${REMOTE_ACCESS_WEBRTC_ICE_TIMEOUT_SECONDS:-5}
+RemoteAccess__Quality__DefaultProfile=${REMOTE_ACCESS_QUALITY_DEFAULT_PROFILE:-high}
+RemoteAccess__Quality__AdaptiveEnabled=${REMOTE_ACCESS_QUALITY_ADAPTIVE_ENABLED:-true}
+RemoteAccess__Quality__MinFps=${REMOTE_ACCESS_QUALITY_MIN_FPS:-5}
+RemoteAccess__Quality__MaxFps=${REMOTE_ACCESS_QUALITY_MAX_FPS:-30}
+RemoteAccess__Quality__DefaultCodec=${REMOTE_ACCESS_QUALITY_DEFAULT_CODEC:-auto}
+RemoteAccess__Recording__Enabled=${REMOTE_ACCESS_RECORDING_ENABLED:-true}
+RemoteAccess__Recording__DefaultOn=${REMOTE_ACCESS_RECORDING_DEFAULT_ON:-false}
+RemoteAccess__Recording__StorageProvider=${REMOTE_ACCESS_RECORDING_STORAGE_PROVIDER:-Local}
+RemoteAccess__Recording__Local__BasePath=${REMOTE_ACCESS_RECORDING_LOCAL_BASE_PATH:-/var/discovery/recordings}
+RemoteAccess__Recording__Local__MaxDiskUsageGb=${REMOTE_ACCESS_RECORDING_LOCAL_MAX_DISK_USAGE_GB:-50}
+EOF
+
+  sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
+  rm -f "$tmp_file"
+  log "Variaveis RemoteAccess atualizadas no $env_file"
+}
 
 update_nats_environment_file() {
   local env_file="/etc/discovery-api/discovery.env"
