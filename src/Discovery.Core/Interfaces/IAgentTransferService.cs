@@ -69,9 +69,6 @@ public sealed record AgentTransferResult
     /// <summary>Indica se a transferência foi entre clientes diferentes.</summary>
     public bool IsCrossClient => PreviousClientId != TargetClientId;
 
-    /// <summary>Indica se a ACL do MeshCentral foi atualizada.</summary>
-    public bool MeshCentralAclUpdated { get; init; }
-
     /// <summary>Motivo registrado para a transferência.</summary>
     public string? Reason { get; init; }
 }

@@ -103,18 +103,6 @@ public static class QuartzServiceCollectionExtensions
                 .WithIdentity($"{AgentLabelingReconciliationJob.Key.Name}-trigger", AgentLabelingReconciliationJob.Key.Group)
                 .WithSimpleSchedule(s => s.WithIntervalInMinutes(10).RepeatForever())
                 .WithDescription("Reconcile agent labels with auto-labeling rules"));
-
-            // ── MeshCentral Identity Reconciliation: hourly ────────────
-            q.ScheduleJob<MeshCentralIdentityReconciliationJob>(trigger => trigger
-                .WithIdentity($"{MeshCentralIdentityReconciliationJob.Key.Name}-trigger", MeshCentralIdentityReconciliationJob.Key.Group)
-                .WithCronSchedule("0 0 * * * ?")
-                .WithDescription("Backfill MeshCentral identity sync"));
-
-            // ── MeshCentral Group Policy Reconciliation: hourly ────────
-            q.ScheduleJob<MeshCentralGroupPolicyReconciliationJob>(trigger => trigger
-                .WithIdentity($"{MeshCentralGroupPolicyReconciliationJob.Key.Name}-trigger", MeshCentralGroupPolicyReconciliationJob.Key.Group)
-                .WithCronSchedule("0 30 * * * ?")
-                .WithDescription("Backfill MeshCentral group policy sync"));
         });
 
         services.AddQuartzHostedService(options =>

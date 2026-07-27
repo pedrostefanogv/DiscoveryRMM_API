@@ -8,11 +8,12 @@
 
 ## 0. Changelog
 
-| Versao | Data | Mudancas |
-|---|---|---|
-| 1.2.0 | 2026-05-13 | Priorizacao de `tenant.{c}.p2p.events` para descoberta P2P por cliente; permissao de subscribe para AgentIdentity; `tenant.{c}.site.{s}.p2p.discovery` marcado como descontinuado. |
-| 1.1.0 | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`), envelope de dispatch com idempotencia e ACL dedicada para fan-out sem loop agente-a-agente. |
-| 1.0.0 | 2026-05-05 | Versao inicial consolidada de subjects e ACL. |
+| Versao | Data       | Mudancas                                                                                                                                                                                                         |
+| ------ | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.3.0  | 2026-07-27 | Inclusao do perfil `RemoteSessionParticipant` com ACL scoped por sessao (`remote.session.{id}.*`). Publisher/Subscriber para acesso remoto nativo (screen, terminal, files, proxy, recording, WebRTC signaling). |
+| 1.2.0  | 2026-05-13 | Priorizacao de `tenant.{c}.p2p.events` para descoberta P2P por cliente; permissao de subscribe para AgentIdentity; `tenant.{c}.site.{s}.p2p.discovery` marcado como descontinuado.                               |
+| 1.1.0  | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`), envelope de dispatch com idempotencia e ACL dedicada para fan-out sem loop agente-a-agente.                                                |
+| 1.0.0  | 2026-05-05 | Versao inicial consolidada de subjects e ACL.                                                                                                                                                                    |
 
 ---
 
@@ -29,24 +30,37 @@ Este documento consolida:
 
 ## 2. Matriz completa de subjects
 
-| Subject | Direcao | Publisher | Subscriber | Payload |
-|---|---|---|---|---|
-| `tenant.{c}.site.{s}.agent.{a}.heartbeat` | Agent -> Servidor | Agent | Servidor | `AgentHeartbeat` |
-| `tenant.{c}.site.{s}.agent.{a}.command` | Servidor -> Agent | Servidor | Agent | `CommandEnvelope` |
-| `tenant.{c}.site.{s}.agents.command` | Servidor -> Agents do site | Servidor | Todos os agents do site | `CommandDispatchEnvelope` |
-| `tenant.{c}.agents.command` | Servidor -> Agents do cliente | Servidor | Todos os agents do cliente | `CommandDispatchEnvelope` |
-| `tenant.global.agents.command` | Servidor -> Todos os agents | Servidor | Todos os agents | `CommandDispatchEnvelope` |
-| `tenant.global.pong` | Servidor -> Todos os agents | Servidor | Todos os agents | `GlobalPongMessage` |
-| `tenant.{c}.site.{s}.agent.{a}.result` | Agent -> Servidor | Agent | Servidor | `CommandResult` |
-| `tenant.{c}.site.{s}.agent.{a}.sync.ping` | Servidor -> Agent | Servidor | Agent | `SyncInvalidationPingMessage` |
-| `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` | Agent -> Servidor | Agent | Servidor | `RemoteDebugLogEntry` |
-| `tenant.{c}.site.{s}.agent.{a}.hardware` | Agent -> Servidor | Agent | Servidor | `HardwareReport` |
-| `tenant.{c}.p2p.events` | Servidor -> Agents do cliente | Servidor | Agents do cliente | `P2pPeerOnlineEvent` |
-| `tenant.{c}.site.{s}.p2p.discovery` | descontinuado | legado | nao usar | legado/transicao |
-| `tenant.{c}.site.{s}.dashboard.events` | Servidor/Agent -> Consumidores | Servidor e Agent | Frontend (WS) e consumidores internos | `DashboardEvent<T>` |
-| `tenant.{c}.dashboard.events` | Servidor -> Consumidores | Servidor | Frontend (WS) e consumidores internos | `DashboardEvent<T>` (fallback por cliente) |
-| `tenant.unscoped.dashboard.events` | Servidor -> Consumidores | Servidor | Frontend (WS) e consumidores internos | `DashboardEvent<T>` (fallback sem tenant) |
-| `tenant.{c}.site.{s}.agent.{a}.dashboard.events` | legado/transicao | legado | nao usar na UI | legado; convergir para `tenant.{c}.site.{s}.dashboard.events` |
+| Subject                                                                    | Direcao                        | Publisher        | Subscriber                            | Payload                                                           |
+| -------------------------------------------------------------------------- | ------------------------------ | ---------------- | ------------------------------------- | ----------------------------------------------------------------- |
+| `tenant.{c}.site.{s}.agent.{a}.heartbeat`                                  | Agent -> Servidor              | Agent            | Servidor                              | `AgentHeartbeat`                                                  |
+| `tenant.{c}.site.{s}.agent.{a}.command`                                    | Servidor -> Agent              | Servidor         | Agent                                 | `CommandEnvelope`                                                 |
+| `tenant.{c}.site.{s}.agents.command`                                       | Servidor -> Agents do site     | Servidor         | Todos os agents do site               | `CommandDispatchEnvelope`                                         |
+| `tenant.{c}.agents.command`                                                | Servidor -> Agents do cliente  | Servidor         | Todos os agents do cliente            | `CommandDispatchEnvelope`                                         |
+| `tenant.global.agents.command`                                             | Servidor -> Todos os agents    | Servidor         | Todos os agents                       | `CommandDispatchEnvelope`                                         |
+| `tenant.global.pong`                                                       | Servidor -> Todos os agents    | Servidor         | Todos os agents                       | `GlobalPongMessage`                                               |
+| `tenant.{c}.site.{s}.agent.{a}.result`                                     | Agent -> Servidor              | Agent            | Servidor                              | `CommandResult`                                                   |
+| `tenant.{c}.site.{s}.agent.{a}.sync.ping`                                  | Servidor -> Agent              | Servidor         | Agent                                 | `SyncInvalidationPingMessage`                                     |
+| `tenant.{c}.site.{s}.agent.{a}.remote-debug.log`                           | Agent -> Servidor              | Agent            | Servidor                              | `RemoteDebugLogEntry`                                             |
+| `tenant.{c}.site.{s}.agent.{a}.hardware`                                   | Agent -> Servidor              | Agent            | Servidor                              | `HardwareReport`                                                  |
+| `tenant.{c}.p2p.events`                                                    | Servidor -> Agents do cliente  | Servidor         | Agents do cliente                     | `P2pPeerOnlineEvent`                                              |
+| `tenant.{c}.site.{s}.p2p.discovery`                                        | descontinuado                  | legado           | nao usar                              | legado/transicao                                                  |
+| `tenant.{c}.site.{s}.dashboard.events`                                     | Servidor/Agent -> Consumidores | Servidor e Agent | Frontend (WS) e consumidores internos | `DashboardEvent<T>`                                               |
+| `tenant.{c}.dashboard.events`                                              | Servidor -> Consumidores       | Servidor         | Frontend (WS) e consumidores internos | `DashboardEvent<T>` (fallback por cliente)                        |
+| `tenant.unscoped.dashboard.events`                                         | Servidor -> Consumidores       | Servidor         | Frontend (WS) e consumidores internos | `DashboardEvent<T>` (fallback sem tenant)                         |
+| `tenant.{c}.site.{s}.agent.{a}.dashboard.events`                           | legado/transicao               | legado           | nao usar na UI                        | legado; convergir para `tenant.{c}.site.{s}.dashboard.events`     |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.control`         | Servidor -> Agent              | Servidor         | Agent                                 | JSON: `{action, sessionId, kind, transport, quality, codec, ...}` |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.event`           | Agent -> Servidor/Viewer       | Agent            | Servidor + Viewer                     | JSON: `{eventType, sessionId, ...}`                               |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.frame`           | Agent -> Viewer                | Agent            | Viewer (browser)                      | Binario: header 12B + frame JPEG/WebP/H.264                       |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.input`           | Viewer -> Agent                | Viewer           | Agent                                 | MessagePack: mouse/keyboard/clipboard                             |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.ack`             | Viewer -> Agent                | Viewer           | Agent                                 | JSON: `{seq, rttMs, jitterMs, estimatedBandwidthKbps}`            |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.out`        | Agent -> Viewer                | Agent            | Viewer                                | JSON: `{data, seq}`                                               |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.in`         | Viewer -> Agent                | Viewer           | Agent                                 | JSON: `{data, cols, rows}`                                        |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.req`       | Viewer -> Agent                | Viewer           | Agent                                 | JSON: `{action, path, chunkIndex?, data?}`                        |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.resp`      | Agent -> Viewer                | Agent            | Viewer                                | JSON: `{status, entries?, chunkData?, ...}`                       |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.req`       | Viewer -> Agent                | Viewer           | Agent                                 | JSON: `{method, url, headers, body?}`                             |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.resp`      | Agent -> Viewer                | Agent            | Viewer                                | JSON: `{status, headers, body?, error?}`                          |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal`          | Bidirecional                   | Viewer/Agent     | Agent/Viewer                          | JSON: SDP offer/answer + ICE candidates                           |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.recording.frame` | Agent -> Servidor              | Agent            | Servidor                              | Binario: header + frame                                           |
 
 ---
 
@@ -78,15 +92,15 @@ Exemplo:
 
 ```json
 {
-	"agentId": "d2719a7d-43bb-4e7e-bbe6-18dce7bf1db7",
-	"clientId": "11111111-1111-1111-1111-111111111111",
-	"siteId": "22222222-2222-2222-2222-222222222222",
-	"hostname": "HOMOLOG-WIN-01",
-	"timestampUtc": "2026-05-05T10:00:00Z",
-	"cpuPercent": 17.3,
-	"memoryPercent": 42.1,
-	"diskPercent": 58.2,
-	"processCount": 120
+  "agentId": "d2719a7d-43bb-4e7e-bbe6-18dce7bf1db7",
+  "clientId": "11111111-1111-1111-1111-111111111111",
+  "siteId": "22222222-2222-2222-2222-222222222222",
+  "hostname": "HOMOLOG-WIN-01",
+  "timestampUtc": "2026-05-05T10:00:00Z",
+  "cpuPercent": 17.3,
+  "memoryPercent": 42.1,
+  "diskPercent": 58.2,
+  "processCount": 120
 }
 ```
 
@@ -103,16 +117,16 @@ Envelope recomendado para unicast e fan-out:
 
 ```json
 {
-	"dispatchId": "guid",
-	"commandId": "guid|null",
-	"commandType": "shell|powershell|script|filetransfer|systeminfo|restart|shutdown|update|remotedebug|showpsadtalert|notification",
-	"targetScope": "agent|site|client|global",
-	"targetClientId": "guid|null",
-	"targetSiteId": "guid|null",
-	"issuedAtUtc": "2026-05-05T10:00:00Z",
-	"expiresAtUtc": "2026-05-05T10:30:00Z|null",
-	"idempotencyKey": "string",
-	"payload": "json-string"
+  "dispatchId": "guid",
+  "commandId": "guid|null",
+  "commandType": "shell|powershell|script|filetransfer|systeminfo|restart|shutdown|update|remotedebug|showpsadtalert|notification",
+  "targetScope": "agent|site|client|global",
+  "targetClientId": "guid|null",
+  "targetSiteId": "guid|null",
+  "issuedAtUtc": "2026-05-05T10:00:00Z",
+  "expiresAtUtc": "2026-05-05T10:30:00Z|null",
+  "idempotencyKey": "string",
+  "payload": "json-string"
 }
 ```
 
@@ -127,12 +141,12 @@ Regras:
 
 ```json
 {
-	"dispatchId": "guid|null",
-	"commandId": "guid|null",
-	"agentId": "guid",
-	"exitCode": 0,
-	"output": "string",
-	"errorMessage": "string"
+  "dispatchId": "guid|null",
+  "commandId": "guid|null",
+  "agentId": "guid",
+  "exitCode": 0,
+  "output": "string",
+  "errorMessage": "string"
 }
 ```
 
@@ -156,12 +170,12 @@ Campos:
 
 ```json
 {
-	"sessionId": "guid",
-	"agentId": "guid",
-	"message": "string",
-	"level": "info|debug|warn|error",
-	"timestampUtc": "2026-05-05T10:00:00Z",
-	"sequence": 1
+  "sessionId": "guid",
+  "agentId": "guid",
+  "message": "string",
+  "level": "info|debug|warn|error",
+  "timestampUtc": "2026-05-05T10:00:00Z",
+  "sequence": 1
 }
 ```
 
@@ -169,15 +183,15 @@ Campos:
 
 ```json
 {
-	"eventType": "peer.online",
-	"clientId": "11111111-1111-1111-1111-111111111111",
-	"siteId": "22222222-2222-2222-2222-222222222222",
-	"agentId": "d2719a7d-43bb-4e7e-bbe6-18dce7bf1db7",
-	"peerId": "12D3KooW...",
-	"addrs": ["10.0.0.10"],
-	"port": 41090,
-	"generatedAtUtc": "2026-05-05T10:00:00Z",
-	"sequence": 10
+  "eventType": "peer.online",
+  "clientId": "11111111-1111-1111-1111-111111111111",
+  "siteId": "22222222-2222-2222-2222-222222222222",
+  "agentId": "d2719a7d-43bb-4e7e-bbe6-18dce7bf1db7",
+  "peerId": "12D3KooW...",
+  "addrs": ["10.0.0.10"],
+  "port": 41090,
+  "generatedAtUtc": "2026-05-05T10:00:00Z",
+  "sequence": 10
 }
 ```
 
@@ -205,11 +219,11 @@ Envelope canonico:
 
 ```json
 {
-	"eventType": "AgentHeartbeat|AgentStatusChanged|CommandCompleted|AgentHardwareReported|AgentConnected|AgentDisconnected",
-	"data": {},
-	"timestampUtc": "2026-05-05T10:00:00Z",
-	"clientId": "11111111-1111-1111-1111-111111111111",
-	"siteId": "22222222-2222-2222-2222-222222222222"
+  "eventType": "AgentHeartbeat|AgentStatusChanged|CommandCompleted|AgentHardwareReported|AgentConnected|AgentDisconnected",
+  "data": {},
+  "timestampUtc": "2026-05-05T10:00:00Z",
+  "clientId": "11111111-1111-1111-1111-111111111111",
+  "siteId": "22222222-2222-2222-2222-222222222222"
 }
 ```
 
@@ -224,9 +238,9 @@ Regras:
 
 ```json
 {
-	"eventType": "pong",
-	"serverTimeUtc": "2026-05-05T10:00:00Z",
-	"serverOverloaded": "true|false|null"
+  "eventType": "pong",
+  "serverTimeUtc": "2026-05-05T10:00:00Z",
+  "serverOverloaded": "true|false|null"
 }
 ```
 
@@ -267,14 +281,15 @@ Ativacao da logica de sobrecarga (servidor):
 
 ### 5.1 Matriz de permissao
 
-| Perfil | Subscribe allow | Publish allow | Bloqueios obrigatorios |
-|---|---|---|---|
-| SiteUser | `tenant.{c}.site.{s}.dashboard.events` | nenhum | qualquer wildcard fora do site, subjects operacionais |
-| ClientManager | `tenant.{c}.site.*.dashboard.events`, `tenant.{c}.dashboard.events` | nenhum | outros clientes, subjects operacionais |
-| GlobalAdmin | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` | nenhum | publish pelo browser |
-| AgentIdentity | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.p2p.events` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` | bloquear subscribe/publish fora do escopo do tenant/site/agent |
-| ServerCommandPublisher | `tenant.*.site.*.agent.*.result` | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command` | nao expor credencial no browser |
-| BackendInternal | conforme servico | opcional e restrito | nao reutilizar token de backend no browser |
+| Perfil                   | Subscribe allow                                                                                                                                                                                                                                                                                                                                                                                                          | Publish allow                                                                                                                                                                                                                                                                                                                                                                                                       | Bloqueios obrigatorios                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| SiteUser                 | `tenant.{c}.site.{s}.dashboard.events`                                                                                                                                                                                                                                                                                                                                                                                   | nenhum                                                                                                                                                                                                                                                                                                                                                                                                              | qualquer wildcard fora do site, subjects operacionais          |
+| ClientManager            | `tenant.{c}.site.*.dashboard.events`, `tenant.{c}.dashboard.events`                                                                                                                                                                                                                                                                                                                                                      | nenhum                                                                                                                                                                                                                                                                                                                                                                                                              | outros clientes, subjects operacionais                         |
+| GlobalAdmin              | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events`                                                                                                                                                                                                                                                                                                                      | nenhum                                                                                                                                                                                                                                                                                                                                                                                                              | publish pelo browser                                           |
+| AgentIdentity            | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.p2p.events`                                                                                                                                                                                     | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log`                                                                                                                                                                                                                                       | bloquear subscribe/publish fora do escopo do tenant/site/agent |
+| ServerCommandPublisher   | `tenant.*.site.*.agent.*.result`                                                                                                                                                                                                                                                                                                                                                                                         | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`                                                                                                                                                                                                                                                                          | nao expor credencial no browser                                |
+| BackendInternal          | conforme servico                                                                                                                                                                                                                                                                                                                                                                                                         | opcional e restrito                                                                                                                                                                                                                                                                                                                                                                                                 | nao reutilizar token de backend no browser                     |
+| RemoteSessionParticipant | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.frame`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.event`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.out`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.resp`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.resp`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal` | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.input`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.ack`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.in`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal` | apenas subjects da propria sessao; JWT scoped por sessionId    |
 
 ### 5.2 Regras de emissao de JWT
 
@@ -289,16 +304,16 @@ Ativacao da logica de sobrecarga (servidor):
 
 ```json
 {
-	"nats": {
-		"sub": {
-			"allow": [
-				"tenant.11111111-1111-1111-1111-111111111111.site.22222222-2222-2222-2222-222222222222.dashboard.events"
-			]
-		},
-		"pub": {
-			"allow": []
-		}
-	}
+  "nats": {
+    "sub": {
+      "allow": [
+        "tenant.11111111-1111-1111-1111-111111111111.site.22222222-2222-2222-2222-222222222222.dashboard.events"
+      ]
+    },
+    "pub": {
+      "allow": []
+    }
+  }
 }
 ```
 
@@ -306,18 +321,18 @@ Ativacao da logica de sobrecarga (servidor):
 
 ```json
 {
-	"nats": {
-		"sub": {
-			"allow": [
-				"tenant.*.site.*.dashboard.events",
-				"tenant.*.dashboard.events",
-				"tenant.unscoped.dashboard.events"
-			]
-		},
-		"pub": {
-			"allow": []
-		}
-	}
+  "nats": {
+    "sub": {
+      "allow": [
+        "tenant.*.site.*.dashboard.events",
+        "tenant.*.dashboard.events",
+        "tenant.unscoped.dashboard.events"
+      ]
+    },
+    "pub": {
+      "allow": []
+    }
+  }
 }
 ```
 

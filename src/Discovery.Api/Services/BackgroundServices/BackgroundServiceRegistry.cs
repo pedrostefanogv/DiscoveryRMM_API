@@ -207,8 +207,7 @@ public static class BackgroundServiceCategoryMap
         // Knowledge — migrated to Quartz (KnowledgeEmbeddingJob)
         // Alerts — migrated to Quartz (AlertSchedulerJob, SlaMonitoringJob)
         // Reports — migrated to Quartz (ReportGenerationJob, ReportScheduleDispatchJob)
-        // Reconciliation — migrated to Quartz (AgentLabelingReconciliationJob,
-        // MeshCentralIdentityReconciliationJob, MeshCentralGroupPolicyReconciliationJob)
+        // Reconciliation — migrated to Quartz (AgentLabelingReconciliationJob)
         // Remote debug
         ["RemoteDebugSessionCleanupService"] = BackgroundServiceCategories.RemoteDebug,
         // Sync

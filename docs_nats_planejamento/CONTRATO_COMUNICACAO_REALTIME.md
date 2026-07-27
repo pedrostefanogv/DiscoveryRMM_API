@@ -9,44 +9,45 @@
 
 ## 0. Changelog
 
-| Versao | Data | Mudancas |
-|---|---|---|
-| 4.4.0 | 2026-05-13 | Descoberta P2P movida para o heartbeat: `AgentHeartbeat` enriquecido com `peerId`/`addrs`/`port`; `POST /p2p/bootstrap` removido; evento `peer.online` publicado em `tenant.{c}.p2p.events` na transicao Offline->Online detectada pelo `HeartbeatCacheService` |
-| 4.2.0 | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`) com subjects dedicados (`*.agents.command`), envelope de dispatch, regras de idempotencia e diretrizes de ACL para alto volume. |
-| 4.1.0 | 2026-05-05 | Padronizacao detalhada de subjects (publish/subscribe), regra explicita de matching NATS, inclusao do subject por cliente (`tenant.{clientId}.dashboard.events`), secao de ACL por perfil e alinhamento com a implementacao de credenciais NATS. |
-| 4.0.0 | 2026-05-05 | Contrato consolidado em NATS de ponta a ponta (nativo e WebSocket), remocao do fluxo de hub legado, secao dedicada de conexao browser via NATS WS, checklist e plano de acao revisados para canal unico por subjects. |
-| 3.0.0 | 2026-05-05 | Consolidacao de envelope canonico, tabelas de equivalencia e plano de convergencia. |
-| 2.0.0 | 2026-05-05 | Contrato executavel com validacao por componente e checklist. |
-| 1.x | - | Versoes iniciais. |
+| Versao | Data       | Mudancas                                                                                                                                                                                                                                                        |
+| ------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4.5.0  | 2026-07-27 | Inclusao dos subjects de acesso remoto nativo (`remote.session.*`) para screen capture, terminal interativo, transferencia de arquivos, proxy de rede, gravacao de sessao e sinalizacao WebRTC. Substitui MeshCentral.                                          |
+| 4.4.0  | 2026-05-13 | Descoberta P2P movida para o heartbeat: `AgentHeartbeat` enriquecido com `peerId`/`addrs`/`port`; `POST /p2p/bootstrap` removido; evento `peer.online` publicado em `tenant.{c}.p2p.events` na transicao Offline->Online detectada pelo `HeartbeatCacheService` |
+| 4.2.0  | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`) com subjects dedicados (`*.agents.command`), envelope de dispatch, regras de idempotencia e diretrizes de ACL para alto volume.                                                            |
+| 4.1.0  | 2026-05-05 | Padronizacao detalhada de subjects (publish/subscribe), regra explicita de matching NATS, inclusao do subject por cliente (`tenant.{clientId}.dashboard.events`), secao de ACL por perfil e alinhamento com a implementacao de credenciais NATS.                |
+| 4.0.0  | 2026-05-05 | Contrato consolidado em NATS de ponta a ponta (nativo e WebSocket), remocao do fluxo de hub legado, secao dedicada de conexao browser via NATS WS, checklist e plano de acao revisados para canal unico por subjects.                                           |
+| 3.0.0  | 2026-05-05 | Consolidacao de envelope canonico, tabelas de equivalencia e plano de convergencia.                                                                                                                                                                             |
+| 2.0.0  | 2026-05-05 | Contrato executavel com validacao por componente e checklist.                                                                                                                                                                                                   |
+| 1.x    | -          | Versoes iniciais.                                                                                                                                                                                                                                               |
 
 ---
 
 ## 1. Principios
 
-| # | Regra |
-|---|---|
-| 0 | Single Source of Truth: este arquivo no repositorio da API e a unica especificacao valida. |
-| 1 | NATS e o barramento unico de realtime para todos os componentes. |
-| 2 | NATS nativo e obrigatorio para servidor, agent e servicos backend. |
-| 3 | NATS via WebSocket e obrigatorio para browser/dashboard. |
-| 4 | JSON camelCase em todos os payloads no wire. |
-| 5 | Subjects NATS em minusculas, separados por ponto. |
-| 6 | Eventos de dashboard devem trafegar apenas em `dashboard.events` (nativo ou WS). |
-| 7 | Notificacoes ao agent chegam por `.command` com `commandType = "notification"`. |
-| 8 | Mesmo DTO/shape em NATS nativo e NATS WS (sem duplicacao por transporte). |
-| 9 | Campo de tempo padrao: `timestampUtc` em ISO-8601 UTC. |
-| 10 | `eventType` em PascalCase e enum fechado. |
-| 11 | Nomes de campo sao exatos (sem aliases em modo estrito). |
-| 12 | Toda violacao de contrato gera log com prefixo `[CONTRACT_VIOLATION]`. |
-| 13 | Cada componente valida na borda de entrada e de saida. |
-| 14 | Nenhum componente pode criar canal paralelo fora do NATS para eventos de dashboard. |
-| 15 | Durante a transicao, normalizacao temporaria e permitida com warning. |
-| 16 | Apos 2026-06-01, modo estrito: mensagem nao conforme deve ser descartada. |
-| 17 | Assinar `tenant.{clientId}.site.{siteId}.dashboard.events` nao inclui subjects mais especificos; matching NATS exige subject exato ou wildcard explicito. |
-| 18 | Subject canonico de dashboard para UI e por site; `tenant.{clientId}.dashboard.events` e `tenant.unscoped.dashboard.events` sao fallbacks controlados de roteamento. |
-| 19 | Comando em massa deve usar subjects dedicados `*.agents.command` por escopo, evitando loop unicast agente-a-agente no servidor. |
-| 20 | Todo comando em massa deve carregar `dispatchId` e `idempotencyKey` para execucao idempotente no agent. |
-| 21 | Resultado de comando em massa deve incluir `dispatchId` para consolidacao de campanha por agent. |
+| #   | Regra                                                                                                                                                                |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0   | Single Source of Truth: este arquivo no repositorio da API e a unica especificacao valida.                                                                           |
+| 1   | NATS e o barramento unico de realtime para todos os componentes.                                                                                                     |
+| 2   | NATS nativo e obrigatorio para servidor, agent e servicos backend.                                                                                                   |
+| 3   | NATS via WebSocket e obrigatorio para browser/dashboard.                                                                                                             |
+| 4   | JSON camelCase em todos os payloads no wire.                                                                                                                         |
+| 5   | Subjects NATS em minusculas, separados por ponto.                                                                                                                    |
+| 6   | Eventos de dashboard devem trafegar apenas em `dashboard.events` (nativo ou WS).                                                                                     |
+| 7   | Notificacoes ao agent chegam por `.command` com `commandType = "notification"`.                                                                                      |
+| 8   | Mesmo DTO/shape em NATS nativo e NATS WS (sem duplicacao por transporte).                                                                                            |
+| 9   | Campo de tempo padrao: `timestampUtc` em ISO-8601 UTC.                                                                                                               |
+| 10  | `eventType` em PascalCase e enum fechado.                                                                                                                            |
+| 11  | Nomes de campo sao exatos (sem aliases em modo estrito).                                                                                                             |
+| 12  | Toda violacao de contrato gera log com prefixo `[CONTRACT_VIOLATION]`.                                                                                               |
+| 13  | Cada componente valida na borda de entrada e de saida.                                                                                                               |
+| 14  | Nenhum componente pode criar canal paralelo fora do NATS para eventos de dashboard.                                                                                  |
+| 15  | Durante a transicao, normalizacao temporaria e permitida com warning.                                                                                                |
+| 16  | Apos 2026-06-01, modo estrito: mensagem nao conforme deve ser descartada.                                                                                            |
+| 17  | Assinar `tenant.{clientId}.site.{siteId}.dashboard.events` nao inclui subjects mais especificos; matching NATS exige subject exato ou wildcard explicito.            |
+| 18  | Subject canonico de dashboard para UI e por site; `tenant.{clientId}.dashboard.events` e `tenant.unscoped.dashboard.events` sao fallbacks controlados de roteamento. |
+| 19  | Comando em massa deve usar subjects dedicados `*.agents.command` por escopo, evitando loop unicast agente-a-agente no servidor.                                      |
+| 20  | Todo comando em massa deve carregar `dispatchId` e `idempotencyKey` para execucao idempotente no agent.                                                              |
+| 21  | Resultado de comando em massa deve incluir `dispatchId` para consolidacao de campanha por agent.                                                                     |
 
 ---
 
@@ -69,6 +70,21 @@ tenant.{clientId}.p2p.events
 tenant.{clientId}.site.{siteId}.dashboard.events
 tenant.{clientId}.dashboard.events
 tenant.unscoped.dashboard.events
+
+# Acesso Remoto Nativo (substitui MeshCentral)
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.control
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.event
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.frame
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.input
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.ack
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.term.out
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.term.in
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.files.req
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.files.resp
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.proxy.req
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.proxy.resp
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.signal
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.recording.frame
 ```
 
 ### 2.0 Regra de matching e roteamento
@@ -85,55 +101,59 @@ tenant.unscoped.dashboard.events
 
 ### 2.1 Heartbeat
 
-| Propriedade | Valor |
-|---|---|
-| Subject | `tenant.{clientId}.site.{siteId}.agent.{agentId}.heartbeat` |
-| Direcao | Agent -> Servidor |
-| DTO | `AgentHeartbeat` |
-| Nota | Fonte de verdade para descoberta P2P: `peer.online` e disparado quando o servidor detecta transicao Offline->Online no heartbeat |
+| Propriedade | Valor                                                                                                                            |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Subject     | `tenant.{clientId}.site.{siteId}.agent.{agentId}.heartbeat`                                                                      |
+| Direcao     | Agent -> Servidor                                                                                                                |
+| DTO         | `AgentHeartbeat`                                                                                                                 |
+| Nota        | Fonte de verdade para descoberta P2P: `peer.online` e disparado quando o servidor detecta transicao Offline->Online no heartbeat |
 
-| Campo | Tipo C# | Obrigatorio | Descricao P2P |
-|---|---|---|---|
-| `agentId` | `Guid` | sim | |
-| `clientId` | `Guid?` | nao | |
-| `siteId` | `Guid?` | nao | |
-| `ipAddress` | `string?` | nao | |
-| `hostname` | `string?` | nao | |
-| `agentVersion` | `string?` | nao | |
-| `timestampUtc` | `DateTime?` | nao | |
-| `cpuPercent` | `double?` | nao | |
-| `memoryPercent` | `double?` | nao | |
-| `memoryTotalGb` | `double?` | nao | |
-| `memoryUsedGb` | `double?` | nao | |
-| `diskPercent` | `double?` | nao | |
-| `diskTotalGb` | `double?` | nao | |
-| `diskUsedGb` | `double?` | nao | |
-| `p2pPeers` | `int?` | nao | |
-| `uptimeSeconds` | `long?` | nao | |
-| `processCount` | `int?` | nao | |
-| `peerId` | `string?` | nao (sim se P2P habilitado) | Peer ID libp2p (12D3KooW...) |
-| `addrs` | `string[]?` | nao (sim se P2P habilitado) | IPs IPv4 roteaveis |
-| `port` | `int?` | nao (sim se P2P habilitado) | Porta TCP/QUIC libp2p |
+| Campo           | Tipo C#     | Obrigatorio                 | Descricao P2P                |
+| --------------- | ----------- | --------------------------- | ---------------------------- |
+| `agentId`       | `Guid`      | sim                         |                              |
+| `clientId`      | `Guid?`     | nao                         |                              |
+| `siteId`        | `Guid?`     | nao                         |                              |
+| `ipAddress`     | `string?`   | nao                         |                              |
+| `hostname`      | `string?`   | nao                         |                              |
+| `agentVersion`  | `string?`   | nao                         |                              |
+| `timestampUtc`  | `DateTime?` | nao                         |                              |
+| `cpuPercent`    | `double?`   | nao                         |                              |
+| `memoryPercent` | `double?`   | nao                         |                              |
+| `memoryTotalGb` | `double?`   | nao                         |                              |
+| `memoryUsedGb`  | `double?`   | nao                         |                              |
+| `diskPercent`   | `double?`   | nao                         |                              |
+| `diskTotalGb`   | `double?`   | nao                         |                              |
+| `diskUsedGb`    | `double?`   | nao                         |                              |
+| `p2pPeers`      | `int?`      | nao                         |                              |
+| `uptimeSeconds` | `long?`     | nao                         |                              |
+| `processCount`  | `int?`      | nao                         |                              |
+| `peerId`        | `string?`   | nao (sim se P2P habilitado) | Peer ID libp2p (12D3KooW...) |
+| `addrs`         | `string[]?` | nao (sim se P2P habilitado) | IPs IPv4 roteaveis           |
+| `port`          | `int?`      | nao (sim se P2P habilitado) | Porta TCP/QUIC libp2p        |
 
 ### 2.2 Comando (unicast)
 
-| Propriedade | Valor |
-|---|---|
-| Subject | `tenant.{clientId}.site.{siteId}.agent.{agentId}.command` |
-| Direcao | Servidor -> Agent |
+| Propriedade | Valor                                                     |
+| ----------- | --------------------------------------------------------- |
+| Subject     | `tenant.{clientId}.site.{siteId}.agent.{agentId}.command` |
+| Direcao     | Servidor -> Agent                                         |
 
 ```json
-{ "commandId": "Guid", "commandType": "string", "payload": "{\"command\":\"Get-Date\",\"timeoutSec\":30}" }
+{
+  "commandId": "Guid",
+  "commandType": "string",
+  "payload": "{\"command\":\"Get-Date\",\"timeoutSec\":30}"
+}
 ```
 
 ### 2.2.1 Comando em massa (fan-out)
 
-| Propriedade | Valor |
-|---|---|
-| Subject por site | `tenant.{clientId}.site.{siteId}.agents.command` |
-| Subject por cliente | `tenant.{clientId}.agents.command` |
-| Subject global | `tenant.global.agents.command` |
-| Direcao | Servidor -> Agents |
+| Propriedade         | Valor                                            |
+| ------------------- | ------------------------------------------------ |
+| Subject por site    | `tenant.{clientId}.site.{siteId}.agents.command` |
+| Subject por cliente | `tenant.{clientId}.agents.command`               |
+| Subject global      | `tenant.global.agents.command`                   |
+| Direcao             | Servidor -> Agents                               |
 
 Envelope recomendado:
 
@@ -161,10 +181,10 @@ Regras minimas:
 
 ### 2.2.2 Pong global (liveness do servidor)
 
-| Propriedade | Valor |
-|---|---|
-| Subject | `tenant.global.pong` |
-| Direcao | Servidor -> Agents |
+| Propriedade  | Valor                     |
+| ------------ | ------------------------- |
+| Subject      | `tenant.global.pong`      |
+| Direcao      | Servidor -> Agents        |
 | Persistencia | nao persistir para replay |
 
 Payload recomendado:
@@ -190,13 +210,20 @@ Regras:
 
 ### 2.3 Resultado
 
-| Propriedade | Valor |
-|---|---|
-| Subject | `tenant.{clientId}.site.{siteId}.agent.{agentId}.result` |
-| Direcao | Agent -> Servidor |
+| Propriedade | Valor                                                    |
+| ----------- | -------------------------------------------------------- |
+| Subject     | `tenant.{clientId}.site.{siteId}.agent.{agentId}.result` |
+| Direcao     | Agent -> Servidor                                        |
 
 ```json
-{ "dispatchId": "Guid?", "commandId": "Guid?", "agentId": "Guid", "exitCode": 0, "output": "string", "errorMessage": "string" }
+{
+  "dispatchId": "Guid?",
+  "commandId": "Guid?",
+  "agentId": "Guid",
+  "exitCode": 0,
+  "output": "string",
+  "errorMessage": "string"
+}
 ```
 
 Regra:
@@ -205,59 +232,59 @@ Regra:
 
 ### 2.4 Sync Ping
 
-| Propriedade | Valor |
-|---|---|
-| Subject | `tenant.{clientId}.site.{siteId}.agent.{agentId}.sync.ping` |
-| Direcao | Servidor -> Agent |
+| Propriedade | Valor                                                       |
+| ----------- | ----------------------------------------------------------- |
+| Subject     | `tenant.{clientId}.site.{siteId}.agent.{agentId}.sync.ping` |
+| Direcao     | Servidor -> Agent                                           |
 
-| Campo | Tipo | Obrigatorio |
-|---|---|---|
-| `eventId` | `Guid` | sim |
-| `agentId` | `Guid` | sim |
-| `eventType` | `string` | sim (`"sync.invalidated"`) |
-| `resource` | `string` | sim |
-| `scopeType` | `string` | sim |
-| `scopeId` | `Guid?` | nao |
-| `installationType` | `string?` | nao |
-| `revision` | `string` | sim |
-| `reason` | `string?` | nao |
-| `changedAtUtc` | `DateTime` | sim |
-| `correlationId` | `string?` | nao |
+| Campo              | Tipo       | Obrigatorio                |
+| ------------------ | ---------- | -------------------------- |
+| `eventId`          | `Guid`     | sim                        |
+| `agentId`          | `Guid`     | sim                        |
+| `eventType`        | `string`   | sim (`"sync.invalidated"`) |
+| `resource`         | `string`   | sim                        |
+| `scopeType`        | `string`   | sim                        |
+| `scopeId`          | `Guid?`    | nao                        |
+| `installationType` | `string?`  | nao                        |
+| `revision`         | `string`   | sim                        |
+| `reason`           | `string?`  | nao                        |
+| `changedAtUtc`     | `DateTime` | sim                        |
+| `correlationId`    | `string?`  | nao                        |
 
 ### 2.5 Remote Debug Log
 
-| Propriedade | Valor |
-|---|---|
-| Subject | `tenant.{clientId}.site.{siteId}.agent.{agentId}.remote-debug.log` |
-| Direcao | Agent -> Servidor |
+| Propriedade | Valor                                                              |
+| ----------- | ------------------------------------------------------------------ |
+| Subject     | `tenant.{clientId}.site.{siteId}.agent.{agentId}.remote-debug.log` |
+| Direcao     | Agent -> Servidor                                                  |
 
-| Campo | Tipo | Obrigatorio |
-|---|---|---|
-| `sessionId` | `Guid` | sim |
-| `agentId` | `Guid?` | nao |
-| `message` | `string?` | nao |
-| `level` | `string?` | nao |
-| `timestampUtc` | `DateTime?` | nao |
-| `sequence` | `long?` | nao |
+| Campo          | Tipo        | Obrigatorio |
+| -------------- | ----------- | ----------- |
+| `sessionId`    | `Guid`      | sim         |
+| `agentId`      | `Guid?`     | nao         |
+| `message`      | `string?`   | nao         |
+| `level`        | `string?`   | nao         |
+| `timestampUtc` | `DateTime?` | nao         |
+| `sequence`     | `long?`     | nao         |
 
 ### 2.6 P2P Events
 
-| Propriedade | Valor |
-|---|---|
-| Subject | `tenant.{clientId}.p2p.events` |
-| Direcao | Servidor -> Agents |
+| Propriedade | Valor                          |
+| ----------- | ------------------------------ |
+| Subject     | `tenant.{clientId}.p2p.events` |
+| Direcao     | Servidor -> Agents             |
 
-| Campo | Tipo |
-|---|---|
-| `eventType` | `string` (`peer.online`) |
-| `clientId` | `Guid` |
-| `siteId` | `Guid` |
-| `agentId` | `Guid` |
-| `peerId` | `string` |
-| `addrs` | `string[]` |
-| `port` | `int` |
-| `sequence` | `int` |
-| `generatedAtUtc` | `DateTime` |
+| Campo            | Tipo                     |
+| ---------------- | ------------------------ |
+| `eventType`      | `string` (`peer.online`) |
+| `clientId`       | `Guid`                   |
+| `siteId`         | `Guid`                   |
+| `agentId`        | `Guid`                   |
+| `peerId`         | `string`                 |
+| `addrs`          | `string[]`               |
+| `port`           | `int`                    |
+| `sequence`       | `int`                    |
+| `generatedAtUtc` | `DateTime`               |
 
 Regras:
 
@@ -267,43 +294,43 @@ Regras:
 
 ### 2.6.1 Subject legado descontinuado
 
-| Propriedade | Valor |
-|---|---|
-| Subject | `tenant.{clientId}.site.{siteId}.p2p.discovery` |
-| Status | descontinuado |
-| Politica | nao publicar/assinar em novas implementacoes |
+| Propriedade | Valor                                           |
+| ----------- | ----------------------------------------------- |
+| Subject     | `tenant.{clientId}.site.{siteId}.p2p.discovery` |
+| Status      | descontinuado                                   |
+| Politica    | nao publicar/assinar em novas implementacoes    |
 
 ### 2.7 Dashboard Events
 
-| Propriedade | Valor |
-|---|---|
-| Subject principal (site) | `tenant.{clientId}.site.{siteId}.dashboard.events` |
-| Subject por cliente (fallback) | `tenant.{clientId}.dashboard.events` |
-| Subject sem tenant/site (fallback) | `tenant.unscoped.dashboard.events` |
-| Publishers | Servidor (C#) e Agent (Go) |
-| Subscribers | Dashboard (NATS WS) e consumidores internos (NATS nativo) |
-| Consumidor final de UI | Apenas NATS WS assinando `dashboard.events` |
+| Propriedade                        | Valor                                                     |
+| ---------------------------------- | --------------------------------------------------------- |
+| Subject principal (site)           | `tenant.{clientId}.site.{siteId}.dashboard.events`        |
+| Subject por cliente (fallback)     | `tenant.{clientId}.dashboard.events`                      |
+| Subject sem tenant/site (fallback) | `tenant.unscoped.dashboard.events`                        |
+| Publishers                         | Servidor (C#) e Agent (Go)                                |
+| Subscribers                        | Dashboard (NATS WS) e consumidores internos (NATS nativo) |
+| Consumidor final de UI             | Apenas NATS WS assinando `dashboard.events`               |
 
 #### 2.7.1 Envelope canonico (unico aceito)
 
-| Campo | Tipo | Obrigatorio | Validacao |
-|---|---|---|---|
-| `eventType` | `string` | sim | Enum fechado (6 valores, PascalCase) |
-| `data` | `object?` | nao | Shape conforme secao 2.8 |
-| `timestampUtc` | `string` | sim | ISO-8601 UTC |
-| `clientId` | `Guid?` | nao | Raiz do envelope |
-| `siteId` | `Guid?` | nao | Raiz do envelope |
+| Campo          | Tipo      | Obrigatorio | Validacao                            |
+| -------------- | --------- | ----------- | ------------------------------------ |
+| `eventType`    | `string`  | sim         | Enum fechado (6 valores, PascalCase) |
+| `data`         | `object?` | nao         | Shape conforme secao 2.8             |
+| `timestampUtc` | `string`  | sim         | ISO-8601 UTC                         |
+| `clientId`     | `Guid?`   | nao         | Raiz do envelope                     |
+| `siteId`       | `Guid?`   | nao         | Raiz do envelope                     |
 
 #### 2.7.2 `eventType` canonicos (enum fechado)
 
-| `eventType` | Origem | Quando | Payload (`data`) |
-|---|---|---|---|
-| `AgentHeartbeat` | Servidor | Ao processar heartbeat | `AgentHeartbeatData` |
-| `AgentStatusChanged` | Servidor | Agent ficou Online/Offline | `AgentStatusData` |
-| `CommandCompleted` | Servidor | Ao processar resultado de comando | `CommandCompletedData` |
-| `AgentHardwareReported` | Servidor | Ao processar hardware | `AgentHardwareData` |
-| `AgentConnected` | Agent | Auditoria de conexao no broker | `AgentConnectionAuditData` |
-| `AgentDisconnected` | Agent | Auditoria de desconexao no broker | `AgentConnectionAuditData` |
+| `eventType`             | Origem   | Quando                            | Payload (`data`)           |
+| ----------------------- | -------- | --------------------------------- | -------------------------- |
+| `AgentHeartbeat`        | Servidor | Ao processar heartbeat            | `AgentHeartbeatData`       |
+| `AgentStatusChanged`    | Servidor | Agent ficou Online/Offline        | `AgentStatusData`          |
+| `CommandCompleted`      | Servidor | Ao processar resultado de comando | `CommandCompletedData`     |
+| `AgentHardwareReported` | Servidor | Ao processar hardware             | `AgentHardwareData`        |
+| `AgentConnected`        | Agent    | Auditoria de conexao no broker    | `AgentConnectionAuditData` |
+| `AgentDisconnected`     | Agent    | Auditoria de desconexao no broker | `AgentConnectionAuditData` |
 
 Valores legados como `agent_connected`, `agent_disconnected`, `command_result`, `timestamp`, `id` e similares sao transitorios e entram em regra de normalizacao da secao 10.
 
@@ -318,60 +345,60 @@ Valores legados como `agent_connected`, `agent_disconnected`, `command_result`, 
 
 #### 2.8.1 `AgentHeartbeat`
 
-| Campo | Tipo | Obrigatorio |
-|---|---|---|
-| `agentId` | `Guid` | sim |
-| `status` | `string` | sim (`"Online"`) |
-| `clientId` | `Guid?` | nao |
-| `siteId` | `Guid?` | nao |
-| `ipAddress` | `string?` | nao |
-| `hostname` | `string?` | nao |
-| `agentVersion` | `string?` | nao |
-| `timestampUtc` | `DateTime?` | nao |
-| `cpuPercent` | `double?` | nao |
-| `memoryPercent` | `double?` | nao |
-| `memoryTotalGb` | `double?` | nao |
-| `memoryUsedGb` | `double?` | nao |
-| `diskPercent` | `double?` | nao |
-| `diskTotalGb` | `double?` | nao |
-| `diskUsedGb` | `double?` | nao |
-| `p2pPeers` | `int?` | nao |
-| `uptimeSeconds` | `long?` | nao |
-| `processCount` | `int?` | nao |
+| Campo           | Tipo        | Obrigatorio      |
+| --------------- | ----------- | ---------------- |
+| `agentId`       | `Guid`      | sim              |
+| `status`        | `string`    | sim (`"Online"`) |
+| `clientId`      | `Guid?`     | nao              |
+| `siteId`        | `Guid?`     | nao              |
+| `ipAddress`     | `string?`   | nao              |
+| `hostname`      | `string?`   | nao              |
+| `agentVersion`  | `string?`   | nao              |
+| `timestampUtc`  | `DateTime?` | nao              |
+| `cpuPercent`    | `double?`   | nao              |
+| `memoryPercent` | `double?`   | nao              |
+| `memoryTotalGb` | `double?`   | nao              |
+| `memoryUsedGb`  | `double?`   | nao              |
+| `diskPercent`   | `double?`   | nao              |
+| `diskTotalGb`   | `double?`   | nao              |
+| `diskUsedGb`    | `double?`   | nao              |
+| `p2pPeers`      | `int?`      | nao              |
+| `uptimeSeconds` | `long?`     | nao              |
+| `processCount`  | `int?`      | nao              |
 
 #### 2.8.2 `AgentStatusChanged`
 
-| Campo | Tipo | Obrigatorio | Valores |
-|---|---|---|---|
-| `agentId` | `Guid` | sim | identidade do agent |
-| `status` | `string` | sim | `"Online"` ou `"Offline"` |
+| Campo     | Tipo     | Obrigatorio | Valores                   |
+| --------- | -------- | ----------- | ------------------------- |
+| `agentId` | `Guid`   | sim         | identidade do agent       |
+| `status`  | `string` | sim         | `"Online"` ou `"Offline"` |
 
 #### 2.8.3 `CommandCompleted`
 
-| Campo | Tipo | Obrigatorio |
-|---|---|---|
-| `commandId` | `Guid` | sim |
-| `exitCode` | `int` | sim |
-| `output` | `string?` | nao |
-| `errorMessage` | `string?` | nao |
+| Campo          | Tipo      | Obrigatorio |
+| -------------- | --------- | ----------- |
+| `commandId`    | `Guid`    | sim         |
+| `exitCode`     | `int`     | sim         |
+| `output`       | `string?` | nao         |
+| `errorMessage` | `string?` | nao         |
 
 #### 2.8.4 `AgentHardwareReported`
 
-| Campo | Tipo | Obrigatorio |
-|---|---|---|
-| `agentId` | `Guid` | sim |
-| `processor` | `string?` | nao |
-| `processorCores` | `int?` | nao |
-| `processorThreads` | `int?` | nao |
-| `processorArchitecture` | `string?` | nao |
-| `totalMemoryBytes` | `long?` | nao |
-| `machineScore` | `int?` | nao |
-| `model` | `string?` | nao |
-| `manufacturer` | `string?` | nao |
-| `gpuModel` | `string?` | nao |
-| `gpuMemoryBytes` | `long?` | nao |
-| `biosVersion` | `string?` | nao |
-| `serialNumber` | `string?` | nao |
+| Campo                   | Tipo      | Obrigatorio |
+| ----------------------- | --------- | ----------- |
+| `agentId`               | `Guid`    | sim         |
+| `processor`             | `string?` | nao         |
+| `processorCores`        | `int?`    | nao         |
+| `processorThreads`      | `int?`    | nao         |
+| `processorArchitecture` | `string?` | nao         |
+| `totalMemoryBytes`      | `long?`   | nao         |
+| `machineScore`          | `int?`    | nao         |
+| `model`                 | `string?` | nao         |
+| `manufacturer`          | `string?` | nao         |
+| `gpuModel`              | `string?` | nao         |
+| `gpuMemoryBytes`        | `long?`   | nao         |
+| `biosVersion`           | `string?` | nao         |
+| `serialNumber`          | `string?` | nao         |
 
 #### 2.8.5 Envelope entregue ao frontend
 
@@ -387,50 +414,50 @@ interface DashboardEvent<T = unknown> {
 
 #### 2.8.6 `AgentConnected` / `AgentDisconnected`
 
-| Campo | Tipo | Obrigatorio | Observacao |
-|---|---|---|---|
-| `agentId` | `Guid` | sim | |
-| `clientId` | `Guid?` | nao | redundante com envelope |
-| `siteId` | `Guid?` | nao | redundante com envelope |
-| `transport` | `string` | nao | `"nats"` ou `"nats_ws"` |
-| `server` | `string?` | nao | URL do broker (apenas em connect) |
-| `reason` | `string?` | nao | apenas em disconnect |
+| Campo       | Tipo      | Obrigatorio | Observacao                        |
+| ----------- | --------- | ----------- | --------------------------------- |
+| `agentId`   | `Guid`    | sim         |                                   |
+| `clientId`  | `Guid?`   | nao         | redundante com envelope           |
+| `siteId`    | `Guid?`   | nao         | redundante com envelope           |
+| `transport` | `string`  | nao         | `"nats"` ou `"nats_ws"`           |
+| `server`    | `string?` | nao         | URL do broker (apenas em connect) |
+| `reason`    | `string?` | nao         | apenas em disconnect              |
 
 ### 2.9 Subjects auxiliares e legado
 
-| Subject | Status | Observacao |
-|---|---|---|
-| `tenant.{clientId}.dashboard.events` | fallback ativo | usado quando existe `clientId` e `siteId` nao esta disponivel no evento |
-| `tenant.{clientId}.site.{siteId}.agent.{agentId}.hardware` | ingestao ativa no servidor | servidor converte para `AgentHardwareReported` em `dashboard.events` |
-| `tenant.{clientId}.site.{siteId}.agent.{agentId}.dashboard.events` | legado/transicao | nao e canal canonico de UI; deve convergir para `tenant.{clientId}.site.{siteId}.dashboard.events` |
+| Subject                                                            | Status                     | Observacao                                                                                         |
+| ------------------------------------------------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------- |
+| `tenant.{clientId}.dashboard.events`                               | fallback ativo             | usado quando existe `clientId` e `siteId` nao esta disponivel no evento                            |
+| `tenant.{clientId}.site.{siteId}.agent.{agentId}.hardware`         | ingestao ativa no servidor | servidor converte para `AgentHardwareReported` em `dashboard.events`                               |
+| `tenant.{clientId}.site.{siteId}.agent.{agentId}.dashboard.events` | legado/transicao           | nao e canal canonico de UI; deve convergir para `tenant.{clientId}.site.{siteId}.dashboard.events` |
 
 ### 2.10 Equivalencia canonica de campos (transitoria)
 
-| Campo canonico | Tipo | Legado aceito (ate 2026-06-01) |
-|---|---|---|
-| `agentId` | `string` UUID | `id`, `agentID` |
-| `timestampUtc` | `string` ISO-8601 | `timestamp`, `timeStamp` |
-| `cpuPercent` | `number` | `cpu` |
-| `memoryPercent` | `number` | `memory` |
-| `diskPercent` | `number` | `disk` |
-| `hostname` | `string` | `hostName`, `machineName` |
-| `agentVersion` | `string` | `version`, `agent_version` |
-| `memoryTotalGb` | `number` | `memoryTotal` |
-| `memoryUsedGb` | `number` | `memoryUsed` |
-| `diskTotalGb` | `number` | `diskTotal` |
-| `diskUsedGb` | `number` | `diskUsed` |
-| `p2pPeers` | `number` | `p2pPeersCount` |
-| `uptimeSeconds` | `number` | `uptime` |
-| `processCount` | `number` | `processes` |
-| `ipAddress` | `string` | `lastIpAddress`, `ip` |
+| Campo canonico  | Tipo              | Legado aceito (ate 2026-06-01) |
+| --------------- | ----------------- | ------------------------------ |
+| `agentId`       | `string` UUID     | `id`, `agentID`                |
+| `timestampUtc`  | `string` ISO-8601 | `timestamp`, `timeStamp`       |
+| `cpuPercent`    | `number`          | `cpu`                          |
+| `memoryPercent` | `number`          | `memory`                       |
+| `diskPercent`   | `number`          | `disk`                         |
+| `hostname`      | `string`          | `hostName`, `machineName`      |
+| `agentVersion`  | `string`          | `version`, `agent_version`     |
+| `memoryTotalGb` | `number`          | `memoryTotal`                  |
+| `memoryUsedGb`  | `number`          | `memoryUsed`                   |
+| `diskTotalGb`   | `number`          | `diskTotal`                    |
+| `diskUsedGb`    | `number`          | `diskUsed`                     |
+| `p2pPeers`      | `number`          | `p2pPeersCount`                |
+| `uptimeSeconds` | `number`          | `uptime`                       |
+| `processCount`  | `number`          | `processes`                    |
+| `ipAddress`     | `string`          | `lastIpAddress`, `ip`          |
 
 ### 2.11 Equivalencia de `eventType` (transitoria)
 
-| Canonico | Legado | Acao ate 2026-06-01 | Acao apos 2026-06-01 |
-|---|---|---|---|
-| `CommandCompleted` | `command_result` | normalizar + warning | rejeitar |
-| `AgentConnected` | `agent_connected` | normalizar + warning | rejeitar |
-| `AgentDisconnected` | `agent_disconnected` | normalizar + warning | rejeitar |
+| Canonico            | Legado               | Acao ate 2026-06-01  | Acao apos 2026-06-01 |
+| ------------------- | -------------------- | -------------------- | -------------------- |
+| `CommandCompleted`  | `command_result`     | normalizar + warning | rejeitar             |
+| `AgentConnected`    | `agent_connected`    | normalizar + warning | rejeitar             |
+| `AgentDisconnected` | `agent_disconnected` | normalizar + warning | rejeitar             |
 
 ---
 
@@ -438,32 +465,32 @@ interface DashboardEvent<T = unknown> {
 
 ### 3.1 Endpoint e autenticacao
 
-| Item | Regra |
-|---|---|
-| URL | `wss://<broker-ou-gateway>/nats` |
-| Auth | token JWT com claims de subscribe/publicacao por subject |
-| TLS | obrigatorio em producao |
-| Keepalive | cliente deve responder `PING/PONG` do protocolo NATS |
-| Erro de auth | conexao deve ser encerrada imediatamente |
+| Item         | Regra                                                    |
+| ------------ | -------------------------------------------------------- |
+| URL          | `wss://<broker-ou-gateway>/nats`                         |
+| Auth         | token JWT com claims de subscribe/publicacao por subject |
+| TLS          | obrigatorio em producao                                  |
+| Keepalive    | cliente deve responder `PING/PONG` do protocolo NATS     |
+| Erro de auth | conexao deve ser encerrada imediatamente                 |
 
 ### 3.2 Fluxo de inscricao esperado (frontend)
 
-| Ordem | Acao | Obrigatorio | Observacao |
-|---|---|---|---|
-| 1 | Abrir conexao NATS WS autenticada | sim | sem token valido, abortar |
-| 2 | Assinar subject de escopo desejado | sim | global, client ou site |
-| 3 | Processar somente payload no envelope canonico | sim | usar `normalizeDashboardEvent()` |
-| 4 | Trocar assinatura ao mudar escopo | opcional | `UNSUB` no subject anterior |
-| 5 | Reconnect com backoff + re-subscribe | sim | manter idempotencia no estado da UI |
+| Ordem | Acao                                           | Obrigatorio | Observacao                          |
+| ----- | ---------------------------------------------- | ----------- | ----------------------------------- |
+| 1     | Abrir conexao NATS WS autenticada              | sim         | sem token valido, abortar           |
+| 2     | Assinar subject de escopo desejado             | sim         | global, client ou site              |
+| 3     | Processar somente payload no envelope canonico | sim         | usar `normalizeDashboardEvent()`    |
+| 4     | Trocar assinatura ao mudar escopo              | opcional    | `UNSUB` no subject anterior         |
+| 5     | Reconnect com backoff + re-subscribe           | sim         | manter idempotencia no estado da UI |
 
 ### 3.3 Subjects de dashboard por escopo
 
-| Escopo | Subject sugerido |
-|---|---|
-| Global | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` |
-| Cliente | `tenant.{clientId}.site.*.dashboard.events`, `tenant.{clientId}.dashboard.events` |
-| Site | `tenant.{clientId}.site.{siteId}.dashboard.events` |
-| Sem tenant | `tenant.unscoped.dashboard.events` |
+| Escopo     | Subject sugerido                                                                                    |
+| ---------- | --------------------------------------------------------------------------------------------------- |
+| Global     | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` |
+| Cliente    | `tenant.{clientId}.site.*.dashboard.events`, `tenant.{clientId}.dashboard.events`                   |
+| Site       | `tenant.{clientId}.site.{siteId}.dashboard.events`                                                  |
+| Sem tenant | `tenant.unscoped.dashboard.events`                                                                  |
 
 ### 3.4 Exemplo de comandos no protocolo NATS WS
 
@@ -506,12 +533,12 @@ O frontend DEVE:
 
 ### 3.6 Projeto de ACL para consumo NATS WS
 
-| Perfil | Subscribe allow | Publish allow | Observacao |
-|---|---|---|---|
-| SiteUser | `tenant.{clientId}.site.{siteId}.dashboard.events` | nenhum | ve todos os eventos de dashboard do site |
-| ClientManager | `tenant.{clientId}.site.*.dashboard.events`, `tenant.{clientId}.dashboard.events` | nenhum | ve todos os sites do cliente e fallback por cliente |
-| GlobalAdmin | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` | nenhum | visao global multi-tenant |
-| InternalDashboardConsumer | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` | opcional (somente servico interno) | nao expor publish para browser |
+| Perfil                    | Subscribe allow                                                                                     | Publish allow                      | Observacao                                          |
+| ------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------------------- |
+| SiteUser                  | `tenant.{clientId}.site.{siteId}.dashboard.events`                                                  | nenhum                             | ve todos os eventos de dashboard do site            |
+| ClientManager             | `tenant.{clientId}.site.*.dashboard.events`, `tenant.{clientId}.dashboard.events`                   | nenhum                             | ve todos os sites do cliente e fallback por cliente |
+| GlobalAdmin               | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` | nenhum                             | visao global multi-tenant                           |
+| InternalDashboardConsumer | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events` | opcional (somente servico interno) | nao expor publish para browser                      |
 
 ### 3.7 Regras de seguranca de ACL
 
@@ -522,10 +549,10 @@ O frontend DEVE:
 
 ### 3.8 ACL para comando em massa (NATS nativo)
 
-| Perfil tecnico | Subscribe allow | Publish allow |
-|---|---|---|
-| AgentIdentity | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.p2p.events` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` |
-| ServerCommandPublisher | `tenant.*.site.*.agent.*.result` | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command` |
+| Perfil tecnico         | Subscribe allow                                                                                                                                                                                                                      | Publish allow                                                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AgentIdentity          | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.p2p.events` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` |
+| ServerCommandPublisher | `tenant.*.site.*.agent.*.result`                                                                                                                                                                                                     | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`                                    |
 
 Regras:
 
@@ -561,15 +588,15 @@ Envelope:
 
 Validacao minima de payload:
 
-| Campo | Obrigatorio | Valores |
-|---|---|---|
-| `action` | sim | `"start"` ou `"stop"` |
-| `sessionId` | sim | Guid |
-| `logLevel` | nao (default `"info"`) | `"info"`, `"debug"`, `"warn"`, `"error"` |
-| `expiresAtUtc` | sim quando `action = "start"` | ISO-8601 UTC |
-| `stream.natsSubject` | sim | subject valido |
-| `stream.natsWssUrl` | nao | URL WS valida |
-| `stream.encoding` | nao (default `"json"`) | `"json"` |
+| Campo                | Obrigatorio                   | Valores                                  |
+| -------------------- | ----------------------------- | ---------------------------------------- |
+| `action`             | sim                           | `"start"` ou `"stop"`                    |
+| `sessionId`          | sim                           | Guid                                     |
+| `logLevel`           | nao (default `"info"`)        | `"info"`, `"debug"`, `"warn"`, `"error"` |
+| `expiresAtUtc`       | sim quando `action = "start"` | ISO-8601 UTC                             |
+| `stream.natsSubject` | sim                           | subject valido                           |
+| `stream.natsWssUrl`  | nao                           | URL WS valida                            |
+| `stream.encoding`    | nao (default `"json"`)        | `"json"`                                 |
 
 ### 4.2 Alerta PSADT
 
@@ -583,7 +610,7 @@ Validacao minima de payload:
     "message": "string",
     "timeoutSeconds": 120,
     "icon": "info|warning|error|question",
-    "actions": [{"label": "Sim", "value": "yes"}],
+    "actions": [{ "label": "Sim", "value": "yes" }],
     "defaultAction": "no"
   }
 }
@@ -626,22 +653,22 @@ Validacao minima de payload:
 
 ## 5. Regras de Integracao
 
-| # | Regra |
-|---|---|
-| 1 | Notificacoes ao agent: enviar por `.command` com `commandType = "notification"`. |
-| 2 | Envio de comando: somente NATS `.command`. |
-| 3 | Envio de sync ping: somente NATS `.sync.ping`. |
-| 4 | Remote debug: usar `.remote-debug.log`. |
-| 5 | Dashboard events: publicar e consumir em `dashboard.events` (NATS nativo/WS). |
-| 6 | Cada componente valida mensagens recebidas e emitidas. |
-| 7 | Violacao de contrato deve registrar `[CONTRACT_VIOLATION]` com `source=<nats|nats_ws>`. |
-| 8 | E proibido criar caminho de evento fora do NATS para atualizar dashboard. |
-| 9 | Comando em massa por site deve ser publicado em `tenant.{clientId}.site.{siteId}.agents.command`. |
-| 10 | Comando em massa por cliente/global deve usar `tenant.{clientId}.agents.command` e `tenant.global.agents.command`. |
-| 11 | Agent deve executar comando em massa de forma idempotente (dedupe por `dispatchId`/`idempotencyKey`). |
-| 12 | Resultado de comando em massa deve incluir `dispatchId` para consolidacao de campanha no servidor. |
-| 13 | Pong global do servidor deve usar `tenant.global.pong` e nao deve ser persistido/replayado. |
-| 14 | Descoberta P2P deve usar `tenant.{clientId}.p2p.events`; `tenant.{clientId}.site.{siteId}.p2p.discovery` esta descontinuado. |
+| #   | Regra                                                                                                                        |
+| --- | ---------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 1   | Notificacoes ao agent: enviar por `.command` com `commandType = "notification"`.                                             |
+| 2   | Envio de comando: somente NATS `.command`.                                                                                   |
+| 3   | Envio de sync ping: somente NATS `.sync.ping`.                                                                               |
+| 4   | Remote debug: usar `.remote-debug.log`.                                                                                      |
+| 5   | Dashboard events: publicar e consumir em `dashboard.events` (NATS nativo/WS).                                                |
+| 6   | Cada componente valida mensagens recebidas e emitidas.                                                                       |
+| 7   | Violacao de contrato deve registrar `[CONTRACT_VIOLATION]` com `source=<nats                                                 | nats_ws>`. |
+| 8   | E proibido criar caminho de evento fora do NATS para atualizar dashboard.                                                    |
+| 9   | Comando em massa por site deve ser publicado em `tenant.{clientId}.site.{siteId}.agents.command`.                            |
+| 10  | Comando em massa por cliente/global deve usar `tenant.{clientId}.agents.command` e `tenant.global.agents.command`.           |
+| 11  | Agent deve executar comando em massa de forma idempotente (dedupe por `dispatchId`/`idempotencyKey`).                        |
+| 12  | Resultado de comando em massa deve incluir `dispatchId` para consolidacao de campanha no servidor.                           |
+| 13  | Pong global do servidor deve usar `tenant.global.pong` e nao deve ser persistido/replayado.                                  |
+| 14  | Descoberta P2P deve usar `tenant.{clientId}.p2p.events`; `tenant.{clientId}.site.{siteId}.p2p.discovery` esta descontinuado. |
 
 ---
 
@@ -649,44 +676,44 @@ Validacao minima de payload:
 
 ### 6.1 Agent (Go) - C:\Projetos\Discovery
 
-| # | Arquivo | Mudanca | Prioridade |
-|---|---|---|---|
-| 6.1.1 | `runtime_nats.go` | `timestamp` -> `timestampUtc` no envelope | P0 |
-| 6.1.2 | `runtime_nats.go` | `agent_connected`/`agent_disconnected` -> PascalCase canonico | P0 |
-| 6.1.3 | `runtime_nats.go` | Remover publish de `command_result` em `dashboard.events` | P1 |
-| 6.1.4 | `runtime_nats.go` | Promover `clientId` e `siteId` para raiz do envelope | P0 |
-| 6.1.5 | `runtime_nats.go` | Validacao de saida contra enum de `eventType` | P1 |
-| 6.1.6 | `runtime_nats.go` | Garantir `processCount` no heartbeat | P2 |
-| 6.1.7 | `runtime_nats.go` | Assinar `*.agents.command` por escopo (site/client/global) | P0 |
-| 6.1.8 | `runtime_nats.go` | Dedupe local por `dispatchId`/`idempotencyKey` com TTL | P0 |
-| 6.1.9 | `runtime_nats.go` | Assinar `tenant.global.pong` e atualizar liveness do servidor | P1 |
-| 6.1.10 | `runtime_nats.go` | Assinar `tenant.{clientId}.p2p.events` e filtrar `eventType = peer.online` | P0 |
+| #      | Arquivo           | Mudanca                                                                    | Prioridade |
+| ------ | ----------------- | -------------------------------------------------------------------------- | ---------- |
+| 6.1.1  | `runtime_nats.go` | `timestamp` -> `timestampUtc` no envelope                                  | P0         |
+| 6.1.2  | `runtime_nats.go` | `agent_connected`/`agent_disconnected` -> PascalCase canonico              | P0         |
+| 6.1.3  | `runtime_nats.go` | Remover publish de `command_result` em `dashboard.events`                  | P1         |
+| 6.1.4  | `runtime_nats.go` | Promover `clientId` e `siteId` para raiz do envelope                       | P0         |
+| 6.1.5  | `runtime_nats.go` | Validacao de saida contra enum de `eventType`                              | P1         |
+| 6.1.6  | `runtime_nats.go` | Garantir `processCount` no heartbeat                                       | P2         |
+| 6.1.7  | `runtime_nats.go` | Assinar `*.agents.command` por escopo (site/client/global)                 | P0         |
+| 6.1.8  | `runtime_nats.go` | Dedupe local por `dispatchId`/`idempotencyKey` com TTL                     | P0         |
+| 6.1.9  | `runtime_nats.go` | Assinar `tenant.global.pong` e atualizar liveness do servidor              | P1         |
+| 6.1.10 | `runtime_nats.go` | Assinar `tenant.{clientId}.p2p.events` e filtrar `eventType = peer.online` | P0         |
 
 ### 6.2 Servidor (C#) - C:\Projetos\DiscoveryRMM_API
 
-| # | Componente | Mudanca | Prioridade |
-|---|---|---|---|
-| 6.2.1 | Pipeline de ingestao NATS | Validar envelope com log `[CONTRACT_VIOLATION]` | P0 |
-| 6.2.2 | Pipeline de normalizacao | `timestamp` -> `timestampUtc` temporario com warning | P0 |
-| 6.2.3 | Pipeline de normalizacao | snake_case -> PascalCase temporario com warning | P1 |
-| 6.2.4 | Pipeline de normalizacao | extrair `clientId`/`siteId` de `data` quando ausentes (temporario) | P1 |
-| 6.2.5 | Publicador de dashboard events | publicar somente envelope canonico em `dashboard.events` | P0 |
-| 6.2.6 | Gateway NATS WS | reforcar auth por claim/subject no subscribe | P1 |
-| 6.2.7 | Command dispatcher | publicar fan-out em `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command` | P0 |
-| 6.2.8 | Orquestrador de campanhas | persistir `dispatchId`, alvo e status por agent (success/fail/pending) | P0 |
-| 6.2.9 | Pipeline de heartbeat/mensageria | publicar `tenant.global.pong` como broadcast efemero (sem replay) | P1 |
-| 6.2.10 | P2P discovery publisher | publicar eventos em `tenant.{clientId}.p2p.events` e descontinuar `tenant.{clientId}.site.{siteId}.p2p.discovery` | P0 |
+| #      | Componente                       | Mudanca                                                                                                               | Prioridade |
+| ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 6.2.1  | Pipeline de ingestao NATS        | Validar envelope com log `[CONTRACT_VIOLATION]`                                                                       | P0         |
+| 6.2.2  | Pipeline de normalizacao         | `timestamp` -> `timestampUtc` temporario com warning                                                                  | P0         |
+| 6.2.3  | Pipeline de normalizacao         | snake_case -> PascalCase temporario com warning                                                                       | P1         |
+| 6.2.4  | Pipeline de normalizacao         | extrair `clientId`/`siteId` de `data` quando ausentes (temporario)                                                    | P1         |
+| 6.2.5  | Publicador de dashboard events   | publicar somente envelope canonico em `dashboard.events`                                                              | P0         |
+| 6.2.6  | Gateway NATS WS                  | reforcar auth por claim/subject no subscribe                                                                          | P1         |
+| 6.2.7  | Command dispatcher               | publicar fan-out em `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command` | P0         |
+| 6.2.8  | Orquestrador de campanhas        | persistir `dispatchId`, alvo e status por agent (success/fail/pending)                                                | P0         |
+| 6.2.9  | Pipeline de heartbeat/mensageria | publicar `tenant.global.pong` como broadcast efemero (sem replay)                                                     | P1         |
+| 6.2.10 | P2P discovery publisher          | publicar eventos em `tenant.{clientId}.p2p.events` e descontinuar `tenant.{clientId}.site.{siteId}.p2p.discovery`     | P0         |
 
 ### 6.3 Dashboard (Frontend) - C:\Projetos\DiscoveryRMM_Site
 
-| # | Componente | Mudanca | Prioridade |
-|---|---|---|---|
-| 6.3.1 | Cliente realtime | usar apenas cliente NATS WS | P0 |
-| 6.3.2 | Event normalizer | implementar `normalizeDashboardEvent(rawEvent)` estrito | P0 |
-| 6.3.3 | Tipos TS | aceitar somente campos canonicos (sem aliases) | P0 |
-| 6.3.4 | Parsing de timestamp | aceitar somente `timestampUtc` ISO-8601 | P1 |
-| 6.3.5 | Assinaturas por escopo | usar subjects globais/client/site e trocar via `UNSUB/SUB` | P1 |
-| 6.3.6 | Observabilidade | `console.warn('[CONTRACT_VIOLATION]')` para nao conformidade | P1 |
+| #     | Componente             | Mudanca                                                      | Prioridade |
+| ----- | ---------------------- | ------------------------------------------------------------ | ---------- |
+| 6.3.1 | Cliente realtime       | usar apenas cliente NATS WS                                  | P0         |
+| 6.3.2 | Event normalizer       | implementar `normalizeDashboardEvent(rawEvent)` estrito      | P0         |
+| 6.3.3 | Tipos TS               | aceitar somente campos canonicos (sem aliases)               | P0         |
+| 6.3.4 | Parsing de timestamp   | aceitar somente `timestampUtc` ISO-8601                      | P1         |
+| 6.3.5 | Assinaturas por escopo | usar subjects globais/client/site e trocar via `UNSUB/SUB`   | P1         |
+| 6.3.6 | Observabilidade        | `console.warn('[CONTRACT_VIOLATION]')` para nao conformidade | P1         |
 
 ---
 
@@ -694,43 +721,43 @@ Validacao minima de payload:
 
 ### 7.1 `timestampUtc`
 
-| Regra | Acao em violacao |
-|---|---|
+| Regra                         | Acao em violacao                   |
+| ----------------------------- | ---------------------------------- |
 | Campo deve ser `timestampUtc` | warning + normalizacao (transicao) |
-| Valor deve ser ISO-8601 UTC | descartar quando invalido |
-| Deve estar no envelope raiz | descartar quando ausente |
+| Valor deve ser ISO-8601 UTC   | descartar quando invalido          |
+| Deve estar no envelope raiz   | descartar quando ausente           |
 
 ### 7.2 `eventType`
 
-| Regra | Acao em violacao |
-|---|---|
-| Deve ser PascalCase | warning + normalizacao (transicao) |
-| Deve estar no enum fechado | descartar |
-| `command_result` nao deve ser duplicado no dashboard | descartar |
+| Regra                                                | Acao em violacao                   |
+| ---------------------------------------------------- | ---------------------------------- |
+| Deve ser PascalCase                                  | warning + normalizacao (transicao) |
+| Deve estar no enum fechado                           | descartar                          |
+| `command_result` nao deve ser duplicado no dashboard | descartar                          |
 
 ### 7.3 Envelope
 
-| Regra | Acao em violacao |
-|---|---|
-| `clientId`/`siteId` na raiz | extrair de `data` com warning (transicao) |
-| Heartbeat exige `agentId` | descartar |
-| CommandCompleted exige `commandId` | descartar |
+| Regra                              | Acao em violacao                          |
+| ---------------------------------- | ----------------------------------------- |
+| `clientId`/`siteId` na raiz        | extrair de `data` com warning (transicao) |
+| Heartbeat exige `agentId`          | descartar                                 |
+| CommandCompleted exige `commandId` | descartar                                 |
 
 ### 7.4 Integridade
 
-| Regra | Acao |
-|---|---|
-| `AgentStatusChanged` sem `status` | descartar |
-| `AgentConnected` sem `transport` | aceitar com warning |
+| Regra                             | Acao                |
+| --------------------------------- | ------------------- |
+| `AgentStatusChanged` sem `status` | descartar           |
+| `AgentConnected` sem `transport`  | aceitar com warning |
 
 ### 7.5 Aliases
 
-| Regra | Ate 2026-06-01 | Apos 2026-06-01 |
-|---|---|---|
-| `id`/`agentID` no lugar de `agentId` | normalizar + warning | rejeitar |
-| `timestamp`/`timeStamp` no lugar de `timestampUtc` | normalizar + warning | rejeitar |
-| `cpu` no lugar de `cpuPercent` | normalizar + warning | rejeitar |
-| `hostName`/`machineName` no lugar de `hostname` | normalizar + warning | rejeitar |
+| Regra                                              | Ate 2026-06-01       | Apos 2026-06-01 |
+| -------------------------------------------------- | -------------------- | --------------- |
+| `id`/`agentID` no lugar de `agentId`               | normalizar + warning | rejeitar        |
+| `timestamp`/`timeStamp` no lugar de `timestampUtc` | normalizar + warning | rejeitar        |
+| `cpu` no lugar de `cpuPercent`                     | normalizar + warning | rejeitar        |
+| `hostName`/`machineName` no lugar de `hostname`    | normalizar + warning | rejeitar        |
 
 ### 7.6 Modelo de log
 
@@ -740,13 +767,13 @@ Validacao minima de payload:
 
 ### 7.7 Comando em massa
 
-| Regra | Acao em violacao |
-|---|---|
-| `dispatchId` obrigatorio em `*.agents.command` | descartar |
-| `idempotencyKey` obrigatorio em `*.agents.command` | descartar |
-| `targetScope` consistente com subject | descartar |
-| dispatch expirado (`expiresAtUtc`) | descartar |
-| resultado fan-out sem `dispatchId` | warning + marcar como nao consolidavel |
+| Regra                                              | Acao em violacao                       |
+| -------------------------------------------------- | -------------------------------------- |
+| `dispatchId` obrigatorio em `*.agents.command`     | descartar                              |
+| `idempotencyKey` obrigatorio em `*.agents.command` | descartar                              |
+| `targetScope` consistente com subject              | descartar                              |
+| dispatch expirado (`expiresAtUtc`)                 | descartar                              |
+| resultado fan-out sem `dispatchId`                 | warning + marcar como nao consolidavel |
 
 ---
 
@@ -756,33 +783,33 @@ Validacao minima de payload:
 
 Objetivo: toda violacao fica visivel em log.
 
-| Acao | Responsavel |
-|---|---|
-| Publicar contrato 4.2.0 | Servidor |
-| Adicionar warning de contrato no dashboard | Frontend |
-| Adicionar warning de contrato no agent | Agent |
-| Mapear divergencias como issues | Todos |
+| Acao                                       | Responsavel |
+| ------------------------------------------ | ----------- |
+| Publicar contrato 4.2.0                    | Servidor    |
+| Adicionar warning de contrato no dashboard | Frontend    |
+| Adicionar warning de contrato no agent     | Agent       |
+| Mapear divergencias como issues            | Todos       |
 
 ### Fase 2 - Correcao do Agent (ate 2026-05-20)
 
 Objetivo: agent publica 100% conforme.
 
-| Acao | Validacao |
-|---|---|
-| `timestampUtc` correto | grep sem `timestamp` legado no publish |
-| `eventType` canonico | ausencia de snake_case no publish |
-| remover `command_result` em dashboard.events | codigo removido |
-| `clientId`/`siteId` no envelope raiz | schema ok |
+| Acao                                         | Validacao                              |
+| -------------------------------------------- | -------------------------------------- |
+| `timestampUtc` correto                       | grep sem `timestamp` legado no publish |
+| `eventType` canonico                         | ausencia de snake_case no publish      |
+| remover `command_result` em dashboard.events | codigo removido                        |
+| `clientId`/`siteId` no envelope raiz         | schema ok                              |
 
 ### Fase 3 - Hardening dashboard/servidor (ate 2026-06-01)
 
 Objetivo: modo estrito ativo, rejeitando nao conformidade.
 
-| Acao | Validacao |
-|---|---|
-| frontend estrito em `normalizeDashboardEvent` | rejeita aliases |
-| remover fallbacks do servidor | sem normalizacao temporaria |
-| gateway NATS WS com auth estrita | subscribe sem permissao bloqueado |
+| Acao                                          | Validacao                         |
+| --------------------------------------------- | --------------------------------- |
+| frontend estrito em `normalizeDashboardEvent` | rejeita aliases                   |
+| remover fallbacks do servidor                 | sem normalizacao temporaria       |
+| gateway NATS WS com auth estrita              | subscribe sem permissao bloqueado |
 
 ---
 
@@ -790,57 +817,57 @@ Objetivo: modo estrito ativo, rejeitando nao conformidade.
 
 ### 9.1 Agent
 
-| Item |
-|---|
-| Heartbeat envia `timestampUtc` |
-| `eventType` em PascalCase canonico |
-| Nao publica `command_result` em `dashboard.events` |
-| `clientId`/`siteId` na raiz do envelope |
-| `processCount` presente no heartbeat |
-| Log `[CONTRACT_VIOLATION]` na borda de saida |
-| Assina subjects `*.agents.command` do proprio escopo |
+| Item                                                  |
+| ----------------------------------------------------- |
+| Heartbeat envia `timestampUtc`                        |
+| `eventType` em PascalCase canonico                    |
+| Nao publica `command_result` em `dashboard.events`    |
+| `clientId`/`siteId` na raiz do envelope               |
+| `processCount` presente no heartbeat                  |
+| Log `[CONTRACT_VIOLATION]` na borda de saida          |
+| Assina subjects `*.agents.command` do proprio escopo  |
 | Assina `tenant.global.pong` para liveness do servidor |
-| Dedupe por `dispatchId`/`idempotencyKey` com TTL |
+| Dedupe por `dispatchId`/`idempotencyKey` com TTL      |
 
 ### 9.2 Servidor
 
-| Item |
-|---|
-| Pipeline NATS valida envelope e loga violacao |
-| Fallbacks transitorios ativos somente ate 2026-06-01 |
-| Eventos invalidos sao descartados |
-| Publicacao do dashboard usa envelope canonico |
+| Item                                                        |
+| ----------------------------------------------------------- |
+| Pipeline NATS valida envelope e loga violacao               |
+| Fallbacks transitorios ativos somente ate 2026-06-01        |
+| Eventos invalidos sao descartados                           |
+| Publicacao do dashboard usa envelope canonico               |
 | Gateway NATS WS valida autenticacao/autorizacao por subject |
-| Dispatcher publica comando em massa em subjects por escopo |
-| Campanha de comando rastreada por `dispatchId` |
+| Dispatcher publica comando em massa em subjects por escopo  |
+| Campanha de comando rastreada por `dispatchId`              |
 
 ### 9.3 Dashboard
 
-| Item |
-|---|
-| Usa somente NATS WS para realtime |
+| Item                                                  |
+| ----------------------------------------------------- |
+| Usa somente NATS WS para realtime                     |
 | `normalizeDashboardEvent()` aplicado em toda mensagem |
-| Sem aliases de campos |
-| Apenas `timestampUtc` aceito |
-| Subjects por escopo (global/client/site) funcionando |
-| Warn de contrato em mensagens invalidas |
+| Sem aliases de campos                                 |
+| Apenas `timestampUtc` aceito                          |
+| Subjects por escopo (global/client/site) funcionando  |
+| Warn de contrato em mensagens invalidas               |
 
 ---
 
 ## 10. Periodo de Transicao
 
-| Fase | Periodo | Comportamento |
-|---|---|---|
-| Transicao | 2026-05-05 a 2026-06-01 | aceitar legado com warning e normalizacao |
-| Endurecimento | apos 2026-06-01 | rejeitar nao conformidade e remover normalizacao |
+| Fase          | Periodo                 | Comportamento                                    |
+| ------------- | ----------------------- | ------------------------------------------------ |
+| Transicao     | 2026-05-05 a 2026-06-01 | aceitar legado com warning e normalizacao        |
+| Endurecimento | apos 2026-06-01         | rejeitar nao conformidade e remover normalizacao |
 
 Fallbacks temporarios (remover apos 2026-06-01):
 
-| Codigo | Descricao |
-|---|---|
-| `NormalizeTimestamp()` | `timestamp` para `timestampUtc` |
-| `NormalizeEventType()` | snake_case para PascalCase |
-| `ExtractTenantFromData()` | extrai `clientId`/`siteId` de `data` |
+| Codigo                    | Descricao                                |
+| ------------------------- | ---------------------------------------- |
+| `NormalizeTimestamp()`    | `timestamp` para `timestampUtc`          |
+| `NormalizeEventType()`    | snake_case para PascalCase               |
+| `ExtractTenantFromData()` | extrai `clientId`/`siteId` de `data`     |
 | `NormalizeFieldAliases()` | converte aliases de campo para canonicos |
 
 ---
@@ -862,35 +889,35 @@ Regra de ouro: o dashboard recebe eventos exclusivamente por assinatura NATS WS 
 
 ### 11.1 Matriz de canais de entrega
 
-| Evento | Subject | Transporte de entrega para UI | Quem publica |
-|---|---|---|---|
-| `AgentHeartbeat` | `tenant.{c}.site.{s}.dashboard.events` | NATS WS | Servidor |
-| `AgentStatusChanged` | `tenant.{c}.site.{s}.dashboard.events` | NATS WS | Servidor |
-| `CommandCompleted` | `tenant.{c}.site.{s}.dashboard.events` | NATS WS | Servidor |
-| `AgentHardwareReported` | `tenant.{c}.site.{s}.dashboard.events` | NATS WS | Servidor |
-| `AgentConnected` | `tenant.{c}.site.{s}.dashboard.events` | NATS WS | Agent |
-| `AgentDisconnected` | `tenant.{c}.site.{s}.dashboard.events` | NATS WS | Agent |
+| Evento                  | Subject                                | Transporte de entrega para UI | Quem publica |
+| ----------------------- | -------------------------------------- | ----------------------------- | ------------ |
+| `AgentHeartbeat`        | `tenant.{c}.site.{s}.dashboard.events` | NATS WS                       | Servidor     |
+| `AgentStatusChanged`    | `tenant.{c}.site.{s}.dashboard.events` | NATS WS                       | Servidor     |
+| `CommandCompleted`      | `tenant.{c}.site.{s}.dashboard.events` | NATS WS                       | Servidor     |
+| `AgentHardwareReported` | `tenant.{c}.site.{s}.dashboard.events` | NATS WS                       | Servidor     |
+| `AgentConnected`        | `tenant.{c}.site.{s}.dashboard.events` | NATS WS                       | Agent        |
+| `AgentDisconnected`     | `tenant.{c}.site.{s}.dashboard.events` | NATS WS                       | Agent        |
 
 ### 11.2 Matriz completa de subjects
 
-| Subject | Direcao | Payload |
-|---|---|---|
-| `tenant.{c}.site.{s}.agent.{a}.heartbeat` | Agent -> Servidor | `AgentHeartbeat` |
-| `tenant.{c}.site.{s}.agent.{a}.command` | Servidor -> Agent | comando |
-| `tenant.{c}.site.{s}.agents.command` | Servidor -> Agents | comando em massa por site |
-| `tenant.{c}.agents.command` | Servidor -> Agents | comando em massa por cliente |
-| `tenant.global.agents.command` | Servidor -> Agents | comando em massa global |
-| `tenant.global.pong` | Servidor -> Agents | sinalizacao global de liveness do servidor (efemera) |
-| `tenant.{c}.site.{s}.agent.{a}.result` | Agent -> Servidor | resultado de comando (`dispatchId?`) |
-| `tenant.{c}.site.{s}.agent.{a}.sync.ping` | Servidor -> Agent | `SyncInvalidationPingMessage` |
-| `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` | Agent -> Servidor | log de sessao |
-| `tenant.{c}.site.{s}.agent.{a}.hardware` | Agent -> Servidor | hardware report |
-| `tenant.{c}.p2p.events` | Servidor -> Agent | eventos p2p por cliente (`peer.online`) |
-| `tenant.{c}.site.{s}.p2p.discovery` | descontinuado | legado/transicao |
-| `tenant.{c}.site.{s}.dashboard.events` | Agent/Servidor -> Consumidores | `DashboardEvent` |
-| `tenant.{c}.dashboard.events` | Servidor -> Consumidores | `DashboardEvent` (fallback por cliente) |
-| `tenant.unscoped.dashboard.events` | Servidor -> Consumidores | `DashboardEvent` |
-| `tenant.{c}.site.{s}.agent.{a}.dashboard.events` | legado/transicao | nao usar para consumo final de UI |
+| Subject                                          | Direcao                        | Payload                                              |
+| ------------------------------------------------ | ------------------------------ | ---------------------------------------------------- |
+| `tenant.{c}.site.{s}.agent.{a}.heartbeat`        | Agent -> Servidor              | `AgentHeartbeat`                                     |
+| `tenant.{c}.site.{s}.agent.{a}.command`          | Servidor -> Agent              | comando                                              |
+| `tenant.{c}.site.{s}.agents.command`             | Servidor -> Agents             | comando em massa por site                            |
+| `tenant.{c}.agents.command`                      | Servidor -> Agents             | comando em massa por cliente                         |
+| `tenant.global.agents.command`                   | Servidor -> Agents             | comando em massa global                              |
+| `tenant.global.pong`                             | Servidor -> Agents             | sinalizacao global de liveness do servidor (efemera) |
+| `tenant.{c}.site.{s}.agent.{a}.result`           | Agent -> Servidor              | resultado de comando (`dispatchId?`)                 |
+| `tenant.{c}.site.{s}.agent.{a}.sync.ping`        | Servidor -> Agent              | `SyncInvalidationPingMessage`                        |
+| `tenant.{c}.site.{s}.agent.{a}.remote-debug.log` | Agent -> Servidor              | log de sessao                                        |
+| `tenant.{c}.site.{s}.agent.{a}.hardware`         | Agent -> Servidor              | hardware report                                      |
+| `tenant.{c}.p2p.events`                          | Servidor -> Agent              | eventos p2p por cliente (`peer.online`)              |
+| `tenant.{c}.site.{s}.p2p.discovery`              | descontinuado                  | legado/transicao                                     |
+| `tenant.{c}.site.{s}.dashboard.events`           | Agent/Servidor -> Consumidores | `DashboardEvent`                                     |
+| `tenant.{c}.dashboard.events`                    | Servidor -> Consumidores       | `DashboardEvent` (fallback por cliente)              |
+| `tenant.unscoped.dashboard.events`               | Servidor -> Consumidores       | `DashboardEvent`                                     |
+| `tenant.{c}.site.{s}.agent.{a}.dashboard.events` | legado/transicao               | nao usar para consumo final de UI                    |
 
 ---
 
@@ -898,34 +925,217 @@ Regra de ouro: o dashboard recebe eventos exclusivamente por assinatura NATS WS 
 
 ### Bloqueantes
 
-| # | Acao | Quem |
-|---|---|---|
-| 1 | Corrigir `timestamp` -> `timestampUtc` no agent | Agent |
-| 2 | Corrigir `eventType` legado -> canonico no agent | Agent |
-| 3 | Promover `clientId`/`siteId` para raiz do envelope | Agent |
-| 4 | Remover `command_result` de `dashboard.events` | Agent |
-| 5 | Adicionar subscribe de `*.agents.command` por escopo no agent | Agent |
-| 6 | Implementar dedupe por `dispatchId`/`idempotencyKey` no agent | Agent |
+| #   | Acao                                                          | Quem  |
+| --- | ------------------------------------------------------------- | ----- |
+| 1   | Corrigir `timestamp` -> `timestampUtc` no agent               | Agent |
+| 2   | Corrigir `eventType` legado -> canonico no agent              | Agent |
+| 3   | Promover `clientId`/`siteId` para raiz do envelope            | Agent |
+| 4   | Remover `command_result` de `dashboard.events`                | Agent |
+| 5   | Adicionar subscribe de `*.agents.command` por escopo no agent | Agent |
+| 6   | Implementar dedupe por `dispatchId`/`idempotencyKey` no agent | Agent |
 
 ### Alta prioridade
 
-| # | Acao | Quem |
-|---|---|---|
-| 7 | Implementar `normalizeDashboardEvent()` estrito | Frontend |
-| 8 | Consolidar cliente realtime em NATS WS | Frontend |
-| 9 | Adicionar validacao `[CONTRACT_VIOLATION]` no servidor | Servidor |
-| 10 | Endurecer auth de subscribe por subject no gateway WS | Servidor |
-| 11 | Criar dispatcher de fan-out (`site/client/global`) no servidor | Servidor |
-| 12 | Persistir campanha por `dispatchId` com status por agent | Servidor |
+| #   | Acao                                                           | Quem     |
+| --- | -------------------------------------------------------------- | -------- |
+| 7   | Implementar `normalizeDashboardEvent()` estrito                | Frontend |
+| 8   | Consolidar cliente realtime em NATS WS                         | Frontend |
+| 9   | Adicionar validacao `[CONTRACT_VIOLATION]` no servidor         | Servidor |
+| 10  | Endurecer auth de subscribe por subject no gateway WS          | Servidor |
+| 11  | Criar dispatcher de fan-out (`site/client/global`) no servidor | Servidor |
+| 12  | Persistir campanha por `dispatchId` com status por agent       | Servidor |
 
 ### Media prioridade
 
-| # | Acao | Quem |
-|---|---|---|
-| 13 | Remover todos os fallbacks temporarios apos prazo | Servidor |
-| 14 | Teste de integracao fim-a-fim heartbeat -> dashboard.events -> UI | QA/Todos |
-| 15 | Garantir que JWT global inclua tambem `tenant.unscoped.dashboard.events` | Servidor |
-| 16 | Teste de carga de fan-out sem loop unicast (site/client/global) | QA/Servidor |
+| #   | Acao                                                                     | Quem        |
+| --- | ------------------------------------------------------------------------ | ----------- |
+| 13  | Remover todos os fallbacks temporarios apos prazo                        | Servidor    |
+| 14  | Teste de integracao fim-a-fim heartbeat -> dashboard.events -> UI        | QA/Todos    |
+| 15  | Garantir que JWT global inclua tambem `tenant.unscoped.dashboard.events` | Servidor    |
+| 16  | Teste de carga de fan-out sem loop unicast (site/client/global)          | QA/Servidor |
+
+---
+
+## 12. Acesso Remoto Nativo — Subjects de Sessao (`remote.session.*`)
+
+### 12.1 Visao Geral
+
+Os subjects de sessao remota nativa substituem a integracao com MeshCentral.
+Cada sessao de acesso remoto possui um `sessionId` unico (Guid) e um conjunto
+de subjects dedicados para controle, stream de tela, terminal, arquivos,
+proxy de rede, gravacao e sinalizacao WebRTC.
+
+### 12.2 Controle de Sessao
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.control`
+
+| Propriedade | Valor                                                                 |
+| ----------- | --------------------------------------------------------------------- |
+| Direcao     | Servidor -> Agent                                                     |
+| Publisher   | Servidor (API/Dispatcher)                                             |
+| Subscriber  | Agent (Go)                                                            |
+| Payload     | JSON com `action` (start/stop/quality/recording_start/recording_stop) |
+| Nota        | Comandos de ciclo de vida da sessao                                   |
+
+```json
+{
+  "action": "start",
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "kind": "screen",
+  "transport": "webrtc",
+  "quality": "high",
+  "codec": "webp",
+  "durationMinutes": 30,
+  "expiresAtUtc": "2026-07-27T12:00:00Z",
+  "natsSubject": "tenant.1.site.2.agent.3.remote.session.550e8400"
+}
+```
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.event`
+
+| Propriedade | Valor                                               |
+| ----------- | --------------------------------------------------- |
+| Direcao     | Agent -> Servidor/Viewer                            |
+| Publisher   | Agent (Go)                                          |
+| Subscriber  | Servidor + Viewer (browser)                         |
+| Payload     | JSON com `eventType` (started/closed/error/expired) |
+
+### 12.3 Stream de Tela (Screen Capture)
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.frame`
+
+| Propriedade | Valor                                                       |
+| ----------- | ----------------------------------------------------------- | --- | --- | --- | ----- | ---------------------------- |
+| Direcao     | Agent -> Viewer (browser)                                   |
+| Publisher   | Agent (Go)                                                  |
+| Subscriber  | Viewer via NATS WS                                          |
+| Payload     | Binario: header 12 bytes (seq                               | ts  | w   | h   | codec | len) + frame JPEG/WebP/H.264 |
+| Nota        | Codec selecionado via perfil de qualidade (auto-adaptativo) |
+
+Header binario (big-endian):
+
+```
+[0..3]  uint32  seq       # Numero sequencial do frame
+[4..7]  uint32  timestamp # Timestamp Unix ms
+[8..9]  uint16  width     # Largura do frame
+[10..11] uint16  height    # Altura do frame
+[12]    uint8   codec     # 0=JPEG, 1=WebP, 2=H264
+[13..15] uint24  length    # Tamanho do payload em bytes
+```
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.input`
+
+| Propriedade | Valor                                                       |
+| ----------- | ----------------------------------------------------------- |
+| Direcao     | Viewer -> Agent                                             |
+| Publisher   | Viewer (browser via NATS WS)                                |
+| Subscriber  | Agent (Go)                                                  |
+| Payload     | MessagePack: mouse move/click/wheel, key down/up, clipboard |
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.ack`
+
+| Propriedade | Valor                                                  |
+| ----------- | ------------------------------------------------------ |
+| Direcao     | Viewer -> Agent                                        |
+| Publisher   | Viewer (browser)                                       |
+| Subscriber  | Agent (Go)                                             |
+| Payload     | JSON: `{seq, rttMs, jitterMs, estimatedBandwidthKbps}` |
+| Nota        | Feedback de qualidade para adaptacao dinamica          |
+
+### 12.4 Terminal Interativo
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.out`
+
+| Propriedade | Valor                                            |
+| ----------- | ------------------------------------------------ |
+| Direcao     | Agent -> Viewer                                  |
+| Publisher   | Agent (Go)                                       |
+| Subscriber  | Viewer (browser)                                 |
+| Payload     | JSON: `{data: "base64 stdout/stderr", seq: int}` |
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.in`
+
+| Propriedade | Valor                                                |
+| ----------- | ---------------------------------------------------- |
+| Direcao     | Viewer -> Agent                                      |
+| Publisher   | Viewer (browser)                                     |
+| Subscriber  | Agent (Go)                                           |
+| Payload     | JSON: `{data: "base64 stdin", cols: int, rows: int}` |
+| Nota        | Inclui resize do terminal via `cols`/`rows`          |
+
+### 12.5 Transferencia de Arquivos
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.req`
+
+| Propriedade | Valor                  |
+| ----------- | ---------------------- | ----- | ----- | ------------------------------------ |
+| Direcao     | Viewer -> Agent        |
+| Publisher   | Viewer (browser)       |
+| Subscriber  | Agent (Go)             |
+| Payload     | JSON: `{action: "list" | "get" | "put" | "delete", path, chunkIndex?, data?}` |
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.resp`
+
+| Propriedade | Valor                                                        |
+| ----------- | ------------------------------------------------------------ |
+| Direcao     | Agent -> Viewer                                              |
+| Publisher   | Agent (Go)                                                   |
+| Subscriber  | Viewer (browser)                                             |
+| Payload     | JSON: `{status, entries?, chunkData?, totalChunks?, error?}` |
+| Nota        | Transferencia chunked >1MB com suporte a resume              |
+
+### 12.6 Proxy de Rede
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.req`
+
+| Propriedade | Valor                                               |
+| ----------- | --------------------------------------------------- |
+| Direcao     | Viewer -> Agent                                     |
+| Publisher   | Viewer (browser)                                    |
+| Subscriber  | Agent (Go)                                          |
+| Payload     | JSON: `{method, url, headers, body?}`               |
+| Nota        | Allowlist vazia por padrao (bloqueio total inicial) |
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.resp`
+
+| Propriedade | Valor                                    |
+| ----------- | ---------------------------------------- |
+| Direcao     | Agent -> Viewer                          |
+| Publisher   | Agent (Go)                               |
+| Subscriber  | Viewer (browser)                         |
+| Payload     | JSON: `{status, headers, body?, error?}` |
+
+### 12.7 Sinalizacao WebRTC
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal`
+
+| Propriedade | Valor                                                                 |
+| ----------- | --------------------------------------------------------------------- |
+| Direcao     | Bidirecional                                                          |
+| Publisher   | Viewer ou Agent                                                       |
+| Subscriber  | Agent ou Viewer                                                       |
+| Payload     | JSON: SDP offer/answer + ICE candidates                               |
+| Nota        | WebRTC P2P via Pion (agent) + browser nativo; STUN Google por default |
+
+### 12.8 Gravacao de Sessao
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.recording.frame`
+
+| Propriedade | Valor                                                 |
+| ----------- | ----------------------------------------------------- |
+| Direcao     | Agent -> Servidor                                     |
+| Publisher   | Agent (Go) — recording source tap                     |
+| Subscriber  | Servidor (RecordingAssemblerService)                  |
+| Payload     | Binario: header + frame (mesmo formato de `.frame`)   |
+| Nota        | Frames duplicados do stream para gravacao server-side |
+
+### 12.9 Seguranca
+
+- **JWT NATS scoped por sessao:** cada viewer recebe token com `sub.allow` e `pub.allow` apenas nos subjects da propria sessao
+- **TTL curto:** token expira junto com a sessao (default 30min, renovavel)
+- **TLS obrigatorio:** todas as conexoes NATS usam TLS
+- **WebRTC DTLS-SRTP:** P2P criptografado fim-a-fim
+- **Auditoria:** todo inicio/fim/renovacao registrado em `RemoteSessionAudit`
 
 ---
 

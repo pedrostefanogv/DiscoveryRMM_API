@@ -10,7 +10,7 @@ namespace Discovery.Api.Services;
 
 /// <summary>
 /// Service que orquestra a transferência de agentes entre sites/clientes.
-/// Valida permissões cross-scope, atualiza banco, ACLs do MeshCentral,
+/// Valida permissões cross-scope, atualiza banco,
 /// invalida caches e publica notificações em tempo real.
 /// </summary>
 public sealed class AgentTransferService : IAgentTransferService
@@ -20,7 +20,6 @@ public sealed class AgentTransferService : IAgentTransferService
     private readonly IClientRepository _clientRepo;
     private readonly IPermissionService _permissionService;
     private readonly IAgentMessaging _messaging;
-    private readonly IMeshCentralApiService _meshCentralApi;
     private readonly IRedisService _redis;
     private readonly ILogger<AgentTransferService> _logger;
 
@@ -30,7 +29,6 @@ public sealed class AgentTransferService : IAgentTransferService
         IClientRepository clientRepo,
         IPermissionService permissionService,
         IAgentMessaging messaging,
-        IMeshCentralApiService meshCentralApi,
         IRedisService redis,
         ILogger<AgentTransferService> logger)
     {
@@ -39,7 +37,6 @@ public sealed class AgentTransferService : IAgentTransferService
         _clientRepo = clientRepo;
         _permissionService = permissionService;
         _messaging = messaging;
-        _meshCentralApi = meshCentralApi;
         _redis = redis;
         _logger = logger;
     }
@@ -83,29 +80,6 @@ public sealed class AgentTransferService : IAgentTransferService
 
         // 3. Persistir a transferência
         await _agentRepo.TransferSiteAsync(agentId, targetSiteId);
-
-        // 4. Atualizar ACL MeshCentral se cross-client e agent tem MeshCentralNodeId
-        var meshCentralUpdated = false;
-        if (isCrossClient && !string.IsNullOrWhiteSpace(agent.MeshCentralNodeId))
-        {
-            try
-            {
-                // A ACL do device no MeshCentral é vinculada ao grupo (mesh) do site.
-                // Ao trocar de cliente, o device precisa ser movido para o mesh do novo site.
-                // A operação de remove+add é feita pelo serviço de sincronismo de grupo.
-                // Como fallback, disparamos o sync ping e o MeshCentralAclSyncService cuidará.
-                meshCentralUpdated = true;
-                _logger.LogInformation(
-                    "Cross-client transfer for agent {AgentId}: MeshCentral node {NodeId} moved from client {FromClient} to client {ToClient}. ACL will be reconciled by background sync.",
-                    agentId, agent.MeshCentralNodeId, previousClient.Id, targetClient.Id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "MeshCentral ACL update failed for agent {AgentId} during cross-client transfer. ACL will be reconciled by background sync.",
-                    agentId);
-            }
-        }
 
         // 5. Invalidar caches Redis
         await InvalidateCachesAsync(agentId, agent.SiteId, targetSiteId);
@@ -169,7 +143,6 @@ public sealed class AgentTransferService : IAgentTransferService
             PreviousSiteId = previousSite.Id,
             PreviousClientId = previousClient.Id,
             TargetClientId = targetClient.Id,
-            MeshCentralAclUpdated = meshCentralUpdated,
             Reason = reason,
         };
     }

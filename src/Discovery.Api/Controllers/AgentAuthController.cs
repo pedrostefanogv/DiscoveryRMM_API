@@ -7,7 +7,6 @@ using Discovery.Core.Cqrs.AgentAuth.Automation;
 using Discovery.Core.Cqrs.AgentAuth.Configuration;
 using Discovery.Core.Cqrs.AgentAuth.Hardware;
 using Discovery.Core.Cqrs.AgentAuth.Knowledge;
-using Discovery.Core.Cqrs.AgentAuth.MeshCentral;
 using Discovery.Core.Cqrs.AgentAuth.Misc;
 using Discovery.Core.Cqrs.AgentAuth.P2P;
 using Discovery.Core.Cqrs.AgentAuth.Software;
@@ -248,26 +247,6 @@ public class AgentAuthController : ControllerBase
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
         return MapResult(await _mediator.Send(cmd with { AgentId = id, TicketId = ticketId }), Ok);
-    }
-
-    // ── MeshCentral ───────────────────────────────────────────────────────
-
-    [HttpPost("me/support/meshcentral/embed-url")]
-    public async Task<IActionResult> CreateMeshCentralEmbedUrl([FromBody] CreateMeshCentralEmbedUrlCommand cmd)
-    {
-        if (!TryGetAgentId(out var id)) return Unauthorized();
-        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
-        if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { AgentId = id }), Ok);
-    }
-
-    [HttpGet("me/support/meshcentral/install")]
-    public async Task<IActionResult> GetMeshCentralInstall()
-    {
-        if (!TryGetAgentId(out var id)) return Unauthorized();
-        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
-        if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetMeshCentralInstallQuery(id)), Ok);
     }
 
     // ── P2P ───────────────────────────────────────────────────────────────

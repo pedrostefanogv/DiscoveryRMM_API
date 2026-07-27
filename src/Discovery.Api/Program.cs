@@ -101,6 +101,8 @@ builder.Services.AddScoped<IRemoteSessionManager, RemoteSessionManager>();
 builder.Services.AddScoped<IRemoteSessionRepository, RemoteSessionRepository>();
 builder.Services.AddScoped<RemoteSessionAuditService>();
 builder.Services.AddScoped<WebrtcTurnCredentialIssuer>();
+builder.Services.AddScoped<RemoteSessionJwtIssuer>();
+builder.Services.AddScoped<RemoteSessionDispatcher>();
 builder.Services.AddHostedService<RemoteSessionExpirationService>();
 builder.Services.Configure<RemoteAccessOptions>(builder.Configuration.GetSection("RemoteAccess"));
 
@@ -155,8 +157,6 @@ builder.Services.AddScoped<AiChatStreamingOrchestrator>();
 
 builder.Services.AddDiscoveryBackgroundServices(backgroundServicesConfig);
 
-builder.Services.Configure<MeshCentralOptions>(
-    builder.Configuration.GetSection("MeshCentral"));
 builder.Services.Configure<AutoTicketOptions>(
     builder.Configuration.GetSection(AutoTicketOptions.SectionName));
 builder.Services.Configure<SecretEncryptionOptions>(

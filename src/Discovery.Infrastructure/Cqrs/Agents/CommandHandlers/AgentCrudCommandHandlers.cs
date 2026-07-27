@@ -29,9 +29,14 @@ public sealed class ApproveZeroTouchCommandHandler(
 
         var ping = new SyncInvalidationPingDto
         {
-            EventId = Guid.NewGuid(), AgentId = cmd.AgentId, Resource = SyncResourceType.ZeroTouchApproved,
-            ScopeType = AppApprovalScopeType.Agent, ScopeId = cmd.AgentId,
-            Revision = $"zero-touch:{DateTime.UtcNow:O}", Reason = "zero-touch-approved", ChangedAtUtc = DateTime.UtcNow
+            EventId = Guid.NewGuid(),
+            AgentId = cmd.AgentId,
+            Resource = SyncResourceType.ZeroTouchApproved,
+            ScopeType = AppApprovalScopeType.Agent,
+            ScopeId = cmd.AgentId,
+            Revision = $"zero-touch:{DateTime.UtcNow:O}",
+            Reason = "zero-touch-approved",
+            ChangedAtUtc = DateTime.UtcNow
         };
         await messaging.PublishSyncPingAsync(cmd.AgentId, SyncInvalidationPingMessage.FromDto(ping), ct);
 
@@ -111,7 +116,6 @@ public sealed class UpdateAgentCommandHandler(
 public sealed class DeleteAgentCommandHandler(
     IAgentRepository agentRepo,
     IAgentAuthService authService,
-    IMeshCentralApiService meshCentral,
     IRedisService redis,
     ISiteRepository siteRepo,
     ILogger<DeleteAgentCommandHandler> logger
@@ -122,12 +126,6 @@ public sealed class DeleteAgentCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.Id);
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
-
-        if (!string.IsNullOrWhiteSpace(agent.MeshCentralNodeId))
-        {
-            try { await meshCentral.RemoveDeviceAsync(agent.MeshCentralNodeId, ct); }
-            catch (Exception ex) { logger.LogWarning(ex, "MeshCentral cleanup failed for agent {AgentId} node {NodeId}", cmd.Id, agent.MeshCentralNodeId); }
-        }
 
         await authService.RevokeAllTokensAsync(cmd.Id);
         await agentRepo.DeleteAsync(cmd.Id);
