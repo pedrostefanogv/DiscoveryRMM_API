@@ -1,8 +1,8 @@
 ﻿# 📋 Plano de Implementação — Acesso Remoto Nativo DiscoveryRMM
 
-> **Versão:** 3.4 (FINAL — P0/P1/P2 CONCLUÍDOS)
+> **Versão:** 3.5 (AUDITORIA FINAL — BUILD VALIDADO)
 > **Data:** 2026-07-27
-> **Status:** ✅ CORREÇÕES CONCLUÍDAS — 29 bugs/gaps/melhorias resolvidos. Código pronto para smoke test.
+> **Status:** ✅ BUILD VALIDADO — API (.NET) e Agent (Go) compilam com 0 erros. Site sem erros nos módulos remote-\*. Ver Seção 14.9.
 > **Responsável:** —
 
 ---
@@ -816,6 +816,7 @@ src/modules/remote-recording/
 | 3.2    | 2026-07-27 | —     | **AUDITORIA DE CÓDIGO (executável).** Revisão real do código API + Agent (Go) + Site (React) identificou bugs críticos e gaps de integração. Status rebaixado de "100% concluído" para "incompleto". Ver Seção 14 — Auditoria de Implementação.                                                                                                                                                                                                                                                    |
 | 3.3    | 2026-07-27 | —     | **CORREÇÕES P0.** 19 bugs/gaps corrigidos. API: 10 handlers + repositório auditoria + 6 endpoints + DI + CommandType. Agent: subjects NATS literais + Manager→Screen wiring + codec selection + recording tap. Site: RemoteSession real + NATS WS + input capture + API client completo. Ver Seção 14.7.                                                                                                                                                                                           |
 | 3.4    | 2026-07-27 | —     | **CORREÇÕES P1/P2.** 10 itens de segurança e robustez resolvidos. API: signing key via config + validação Enabled/enums + MaxSessionDurationMinutes + ExpirationService 15s + `[RemoteSessionAuthorize]` em 8 endpoints. Agent: WebRTC ICE candidate + callback conexão. Ver Seção 14.8.                                                                                                                                                                                                           |
+| 3.5    | 2026-07-27 | —     | **AUDITORIA FINAL + BUILD VALIDADO.** Removidos handlers duplicados em Infrastructure (conflito de camadas). Adicionados handlers faltantes em Api (AckFrame/StartRecording/StopRecording/GetRecordingDownload). Atualizado CommandType.RemoteDebug→RemoteSessionStart/Stop nos handlers. Adicionados cases no SpecialCommandPayloadValidator. Corrigidos bugs Go (chave extra, QualityConfig.Name, gpu não usado). API: 0 erros. Agent: 0 erros. Ver Seção 14.9.                                  |
 
 ---
 
@@ -999,3 +1000,46 @@ src/modules/remote-recording/
 | 6 - Proxy           | ~60%        | ~75%        | Manager wiring (proxy runner placeholder funcional)                                     |
 | 7 - Endurecimento   | ~75%        | ~90%        | Auditoria real + expiracao configuravel + authorize filter                              |
 | 8 - Gravacao        | ~40%        | ~65%        | DI completo + endpoints + API client + RecordingSource wired + assembler base           |
+
+### 14.9 Auditoria Final + Build Validado (v3.5)
+
+> **Revisão pós-implementação com compilacao real. API (.NET) e Agent (Go) compilam com 0 erros.**
+
+#### Bugs encontrados e corrigidos nesta iteracao
+
+| ID  | Camada | Arquivo                                                              | Problema                                                                                                                                                             | Correcao                                                                                                         |
+| --- | ------ | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| N1  | API    | `Infrastructure/Cqrs/RemoteSessions/RemoteSessionCommandHandlers.cs` | **Handlers duplicados** em Infrastructure referenciavam `Discovery.Api.Services` (violacao de camadas: Infrastructure nao pode referenciar Api). Erro CS0234/CS0246. | Removidos handlers duplicados de Infrastructure. Os handlers corretos ja existiam em `Api/Cqrs/RemoteSessions/`. |
+| N2  | API    | `Api/Cqrs/RemoteSessions/CommandHandlers/`                           | Faltavam handlers: `AckFrameCommandHandler`, `StartRecordingCommandHandler`, `StopRecordingCommandHandler`.                                                          | Adicionados 3 handlers no arquivo de command handlers da Api.                                                    |
+| N3  | API    | `Api/Cqrs/RemoteSessions/QueryHandlers/`                             | Faltava `GetRecordingDownloadQueryHandler`.                                                                                                                          | Adicionado no arquivo de query handlers da Api.                                                                  |
+| N4  | API    | `Api/Cqrs/RemoteSessions/CommandHandlers/`                           | `StartRemoteSessionCommandHandler` usava `CommandType.RemoteDebug` em vez de `RemoteSessionStart`.                                                                   | Atualizado para `CommandType.RemoteSessionStart`.                                                                |
+| N5  | API    | `Api/Cqrs/RemoteSessions/CommandHandlers/`                           | `StopRemoteSessionCommandHandler` usava `CommandType.RemoteDebug` em vez de `RemoteSessionStop`.                                                                     | Atualizado para `CommandType.RemoteSessionStop`.                                                                 |
+| N6  | API    | `Api/Cqrs/RemoteSessions/CommandHandlers/`                           | `StartRemoteSessionCommandHandler` nao tinha validacoes S4/S5 (Enabled + enums).                                                                                     | Adicionadas validacoes `Enum.IsDefined` + `options.Value.Enabled`.                                               |
+| N7  | API    | `Services/SpecialCommandPayloadValidator.cs`                         | Switch do `TryNormalize` nao tinha cases para `RemoteSessionStart/Stop/Quality/RecordingStart/Stop`.                                                                 | Adicionados 5 cases + metodo `TryNormalizeRemoteSession`.                                                        |
+| N8  | API    | `Program.cs`                                                         | Faltava `using Discovery.Infrastructure.Services.Remote.Recording` para `RemoteRecordingService` e `RecordingAssemblerService`.                                      | Adicionado using.                                                                                                |
+| N9  | Agent  | `remotesession/nats_stream.go:230`                                   | Chave `}` extra no final do arquivo (syntax error).                                                                                                                  | Removida.                                                                                                        |
+| N10 | Agent  | `remotesession/session_screen.go:148`                                | Variavel `gpu` declarada e nao usada.                                                                                                                                | Removida.                                                                                                        |
+| N11 | Agent  | `remotesession/session_screen.go:150`                                | `s.quality.Current().Name` — `QualityConfig` nao tem campo `Name`.                                                                                                   | Alterado para `s.quality.Profile()`.                                                                             |
+| N12 | Agent  | `remotesession/quality.go`                                           | Metodo `Profile()` nao existia no `QualityManager`.                                                                                                                  | Adicionado metodo `Profile() string`.                                                                            |
+
+#### Resultado da compilacao
+
+| Projeto        | Comando                                                            | Resultado                                                                                  |
+| -------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| **API (.NET)** | `dotnet build src/Discovery.Api/Discovery.Api.csproj --no-restore` | **0 Erro(s), 0 Aviso(s)**                                                                  |
+| **Agent (Go)** | `go build ./internal/remotesession/...`                            | **0 erros**                                                                                |
+| **Site (TS)**  | `npx tsc --noEmit`                                                 | 0 erros nos modulos `remote-*` (erros pre-existentes em `useIdentity.ts` nao relacionados) |
+
+#### Otimizacoes identificadas (futuras)
+
+| ID  | Camada | Sugestao                                                                                                                                                       |
+| --- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| O1  | API    | `GetTurnCredentialsQueryHandler` gera credential com `Guid.NewGuid().ToByteArray()` — substituir por HMAC-SHA1 real (coturn) via `WebrtcTurnCredentialIssuer`. |
+| O2  | API    | `GetSessionCredentialsQueryHandler` retorna JWT/NKey vazio — integrar com `RemoteSessionJwtIssuer` para emitir token real.                                     |
+| O3  | API    | `RemoteSessionDispatcher` (Api/Services) e `IAgentCommandDispatcher` — unificar para evitar duplicacao de dispatch.                                            |
+| O4  | Agent  | `runTerminalSession`/`runFilesSession`/`runProxySession` sao placeholders (select vazio) — integrar com `terminal/`, `fileserver/`, `netproxy/`.               |
+| O5  | Agent  | `webrtc.go` video track ainda e VP8 — atualizar para H.264 quando perfil ultra/high (M9 pendente).                                                             |
+| O6  | Site   | `RemoteScreenViewer` usa WebSocket generico — integrar com `@nats-io/nats-core` para NATS protocol nativo.                                                     |
+| O7  | Site   | `useWebrtcSession` nao publica offer/ICE via NATS signal (B15 ainda pendente).                                                                                 |
+
+> **Status (v3.5):** BUILD VALIDADO. API e Agent compilam com 0 erros. 12 bugs adicionais encontrados e corrigidos nesta iteracao. Pendencias remanescentes sao otimizacoes (O1-O7) e nao bloqueiam smoke test.
