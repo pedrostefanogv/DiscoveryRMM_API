@@ -119,7 +119,7 @@ public class RemoteSessionDispatcher
             Payload = payload
         };
 
-        var created = await _commandRepository.CreateAsync(command, ct);
+        var created = await _commandRepository.CreateAsync(command);
         var sent = false;
 
         if (_messaging.IsConnected)

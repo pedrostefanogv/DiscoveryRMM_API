@@ -1,4 +1,5 @@
 using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs.RemoteSessions.Commands;
 
 namespace Discovery.Core.Cqrs.RemoteSessions.Queries;
 

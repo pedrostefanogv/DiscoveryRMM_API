@@ -1,6 +1,7 @@
 using Discovery.Api.Services;
 using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs.RemoteSessions.Commands;
 using Discovery.Core.Cqrs.RemoteSessions.Queries;
 using Discovery.Core.Interfaces;
 using MediatR;

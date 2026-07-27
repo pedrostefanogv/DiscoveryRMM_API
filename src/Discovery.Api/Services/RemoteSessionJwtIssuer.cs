@@ -14,16 +14,13 @@ namespace Discovery.Api.Services;
 public class RemoteSessionJwtIssuer
 {
     private readonly RemoteAccessOptions _options;
-    private readonly IConfigurationService _configurationService;
     private readonly ILogger<RemoteSessionJwtIssuer> _logger;
 
     public RemoteSessionJwtIssuer(
         IOptions<RemoteAccessOptions> options,
-        IConfigurationService configurationService,
         ILogger<RemoteSessionJwtIssuer> logger)
     {
         _options = options.Value;
-        _configurationService = configurationService;
         _logger = logger;
     }
 
@@ -64,11 +61,8 @@ public class RemoteSessionJwtIssuer
                 claims.Add(new Claim("nats_sub_allow", perm[4..]));
         }
 
-        // Usa a chave de signing do servidor (via configuration service)
-        var serverConfig = _configurationService.GetServerConfigAsync().GetAwaiter().GetResult();
-        var signingKey = !string.IsNullOrWhiteSpace(serverConfig.NatsJwtSigningSecret)
-            ? serverConfig.NatsJwtSigningSecret
-            : "discovery-nats-jwt-secret-dev"; // fallback dev
+        // Usa chave de signing; em produção usar env var / vault
+        var signingKey = "discovery-nats-jwt-secret-dev";
 
         var key = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey));
         var creds = new Microsoft.IdentityModel.Tokens.SigningCredentials(key, Microsoft.IdentityModel.Tokens.SecurityAlgorithms.HmacSha256);
