@@ -67,7 +67,6 @@ public sealed class CreateMyTicketHandler(
 }
 
 public sealed class AddMyTicketCommentHandler(
-    ITicketRepository ticketRepo,
     ITicketCommandService ticketCommandService,
     ILogger<AddMyTicketCommentHandler> logger
 ) : IRequestHandler<AddMyTicketCommentCommand, Result<object>>

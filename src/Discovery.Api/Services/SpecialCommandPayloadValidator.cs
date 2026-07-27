@@ -139,12 +139,12 @@ public sealed class SpecialCommandPayloadValidator
     private static bool TryNormalizeRemoteSession(
         JsonElement payload,
         out string normalizedPayload,
-        out string? validationError)
+        out string validationError)
     {
         // Remote session payloads são JSON simples com action + sessionId + parâmetros.
         // A validação de schema é feita pelo handler; aqui apenas normalizamos (re-serializamos).
         normalizedPayload = payload.GetRawText();
-        validationError = null;
+        validationError = string.Empty;
         return true;
     }
 

@@ -8,7 +8,6 @@ using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
 using MediatR;
-using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
 
@@ -117,8 +116,7 @@ public sealed class DeleteAgentCommandHandler(
     IAgentRepository agentRepo,
     IAgentAuthService authService,
     IRedisService redis,
-    ISiteRepository siteRepo,
-    ILogger<DeleteAgentCommandHandler> logger
+    ISiteRepository siteRepo
 ) : IRequestHandler<DeleteAgentCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteAgentCommand cmd, CancellationToken ct)

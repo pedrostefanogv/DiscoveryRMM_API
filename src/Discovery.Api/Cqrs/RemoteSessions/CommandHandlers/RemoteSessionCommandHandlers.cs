@@ -150,8 +150,7 @@ public sealed class StopRemoteSessionCommandHandler(
 }
 
 public sealed class RenewRemoteSessionCommandHandler(
-    IRemoteSessionManager sessionManager,
-    ILogger<RenewRemoteSessionCommandHandler> logger
+    IRemoteSessionManager sessionManager
 ) : IRequestHandler<RenewRemoteSessionCommand, Result<RemoteSessionResponseDto>>
 {
     public async Task<Result<RemoteSessionResponseDto>> Handle(RenewRemoteSessionCommand cmd, CancellationToken ct)

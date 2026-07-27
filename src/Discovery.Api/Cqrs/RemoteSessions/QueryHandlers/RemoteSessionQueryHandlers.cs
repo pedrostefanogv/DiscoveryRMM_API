@@ -5,15 +5,12 @@ using Discovery.Core.Cqrs.RemoteSessions.Commands;
 using Discovery.Core.Cqrs.RemoteSessions.Queries;
 using Discovery.Core.Interfaces;
 using MediatR;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Discovery.Api.Cqrs.RemoteSessions.QueryHandlers;
 
 public sealed class GetActiveSessionsQueryHandler(
-    IRemoteSessionRepository repo,
-    IRemoteSessionManager sessionManager,
-    ILogger<GetActiveSessionsQueryHandler> logger
+    IRemoteSessionRepository repo
 ) : IRequestHandler<GetActiveSessionsQuery, Result<IEnumerable<ActiveSessionDto>>>
 {
     public async Task<Result<IEnumerable<ActiveSessionDto>>> Handle(GetActiveSessionsQuery query, CancellationToken ct)
@@ -31,8 +28,7 @@ public sealed class GetActiveSessionsQueryHandler(
 
 public sealed class GetTurnCredentialsQueryHandler(
     IRemoteSessionManager sessionManager,
-    IOptions<RemoteAccessOptions> options,
-    ILogger<GetTurnCredentialsQueryHandler> logger
+    IOptions<RemoteAccessOptions> options
 ) : IRequestHandler<GetTurnCredentialsQuery, Result<TurnCredentialsDto>>
 {
     public async Task<Result<TurnCredentialsDto>> Handle(GetTurnCredentialsQuery query, CancellationToken ct)
@@ -61,8 +57,7 @@ public sealed class GetTurnCredentialsQueryHandler(
 
 public sealed class GetSessionCredentialsQueryHandler(
     IRemoteSessionManager sessionManager,
-    IConfigurationService configurationService,
-    ILogger<GetSessionCredentialsQueryHandler> logger
+    IConfigurationService configurationService
 ) : IRequestHandler<GetSessionCredentialsQuery, Result<SessionCredentialsDto>>
 {
     public async Task<Result<SessionCredentialsDto>> Handle(GetSessionCredentialsQuery query, CancellationToken ct)
@@ -88,8 +83,7 @@ public sealed class GetSessionCredentialsQueryHandler(
 
 public sealed class GetRecordingDownloadQueryHandler(
     IRemoteSessionManager sessionManager,
-    IRemoteRecordingService recordingService,
-    ILogger<GetRecordingDownloadQueryHandler> logger
+    IRemoteRecordingService recordingService
 ) : IRequestHandler<GetRecordingDownloadQuery, Result<RecordingDownloadDto>>
 {
     public async Task<Result<RecordingDownloadDto>> Handle(GetRecordingDownloadQuery query, CancellationToken ct)
