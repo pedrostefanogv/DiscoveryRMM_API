@@ -11,7 +11,7 @@ namespace Discovery.Api.Controllers;
 /// Endpoints de sessões de acesso remoto nativo (screen, terminal, files, proxy).
 /// </summary>
 [ApiController]
-[Route("api/v{version:apiVersion}/[controller]")]
+[Route("api/v{version:apiVersion}/remote-sessions")]
 public class RemoteSessionsController : ControllerBase
 {
     private readonly IMediator _mediator;
