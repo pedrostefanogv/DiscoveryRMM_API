@@ -45,13 +45,17 @@ public sealed class StartRemoteSessionCommandHandler(
         var site = await siteRepo.GetByIdAsync(agent.SiteId);
         if (site is null) return Result<RemoteSessionResponseDto>.Failure(Error.NotFound("Site not found."));
 
+        // Deriva tenantId/siteId do agente se não vieram populados (caso de ScopeSource.Global)
+        var tenantId = cmd.TenantId != Guid.Empty ? cmd.TenantId : site.ClientId;
+        var siteId = cmd.SiteId != Guid.Empty ? cmd.SiteId : agent.SiteId;
+
         var natsSubject = $"{options.Value.Nats.FrameSubjectPrefix}.{cmd.AgentId}.{Guid.NewGuid():N}";
 
         RemoteSession session;
         try
         {
             session = await sessionManager.CreateSessionAsync(
-                cmd.AgentId, cmd.UserId, cmd.TenantId, cmd.SiteId,
+                cmd.AgentId, cmd.UserId, tenantId, siteId,
                 cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, natsSubject, ct);
         }
         catch (InvalidOperationException ex)

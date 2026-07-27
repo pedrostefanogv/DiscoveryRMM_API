@@ -26,7 +26,13 @@ public class RemoteSessionsController : ControllerBase
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> StartSession(Guid agentId, [FromBody] StartRemoteSessionCommand cmd, CancellationToken ct = default)
     {
-        var result = await _mediator.Send(cmd with { AgentId = agentId }, ct);
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var tenantId = HttpContext.Items["TenantId"] as Guid? ?? Guid.Empty;
+        var siteId = HttpContext.Items["SiteId"] as Guid? ?? Guid.Empty;
+
+        var result = await _mediator.Send(cmd with { AgentId = agentId, UserId = userId, TenantId = tenantId, SiteId = siteId }, ct);
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
