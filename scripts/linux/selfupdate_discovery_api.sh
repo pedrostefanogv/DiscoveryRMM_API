@@ -20,6 +20,44 @@ require_cmd() {
 
 # ── Merge RemoteAccess settings into /etc/discovery-api/discovery.env ─────
 
+# Atualiza chaves críticas no env existente (mesmo se RemoteAccess já está configurado).
+# Garante que correções de segurança/configuração sejam aplicadas em updates.
+_patch_critical_env_keys() {
+  local env_file="$1"
+  if [[ ! -f "$env_file" ]]; then return; fi
+
+  local tmp_file; tmp_file="$(mktemp)"
+  cp "$env_file" "$tmp_file"
+
+  # Função auxiliar: define ou atualiza uma chave no env
+  _set_env_key() {
+    local key="$1" value="$2"
+    if grep -q "^${key}=" "$tmp_file" 2>/dev/null; then
+      sed -i "s|^${key}=.*|${key}=${value}|" "$tmp_file"
+    else
+      printf '%s=%s\n' "$key" "$value" >> "$tmp_file"
+    fi
+  }
+
+  # Correções críticas aplicadas em todo self-update:
+  # - Access token TTL: 30 → 60 min (reduz renovações e 401 em sessões longas)
+  _set_env_key "Authentication__Jwt__AccessTokenExpirationMinutes" "60"
+  # - 1 sessão remota por agente (força sobreposição via flag Force)
+  _set_env_key "RemoteAccess__MaxConcurrentSessionsPerAgent" "1"
+
+  if command -v sudo >/dev/null 2>&1; then
+    sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file" 2>/dev/null \
+      || install -m 640 "$tmp_file" "$env_file" 2>/dev/null \
+      || warn "Falha ao aplicar patches criticos em $env_file"
+  else
+    install -m 640 "$tmp_file" "$env_file" 2>/dev/null \
+      || warn "Falha ao aplicar patches criticos em $env_file"
+  fi
+
+  rm -f "$tmp_file"
+  log "Patches criticos aplicados ao $env_file (AccessTokenTTL=60, MaxSessionsPerAgent=1)"
+}
+
 _merge_env_remote_access() {
   local env_file="/etc/discovery-api/discovery.env"
   if [[ ! -f "$env_file" ]]; then
@@ -30,6 +68,7 @@ _merge_env_remote_access() {
   # Só executa merge se ainda não tem RemoteAccess no env (evita overwrite de customizações)
   if grep -q '^RemoteAccess__' "$env_file" 2>/dev/null; then
     log "RemoteAccess ja configurado no $env_file; pulando merge."
+    _patch_critical_env_keys "$env_file"
     return
   fi
 
@@ -52,7 +91,7 @@ _merge_env_remote_access() {
 RemoteAccess__Enabled=true
 RemoteAccess__DefaultTtlMinutes=30
 RemoteAccess__MaxSessionDurationMinutes=120
-RemoteAccess__MaxConcurrentSessionsPerAgent=3
+RemoteAccess__MaxConcurrentSessionsPerAgent=1
 RemoteAccess__MaxConcurrentSessionsPerUser=5
 REMOTEACCESS_EOF
   printf 'RemoteAccess__Nats__JwtSigningKey=%s\n' "$jwt_key" >> "$tmp_file"

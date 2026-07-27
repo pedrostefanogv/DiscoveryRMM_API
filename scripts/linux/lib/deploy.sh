@@ -205,7 +205,7 @@ Authentication__Jwt__Issuer=discovery
 Authentication__Jwt__Audience=discovery
 Authentication__Jwt__PrivateKeyPath=/etc/discovery-api/certs/jwt-private.pem
 Authentication__Jwt__PublicKeyPath=/etc/discovery-api/certs/jwt-public.pem
-Authentication__Jwt__AccessTokenExpirationMinutes=30
+Authentication__Jwt__AccessTokenExpirationMinutes=${AUTHENTICATION_JWT_ACCESS_TOKEN_EXPIRATION_MINUTES:-60}
 Authentication__Jwt__RefreshTokenExpirationDays=7
 Authentication__Fido2__ServerDomain=${fido2_server_domain}
 Authentication__Fido2__ServerName=${fido2_server_name}
@@ -250,7 +250,7 @@ ZEROSSL_DNS_AUTOMATION_HOOK=${ZEROSSL_DNS_AUTOMATION_HOOK:-}
 RemoteAccess__Enabled=$( [[ "${REMOTE_ACCESS_ENABLED:-1}" == "1" ]] && echo true || echo false )
 RemoteAccess__DefaultTtlMinutes=${REMOTE_ACCESS_DEFAULT_TTL_MINUTES:-30}
 RemoteAccess__MaxSessionDurationMinutes=${REMOTE_ACCESS_MAX_SESSION_DURATION_MINUTES:-120}
-RemoteAccess__MaxConcurrentSessionsPerAgent=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_AGENT:-3}
+RemoteAccess__MaxConcurrentSessionsPerAgent=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_AGENT:-1}
 RemoteAccess__MaxConcurrentSessionsPerUser=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_USER:-5}
 RemoteAccess__Nats__JwtSigningKey=${REMOTE_ACCESS_NATS_JWT_SIGNING_KEY}
 RemoteAccess__Nats__FrameSubjectPrefix=${REMOTE_ACCESS_NATS_FRAME_SUBJECT_PREFIX:-remote.session}
@@ -579,7 +579,7 @@ update_remote_access_environment_file() {
 RemoteAccess__Enabled=$( [[ "${REMOTE_ACCESS_ENABLED:-1}" == "1" ]] && echo true || echo false )
 RemoteAccess__DefaultTtlMinutes=${REMOTE_ACCESS_DEFAULT_TTL_MINUTES:-30}
 RemoteAccess__MaxSessionDurationMinutes=${REMOTE_ACCESS_MAX_SESSION_DURATION_MINUTES:-120}
-RemoteAccess__MaxConcurrentSessionsPerAgent=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_AGENT:-3}
+RemoteAccess__MaxConcurrentSessionsPerAgent=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_AGENT:-1}
 RemoteAccess__MaxConcurrentSessionsPerUser=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_USER:-5}
 RemoteAccess__Nats__JwtSigningKey=${jwt_key}
 RemoteAccess__Nats__FrameSubjectPrefix=${REMOTE_ACCESS_NATS_FRAME_SUBJECT_PREFIX:-remote.session}
