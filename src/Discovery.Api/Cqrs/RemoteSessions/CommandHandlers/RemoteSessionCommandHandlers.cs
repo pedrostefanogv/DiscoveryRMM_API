@@ -25,6 +25,20 @@ public sealed class StartRemoteSessionCommandHandler(
 {
     public async Task<Result<RemoteSessionResponseDto>> Handle(StartRemoteSessionCommand cmd, CancellationToken ct)
     {
+        // S4: Validar feature flag
+        if (!options.Value.Enabled)
+            return Result<RemoteSessionResponseDto>.Failure(Error.Forbidden("Remote access is disabled."));
+
+        // S5: Validar enums
+        if (!Enum.IsDefined(cmd.Kind))
+            return Result<RemoteSessionResponseDto>.Failure(Error.Validation("kind", $"Invalid value: {cmd.Kind}"));
+        if (!Enum.IsDefined(cmd.Transport))
+            return Result<RemoteSessionResponseDto>.Failure(Error.Validation("transport", $"Invalid value: {cmd.Transport}"));
+        if (!Enum.IsDefined(cmd.Quality))
+            return Result<RemoteSessionResponseDto>.Failure(Error.Validation("quality", $"Invalid value: {cmd.Quality}"));
+        if (!Enum.IsDefined(cmd.Codec))
+            return Result<RemoteSessionResponseDto>.Failure(Error.Validation("codec", $"Invalid value: {cmd.Codec}"));
+
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<RemoteSessionResponseDto>.Failure(Error.NotFound("Agent not found."));
 
@@ -58,13 +72,13 @@ public sealed class StartRemoteSessionCommandHandler(
             natsSubject
         });
 
-        if (!payloadValidator.TryNormalize(CommandType.RemoteDebug, payload, out var normalizedPayload, out var validationError))
+        if (!payloadValidator.TryNormalize(CommandType.RemoteSessionStart, payload, out var normalizedPayload, out var validationError))
             return Result<RemoteSessionResponseDto>.Failure(Error.Validation("Payload", validationError ?? "Invalid remote session payload."));
 
         var command = new AgentCommand
         {
             AgentId = cmd.AgentId,
-            CommandType = CommandType.RemoteDebug, // using RemoteDebug as transport for now; will add RemoteSessionStart when wire mapper updated
+            CommandType = CommandType.RemoteSessionStart,
             Payload = normalizedPayload
         };
         await dispatcher.DispatchAsync(command, ct);
@@ -116,13 +130,13 @@ public sealed class StopRemoteSessionCommandHandler(
             sessionId = cmd.SessionId
         });
 
-        if (!payloadValidator.TryNormalize(CommandType.RemoteDebug, payload, out var normalizedPayload, out var validationError))
+        if (!payloadValidator.TryNormalize(CommandType.RemoteSessionStop, payload, out var normalizedPayload, out var validationError))
             return Result<VoidResult>.Failure(Error.Validation("Payload", validationError ?? "Invalid remote session payload."));
 
         var command = new AgentCommand
         {
             AgentId = cmd.AgentId,
-            CommandType = CommandType.RemoteDebug,
+            CommandType = CommandType.RemoteSessionStop,
             Payload = normalizedPayload
         };
         await dispatcher.DispatchAsync(command, ct);
@@ -165,6 +179,105 @@ public sealed class RenewRemoteSessionCommandHandler(
         catch (UnauthorizedAccessException ex)
         {
             return Result<RemoteSessionResponseDto>.Failure(Error.Forbidden(ex.Message));
+        }
+    }
+}
+
+public sealed class AckFrameCommandHandler(
+    ILogger<AckFrameCommandHandler> logger
+) : IRequestHandler<AckFrameCommand, Result<VoidResult>>
+{
+    public Task<Result<VoidResult>> Handle(AckFrameCommand cmd, CancellationToken ct)
+    {
+        // Frame ack é apenas métrico; não persiste no banco.
+        // As métricas são usadas pelo quality manager no agent.
+        logger.LogDebug("Frame ack: session {SessionId}, seq {Seq}, rtt {RttMs}ms",
+            cmd.SessionId, cmd.FrameSeq, cmd.RttMs);
+        return Task.FromResult(Result<VoidResult>.Success(VoidResult.Value));
+    }
+}
+
+public sealed class StartRecordingCommandHandler(
+    IRemoteSessionManager sessionManager,
+    IRemoteRecordingService recordingService,
+    IAgentCommandDispatcher dispatcher,
+    SpecialCommandPayloadValidator payloadValidator,
+    ILogger<StartRecordingCommandHandler> logger
+) : IRequestHandler<StartRecordingCommand, Result<RecordingResponseDto>>
+{
+    public async Task<Result<RecordingResponseDto>> Handle(StartRecordingCommand cmd, CancellationToken ct)
+    {
+        var session = await sessionManager.GetActiveForUserAsync(cmd.SessionId, cmd.UserId, ct);
+        if (session is null)
+            return Result<RecordingResponseDto>.Failure(Error.NotFound("Remote session not found or not active."));
+
+        try
+        {
+            var recording = await recordingService.StartRecordingAsync(cmd.SessionId, cmd.UserId, ct);
+
+            var payload = JsonSerializer.Serialize(new { action = "recording_start", sessionId = cmd.SessionId });
+            if (payloadValidator.TryNormalize(CommandType.RecordingStart, payload, out var normalizedPayload, out _))
+            {
+                var command = new AgentCommand
+                {
+                    AgentId = cmd.AgentId,
+                    CommandType = CommandType.RecordingStart,
+                    Payload = normalizedPayload
+                };
+                await dispatcher.DispatchAsync(command, ct);
+            }
+
+            logger.LogInformation("Recording {RecordingId} started for session {SessionId}",
+                recording.Id, cmd.SessionId);
+
+            return Result<RecordingResponseDto>.Success(new RecordingResponseDto(
+                recording.Id, cmd.SessionId, recording.Status, recording.StartedAt));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Result<RecordingResponseDto>.Failure(Error.Validation("Recording", ex.Message));
+        }
+    }
+}
+
+public sealed class StopRecordingCommandHandler(
+    IRemoteSessionManager sessionManager,
+    IRemoteRecordingService recordingService,
+    IAgentCommandDispatcher dispatcher,
+    SpecialCommandPayloadValidator payloadValidator,
+    ILogger<StopRecordingCommandHandler> logger
+) : IRequestHandler<StopRecordingCommand, Result<RecordingResponseDto>>
+{
+    public async Task<Result<RecordingResponseDto>> Handle(StopRecordingCommand cmd, CancellationToken ct)
+    {
+        var session = await sessionManager.GetActiveForUserAsync(cmd.SessionId, cmd.UserId, ct);
+        if (session is null)
+            return Result<RecordingResponseDto>.Failure(Error.NotFound("Remote session not found or not active."));
+
+        try
+        {
+            var recording = await recordingService.StopRecordingAsync(cmd.SessionId, cmd.UserId, ct);
+
+            var payload = JsonSerializer.Serialize(new { action = "recording_stop", sessionId = cmd.SessionId });
+            if (payloadValidator.TryNormalize(CommandType.RecordingStop, payload, out var normalizedPayload, out _))
+            {
+                var command = new AgentCommand
+                {
+                    AgentId = cmd.AgentId,
+                    CommandType = CommandType.RecordingStop,
+                    Payload = normalizedPayload
+                };
+                await dispatcher.DispatchAsync(command, ct);
+            }
+
+            logger.LogInformation("Recording stopped for session {SessionId}", cmd.SessionId);
+
+            return Result<RecordingResponseDto>.Success(new RecordingResponseDto(
+                recording.Id, cmd.SessionId, recording.Status, recording.StartedAt, recording.StorageUrl));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Result<RecordingResponseDto>.Failure(Error.NotFound(ex.Message));
         }
     }
 }

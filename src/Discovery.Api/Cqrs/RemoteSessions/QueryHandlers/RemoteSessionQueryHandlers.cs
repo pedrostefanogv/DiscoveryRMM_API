@@ -85,3 +85,28 @@ public sealed class GetSessionCredentialsQueryHandler(
             natsWsUrl));
     }
 }
+
+public sealed class GetRecordingDownloadQueryHandler(
+    IRemoteSessionManager sessionManager,
+    IRemoteRecordingService recordingService,
+    ILogger<GetRecordingDownloadQueryHandler> logger
+) : IRequestHandler<GetRecordingDownloadQuery, Result<RecordingDownloadDto>>
+{
+    public async Task<Result<RecordingDownloadDto>> Handle(GetRecordingDownloadQuery query, CancellationToken ct)
+    {
+        var session = await sessionManager.GetActiveForUserAsync(query.SessionId, query.UserId, ct);
+        if (session is null)
+            return Result<RecordingDownloadDto>.Failure(Error.NotFound("Remote session not found or not active."));
+
+        try
+        {
+            var url = await recordingService.GetDownloadUrlAsync(query.SessionId, ct);
+            return Result<RecordingDownloadDto>.Success(new RecordingDownloadDto(
+                url, "webm", 0, 0, DateTime.UtcNow.AddMinutes(15)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Result<RecordingDownloadDto>.Failure(Error.NotFound(ex.Message));
+        }
+    }
+}

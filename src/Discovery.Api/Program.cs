@@ -22,6 +22,7 @@ using Discovery.Infrastructure.Repositories;
 using Discovery.Infrastructure.Services;
 using Discovery.Infrastructure.Services.Remote;
 using Discovery.Infrastructure.Services.Remote.Audit;
+using Discovery.Infrastructure.Services.Remote.Recording;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.HttpOverrides;
 using Scalar.AspNetCore;

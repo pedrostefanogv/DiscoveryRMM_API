@@ -126,9 +126,26 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.Restart => TryNormalizeRestart(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.Shutdown => TryNormalizeShutdown(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.WakeOnLan => TryNormalizeWakeOnLan(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.RemoteSessionStart => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.RemoteSessionStop => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.RemoteSessionQuality => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.RecordingStart => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.RecordingStop => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }
+    }
+
+    private static bool TryNormalizeRemoteSession(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string? validationError)
+    {
+        // Remote session payloads são JSON simples com action + sessionId + parâmetros.
+        // A validação de schema é feita pelo handler; aqui apenas normalizamos (re-serializamos).
+        normalizedPayload = payload.GetRawText();
+        validationError = null;
+        return true;
     }
 
     private static bool TryNormalizeRemoteDebug(
