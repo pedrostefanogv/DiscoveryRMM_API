@@ -26,6 +26,9 @@ public class M139_RemoveMeshCentral : Migration
         if (Schema.Table("agents").Column("meshcentral_node_id").Exists())
         {
             Delete.Column("meshcentral_node_id").FromTable("agents");
+        }
+        if (Schema.Table("agents").Index("ix_agents_meshcentral_node_id").Exists())
+        {
             Delete.Index("ix_agents_meshcentral_node_id").OnTable("agents");
         }
 
