@@ -40,11 +40,24 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         QualityProfile quality,
         RemoteCodec codec,
         string natsSubject,
+        bool force = false,
         CancellationToken ct = default)
     {
-        var activeCount = await _repo.CountActiveByAgentAsync(agentId, ct);
+        var activeSessions = (await _repo.GetActiveByAgentAsync(agentId, ct)).ToList();
+        var activeCount = activeSessions.Count;
+
         if (activeCount >= _options.MaxConcurrentSessionsPerAgent)
-            throw new InvalidOperationException($"Agent already has {activeCount} active sessions (max {_options.MaxConcurrentSessionsPerAgent}).");
+        {
+            if (!force)
+                throw new InvalidOperationException($"Agent already has {activeCount} active session(s) (max {_options.MaxConcurrentSessionsPerAgent}). Use force=true to override.");
+
+            // Força o encerramento de todas as sessões ativas antes de criar a nova
+            foreach (var existing in activeSessions)
+            {
+                await CloseSessionAsync(existing.Id, "overridden-by-new-session", userId, ct);
+                _logger.LogInformation("Remote session {SessionId} overridden by new session for agent {AgentId}", existing.Id, agentId);
+            }
+        }
 
         var userCount = await _repo.CountActiveByUserAsync(userId, ct);
         if (userCount >= _options.MaxConcurrentSessionsPerUser)

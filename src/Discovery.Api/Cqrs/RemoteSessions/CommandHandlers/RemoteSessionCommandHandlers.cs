@@ -56,7 +56,7 @@ public sealed class StartRemoteSessionCommandHandler(
         {
             session = await sessionManager.CreateSessionAsync(
                 cmd.AgentId, cmd.UserId, tenantId, siteId,
-                cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, natsSubject, ct);
+                cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, natsSubject, cmd.Force, ct);
         }
         catch (InvalidOperationException ex)
         {

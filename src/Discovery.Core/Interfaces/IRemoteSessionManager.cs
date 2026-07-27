@@ -18,6 +18,7 @@ public interface IRemoteSessionManager
         Core.Enums.QualityProfile quality,
         Core.Enums.RemoteCodec codec,
         string natsSubject,
+        bool force = false,
         CancellationToken ct = default);
 
     /// <summary>Renova o TTL da sessão.</summary>

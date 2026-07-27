@@ -11,7 +11,6 @@ namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/auth")]
-[AllowAnonymous]
 public class AuthController(IMediator mediator) : ControllerBase
 {
     private readonly IMediator _mediator = mediator;
@@ -25,10 +24,23 @@ public class AuthController(IMediator mediator) : ControllerBase
     // ── Login / Refresh / Logout (CQRS via MediatR) ──────────────────────
 
     /// <summary>
+    /// Verifica se o token atual é válido. Útil para o frontend validar
+    /// proativamente antes de expirar e renovar via refresh.
+    /// </summary>
+    [HttpGet("verify")]
+    [RequireUserAuth]
+    public IActionResult VerifyToken()
+    {
+        var userId = HttpContext.Items["UserId"];
+        return Ok(new { valid = true, userId });
+    }
+
+    /// <summary>
     /// Etapa 1 do login: valida login+senha e retorna um mfaPendingToken (se MFA configurado)
     /// ou um mfaSetupToken (se MFA ainda não configurado).
     /// </summary>
     [HttpPost("login")]
+    [AllowAnonymous]
     public async Task<IActionResult> Login([FromBody] LoginRequestDto dto)
     {
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
@@ -46,6 +58,7 @@ public class AuthController(IMediator mediator) : ControllerBase
     /// Renova o par de tokens usando o refresh token.
     /// </summary>
     [HttpPost("refresh")]
+    [AllowAnonymous]
     public async Task<IActionResult> Refresh([FromBody] RefreshTokenRequestDto dto)
     {
         var result = await _mediator.Send(new RefreshTokenQuery(dto.RefreshToken));
@@ -76,6 +89,7 @@ public class AuthController(IMediator mediator) : ControllerBase
     /// Requer header: Authorization: Bearer {mfaPendingToken}
     /// </summary>
     [HttpPost("mfa/fido2/begin")]
+    [AllowAnonymous]
     [RequireMfaPending]
     public async Task<IActionResult> BeginFido2Assertion()
     {
@@ -92,6 +106,7 @@ public class AuthController(IMediator mediator) : ControllerBase
     /// Etapa 2b — MFA via FIDO2: valida a resposta e emite a sessão completa (access + refresh tokens).
     /// </summary>
     [HttpPost("mfa/fido2/complete")]
+    [AllowAnonymous]
     [RequireMfaPending]
     public async Task<IActionResult> CompleteFido2Assertion([FromBody] CompleteFido2AssertionDto dto)
     {
@@ -116,6 +131,7 @@ public class AuthController(IMediator mediator) : ControllerBase
     /// Etapa 2b — MFA via OTP/TOTP: valida o código e emite a sessão completa.
     /// </summary>
     [HttpPost("mfa/otp/complete")]
+    [AllowAnonymous]
     [RequireMfaPending]
     public async Task<IActionResult> CompleteOtpAssertion([FromBody] CompleteOtpAssertionDto dto)
     {
@@ -141,6 +157,7 @@ public class AuthController(IMediator mediator) : ControllerBase
     /// Requer token mfa_setup ou sessão completa.
     /// </summary>
     [HttpPost("first-access/complete")]
+    [AllowAnonymous]
     [RequireMfaSetupOrFullSession]
     public async Task<IActionResult> CompleteFirstAccess([FromBody] CompleteFirstAccessRequestDto dto)
     {
@@ -161,6 +178,7 @@ public class AuthController(IMediator mediator) : ControllerBase
     /// Requer token mfa_setup ou sessão completa.
     /// </summary>
     [HttpGet("first-access/status")]
+    [AllowAnonymous]
     [RequireMfaSetupOrFullSession]
     public async Task<IActionResult> GetFirstAccessStatus()
     {

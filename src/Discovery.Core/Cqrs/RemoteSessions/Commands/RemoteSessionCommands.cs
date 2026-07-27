@@ -13,7 +13,8 @@ public sealed record StartRemoteSessionCommand(
     RemoteTransport Transport,
     QualityProfile Quality,
     RemoteCodec Codec,
-    int DurationMinutes
+    int DurationMinutes,
+    bool Force = false
 ) : ICommand<Result<RemoteSessionResponseDto>>;
 
 public sealed record StopRemoteSessionCommand(

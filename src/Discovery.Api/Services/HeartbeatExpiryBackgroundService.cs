@@ -10,7 +10,7 @@ namespace Discovery.Api.Services;
 
 /// <summary>
 /// Detecta agentes cujo heartbeat expirou no Redis e os marca como Offline no DB.
-/// 
+///
 /// Estratégia:
 /// - Busca agentes com Status=Online no DB (batch pequeno, só Online)
 /// - Verifica se cada um tem chave heartbeat:agent:{id} no Redis
@@ -87,6 +87,23 @@ public class HeartbeatExpiryBackgroundService : BackgroundService
                     continue;
                 }
                 await agentRepo.UpdateStatusAsync(agentId, AgentStatus.Offline, null);
+
+                // Fecha todas as sessões remotas ativas deste agente que caiu
+                try
+                {
+                    var sessionManager = scope.ServiceProvider.GetRequiredService<IRemoteSessionManager>();
+                    var sessionRepo = scope.ServiceProvider.GetRequiredService<IRemoteSessionRepository>();
+                    var activeSessions = await sessionRepo.GetActiveByAgentAsync(agentId, ct);
+                    foreach (var s in activeSessions)
+                    {
+                        await sessionManager.CloseSessionAsync(s.Id, "agent-offline", null, ct);
+                        _logger.LogInformation("Remote session {SessionId} closed because agent {AgentId} went offline", s.Id, agentId);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Erro ao fechar sessoes remotas do agent {AgentId} offline", agentId);
+                }
 
                 if (messaging.IsConnected)
                 {
