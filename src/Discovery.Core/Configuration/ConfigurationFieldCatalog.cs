@@ -9,7 +9,6 @@ public static class ConfigurationFieldCatalog
         "P2PFilesEnabled",
         "CloudBootstrapEnabled",
         "SupportEnabled",
-        "MeshCentralGroupPolicyProfile",
         "ChatAIEnabled",
         "KnowledgeBaseEnabled",
         "AppStorePolicy",

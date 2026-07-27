@@ -10,15 +10,15 @@ public class ClientConfiguration
 {
     public Guid Id { get; set; }
     public Guid ClientId { get; set; }
-    
+
     // ============ Funcionalidades ============
-    
+
     /// <summary>Recovery automática: detecta se o agent foi instalado antes para reutilizar dados</summary>
     public bool? RecoveryEnabled { get; set; } // null = herda de servidor
-    
+
     /// <summary>Discovery automática de rede pelos agents</summary>
     public bool? DiscoveryEnabled { get; set; }
-    
+
     /// <summary>Transferência de arquivos P2P entre agents</summary>
     public bool? P2PFilesEnabled { get; set; }
 
@@ -28,15 +28,12 @@ public class ClientConfiguration
     /// <summary>Suporte habilitado: permite abertura de chamados/tickets</summary>
     public bool? SupportEnabled { get; set; }
 
-    /// <summary>Perfil de permissao para grupos MeshCentral (null = herda servidor).</summary>
-    public string? MeshCentralGroupPolicyProfile { get; set; }
-
     /// <summary>Chat de IA para suporte (null = herda servidor)</summary>
     public bool? ChatAIEnabled { get; set; }
 
     /// <summary>Base de conhecimento habilitada (null = herda servidor)</summary>
     public bool? KnowledgeBaseEnabled { get; set; }
-    
+
     // ============ Loja de aplicativos ============
 
     /// <summary>Política de acesso à loja de aplicativos (null = herda servidor)</summary>
@@ -63,8 +60,8 @@ public class ClientConfiguration
 
     /// <summary>Configurações de self-update do agent para este cliente</summary>
     public string? AgentUpdatePolicyJson { get; set; }
-     
-    // ============ Configurações de conexão de agent ============ 
+
+    // ============ Configurações de conexão de agent ============
 
     /// <summary>Intervalo esperado de heartbeat do agent (segundos)</summary>
     public int? AgentHeartbeatIntervalSeconds { get; set; }
@@ -77,9 +74,9 @@ public class ClientConfiguration
     /// Bloqueia sobrescrita nos sites e agents deste cliente.
     /// </summary>
     public string LockedFieldsJson { get; set; } = "[]";
-    
+
     // ============ Auditoria ============
-    
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public string? CreatedBy { get; set; }

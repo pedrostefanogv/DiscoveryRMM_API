@@ -74,8 +74,6 @@ public partial class DiscoveryDbContext
                 .HasDatabaseName("ix_agents_site_id");
             entity.HasIndex(agent => agent.Hostname)
                 .HasDatabaseName("ix_agents_hostname");
-            entity.HasIndex(agent => agent.MeshCentralNodeId)
-                .HasDatabaseName("ix_agents_meshcentral_node_id");
             entity.HasIndex(agent => agent.DeletedAt)
                 .HasDatabaseName("ix_agents_deleted_at");
             entity.HasQueryFilter(agent => agent.DeletedAt == null);
@@ -90,9 +88,6 @@ public partial class DiscoveryDbContext
                 .HasMaxLength(200);
             entity.Property(agent => agent.DisplayName)
                 .HasColumnName("display_name")
-                .HasMaxLength(200);
-            entity.Property(agent => agent.MeshCentralNodeId)
-                .HasColumnName("meshcentral_node_id")
                 .HasMaxLength(200);
             entity.Property(agent => agent.Status)
                 .HasColumnName("status")

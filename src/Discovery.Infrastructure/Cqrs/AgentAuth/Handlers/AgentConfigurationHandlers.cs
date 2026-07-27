@@ -92,9 +92,9 @@ public sealed class GetAgentConfigurationHandler(
             ["apiTlsCertHash"] = (string?)null,   // TODO: compute from server certificate
             ["natsTlsCertHash"] = (string?)null,  // TODO: compute from NATS certificate
 
-            // MeshCentral
+            // MeshCentral legacy — always disabled after removal
             ["meshCentralEnabled"] = false,
-            ["meshCentralGroupPolicyProfile"] = siteConfig?.MeshCentralGroupPolicyProfile ?? clientConfig?.MeshCentralGroupPolicyProfile ?? serverConfig.MeshCentralGroupPolicyProfile
+            ["meshCentralGroupPolicyProfile"] = (string?)null
         };
 
         return Result<object>.Success(effective);

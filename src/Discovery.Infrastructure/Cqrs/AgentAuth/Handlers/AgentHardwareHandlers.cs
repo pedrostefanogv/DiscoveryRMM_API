@@ -98,8 +98,6 @@ public sealed class ReportAgentHardwareCommandHandler(
             agent.LastIpAddress = cmd.LastIpAddress;
         if (!string.IsNullOrWhiteSpace(cmd.MacAddress))
             agent.MacAddress = cmd.MacAddress;
-        if (!string.IsNullOrWhiteSpace(cmd.MeshCentralNodeId))
-            agent.MeshCentralNodeId = cmd.MeshCentralNodeId;
 
         await agentRepo.UpdateAsync(agent);
 

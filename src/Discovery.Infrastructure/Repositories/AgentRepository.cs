@@ -70,7 +70,6 @@ public class AgentRepository : IAgentRepository
         existingAgent.SiteId = agent.SiteId;
         existingAgent.Hostname = agent.Hostname;
         existingAgent.DisplayName = agent.DisplayName;
-        existingAgent.MeshCentralNodeId = agent.MeshCentralNodeId;
         existingAgent.Status = agent.Status;
         existingAgent.OperatingSystem = agent.OperatingSystem;
         existingAgent.OsVersion = agent.OsVersion;

@@ -9,7 +9,6 @@ public class Agent
     public Guid SiteId { get; set; }
     public string Hostname { get; set; } = string.Empty;
     public string? DisplayName { get; set; }
-    public string? MeshCentralNodeId { get; set; }
     public AgentStatus Status { get; set; } = AgentStatus.Offline;
     public string? OperatingSystem { get; set; }
     public string? OsVersion { get; set; }

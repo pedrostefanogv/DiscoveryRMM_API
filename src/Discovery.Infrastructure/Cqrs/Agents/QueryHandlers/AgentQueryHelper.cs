@@ -25,7 +25,6 @@ internal static class AgentQueryHelper
         a.EffectiveStatus == AgentStatus.Online,
         a.LastSeenAt,
         a.ZeroTouchPending,
-        a.MeshCentralNodeId,
         a.CreatedAt,
         a.UpdatedAt,
         null);
@@ -46,7 +45,6 @@ internal static class AgentQueryHelper
         a.EffectiveStatus == AgentStatus.Online,
         hb?.LastHeartbeatAt ?? a.LastSeenAt,
         a.ZeroTouchPending,
-        a.MeshCentralNodeId,
         a.CreatedAt,
         a.UpdatedAt,
         hb is null ? null : new HeartbeatMetricsDto(

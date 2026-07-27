@@ -12,7 +12,7 @@ public sealed record AgentHardwarePayloadDto(
 // Commands
 public sealed record ReportAgentHardwareCommand(
     Guid AgentId,
-    string? Hostname, string? DisplayName, string? MeshCentralNodeId,
+    string? Hostname, string? DisplayName,
     string? Status, string? OperatingSystem, string? OsVersion, string? AgentVersion, string? CommitHash,
     string? LastIpAddress, string? MacAddress,
     object? Hardware, object? Components, JsonElement? InventoryRaw,

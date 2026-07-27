@@ -22,7 +22,6 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<EntityNote> EntityNotes => Set<EntityNote>();
     public DbSet<LogEntry> Logs => Set<LogEntry>();
     public DbSet<ServerConfiguration> ServerConfigurations => Set<ServerConfiguration>();
-    public DbSet<MeshCentralRightsProfile> MeshCentralRightsProfiles => Set<MeshCentralRightsProfile>();
     public DbSet<SiteConfiguration> SiteConfigurations => Set<SiteConfiguration>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<TicketComment> TicketComments => Set<TicketComment>();

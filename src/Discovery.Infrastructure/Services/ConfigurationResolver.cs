@@ -209,12 +209,6 @@ public class ConfigurationResolver : IConfigurationResolver
         var p2p = ResolveValue("P2PFilesEnabled", blocked, site?.P2PFilesEnabled, client?.P2PFilesEnabled, server.P2PFilesEnabled);
         var cloudBootstrap = ResolveValue("CloudBootstrapEnabled", blocked, (bool?)null, client?.CloudBootstrapEnabled, server.CloudBootstrapEnabled);
         var support = ResolveValue("SupportEnabled", blocked, site?.SupportEnabled, client?.SupportEnabled, server.SupportEnabled);
-        var meshPolicyProfile = ResolveStringValue(
-            "MeshCentralGroupPolicyProfile",
-            blocked,
-            site?.MeshCentralGroupPolicyProfile,
-            client?.MeshCentralGroupPolicyProfile,
-            server.MeshCentralGroupPolicyProfile);
         var chatAi = ResolveValue("ChatAIEnabled", blocked, site?.ChatAIEnabled, client?.ChatAIEnabled, server.ChatAIEnabled);
         var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, site?.KnowledgeBaseEnabled, client?.KnowledgeBaseEnabled, server.KnowledgeBaseEnabled);
         var appStore = ResolveValue("AppStorePolicy", blocked, site?.AppStorePolicy, client?.AppStorePolicy, server.AppStorePolicy);
@@ -239,7 +233,6 @@ public class ConfigurationResolver : IConfigurationResolver
             P2PFilesEnabled = p2p.Value,
             CloudBootstrapEnabled = cloudBootstrap.Value,
             SupportEnabled = support.Value,
-            MeshCentralGroupPolicyProfile = meshPolicyProfile.Value,
             ChatAIEnabled = chatAi.Value,
             KnowledgeBaseEnabled = knowledge.Value,
             AppStorePolicy = appStore.Value,
@@ -257,7 +250,6 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["P2PFilesEnabled"] = (int)p2p.Source;
         resolved.Inheritance["CloudBootstrapEnabled"] = (int)cloudBootstrap.Source;
         resolved.Inheritance["SupportEnabled"] = (int)support.Source;
-        resolved.Inheritance["MeshCentralGroupPolicyProfile"] = (int)meshPolicyProfile.Source;
         resolved.Inheritance["ChatAIEnabled"] = (int)chatAi.Source;
         resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;
         resolved.Inheritance["AppStorePolicy"] = (int)appStore.Source;

@@ -3,9 +3,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Data;
 
-// ── Configuration: Server, Client, Site, MeshCentral, Audit ──
+// ── Configuration: Server, Client, Site, Audit ──
 //    Includes: ServerConfiguration, ClientConfiguration, SiteConfiguration,
-//    ConfigurationAudit, MeshCentralRightsProfile
+//    ConfigurationAudit
 
 public partial class DiscoveryDbContext
 {
@@ -22,7 +22,6 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
             entity.Property(config => config.CloudBootstrapEnabled).HasColumnName("cloud_bootstrap_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
-            entity.Property(config => config.MeshCentralGroupPolicyProfile).HasColumnName("meshcentral_group_policy_profile").HasMaxLength(64);
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int>();
@@ -62,21 +61,6 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.CurrentEmbeddingDimensions).HasColumnName("current_embedding_dimensions");
         });
 
-        modelBuilder.Entity<MeshCentralRightsProfile>(entity =>
-        {
-            entity.ToTable("meshcentral_rights_profiles");
-            entity.HasKey(profile => profile.Id);
-            entity.HasIndex(profile => profile.Name).IsUnique().HasDatabaseName("ix_meshcentral_rights_profiles_name");
-
-            entity.Property(profile => profile.Id).HasColumnName("id").ValueGeneratedNever();
-            entity.Property(profile => profile.Name).HasColumnName("name").HasMaxLength(64);
-            entity.Property(profile => profile.Description).HasColumnName("description").HasMaxLength(500);
-            entity.Property(profile => profile.RightsMask).HasColumnName("rights_mask");
-            entity.Property(profile => profile.IsSystem).HasColumnName("is_system");
-            entity.Property(profile => profile.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
-            entity.Property(profile => profile.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
-        });
-
         modelBuilder.Entity<ClientConfiguration>(entity =>
         {
             entity.ToTable("client_configurations");
@@ -90,7 +74,6 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
             entity.Property(config => config.CloudBootstrapEnabled).HasColumnName("cloud_bootstrap_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
-            entity.Property(config => config.MeshCentralGroupPolicyProfile).HasColumnName("meshcentral_group_policy_profile").HasMaxLength(64);
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
@@ -123,7 +106,6 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
-            entity.Property(config => config.MeshCentralGroupPolicyProfile).HasColumnName("meshcentral_group_policy_profile").HasMaxLength(64);
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
@@ -136,10 +118,6 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.Location).HasColumnName("location").HasMaxLength(500);
             entity.Property(config => config.ContactPerson).HasColumnName("contact_person").HasMaxLength(256);
             entity.Property(config => config.ContactEmail).HasColumnName("contact_email").HasMaxLength(256);
-            entity.Property(config => config.MeshCentralGroupName).HasColumnName("meshcentral_group_name").HasMaxLength(200);
-            entity.Property(config => config.MeshCentralMeshId).HasColumnName("meshcentral_mesh_id").HasMaxLength(200);
-            entity.Property(config => config.MeshCentralAppliedGroupPolicyProfile).HasColumnName("meshcentral_applied_group_policy_profile").HasMaxLength(64);
-            entity.Property(config => config.MeshCentralAppliedGroupPolicyAt).HasColumnName("meshcentral_applied_group_policy_at").HasColumnType("timestamptz");
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
             entity.Property(config => config.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(config => config.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");

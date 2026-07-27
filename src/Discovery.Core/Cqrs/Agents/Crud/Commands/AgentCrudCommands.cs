@@ -23,7 +23,6 @@ public sealed record AgentDto(
     bool IsOnline,
     DateTime? LastSeenAt,
     bool ZeroTouchPending,
-    string? MeshCentralNodeId,
     DateTime CreatedAt,
     DateTime UpdatedAt,
     HeartbeatMetricsDto? HeartbeatMetrics = null
