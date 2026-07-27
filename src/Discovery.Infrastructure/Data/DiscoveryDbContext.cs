@@ -30,7 +30,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<WorkflowTransition> WorkflowTransitions => Set<WorkflowTransition>();
     public DbSet<SoftwareCatalog> SoftwareCatalogs => Set<SoftwareCatalog>();
     public DbSet<AgentSoftwareInventory> AgentSoftwareInventories => Set<AgentSoftwareInventory>();
-    
+
     // New DbSets for ticket enhancements
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<WorkflowProfile> WorkflowProfiles => Set<WorkflowProfile>();
@@ -41,7 +41,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<ReportExecution> ReportExecutions => Set<ReportExecution>();
     public DbSet<ReportSchedule> ReportSchedules => Set<ReportSchedule>();
     public DbSet<AppNotification> AppNotifications => Set<AppNotification>();
-    
+
     // AI Chat & MCP
     public DbSet<AiChatSession> AiChatSessions => Set<AiChatSession>();
     public DbSet<AiChatMessage> AiChatMessages => Set<AiChatMessage>();
@@ -125,6 +125,11 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<P2pSeedPlan> P2pSeedPlans => Set<P2pSeedPlan>();
     public DbSet<P2pArtifactManifest> P2pArtifactManifests => Set<P2pArtifactManifest>();
 
+    // Remote Sessions (Acesso Remoto Nativo)
+    public DbSet<RemoteSession> RemoteSessions => Set<RemoteSession>();
+    public DbSet<RemoteSessionAudit> RemoteSessionAudits => Set<RemoteSessionAudit>();
+    public DbSet<RemoteSessionRecording> RemoteSessionRecordings => Set<RemoteSessionRecording>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureDateTimeConversion(modelBuilder);
@@ -151,6 +156,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         // Attachments
         ConfigureAttachments(modelBuilder);
 
+        // Remote sessions (acesso remoto nativo)
+        ConfigureRemoteSessions(modelBuilder);
+
         // Fallback convention: ensure any entity/column not explicitly mapped also uses snake_case.
         ApplySnakeCaseFallback(modelBuilder);
     }
@@ -171,6 +179,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureCustomFields(ModelBuilder modelBuilder);
     static partial void ConfigureAiChat(ModelBuilder modelBuilder);
     static partial void ConfigureAttachments(ModelBuilder modelBuilder);
+    static partial void ConfigureRemoteSessions(ModelBuilder modelBuilder);
 
     private static void ApplySnakeCaseFallback(ModelBuilder modelBuilder)
     {

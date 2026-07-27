@@ -20,6 +20,8 @@ using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Messaging;
 using Discovery.Infrastructure.Repositories;
 using Discovery.Infrastructure.Services;
+using Discovery.Infrastructure.Services.Remote;
+using Discovery.Infrastructure.Services.Remote.Audit;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.HttpOverrides;
 using Scalar.AspNetCore;
@@ -93,6 +95,14 @@ builder.Services.AddSingleton<DashboardEventContractNormalizer>();
 builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
 builder.Services.AddScoped<IAgentTransferService, AgentTransferService>();
 builder.Services.AddSingleton(TimeProvider.System);
+
+// Remote access (acesso remoto nativo)
+builder.Services.AddScoped<IRemoteSessionManager, RemoteSessionManager>();
+builder.Services.AddScoped<IRemoteSessionRepository, RemoteSessionRepository>();
+builder.Services.AddScoped<RemoteSessionAuditService>();
+builder.Services.AddScoped<WebrtcTurnCredentialIssuer>();
+builder.Services.AddHostedService<RemoteSessionExpirationService>();
+builder.Services.Configure<RemoteAccessOptions>(builder.Configuration.GetSection("RemoteAccess"));
 
 // Scoped scope context (cache de escopo intra-request para queries filtradas)
 builder.Services.AddScoped<Discovery.Core.Interfaces.Auth.IScopeContext, Discovery.Infrastructure.Services.ScopeContext>();
