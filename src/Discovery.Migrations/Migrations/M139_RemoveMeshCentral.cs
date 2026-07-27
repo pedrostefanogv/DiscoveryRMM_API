@@ -23,13 +23,10 @@ public class M139_RemoveMeshCentral : Migration
         }
 
         // Remove meshcentral columns from agents
+        // Note: DROP COLUMN automatically drops any dependent index (ix_agents_meshcentral_node_id)
         if (Schema.Table("agents").Column("meshcentral_node_id").Exists())
         {
             Delete.Column("meshcentral_node_id").FromTable("agents");
-        }
-        if (Schema.Table("agents").Index("ix_agents_meshcentral_node_id").Exists())
-        {
-            Delete.Index("ix_agents_meshcentral_node_id").OnTable("agents");
         }
 
         // Remove meshcentral columns from server_configurations
