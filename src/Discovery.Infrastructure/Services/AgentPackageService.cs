@@ -40,7 +40,7 @@ public class AgentPackageService : IAgentPackageService
         var activeProfile = GetActiveProfileName();
         var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
             ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
-        
+
         if (!Directory.Exists(projectPath))
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
@@ -193,7 +193,7 @@ public class AgentPackageService : IAgentPackageService
         var activeProfile = GetActiveProfileName();
         var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
             ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
-        
+
         if (!Directory.Exists(projectPath))
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
@@ -325,12 +325,16 @@ public class AgentPackageService : IAgentPackageService
         var makensisPath = ResolveMakensisPath();
 
         var outputName = GetAgentPackageSetting("InstallerOutputName") ?? "discovery-agent-install.exe";
+        var agentVersion = DetectAgentVersion(projectPath);
+        if (string.IsNullOrWhiteSpace(agentVersion))
+            agentVersion = "1.0.0";
 
         _logger.LogInformation(
-            "Agent installer build with profile={Profile}, installerDir={InstallerDir}, embedBootstrapDefaults={EmbedBootstrapDefaults}",
+            "Agent installer build with profile={Profile}, installerDir={InstallerDir}, embedBootstrapDefaults={EmbedBootstrapDefaults}, version={Version}",
             activeProfile,
             installerDir,
-            includeBootstrapDefaults);
+            includeBootstrapDefaults,
+            agentVersion);
 
         // WebView2 bootstrapper is embedded by the NSIS script (wails_tools.nsh).
         await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
@@ -341,6 +345,7 @@ public class AgentPackageService : IAgentPackageService
         {
             "-V3",
             "-INPUTCHARSET", "UTF8",
+            $"-DINFO_PRODUCTVERSION={agentVersion}",
             $"-DARG_WAILS_AMD64_BINARY={binaryPath}",
             $"-DARG_OUTFILE_NAME={outputName}"
         };
@@ -399,12 +404,17 @@ public class AgentPackageService : IAgentPackageService
 
         var outputName = "discovery-agent-bootstrap.exe";
         var payloadFileName = "discovery-agent-install.exe";
+        var agentVersion = DetectAgentVersion(projectPath);
+        if (string.IsNullOrWhiteSpace(agentVersion))
+            agentVersion = "1.0.0";
+
         var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
 
         _logger.LogInformation(
-            "Bootstrap installer build: stage2Url={Stage2Url}, output={OutputName}",
+            "Bootstrap installer build: stage2Url={Stage2Url}, output={OutputName}, version={Version}",
             stage2Url,
-            outputName);
+            outputName,
+            agentVersion);
 
         await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
 
@@ -414,6 +424,7 @@ public class AgentPackageService : IAgentPackageService
         {
             "-V3",
             "-INPUTCHARSET", "UTF8",
+            $"-DINFO_PRODUCTVERSION={agentVersion}",
             $"-DARG_WAILS_AMD64_BINARY={binaryPath}",
             $"-DARG_OUTFILE_NAME={outputName}",
             // Bootstrap mode: downloads and executes stage2, then exits
@@ -471,12 +482,17 @@ public class AgentPackageService : IAgentPackageService
         var makensisPath = ResolveMakensisPath();
 
         var outputName = "discovery-agent-zerotouch.exe";
+        var agentVersion = DetectAgentVersion(projectPath);
+        if (string.IsNullOrWhiteSpace(agentVersion))
+            agentVersion = "1.0.0";
+
         var defaultDiscovery = (_config["AgentPackage:InstallerDefaults:DiscoveryEnabled"] ?? "1") == "0" ? "0" : "1";
 
         _logger.LogInformation(
-            "Generic (zero-touch) installer build: output={OutputName}, discovery={Discovery}",
+            "Generic (zero-touch) installer build: output={OutputName}, discovery={Discovery}, version={Version}",
             outputName,
-            defaultDiscovery);
+            defaultDiscovery,
+            agentVersion);
 
         await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
 
@@ -486,6 +502,7 @@ public class AgentPackageService : IAgentPackageService
         {
             "-V3",
             "-INPUTCHARSET", "UTF8",
+            $"-DINFO_PRODUCTVERSION={agentVersion}",
             $"-DARG_WAILS_AMD64_BINARY={binaryPath}",
             $"-DARG_OUTFILE_NAME={outputName}",
             // Generic mode: no URL/KEY, P2P auto-provisioning enabled
