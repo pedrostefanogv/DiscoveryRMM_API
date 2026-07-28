@@ -141,6 +141,7 @@ update_all_components() {
   if sudo systemctl list-unit-files nginx.service >/dev/null 2>&1; then
     sudo systemctl restart nginx || warn "Falha ao reiniciar nginx"
   fi
+  _trigger_agent_rebuild_via_api
 }
 
 # ── Update: scope selector ────────────────────────────────────────────────
