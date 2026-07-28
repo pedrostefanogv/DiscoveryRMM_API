@@ -253,10 +253,19 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             return await BuildSuccessResponseAsync(request, jwt.Jwt, jwt.ExpiresAtUtc, configurationService, ct);
         }
 
-        // Compatibilidade transitória: aceita JWT NATS já emitido pela API para o user_nkey da conexão.
-        // Continua estrito por assinatura, issuer (account) e validade temporal.
-        if (TryValidatePreIssuedNatsUserJwt(token, request.Nats.UserNkey, out var preIssuedExpiresAtUtc))
-            return await BuildSuccessResponseAsync(request, token, preIssuedExpiresAtUtc, configurationService, ct);
+        // Aceita JWT NATS pré-emitido pela API (agent, user, ou sessão remota).
+        // Valida assinatura (account key), issuer e validade temporal.
+        if (TryValidatePreIssuedNatsJwt(token, out var preIssuedExpiresAtUtc, out var isSessionToken))
+        {
+            // Para JWTs de sessão remota, o userNkey não precisa bater porque
+            // o viewer web não possui a NKey — apenas o JWT é usado como access_token.
+            if (isSessionToken)
+                return await BuildSuccessResponseAsync(request, token, preIssuedExpiresAtUtc, configurationService, ct);
+
+            // Para JWTs de agent/user, valida userNkey normalmente
+            if (TryValidatePreIssuedNatsUserJwt(token, request.Nats.UserNkey, out preIssuedExpiresAtUtc))
+                return await BuildSuccessResponseAsync(request, token, preIssuedExpiresAtUtc, configurationService, ct);
+        }
 
         var principal = jwtService.ValidateToken(token);
         if (principal is null)
@@ -292,6 +301,79 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             ct,
             remoteDebugScopeAccess);
         return await BuildSuccessResponseAsync(request, userJwt.Jwt, userJwt.ExpiresAtUtc, configurationService, ct);
+    }
+
+    /// <summary>
+    /// Valida um JWT NATS pré-emitido (agent, user ou sessão) sem exigir userNkey correspondente.
+    /// Para JWTs de sessão remota (Name = "session:*"), o userNkey é ignorado porque
+    /// o viewer web não possui a NKey — o JWT é usado diretamente como access_token.
+    /// Retorna isSessionToken=true quando detecta um JWT de sessão remota.
+    /// </summary>
+    private bool TryValidatePreIssuedNatsJwt(string token, out DateTime expiresAtUtc, out bool isSessionToken)
+    {
+        expiresAtUtc = default;
+        isSessionToken = false;
+
+        NatsUserClaims claims;
+        try
+        {
+            claims = NatsJwt.DecodeUserClaims(token);
+        }
+        catch (NatsJwtException)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(claims.Subject))
+        {
+            _logger.LogWarning("Rejected NATS JWT due to empty subject.");
+            return false;
+        }
+
+        var accountSeed = _configuration["Nats:AccountSeed"];
+        if (string.IsNullOrWhiteSpace(accountSeed))
+            return false;
+
+        var expectedIssuer = KeyPair.FromSeed(accountSeed).GetPublicKey();
+        if (string.IsNullOrWhiteSpace(claims.Issuer)
+            || !string.Equals(claims.Issuer, expectedIssuer, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Rejected NATS JWT due to issuer mismatch. Expected={Expected}, Actual={Actual}",
+                expectedIssuer,
+                claims.Issuer);
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (claims.NotBefore.HasValue && claims.NotBefore.Value > now.Add(JwtClockSkew))
+        {
+            _logger.LogWarning("Rejected NATS JWT due to not-before in the future. Nbf={NbfUtc}", claims.NotBefore);
+            return false;
+        }
+
+        if (!claims.Expires.HasValue)
+        {
+            _logger.LogWarning("Rejected NATS JWT without expiration.");
+            return false;
+        }
+
+        if (claims.Expires.Value <= now.Subtract(JwtClockSkew))
+        {
+            _logger.LogWarning("Rejected NATS JWT due to expiration. Exp={ExpUtc}", claims.Expires);
+            return false;
+        }
+
+        // Detecta JWT de sessão remota pelo padrão "session:" no campo Name
+        isSessionToken = !string.IsNullOrWhiteSpace(claims.Name)
+            && claims.Name.StartsWith("session:", StringComparison.OrdinalIgnoreCase);
+
+        expiresAtUtc = claims.Expires.Value.UtcDateTime;
+        return true;
     }
 
     private bool TryValidatePreIssuedNatsUserJwt(string token, string expectedUserNkey, out DateTime expiresAtUtc)
