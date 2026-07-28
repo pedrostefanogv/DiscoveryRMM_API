@@ -32,7 +32,7 @@ public class RemoteSessionsController : ControllerBase
         var tenantId = HttpContext.Items["TenantId"] as Guid? ?? Guid.Empty;
         var siteId = HttpContext.Items["SiteId"] as Guid? ?? Guid.Empty;
 
-        var result = await _mediator.Send(cmd with { AgentId = agentId, UserId = userId, TenantId = tenantId, SiteId = siteId }, ct);
+        var result = await _mediator.Send(cmd with { AgentId = agentId, UserId = userId, TenantId = tenantId, SiteId = siteId, Force = true }, ct);
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
