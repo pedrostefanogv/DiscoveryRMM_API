@@ -571,9 +571,11 @@ update_remote_access_environment_file() {
   log "Atualizando variaveis RemoteAccess no $env_file"
   local tmp_file; tmp_file="$(mktemp)"
 
-  sudo awk '
-    !/^RemoteAccess__/
-  ' "$env_file" > "$tmp_file"
+  # Copia todas as linhas que NAO comecam com RemoteAccess__
+  # set +e evita que awk quebre o script em caso de pipe fechado
+  set +e
+  sudo awk '!/^RemoteAccess__/' "$env_file" > "$tmp_file" 2>/dev/null
+  set -e
 
   cat >> "$tmp_file" <<EOF
 RemoteAccess__Enabled=$( [[ "${REMOTE_ACCESS_ENABLED:-1}" == "1" ]] && echo true || echo false )

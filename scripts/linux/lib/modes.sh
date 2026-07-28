@@ -128,20 +128,21 @@ update_all_components() {
   clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
   publish_api
-  update_remote_access_environment_file
+  update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
   publish_site
   if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-0}" == "1" ]]; then
     log "Atualizando tambem infraestrutura auxiliar (self-update + Nginx) por solicitacao explicita"
-    install_selfupdate_script
-    write_site_proxy_config
+    install_selfupdate_script || warn "Falha ao instalar script de self-update (nao-bloqueante)"
+    write_site_proxy_config || warn "Falha ao escrever config do Nginx (nao-bloqueante)"
   fi
+  log "Reiniciando servicos..."
   if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
     sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api"
   else warn "Servico discovery-api nao encontrado; pulando restart"; fi
   if sudo systemctl list-unit-files nginx.service >/dev/null 2>&1; then
     sudo systemctl restart nginx || warn "Falha ao reiniciar nginx"
   fi
-  _trigger_agent_rebuild_via_api
+  _trigger_agent_rebuild_via_api || warn "Falha ao disparar rebuild do agent (nao-bloqueante)"
 }
 
 # ── Update: scope selector ────────────────────────────────────────────────
