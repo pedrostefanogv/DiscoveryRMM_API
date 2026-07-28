@@ -5,15 +5,15 @@ using Discovery.Core.Enums;
 namespace Discovery.Core.Cqrs.RemoteSessions.Commands;
 
 public sealed record StartRemoteSessionCommand(
-    Guid AgentId,
-    Guid UserId,
-    Guid TenantId,
-    Guid SiteId,
     RemoteSessionKind Kind,
     RemoteTransport Transport,
     QualityProfile Quality,
     RemoteCodec Codec,
-    int DurationMinutes,
+    Guid AgentId = default,
+    Guid UserId = default,
+    Guid TenantId = default,
+    Guid SiteId = default,
+    int DurationMinutes = 30,
     bool Force = false
 ) : ICommand<Result<RemoteSessionResponseDto>>;
 
