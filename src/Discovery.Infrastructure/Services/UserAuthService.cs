@@ -8,6 +8,7 @@ using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Core.Helpers;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -25,7 +26,9 @@ public class UserAuthService : IUserAuthService
     private readonly IRoleRepository _roles;
     private readonly IUserMfaKeyRepository _mfaKeys;
     private readonly IAuthAuditLogRepository _auditLog;
+    private readonly ILogger<UserAuthService> _logger;
     private readonly int _accessTokenSeconds;
+    private readonly int _refreshTokenDays;
 
     public UserAuthService(
         IUserRepository users,
@@ -36,7 +39,8 @@ public class UserAuthService : IUserAuthService
         IRoleRepository roles,
         IUserMfaKeyRepository mfaKeys,
         IAuthAuditLogRepository auditLog,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ILogger<UserAuthService> logger)
     {
         _users = users;
         _sessions = sessions;
@@ -46,7 +50,9 @@ public class UserAuthService : IUserAuthService
         _roles = roles;
         _mfaKeys = mfaKeys;
         _auditLog = auditLog;
+        _logger = logger;
         _accessTokenSeconds = configuration.GetValue<int>("Authentication:Jwt:AccessTokenExpirationMinutes", 30) * 60;
+        _refreshTokenDays = configuration.GetValue<int>("Authentication:Jwt:RefreshTokenExpirationDays", 7);
     }
 
     public async Task<LoginResponseDto> LoginAsync(
@@ -289,29 +295,66 @@ public class UserAuthService : IUserAuthService
 
     public async Task<TokenPairDto> RefreshAsync(string refreshToken)
     {
-        var refreshBytes = Convert.FromBase64String(refreshToken);
+        // Validação: token vazio ou nulo
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            _logger.LogWarning("[Refresh] Token vazio ou nulo recebido");
+            throw new UnauthorizedAccessException("Refresh token inválido ou expirado.");
+        }
+
+        // Decodificação segura do Base64
+        byte[] refreshBytes;
+        try
+        {
+            refreshBytes = Convert.FromBase64String(refreshToken);
+        }
+        catch (FormatException)
+        {
+            _logger.LogWarning("[Refresh] Token Base64 inválido: prefixo={Prefix}",
+                refreshToken.Length > 10 ? refreshToken[..10] : refreshToken);
+            throw new UnauthorizedAccessException("Refresh token inválido ou expirado.");
+        }
+
         var refreshHash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(refreshBytes));
 
         // Busca incluindo sessões revogadas dentro do grace period
-        // (para suportar renovação concorrente de múltiplas abas)
         var session = await _sessions.GetByRefreshTokenHashWithGracePeriodAsync(refreshHash);
         if (session is null)
+        {
+            _logger.LogWarning("[Refresh] Sessão não encontrada para o hash do refresh token");
             throw new UnauthorizedAccessException("Refresh token inválido ou expirado.");
+        }
 
         // Sessão revogada fora do grace period
         if (session.IsRevoked && !session.IsWithinRefreshGracePeriod)
+        {
+            _logger.LogWarning(
+                "[Refresh] Sessão {SessionId} revogada fora do grace (RevokedAt={RevokedAt}, GraceUntil={GraceUntil}, Now={Now}, UserId={UserId})",
+                session.Id, session.RevokedAt, session.RefreshTokenGracePeriodUntil, DateTime.UtcNow, session.UserId);
             throw new UnauthorizedAccessException("Refresh token inválido ou expirado.");
+        }
 
         // Sessão expirada
         if (session.IsExpired)
+        {
+            _logger.LogWarning(
+                "[Refresh] Sessão {SessionId} expirada (ExpiresAt={ExpiresAt}, Now={Now}, UserId={UserId})",
+                session.Id, session.ExpiresAt, DateTime.UtcNow, session.UserId);
             throw new UnauthorizedAccessException("Refresh token inválido ou expirado.");
+        }
 
-        // Rotação com grace period: revoga sessão antiga mas mantém o refresh
-        // token aceito por 60s para permitir que outras abas renovem também.
-        // Se já está revogada (dentro do grace period), não revoga novamente.
+        bool isWithinGrace = session.IsRevoked && session.IsWithinRefreshGracePeriod;
+        if (isWithinGrace)
+        {
+            _logger.LogInformation(
+                "[Refresh] Sessão {SessionId} já revogada mas dentro do grace period — reutilizando (UserId={UserId})",
+                session.Id, session.UserId);
+        }
+
+        // Rotação com grace period de 5 minutos
         if (!session.IsRevoked)
         {
-            await _sessions.RevokeWithGracePeriodAsync(session.Id, TimeSpan.FromSeconds(60));
+            await _sessions.RevokeWithGracePeriodAsync(session.Id, TimeSpan.FromMinutes(5));
         }
 
         return await IssueFullSessionAsync(session.UserId, session.MfaVerified, null, null);
@@ -346,7 +389,7 @@ public class UserAuthService : IUserAuthService
             IpAddress = ipAddress,
             UserAgent = userAgent,
             CreatedAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.AddDays(7)
+            ExpiresAt = DateTime.UtcNow.AddDays(_refreshTokenDays)
         };
 
         await _sessions.CreateAsync(session);
