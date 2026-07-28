@@ -95,14 +95,26 @@ _trigger_agent_rebuild_via_api() {
   fi
 
   log "Disparando rebuild do agent via API (sem restart)..."
-  local response http_code
-  response="$(curl -s -w '\n%{http_code}' -X POST "$rebuild_endpoint" \
-    -H "Content-Type: application/json" \
-    --max-time "$curl_timeout" \
-    2>&1)" || {
-    warn "Falha ao conectar na API em $api_url para rebuild do agent"
+  local response http_code retry=0 max_retries=5
+
+  while [[ $retry -lt $max_retries ]]; do
+    response="$(curl -s -w '\n%{http_code}' -X POST "$rebuild_endpoint" \
+      -H "Content-Type: application/json" \
+      --max-time "$curl_timeout" \
+      --connect-timeout 5 \
+      2>&1)" && break
+
+    retry=$((retry + 1))
+    if [[ $retry -lt $max_retries ]]; then
+      log "API ainda nao respondeu (tentativa $retry/$max_retries). Aguardando 3s..."
+      sleep 3
+    fi
+  done
+
+  if [[ -z "$response" ]]; then
+    warn "Falha ao conectar na API em $api_url para rebuild do agent apos $max_retries tentativas"
     return
-  }
+  fi
 
   http_code="$(printf '%s' "$response" | tail -n 1)"
   local body; body="$(printf '%s' "$response" | sed '$d')"
