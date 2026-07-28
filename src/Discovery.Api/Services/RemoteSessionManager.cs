@@ -144,13 +144,52 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
     public async Task<RemoteSession?> GetActiveForUserAsync(Guid sessionId, Guid userId, CancellationToken ct = default)
     {
         var session = await _repo.GetByIdAsync(sessionId, ct);
-        if (session is null || session.Status != "active")
+        if (session is null)
+        {
+            _logger.LogWarning(
+                "[RemoteSession] GetActiveForUserAsync: sessão {SessionId} não encontrada no banco", sessionId);
             return null;
+        }
+
+        if (session.Status != "active")
+        {
+            _logger.LogWarning(
+                "[RemoteSession] GetActiveForUserAsync: sessão {SessionId} não está ativa. Status={Status}, UserId={SessionUserId}",
+                sessionId, session.Status, session.UserId);
+            return null;
+        }
+
+        if (session.UserId == Guid.Empty)
+        {
+            _logger.LogError(
+                "[RemoteSession] GetActiveForUserAsync: sessão {SessionId} é ÓRFÃ (UserId=Guid.Empty). " +
+                "Provável bug na criação da sessão. AgentId={AgentId}, StartedAt={StartedAt}",
+                sessionId, session.AgentId, session.StartedAt);
+            return null;
+        }
 
         if (session.UserId != userId)
+        {
+            _logger.LogWarning(
+                "[RemoteSession] GetActiveForUserAsync: UserId mismatch. SessionUserId={SessionUserId}, RequestUserId={RequestUserId}, SessionId={SessionId}",
+                session.UserId, userId, sessionId);
             return null;
+        }
 
         return session;
+    }
+
+    /// <inheritdoc />
+    public async Task<RemoteSession?> GetRawSessionAsync(Guid sessionId, CancellationToken ct = default)
+    {
+        return await _repo.GetByIdAsync(sessionId, ct);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<RemoteSession>> GetActiveSessionsForAgentAsync(Guid agentId, CancellationToken ct = default)
+    {
+        var sessions = await _repo.GetActiveByAgentAsync(agentId, ct);
+        return sessions.ToList().AsReadOnly();
     }
 
     public async Task AuditAsync(Guid sessionId, string eventType, string? details = null, string? actorUserId = null, string? ipAddress = null, CancellationToken ct = default)

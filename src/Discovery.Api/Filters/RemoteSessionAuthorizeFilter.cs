@@ -60,10 +60,61 @@ internal class RemoteSessionAuthorizeFilter : IAsyncActionFilter
                 var session = await _sessionManager.GetActiveForUserAsync(sessionId, userId, context.HttpContext.RequestAborted);
                 if (session is null)
                 {
-                    context.Result = new UnauthorizedObjectResult(new
+                    // Diagnóstico: buscar a sessão bruta para entender o motivo da falha
+                    var rawSession = await _sessionManager.GetRawSessionAsync(sessionId, context.HttpContext.RequestAborted);
+                    if (rawSession is null)
                     {
-                        error = "Remote session not found, not active, or you don't have access to it."
-                    });
+                        context.Result = new UnauthorizedObjectResult(new
+                        {
+                            error = "Remote session not found.",
+                            sessionId = sessionId,
+                            reason = "session_does_not_exist"
+                        });
+                    }
+                    else if (rawSession.Status != "active")
+                    {
+                        context.Result = new UnauthorizedObjectResult(new
+                        {
+                            error = "Remote session is no longer active.",
+                            sessionId = sessionId,
+                            status = rawSession.Status,
+                            reason = "session_not_active"
+                        });
+                    }
+                    else if (rawSession.UserId == Guid.Empty)
+                    {
+                        _logger.LogError(
+                            "[RemoteSessionAuthorize] Sessão ÓRFÃ detectada: SessionId={SessionId}, AgentId={AgentId}, " +
+                            "RequestUserId={RequestUserId}. Possível bug na criação da sessão.",
+                            sessionId, rawSession.AgentId, userId);
+                        context.Result = new UnauthorizedObjectResult(new
+                        {
+                            error = "Remote session is orphaned (created without a valid user). This is a server-side bug — please report it.",
+                            sessionId = sessionId,
+                            reason = "session_orphaned"
+                        });
+                    }
+                    else if (rawSession.UserId != userId)
+                    {
+                        _logger.LogWarning(
+                            "[RemoteSessionAuthorize] UserId mismatch: SessionUserId={SessionUserId}, RequestUserId={RequestUserId}, SessionId={SessionId}",
+                            rawSession.UserId, userId, sessionId);
+                        context.Result = new UnauthorizedObjectResult(new
+                        {
+                            error = "Remote session belongs to a different user.",
+                            sessionId = sessionId,
+                            reason = "user_mismatch"
+                        });
+                    }
+                    else
+                    {
+                        context.Result = new UnauthorizedObjectResult(new
+                        {
+                            error = "Remote session not found, not active, or you don't have access to it.",
+                            sessionId = sessionId,
+                            reason = "unknown"
+                        });
+                    }
                     return;
                 }
 
@@ -71,7 +122,10 @@ internal class RemoteSessionAuthorizeFilter : IAsyncActionFilter
                 {
                     context.Result = new BadRequestObjectResult(new
                     {
-                        error = "Session does not belong to the specified agent."
+                        error = "Session does not belong to the specified agent.",
+                        sessionId = sessionId,
+                        sessionAgentId = session.AgentId,
+                        requestAgentId = agentId
                     });
                     return;
                 }

@@ -51,6 +51,30 @@ public sealed class StartRemoteSessionCommandHandler(
 
         var natsSubject = $"{options.Value.Nats.FrameSubjectPrefix}.{cmd.AgentId}.{Guid.NewGuid():N}";
 
+        // Diagnóstico: logar UserId recebido para rastrear sessões órfãs
+        logger.LogInformation(
+            "[RemoteSession] StartSession diagnóstico: UserId={UserId}, AgentId={AgentId}, TenantId={TenantId}, SiteId={SiteId}, Kind={Kind}, Transport={Transport}, Force={Force}",
+            cmd.UserId, cmd.AgentId, tenantId, siteId, cmd.Kind, cmd.Transport, cmd.Force);
+
+        if (cmd.UserId == Guid.Empty)
+        {
+            logger.LogError("[RemoteSession] StartSession: UserId é Guid.Empty — sessão será criada como órfã! AgentId={AgentId}", cmd.AgentId);
+            return Result<RemoteSessionResponseDto>.Failure(Error.Unauthorized("UserId is required to create a session."));
+        }
+
+        // Se Force=true, mata sessões ativas do agent (incluindo órfãs com UserId vazio)
+        if (cmd.Force)
+        {
+            var existingSessions = await sessionManager.GetActiveSessionsForAgentAsync(cmd.AgentId, ct);
+            foreach (var existing in existingSessions)
+            {
+                logger.LogWarning(
+                    "[RemoteSession] Force=true: encerrando sessão existente {SessionId} (UserId={SessionUserId}, Status={Status}) para agent {AgentId}",
+                    existing.Id, existing.UserId, existing.Status, cmd.AgentId);
+                await sessionManager.CloseSessionAsync(existing.Id, "overridden-by-new-session", cmd.UserId, ct);
+            }
+        }
+
         RemoteSession session;
         try
         {

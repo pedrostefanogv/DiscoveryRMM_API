@@ -30,6 +30,18 @@ public interface IRemoteSessionManager
     /// <summary>Obtém sessão ativa com validação de usuário.</summary>
     Task<RemoteSession?> GetActiveForUserAsync(Guid sessionId, Guid userId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Obtém uma sessão pelo ID SEM validação de usuário, para fins de diagnóstico.
+    /// Retorna a sessão independente de status ou owner.
+    /// </summary>
+    Task<RemoteSession?> GetRawSessionAsync(Guid sessionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Retorna todas as sessões ativas de um agent, independente do usuário.
+    /// Usado pelo StartSession com Force=true para matar sessões órfãs.
+    /// </summary>
+    Task<IReadOnlyList<RemoteSession>> GetActiveSessionsForAgentAsync(Guid agentId, CancellationToken ct = default);
+
     /// <summary>Registra um evento de auditoria na sessão.</summary>
     Task AuditAsync(Guid sessionId, string eventType, string? details = null, string? actorUserId = null, string? ipAddress = null, CancellationToken ct = default);
 }

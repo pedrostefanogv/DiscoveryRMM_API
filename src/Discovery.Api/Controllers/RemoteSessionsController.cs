@@ -15,10 +15,12 @@ namespace Discovery.Api.Controllers;
 public class RemoteSessionsController : ControllerBase
 {
     private readonly IMediator _mediator;
+    private readonly ILogger<RemoteSessionsController> _logger;
 
-    public RemoteSessionsController(IMediator mediator)
+    public RemoteSessionsController(IMediator mediator, ILogger<RemoteSessionsController> logger)
     {
         _mediator = mediator;
+        _logger = logger;
     }
 
     /// <summary>Inicia uma nova sessão de acesso remoto.</summary>
@@ -26,8 +28,13 @@ public class RemoteSessionsController : ControllerBase
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> StartSession(Guid agentId, [FromBody] StartRemoteSessionCommand cmd, CancellationToken ct = default)
     {
-        if (HttpContext.Items["UserId"] is not Guid userId)
+        var rawUserId = HttpContext.Items["UserId"];
+        if (rawUserId is not Guid userId || userId == Guid.Empty)
+        {
+            _logger.LogWarning("[RemoteSession] StartSession: UserId ausente ou vazio no HttpContext. Raw={RawUserId}, IsApiToken={IsApiToken}, Path={Path}",
+                rawUserId, HttpContext.Items["IsApiTokenAuth"], HttpContext.Request.Path);
             return Unauthorized(new { error = "User not authenticated." });
+        }
 
         var tenantId = HttpContext.Items["TenantId"] as Guid? ?? Guid.Empty;
         var siteId = HttpContext.Items["SiteId"] as Guid? ?? Guid.Empty;
