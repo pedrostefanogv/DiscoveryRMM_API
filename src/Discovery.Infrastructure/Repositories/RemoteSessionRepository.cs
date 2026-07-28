@@ -50,7 +50,20 @@ public class RemoteSessionRepository : IRemoteSessionRepository
 
     public async Task<RemoteSession> UpdateAsync(RemoteSession session, CancellationToken ct = default)
     {
-        _db.RemoteSessions.Update(session);
+        // Evita conflito de tracking quando a entidade já está sendo rastreada
+        // (ex: criada via CreateAsync no mesmo escopo e depois atualizada via SetNatsSubjectAsync/CloseSessionAsync)
+        var alreadyTracked = _db.ChangeTracker.Entries<RemoteSession>()
+            .FirstOrDefault(e => e.Entity.Id == session.Id);
+
+        if (alreadyTracked != null)
+        {
+            alreadyTracked.CurrentValues.SetValues(session);
+        }
+        else
+        {
+            _db.RemoteSessions.Update(session);
+        }
+
         await _db.SaveChangesAsync(ct);
         return session;
     }
