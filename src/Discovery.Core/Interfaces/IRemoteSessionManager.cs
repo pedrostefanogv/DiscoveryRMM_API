@@ -42,6 +42,9 @@ public interface IRemoteSessionManager
     /// </summary>
     Task<IReadOnlyList<RemoteSession>> GetActiveSessionsForAgentAsync(Guid agentId, CancellationToken ct = default);
 
+    /// <summary>Atualiza o subject NATS de uma sessão após criação (subject canônico depende do sessionId).</summary>
+    Task<RemoteSession> SetNatsSubjectAsync(Guid sessionId, string natsSubject, CancellationToken ct = default);
+
     /// <summary>Registra um evento de auditoria na sessão.</summary>
     Task AuditAsync(Guid sessionId, string eventType, string? details = null, string? actorUserId = null, string? ipAddress = null, CancellationToken ct = default);
 }

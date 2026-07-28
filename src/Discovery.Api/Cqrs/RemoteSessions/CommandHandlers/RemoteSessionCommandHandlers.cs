@@ -49,8 +49,6 @@ public sealed class StartRemoteSessionCommandHandler(
         var tenantId = cmd.TenantId != Guid.Empty ? cmd.TenantId : site.ClientId;
         var siteId = cmd.SiteId != Guid.Empty ? cmd.SiteId : agent.SiteId;
 
-        var natsSubject = $"{options.Value.Nats.FrameSubjectPrefix}.{cmd.AgentId}.{Guid.NewGuid():N}";
-
         // Diagnóstico: logar UserId recebido para rastrear sessões órfãs
         logger.LogInformation(
             "[RemoteSession] StartSession diagnóstico: UserId={UserId}, AgentId={AgentId}, TenantId={TenantId}, SiteId={SiteId}, Kind={Kind}, Transport={Transport}, Force={Force}",
@@ -78,14 +76,24 @@ public sealed class StartRemoteSessionCommandHandler(
         RemoteSession session;
         try
         {
+            // Subject temporário — será substituído pelo canônico após obter sessionId
             session = await sessionManager.CreateSessionAsync(
                 cmd.AgentId, cmd.UserId, tenantId, siteId,
-                cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, natsSubject, cmd.Force, ct);
+                cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, "temp", cmd.Force, ct);
         }
         catch (InvalidOperationException ex)
         {
             return Result<RemoteSessionResponseDto>.Failure(Error.Validation("Session", ex.Message));
         }
+
+        // Subject canônico conforme contrato de comunicação v4.5.0:
+        // tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}
+        var natsSubject = $"tenant.{tenantId:N}.site.{siteId:N}.agent.{cmd.AgentId:N}.remote.session.{session.Id:N}";
+        session = await sessionManager.SetNatsSubjectAsync(session.Id, natsSubject, ct);
+
+        logger.LogInformation(
+            "[RemoteSession] Subject NATS canônico gerado: {Subject} para SessionId={SessionId}",
+            natsSubject, session.Id);
 
         var payload = JsonSerializer.Serialize(new
         {

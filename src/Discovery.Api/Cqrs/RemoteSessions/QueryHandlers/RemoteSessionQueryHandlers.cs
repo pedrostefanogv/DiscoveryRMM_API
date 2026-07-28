@@ -38,8 +38,15 @@ public sealed class GetTurnCredentialsQueryHandler(
             return Result<TurnCredentialsDto>.Failure(Error.NotFound("Remote session not found or not active."));
 
         var webRtc = options.Value.WebRtc;
+
+        // Se WebRTC está desabilitado ou sem TURN configurado, retorna sucesso vazio
+        // (o frontend usa NATS como transporte primário e TURN é opcional)
         if (!webRtc.Enabled || webRtc.TurnUrls.Length == 0)
-            return Result<TurnCredentialsDto>.Failure(Error.Validation("WebRtc", "TURN is not configured."));
+            return Result<TurnCredentialsDto>.Success(new TurnCredentialsDto(
+                Array.Empty<string>(),
+                string.Empty,
+                string.Empty,
+                0));
 
         // Generate HMAC-based credentials for coturn (long-term credential mechanism)
         var ttl = TimeSpan.FromMinutes(webRtc.TurnCredentialTtlMinutes);

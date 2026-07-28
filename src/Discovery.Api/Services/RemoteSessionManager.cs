@@ -192,6 +192,19 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         return sessions.ToList().AsReadOnly();
     }
 
+    /// <inheritdoc />
+    public async Task<RemoteSession> SetNatsSubjectAsync(Guid sessionId, string natsSubject, CancellationToken ct = default)
+    {
+        var session = await _repo.GetByIdAsync(sessionId, ct)
+            ?? throw new InvalidOperationException($"Session {sessionId} not found.");
+
+        session.NatsSubject = natsSubject;
+        var updated = await _repo.UpdateAsync(session, ct);
+
+        _logger.LogInformation("Remote session {SessionId} NATS subject updated to {Subject}", sessionId, natsSubject);
+        return updated;
+    }
+
     public async Task AuditAsync(Guid sessionId, string eventType, string? details = null, string? actorUserId = null, string? ipAddress = null, CancellationToken ct = default)
     {
         var audit = new RemoteSessionAudit
