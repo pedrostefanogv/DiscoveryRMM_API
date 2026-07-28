@@ -1,4 +1,3 @@
-using Discovery.Api.Services;
 using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.RemoteSessions.Commands;
@@ -64,7 +63,8 @@ public sealed class GetTurnCredentialsQueryHandler(
 
 public sealed class GetSessionCredentialsQueryHandler(
     IRemoteSessionManager sessionManager,
-    IConfigurationService configurationService
+    IConfigurationService configurationService,
+    INatsCredentialsService credentialsService
 ) : IRequestHandler<GetSessionCredentialsQuery, Result<SessionCredentialsDto>>
 {
     public async Task<Result<SessionCredentialsDto>> Handle(GetSessionCredentialsQuery query, CancellationToken ct)
@@ -78,11 +78,41 @@ public sealed class GetSessionCredentialsQueryHandler(
             ? serverConfig.NatsWebSocketExternalUrl
             : null;
 
-        // NATS credentials são emitidas pelo serviço de credenciais já existente.
-        // Aqui retornamos apenas o URL do WebSocket; o JWT será emitido via endpoint já existente.
+        if (string.IsNullOrWhiteSpace(session.NatsSubject))
+            return Result<SessionCredentialsDto>.Failure(Error.Validation("NatsSubject", "Session has no NATS subject configured."));
+
+        // Permissões pub/sub scoped para o viewer da sessão remota.
+        // Alinhado com RemoteSessionJwtIssuer.BuildDefaultPermissions.
+        var natsSubject = session.NatsSubject;
+        var pubSubjects = new[]
+        {
+            $"{natsSubject}.input",
+            $"{natsSubject}.ack",
+            $"{natsSubject}.term.in",
+            $"{natsSubject}.files.req",
+            $"{natsSubject}.proxy.req",
+            $"{natsSubject}.signal",
+        };
+        var subSubjects = new[]
+        {
+            $"{natsSubject}.frame",
+            $"{natsSubject}.event",
+            $"{natsSubject}.term.out",
+            $"{natsSubject}.files.resp",
+            $"{natsSubject}.proxy.resp",
+            $"{natsSubject}.signal",
+        };
+
+        var (jwt, nkeySeed, _) = await credentialsService.IssueSessionCredentialsAsync(
+            pubSubjects,
+            subSubjects,
+            ttlMinutes: 30,
+            $"session:{session.Id:N}",
+            ct);
+
         return Result<SessionCredentialsDto>.Success(new SessionCredentialsDto(
-            string.Empty, // JWT will be issued by existing NatsCredentialsService
-            string.Empty,
+            jwt,
+            nkeySeed,
             session.ExpiresAt,
             natsWsUrl));
     }

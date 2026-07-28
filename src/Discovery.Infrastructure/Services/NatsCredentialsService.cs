@@ -255,6 +255,46 @@ public class NatsCredentialsService : INatsCredentialsService
         return (publishSubjects, subscribeSubjects);
     }
 
+    public async Task<(string Jwt, string NkeySeed, DateTime ExpiresAtUtc)> IssueSessionCredentialsAsync(
+        string[] publishSubjects,
+        string[] subscribeSubjects,
+        int ttlMinutes,
+        string traceLabel,
+        CancellationToken ct = default)
+    {
+        var config = await _configurationService.GetServerConfigAsync();
+        EnsureEnabled(config);
+
+        var accountSeedPlain = _configuration["Nats:AccountSeed"];
+        if (string.IsNullOrWhiteSpace(accountSeedPlain))
+            throw new InvalidOperationException("NATS account seed is not configured (Nats:AccountSeed).");
+
+        var accountKeyPair = KeyPair.FromSeed(accountSeedPlain);
+        var userKeyPair = KeyPair.CreatePair(PrefixByte.User);
+
+        var now = DateTime.UtcNow;
+        var expiresAtUtc = now.AddMinutes(Math.Max(1, ttlMinutes));
+        var targetAccount = ResolveAuthCalloutTargetAccount();
+
+        var claims = NatsJwt.NewUserClaims(userKeyPair.GetPublicKey());
+        claims.Name = traceLabel;
+        claims.Expires = new DateTimeOffset(expiresAtUtc);
+        claims.Audience = targetAccount;
+
+        if (publishSubjects.Length > 0)
+            claims.User.Pub.Allow = publishSubjects.ToList();
+        if (subscribeSubjects.Length > 0)
+            claims.User.Sub.Allow = subscribeSubjects.ToList();
+
+        var jwt = NatsJwt.EncodeUserClaims(claims, accountKeyPair);
+
+        _logger.LogInformation(
+            "NATS session credentials issued for {Trace}. Pub={PubCount} Sub={SubCount} Exp={ExpUtc}",
+            traceLabel, publishSubjects.Length, subscribeSubjects.Length, expiresAtUtc);
+
+        return (jwt, userKeyPair.GetSeed(), expiresAtUtc);
+    }
+
     private string ResolveAuthCalloutTargetAccount()
     {
         var account = _configuration["Nats:AuthCallout:Account"];
