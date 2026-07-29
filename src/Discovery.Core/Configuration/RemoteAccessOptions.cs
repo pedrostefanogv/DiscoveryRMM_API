@@ -57,9 +57,20 @@ public class RemoteAccessQualityOptions
 {
     public string DefaultProfile { get; set; } = "high";
     public bool AdaptiveEnabled { get; set; } = true;
+    public int AdaptiveIntervalSeconds { get; set; } = 5;
+    public int AdaptiveHysteresisSeconds { get; set; } = 15;
     public int MinFps { get; set; } = 5;
     public int MaxFps { get; set; } = 30;
     public string DefaultCodec { get; set; } = "auto";
+    public AdaptiveThresholds Thresholds { get; set; } = new();
+}
+
+public class AdaptiveThresholds
+{
+    public double HighLatencyMs { get; set; } = 300;
+    public double LowLatencyMs { get; set; } = 50;
+    public double LowBandwidthKbps { get; set; } = 500;
+    public double HighBandwidthKbps { get; set; } = 5000;
 }
 
 public class RemoteAccessRecordingOptions

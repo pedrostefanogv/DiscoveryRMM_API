@@ -50,6 +50,16 @@ public sealed record StopRecordingCommand(
     Guid UserId
 ) : ICommand<Result<RecordingResponseDto>>;
 
+public sealed record ChangeRemoteSessionQualityCommand(
+    Guid AgentId = default,
+    Guid SessionId = default,
+    Guid UserId = default,
+    QualityProfile Quality = QualityProfile.High,
+    RemoteCodec? Codec = null,
+    int? Fps = null,
+    bool Auto = false
+) : ICommand<Result<RemoteSessionResponseDto>>;
+
 // ── DTOs ──
 
 public sealed record RemoteSessionResponseDto(

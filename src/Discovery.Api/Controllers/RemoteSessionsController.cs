@@ -148,6 +148,19 @@ public class RemoteSessionsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
     }
 
+    /// <summary>Altera qualidade/codec/FPS de uma sessão ativa. Suporta modo Auto para adaptação dinâmica.</summary>
+    [HttpPut("{agentId:guid}/{sessionId:guid}/quality")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> ChangeQuality(Guid agentId, Guid sessionId, [FromBody] ChangeRemoteSessionQualityCommand cmd, CancellationToken ct = default)
+    {
+        var userId = GetUserId();
+        var result = await _mediator.Send(cmd with { AgentId = agentId, SessionId = sessionId, UserId = userId }, ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
     /// <summary>Exclui a gravação de uma sessão (LGPD Art. 18).</summary>
     [HttpDelete("{agentId:guid}/{sessionId:guid}/recording")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]

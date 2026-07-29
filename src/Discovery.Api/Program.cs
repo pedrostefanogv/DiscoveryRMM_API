@@ -108,6 +108,8 @@ builder.Services.AddScoped<RemoteSessionJwtIssuer>();
 builder.Services.AddScoped<RemoteSessionDispatcher>();
 builder.Services.AddHostedService<RemoteSessionExpirationService>();
 builder.Services.AddHostedService<RecordingAssemblerService>();
+builder.Services.AddSingleton<Discovery.Infrastructure.Services.Remote.SessionMetricsStore>();
+builder.Services.AddHostedService<Discovery.Infrastructure.Services.Remote.AdaptiveQualityService>();
 builder.Services.Configure<RemoteAccessOptions>(builder.Configuration.GetSection("RemoteAccess"));
 
 // Scoped scope context (cache de escopo intra-request para queries filtradas)

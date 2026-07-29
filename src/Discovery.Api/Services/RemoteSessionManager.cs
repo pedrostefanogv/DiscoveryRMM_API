@@ -205,6 +205,28 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         return updated;
     }
 
+    /// <inheritdoc />
+    public async Task<RemoteSession> UpdateQualityAsync(Guid sessionId, QualityProfile quality, RemoteCodec? codec = null, CancellationToken ct = default)
+    {
+        var session = await _repo.GetByIdAsync(sessionId, ct)
+            ?? throw new InvalidOperationException($"Session {sessionId} not found.");
+
+        session.QualityProfile = quality;
+        if (codec.HasValue)
+            session.Codec = codec.Value;
+
+        var updated = await _repo.UpdateAsync(session, ct);
+
+        await AuditAsync(sessionId, "quality_changed",
+            $"{{\"quality\":\"{quality}\",\"codec\":\"{updated.Codec}\"}}",
+            null, null, ct);
+
+        _logger.LogInformation("Remote session {SessionId} quality changed to {Quality}/{Codec}",
+            sessionId, quality, updated.Codec);
+
+        return updated;
+    }
+
     public async Task AuditAsync(Guid sessionId, string eventType, string? details = null, string? actorUserId = null, string? ipAddress = null, CancellationToken ct = default)
     {
         var audit = new RemoteSessionAudit

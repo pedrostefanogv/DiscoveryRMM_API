@@ -6,6 +6,7 @@ using Discovery.Core.Cqrs.RemoteSessions.Commands;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Services.Remote;
 using MediatR;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -219,15 +220,17 @@ public sealed class RenewRemoteSessionCommandHandler(
 }
 
 public sealed class AckFrameCommandHandler(
+    SessionMetricsStore metricsStore,
     ILogger<AckFrameCommandHandler> logger
 ) : IRequestHandler<AckFrameCommand, Result<VoidResult>>
 {
     public Task<Result<VoidResult>> Handle(AckFrameCommand cmd, CancellationToken ct)
     {
-        // Frame ack é apenas métrico; não persiste no banco.
-        // As métricas são usadas pelo quality manager no agent.
-        logger.LogDebug("Frame ack: session {SessionId}, seq {Seq}, rtt {RttMs}ms",
-            cmd.SessionId, cmd.FrameSeq, cmd.RttMs);
+        // Alimenta o store de métricas para AdaptiveQualityService
+        metricsStore.RecordFrame(cmd.SessionId, cmd.FrameSeq, cmd.RttMs, cmd.JitterMs, cmd.EstimatedBandwidthKbps);
+
+        logger.LogDebug("Frame ack: session {SessionId}, seq {Seq}, rtt {RttMs}ms, bw {Bw}kbps",
+            cmd.SessionId, cmd.FrameSeq, cmd.RttMs, cmd.EstimatedBandwidthKbps);
         return Task.FromResult(Result<VoidResult>.Success(VoidResult.Value));
     }
 }
@@ -314,5 +317,63 @@ public sealed class StopRecordingCommandHandler(
         {
             return Result<RecordingResponseDto>.Failure(Error.NotFound(ex.Message));
         }
+    }
+}
+
+public sealed class ChangeRemoteSessionQualityCommandHandler(
+    IRemoteSessionManager sessionManager,
+    RemoteSessionDispatcher dispatcher,
+    SessionMetricsStore metricsStore,
+    ILogger<ChangeRemoteSessionQualityCommandHandler> logger
+) : IRequestHandler<ChangeRemoteSessionQualityCommand, Result<RemoteSessionResponseDto>>
+{
+    public async Task<Result<RemoteSessionResponseDto>> Handle(ChangeRemoteSessionQualityCommand cmd, CancellationToken ct)
+    {
+        var session = await sessionManager.GetActiveForUserAsync(cmd.SessionId, cmd.UserId, ct);
+        if (session is null)
+            return Result<RemoteSessionResponseDto>.Failure(Error.NotFound("Remote session not found or not active."));
+
+        if (session.AgentId != cmd.AgentId)
+            return Result<RemoteSessionResponseDto>.Failure(Error.Validation("AgentId", "Session does not belong to this agent."));
+
+        // Valida compatibilidade codec x transporte
+        var effectiveCodec = cmd.Codec ?? session.Codec;
+        if (!QualityProfileMapping.IsCodecValidForTransport(effectiveCodec, session.Transport))
+        {
+            return Result<RemoteSessionResponseDto>.Failure(
+                Error.Validation("Codec", $"Codec {effectiveCodec} is not supported with transport {session.Transport}. Use JPEG or WebP for NATS, or switch to WebRTC for H264."));
+        }
+
+        // Gerencia modo Auto no metrics store
+        if (cmd.Auto)
+        {
+            metricsStore.EnableAutoMode(cmd.SessionId);
+            logger.LogInformation("Auto quality mode ENABLED for session {SessionId}", cmd.SessionId);
+        }
+        else
+        {
+            metricsStore.DisableAutoMode(cmd.SessionId);
+        }
+
+        // Obtém parâmetros do perfil
+        var (fps, scale, jpegQ, webpQ) = QualityProfileMapping.GetParameters(cmd.Quality);
+
+        // Atualiza no banco
+        session = await sessionManager.UpdateQualityAsync(cmd.SessionId, cmd.Quality, effectiveCodec, ct);
+
+        // Dispara comando quality para o agent
+        var targetFps = cmd.Fps ?? fps;
+        await dispatcher.DispatchQualityChangeAsync(
+            cmd.AgentId, cmd.SessionId, cmd.Quality, effectiveCodec, targetFps, ct);
+
+        logger.LogInformation(
+            "Quality changed to {Quality}/{Codec} @ {Fps}FPS (scale:{Scale}%, jpeg:{JpegQ}%, webp:{WebpQ}%) auto={Auto} for session {SessionId}",
+            cmd.Quality, effectiveCodec, targetFps, scale, jpegQ, webpQ, cmd.Auto, cmd.SessionId);
+
+        return Result<RemoteSessionResponseDto>.Success(new RemoteSessionResponseDto(
+            session.Id, session.NatsSubject ?? "", session.AgentId,
+            session.Kind.ToString(), session.Transport.ToString(),
+            session.QualityProfile.ToString(), session.Codec.ToString(),
+            session.Status, session.ExpiresAt, session.StartedAt));
     }
 }
