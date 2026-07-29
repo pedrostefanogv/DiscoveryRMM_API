@@ -353,6 +353,10 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
     /// Valida um JWT NATS pré-emitido (agent, user ou sessão) sem exigir userNkey correspondente.
     /// Para JWTs de sessão remota (Name = "session:*"), extrai também as permissões pub/sub
     /// para reemitir um JWT com sub = request.Nats.UserNkey no auth callout.
+    ///
+    /// NOTA: Usa decodificação JWT manual (System.IdentityModel.Tokens.Jwt) em vez de
+    /// NatsJwt.DecodeUserClaims porque a versão 1.0.1 da lib NATS.Jwt contém um bug
+    /// que causa NatsJwtException em JWTs válidos gerados por NatsJwt.EncodeUserClaims.
     /// </summary>
     private bool TryValidatePreIssuedNatsJwt(string token, out DateTime expiresAtUtc, out bool isSessionToken, out string jwtSubject, out string[] pubPerms, out string[] subPerms)
     {
@@ -362,71 +366,142 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         pubPerms = [];
         subPerms = [];
 
-        NatsUserClaims claims;
+        // Decodificação manual do JWT usando System.IdentityModel.Tokens.Jwt
+        // (já usado em ParseAuthRequest neste mesmo arquivo).
+        // Evita bug do NatsJwt.DecodeUserClaims v1.0.1.
+        System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwtToken;
         try
         {
-            claims = NatsJwt.DecodeUserClaims(token);
-        }
-        catch (NatsJwtException ex)
-        {
-            _logger.LogWarning(ex, "TryValidatePreIssuedNatsJwt: rejected due to NatsJwtException.");
-            return false;
+            var handler = new JwtSecurityTokenHandler();
+            jwtToken = handler.ReadJwtToken(token);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "TryValidatePreIssuedNatsJwt: rejected due to unexpected decode failure.");
+            _logger.LogWarning(ex, "TryValidatePreIssuedNatsJwt: failed to decode JWT manually.");
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(claims.Subject))
+        // Extrai claims do JWT decode manual
+        var sub = jwtToken.Subject ?? jwtToken.Payload.Sub
+            ?? jwtToken.Claims.FirstOrDefault(c => c.Type == "sub")?.Value;
+        if (string.IsNullOrWhiteSpace(sub))
         {
-            _logger.LogWarning("Rejected NATS JWT due to empty subject.");
+            _logger.LogWarning("TryValidatePreIssuedNatsJwt: rejected due to empty subject.");
             return false;
         }
 
+        // Valida assinatura: verifica issuer (account public key)
         var accountSeed = _configuration["Nats:AccountSeed"];
         if (string.IsNullOrWhiteSpace(accountSeed))
+        {
+            _logger.LogWarning("TryValidatePreIssuedNatsJwt: Nats:AccountSeed não configurado.");
             return false;
+        }
 
-        var expectedIssuer = KeyPair.FromSeed(accountSeed).GetPublicKey();
-        if (string.IsNullOrWhiteSpace(claims.Issuer)
-            || !string.Equals(claims.Issuer, expectedIssuer, StringComparison.Ordinal))
+        KeyPair accountKeyPair;
+        try
+        {
+            accountKeyPair = KeyPair.FromSeed(accountSeed);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "TryValidatePreIssuedNatsJwt: invalid Nats:AccountSeed.");
+            return false;
+        }
+
+        var expectedIssuer = accountKeyPair.GetPublicKey();
+        var issuer = jwtToken.Issuer ?? jwtToken.Payload.Iss
+            ?? jwtToken.Claims.FirstOrDefault(c => c.Type == "iss")?.Value;
+        if (string.IsNullOrWhiteSpace(issuer)
+            || !string.Equals(issuer, expectedIssuer, StringComparison.Ordinal))
         {
             _logger.LogWarning(
-                "Rejected NATS JWT due to issuer mismatch. Expected={Expected}, Actual={Actual}",
-                expectedIssuer,
-                claims.Issuer);
+                "TryValidatePreIssuedNatsJwt: issuer mismatch. Expected={Expected}, Actual={Actual}",
+                expectedIssuer, issuer);
             return false;
         }
 
+        // Valida expiração
         var now = DateTimeOffset.UtcNow;
-        if (claims.NotBefore.HasValue && claims.NotBefore.Value > now.Add(JwtClockSkew))
+        var expUnix = jwtToken.Payload.Expiration
+            ?? (long.TryParse(jwtToken.Claims.FirstOrDefault(c => c.Type == "exp")?.Value, out var e) ? e : null);
+        if (!expUnix.HasValue)
         {
-            _logger.LogWarning("Rejected NATS JWT due to not-before in the future. Nbf={NbfUtc}", claims.NotBefore);
+            _logger.LogWarning("TryValidatePreIssuedNatsJwt: no expiration claim.");
             return false;
         }
 
-        if (!claims.Expires.HasValue)
+        var exp = DateTimeOffset.FromUnixTimeSeconds(expUnix.Value);
+        if (exp <= now.Subtract(JwtClockSkew))
         {
-            _logger.LogWarning("Rejected NATS JWT without expiration.");
+            _logger.LogWarning("TryValidatePreIssuedNatsJwt: JWT expired. Exp={ExpUtc}", exp);
             return false;
         }
 
-        if (claims.Expires.Value <= now.Subtract(JwtClockSkew))
+        var nbfUnix = jwtToken.Payload.NotBefore
+            ?? (long.TryParse(jwtToken.Claims.FirstOrDefault(c => c.Type == "nbf")?.Value, out var n) ? n : null);
+        if (nbfUnix.HasValue)
         {
-            _logger.LogWarning("Rejected NATS JWT due to expiration. Exp={ExpUtc}", claims.Expires);
-            return false;
+            var nbf = DateTimeOffset.FromUnixTimeSeconds(nbfUnix.Value);
+            if (nbf > now.Add(JwtClockSkew))
+            {
+                _logger.LogWarning("TryValidatePreIssuedNatsJwt: not-before in the future. Nbf={NbfUtc}", nbf);
+                return false;
+            }
         }
 
-        // Detecta JWT de sessão remota pelo padrão "session:" no campo Name
-        isSessionToken = !string.IsNullOrWhiteSpace(claims.Name)
-            && claims.Name.StartsWith("session:", StringComparison.OrdinalIgnoreCase);
+        // Detecta JWT de sessão remota pelo padrão "session:" no campo Name (claim "name")
+        var nameClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == "name" || c.Type == "sub_name")?.Value;
+        isSessionToken = !string.IsNullOrWhiteSpace(nameClaim)
+            && nameClaim.StartsWith("session:", StringComparison.OrdinalIgnoreCase);
 
-        jwtSubject = claims.Subject;
-        pubPerms = claims.User.Pub.Allow?.ToArray() ?? [];
-        subPerms = claims.User.Sub.Allow?.ToArray() ?? [];
-        expiresAtUtc = claims.Expires.Value.UtcDateTime;
+        // Extrai permissões pub/sub do claim "nats" (JSON object)
+        pubPerms = ExtractNatsClaimPermissions(jwtToken, "pub");
+        subPerms = ExtractNatsClaimPermissions(jwtToken, "sub");
+
+        jwtSubject = sub;
+        expiresAtUtc = exp.UtcDateTime;
+
+        _logger.LogInformation(
+            "TryValidatePreIssuedNatsJwt: JWT validado. IsSession={IsSession}, Subject={Subject}, " +
+            "Name={Name}, PubCount={PubCount}, SubCount={SubCount}, Exp={ExpUtc}",
+            isSessionToken, jwtSubject, nameClaim, pubPerms.Length, subPerms.Length, expiresAtUtc);
+
         return true;
+    }
+
+    /// <summary>
+    /// Extrai permissões pub/sub do claim "nats" do JWT.
+    /// O claim "nats" contém um JSON: {"pub":{"allow":[...]},"sub":{"allow":[...]}}
+    /// </summary>
+    private static string[] ExtractNatsClaimPermissions(JwtSecurityToken jwt, string type)
+    {
+        try
+        {
+            var natsClaim = jwt.Claims.FirstOrDefault(c =>
+                c.Type == "nats" || c.Type == "nat");
+            if (natsClaim is null) return [];
+
+            using var doc = JsonDocument.Parse(natsClaim.Value);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty(type, out var typeElement)
+                && typeElement.TryGetProperty("allow", out var allowElement)
+                && allowElement.ValueKind == JsonValueKind.Array)
+            {
+                return allowElement.EnumerateArray()
+                    .Select(e => e.GetString())
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Cast<string>()
+                    .ToArray();
+            }
+        }
+        catch
+        {
+            // Log silencioso — permissões vazias são aceitáveis
+        }
+
+        return [];
     }
 
     private bool TryValidatePreIssuedNatsUserJwt(string token, string expectedUserNkey, out DateTime expiresAtUtc)
