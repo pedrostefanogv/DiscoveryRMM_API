@@ -13,10 +13,22 @@ public interface INatsCredentialsService
     /// <summary>
     /// Emite credenciais NATS scoped para uma sessão de acesso remoto.
     /// Gera um par de chaves NKey + JWT assinado com a account key, com permissões
-    /// pub/sub limitadas aos subjects da sessão. O JWT é reconhecido pelo auth callout
-    /// via TryValidatePreIssuedNatsUserJwt.
+    /// pub/sub limitadas aos subjects da sessão.
     /// </summary>
     Task<(string Jwt, string NkeySeed, DateTime ExpiresAtUtc)> IssueSessionCredentialsAsync(
+        string[] publishSubjects,
+        string[] subscribeSubjects,
+        int ttlMinutes,
+        string traceLabel,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Reemite um JWT de sessão remota para uma userNkey específica (auth callout).
+    /// Usado quando o viewer conecta com o JWT original mas o NATS exige que o
+    /// subject da resposta bata com o userNkey efêmero do WebSocket.
+    /// </summary>
+    Task<(string Jwt, DateTime ExpiresAtUtc)> IssueSessionJwtForPublicKeyAsync(
+        string userPublicKey,
         string[] publishSubjects,
         string[] subscribeSubjects,
         int ttlMinutes,

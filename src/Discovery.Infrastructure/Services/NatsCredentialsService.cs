@@ -235,6 +235,7 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishResult));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishHardware));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishRemoteDebugLog));
+        publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "remote.session.>"));
         publishSubjects.Add("$JS.API.STREAM.NAMES");
         publishSubjects.Add("$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>");
         publishSubjects.Add("$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>");
@@ -293,6 +294,25 @@ public class NatsCredentialsService : INatsCredentialsService
             traceLabel, publishSubjects.Length, subscribeSubjects.Length, expiresAtUtc);
 
         return (jwt, userKeyPair.GetSeed(), expiresAtUtc);
+    }
+
+    public async Task<(string Jwt, DateTime ExpiresAtUtc)> IssueSessionJwtForPublicKeyAsync(
+        string userPublicKey,
+        string[] publishSubjects,
+        string[] subscribeSubjects,
+        int ttlMinutes,
+        string traceLabel,
+        CancellationToken ct = default)
+    {
+        var config = await _configurationService.GetServerConfigAsync();
+        EnsureEnabled(config);
+
+        return IssueUserJwtForPublicKey(
+            userPublicKey,
+            ttlMinutes,
+            publishSubjects,
+            subscribeSubjects,
+            traceLabel);
     }
 
     private string ResolveAuthCalloutTargetAccount()

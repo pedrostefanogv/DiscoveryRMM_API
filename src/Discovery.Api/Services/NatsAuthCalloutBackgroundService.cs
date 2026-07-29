@@ -255,12 +255,22 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
         // Aceita JWT NATS pré-emitido pela API (agent, user, ou sessão remota).
         // Valida assinatura (account key), issuer e validade temporal.
-        if (TryValidatePreIssuedNatsJwt(token, out var preIssuedExpiresAtUtc, out var isSessionToken, out var jwtSubject))
+        if (TryValidatePreIssuedNatsJwt(token, out var preIssuedExpiresAtUtc, out var isSessionToken, out var jwtSubject, out var pubPerms, out var subPerms))
         {
             // Para JWTs de sessão remota, o userNkey do WebSocket não corresponde ao sub do JWT.
-            // Extraímos o subject do próprio JWT para construir a resposta de autorização.
+            // Reemitimos um novo JWT com sub = request.Nats.UserNkey e as mesmas permissões,
+            // mesmo padrão usado para agents via IssueUserJwtForAgentAsync.
             if (isSessionToken)
-                return await BuildSuccessResponseAsync(request, token, preIssuedExpiresAtUtc, configurationService, ct, jwtSubject);
+            {
+                var sessionJwt = await credentialsService.IssueSessionJwtForPublicKeyAsync(
+                    request.Nats.UserNkey,
+                    pubPerms,
+                    subPerms,
+                    ttlMinutes: 5, // curto, só para autorizar a conexão
+                    $"session:{jwtSubject}",
+                    ct);
+                return await BuildSuccessResponseAsync(request, sessionJwt.Jwt, sessionJwt.ExpiresAtUtc, configurationService, ct);
+            }
 
             // Para JWTs de agent/user, valida userNkey normalmente
             if (TryValidatePreIssuedNatsUserJwt(token, request.Nats.UserNkey, out preIssuedExpiresAtUtc))
@@ -305,15 +315,16 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
     /// <summary>
     /// Valida um JWT NATS pré-emitido (agent, user ou sessão) sem exigir userNkey correspondente.
-    /// Para JWTs de sessão remota (Name = "session:*"), o userNkey é ignorado porque
-    /// o viewer web não possui a NKey — o JWT é usado diretamente como access_token.
-    /// Retorna isSessionToken=true e extrai o subject do JWT quando detecta sessão remota.
+    /// Para JWTs de sessão remota (Name = "session:*"), extrai também as permissões pub/sub
+    /// para reemitir um JWT com sub = request.Nats.UserNkey no auth callout.
     /// </summary>
-    private bool TryValidatePreIssuedNatsJwt(string token, out DateTime expiresAtUtc, out bool isSessionToken, out string jwtSubject)
+    private bool TryValidatePreIssuedNatsJwt(string token, out DateTime expiresAtUtc, out bool isSessionToken, out string jwtSubject, out string[] pubPerms, out string[] subPerms)
     {
         expiresAtUtc = default;
         isSessionToken = false;
         jwtSubject = string.Empty;
+        pubPerms = [];
+        subPerms = [];
 
         NatsUserClaims claims;
         try
@@ -374,6 +385,8 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             && claims.Name.StartsWith("session:", StringComparison.OrdinalIgnoreCase);
 
         jwtSubject = claims.Subject;
+        pubPerms = claims.User.Pub.Allow?.ToArray() ?? [];
+        subPerms = claims.User.Sub.Allow?.ToArray() ?? [];
         expiresAtUtc = claims.Expires.Value.UtcDateTime;
         return true;
     }
@@ -466,13 +479,10 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         }
     }
 
-    private async Task<string> BuildSuccessResponseAsync(AuthorizationRequest request, string userJwt, DateTime expiresAtUtc, IConfigurationService configurationService, CancellationToken ct, string? overrideUserNkey = null)
+    private async Task<string> BuildSuccessResponseAsync(AuthorizationRequest request, string userJwt, DateTime expiresAtUtc, IConfigurationService configurationService, CancellationToken ct)
     {
         var accountKeyPair = await ResolveAccountKeyPairAsync(configurationService, ct);
-        // Para JWTs de sessão remota, usa o subject do próprio JWT (overrideUserNkey)
-        // em vez do userNkey efêmero do WebSocket, pois eles não batem.
-        var userNkey = overrideUserNkey ?? request.Nats.UserNkey;
-        var response = NatsJwt.NewAuthorizationResponseClaims(userNkey);
+        var response = NatsJwt.NewAuthorizationResponseClaims(request.Nats.UserNkey);
         // O NATS valida que o `aud` da resposta seja a server public key (server_id.id) que enviou a request.
         response.Audience = request.Nats.Server?.Id ?? string.Empty;
         response.Expires = new DateTimeOffset(expiresAtUtc);
