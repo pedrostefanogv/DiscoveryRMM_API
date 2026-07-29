@@ -191,9 +191,23 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
     {
         var request = ParseAuthRequest(requestJwt);
         if (request is null)
+        {
+            _logger.LogWarning(
+                "Auth callout: failed to parse auth request JWT. JwtLength={JwtLength}",
+                requestJwt?.Length ?? 0);
             return await BuildErrorResponseAsync("Invalid auth request.", null, null, configurationService, ct);
+        }
 
         var serverId = request.Nats.Server?.Id;
+
+        _logger.LogInformation(
+            "Auth callout request received. ServerId={ServerId}, UserNkey={UserNkey}, " +
+            "HasAuthToken={HasAuthToken}, HasToken={HasToken}, HasJwt={HasJwt}",
+            serverId,
+            request.Nats.UserNkey,
+            !string.IsNullOrWhiteSpace(request.Nats.ConnectOptions.AuthToken),
+            !string.IsNullOrWhiteSpace(request.Nats.ConnectOptions.Token),
+            !string.IsNullOrWhiteSpace(request.Nats.ConnectOptions.Jwt));
 
         if (string.IsNullOrWhiteSpace(request.Nats.UserNkey))
             return await BuildErrorResponseAsync("Missing user nkey.", null, serverId, configurationService, ct);
@@ -257,11 +271,23 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         // Valida assinatura (account key), issuer e validade temporal.
         if (TryValidatePreIssuedNatsJwt(token, out var preIssuedExpiresAtUtc, out var isSessionToken, out var jwtSubject, out var pubPerms, out var subPerms))
         {
+            _logger.LogInformation(
+                "Auth callout: pre-issued NATS JWT validated. IsSession={IsSession}, Subject={Subject}, " +
+                "UserNkey={UserNkey}, PubCount={PubCount}, SubCount={SubCount}, Exp={ExpUtc}",
+                isSessionToken, jwtSubject, request.Nats.UserNkey,
+                pubPerms.Length, subPerms.Length, preIssuedExpiresAtUtc);
+
             // Para JWTs de sessão remota, o userNkey do WebSocket não corresponde ao sub do JWT.
             // Reemitimos um novo JWT com sub = request.Nats.UserNkey e as mesmas permissões,
             // mesmo padrão usado para agents via IssueUserJwtForAgentAsync.
             if (isSessionToken)
             {
+                _logger.LogInformation(
+                    "Auth callout: reissuing session JWT for userNkey={UserNkey}. " +
+                    "Original subject={Subject}, Name={Name}, Pub=[{PubPerms}], Sub=[{SubPerms}]",
+                    request.Nats.UserNkey, jwtSubject, $"session:{jwtSubject}",
+                    string.Join(",", pubPerms), string.Join(",", subPerms));
+
                 var sessionJwt = await credentialsService.IssueSessionJwtForPublicKeyAsync(
                     request.Nats.UserNkey,
                     pubPerms,
@@ -269,12 +295,22 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                     ttlMinutes: 5, // curto, só para autorizar a conexão
                     $"session:{jwtSubject}",
                     ct);
+
+                _logger.LogInformation(
+                    "Auth callout: session JWT reissued successfully. NewExp={NewExpUtc}",
+                    sessionJwt.ExpiresAtUtc);
+
                 return await BuildSuccessResponseAsync(request, sessionJwt.Jwt, sessionJwt.ExpiresAtUtc, configurationService, ct);
             }
 
             // Para JWTs de agent/user, valida userNkey normalmente
             if (TryValidatePreIssuedNatsUserJwt(token, request.Nats.UserNkey, out preIssuedExpiresAtUtc))
+            {
+                _logger.LogInformation(
+                    "Auth callout: pre-issued user/agent JWT valid. UserNkey={UserNkey}, Exp={ExpUtc}",
+                    request.Nats.UserNkey, preIssuedExpiresAtUtc);
                 return await BuildSuccessResponseAsync(request, token, preIssuedExpiresAtUtc, configurationService, ct);
+            }
         }
 
         var principal = jwtService.ValidateToken(token);
@@ -331,12 +367,14 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         {
             claims = NatsJwt.DecodeUserClaims(token);
         }
-        catch (NatsJwtException)
+        catch (NatsJwtException ex)
         {
+            _logger.LogWarning(ex, "TryValidatePreIssuedNatsJwt: rejected due to NatsJwtException.");
             return false;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "TryValidatePreIssuedNatsJwt: rejected due to unexpected decode failure.");
             return false;
         }
 
