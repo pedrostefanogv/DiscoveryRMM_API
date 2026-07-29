@@ -56,7 +56,8 @@ public sealed record ChangeRemoteSessionQualityCommand(
     Guid UserId = default,
     QualityProfile Quality = QualityProfile.High,
     RemoteCodec? Codec = null,
-    int? Fps = null,
+    int? ImageQuality = null,
+    int? MaxFps = null,
     bool Auto = false
 ) : ICommand<Result<RemoteSessionResponseDto>>;
 

@@ -27,6 +27,8 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.Kind).HasColumnName("kind").HasConversion<int>();
             entity.Property(s => s.Transport).HasColumnName("transport").HasConversion<int>();
             entity.Property(s => s.QualityProfile).HasColumnName("quality_profile").HasConversion<int>();
+            entity.Property(s => s.ImageQuality).HasColumnName("image_quality").HasDefaultValue(70);
+            entity.Property(s => s.MaxFps).HasColumnName("max_fps").HasDefaultValue(15);
             entity.Property(s => s.Codec).HasColumnName("codec").HasConversion<int>();
             entity.Property(s => s.Status).HasColumnName("status").HasMaxLength(32);
             entity.Property(s => s.NatsSubject).HasColumnName("nats_subject").HasMaxLength(512);

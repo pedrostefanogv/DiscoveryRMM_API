@@ -68,14 +68,15 @@ public class RemoteSessionDispatcher
     }
 
     /// <summary>
-    /// Envia comando de mudança de qualidade (perfil/FPS/codec) para o agent.
+    /// Envia comando de mudança de qualidade (imagem/FPS/codec) para o agent.
     /// </summary>
     public async Task DispatchQualityChangeAsync(
         Guid agentId,
         Guid sessionId,
         QualityProfile quality,
         RemoteCodec? codec = null,
-        int? fps = null,
+        int? imageQuality = null,
+        int? maxFps = null,
         CancellationToken ct = default)
     {
         var payload = JsonSerializer.Serialize(new
@@ -84,7 +85,8 @@ public class RemoteSessionDispatcher
             sessionId,
             quality = quality.ToString().ToLowerInvariant(),
             codec = codec?.ToString().ToLowerInvariant(),
-            fps
+            imageQuality,
+            maxFps
         });
 
         await DispatchToAgentAsync(agentId, CommandType.RemoteSessionQuality, payload, ct);

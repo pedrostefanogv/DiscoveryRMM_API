@@ -169,17 +169,19 @@ public sealed class AdaptiveQualityService : BackgroundService
 
         try
         {
-            await sessionManager.UpdateQualityAsync(sessionId, quality, session.Codec, ct);
+            var (defaultFps, _, jpegQ, _) = QualityProfileMapping.GetParameters(quality);
 
-            // Dispara comando quality para o agent (mesma lógica do RemoteSessionDispatcher)
-            var (fps, _, _, _) = QualityProfileMapping.GetParameters(quality);
+            await sessionManager.UpdateQualityAsync(sessionId, quality, session.Codec, jpegQ, defaultFps, ct);
+
+            // Dispara comando quality para o agent com imageQuality e maxFps separados
             var payload = JsonSerializer.Serialize(new
             {
                 action = "quality",
                 sessionId,
                 quality = quality.ToString().ToLowerInvariant(),
                 codec = session.Codec.ToString().ToLowerInvariant(),
-                fps
+                imageQuality = jpegQ,
+                maxFps = defaultFps
             });
 
             var wireCommandType = CommandTypeWireMapper.ToWireValue(CommandType.RemoteSessionQuality);

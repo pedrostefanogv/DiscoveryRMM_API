@@ -20,8 +20,14 @@ public class RemoteSession
     /// <summary>Transporte em uso (Webrtc, Nats, Http).</summary>
     public RemoteTransport Transport { get; set; } = RemoteTransport.Webrtc;
 
-    /// <summary>Perfil de qualidade do stream.</summary>
+    /// <summary>Perfil de qualidade do stream (preset inicial).</summary>
     public QualityProfile QualityProfile { get; set; } = QualityProfile.High;
+
+    /// <summary>Qualidade da imagem (compressão JPEG/WebP). 1-100. Default 75.</summary>
+    public int ImageQuality { get; set; } = 75;
+
+    /// <summary>Taxa máxima de quadros por segundo. Default 15.</summary>
+    public int MaxFps { get; set; } = 15;
 
     /// <summary>Codec de compressão preferencial.</summary>
     public RemoteCodec Codec { get; set; } = RemoteCodec.Jpeg;

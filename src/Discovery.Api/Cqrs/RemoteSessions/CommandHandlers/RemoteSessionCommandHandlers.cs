@@ -96,6 +96,8 @@ public sealed class StartRemoteSessionCommandHandler(
             "[RemoteSession] Subject NATS canônico gerado: {Subject} para SessionId={SessionId}",
             natsSubject, session.Id);
 
+        var (defaultFps, _, defaultJpegQ, _) = QualityProfileMapping.GetParameters(cmd.Quality);
+
         var payload = JsonSerializer.Serialize(new
         {
             action = "start",
@@ -104,6 +106,8 @@ public sealed class StartRemoteSessionCommandHandler(
             transport = cmd.Transport.ToString().ToLowerInvariant(),
             quality = cmd.Quality.ToString().ToLowerInvariant(),
             codec = cmd.Codec.ToString().ToLowerInvariant(),
+            imageQuality = defaultJpegQ,
+            maxFps = defaultFps,
             durationMinutes = cmd.DurationMinutes,
             expiresAtUtc = session.ExpiresAt,
             natsSubject
@@ -355,20 +359,23 @@ public sealed class ChangeRemoteSessionQualityCommandHandler(
             metricsStore.DisableAutoMode(cmd.SessionId);
         }
 
-        // Obtém parâmetros do perfil
-        var (fps, scale, jpegQ, webpQ) = QualityProfileMapping.GetParameters(cmd.Quality);
+        // Obtém parâmetros do perfil como fallback caso ImageQuality/MaxFps não sejam especificados
+        var (defaultFps, scale, jpegQ, webpQ) = QualityProfileMapping.GetParameters(cmd.Quality);
 
-        // Atualiza no banco
-        session = await sessionManager.UpdateQualityAsync(cmd.SessionId, cmd.Quality, effectiveCodec, ct);
+        // Prioriza valores explícitos sobre o perfil
+        var effectiveImageQuality = cmd.ImageQuality ?? jpegQ;
+        var effectiveMaxFps = cmd.MaxFps ?? defaultFps;
 
-        // Dispara comando quality para o agent
-        var targetFps = cmd.Fps ?? fps;
+        // Atualiza no banco com valores separados
+        session = await sessionManager.UpdateQualityAsync(cmd.SessionId, cmd.Quality, effectiveCodec, effectiveImageQuality, effectiveMaxFps, ct);
+
+        // Dispara comando quality para o agent com imageQuality e maxFps separados
         await dispatcher.DispatchQualityChangeAsync(
-            cmd.AgentId, cmd.SessionId, cmd.Quality, effectiveCodec, targetFps, ct);
+            cmd.AgentId, cmd.SessionId, cmd.Quality, effectiveCodec, effectiveImageQuality, effectiveMaxFps, ct);
 
         logger.LogInformation(
-            "Quality changed to {Quality}/{Codec} @ {Fps}FPS (scale:{Scale}%, jpeg:{JpegQ}%, webp:{WebpQ}%) auto={Auto} for session {SessionId}",
-            cmd.Quality, effectiveCodec, targetFps, scale, jpegQ, webpQ, cmd.Auto, cmd.SessionId);
+            "Quality changed to {Quality}/{Codec} imageQ={ImageQuality}% maxFps={MaxFps} (scale:{Scale}%) auto={Auto} for session {SessionId}",
+            cmd.Quality, effectiveCodec, effectiveImageQuality, effectiveMaxFps, scale, cmd.Auto, cmd.SessionId);
 
         return Result<RemoteSessionResponseDto>.Success(new RemoteSessionResponseDto(
             session.Id, session.NatsSubject ?? "", session.AgentId,
