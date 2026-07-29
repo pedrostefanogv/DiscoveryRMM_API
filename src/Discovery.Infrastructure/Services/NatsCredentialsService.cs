@@ -235,7 +235,10 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishResult));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishHardware));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishRemoteDebugLog));
-        publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "remote.session.>"));
+        // Remote-session subjects use the canonical UUID format without hyphens,
+        // matching RemoteSessionCommandHandlers and the agent NATS stream.
+        publishSubjects.Add(
+            $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>");
         publishSubjects.Add("$JS.API.STREAM.NAMES");
         publishSubjects.Add("$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>");
         publishSubjects.Add("$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>");
