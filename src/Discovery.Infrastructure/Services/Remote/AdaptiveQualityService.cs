@@ -171,7 +171,8 @@ public sealed class AdaptiveQualityService : BackgroundService
         {
             var (defaultFps, _, jpegQ, _) = QualityProfileMapping.GetParameters(quality);
 
-            await sessionManager.UpdateQualityAsync(sessionId, quality, session.Codec, jpegQ, defaultFps, ct);
+            // Não persiste no banco (ImageQuality/MaxFps são [NotMapped] — runtime only)
+            // O estado é mantido em _states dictionary
 
             // Dispara comando quality para o agent com imageQuality e maxFps separados
             var payload = JsonSerializer.Serialize(new

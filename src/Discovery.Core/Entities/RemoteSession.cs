@@ -1,4 +1,5 @@
 using Discovery.Core.Enums;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Discovery.Core.Entities;
 
@@ -23,10 +24,12 @@ public class RemoteSession
     /// <summary>Perfil de qualidade do stream (preset inicial).</summary>
     public QualityProfile QualityProfile { get; set; } = QualityProfile.High;
 
-    /// <summary>Qualidade da imagem (compressão JPEG/WebP). 1-100. Default 75.</summary>
+    /// <summary>Qualidade da imagem (compressão JPEG/WebP). 1-100. Runtime — não persistido.</summary>
+    [NotMapped]
     public int ImageQuality { get; set; } = 75;
 
-    /// <summary>Taxa máxima de quadros por segundo. Default 15.</summary>
+    /// <summary>Taxa máxima de quadros por segundo. Runtime — não persistido.</summary>
+    [NotMapped]
     public int MaxFps { get; set; } = 15;
 
     /// <summary>Codec de compressão preferencial.</summary>

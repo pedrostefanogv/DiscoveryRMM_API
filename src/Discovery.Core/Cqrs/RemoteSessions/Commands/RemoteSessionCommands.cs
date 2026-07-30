@@ -14,7 +14,10 @@ public sealed record StartRemoteSessionCommand(
     Guid TenantId = default,
     Guid SiteId = default,
     int DurationMinutes = 30,
-    bool Force = false
+    bool Force = false,
+    string? Shell = "powershell",
+    int? TermCols = 120,
+    int? TermRows = 40
 ) : ICommand<Result<RemoteSessionResponseDto>>;
 
 public sealed record StopRemoteSessionCommand(
@@ -61,6 +64,26 @@ public sealed record ChangeRemoteSessionQualityCommand(
     bool Auto = false
 ) : ICommand<Result<RemoteSessionResponseDto>>;
 
+// ── Terminal Multi-Tab Commands ──
+
+/// <summary>Cria uma nova aba de terminal na sessão (notifica o agent via NATS).</summary>
+public sealed record CreateTerminalTabCommand(
+    Guid AgentId,
+    Guid SessionId,
+    Guid UserId,
+    string Shell = "powershell",
+    int Cols = 120,
+    int Rows = 40
+) : ICommand<Result<TerminalTabResponseDto>>;
+
+/// <summary>Fecha uma aba de terminal na sessão (notifica o agent via NATS).</summary>
+public sealed record CloseTerminalTabCommand(
+    Guid AgentId,
+    Guid SessionId,
+    Guid UserId,
+    Guid TabId
+) : ICommand<Result<VoidResult>>;
+
 // ── DTOs ──
 
 public sealed record RemoteSessionResponseDto(
@@ -83,6 +106,14 @@ public sealed record TurnCredentialsDto(
     string Username,
     string Credential,
     int TtlSeconds
+);
+
+public sealed record TerminalTabResponseDto(
+    Guid TabId,
+    string Shell,
+    string NatsSubject,
+    int Cols,
+    int Rows
 );
 
 public sealed record RecordingResponseDto(

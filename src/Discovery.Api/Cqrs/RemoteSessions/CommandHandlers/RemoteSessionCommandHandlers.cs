@@ -110,7 +110,10 @@ public sealed class StartRemoteSessionCommandHandler(
             maxFps = defaultFps,
             durationMinutes = cmd.DurationMinutes,
             expiresAtUtc = session.ExpiresAt,
-            natsSubject
+            natsSubject,
+            shell = cmd.Shell ?? "powershell",
+            termCols = cmd.TermCols ?? 120,
+            termRows = cmd.TermRows ?? 40
         });
 
         if (!payloadValidator.TryNormalize(CommandType.RemoteSessionStart, payload, out var normalizedPayload, out var validationError))
@@ -366,8 +369,8 @@ public sealed class ChangeRemoteSessionQualityCommandHandler(
         var effectiveImageQuality = cmd.ImageQuality ?? jpegQ;
         var effectiveMaxFps = cmd.MaxFps ?? defaultFps;
 
-        // Atualiza no banco com valores separados
-        session = await sessionManager.UpdateQualityAsync(cmd.SessionId, cmd.Quality, effectiveCodec, effectiveImageQuality, effectiveMaxFps, ct);
+        // Atualiza no banco (apenas QualityProfile + Codec — ImageQuality/MaxFps são runtime only)
+        session = await sessionManager.UpdateQualityAsync(cmd.SessionId, cmd.Quality, effectiveCodec, ct);
 
         // Dispara comando quality para o agent com imageQuality e maxFps separados
         await dispatcher.DispatchQualityChangeAsync(
@@ -382,5 +385,85 @@ public sealed class ChangeRemoteSessionQualityCommandHandler(
             session.Kind.ToString(), session.Transport.ToString(),
             session.QualityProfile.ToString(), session.Codec.ToString(),
             session.Status, session.ExpiresAt, session.StartedAt));
+    }
+}
+
+// ── Terminal Multi-Tab Handlers ──
+
+public sealed class CreateTerminalTabCommandHandler(
+    IRemoteSessionManager sessionManager,
+    IAgentCommandDispatcher dispatcher,
+    ILogger<CreateTerminalTabCommandHandler> logger
+) : IRequestHandler<CreateTerminalTabCommand, Result<TerminalTabResponseDto>>
+{
+    public async Task<Result<TerminalTabResponseDto>> Handle(CreateTerminalTabCommand cmd, CancellationToken ct)
+    {
+        var session = await sessionManager.GetActiveForUserAsync(cmd.SessionId, cmd.UserId, ct);
+        if (session is null)
+            return Result<TerminalTabResponseDto>.Failure(Error.NotFound("Remote session not found or not active."));
+
+        if (session.AgentId != cmd.AgentId)
+            return Result<TerminalTabResponseDto>.Failure(Error.Validation("AgentId", "Session does not belong to this agent."));
+
+        var tabId = Guid.NewGuid();
+        var shell = cmd.Shell ?? "powershell";
+
+        // Publica comando term.create no NATS para o agent
+        var payload = JsonSerializer.Serialize(new
+        {
+            action = "term.create",
+            tabId,
+            shell,
+            cols = cmd.Cols > 0 ? cmd.Cols : 120,
+            rows = cmd.Rows > 0 ? cmd.Rows : 40
+        });
+
+        var command = new AgentCommand
+        {
+            AgentId = cmd.AgentId,
+            CommandType = CommandType.RemoteSessionStart,
+            Payload = payload
+        };
+        await dispatcher.DispatchAsync(command, ct);
+
+        logger.LogInformation("Terminal tab created: {TabId} shell={Shell} for session {SessionId}", tabId, shell, cmd.SessionId);
+
+        // Subject para o viewer subscrever
+        var natsSubject = session.NatsSubject ?? "";
+
+        return Result<TerminalTabResponseDto>.Success(new TerminalTabResponseDto(
+            tabId, shell, natsSubject, cmd.Cols, cmd.Rows));
+    }
+}
+
+public sealed class CloseTerminalTabCommandHandler(
+    IRemoteSessionManager sessionManager,
+    IAgentCommandDispatcher dispatcher,
+    ILogger<CloseTerminalTabCommandHandler> logger
+) : IRequestHandler<CloseTerminalTabCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(CloseTerminalTabCommand cmd, CancellationToken ct)
+    {
+        var session = await sessionManager.GetActiveForUserAsync(cmd.SessionId, cmd.UserId, ct);
+        if (session is null)
+            return Result<VoidResult>.Failure(Error.NotFound("Remote session not found or not active."));
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            action = "term.close",
+            tabId = cmd.TabId
+        });
+
+        var command = new AgentCommand
+        {
+            AgentId = cmd.AgentId,
+            CommandType = CommandType.RemoteSessionStart,
+            Payload = payload
+        };
+        await dispatcher.DispatchAsync(command, ct);
+
+        logger.LogInformation("Terminal tab closed: {TabId} for session {SessionId}", cmd.TabId, cmd.SessionId);
+
+        return Result<VoidResult>.Success(VoidResult.Value);
     }
 }

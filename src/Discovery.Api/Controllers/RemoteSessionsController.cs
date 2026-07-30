@@ -178,4 +178,49 @@ public class RemoteSessionsController : ControllerBase
         if (HttpContext.Items["UserId"] is string uidStr && Guid.TryParse(uidStr, out var parsed)) return parsed;
         return Guid.Empty;
     }
+
+    // ── Terminal Multi-Tab ──
+
+    /// <summary>Cria uma nova aba de terminal na sessão.</summary>
+    [HttpPost("{agentId:guid}/{sessionId:guid}/terminal/tabs")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> CreateTerminalTab(Guid agentId, Guid sessionId, [FromBody] CreateTerminalTabRequest req, CancellationToken ct = default)
+    {
+        var userId = GetUserId();
+        var result = await _mediator.Send(new CreateTerminalTabCommand(agentId, sessionId, userId, req.Shell, req.Cols, req.Rows), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>Fecha uma aba de terminal.</summary>
+    [HttpDelete("{agentId:guid}/{sessionId:guid}/terminal/tabs/{tabId:guid}")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> CloseTerminalTab(Guid agentId, Guid sessionId, Guid tabId, CancellationToken ct = default)
+    {
+        var userId = GetUserId();
+        var result = await _mediator.Send(new CloseTerminalTabCommand(agentId, sessionId, userId, tabId), ct);
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>Lista shells disponíveis no agent (inclui WSL se instalado).</summary>
+    [HttpGet("{agentId:guid}/{sessionId:guid}/terminal/shells")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public IActionResult GetAvailableShells(Guid agentId, Guid sessionId)
+    {
+        // Retorna shells padrão; WSL availability vem do agent via NATS term.ready
+        return Ok(new
+        {
+            shells = new[] { "powershell", "cmd" },
+            note = "WSL availability is reported by the agent via NATS term.ready event"
+        });
+    }
 }
+
+/// <summary>Request para criar uma nova aba de terminal.</summary>
+public record CreateTerminalTabRequest(string Shell = "powershell", int Cols = 120, int Rows = 40);

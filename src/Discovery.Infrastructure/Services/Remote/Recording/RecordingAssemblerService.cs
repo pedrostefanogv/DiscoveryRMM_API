@@ -66,7 +66,12 @@ public class RecordingAssemblerService : BackgroundService
         _logger.LogDebug("Processando gravações pendentes de assembly...");
 
         // Placeholder: a implementação completa leria os frames do buffer
-        // e usaria FFmpeg/libavformat para montar o container
+        // e usaria FFmpeg/libavformat para montar o container.
+        //
+        // Streams a combinar no container final:
+        //   - Screen frames: remote.session.{id}.recording.frame
+        //   - Terminal output: remote.session.{id}.recording.term (multi-tab)
+        //   - Áudio (futuro): remote.session.{id}.recording.audio
         await Task.CompletedTask;
     }
 

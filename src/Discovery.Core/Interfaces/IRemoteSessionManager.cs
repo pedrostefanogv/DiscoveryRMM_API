@@ -45,8 +45,8 @@ public interface IRemoteSessionManager
     /// <summary>Atualiza o subject NATS de uma sessão após criação (subject canônico depende do sessionId).</summary>
     Task<RemoteSession> SetNatsSubjectAsync(Guid sessionId, string natsSubject, CancellationToken ct = default);
 
-    /// <summary>Atualiza qualidade/codec/imagem/FPS da sessão e registra auditoria.</summary>
-    Task<RemoteSession> UpdateQualityAsync(Guid sessionId, Core.Enums.QualityProfile quality, Core.Enums.RemoteCodec? codec = null, int? imageQuality = null, int? maxFps = null, CancellationToken ct = default);
+    /// <summary>Atualiza qualidade/codec da sessão e registra auditoria.</summary>
+    Task<RemoteSession> UpdateQualityAsync(Guid sessionId, Core.Enums.QualityProfile quality, Core.Enums.RemoteCodec? codec = null, CancellationToken ct = default);
 
     /// <summary>Registra um evento de auditoria na sessão.</summary>
     Task AuditAsync(Guid sessionId, string eventType, string? details = null, string? actorUserId = null, string? ipAddress = null, CancellationToken ct = default);
