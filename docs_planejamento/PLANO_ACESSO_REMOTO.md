@@ -1043,3 +1043,231 @@ src/modules/remote-recording/
 | O7  | Site   | `useWebrtcSession` nao publica offer/ICE via NATS signal (B15 ainda pendente).                                                                                 |
 
 > **Status (v3.5):** BUILD VALIDADO. API e Agent compilam com 0 erros. 12 bugs adicionais encontrados e corrigidos nesta iteracao. Pendencias remanescentes sao otimizacoes (O1-O7) e nao bloqueiam smoke test.
+
+---
+
+## 15. Plano Consolidado de Correção e Otimização — Screen, Input, Terminal e Arquivos (2026-07-29)
+
+> **Status:** 🔎 **ANALISADO — AGUARDANDO REVISÃO E APROVAÇÃO PARA IMPLEMENTAÇÃO**
+>
+> Este plano consolida `PLANO_TERMINAL_CONPTY.md` neste documento. Após aprovação, `PLANO_TERMINAL_CONPTY.md` deve ser mantido apenas como histórico/depreciado para evitar duas fontes de verdade.
+
+### 15.1 Evidências coletadas
+
+#### Servidor de homologação — somente leitura
+
+- Host `192.168.1.120` (`discoveryhomolog`): `discovery-api`, `nats-server` e `nginx` estavam ativos na coleta.
+- Os logs da API mostram consultas a `remote_sessions`, mas **não apresentam telemetria de stream** (FPS, bytes, tamanho de frame, RTT, input aplicado, terminal/files). Assim, não é possível atribuir o FPS baixo à rede, CPU, captura ou encoder somente pelos logs atuais.
+- A seleção da tabela confirma que `image_quality` e `max_fps` **não são colunas persistidas**. Esses parâmetros devem permanecer como estado de runtime enviado no comando NATS, não devem motivar migrations adicionais.
+
+#### Causas confirmadas no código
+
+| Área     | Evidência                                                                                                                                  | Consequência                                                                                                         |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| FPS      | `agent/internal/screen/capturer.go` sempre retorna `NewGDICapturer()`; `capturer_gdi.go` usa `BitBlt` + `GetDIBits` full-screen por frame. | Alto custo de cópia CPU/memória em resoluções altas; DXGI não é usado.                                               |
+| FPS      | `session_screen.go` captura, converte BGRA e roda `image/jpeg.Encode` síncrono no mesmo goroutine de captura.                              | Captura não consegue respeitar FPS quando encode/publicação ficam caros; frames atrasam em vez de serem descartados. |
+| FPS      | `scaleFactor` existe no `QualityConfig`, mas não há redimensionamento antes do JPEG encode.                                                | Perfis `medium/low/ultralow` não reduzem pixels; só reduzirem JPEG quality/FPS não basta.                            |
+| Input    | Site publica JSON em `.input`; `nats_stream.go` oferece `SubscribeToInput`, mas `runScreenSession` não subscreve/decodifica/aplica input.  | Mouse e teclado nunca chegam a `screen.Inject*`; controle remoto é somente visualização.                             |
+| Input    | Site envia `offsetX/offsetY` relativos ao canvas CSS; `InjectMouseMove` espera coordenadas absolutas Windows (0–65535).                    | Mesmo após wiring, cursor ficaria incorreto sem normalização canvas→frame→desktop virtual.                           |
+| Terminal | `session_terminal.go` existe e usa subjects por tab, mas `terminal/pty_windows.go` usa pipes e `Resize()` é no-op.                         | Apps interativos, ANSI/VT completo, resize e WSL/TUI não são confiáveis.                                             |
+| Terminal | `useTerminalStream.ts` trata mensagens WebSocket como uma única string `MSG...`; NATS WS pode fragmentar/concatenar comandos.              | Saída do terminal pode truncar/corromper/intermitir sob carga.                                                       |
+| Arquivos | `RemoteFiles.tsx` simula listagem; `runFilesSession` contém `TODO`.                                                                        | Acesso a arquivos não está implementado de ponta a ponta.                                                            |
+
+### 15.2 Objetivos e critérios mensuráveis
+
+| Objetivo                   | Critério de aceite                                                                                                                                                          |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FPS utilizável             | Em 1080p, máquina agent compatível e rede LAN: perfil 15 FPS mantém >= 12 FPS renderizados no viewer durante 60s; 30 FPS mantém >= 24 FPS quando encode/captura permitirem. |
+| Latência                   | p95 de captura→viewer <= 250 ms em LAN para perfil 15 FPS.                                                                                                                  |
+| Imagem x FPS independentes | Usuário altera JPEG/WebP quality sem alterar max FPS e altera max FPS sem alterar compressão.                                                                               |
+| Mouse/teclado              | Clique, drag, botão direito, scroll e teclas modificadoras funcionam em monitor primário e monitores com DPI scaling.                                                       |
+| Terminal                   | PowerShell padrão, resize funcional, Ctrl+C, cores ANSI e saída contínua; tabs isoladas por subject.                                                                        |
+| Arquivos                   | Listar, navegar, baixar, enviar, sobrescrever com confirmação e remover dentro do sandbox permitido.                                                                        |
+
+### 15.3 Fase A — Observabilidade antes de otimizar (P0)
+
+**Objetivo:** tornar o gargalo mensurável antes de ajustar defaults.
+
+1. Agent: adicionar métricas estruturadas por sessão, agregadas em janela de 5 segundos:
+   - `captureMs`, `encodeMs`, `publishMs`, `frameBytes`, `rawBytes`, `framesCaptured`, `framesPublished`, `framesDropped`, `targetFps`, `effectiveFps`, `resolution`, `codec`, `imageQuality` e `scaleFactor`.
+2. Agent: publicar evento `metrics` em `.event` com dados numéricos (não strings) e incluir `timestampUtc`.
+3. Site: exibir métricas separadas:
+   - FPS de renderização local;
+   - FPS de captura/publicação informado pelo agent;
+   - latência estimada, tamanho médio de frame, compressão e frames descartados.
+4. API: logs estruturados para `quality_changed`, `input_received`, `input_applied`, `terminal_tab_created`, `files_request_completed`; incluir `sessionId`, `agentId`, duração e resultado.
+5. Criar roteiro de coleta com perfil 30/15/10/5 FPS e JPEG 90/75/60/40/25 em 1080p e 4K.
+
+**Não ajustar os thresholds adaptativos até existir essa baseline.**
+
+### 15.4 Fase B — Pipeline de tela e FPS (P0)
+
+#### B1. Separar captura, encode e publicação
+
+- Refatorar `agent/internal/remotesession/session_screen.go` para pipeline bounded:
+  1. goroutine de captura;
+  2. fila limitada de tamanho 1–2 (sempre manter frame mais recente);
+  3. worker de scale/encode;
+  4. publicação NATS.
+- Quando encoder/publicação atrasar, descartar frame antigo em vez de acumular latência.
+- Garantir `ReleaseFrame()` em todos os caminhos de erro e ao descartar frame.
+
+#### B2. Aplicar escala de verdade
+
+- Implementar redimensionamento BGRA antes do encode para `QualityConfig.ScaleFactor`.
+- Alvos iniciais: `100%`, `75%`, `50%`, `30%`.
+- Incluir largura/altura efetivas no header de frame e no evento de métricas.
+- Não usar `createImageBitmap` para “simular” escala: a redução deve ocorrer no agent antes da transmissão.
+
+#### B3. Capturador e encoder
+
+- Fazer `NewCapturer()` escolher DXGI Desktop Duplication quando suportado e GDI apenas como fallback; cachear o fallback após falha inicial.
+- Avaliar/implementar dirty rectangles após estabilizar o pipeline full-frame.
+- Remover custo inútil: `encoder_jpeg.go` importa Zstd, mas JPEG já é comprimido; não aplicar compressão adicional sem benchmark que prove ganho.
+- Encoders devem aceitar quality explícita `1..100`; manter JPEG 25–40 como opção rápida e 75 como padrão balanceado.
+- Limitar dimensões e bytes por frame para ficar abaixo do `max_payload` NATS; publicar métrica de frame rejeitado.
+
+#### B4. Perfil e controles independentes
+
+- Manter `QualityProfile` apenas como preset.
+- Estado runtime canônico: `codec`, `imageQuality`, `maxFps`, `scaleFactor` e `auto` no Agent por sessão.
+- `ChangeRemoteSessionQualityCommand` deve validar limites: image quality `1..100`, FPS `1..60`, escala permitida e H.264 somente WebRTC.
+- Corrigir semântica Auto: Auto controla apenas parâmetros não fixados manualmente; UI deve indicar quais controles estão sob Auto e qual valor efetivo está ativo.
+
+### 15.5 Fase C — Controle remoto mouse/teclado (P0)
+
+#### C1. Contrato canônico de input
+
+Definir versionamento JSON em `CONTRATO_COMUNICACAO_REALTIME.md`:
+
+```json
+{
+  "version": 1,
+  "type": "mouse.move|mouse.down|mouse.up|mouse.wheel|key.down|key.up|clipboard",
+  "frameWidth": 1920,
+  "frameHeight": 1080,
+  "x": 535,
+  "y": 420,
+  "button": 0,
+  "deltaX": 0,
+  "deltaY": 120,
+  "code": "KeyA",
+  "key": "a",
+  "modifiers": { "ctrl": false, "alt": false, "shift": false, "meta": false },
+  "sequence": 42
+}
+```
+
+#### C2. Site — normalização correta
+
+- Em `RemoteScreenViewer.tsx`, calcular coordenadas com `getBoundingClientRect()` e tamanho real do canvas/frame, considerando `object-contain`, letterboxing, Fit/1:1, fullscreen e `devicePixelRatio`.
+- Ignorar input nas barras pretas fora da imagem.
+- Fazer throttle/coalescing de `mousemove` para 60 eventos/s e preservar último evento; nunca usar `offsetX/offsetY` sem conversão.
+- Capturar foco no canvas no clique; registrar apenas keyboard events quando o canvas/viewer estiver focado (não globalmente no `window`).
+- Enviar `preventDefault()` para atalhos que seriam consumidos pelo browser quando o viewer estiver ativo; implementar clipboard com permissão explícita.
+
+#### C3. Agent — wiring e injeção
+
+- Em `runScreenSession`, subscrever `.input` e criar `InputController` por sessão.
+- Decodificar/validar payload, aplicar rate limit e deduplicar sequência.
+- Converter pixels do frame em coordenadas do desktop virtual (`GetSystemMetrics` virtual screen), depois em absoluto `0..65535`; usar `MOUSEEVENTF_VIRTUALDESK` para múltiplos monitores.
+- Mapear browser `KeyboardEvent.code` para scan codes Windows, incluindo modificadores e key-up; não confiar apenas em `key`/virtual key.
+- Corrigir `InjectMouseWheel`: `mouseData` deve carregar delta assinado conforme Win32, sem deslocamento incorreto.
+- Publicar `input.applied`/`input.error` em `.event` somente em modo diagnóstico, sem vazar teclas/clipboard.
+
+#### C4. Permissões e segurança
+
+- Incluir capability explícita `canControl` na credencial/viewer e manter modo `view-only` como default configurável.
+- Validar ACL de publish em `.input`; limitar tamanho e frequência de payload.
+- Bloquear input em tela de bloqueio/UAC quando a sessão não possuir desktop interativo apropriado; mostrar estado claro na UI.
+
+### 15.6 Fase D — Terminal interativo ConPTY e multi-tab (P0/P1)
+
+> Consolida integralmente `PLANO_TERMINAL_CONPTY.md`; este documento passa a ser a fonte de verdade.
+
+#### D1. Corrigir transporte NATS do terminal primeiro (P0)
+
+- Extrair parser NATS WS incremental comum usado por Screen Viewer e `useTerminalStream.ts`; ele deve suportar `INFO`, `PING`, `+OK`, `-ERR`, `MSG` fragmentado e múltiplas mensagens em um WebSocket frame.
+- Seguir o mesmo fluxo de autenticação (`INFO` → `CONNECT` → `SUB`) empregado pelo screen viewer; o hook atual assina no `onopen` sem handshake explícito.
+- Padronizar payloads:
+  - output `{data: base64, seq}`;
+  - input `{data: base64}`;
+  - resize `{cols, rows}`.
+- Implementar backpressure e limitar input a 100 mensagens/s e resize a 10/s por tab.
+
+#### D2. ConPTY real (P1)
+
+- Criar `internal/terminal/pty_conpty.go` e `pty_conpty_shell.go` para `CreatePseudoConsole`, `ResizePseudoConsole`, `ClosePseudoConsole` e `STARTUPINFOEX`.
+- Reescrever `terminal.ConPTYShell` para usar ConPTY quando Windows >= 10 1809; manter `pty_windows.go` com pipes apenas como fallback explícito.
+- Corrigir PowerShell: remover `-NonInteractive -Command -`, usar `powershell.exe -NoLogo -NoExit` para sessão interativa.
+- Disponibilizar `cmd`, `powershell`, `wsl` e `wsl:<distro>` após detecção no agent.
+- Limite inicial: máximo 5 tabs por sessão; encerrar tabs no TTL/stop.
+
+#### D3. UI xterm.js e abas (P1)
+
+- Corrigir erros TypeScript existentes de `RemoteTerminal`, `useTerminalStream` e `remote-sessions.ts` antes de deploy.
+- Integrar Fit, WebLinks, Search, Clipboard e ResizeObserver com debounce de 200ms.
+- Confirmar criação/fechamento via evento `term.ready`/`term.list`; não assumir tab local sem confirmação do Agent.
+- Auditar apenas metadados de tab e tamanho/timestamp de input; não persistir comandos ou output sensível no audit.
+
+### 15.7 Fase E — Acesso remoto a arquivos (P0)
+
+#### E1. Agent
+
+- Criar `session_files.go` ou implementar `runFilesSession` com `fileserver.Server` real.
+- Subscrever `.files.req`; validar JSON versionado e dispatch `list/get/put/delete/mkdir`.
+- Publicar `.files.resp` com `requestId`, status, erro normalizado, entries ou chunk.
+- Usar sandbox por roots configurados, prevenção de path traversal/caminhos UNC não autorizados, symlink-safe canonicalization e allowlist de extensões/tamanho.
+- Transferência em chunks: 256 KiB padrão, hash SHA-256 por arquivo/chunk, retries, cancelamento e resume por `transferId`.
+- Limitar concorrência, bytes/s e tamanho de payload NATS; para arquivos grandes, emitir URL HTTP temporária ou protocolo chunked com janela deslizante.
+
+#### E2. Site
+
+- Substituir a simulação em `RemoteFiles.tsx` por `useFilesStream.ts` com parser NATS WS incremental compartilhado.
+- Correlacionar request/response por `requestId`, lidar com timeout e reconexão.
+- Implementar navegação real, download stream, upload com progresso, confirmação de overwrite/delete, criar pasta e cancelamento.
+- Não encerrar toda a sessão quando o componente de arquivos desmonta; remover o `stopSession` no unmount atual.
+
+### 15.8 Fase F — Servidor, autorização e deploy (P0)
+
+1. **Servidor não deve ser caminho de dados de frames NATS**, mas deve emitir credenciais, auditar e expor estado. Manter payload de `start` coerente (`imageQuality`, `maxFps`, `shell`, `termCols`, `termRows`).
+2. Validar no backend todos os limites de input de qualidade/FPS e registrar o comando efetivo despachado ao Agent.
+3. Revisar permissões JWT NATS para que viewer publique somente `.input`, `.ack`, `.term.>.in`, `.files.req` e subscreva somente subjects da própria sessão.
+4. Atualizar `CONTRATO_COMUNICACAO_REALTIME.md` para incluir input versionado, subjects multi-tab de terminal, files protocol e events `metrics`/`input.*`.
+5. Corrigir e reduzir logging EF em produção, substituindo por logs de sessão úteis e métricas; os logs do servidor atual não permitem diagnosticar FPS.
+6. Deploy coordenado: API → Agent → Site. Exigir compatibilidade de versão/capabilities no `started`/`ready` event e rollback se Agent não suporta protocolo.
+
+### 15.9 Sequência de execução recomendada
+
+| Ordem | Entrega                                               | Risco que remove                                    |
+| ----- | ----------------------------------------------------- | --------------------------------------------------- |
+| 1     | Fase A: telemetria e parser NATS WS compartilhado     | Evita otimizar às cegas e corrige intermitência WS. |
+| 2     | Fase C: InputController + normalização de coordenadas | Restaura mouse/teclado funcional.                   |
+| 3     | Fase B: pipeline bounded, escala real, DXGI           | Corrige FPS/latência.                               |
+| 4     | Fase E: arquivos end-to-end                           | Substitui o placeholder atual.                      |
+| 5     | Fase D1: transporte terminal confiável                | Faz output/input terminal estáveis.                 |
+| 6     | Fase D2/D3: ConPTY, WSL, xterm e multi-tab            | Completa terminal interativo.                       |
+| 7     | Fase F: ACL, contrato, observabilidade e rollout      | Endurece segurança e operação.                      |
+
+### 15.10 Testes de aceite e regressão
+
+#### Automação
+
+- Testes Go para normalização de mouse, mapping de teclas, payload input, scale/resample, fila de frame latest-wins, limites de FPS e image quality.
+- Testes C# para validação de `ChangeRemoteSessionQualityCommand`, payload de dispatch e ACL de credenciais.
+- Testes TypeScript para coordenadas canvas→frame, parser NATS fragmentado, correlação files request/response e terminal parser.
+
+#### Smoke tests manuais controlados
+
+1. 1080p e 4K: perfis 30/15/10/5 FPS × JPEG 90/75/40/25; registrar FPS efetivo e p95 latência.
+2. Mouse: click, drag, direito, scroll, DPI 100/125/150%, Fit/1:1/fullscreen, dois monitores.
+3. Teclado: texto, modificadores, Ctrl+C, Alt+Tab bloqueado/permitido conforme política, layout PT-BR.
+4. Terminal: PowerShell, cmd, WSL, `ssh`, TUI, resize, Ctrl+C, desconexão/reconexão, até 5 tabs.
+5. Arquivos: listar/navegar/upload/download/overwrite/delete/cancel/resume e tentativa de traversal.
+6. Segurança: viewer de outro tenant, subject indevido, input sem capability e payload acima do limite devem ser recusados/auditados.
+
+### 15.11 Definição de pronto
+
+- Não declarar fases como concluídas apenas por compilação.
+- Cada entrega deve ter teste automatizado, smoke test em agent Windows real, métrica antes/depois e evento de capacidade compatível.
+- Atualizar este plano com resultado medido, versão Agent/API/Site e riscos remanescentes após cada rollout.
