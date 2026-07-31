@@ -96,6 +96,8 @@ public sealed class GetSessionCredentialsQueryHandler(
         var subSubjects = new[]
         {
             $"{natsSubject}.frame",
+            $"{natsSubject}.frame.frag",
+            $"{natsSubject}.cursor",
             $"{natsSubject}.event",
             $"{natsSubject}.term.out",
             $"{natsSubject}.files.resp",

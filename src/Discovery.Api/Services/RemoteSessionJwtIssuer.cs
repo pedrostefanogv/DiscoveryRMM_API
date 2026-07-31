@@ -109,6 +109,8 @@ public class RemoteSessionJwtIssuer
 
             // Viewer subscreve (recebe stream)
             $"sub.{natsSubject}.frame",
+            $"sub.{natsSubject}.frame.frag",
+            $"sub.{natsSubject}.cursor",
             $"sub.{natsSubject}.event",
             $"sub.{natsSubject}.term.out",
             $"sub.{natsSubject}.files.resp",
