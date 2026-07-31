@@ -77,6 +77,7 @@ public class RemoteSessionDispatcher
         RemoteCodec? codec = null,
         int? imageQuality = null,
         int? maxFps = null,
+        bool auto = false,
         CancellationToken ct = default)
     {
         var payload = JsonSerializer.Serialize(new
@@ -86,7 +87,8 @@ public class RemoteSessionDispatcher
             quality = quality.ToString().ToLowerInvariant(),
             codec = codec?.ToString().ToLowerInvariant(),
             imageQuality,
-            maxFps
+            maxFps,
+            auto
         });
 
         await DispatchToAgentAsync(agentId, CommandType.RemoteSessionQuality, payload, ct);

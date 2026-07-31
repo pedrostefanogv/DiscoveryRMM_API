@@ -367,16 +367,25 @@ public sealed class ChangeRemoteSessionQualityCommandHandler(
         // Obtém parâmetros do perfil como fallback caso ImageQuality/MaxFps não sejam especificados
         var (defaultFps, scale, jpegQ, webpQ) = QualityProfileMapping.GetParameters(cmd.Quality);
 
-        // Prioriza valores explícitos sobre o perfil
-        var effectiveImageQuality = cmd.ImageQuality ?? jpegQ;
-        var effectiveMaxFps = cmd.MaxFps ?? defaultFps;
+        // Em modo Auto: usa a qualidade do perfil do codec efetivo (webpQ para WebP,
+        // jpegQ para JPEG) — sem overrides manuais. Em Manual: prioriza valores explícitos.
+        int? effectiveImageQuality;
+        if (cmd.Auto)
+        {
+            effectiveImageQuality = effectiveCodec == RemoteCodec.WebP ? webpQ : jpegQ;
+        }
+        else
+        {
+            effectiveImageQuality = cmd.ImageQuality ?? (effectiveCodec == RemoteCodec.WebP ? webpQ : jpegQ);
+        }
+        var effectiveMaxFps = cmd.Auto ? defaultFps : (cmd.MaxFps ?? defaultFps);
 
         // Atualiza no banco (apenas QualityProfile + Codec — ImageQuality/MaxFps são runtime only)
         session = await sessionManager.UpdateQualityAsync(cmd.SessionId, cmd.Quality, effectiveCodec, ct);
 
         // Dispara comando quality para o agent com imageQuality e maxFps separados
         await dispatcher.DispatchQualityChangeAsync(
-            cmd.AgentId, cmd.SessionId, cmd.Quality, effectiveCodec, effectiveImageQuality, effectiveMaxFps, ct);
+            cmd.AgentId, cmd.SessionId, cmd.Quality, effectiveCodec, effectiveImageQuality, effectiveMaxFps, cmd.Auto, ct);
 
         logger.LogInformation(
             "Quality changed to {Quality}/{Codec} imageQ={ImageQuality}% maxFps={MaxFps} (scale:{Scale}%) auto={Auto} for session {SessionId}",

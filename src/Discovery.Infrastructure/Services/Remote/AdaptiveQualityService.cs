@@ -131,7 +131,9 @@ public sealed class AdaptiveQualityService : BackgroundService
             // Condições ruins: reduz qualidade
             return current switch
             {
-                QualityProfile.Ultra => QualityProfile.High,
+                QualityProfile.Unlimited => QualityProfile.Fast,
+                QualityProfile.Ultra => QualityProfile.Fast,
+                QualityProfile.Fast => QualityProfile.High,
                 QualityProfile.High => QualityProfile.Medium,
                 QualityProfile.Medium => QualityProfile.Low,
                 QualityProfile.Low => QualityProfile.UltraLow,
@@ -148,8 +150,10 @@ public sealed class AdaptiveQualityService : BackgroundService
                 QualityProfile.UltraLow => QualityProfile.Low,
                 QualityProfile.Low => QualityProfile.Medium,
                 QualityProfile.Medium => QualityProfile.High,
-                QualityProfile.High => QualityProfile.Ultra,
+                QualityProfile.High => QualityProfile.Fast,
+                QualityProfile.Fast => QualityProfile.Ultra,
                 QualityProfile.Ultra => QualityProfile.Ultra,
+                QualityProfile.Unlimited => QualityProfile.Unlimited,
                 _ => QualityProfile.High
             };
         }
