@@ -113,7 +113,9 @@ public sealed class StartRemoteSessionCommandHandler(
             natsSubject,
             shell = cmd.Shell ?? "powershell",
             termCols = cmd.TermCols ?? 120,
-            termRows = cmd.TermRows ?? 40
+            termRows = cmd.TermRows ?? 40,
+            // Raiz do explorador de arquivos (opcional; agent usa C:\ por padrão)
+            rootPath = cmd.RootPath ?? "C:\\"
         });
 
         if (!payloadValidator.TryNormalize(CommandType.RemoteSessionStart, payload, out var normalizedPayload, out var validationError))

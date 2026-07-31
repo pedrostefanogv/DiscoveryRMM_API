@@ -17,7 +17,8 @@ public sealed record StartRemoteSessionCommand(
     bool Force = false,
     string? Shell = "powershell",
     int? TermCols = 120,
-    int? TermRows = 40
+    int? TermRows = 40,
+    string? RootPath = "C:\\"
 ) : ICommand<Result<RemoteSessionResponseDto>>;
 
 public sealed record StopRemoteSessionCommand(
