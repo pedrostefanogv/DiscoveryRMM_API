@@ -280,19 +280,25 @@ prompt_tls_certificate_configuration() {
   wizard_header "Certificado TLS" "$(wizard_step_label "6/9" "5/8")"
   echo "1) self-signed  - certificado local gerado pelo instalador"
   echo "2) zerossl-acme - ZeroSSL via ACME com validacao DNS manual"
+  echo "3) letsencrypt-acme - Let's Encrypt via ACME com validacao DNS manual"
   echo "----------------------------------------"
 
-  prompt_if_empty TLS_CERT_PROVIDER "Modo de certificado TLS (1/2 ou self-signed/zerossl-acme)" 0 "self-signed"
+  prompt_if_empty TLS_CERT_PROVIDER "Modo de certificado TLS (1/2/3 ou self-signed/zerossl-acme/letsencrypt-acme)" 0 "self-signed"
   case "$(printf '%s' "$TLS_CERT_PROVIDER" | tr '[:upper:]' '[:lower:]')" in
     1) TLS_CERT_PROVIDER="self-signed" ;;
     2) TLS_CERT_PROVIDER="zerossl-acme" ;;
+    3) TLS_CERT_PROVIDER="letsencrypt-acme" ;;
   esac
   normalize_tls_certificate_provider
 
-  if [[ "$TLS_CERT_PROVIDER" != "zerossl-acme" ]]; then
-    return
+  if [[ "$TLS_CERT_PROVIDER" == "zerossl-acme" ]]; then
+    prompt_zerossl_acme_configuration
+  elif [[ "$TLS_CERT_PROVIDER" == "letsencrypt-acme" ]]; then
+    prompt_letsencrypt_acme_configuration
   fi
+}
 
+prompt_zerossl_acme_configuration() {
   echo
   echo "ZeroSSL ACME usa desafio DNS-01. O instalador exibira o registro TXT,"
   echo "aguardara sua confirmacao e validara o DNS com dig antes de continuar."
@@ -312,6 +318,28 @@ prompt_tls_certificate_configuration() {
   echo "Renovacao recomendada: checar diariamente e renovar quando faltar ate ${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY} dias."
   prompt_if_empty ZEROSSL_AUTO_RENEW_ENABLED "Criar timer automatico de renovacao ZeroSSL? (1/0)" 0 "1"
   normalize_zerossl_auto_renew_enabled
+  normalize_tls_certificate_provider
+}
+
+prompt_letsencrypt_acme_configuration() {
+  echo
+  echo "Let's Encrypt ACME usa desafio DNS-01. O instalador exibira o registro TXT,"
+  echo "aguardara sua confirmacao e validara o DNS com dig antes de continuar."
+  echo "Nao requer EAB (diferente do ZeroSSL)."
+  echo
+  prompt_if_empty LETSENCRYPT_CERT_DOMAIN "Dominio do certificado" 0 "$(resolve_fido2_server_domain)"
+  if [[ -z "${LETSENCRYPT_CERT_ALT_DOMAINS:-}" && "$NON_INTERACTIVE" -eq 0 ]]; then
+    read -r -p "SANs adicionais separados por virgula (opcional): " LETSENCRYPT_CERT_ALT_DOMAINS
+  fi
+  LETSENCRYPT_CERT_ALT_DOMAINS="${LETSENCRYPT_CERT_ALT_DOMAINS:-}"
+  prompt_if_empty LETSENCRYPT_ACME_EMAIL "Email da conta Let's Encrypt/ACME"
+  prompt_if_empty LETSENCRYPT_DNS_RESOLVERS "Resolvers para validar DNS (separados por virgula)" 0 "1.1.1.1,8.8.8.8"
+  prompt_if_empty LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS "Timeout de propagacao DNS em segundos" 0 "600"
+  prompt_if_empty LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS "Intervalo de consulta DNS em segundos" 0 "15"
+  LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY="${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY:-30}"
+  echo "Renovacao recomendada: checar diariamente e renovar quando faltar ate ${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY} dias."
+  prompt_if_empty LETSENCRYPT_AUTO_RENEW_ENABLED "Criar timer automatico de renovacao Let's Encrypt? (1/0)" 0 "1"
+  normalize_letsencrypt_auto_renew_enabled
   normalize_tls_certificate_provider
 }
 
@@ -487,6 +515,9 @@ print_selected_configuration_summary() {
   echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
   if [[ "${TLS_CERT_PROVIDER:-self-signed}" == "zerossl-acme" ]]; then
     echo "- TLS dominio: ${ZEROSSL_CERT_DOMAIN:-$(resolve_fido2_server_domain)}"
+  fi
+  if [[ "${TLS_CERT_PROVIDER:-self-signed}" == "letsencrypt-acme" ]]; then
+    echo "- TLS dominio: ${LETSENCRYPT_CERT_DOMAIN:-$(resolve_fido2_server_domain)}"
   fi
   if [[ -n "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
     if [[ "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN_AUTO:-0}" -eq 1 ]]; then

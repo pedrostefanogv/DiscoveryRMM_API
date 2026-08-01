@@ -118,15 +118,6 @@ setup_zerossl_acme_certificate() {
     "$DISCOVERY_OPS_DIR/zerossl-acme-certificate.sh" issue
 }
 
-setup_proxy_certificate() {
-  normalize_tls_certificate_provider
-  if [[ "$TLS_CERT_PROVIDER" == "zerossl-acme" ]]; then
-    setup_zerossl_acme_certificate
-    return
-  fi
-  setup_self_signed_proxy_certificate
-}
-
 setup_zerossl_renewal_timer() {
   [[ "${TLS_CERT_PROVIDER:-self-signed}" == "zerossl-acme" ]] || return 0
   normalize_zerossl_auto_renew_enabled
@@ -167,6 +158,83 @@ EOF
   sudo systemctl enable --now discovery-zerossl-renew.timer
 }
 
+# ── Let's Encrypt ACME ─────────────────────────────────────────────────────
+
+install_letsencrypt_acme_certificate_script() {
+  [[ -f "$LETSENCRYPT_ACME_TEMPLATE_PATH" ]] || fail "Template Let's Encrypt ACME nao encontrado: $LETSENCRYPT_ACME_TEMPLATE_PATH"
+  sudo install -m 750 -o root -g discovery-api "$LETSENCRYPT_ACME_TEMPLATE_PATH" "$DISCOVERY_OPS_DIR/letsencrypt-acme-certificate.sh"
+}
+
+setup_letsencrypt_acme_certificate() {
+  log "Emitindo certificado Let's Encrypt via ACME"
+  install_letsencrypt_acme_certificate_script
+
+  sudo env \
+    TLS_CERT_PROVIDER="$TLS_CERT_PROVIDER" \
+    LETSENCRYPT_CERT_DOMAIN="$LETSENCRYPT_CERT_DOMAIN" \
+    LETSENCRYPT_CERT_ALT_DOMAINS="${LETSENCRYPT_CERT_ALT_DOMAINS:-}" \
+    LETSENCRYPT_ACME_EMAIL="$LETSENCRYPT_ACME_EMAIL" \
+    LETSENCRYPT_DNS_RESOLVERS="${LETSENCRYPT_DNS_RESOLVERS:-1.1.1.1,8.8.8.8}" \
+    LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS="${LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS:-600}" \
+    LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS="${LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS:-15}" \
+    LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY="${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY:-30}" \
+    LETSENCRYPT_DNS_AUTOMATION_HOOK="${LETSENCRYPT_DNS_AUTOMATION_HOOK:-}" \
+    "$DISCOVERY_OPS_DIR/letsencrypt-acme-certificate.sh" issue
+}
+
+setup_proxy_certificate() {
+  normalize_tls_certificate_provider
+  if [[ "$TLS_CERT_PROVIDER" == "zerossl-acme" ]]; then
+    setup_zerossl_acme_certificate
+    return
+  fi
+  if [[ "$TLS_CERT_PROVIDER" == "letsencrypt-acme" ]]; then
+    setup_letsencrypt_acme_certificate
+    return
+  fi
+  setup_self_signed_proxy_certificate
+}
+
+setup_letsencrypt_renewal_timer() {
+  [[ "${TLS_CERT_PROVIDER:-self-signed}" == "letsencrypt-acme" ]] || return 0
+  normalize_letsencrypt_auto_renew_enabled
+  if [[ "${LETSENCRYPT_AUTO_RENEW_ENABLED:-1}" != "1" ]]; then
+    log "Timer de renovacao Let's Encrypt desativado por configuracao."
+    sudo systemctl disable --now discovery-letsencrypt-renew.timer >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  install_letsencrypt_acme_certificate_script
+
+  sudo tee /etc/systemd/system/discovery-letsencrypt-renew.service >/dev/null <<EOF
+[Unit]
+Description=Discovery RMM Let's Encrypt certificate renewal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/discovery-api/discovery.env
+ExecStart=${DISCOVERY_OPS_DIR}/letsencrypt-acme-certificate.sh renew
+EOF
+
+  sudo tee /etc/systemd/system/discovery-letsencrypt-renew.timer >/dev/null <<EOF
+[Unit]
+Description=Discovery RMM Let's Encrypt certificate renewal timer
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now discovery-letsencrypt-renew.timer
+}
+
 # ── TLS defaults from existing install ─────────────────────────────────────
 
 load_existing_tls_defaults() {
@@ -185,6 +253,15 @@ load_existing_tls_defaults() {
   ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-$(sudo awk -F= '/^ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
   ZEROSSL_AUTO_RENEW_ENABLED="${ZEROSSL_AUTO_RENEW_ENABLED:-$(sudo awk -F= '/^ZEROSSL_AUTO_RENEW_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
   ZEROSSL_DNS_AUTOMATION_HOOK="${ZEROSSL_DNS_AUTOMATION_HOOK:-$(sudo awk -F= '/^ZEROSSL_DNS_AUTOMATION_HOOK=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  LETSENCRYPT_CERT_DOMAIN="${LETSENCRYPT_CERT_DOMAIN:-$(sudo awk -F= '/^LETSENCRYPT_CERT_DOMAIN=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  LETSENCRYPT_CERT_ALT_DOMAINS="${LETSENCRYPT_CERT_ALT_DOMAINS:-$(sudo awk -F= '/^LETSENCRYPT_CERT_ALT_DOMAINS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  LETSENCRYPT_ACME_EMAIL="${LETSENCRYPT_ACME_EMAIL:-$(sudo awk -F= '/^LETSENCRYPT_ACME_EMAIL=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  LETSENCRYPT_DNS_RESOLVERS="${LETSENCRYPT_DNS_RESOLVERS:-$(sudo awk -F= '/^LETSENCRYPT_DNS_RESOLVERS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS="${LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS:-$(sudo awk -F= '/^LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS="${LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS:-$(sudo awk -F= '/^LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY="${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY:-$(sudo awk -F= '/^LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  LETSENCRYPT_AUTO_RENEW_ENABLED="${LETSENCRYPT_AUTO_RENEW_ENABLED:-$(sudo awk -F= '/^LETSENCRYPT_AUTO_RENEW_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  LETSENCRYPT_DNS_AUTOMATION_HOOK="${LETSENCRYPT_DNS_AUTOMATION_HOOK:-$(sudo awk -F= '/^LETSENCRYPT_DNS_AUTOMATION_HOOK=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
 }
 
 setup_cloudflare_tunnel() {

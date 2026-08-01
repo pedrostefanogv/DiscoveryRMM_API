@@ -451,6 +451,7 @@ apply_maintenance_mode() {
     echo "3) Resetar SOMENTE o MFA (senha inalterada, usuario deve existir)"
     echo "4) Recriar/garantir admin padrao (login admin, senha automatica, reset MFA)"
     echo "5) Ver ajuda completa do recover-admin"
+    echo "6) Trocar provedor de certificado TLS (self-signed/ZeroSSL/Let's Encrypt)"
     echo "0) Sair"
     echo "----------------------------------------"
 
@@ -486,6 +487,9 @@ apply_maintenance_mode() {
       5)
         print_recover_admin_help
         pause_maintenance_menu ;;
+      6)
+        switch_tls_provider
+        pause_maintenance_menu ;;
       0|sair|exit|q|quit)
         log "Saindo do modo de manutencao"
         return ;;
@@ -493,4 +497,105 @@ apply_maintenance_mode() {
         echo "Opcao invalida: $selected_option" >&2 ;;
     esac
   done
+}
+
+# ── Troca de provedor de certificado TLS ───────────────────────────────────
+
+# Troca o provedor de certificado TLS (self-signed / zerossl-acme / letsencrypt-acme)
+# em uma instalacao existente. Emite o novo certificado, atualiza o discovery.env
+# e ajusta os timers de renovacao.
+switch_tls_provider() {
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  sudo test -f "$env_file" || fail "Arquivo de ambiente da API nao encontrado: $env_file"
+
+  # Carrega defaults existentes para preservar credenciais.
+  load_existing_tls_defaults
+
+  local current_provider="${TLS_CERT_PROVIDER:-self-signed}"
+  echo
+  echo "Provedor de certificado TLS atual: $current_provider"
+  echo "1) self-signed  - certificado local gerado pelo instalador"
+  echo "2) zerossl-acme - ZeroSSL via ACME com validacao DNS"
+  echo "3) letsencrypt-acme - Let's Encrypt via ACME com validacao DNS"
+  echo "0) Cancelar"
+  echo "----------------------------------------"
+
+  local new_provider
+  read -r -p "Novo provedor [0]: " new_provider
+  new_provider="${new_provider:-0}"
+  new_provider="$(printf '%s' "$new_provider" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  case "$new_provider" in
+    1|self-signed) new_provider="self-signed" ;;
+    2|zerossl|zerossl-acme) new_provider="zerossl-acme" ;;
+    3|letsencrypt|lets-encrypt|letsencrypt-acme) new_provider="letsencrypt-acme" ;;
+    0|cancelar|sair|exit|q|quit) log "Troca de TLS cancelada."; return ;;
+    *) echo "Opcao invalida: $new_provider" >&2; return ;;
+  esac
+
+  if [[ "$new_provider" == "$current_provider" ]]; then
+    log "O provedor ja e $new_provider; nada a fazer."
+    return
+  fi
+
+  # Coleta configuracao do novo provider (se ACME).
+  if [[ "$new_provider" == "zerossl-acme" ]]; then
+    prompt_zerossl_acme_configuration
+  elif [[ "$new_provider" == "letsencrypt-acme" ]]; then
+    prompt_letsencrypt_acme_configuration
+  fi
+
+  TLS_CERT_PROVIDER="$new_provider"
+  normalize_tls_certificate_provider
+
+  log "Trocando provedor TLS para $TLS_CERT_PROVIDER"
+
+  # Emite o novo certificado.
+  setup_proxy_certificate
+
+  # Atualiza o discovery.env com o novo provider.
+  local tmp_file; tmp_file="$(mktemp)"
+  cp "$env_file" "$tmp_file"
+
+  _set_env_key() {
+    local key="$1" value="$2"
+    if grep -q "^${key}=" "$tmp_file" 2>/dev/null; then
+      sed -i "s|^${key}=.*|${key}=${value}|" "$tmp_file"
+    else
+      printf '%s=%s\n' "$key" "$value" >> "$tmp_file"
+    fi
+  }
+
+  _set_env_key "TLS_CERT_PROVIDER" "$TLS_CERT_PROVIDER"
+  _set_env_key "ZEROSSL_CERT_DOMAIN" "${ZEROSSL_CERT_DOMAIN:-}"
+  _set_env_key "ZEROSSL_CERT_ALT_DOMAINS" "${ZEROSSL_CERT_ALT_DOMAINS:-}"
+  _set_env_key "ZEROSSL_ACME_EMAIL" "${ZEROSSL_ACME_EMAIL:-}"
+  _set_env_key "ZEROSSL_ACME_EAB_KID" "${ZEROSSL_ACME_EAB_KID:-}"
+  _set_env_key "ZEROSSL_ACME_EAB_HMAC_KEY" "${ZEROSSL_ACME_EAB_HMAC_KEY:-}"
+  _set_env_key "ZEROSSL_DNS_RESOLVERS" "${ZEROSSL_DNS_RESOLVERS:-1.1.1.1,8.8.8.8}"
+  _set_env_key "ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS" "${ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS:-600}"
+  _set_env_key "ZEROSSL_DNS_POLL_INTERVAL_SECONDS" "${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-15}"
+  _set_env_key "ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY" "${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-30}"
+  _set_env_key "ZEROSSL_AUTO_RENEW_ENABLED" "${ZEROSSL_AUTO_RENEW_ENABLED:-1}"
+  _set_env_key "ZEROSSL_DNS_AUTOMATION_HOOK" "${ZEROSSL_DNS_AUTOMATION_HOOK:-}"
+  _set_env_key "LETSENCRYPT_CERT_DOMAIN" "${LETSENCRYPT_CERT_DOMAIN:-}"
+  _set_env_key "LETSENCRYPT_CERT_ALT_DOMAINS" "${LETSENCRYPT_CERT_ALT_DOMAINS:-}"
+  _set_env_key "LETSENCRYPT_ACME_EMAIL" "${LETSENCRYPT_ACME_EMAIL:-}"
+  _set_env_key "LETSENCRYPT_DNS_RESOLVERS" "${LETSENCRYPT_DNS_RESOLVERS:-1.1.1.1,8.8.8.8}"
+  _set_env_key "LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS" "${LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS:-600}"
+  _set_env_key "LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS" "${LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS:-15}"
+  _set_env_key "LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY" "${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY:-30}"
+  _set_env_key "LETSENCRYPT_AUTO_RENEW_ENABLED" "${LETSENCRYPT_AUTO_RENEW_ENABLED:-1}"
+  _set_env_key "LETSENCRYPT_DNS_AUTOMATION_HOOK" "${LETSENCRYPT_DNS_AUTOMATION_HOOK:-}"
+
+  sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
+  rm -f "$tmp_file"
+
+  # Ajusta os timers de renovacao (desativa o antigo, ativa o novo).
+  sudo systemctl disable --now discovery-zerossl-renew.timer >/dev/null 2>&1 || true
+  sudo systemctl disable --now discovery-letsencrypt-renew.timer >/dev/null 2>&1 || true
+  setup_zerossl_renewal_timer
+  setup_letsencrypt_renewal_timer
+
+  log "Provedor TLS alterado para $TLS_CERT_PROVIDER com sucesso."
 }

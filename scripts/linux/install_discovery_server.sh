@@ -8,6 +8,7 @@ TEMPLATES_DIR="$SCRIPT_DIR/templates"
 NGINX_TEMPLATE_PATH="$TEMPLATES_DIR/nginx-discovery.conf.tpl"
 SELFUPDATE_TEMPLATE_PATH="$TEMPLATES_DIR/selfupdate-discovery-api.sh"
 ZEROSSL_ACME_TEMPLATE_PATH="$TEMPLATES_DIR/zerossl-acme-certificate.sh"
+LETSENCRYPT_ACME_TEMPLATE_PATH="$TEMPLATES_DIR/letsencrypt-acme-certificate.sh"
 
 NON_INTERACTIVE=0
 CONFIG_FILE=""
@@ -195,6 +196,7 @@ main() {
   setup_cloudflare_tunnel
   write_environment_file
   setup_zerossl_renewal_timer
+  setup_letsencrypt_renewal_timer
 
   trap cleanup_on_exit EXIT
   setup_git_askpass

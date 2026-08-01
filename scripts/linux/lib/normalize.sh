@@ -42,6 +42,16 @@ normalize_zerossl_auto_renew_enabled() {
   esac
 }
 
+normalize_letsencrypt_auto_renew_enabled() {
+  local normalized
+  normalized="$(printf '%s' "${LETSENCRYPT_AUTO_RENEW_ENABLED:-1}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$normalized" in
+    1|true|yes|y|sim|s)       LETSENCRYPT_AUTO_RENEW_ENABLED=1 ;;
+    0|false|no|n|nao|"")      LETSENCRYPT_AUTO_RENEW_ENABLED=0 ;;
+    *) fail "LETSENCRYPT_AUTO_RENEW_ENABLED invalido: ${LETSENCRYPT_AUTO_RENEW_ENABLED}. Use 1/0 (ou sim/nao)." ;;
+  esac
+}
+
 normalize_nats_settings() {
   NATS_BIND_HOST="${NATS_BIND_HOST:-0.0.0.0}"
   NATS_MONITOR_HOST="${NATS_MONITOR_HOST:-127.0.0.1}"
@@ -100,7 +110,8 @@ normalize_tls_certificate_provider() {
   case "$provider" in
     self-signed|selfsigned|local) TLS_CERT_PROVIDER="self-signed" ;;
     zerossl|zerossl-acme|acme)    TLS_CERT_PROVIDER="zerossl-acme" ;;
-    *) fail "TLS_CERT_PROVIDER invalido: $provider (use self-signed ou zerossl-acme)" ;;
+    letsencrypt|lets-encrypt|le|letsencrypt-acme) TLS_CERT_PROVIDER="letsencrypt-acme" ;;
+    *) fail "TLS_CERT_PROVIDER invalido: $provider (use self-signed, zerossl-acme ou letsencrypt-acme)" ;;
   esac
 
   if [[ "$TLS_CERT_PROVIDER" == "zerossl-acme" ]]; then
@@ -113,6 +124,18 @@ normalize_tls_certificate_provider() {
     ZEROSSL_AUTO_RENEW_ENABLED="${ZEROSSL_AUTO_RENEW_ENABLED:-1}"
     normalize_zerossl_auto_renew_enabled
     ZEROSSL_DNS_AUTOMATION_HOOK="${ZEROSSL_DNS_AUTOMATION_HOOK:-}"
+  fi
+
+  if [[ "$TLS_CERT_PROVIDER" == "letsencrypt-acme" ]]; then
+    LETSENCRYPT_CERT_DOMAIN="$(normalize_host_without_scheme "${LETSENCRYPT_CERT_DOMAIN:-$(resolve_fido2_server_domain)}")"
+    LETSENCRYPT_CERT_ALT_DOMAINS="${LETSENCRYPT_CERT_ALT_DOMAINS:-}"
+    LETSENCRYPT_DNS_RESOLVERS="${LETSENCRYPT_DNS_RESOLVERS:-1.1.1.1,8.8.8.8}"
+    LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS="${LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS:-600}"
+    LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS="${LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS:-15}"
+    LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY="${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY:-30}"
+    LETSENCRYPT_AUTO_RENEW_ENABLED="${LETSENCRYPT_AUTO_RENEW_ENABLED:-1}"
+    normalize_letsencrypt_auto_renew_enabled
+    LETSENCRYPT_DNS_AUTOMATION_HOOK="${LETSENCRYPT_DNS_AUTOMATION_HOOK:-}"
   fi
 }
 
