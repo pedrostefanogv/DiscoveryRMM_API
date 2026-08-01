@@ -452,6 +452,7 @@ listen: ${NATS_BIND_HOST}:4222
 http: ${NATS_MONITOR_HOST}:8222
 server_name: discovery-nats
 max_payload: 4194304
+max_control_line: 16384
 max_connections: 5000
 write_deadline: 5s
 ${jetstream_block}${auth_block}${ws_block}

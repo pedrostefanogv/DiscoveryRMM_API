@@ -99,6 +99,7 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.frame.frag",
             $"{natsSubject}.cursor",
             $"{natsSubject}.cursor.img",
+            $"{natsSubject}.monitors",
             $"{natsSubject}.event",
             $"{natsSubject}.term.out",
             $"{natsSubject}.files.resp",
