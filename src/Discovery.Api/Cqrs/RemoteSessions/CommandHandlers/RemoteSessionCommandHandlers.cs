@@ -115,7 +115,9 @@ public sealed class StartRemoteSessionCommandHandler(
             termCols = cmd.TermCols ?? 120,
             termRows = cmd.TermRows ?? 40,
             // Raiz do explorador de arquivos (opcional; agent usa C:\ por padrão)
-            rootPath = cmd.RootPath ?? "C:\\"
+            rootPath = cmd.RootPath ?? "C:\\",
+            // Monitor para captura de tela (0 = primário). Opcional; agent usa 0 por padrão.
+            monitorIndex = cmd.MonitorIndex ?? 0
         });
 
         if (!payloadValidator.TryNormalize(CommandType.RemoteSessionStart, payload, out var normalizedPayload, out var validationError))

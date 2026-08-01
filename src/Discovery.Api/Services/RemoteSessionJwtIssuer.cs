@@ -111,6 +111,7 @@ public class RemoteSessionJwtIssuer
             $"sub.{natsSubject}.frame",
             $"sub.{natsSubject}.frame.frag",
             $"sub.{natsSubject}.cursor",
+            $"sub.{natsSubject}.cursor.img",
             $"sub.{natsSubject}.event",
             $"sub.{natsSubject}.term.out",
             $"sub.{natsSubject}.files.resp",
