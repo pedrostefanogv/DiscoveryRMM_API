@@ -242,8 +242,11 @@ public sealed class GetKnowledgeTreeQueryHandler(
             });
         }
 
-        IReadOnlyList<KnowledgeTreeNode> Build(Guid? parentId)
+        IReadOnlyList<KnowledgeTreeNode> Build(Guid? parentId, int depth = 0)
         {
+            // Proteção contra ciclos/recursão infinita (máx. 3 níveis + folga)
+            if (depth > 10) return [];
+
             var key = parentId ?? Guid.Empty;
             if (!childrenMap.TryGetValue(key, out var siblings))
                 return [];
@@ -251,7 +254,7 @@ public sealed class GetKnowledgeTreeQueryHandler(
             var nodes = new List<KnowledgeTreeNode>(siblings.Count);
             foreach (var a in siblings)
             {
-                var children = Build(a.Id);
+                var children = Build(a.Id, depth + 1);
                 nodes.Add(new KnowledgeTreeNode(
                     Id: a.Id,
                     Title: a.Title,
@@ -395,7 +398,7 @@ public sealed class UpdateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
         if (cmd.ParentId.HasValue && cmd.ParentId.Value == cmd.Id)
             return Result<ArticleResponse>.Failure(Error.Validation("ParentId", "Uma página não pode ser pai de si mesma."));
 
-        // Se mudou de pai, valida profundidade e herda escopo/status da nova raiz
+        // Se mudou de pai, valida profundidade, ciclo indireto e herança
         if (cmd.ParentId != article.ParentId)
         {
             if (cmd.ParentId.HasValue)
@@ -404,11 +407,17 @@ public sealed class UpdateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
                 if (parent is null)
                     return Result<ArticleResponse>.Failure(Error.Validation("ParentId", "Página pai não encontrada."));
 
+                // Impede ciclo indireto: a página não pode ser movida para baixo de um de seus próprios descendentes
+                if (await repo.IsDescendantAsync(cmd.Id, cmd.ParentId.Value, ct))
+                    return Result<ArticleResponse>.Failure(Error.Validation("ParentId", "Não é possível mover uma página para dentro de sua própria subárvore (criaria um ciclo)."));
+
+                // Profundidade máxima: 3 níveis. Considera a subárvore inteira da página sendo movida.
                 var parentDepth = await repo.GetDepthAsync(parent.Id, ct);
-                if (parentDepth >= 3)
+                var subtreeMaxLevel = await repo.GetSubtreeMaxLevelAsync(cmd.Id, ct);
+                if (parentDepth + subtreeMaxLevel > 3)
                     return Result<ArticleResponse>.Failure(Error.Validation("ParentId", "Profundidade máxima de 3 níveis de páginas atingida."));
 
-                // Herda escopo e status da nova raiz
+                // Herda escopo e status da nova raiz e propaga para toda a subárvore
                 var root = await repo.GetRootAsync(parent.Id, ct);
                 if (root is not null)
                 {
@@ -416,12 +425,13 @@ public sealed class UpdateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
                     article.SiteId = root.SiteId;
                     article.DepartmentId = root.DepartmentId;
                     article.Status = root.Status;
+                    await repo.PropagateScopeAndStatusAsync(cmd.Id, root.ClientId, root.SiteId, root.DepartmentId, root.Status, ct);
                 }
             }
             else
             {
-                // Movendo para raiz: mantém escopo atual (não herda de ninguém)
-                // Status permanece o atual.
+                // Movendo para raiz: mantém escopo atual, mas propaga o status atual para a subárvore
+                await repo.PropagateScopeAndStatusAsync(cmd.Id, article.ClientId, article.SiteId, article.DepartmentId, article.Status, ct);
             }
         }
 
@@ -433,7 +443,9 @@ public sealed class UpdateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
         article.LastEditedAt = DateTime.UtcNow;
         article.ParentId = cmd.ParentId;
         article.SortOrder = cmd.SortOrder;
-        article.IsPage = cmd.IsPage;
+        // Auto-set de IsPage: uma página com subpáginas é sempre um container
+        var hasChildren = await repo.GetSubtreeMaxLevelAsync(cmd.Id, ct) > 1;
+        article.IsPage = cmd.IsPage || hasChildren;
 
         var updated = await repo.UpdateAsync(article, ct);
         return Result<ArticleResponse>.Success(MapToResponse(updated));
@@ -494,6 +506,9 @@ public sealed class PublishKnowledgeArticleCommandHandler(IKnowledgeArticleRepos
 
         var updated = await repo.UpdateAsync(article, ct);
 
+        // Propaga o status para toda a subárvore (subpáginas herdam o status da raiz)
+        await repo.PropagateScopeAndStatusAsync(cmd.Id, updated.ClientId, updated.SiteId, updated.DepartmentId, updated.Status, ct);
+
         return Result<ArticleResponse>.Success(new ArticleResponse(
             Id: updated.Id, Title: updated.Title, Content: updated.Content, Category: updated.Category,
             Tags: [], CreatedBy: updated.CreatedBy, LastEditedBy: updated.LastEditedBy,
@@ -502,7 +517,8 @@ public sealed class PublishKnowledgeArticleCommandHandler(IKnowledgeArticleRepos
             ClientId: updated.ClientId, SiteId: updated.SiteId, ClientName: null, SiteName: null,
             DepartmentId: updated.DepartmentId, CurrentVersionNumber: updated.CurrentVersionNumber,
             PublishedAt: updated.PublishedAt, ChunkCount: 0, EmbeddingsReady: false,
-            CreatedAt: updated.CreatedAt, UpdatedAt: updated.UpdatedAt));
+            CreatedAt: updated.CreatedAt, UpdatedAt: updated.UpdatedAt,
+            ParentId: updated.ParentId, SortOrder: updated.SortOrder, IsPage: updated.IsPage));
     }
 }
 

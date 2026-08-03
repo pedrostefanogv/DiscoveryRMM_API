@@ -28,6 +28,25 @@ public interface IKnowledgeArticleRepository
     Task<int> GetDepthAsync(Guid? parentId, CancellationToken ct = default);
 
     /// <summary>
+    /// Retorna o nível máximo (1-based) da subárvore enraizada em <paramref name="id"/>.
+    /// Uma folha retorna 1; um nó com filhos retorna 1 + max(níveis dos filhos).
+    /// Usado para validar que mover uma página não exceda o limite de 3 níveis.
+    /// </summary>
+    Task<int> GetSubtreeMaxLevelAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Verifica se <paramref name="nodeId"/> é descendente de <paramref name="ancestorId"/>.
+    /// Usado para impedir ciclos na hierarquia (ex.: mover A para ser filho de seu próprio descendente).
+    /// </summary>
+    Task<bool> IsDescendantAsync(Guid ancestorId, Guid nodeId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Propaga escopo e status para toda a subárvore enraizada em <paramref name="rootId"/>.
+    /// Usado ao mover uma página para outra raiz ou ao publicar, mantendo a herança consistente.
+    /// </summary>
+    Task PropagateScopeAndStatusAsync(Guid rootId, Guid? clientId, Guid? siteId, Guid? departmentId, string status, CancellationToken ct = default);
+
+    /// <summary>
     /// Lista todos os artigos visíveis (ACL multi-escopo) para montagem da árvore de páginas.
     /// Retorna a lista plana; a montagem da árvore é feita no handler.
     /// </summary>

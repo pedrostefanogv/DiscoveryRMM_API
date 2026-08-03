@@ -63,10 +63,117 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         return depth;
     }
 
+    public async Task<int> GetSubtreeMaxLevelAsync(Guid id, CancellationToken ct = default)
+    {
+        // Carrega toda a subárvore de uma vez (evita N+1) e calcula o nível máximo.
+        var all = await db.KnowledgeArticles
+            .AsNoTracking()
+            .Where(a => a.DeletedAt == null)
+            .Select(a => new { a.Id, a.ParentId })
+            .ToListAsync(ct);
+
+        var childrenMap = new Dictionary<Guid, List<Guid>>();
+        foreach (var a in all)
+        {
+            if (a.ParentId.HasValue)
+            {
+                if (!childrenMap.TryGetValue(a.ParentId.Value, out var list))
+                {
+                    list = new List<Guid>();
+                    childrenMap[a.ParentId.Value] = list;
+                }
+                list.Add(a.Id);
+            }
+        }
+
+        int MaxLevel(Guid nodeId, int depth, HashSet<Guid> visited)
+        {
+            if (!visited.Add(nodeId)) return depth; // proteção contra ciclo
+            if (!childrenMap.TryGetValue(nodeId, out var children) || children.Count == 0)
+                return depth;
+            var maxChild = depth;
+            foreach (var child in children)
+                maxChild = Math.Max(maxChild, MaxLevel(child, depth + 1, visited));
+            return maxChild;
+        }
+
+        return MaxLevel(id, 1, new HashSet<Guid>());
+    }
+
+    public async Task<bool> IsDescendantAsync(Guid ancestorId, Guid nodeId, CancellationToken ct = default)
+    {
+        // Sobe a cadeia de pais de nodeId até a raiz; se encontrar ancestorId, é descendente.
+        var currentId = nodeId;
+        var guard = 0;
+        while (guard < 10)
+        {
+            var node = await db.KnowledgeArticles
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == currentId && a.DeletedAt == null, ct);
+            if (node is null) return false;
+            if (node.ParentId == ancestorId) return true;
+            if (!node.ParentId.HasValue) return false;
+            currentId = node.ParentId.Value;
+            guard++;
+        }
+        return false;
+    }
+
+    public async Task PropagateScopeAndStatusAsync(
+        Guid rootId, Guid? clientId, Guid? siteId, Guid? departmentId, string status, CancellationToken ct = default)
+    {
+        // Carrega toda a subárvore e atualiza escopo/status de cada nó.
+        var all = await db.KnowledgeArticles
+            .Where(a => a.DeletedAt == null)
+            .ToListAsync(ct);
+
+        var childrenMap = new Dictionary<Guid, List<KnowledgeArticle>>();
+        foreach (var a in all)
+        {
+            if (a.ParentId.HasValue)
+            {
+                if (!childrenMap.TryGetValue(a.ParentId.Value, out var list))
+                {
+                    list = new List<KnowledgeArticle>();
+                    childrenMap[a.ParentId.Value] = list;
+                }
+                list.Add(a);
+            }
+        }
+
+        var toUpdate = new List<KnowledgeArticle>();
+        void Collect(Guid nodeId, HashSet<Guid> visited)
+        {
+            if (!visited.Add(nodeId)) return;
+            if (!childrenMap.TryGetValue(nodeId, out var children)) return;
+            foreach (var child in children)
+            {
+                child.ClientId = clientId;
+                child.SiteId = siteId;
+                child.DepartmentId = departmentId;
+                child.Status = status;
+                child.UpdatedAt = DateTime.UtcNow;
+                toUpdate.Add(child);
+                Collect(child.Id, visited);
+            }
+        }
+
+        Collect(rootId, new HashSet<Guid>());
+
+        if (toUpdate.Count > 0)
+        {
+            db.KnowledgeArticles.UpdateRange(toUpdate);
+            await db.SaveChangesAsync(ct);
+        }
+    }
+
     public async Task<KnowledgeArticle> CreateAsync(KnowledgeArticle article, CancellationToken ct = default)
     {
         article.Id = IdGenerator.NewId();
-        article.Status = ArticleStatus.Draft.ToString();
+        // Não força Draft aqui: o handler já define o status (incluindo herança de subpáginas).
+        // Se o status vier vazio, usa Draft como fallback.
+        if (string.IsNullOrWhiteSpace(article.Status))
+            article.Status = ArticleStatus.Draft.ToString();
         article.CurrentVersionNumber = 0;
         article.CreatedAt = DateTime.UtcNow;
         article.UpdatedAt = DateTime.UtcNow;
