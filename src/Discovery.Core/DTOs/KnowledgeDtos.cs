@@ -13,14 +13,20 @@ public record CreateArticleRequest(
     string? CreatedBy,
     Guid? ClientId,
     Guid? SiteId,
-    Guid? DepartmentId = null);
+    Guid? DepartmentId = null,
+    Guid? ParentId = null,
+    int SortOrder = 0,
+    bool IsPage = false);
 
 public record UpdateArticleRequest(
     string Title,
     string Content,
     string? Category,
     List<string>? Tags,
-    string? LastEditedBy);
+    string? LastEditedBy,
+    Guid? ParentId = null,
+    int SortOrder = 0,
+    bool IsPage = false);
 
 public record PublishArticleRequest(
     string Status,        // "Published" ou "Internal"
@@ -62,7 +68,10 @@ public record ArticleListItem(
     DateTime? PublishedAt,
     int ChunkCount,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    Guid? ParentId = null,
+    int SortOrder = 0,
+    bool IsPage = false);
 
 /// <summary>Resposta paginada (cursor-based) para listagem de artigos.</summary>
 [Obsolete("Substituído por CursorPageDto<ArticleListItem>. Remover na v2.")]
@@ -96,7 +105,11 @@ public record ArticleResponse(
     int ChunkCount,
     bool EmbeddingsReady,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    Guid? ParentId = null,
+    int SortOrder = 0,
+    bool IsPage = false,
+    IReadOnlyList<ArticleResponse>? Children = null);
 
 public record ArticleVersionResponse(
     Guid Id,
@@ -110,6 +123,26 @@ public record ArticleVersionResponse(
     string? EditedBy,
     string? ChangeSummary,
     DateTime CreatedAt);
+
+/// <summary>
+/// Nó da árvore de páginas da base de conhecimento (estilo Notion).
+/// Representa uma página e suas subpáginas aninhadas (até 3 níveis).
+/// </summary>
+public record KnowledgeTreeNode(
+    Guid Id,
+    string Title,
+    string? Category,
+    string Status,
+    string Scope,
+    string ScopeOrigin,
+    Guid? ClientId,
+    Guid? SiteId,
+    Guid? DepartmentId,
+    Guid? ParentId,
+    int SortOrder,
+    bool IsPage,
+    int ChildCount,
+    IReadOnlyList<KnowledgeTreeNode> Children);
 
 public record KbSearchResult(
     Guid ArticleId,
@@ -165,4 +198,7 @@ public record AgentKnowledgeArticleDto(
     int CurrentVersionNumber,
     DateTime? PublishedAt,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    Guid? ParentId = null,
+    int SortOrder = 0,
+    bool IsPage = false);

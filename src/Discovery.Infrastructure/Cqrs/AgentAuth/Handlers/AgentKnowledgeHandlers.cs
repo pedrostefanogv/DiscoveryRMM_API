@@ -60,7 +60,10 @@ public sealed class GetKnowledgeArticlesHandler(
         CurrentVersionNumber: a.CurrentVersionNumber,
         PublishedAt: a.PublishedAt,
         CreatedAt: a.CreatedAt,
-        UpdatedAt: a.UpdatedAt);
+        UpdatedAt: a.UpdatedAt,
+        ParentId: a.ParentId,
+        SortOrder: a.SortOrder,
+        IsPage: a.IsPage);
 
     private static List<string> ParseTags(string? json)
     {
@@ -98,7 +101,10 @@ public sealed class GetKnowledgeArticleHandler(
             CurrentVersionNumber: article.CurrentVersionNumber,
             PublishedAt: article.PublishedAt,
             CreatedAt: article.CreatedAt,
-            UpdatedAt: article.UpdatedAt);
+            UpdatedAt: article.UpdatedAt,
+            ParentId: article.ParentId,
+            SortOrder: article.SortOrder,
+            IsPage: article.IsPage);
 
         return Result<object>.Success(dto);
     }

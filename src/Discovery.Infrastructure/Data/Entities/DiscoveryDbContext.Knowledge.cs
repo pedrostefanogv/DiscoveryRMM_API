@@ -18,11 +18,15 @@ public partial class DiscoveryDbContext
             entity.HasIndex(article => article.DeletedAt).HasDatabaseName("ix_ka_deleted_at");
             entity.HasIndex(article => article.Status).HasDatabaseName("ix_ka_status");
             entity.HasIndex(article => article.DepartmentId).HasDatabaseName("ix_ka_department_id");
+            entity.HasIndex(article => new { article.ParentId, article.SortOrder }).HasDatabaseName("ix_ka_parent_id");
 
             entity.Property(article => article.Id).HasColumnName("id").ValueGeneratedNever();
             entity.Property(article => article.ClientId).HasColumnName("client_id");
             entity.Property(article => article.SiteId).HasColumnName("site_id");
             entity.Property(article => article.DepartmentId).HasColumnName("department_id");
+            entity.Property(article => article.ParentId).HasColumnName("parent_id");
+            entity.Property(article => article.SortOrder).HasColumnName("sort_order");
+            entity.Property(article => article.IsPage).HasColumnName("is_page");
             entity.Property(article => article.Title).HasColumnName("title").HasMaxLength(500);
             entity.Property(article => article.Content).HasColumnName("content").HasColumnType("text");
             entity.Property(article => article.Category).HasColumnName("category").HasMaxLength(200);
@@ -41,6 +45,12 @@ public partial class DiscoveryDbContext
             entity.HasOne<Client>().WithMany().HasForeignKey(article => article.ClientId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Site>().WithMany().HasForeignKey(article => article.SiteId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Department>().WithMany().HasForeignKey(article => article.DepartmentId).OnDelete(DeleteBehavior.Restrict);
+
+            // Hierarquia de páginas: auto-referência (página pai → subpáginas)
+            entity.HasOne(article => article.Parent)
+                .WithMany(article => article.Children)
+                .HasForeignKey(article => article.ParentId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<KnowledgeArticleChunk>(entity =>

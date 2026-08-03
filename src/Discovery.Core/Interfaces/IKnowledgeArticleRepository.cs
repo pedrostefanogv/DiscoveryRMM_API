@@ -11,6 +11,38 @@ public interface IKnowledgeArticleRepository
     Task DeleteAsync(Guid id, CancellationToken ct = default); // soft delete
 
     /// <summary>
+    /// Obtém um artigo incluindo o pai (para resolver herança de escopo/status).
+    /// </summary>
+    Task<KnowledgeArticle?> GetByIdWithParentAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sobe a cadeia de pais até a raiz e retorna o artigo raiz.
+    /// Usado para herdar escopo/status em subpáginas.
+    /// </summary>
+    Task<KnowledgeArticle?> GetRootAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Calcula a profundidade de um nó pai (0 = raiz, 1 = filho da raiz, ...).
+    /// Usado para validar o limite de 3 níveis de profundidade.
+    /// </summary>
+    Task<int> GetDepthAsync(Guid? parentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Lista todos os artigos visíveis (ACL multi-escopo) para montagem da árvore de páginas.
+    /// Retorna a lista plana; a montagem da árvore é feita no handler.
+    /// </summary>
+    Task<List<KnowledgeArticle>> ListForTreeAsync(
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds,
+        string? status = null,
+        Guid? departmentId = null,
+        string? category = null,
+        Guid? filterClientId = null,
+        Guid? filterSiteId = null,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Lista artigos respeitando herança de escopo:
     /// site → client → global (todos os níveis superiores são incluídos)
     /// + filtro por status e departamento

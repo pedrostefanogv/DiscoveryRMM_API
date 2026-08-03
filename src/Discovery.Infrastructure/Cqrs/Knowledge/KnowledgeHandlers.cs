@@ -52,7 +52,8 @@ public sealed class SearchKnowledgeQueryHandler(
         DepartmentId: a.DepartmentId, CurrentVersionNumber: a.CurrentVersionNumber,
         PublishedAt: a.PublishedAt, ChunkCount: a.Chunks?.Count ?? 0,
         EmbeddingsReady: a.LastChunkedAt.HasValue,
-        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt);
+        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
+        ParentId: a.ParentId, SortOrder: a.SortOrder, IsPage: a.IsPage);
 
     private static List<string> ParseTags(string? json)
     {
@@ -107,7 +108,8 @@ public sealed class ListKnowledgeArticlesByUserScopeQueryHandler(
             CurrentVersionNumber: a.CurrentVersionNumber,
             PublishedAt: a.PublishedAt,
             ChunkCount: a.Chunks?.Count ?? 0,
-            CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt
+            CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
+            ParentId: a.ParentId, SortOrder: a.SortOrder, IsPage: a.IsPage
         )).ToList();
 
         return Result<CursorPageDto<ArticleListItem>>.Success(new CursorPageDto<ArticleListItem>(
@@ -163,13 +165,113 @@ public sealed class GetKnowledgeArticleByIdQueryHandler(IKnowledgeArticleReposit
         DepartmentId: a.DepartmentId, CurrentVersionNumber: a.CurrentVersionNumber,
         PublishedAt: a.PublishedAt, ChunkCount: a.Chunks?.Count ?? 0,
         EmbeddingsReady: a.LastChunkedAt.HasValue,
-        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt);
+        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
+        ParentId: a.ParentId, SortOrder: a.SortOrder, IsPage: a.IsPage);
 
     private static List<string> ParseTags(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return [];
         try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
         catch { return []; }
+    }
+
+    private static string ResolveScope(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "Global",
+            (not null, null) => "Client",
+            _ => "Site"
+        };
+
+    private static string ResolveScopeOrigin(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "global",
+            (not null, null) => "client",
+            _ => "site"
+        };
+}
+
+public sealed class GetKnowledgeTreeQueryHandler(
+    IKnowledgeArticleRepository repo,
+    IScopeContext scopeContext
+) : IRequestHandler<GetKnowledgeTreeQuery, Result<IReadOnlyList<KnowledgeTreeNode>>>
+{
+    public async Task<Result<IReadOnlyList<KnowledgeTreeNode>>> Handle(GetKnowledgeTreeQuery q, CancellationToken ct)
+    {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.KnowledgeBase, ActionType.View);
+        var hasGlobal = scope.HasGlobalAccess;
+        var allowedClientIds = scope.AllowedClientIds.ToHashSet();
+        var allowedSiteIds = scope.AllowedSiteIds.ToHashSet();
+
+        var articles = await repo.ListForTreeAsync(
+            hasGlobal, allowedClientIds, allowedSiteIds,
+            q.Status, q.DepartmentId, q.Category,
+            q.ClientId, q.SiteId, ct);
+
+        var roots = BuildTree(articles);
+        return Result<IReadOnlyList<KnowledgeTreeNode>>.Success(roots);
+    }
+
+    /// <summary>
+    /// Monta a árvore de páginas a partir da lista plana.
+    /// Ordena irmãos por SortOrder (ascendente) e depois por título.
+    /// </summary>
+    private static IReadOnlyList<KnowledgeTreeNode> BuildTree(List<KnowledgeArticle> articles)
+    {
+        // Usa Guid.Empty como chave sentinela para páginas raiz (ParentId == null)
+        var childrenMap = new Dictionary<Guid, List<KnowledgeArticle>>();
+        foreach (var a in articles)
+        {
+            var key = a.ParentId ?? Guid.Empty;
+            if (!childrenMap.TryGetValue(key, out var list))
+            {
+                list = new List<KnowledgeArticle>();
+                childrenMap[key] = list;
+            }
+            list.Add(a);
+        }
+
+        // Ordena cada lista de irmãos
+        foreach (var list in childrenMap.Values)
+        {
+            list.Sort((x, y) =>
+            {
+                var c = x.SortOrder.CompareTo(y.SortOrder);
+                return c != 0 ? c : string.Compare(x.Title, y.Title, StringComparison.OrdinalIgnoreCase);
+            });
+        }
+
+        IReadOnlyList<KnowledgeTreeNode> Build(Guid? parentId)
+        {
+            var key = parentId ?? Guid.Empty;
+            if (!childrenMap.TryGetValue(key, out var siblings))
+                return [];
+
+            var nodes = new List<KnowledgeTreeNode>(siblings.Count);
+            foreach (var a in siblings)
+            {
+                var children = Build(a.Id);
+                nodes.Add(new KnowledgeTreeNode(
+                    Id: a.Id,
+                    Title: a.Title,
+                    Category: a.Category,
+                    Status: a.Status,
+                    Scope: ResolveScope(a.ClientId, a.SiteId),
+                    ScopeOrigin: ResolveScopeOrigin(a.ClientId, a.SiteId),
+                    ClientId: a.ClientId,
+                    SiteId: a.SiteId,
+                    DepartmentId: a.DepartmentId,
+                    ParentId: a.ParentId,
+                    SortOrder: a.SortOrder,
+                    IsPage: a.IsPage,
+                    ChildCount: children.Count,
+                    Children: children));
+            }
+            return nodes;
+        }
+
+        return Build(null);
     }
 
     private static string ResolveScope(Guid? clientId, Guid? siteId)
@@ -196,6 +298,34 @@ public sealed class CreateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
 {
     public async Task<Result<ArticleResponse>> Handle(CreateKnowledgeArticleCommand cmd, CancellationToken ct)
     {
+        // Validação de hierarquia: se houver página pai, valida profundidade e herda escopo/status
+        Guid? clientId = cmd.ClientId;
+        Guid? siteId = cmd.SiteId;
+        Guid? departmentId = cmd.DepartmentId;
+        string status = ArticleStatus.Draft.ToString();
+
+        if (cmd.ParentId.HasValue)
+        {
+            var parent = await repo.GetByIdWithParentAsync(cmd.ParentId.Value, ct);
+            if (parent is null)
+                return Result<ArticleResponse>.Failure(Error.Validation("ParentId", "Página pai não encontrada."));
+
+            // Profundidade máxima: 3 níveis (raiz = nível 1, ... nível 3)
+            var parentDepth = await repo.GetDepthAsync(parent.Id, ct);
+            if (parentDepth >= 3)
+                return Result<ArticleResponse>.Failure(Error.Validation("ParentId", "Profundidade máxima de 3 níveis de páginas atingida."));
+
+            // Subpágina herda escopo e status da raiz
+            var root = await repo.GetRootAsync(parent.Id, ct);
+            if (root is not null)
+            {
+                clientId = root.ClientId;
+                siteId = root.SiteId;
+                departmentId = root.DepartmentId;
+                status = root.Status;
+            }
+        }
+
         var article = new KnowledgeArticle
         {
             Title = cmd.Title,
@@ -204,10 +334,13 @@ public sealed class CreateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
             TagsJson = cmd.Tags is { Count: > 0 } ? JsonSerializer.Serialize(cmd.Tags) : null,
             CreatedBy = cmd.CreatedBy,
             LastEditedBy = cmd.CreatedBy,
-            ClientId = cmd.ClientId,
-            SiteId = cmd.SiteId,
-            DepartmentId = cmd.DepartmentId,
-            Status = ArticleStatus.Draft.ToString()
+            ClientId = clientId,
+            SiteId = siteId,
+            DepartmentId = departmentId,
+            ParentId = cmd.ParentId,
+            SortOrder = cmd.SortOrder,
+            IsPage = cmd.IsPage,
+            Status = status
         };
 
         var created = await repo.CreateAsync(article, ct);
@@ -223,7 +356,8 @@ public sealed class CreateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
         DepartmentId: a.DepartmentId, CurrentVersionNumber: a.CurrentVersionNumber,
         PublishedAt: a.PublishedAt, ChunkCount: a.Chunks?.Count ?? 0,
         EmbeddingsReady: a.LastChunkedAt.HasValue,
-        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt);
+        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
+        ParentId: a.ParentId, SortOrder: a.SortOrder, IsPage: a.IsPage);
 
     private static List<string> ParseTags(string? json)
     {
@@ -254,8 +388,42 @@ public sealed class UpdateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
 {
     public async Task<Result<ArticleResponse>> Handle(UpdateKnowledgeArticleCommand cmd, CancellationToken ct)
     {
-        var article = await repo.GetByIdAsync(cmd.Id, ct);
+        var article = await repo.GetByIdWithParentAsync(cmd.Id, ct);
         if (article is null) return Result<ArticleResponse>.Failure(Error.NotFound($"Article {cmd.Id} not found"));
+
+        // Impede ciclo: não pode ser pai de si mesmo
+        if (cmd.ParentId.HasValue && cmd.ParentId.Value == cmd.Id)
+            return Result<ArticleResponse>.Failure(Error.Validation("ParentId", "Uma página não pode ser pai de si mesma."));
+
+        // Se mudou de pai, valida profundidade e herda escopo/status da nova raiz
+        if (cmd.ParentId != article.ParentId)
+        {
+            if (cmd.ParentId.HasValue)
+            {
+                var parent = await repo.GetByIdWithParentAsync(cmd.ParentId.Value, ct);
+                if (parent is null)
+                    return Result<ArticleResponse>.Failure(Error.Validation("ParentId", "Página pai não encontrada."));
+
+                var parentDepth = await repo.GetDepthAsync(parent.Id, ct);
+                if (parentDepth >= 3)
+                    return Result<ArticleResponse>.Failure(Error.Validation("ParentId", "Profundidade máxima de 3 níveis de páginas atingida."));
+
+                // Herda escopo e status da nova raiz
+                var root = await repo.GetRootAsync(parent.Id, ct);
+                if (root is not null)
+                {
+                    article.ClientId = root.ClientId;
+                    article.SiteId = root.SiteId;
+                    article.DepartmentId = root.DepartmentId;
+                    article.Status = root.Status;
+                }
+            }
+            else
+            {
+                // Movendo para raiz: mantém escopo atual (não herda de ninguém)
+                // Status permanece o atual.
+            }
+        }
 
         article.Title = cmd.Title;
         article.Content = cmd.Content;
@@ -263,6 +431,9 @@ public sealed class UpdateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
         article.TagsJson = cmd.Tags is { Count: > 0 } ? JsonSerializer.Serialize(cmd.Tags) : null;
         article.LastEditedBy = cmd.LastEditedBy;
         article.LastEditedAt = DateTime.UtcNow;
+        article.ParentId = cmd.ParentId;
+        article.SortOrder = cmd.SortOrder;
+        article.IsPage = cmd.IsPage;
 
         var updated = await repo.UpdateAsync(article, ct);
         return Result<ArticleResponse>.Success(MapToResponse(updated));
@@ -277,7 +448,8 @@ public sealed class UpdateKnowledgeArticleCommandHandler(IKnowledgeArticleReposi
         DepartmentId: a.DepartmentId, CurrentVersionNumber: a.CurrentVersionNumber,
         PublishedAt: a.PublishedAt, ChunkCount: a.Chunks?.Count ?? 0,
         EmbeddingsReady: a.LastChunkedAt.HasValue,
-        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt);
+        CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
+        ParentId: a.ParentId, SortOrder: a.SortOrder, IsPage: a.IsPage);
 
     private static List<string> ParseTags(string? json)
     {

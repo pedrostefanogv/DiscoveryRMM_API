@@ -16,6 +16,53 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             .Include(a => a.Chunks)
             .FirstOrDefaultAsync(a => a.Id == id && a.DeletedAt == null, ct);
 
+    public async Task<KnowledgeArticle?> GetByIdWithParentAsync(Guid id, CancellationToken ct = default)
+        => await db.KnowledgeArticles
+            .Include(a => a.Parent)
+            .FirstOrDefaultAsync(a => a.Id == id && a.DeletedAt == null, ct);
+
+    public async Task<KnowledgeArticle?> GetRootAsync(Guid id, CancellationToken ct = default)
+    {
+        var current = await db.KnowledgeArticles
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Id == id && a.DeletedAt == null, ct);
+        if (current is null) return null;
+
+        // Sobe a cadeia de pais até encontrar a raiz (ParentId == null)
+        var guard = 0;
+        while (current.ParentId.HasValue && guard < 10)
+        {
+            var parent = await db.KnowledgeArticles
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == current.ParentId.Value && a.DeletedAt == null, ct);
+            if (parent is null) break;
+            current = parent;
+            guard++;
+        }
+        return current;
+    }
+
+    public async Task<int> GetDepthAsync(Guid? parentId, CancellationToken ct = default)
+    {
+        if (!parentId.HasValue) return 0;
+
+        var depth = 0;
+        var currentId = parentId.Value;
+        var guard = 0;
+        while (guard < 10)
+        {
+            var node = await db.KnowledgeArticles
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == currentId && a.DeletedAt == null, ct);
+            if (node is null) break;
+            depth++;
+            if (!node.ParentId.HasValue) break;
+            currentId = node.ParentId.Value;
+            guard++;
+        }
+        return depth;
+    }
+
     public async Task<KnowledgeArticle> CreateAsync(KnowledgeArticle article, CancellationToken ct = default)
     {
         article.Id = IdGenerator.NewId();
@@ -445,4 +492,82 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         return await query.OrderBy(a => a.Title).Take(20).ToListAsync(ct);
     }
 
+    /// <summary>
+    /// Lista todos os artigos visíveis (ACL multi-escopo) para montagem da árvore de páginas.
+    /// Retorna a lista plana ordenada por parent_id + sort_order; a montagem da árvore
+    /// é feita no handler (evita N+1 e recursão de navigation properties).
+    /// </summary>
+    public async Task<List<KnowledgeArticle>> ListForTreeAsync(
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds,
+        string? status = null,
+        Guid? departmentId = null,
+        string? category = null,
+        Guid? filterClientId = null,
+        Guid? filterSiteId = null,
+        CancellationToken ct = default)
+    {
+        var query = db.KnowledgeArticles
+            .AsNoTracking()
+            .Where(a => a.DeletedAt == null);
+
+        // Filtro de status
+        if (!string.IsNullOrEmpty(status))
+        {
+            var statusFilter = status;
+            if (statusFilter == "visible")
+            {
+                query = query.Where(a =>
+                    a.Status == ArticleStatus.Published.ToString() ||
+                    a.Status == ArticleStatus.Internal.ToString());
+            }
+            else
+            {
+                query = query.Where(a => a.Status == statusFilter);
+            }
+        }
+
+        // Filtro de escopo: se o usuário selecionou um cliente/site, refina;
+        // caso contrário, aplica ACL multi-escopo.
+        if (filterClientId.HasValue && filterSiteId.HasValue)
+        {
+            query = query.Where(a =>
+                (a.ClientId == null && a.SiteId == null) ||
+                (a.ClientId == filterClientId.Value && a.SiteId == null) ||
+                (a.SiteId == filterSiteId.Value));
+        }
+        else if (filterClientId.HasValue)
+        {
+            query = query.Where(a =>
+                (a.ClientId == null && a.SiteId == null) ||
+                (a.ClientId == filterClientId.Value && a.SiteId == null));
+        }
+        else
+        {
+            query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
+        }
+
+        // Filtro de departamento (para artigos Internal)
+        if (departmentId.HasValue)
+        {
+            query = query.Where(a =>
+                a.Status != ArticleStatus.Internal.ToString() ||
+                a.DepartmentId == departmentId.Value);
+        }
+        else
+        {
+            query = query.Where(a => a.Status != ArticleStatus.Internal.ToString());
+        }
+
+        if (!string.IsNullOrWhiteSpace(category))
+            query = query.Where(a => a.Category != null && a.Category.ToLower() == category.ToLower());
+
+        return await query
+            .OrderBy(a => a.ParentId)
+            .ThenBy(a => a.SortOrder)
+            .ThenBy(a => a.Title)
+            .ToListAsync(ct);
     }
+
+}

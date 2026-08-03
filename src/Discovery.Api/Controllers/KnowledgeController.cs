@@ -36,6 +36,19 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
         return result.ToActionResult();
     }
 
+    [HttpGet("tree")]
+    public async Task<IActionResult> GetTree(
+        [FromQuery] string? status = null,
+        [FromQuery] Guid? departmentId = null,
+        [FromQuery] string? category = null,
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null)
+    {
+        var result = await mediator.Send(new GetKnowledgeTreeQuery(
+            status, departmentId, category, clientId, siteId));
+        return result.ToActionResult();
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
@@ -48,7 +61,8 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     {
         var result = await mediator.Send(new CreateKnowledgeArticleCommand(
             request.Title, request.Content, request.Category, request.Tags,
-            request.CreatedBy, request.ClientId, request.SiteId, request.DepartmentId), ct);
+            request.CreatedBy, request.ClientId, request.SiteId, request.DepartmentId,
+            request.ParentId, request.SortOrder, request.IsPage), ct);
         return result.Match<IActionResult>(
             success: article => CreatedAtAction(nameof(GetById), new { id = article.Id, version = "v1" }, article),
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
@@ -58,7 +72,8 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateArticleRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new UpdateKnowledgeArticleCommand(
-            id, request.Title, request.Content, request.Category, request.Tags, request.LastEditedBy), ct);
+            id, request.Title, request.Content, request.Category, request.Tags, request.LastEditedBy,
+            request.ParentId, request.SortOrder, request.IsPage), ct);
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
