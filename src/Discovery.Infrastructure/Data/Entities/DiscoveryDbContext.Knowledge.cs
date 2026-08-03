@@ -18,15 +18,11 @@ public partial class DiscoveryDbContext
             entity.HasIndex(article => article.DeletedAt).HasDatabaseName("ix_ka_deleted_at");
             entity.HasIndex(article => article.Status).HasDatabaseName("ix_ka_status");
             entity.HasIndex(article => article.DepartmentId).HasDatabaseName("ix_ka_department_id");
-            entity.HasIndex(article => new { article.ParentId, article.SortOrder }).HasDatabaseName("ix_ka_parent_id");
 
             entity.Property(article => article.Id).HasColumnName("id").ValueGeneratedNever();
             entity.Property(article => article.ClientId).HasColumnName("client_id");
             entity.Property(article => article.SiteId).HasColumnName("site_id");
             entity.Property(article => article.DepartmentId).HasColumnName("department_id");
-            entity.Property(article => article.ParentId).HasColumnName("parent_id");
-            entity.Property(article => article.SortOrder).HasColumnName("sort_order");
-            entity.Property(article => article.IsPage).HasColumnName("is_page");
             entity.Property(article => article.Title).HasColumnName("title").HasMaxLength(500);
             entity.Property(article => article.Content).HasColumnName("content").HasColumnType("text");
             entity.Property(article => article.Category).HasColumnName("category").HasMaxLength(200);
@@ -45,11 +41,33 @@ public partial class DiscoveryDbContext
             entity.HasOne<Client>().WithMany().HasForeignKey(article => article.ClientId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Site>().WithMany().HasForeignKey(article => article.SiteId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Department>().WithMany().HasForeignKey(article => article.DepartmentId).OnDelete(DeleteBehavior.Restrict);
+        });
 
-            // Hierarquia de páginas: auto-referência (página pai → subpáginas)
-            entity.HasOne(article => article.Parent)
-                .WithMany(article => article.Children)
-                .HasForeignKey(article => article.ParentId)
+        modelBuilder.Entity<KnowledgeArticlePage>(entity =>
+        {
+            entity.ToTable("knowledge_article_pages");
+            entity.HasKey(page => page.Id);
+
+            entity.HasIndex(page => new { page.ArticleId, page.ParentPageId, page.SortOrder }).HasDatabaseName("ix_kap_article_parent");
+
+            entity.Property(page => page.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(page => page.ArticleId).HasColumnName("article_id");
+            entity.Property(page => page.ParentPageId).HasColumnName("parent_page_id");
+            entity.Property(page => page.Title).HasColumnName("title").HasMaxLength(500);
+            entity.Property(page => page.Content).HasColumnName("content").HasColumnType("text");
+            entity.Property(page => page.SortOrder).HasColumnName("sort_order");
+            entity.Property(page => page.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(page => page.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+
+            entity.HasOne(page => page.Article)
+                .WithMany()
+                .HasForeignKey(page => page.ArticleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Auto-referência: sub-página pai → sub-páginas filhas
+            entity.HasOne(page => page.ParentPage)
+                .WithMany(page => page.Children)
+                .HasForeignKey(page => page.ParentPageId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

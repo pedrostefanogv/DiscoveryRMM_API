@@ -13,20 +13,14 @@ public record CreateArticleRequest(
     string? CreatedBy,
     Guid? ClientId,
     Guid? SiteId,
-    Guid? DepartmentId = null,
-    Guid? ParentId = null,
-    int SortOrder = 0,
-    bool IsPage = false);
+    Guid? DepartmentId = null);
 
 public record UpdateArticleRequest(
     string Title,
     string Content,
     string? Category,
     List<string>? Tags,
-    string? LastEditedBy,
-    Guid? ParentId = null,
-    int SortOrder = 0,
-    bool IsPage = false);
+    string? LastEditedBy);
 
 public record PublishArticleRequest(
     string Status,        // "Published" ou "Internal"
@@ -68,10 +62,7 @@ public record ArticleListItem(
     DateTime? PublishedAt,
     int ChunkCount,
     DateTime CreatedAt,
-    DateTime UpdatedAt,
-    Guid? ParentId = null,
-    int SortOrder = 0,
-    bool IsPage = false);
+    DateTime UpdatedAt);
 
 /// <summary>Resposta paginada (cursor-based) para listagem de artigos.</summary>
 [Obsolete("Substituído por CursorPageDto<ArticleListItem>. Remover na v2.")]
@@ -105,11 +96,7 @@ public record ArticleResponse(
     int ChunkCount,
     bool EmbeddingsReady,
     DateTime CreatedAt,
-    DateTime UpdatedAt,
-    Guid? ParentId = null,
-    int SortOrder = 0,
-    bool IsPage = false,
-    IReadOnlyList<ArticleResponse>? Children = null);
+    DateTime UpdatedAt);
 
 public record ArticleVersionResponse(
     Guid Id,
@@ -123,6 +110,48 @@ public record ArticleVersionResponse(
     string? EditedBy,
     string? ChangeSummary,
     DateTime CreatedAt);
+
+// ─── Sub-páginas internas do artigo (estilo Notion) ────────────────
+
+/// <summary>Request para criar uma sub-página interna em um artigo.</summary>
+public record CreateArticlePageRequest(
+    string Title,
+    string Content,
+    Guid? ParentPageId = null,
+    int SortOrder = 0);
+
+/// <summary>Request para atualizar uma sub-página interna.</summary>
+public record UpdateArticlePageRequest(
+    string Title,
+    string Content,
+    Guid? ParentPageId = null,
+    int SortOrder = 0);
+
+/// <summary>Sub-página interna de um artigo (nó da árvore).</summary>
+public record ArticlePageResponse(
+    Guid Id,
+    Guid ArticleId,
+    Guid? ParentPageId,
+    string Title,
+    string Content,
+    int SortOrder,
+    int ChildCount,
+    IReadOnlyList<ArticlePageResponse> Children,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+/// <summary>
+/// Nó da árvore de sub-páginas internas de um artigo (estilo Notion).
+/// Representa uma parte/página DENTRO do artigo e suas sub-páginas aninhadas (até 3 níveis).
+/// </summary>
+public record ArticlePageTreeNode(
+    Guid Id,
+    Guid ArticleId,
+    Guid? ParentPageId,
+    string Title,
+    int SortOrder,
+    int ChildCount,
+    IReadOnlyList<ArticlePageTreeNode> Children);
 
 /// <summary>
 /// Nó da árvore de páginas da base de conhecimento (estilo Notion).
@@ -198,7 +227,4 @@ public record AgentKnowledgeArticleDto(
     int CurrentVersionNumber,
     DateTime? PublishedAt,
     DateTime CreatedAt,
-    DateTime UpdatedAt,
-    Guid? ParentId = null,
-    int SortOrder = 0,
-    bool IsPage = false);
+    DateTime UpdatedAt);

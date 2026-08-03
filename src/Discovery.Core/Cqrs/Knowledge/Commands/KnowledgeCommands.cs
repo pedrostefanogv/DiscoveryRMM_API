@@ -11,10 +11,7 @@ public sealed record CreateKnowledgeArticleCommand(
     string? CreatedBy,
     Guid? ClientId,
     Guid? SiteId,
-    Guid? DepartmentId = null,
-    Guid? ParentId = null,
-    int SortOrder = 0,
-    bool IsPage = false
+    Guid? DepartmentId = null
 ) : ICommand<Result<ArticleResponse>>;
 
 public sealed record UpdateKnowledgeArticleCommand(
@@ -23,10 +20,7 @@ public sealed record UpdateKnowledgeArticleCommand(
     string Content,
     string? Category,
     List<string>? Tags,
-    string? LastEditedBy,
-    Guid? ParentId = null,
-    int SortOrder = 0,
-    bool IsPage = false
+    string? LastEditedBy
 ) : ICommand<Result<ArticleResponse>>;
 
 public sealed record PublishKnowledgeArticleCommand(

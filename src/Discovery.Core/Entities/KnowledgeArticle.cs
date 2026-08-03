@@ -27,18 +27,6 @@ public class KnowledgeArticle
     public string? Category { get; set; }               // string livre
     public string? TagsJson { get; set; }               // JSONB: ["tag1","tag2"]
 
-    // ── Hierarquia de páginas (estilo Notion) ─────────────────────
-    // parent_id null = página raiz. Subpáginas herdam escopo e status da raiz.
-    public Guid? ParentId { get; set; }
-    public KnowledgeArticle? Parent { get; set; }
-    public ICollection<KnowledgeArticle> Children { get; set; } = new List<KnowledgeArticle>();
-
-    // Ordenação entre páginas irmãs (ascendente)
-    public int SortOrder { get; set; }
-
-    // true quando a página é um container (possui subpáginas)
-    public bool IsPage { get; set; }
-
     // Status tri-state: Draft, Published, Internal
     public string Status { get; set; } = ArticleStatus.Draft.ToString();
 
