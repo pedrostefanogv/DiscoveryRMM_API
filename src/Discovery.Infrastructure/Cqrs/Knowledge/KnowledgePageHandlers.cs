@@ -8,11 +8,18 @@ using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Knowledge;
 
-public sealed class GetArticlePagesQueryHandler(IKnowledgeArticlePageRepository repo)
+public sealed class GetArticlePagesQueryHandler(
+    IKnowledgeArticlePageRepository repo,
+    IKnowledgeArticleRepository articleRepo)
     : IRequestHandler<GetArticlePagesQuery, Result<IReadOnlyList<ArticlePageTreeNode>>>
 {
     public async Task<Result<IReadOnlyList<ArticlePageTreeNode>>> Handle(GetArticlePagesQuery q, CancellationToken ct)
     {
+        // Valida que o artigo existe
+        var article = await articleRepo.GetByIdAsync(q.ArticleId, ct);
+        if (article is null)
+            return Result<IReadOnlyList<ArticlePageTreeNode>>.Failure(Error.NotFound($"Article {q.ArticleId} not found"));
+
         var pages = await repo.ListByArticleAsync(q.ArticleId, ct);
         var roots = BuildTree(pages);
         return Result<IReadOnlyList<ArticlePageTreeNode>>.Success(roots);
@@ -57,6 +64,7 @@ public sealed class GetArticlePagesQueryHandler(IKnowledgeArticlePageRepository 
                     ArticleId: p.ArticleId,
                     ParentPageId: p.ParentPageId,
                     Title: p.Title,
+                    Content: p.Content,
                     SortOrder: p.SortOrder,
                     ChildCount: children.Count,
                     Children: children));
@@ -91,11 +99,21 @@ public sealed class GetArticlePageQueryHandler(IKnowledgeArticlePageRepository r
         UpdatedAt: p.UpdatedAt);
 }
 
-public sealed class CreateArticlePageCommandHandler(IKnowledgeArticlePageRepository repo)
+public sealed class CreateArticlePageCommandHandler(
+    IKnowledgeArticlePageRepository repo,
+    IKnowledgeArticleRepository articleRepo)
     : IRequestHandler<CreateArticlePageCommand, Result<ArticlePageResponse>>
 {
     public async Task<Result<ArticlePageResponse>> Handle(CreateArticlePageCommand cmd, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(cmd.Title))
+            return Result<ArticlePageResponse>.Failure(Error.Validation("Title", "O título da página é obrigatório."));
+
+        // Valida que o artigo existe
+        var article = await articleRepo.GetByIdAsync(cmd.ArticleId, ct);
+        if (article is null)
+            return Result<ArticlePageResponse>.Failure(Error.NotFound($"Article {cmd.ArticleId} not found"));
+
         if (cmd.ParentPageId.HasValue)
         {
             var parent = await repo.GetByIdAsync(cmd.ArticleId, cmd.ParentPageId.Value, ct);
@@ -139,6 +157,9 @@ public sealed class UpdateArticlePageCommandHandler(IKnowledgeArticlePageReposit
 {
     public async Task<Result<ArticlePageResponse>> Handle(UpdateArticlePageCommand cmd, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(cmd.Title))
+            return Result<ArticlePageResponse>.Failure(Error.Validation("Title", "O título da página é obrigatório."));
+
         var page = await repo.GetByIdWithParentAsync(cmd.ArticleId, cmd.PageId, ct);
         if (page is null) return Result<ArticlePageResponse>.Failure(Error.NotFound($"Page {cmd.PageId} not found in article {cmd.ArticleId}"));
 

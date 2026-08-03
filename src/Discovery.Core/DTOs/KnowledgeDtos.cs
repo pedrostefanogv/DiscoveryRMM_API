@@ -149,29 +149,10 @@ public record ArticlePageTreeNode(
     Guid ArticleId,
     Guid? ParentPageId,
     string Title,
+    string Content,
     int SortOrder,
     int ChildCount,
     IReadOnlyList<ArticlePageTreeNode> Children);
-
-/// <summary>
-/// Nó da árvore de páginas da base de conhecimento (estilo Notion).
-/// Representa uma página e suas subpáginas aninhadas (até 3 níveis).
-/// </summary>
-public record KnowledgeTreeNode(
-    Guid Id,
-    string Title,
-    string? Category,
-    string Status,
-    string Scope,
-    string ScopeOrigin,
-    Guid? ClientId,
-    Guid? SiteId,
-    Guid? DepartmentId,
-    Guid? ParentId,
-    int SortOrder,
-    bool IsPage,
-    int ChildCount,
-    IReadOnlyList<KnowledgeTreeNode> Children);
 
 public record KbSearchResult(
     Guid ArticleId,
