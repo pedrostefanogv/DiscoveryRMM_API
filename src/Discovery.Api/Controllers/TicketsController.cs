@@ -248,7 +248,11 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomField(Guid id, Guid definitionId, [FromBody] JsonElement body)
     {
-        var valueJson = body.TryGetProperty("value", out var prop) ? prop.GetRawText() : body.GetRawText();
+        // Aceita tanto o formato { "value": ... } quanto o valor cru (string, número, etc.)
+        // enviado diretamente como corpo JSON. TryGetProperty só é seguro em objetos.
+        var valueJson = body.ValueKind == JsonValueKind.Object && body.TryGetProperty("value", out var prop)
+            ? prop.GetRawText()
+            : body.GetRawText();
         var result = await customFieldService.UpsertValueAsync(new UpsertCustomFieldValueInput(definitionId, CustomFieldScopeType.Ticket, id, valueJson, Username), HttpContext.RequestAborted);
         return Ok(result);
     }
