@@ -254,6 +254,12 @@ public class NatsCredentialsService : INatsCredentialsService
 #pragma warning disable CS0618 // P2pSiteDiscoverySubject é obsoleto mas necessário para compatibilidade com agents antigos
         subscribeSubjects.Add(NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId));
 #pragma warning restore CS0618
+        // Remote-session subjects use the canonical UUID format without hyphens.
+        // O agent precisa SUBSCREVER os subjects de input/control/term.in/files.req/
+        // proxy.req/signal para receber interação do viewer (mouse, teclado, terminal,
+        // arquivos, proxy). Sem isso, o NATS bloqueia a entrega (Permissions Violation).
+        subscribeSubjects.Add(
+            $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>");
         subscribeSubjects.Add("_INBOX.>");
 
         return (publishSubjects, subscribeSubjects);

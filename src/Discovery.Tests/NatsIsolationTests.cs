@@ -75,8 +75,8 @@ public class NatsIsolationTests
 
         Assert.That(pub, Has.Count.EqualTo(5),
             "Agente deve publicar em 5 subjects: 4 telemetrias canônicas + lookup de stream JetStream.");
-        Assert.That(sub, Has.Count.EqualTo(8),
-            "Agente deve assinar em 8 subjects: 6 canônicos + p2p.events + inbox para respostas de request/reply.");
+        Assert.That(sub, Has.Count.EqualTo(9),
+            "Agente deve assinar em 9 subjects: 6 canônicos + p2p.events + remote.session + inbox para respostas de request/reply.");
     }
 
     [Test]
@@ -112,6 +112,7 @@ public class NatsIsolationTests
                 "tenant.global.pong",
                 expectedPrefix + "sync.ping",
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
+                $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "_INBOX.>",
             }),
             "Subscribe subjects devem conter somente os message types canônicos.");
@@ -443,6 +444,7 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.ServerPongSubject(),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
+                $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "_INBOX.>",
             ]);
     }
