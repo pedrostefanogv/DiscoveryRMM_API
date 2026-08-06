@@ -1,8 +1,7 @@
-using System.Security.Cryptography;
-using System.Text;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentRegistration;
 using Discovery.Core.Entities;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.Extensions.Logging;
@@ -20,9 +19,13 @@ public sealed class RegisterAgentFromDeployTokenCommandHandler(
     IAgentAuthService agentAuthService,
     ISiteRepository siteRepo,
     IConfigurationService configService,
+    IRedisService redis,
     ILogger<RegisterAgentFromDeployTokenCommandHandler> logger
 ) : IRequestHandler<RegisterAgentFromDeployTokenCommand, Result<AgentRegistrationResult>>
 {
+    private const string RecoveryLockKeyPrefix = "device-recovery:lock:";
+    private static readonly TimeSpan RecoveryLockTtl = TimeSpan.FromSeconds(30);
+
     public async Task<Result<AgentRegistrationResult>> Handle(
         RegisterAgentFromDeployTokenCommand cmd, CancellationToken ct)
     {
@@ -45,60 +48,135 @@ public sealed class RegisterAgentFromDeployTokenCommandHandler(
             return Result<AgentRegistrationResult>.Failure(
                 [Error.NotFound("Site não encontrado ou não pertence ao cliente do token.")]);
 
-        // 3. Tentar recuperar agent existente pelo fingerprint (Recuperação de Dispositivos)
-        var fingerprintHash = ComputeFingerprintHash(cmd.TpmEkHash, cmd.SmbiosUuid);
-        var recoveredAgent = await TryRecoverAsync(cmd, clientId, siteId, fingerprintHash, ct);
+        // 3. Fingerprint de hardware (Recuperação de Dispositivos)
+        var fingerprintHash = DeviceFingerprint.ComputeHash(cmd.TpmEkHash, cmd.SmbiosUuid);
 
-        Agent agent;
-        bool recovered;
-        if (recoveredAgent is not null)
+        // Lock distribuído por fingerprint: serializa registros simultâneos com o
+        // mesmo fingerprint (ex.: deploy multi-uso em escala/laboratório), evitando
+        // duplicação de agentes. Sem fingerprint, não há risco de duplicação por
+        // fingerprint, então o lock é desnecessário.
+        var lockKey = fingerprintHash is null ? null : RecoveryLockKeyPrefix + fingerprintHash;
+        var lockAcquired = lockKey is null || await TryAcquireLockAsync(lockKey, ct);
+
+        // Se outro registro com o mesmo fingerprint está em andamento, aguarda com
+        // backoff curto e tenta re-adquirir o lock. Isso reduz a janela de duplicação
+        // quando o deploy token é multi-uso e vários agents idênticos registram em paralelo.
+        if (!lockAcquired)
         {
-            agent = recoveredAgent;
-            recovered = true;
-            logger.LogInformation(
-                "Agent recuperado via fingerprint: AgentId={AgentId}, Hostname={Hostname}, ClientId={ClientId}",
-                agent.Id, cmd.Hostname, clientId);
-        }
-        else
-        {
-            // 4. Criar o Agent com ZeroTouchPending = true
-            agent = new Agent
+            for (var attempt = 1; attempt <= 3 && !lockAcquired; attempt++)
             {
-                SiteId = siteId,
-                Hostname = cmd.Hostname,
-                DisplayName = cmd.Hostname,
-                MacAddress = cmd.MacAddress,
-                ZeroTouchPending = true,
-                TpmEkHash = cmd.TpmEkHash,
-                SmbiosUuid = cmd.SmbiosUuid,
-                FingerprintHash = fingerprintHash
-            };
-
-            agent = await agentRepo.CreateAsync(agent);
-            recovered = false;
-
-            logger.LogInformation(
-                "Agent auto-registrado via deploy token: AgentId={AgentId}, Hostname={Hostname}, SiteId={SiteId}, ClientId={ClientId}",
-                agent.Id, cmd.Hostname, siteId, clientId);
+                await Task.Delay(TimeSpan.FromMilliseconds(300 * attempt), ct);
+                lockAcquired = await TryAcquireLockAsync(lockKey!, ct);
+            }
         }
 
-        // 5. Gerar token mdz_ para o agent (revoga tokens anteriores automaticamente)
-        var (agentToken, rawToken) = await agentAuthService.CreateTokenAsync(
-            agent.Id,
-            $"Auto-registro via deploy token ({deployToken.TokenPrefix}...)");
+        // Se ainda não conseguiu o lock (ex.: Redis indisponível ou lock preso), tenta
+        // recuperar o agent que outro registro possa ter criado/reativado. Se não houver
+        // match, prossegue sem lock (fallback) — em conflito real, o servidor cria novo.
+        if (!lockAcquired)
+        {
+            var retry = await TryRecoverAsync(cmd, clientId, siteId, fingerprintHash, ct);
+            if (retry is not null)
+            {
+                var (_, retryRaw) = await agentAuthService.CreateTokenAsync(
+                    retry.Id, $"Auto-registro via deploy token ({deployToken.TokenPrefix}...)");
+                return Result<AgentRegistrationResult>.Success(new AgentRegistrationResult(
+                    Token: retryRaw, AgentId: retry.Id, ClientId: clientId, SiteId: retry.SiteId, Recovered: true));
+            }
+        }
 
-        logger.LogInformation(
-            "Token de agente gerado para AgentId={AgentId}, TokenId={TokenId}",
-            agent.Id, agentToken.Id);
+        try
+        {
+            var recoveredAgent = await TryRecoverAsync(cmd, clientId, siteId, fingerprintHash, ct);
 
-        // 6. Retornar credenciais
-        return Result<AgentRegistrationResult>.Success(new AgentRegistrationResult(
-            Token: rawToken,
-            AgentId: agent.Id,
-            ClientId: clientId,
-            SiteId: agent.SiteId,
-            Recovered: recovered
-        ));
+            Agent agent;
+            bool recovered;
+            if (recoveredAgent is not null)
+            {
+                agent = recoveredAgent;
+                recovered = true;
+                logger.LogInformation(
+                    "Agent recuperado via fingerprint: AgentId={AgentId}, Hostname={Hostname}, ClientId={ClientId}",
+                    agent.Id, cmd.Hostname, clientId);
+            }
+            else
+            {
+                // 4. Criar o Agent com ZeroTouchPending = true
+                agent = new Agent
+                {
+                    SiteId = siteId,
+                    Hostname = cmd.Hostname,
+                    DisplayName = cmd.Hostname,
+                    MacAddress = cmd.MacAddress,
+                    ZeroTouchPending = true,
+                    TpmEkHash = cmd.TpmEkHash,
+                    SmbiosUuid = cmd.SmbiosUuid,
+                    FingerprintHash = fingerprintHash
+                };
+
+                agent = await agentRepo.CreateAsync(agent);
+                recovered = false;
+
+                logger.LogInformation(
+                    "Agent auto-registrado via deploy token: AgentId={AgentId}, Hostname={Hostname}, SiteId={SiteId}, ClientId={ClientId}",
+                    agent.Id, cmd.Hostname, siteId, clientId);
+            }
+
+            // 5. Gerar token mdz_ para o agent (revoga tokens anteriores automaticamente)
+            var (agentToken, rawToken) = await agentAuthService.CreateTokenAsync(
+                agent.Id,
+                $"Auto-registro via deploy token ({deployToken.TokenPrefix}...)");
+
+            logger.LogInformation(
+                "Token de agente gerado para AgentId={AgentId}, TokenId={TokenId}",
+                agent.Id, agentToken.Id);
+
+            // 6. Retornar credenciais
+            return Result<AgentRegistrationResult>.Success(new AgentRegistrationResult(
+                Token: rawToken,
+                AgentId: agent.Id,
+                ClientId: clientId,
+                SiteId: agent.SiteId,
+                Recovered: recovered
+            ));
+        }
+        finally
+        {
+            // Só libera o lock se este registro o adquiriu (evita liberar o lock de outro).
+            if (lockKey is not null && lockAcquired)
+                await ReleaseLockAsync(lockKey, ct);
+        }
+    }
+
+    private async Task<bool> TryAcquireLockAsync(string key, CancellationToken ct)
+    {
+        if (!redis.IsConnected)
+            return true; // fallback: sem Redis, prossegue (aceitável)
+
+        ct.ThrowIfCancellationRequested();
+        try
+        {
+            return await redis.SetIfNotExistsAsync(key, Guid.NewGuid().ToString("N"), (int)RecoveryLockTtl.TotalSeconds);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao adquirir lock de recuperação {Key}", key);
+            return true; // fallback: prossegue sem lock
+        }
+    }
+
+    private async Task ReleaseLockAsync(string key, CancellationToken ct)
+    {
+        if (!redis.IsConnected) return;
+        ct.ThrowIfCancellationRequested();
+        try
+        {
+            await redis.DeleteAsync(key);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao liberar lock de recuperação {Key}", key);
+        }
     }
 
     /// <summary>
@@ -147,24 +225,4 @@ public sealed class RegisterAgentFromDeployTokenCommandHandler(
         await agentRepo.UpdateAsync(existing);
         return existing;
     }
-
-    /// <summary>
-    /// Calcula o hash combinado do fingerprint. Prioriza TPM EK; usa SMBIOS UUID como fallback.
-    /// Retorna null se nenhum dos dois estiver disponível.
-    /// </summary>
-    internal static string? ComputeFingerprintHash(string? tpmEkHash, string? smbiosUuid)
-    {
-        var tpm = Normalize(tpmEkHash);
-        var uuid = Normalize(smbiosUuid);
-
-        if (string.IsNullOrEmpty(tpm) && string.IsNullOrEmpty(uuid))
-            return null;
-
-        var combined = $"{tpm}|{uuid}";
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(combined));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
-    }
-
-    private static string? Normalize(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToLowerInvariant();
 }

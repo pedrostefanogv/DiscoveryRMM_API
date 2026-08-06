@@ -63,7 +63,11 @@ public class AgentRepository : IAgentRepository
 
     public async Task UpdateAsync(Agent agent)
     {
-        var existingAgent = await _db.Agents.SingleOrDefaultAsync(existing => existing.Id == agent.Id);
+        // IgnoreQueryFilters: permite atualizar agents soft-deleted (ex.: reativação
+        // na Recuperação de Dispositivos), onde DeletedAt é limpo.
+        var existingAgent = await _db.Agents
+            .IgnoreQueryFilters()
+            .SingleOrDefaultAsync(existing => existing.Id == agent.Id);
         if (existingAgent is null)
             return;
 
@@ -81,6 +85,7 @@ public class AgentRepository : IAgentRepository
         existingAgent.TpmEkHash = agent.TpmEkHash;
         existingAgent.SmbiosUuid = agent.SmbiosUuid;
         existingAgent.FingerprintHash = agent.FingerprintHash;
+        existingAgent.DeletedAt = agent.DeletedAt;
         existingAgent.MaintenanceEnabled = agent.MaintenanceEnabled;
         existingAgent.MaintenanceReason = agent.MaintenanceReason;
         existingAgent.MaintenanceChangedAt = agent.MaintenanceChangedAt;
