@@ -126,6 +126,18 @@ public partial class DiscoveryDbContext
                 .HasColumnName("zero_touch_pending")
                 .HasDefaultValue(false);
 
+            entity.Property(agent => agent.TpmEkHash)
+                .HasColumnName("tpm_ek_hash")
+                .HasMaxLength(64);
+            entity.Property(agent => agent.SmbiosUuid)
+                .HasColumnName("smbios_uuid")
+                .HasMaxLength(64);
+            entity.Property(agent => agent.FingerprintHash)
+                .HasColumnName("fingerprint_hash")
+                .HasMaxLength(64);
+            entity.HasIndex(agent => agent.FingerprintHash)
+                .HasDatabaseName("ix_agents_fingerprint_hash");
+
             entity.Property(agent => agent.MaintenanceEnabled)
                 .HasColumnName("maintenance_enabled")
                 .HasDefaultValue(false);

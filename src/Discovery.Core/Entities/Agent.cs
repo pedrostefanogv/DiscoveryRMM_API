@@ -22,6 +22,14 @@ public class Agent
     public DateTime? DeletedAt { get; set; }
     public bool ZeroTouchPending { get; set; }
 
+    // ── Fingerprint de hardware (Recuperação de Dispositivos) ─────────────
+    /// <summary>Hash SHA-256 (hex) da chave pública da TPM Endorsement Key (EK).</summary>
+    public string? TpmEkHash { get; set; }
+    /// <summary>UUID SMBIOS da máquina (normalizado, apenas hex + hífens).</summary>
+    public string? SmbiosUuid { get; set; }
+    /// <summary>Hash combinado (TPM EK + SMBIOS UUID) usado para busca de recuperação.</summary>
+    public string? FingerprintHash { get; set; }
+
     public bool MaintenanceEnabled { get; set; }
     public string? MaintenanceReason { get; set; }
     public DateTime? MaintenanceChangedAt { get; set; }

@@ -78,6 +78,9 @@ public class AgentRepository : IAgentRepository
         existingAgent.MacAddress = agent.MacAddress;
         existingAgent.LastSeenAt = agent.LastSeenAt;
         existingAgent.ZeroTouchPending = agent.ZeroTouchPending;
+        existingAgent.TpmEkHash = agent.TpmEkHash;
+        existingAgent.SmbiosUuid = agent.SmbiosUuid;
+        existingAgent.FingerprintHash = agent.FingerprintHash;
         existingAgent.MaintenanceEnabled = agent.MaintenanceEnabled;
         existingAgent.MaintenanceReason = agent.MaintenanceReason;
         existingAgent.MaintenanceChangedAt = agent.MaintenanceChangedAt;
@@ -176,5 +179,20 @@ public class AgentRepository : IAgentRepository
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(agent => agent.DeletedAt, _ => now)
                 .SetProperty(agent => agent.UpdatedAt, _ => now));
+    }
+
+    public async Task<IReadOnlyList<Agent>> FindByFingerprintAsync(string fingerprintHash, Guid clientId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(fingerprintHash))
+            return [];
+
+        // Inclui soft-deleted (IgnoreQueryFilters) para permitir reativação na recuperação.
+        return await (
+            from agent in _db.Agents.AsNoTracking().IgnoreQueryFilters()
+            join site in _db.Sites.AsNoTracking() on agent.SiteId equals site.Id
+            where agent.FingerprintHash == fingerprintHash
+                  && site.ClientId == clientId
+            select agent)
+            .ToListAsync(ct);
     }
 }

@@ -69,7 +69,9 @@ public class AgentRegistrationController : ControllerBase
             DeployToken: deployToken,
             Hostname: hostname,
             MacAddress: request.MacAddress,
-            Notes: request.Notes
+            Notes: request.Notes,
+            TpmEkHash: request.TpmEkHash,
+            SmbiosUuid: request.SmbiosUuid
         );
 
         var result = await _mediator.Send(cmd, ct);
@@ -79,7 +81,8 @@ public class AgentRegistrationController : ControllerBase
                 token = dto.Token,
                 agentId = dto.AgentId,
                 clientId = dto.ClientId,
-                siteId = dto.SiteId
+                siteId = dto.SiteId,
+                recovered = dto.Recovered
             }),
             failure: errors => errors[0].Code switch
             {
@@ -104,5 +107,8 @@ public sealed record AgentRegistrationRequest(
     string? Notes = null,
     // Formato alternativo
     string? Hostname = null,
-    string? DeployToken = null
+    string? DeployToken = null,
+    // Fingerprint de hardware (Recuperação de Dispositivos)
+    string? TpmEkHash = null,
+    string? SmbiosUuid = null
 );

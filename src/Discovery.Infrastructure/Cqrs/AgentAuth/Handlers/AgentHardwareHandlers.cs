@@ -3,6 +3,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Hardware;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Cqrs.AgentRegistration;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
@@ -139,6 +140,20 @@ public sealed class ReportAgentHardwareCommandHandler(
             if (hw.TryGetProperty("osVersion", out var ov)) hardwareInfo.OsVersion = ov.GetString();
             if (hw.TryGetProperty("osBuild", out var ob)) hardwareInfo.OsBuild = ob.GetString();
             if (hw.TryGetProperty("osArchitecture", out var oa)) hardwareInfo.OsArchitecture = oa.GetString();
+
+            // Fingerprint de hardware (Recuperação de Dispositivos)
+            string? tpmEk = null;
+            string? smbiosUuid = null;
+            if (hw.TryGetProperty("tpmEk", out var tpm)) tpmEk = tpm.GetString();
+            if (hw.TryGetProperty("smbiosUuid", out var uuid)) smbiosUuid = uuid.GetString();
+
+            if (!string.IsNullOrWhiteSpace(tpmEk) || !string.IsNullOrWhiteSpace(smbiosUuid))
+            {
+                agent.TpmEkHash = tpmEk;
+                agent.SmbiosUuid = smbiosUuid;
+                agent.FingerprintHash = RegisterAgentFromDeployTokenCommandHandler.ComputeFingerprintHash(tpmEk, smbiosUuid);
+                await agentRepo.UpdateAsync(agent);
+            }
         }
 
         // MachineScore: enviado pelo agent no nível raiz do envelope (cmd.MachineScore),

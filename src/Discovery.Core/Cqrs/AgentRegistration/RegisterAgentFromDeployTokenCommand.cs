@@ -12,7 +12,9 @@ public sealed record RegisterAgentFromDeployTokenCommand(
     string DeployToken,
     string Hostname,
     string? MacAddress,
-    string? Notes
+    string? Notes,
+    string? TpmEkHash = null,
+    string? SmbiosUuid = null
 ) : ICommand<Result<AgentRegistrationResult>>;
 
 /// <summary>
@@ -22,5 +24,6 @@ public sealed record AgentRegistrationResult(
     string Token,
     Guid AgentId,
     Guid ClientId,
-    Guid SiteId
+    Guid SiteId,
+    bool Recovered = false
 );

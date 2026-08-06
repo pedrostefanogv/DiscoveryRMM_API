@@ -16,4 +16,10 @@ public interface IAgentRepository
     Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId);
     Task TransferSiteAsync(Guid agentId, Guid newSiteId);
     Task DeleteAsync(Guid id);
+
+    /// <summary>
+    /// Busca agents (incluindo soft-deleted) que possuam o fingerprint informado e pertençam ao cliente.
+    /// Usado pela Recuperação de Dispositivos para reutilizar um agent já registrado.
+    /// </summary>
+    Task<IReadOnlyList<Agent>> FindByFingerprintAsync(string fingerprintHash, Guid clientId, CancellationToken ct = default);
 }

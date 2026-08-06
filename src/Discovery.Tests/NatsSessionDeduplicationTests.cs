@@ -65,6 +65,7 @@ public class NatsSessionDeduplicationTests
         public Task<IReadOnlyList<Agent>> GetByClientIdPaginatedAsync(Guid clientId, int limit, string? cursor) => throw new NotImplementedException();
         public Task<int> GetCountBySiteIdAsync(Guid siteId) => throw new NotImplementedException();
         public Task<int> GetCountByClientIdAsync(Guid clientId) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Agent>> FindByFingerprintAsync(string fingerprintHash, Guid clientId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     /// <summary>
