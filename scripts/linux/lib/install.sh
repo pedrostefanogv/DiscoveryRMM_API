@@ -6,6 +6,11 @@ install_apt_dependencies() {
     apt-transport-https ca-certificates curl git gnupg jq lsb-release
     dnsutils nginx openssl postgresql postgresql-contrib redis-server nats-server
     golang-go gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 nsis unzip
+    # Build toolchain para compilar o wails3 (pre-requisito oficial do Wails v3)
+    build-essential pkg-config
+    # GTK4 + WebKitGTK 6.0 (stack default do Wails v3). Necessario para o
+    # `go install` do wails3 (o release beta nao publica binario pre-compilado).
+    libgtk-4-dev libwebkitgtk-6.0-dev
   )
 
   local -a missing_packages=()
@@ -131,6 +136,45 @@ ensure_nodejs() {
 # acessivel a todos e presente no PATH padrao do systemd), e nao em ~/go/bin.
 # Versao alinhada com src/go.mod do agent (github.com/wailsapp/wails/v3).
 WAILS3_VERSION="${WAILS3_VERSION:-v3.0.0-beta.3}"
+# Stock GTK do Wails v3 (Ubuntu 24.04+ / Debian 13+). Necessario para compilar
+# o wails3 via `go install` (releases beta nao publicam binario pre-compilado).
+# Em distros mais antigas, usar GTK3: libgtk-3-dev libwebkit2gtk-4.1-dev.
+WAILS3_APT_DEPS="build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev"
+WAILS3_APT_DEPS_GTK3="build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev"
+
+# Instala os pre-requisitos de build do Wails v3 (GTK4/WebKitGTK dev).
+# Isso e separado do install_apt_dependencies porque, no fluxo de update,
+# o install_apt_dependencies original nao re-roda. Detecta o fallback GTK3
+# para distros que ainda nao fornecem WebKitGTK 6.0 (pkg-config checa se existe).
+ensure_wails3_apt_deps() {
+  command -v apt-get >/dev/null 2>&1 || { warn "apt-get nao encontrado; nao e possivel garantir deps do wails3"; return; }
+
+  local -a deps
+  mapfile -t deps <<< "${WAILS3_APT_DEPS// /$'\n'}"
+
+  # Se libwebkitgtk-6.0-dev nao existir no repositorio, usa o legado GTK3.
+  if ! apt-cache show libwebkitgtk-6.0-dev >/dev/null 2>&1; then
+    warn "libwebkitgtk-6.0-dev indisponivel; usando stack legado GTK3 para o wails3."
+    mapfile -t deps <<< "${WAILS3_APT_DEPS_GTK3// /$'\n'}"
+  fi
+
+  local -a missing=()
+  local pkg
+  for pkg in "${deps[@]}"; do
+    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+
+  if (( ${#missing[@]} == 0 )); then
+    return
+  fi
+
+  log "Instalando dependencias de build do wails3 via apt: ${missing[*]}"
+  sudo apt-get update -y
+  sudo apt-get install -y "${missing[@]}" || \
+    warn "Falha ao instalar deps de build do wails3; o go install do wails3 pode falhar"
+}
 
 ensure_wails3_toolchain() {
   if ! command -v go >/dev/null 2>&1; then
@@ -145,6 +189,8 @@ ensure_wails3_toolchain() {
     log "wails3 ja instalado: $(command -v wails3)"
     return
   fi
+
+  ensure_wails3_apt_deps
 
   log "Instalando wails3 ${WAILS3_VERSION} (requerido pelo build do agent Wails v3)..."
   # GOBIN=/usr/local/bin coloca o binario em local acessivel a todos os usuarios,
