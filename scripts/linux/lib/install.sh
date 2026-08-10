@@ -174,23 +174,27 @@ ensure_service_user() {
 
 # Garante um HOME gravavel para o usuario de servico discovery-api.
 # O processo de build do agent (go install do wails3, cache do Go, etc.) roda
-# sob esse usuario; sem HOME, o Go nao consegue gravar GOPATH/GOBIN e o build
-# do agent falha ou degrada silenciosamente.
+# sob esse usuario; sem HOME gravavel, o Go nao consegue gravar GOPATH/GOBIN e
+# o build do agent falha ou degrada silenciosamente.
+#
+# Nao usamos `usermod -d` aqui: o HOME efetivo do processo e definido por
+# `Environment=HOME=/var/lib/discovery-api` no systemd service, e o `usermod`
+# falha com "user is currently used by process" quando discovery-api esta ativo
+# durante um update (servico em execucao). Aqui so garantimos que o diretorio
+# exista e seja gravavel pelo usuario de servico.
 ensure_service_user_home() {
   local home_dir="/var/lib/discovery-api"
   if ! sudo test -d "$home_dir"; then
     log "Criando HOME gravavel para discovery-api em $home_dir"
     sudo install -d -m 750 -o discovery-api -g discovery-api "$home_dir"
   fi
-  # Garante que o usuario tenha o HOME apontando para o diretorio gravavel.
-  # usermod fica em /usr/sbin, nem sempre no PATH de um usuario comum.
-  local usermod_bin
-  usermod_bin="$(command -v usermod || printf '/usr/sbin/usermod')"
-  local current_home
-  current_home="$(sudo getent passwd discovery-api | cut -d: -f6 2>/dev/null || true)"
-  if [[ -n "$current_home" && "$current_home" != "$home_dir" ]]; then
-    log "Ajustando HOME do discovery-api: $current_home -> $home_dir"
-    sudo "$usermod_bin" -d "$home_dir" discovery-api
+
+  # Garante write exitoso (defensivo): ajusta ownership se necessario.
+  local mismatch
+  mismatch="$(sudo find "$home_dir" -maxdepth 1 -not -user discovery-api -print -quit 2>/dev/null || true)"
+  if [[ -n "$mismatch" ]]; then
+    warn "Ownership inconsistente em $home_dir ($mismatch); corrigindo para discovery-api."
+    sudo chown -R discovery-api:discovery-api "$home_dir"
   fi
 }
 
