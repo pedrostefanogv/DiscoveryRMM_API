@@ -80,7 +80,7 @@ public sealed class RebuildAgentCommandHandler(
         var (content, fileName) = await agentPackageService.BuildUpdateInstallerAsync(ct);
 
         // Publish the newly built installer as the current stage2 build.
-        // Use the agent source version (wails.json) when available;
+        // Use the agent source version (build/config.yml) when available;
         // fall back to date-based version for CI rebuilds without source access.
         var sourceVersion = await agentPackageService.GetAgentSourceVersionAsync(ct);
         var now = DateTime.UtcNow;

@@ -46,7 +46,9 @@ load_update_defaults() {
   ensure_dotnet_sdk
   ensure_nodejs
   ensure_service_user
+  ensure_service_user_home
   create_directories
+  ensure_wails3_toolchain
 
   trap cleanup_on_exit EXIT
   setup_git_askpass

@@ -182,7 +182,7 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
             return normalizedConfigured;
         }
 
-        // Level 2: read from agent source code (wails.json → agent-version.json)
+        // Level 2: read from agent source code (build/config.yml → agent-version.json)
         var sourceVersion = await packageService.GetAgentSourceVersionAsync(cancellationToken);
         if (!string.IsNullOrWhiteSpace(sourceVersion)
             && !string.Equals(sourceVersion, "unknown", StringComparison.OrdinalIgnoreCase)

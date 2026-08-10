@@ -740,23 +740,70 @@ public class AgentPackageService : IAgentPackageService
     // ── Repository sync ───────────────────────────────────────────────────
 
     /// <summary>
-    /// Reads productVersion from the agent source wails.json.
-    /// Returns empty string if the file doesn't exist or can't be parsed.
+    /// Reads the agent version from the source. Prefers the Wails v3
+    /// build/config.yml (info.version); falls back to the legacy v2 wails.json
+    /// (info.productVersion). Returns empty string if not found or unparsable.
     /// </summary>
     private static string DetectAgentVersion(string projectPath)
     {
+        // Wails v3: schema em src/build/config.yml, seção `info.version`.
+        var configYmlPath = Path.Combine(projectPath, "src", "build", "config.yml");
+        var yamlVersion = ReadVersionFromConfigYml(configYmlPath);
+        if (!string.IsNullOrWhiteSpace(yamlVersion))
+            return yamlVersion;
+
+        // Legado (Wails v2): src/wails.json, campo `info.productVersion`.
         var wailsJsonPath = Path.Combine(projectPath, "src", "wails.json");
-        if (!File.Exists(wailsJsonPath))
+        if (File.Exists(wailsJsonPath))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(wailsJsonPath));
+                if (doc.RootElement.TryGetProperty("info", out var info) &&
+                    info.TryGetProperty("productVersion", out var ver))
+                {
+                    var v = ver.GetString();
+                    if (!string.IsNullOrWhiteSpace(v))
+                        return v;
+                }
+            }
+            catch
+            {
+                // Best-effort — version not critical for build.
+            }
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Parses `info.version` from a Wails v3 config.yml (simple, dependency-free).
+    /// Handles both `version: 1.2.3` and `version: "1.2.3"`.
+    /// </summary>
+    private static string ReadVersionFromConfigYml(string configYmlPath)
+    {
+        if (!File.Exists(configYmlPath))
             return string.Empty;
 
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(wailsJsonPath));
-            if (doc.RootElement.TryGetProperty("info", out var info) &&
-                info.TryGetProperty("productVersion", out var ver))
+            var inInfo = false;
+            foreach (var rawLine in File.ReadLines(configYmlPath))
             {
-                var v = ver.GetString();
-                return string.IsNullOrWhiteSpace(v) ? string.Empty : v;
+                var trimmed = rawLine.Trim();
+                if (trimmed.StartsWith("info:", StringComparison.Ordinal))
+                {
+                    inInfo = true;
+                    continue;
+                }
+                if (inInfo && (trimmed.StartsWith("version:", StringComparison.Ordinal)))
+                {
+                    var value = trimmed["version:".Length..].Trim().Trim('"').Trim('\'').Trim();
+                    return string.IsNullOrWhiteSpace(value) ? string.Empty : value;
+                }
+                // Sai da seção info assim que uma chave de topo (sem indentação) aparece.
+                if (inInfo && !rawLine.StartsWith(' ') && !rawLine.StartsWith('\t') && rawLine.Trim().Length > 0)
+                    inInfo = false;
             }
         }
         catch

@@ -361,6 +361,12 @@ User=discovery-api
 Group=discovery-api
 WorkingDirectory=${DISCOVERY_API_CURRENT}
 EnvironmentFile=/etc/discovery-api/discovery.env
+# HOME gravavel + PATH com GOBIN (/usr/local/bin) para que o processo de build
+# do agent (Wails v3) encontre o binario wails3 e grave o cache do Go.
+# /var/lib/discovery-api/go/bin cobre o caso do build auto-instalar o wails3
+# no GOPATH do usuario de servico (fallback quando o /usr/local/bin nao existe).
+Environment=HOME=/var/lib/discovery-api
+Environment=PATH=/usr/local/bin:/usr/local/go/bin:/var/lib/discovery-api/go/bin:/usr/bin:/bin:/usr/sbin:/sbin
 ExecStart=${DISCOVERY_API_CURRENT}/Discovery.Api
 Restart=always
 RestartSec=5

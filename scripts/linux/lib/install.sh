@@ -119,12 +119,79 @@ ensure_nodejs() {
   command -v npm  >/dev/null 2>&1 || fail "npm nao foi instalado com sucesso"
 }
 
+# ── Wails v3 CLI (wails3) ─────────────────────────────────────────────────
+
+# O agent Go foi migrado para Wails v3 (github.com/wailsapp/wails/v3), que
+# usa o binario `wails3` (nao mais `wails` v2). O wails3 e necessario durante
+# o build do agent para regenerar os bindings do frontend (frontend/bindings)
+# quando ha mudancas na API Go exposta.
+#
+# O processo de build roda sob o usuario de servico `discovery-api`, que nao
+# tem HOME gravavel -- por isso instalamos o binario em /usr/local/bin (global,
+# acessivel a todos e presente no PATH padrao do systemd), e nao em ~/go/bin.
+# Versao alinhada com src/go.mod do agent (github.com/wailsapp/wails/v3).
+WAILS3_VERSION="${WAILS3_VERSION:-v3.0.0-beta.3}"
+
+ensure_wails3_toolchain() {
+  if ! command -v go >/dev/null 2>&1; then
+    # No fluxo de install, o Go e instalado por install_apt_dependencies antes.
+    # No fluxo de update, o host ja deveria ter o Go; se nao tiver, nao bloqueamos
+    # o update inteiro — apenas avisamos e deixamos o auto-install do build seguir.
+    warn "go nao encontrado; pulando instalacao do wails3 (instale golang-go antes de buildar o agent)"
+    return
+  fi
+
+  if command -v wails3 >/dev/null 2>&1; then
+    log "wails3 ja instalado: $(command -v wails3)"
+    return
+  fi
+
+  log "Instalando wails3 ${WAILS3_VERSION} (requerido pelo build do agent Wails v3)..."
+  # GOBIN=/usr/local/bin coloca o binario em local acessivel a todos os usuarios,
+  # independente do HOME inconsistente do usuario de servico. GOPATH explicito
+  # garante um module cache determinístico (execução sob sudo/root).
+  if ! sudo env GOBIN=/usr/local/bin GOPATH=/root/go go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS3_VERSION}"; then
+    warn "Falha ao instalar wails3 via go install; o build do agent dependera do auto-install do script de build (pode nao regerar bindings)."
+    warn "Instale manualmente: sudo env GOBIN=/usr/local/bin go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS3_VERSION}"
+    return
+  fi
+
+  if [[ -f /usr/local/bin/wails3 ]]; then
+    sudo chmod 755 /usr/local/bin/wails3
+    log "wails3 instalado em /usr/local/bin/wails3"
+  else
+    warn "wails3 instalado mas binario nao encontrado em /usr/local/bin; verifique GOBIN/go env"
+  fi
+}
+
 ensure_service_user() {
   if id -u discovery-api >/dev/null 2>&1; then
     log "Usuario de servico discovery-api ja existe"; return
   fi
   log "Criando usuario de servico discovery-api"
   sudo useradd --system --no-create-home --home-dir /opt/discovery-api --shell /usr/sbin/nologin discovery-api
+}
+
+# Garante um HOME gravavel para o usuario de servico discovery-api.
+# O processo de build do agent (go install do wails3, cache do Go, etc.) roda
+# sob esse usuario; sem HOME, o Go nao consegue gravar GOPATH/GOBIN e o build
+# do agent falha ou degrada silenciosamente.
+ensure_service_user_home() {
+  local home_dir="/var/lib/discovery-api"
+  if ! sudo test -d "$home_dir"; then
+    log "Criando HOME gravavel para discovery-api em $home_dir"
+    sudo install -d -m 750 -o discovery-api -g discovery-api "$home_dir"
+  fi
+  # Garante que o usuario tenha o HOME apontando para o diretorio gravavel.
+  # usermod fica em /usr/sbin, nem sempre no PATH de um usuario comum.
+  local usermod_bin
+  usermod_bin="$(command -v usermod || printf '/usr/sbin/usermod')"
+  local current_home
+  current_home="$(sudo getent passwd discovery-api | cut -d: -f6 2>/dev/null || true)"
+  if [[ -n "$current_home" && "$current_home" != "$home_dir" ]]; then
+    log "Ajustando HOME do discovery-api: $current_home -> $home_dir"
+    sudo "$usermod_bin" -d "$home_dir" discovery-api
+  fi
 }
 
 create_directories() {
