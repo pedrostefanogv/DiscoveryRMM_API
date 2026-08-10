@@ -159,12 +159,10 @@ main() {
     warn "Arquitetura nao mapeada (${detected_arch:-desconhecida}); usando runtime padrao linux-x64"
   fi
 
-  DISCOVERY_DETECTED_ARCH="$detected_arch"
-  DISCOVERY_DETECTED_DOTNET_RUNTIME="$detected_dotnet_runtime"
   if [[ -z "${DISCOVERY_DOTNET_RUNTIME:-}" ]]; then DISCOVERY_DOTNET_RUNTIME="$detected_dotnet_runtime"; fi
   validate_dotnet_runtime "$DISCOVERY_DOTNET_RUNTIME"
 
-  log "Arquitetura detectada: ${DISCOVERY_DETECTED_ARCH:-desconhecida}"
+  log "Arquitetura detectada: ${detected_arch:-desconhecida}"
   log "Runtime .NET da API: ${DISCOVERY_DOTNET_RUNTIME}"
   log "Build do Agent permanece Windows x86/x64 nesta fase"
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"

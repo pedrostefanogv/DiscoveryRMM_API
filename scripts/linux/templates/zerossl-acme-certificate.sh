@@ -90,8 +90,11 @@ ZEROSSL_FORCE_RENEW="${ZEROSSL_FORCE_RENEW:-0}"
 ZEROSSL_CERT_DOMAIN="$(normalize_host_without_scheme "${ZEROSSL_CERT_DOMAIN:-${Authentication__Fido2__ServerDomain:-${INTERNAL_API_HOST:-${EXTERNAL_API_HOST:-}}}}")"
 [[ -n "$ZEROSSL_CERT_DOMAIN" ]] || fail "ZEROSSL_CERT_DOMAIN nao definido."
 [[ -n "${ZEROSSL_ACME_EMAIL:-}" ]] || fail "ZEROSSL_ACME_EMAIL nao definido."
-[[ -n "${ZEROSSL_ACME_EAB_KID:-}" ]] || fail "ZEROSSL_ACME_EAB_KID nao definido."
-[[ -n "${ZEROSSL_ACME_EAB_HMAC_KEY:-}" ]] || fail "ZEROSSL_ACME_EAB_HMAC_KEY nao definido."
+# EAB so e obrigatorio quando a conta acme.sh ainda nao esta registrada.
+if [[ ! -f "$ZEROSSL_ACME_HOME/ca/acme.zerossl.com/v2/DV90/account.key" && ! -f "$ZEROSSL_ACME_HOME/ca/acme.zerossl.com/v2/DV90/account.json" ]]; then
+  [[ -n "${ZEROSSL_ACME_EAB_KID:-}" ]] || fail "ZEROSSL_ACME_EAB_KID nao definido (necessario para registrar conta)."
+  [[ -n "${ZEROSSL_ACME_EAB_HMAC_KEY:-}" ]] || fail "ZEROSSL_ACME_EAB_HMAC_KEY nao definido (necessario para registrar conta)."
+fi
 
 require_cmd git
 require_cmd openssl
@@ -127,6 +130,11 @@ build_domain_args() {
 
 register_account() {
   install -d -m 750 -o root -g discovery-api "$ZEROSSL_ACME_HOME"
+  # Se a conta ja esta registrada, nao precisa de EAB novamente.
+  if [[ -f "$ZEROSSL_ACME_HOME/ca/acme.zerossl.com/v2/DV90/account.key" || -f "$ZEROSSL_ACME_HOME/ca/acme.zerossl.com/v2/DV90/account.json" ]]; then
+    log "Conta ACME ja registrada; pulando register-account."
+    return 0
+  fi
   "$ZEROSSL_ACME_SH" --home "$ZEROSSL_ACME_HOME" \
     --register-account \
     --server "$ZEROSSL_ACME_SERVER" \
@@ -400,6 +408,64 @@ certificate_needs_renewal() {
   return 0
 }
 
+# Recupera um certificado que ja foi emitido pela CA (order finalizado) mas
+# ainda nao foi baixado/instalado localmente. Evita repetir o processo de
+# renovacao (e o rate-limit) quando o acme.sh ja possui um cert valido.
+# Retorna 0 se conseguiu instalar um certificado valido, 1 caso contrario.
+recover_already_issued_certificate() {
+  local domain_dir="$ZEROSSL_ACME_HOME/${ZEROSSL_CERT_DOMAIN}_ecc"
+  local domain_conf="$domain_dir/${ZEROSSL_CERT_DOMAIN}.conf"
+  local acme_fullchain="$domain_dir/fullchain.cer"
+  local acme_key="$domain_dir/${ZEROSSL_CERT_DOMAIN}.key"
+
+  # Sem conf do dominio no acme.sh, nao ha order para recuperar.
+  [[ -f "$domain_conf" ]] || return 1
+
+  local link_cert=""
+  link_cert="$(awk -F= '/^Le_LinkCert=/{sub("^[^=]*=",""); gsub(/[\x27\x22]/,""); print; exit}' "$domain_conf" 2>/dev/null || true)"
+
+  # Se o acme.sh ja tem um fullchain valido, instala direto (sem re-emitir).
+  if [[ -s "$acme_fullchain" ]] && openssl x509 -checkend 0 -noout -in "$acme_fullchain" >/dev/null 2>&1; then
+    log "Recuperando certificado ja emitido (fullchain valido no acme.sh)."
+    install -d -m 750 -o root -g discovery-api "$(dirname "$ZEROSSL_CERT_KEY_PATH")"
+    install -m 640 -o root -g discovery-api "$acme_key" "$ZEROSSL_CERT_KEY_PATH"
+    install -m 644 -o root -g discovery-api "$acme_fullchain" "$ZEROSSL_CERT_FULLCHAIN_PATH"
+    chown root:discovery-api "$ZEROSSL_CERT_KEY_PATH" "$ZEROSSL_CERT_FULLCHAIN_PATH"
+    systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true
+    log "Certificado recuperado e instalado em $ZEROSSL_CERT_FULLCHAIN_PATH"
+    return 0
+  fi
+
+  # Se ha um Le_LinkCert (order finalizado) mas o fullchain nao foi baixado,
+  # tenta baixar via acme.sh --renew --force (que baixa do order existente).
+  if [[ -n "$link_cert" ]]; then
+    log "Order ja finalizado (Le_LinkCert presente); tentando baixar o certificado emitido sem re-emitir."
+    local out
+    out="$(mktemp)"
+    set +e
+    "$ZEROSSL_ACME_SH" --home "$ZEROSSL_ACME_HOME" --renew -d "$ZEROSSL_CERT_DOMAIN" --force \
+      --yes-I-know-dns-manual-mode-enough-go-ahead-please 2>&1 | tee "$out"
+    local rc=${PIPESTATUS[0]}
+    set -e
+    rm -f "$out"
+
+    if [[ -s "$acme_fullchain" ]] && openssl x509 -checkend 0 -noout -in "$acme_fullchain" >/dev/null 2>&1; then
+      log "Certificado baixado com sucesso do order ja finalizado."
+      install -d -m 750 -o root -g discovery-api "$(dirname "$ZEROSSL_CERT_KEY_PATH")"
+      install -m 640 -o root -g discovery-api "$acme_key" "$ZEROSSL_CERT_KEY_PATH"
+      install -m 644 -o root -g discovery-api "$acme_fullchain" "$ZEROSSL_CERT_FULLCHAIN_PATH"
+      chown root:discovery-api "$ZEROSSL_CERT_KEY_PATH" "$ZEROSSL_CERT_FULLCHAIN_PATH"
+      systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true
+      log "Certificado recuperado e instalado em $ZEROSSL_CERT_FULLCHAIN_PATH"
+      return 0
+    fi
+
+    warn "Nao foi possivel baixar o certificado do order ja finalizado (rc=$rc)."
+  fi
+
+  return 1
+}
+
 issue_or_renew() {
   local command_action="$1"
 
@@ -414,6 +480,13 @@ issue_or_renew() {
 
   if [[ "$command_action" == "--renew" && -z "${ZEROSSL_DNS_AUTOMATION_HOOK:-}" && ! -t 0 ]]; then
     warn "Renovacao ZeroSSL usa DNS manual e nao ha terminal interativo. Execute este script manualmente ou configure ZEROSSL_DNS_AUTOMATION_HOOK."
+    exit 0
+  fi
+
+  # Antes de re-emitir, tenta recuperar um certificado ja emitido pela CA.
+  # Isso evita repetir o processo de renovacao (e o rate-limit) quando o
+  # order ja foi finalizado mas o cert nao foi baixado/instalado.
+  if recover_already_issued_certificate; then
     exit 0
   fi
 

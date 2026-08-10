@@ -198,6 +198,8 @@ load_existing_nats_defaults() {
     NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(env_file_get "NATS_WS_TLS_ENABLED" "$env_file")}"
     NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$(env_file_get "Nats__AccountSeed" "$env_file")}"
     NATS_XKEY_SEED="${NATS_XKEY_SEED:-$(env_file_get "Nats__XKeySeed" "$env_file")}"
+    NATS_ACCOUNT_PUBLIC_KEY="${NATS_ACCOUNT_PUBLIC_KEY:-$(env_file_get "Nats__AccountPublicKey" "$env_file")}"
+    NATS_XKEY_PUBLIC_KEY="${NATS_XKEY_PUBLIC_KEY:-$(env_file_get "Nats__XKeyPublicKey" "$env_file")}"
     NATS_JS_ENABLED="${NATS_JS_ENABLED:-$(env_file_get "NATS_JS_ENABLED" "$env_file")}"
     NATS_JS_STORE_DIR="${NATS_JS_STORE_DIR:-$(env_file_get "NATS_JS_STORE_DIR" "$env_file")}"
     NATS_JS_MAX_MEMORY_STORE="${NATS_JS_MAX_MEMORY_STORE:-$(env_file_get "NATS_JS_MAX_MEMORY_STORE" "$env_file")}"

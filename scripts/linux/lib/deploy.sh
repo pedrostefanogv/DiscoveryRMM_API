@@ -185,6 +185,8 @@ Nats__AuthUser=${NATS_AUTH_USER}
 Nats__AuthPassword=${NATS_AUTH_PASSWORD}
 Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}
 Nats__XKeySeed=${NATS_XKEY_SEED:-}
+Nats__AccountPublicKey=${NATS_ACCOUNT_PUBLIC_KEY:-}
+Nats__XKeyPublicKey=${NATS_XKEY_PUBLIC_KEY:-}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
 Nats__AuthCallout__Subject=${escaped_callout_subject}
 Nats__ServerHostExternal=${nats_server_external_host}
@@ -647,6 +649,8 @@ update_nats_environment_file() {
     !/^Nats__AuthCallout__Subject=/ &&
     !/^Nats__AccountSeed=/ &&
     !/^Nats__XKeySeed=/ &&
+    !/^Nats__AccountPublicKey=/ &&
+    !/^Nats__XKeyPublicKey=/ &&
     !/^NATS_JS_ENABLED=/ &&
     !/^NATS_JS_STORE_DIR=/ &&
     !/^NATS_JS_MAX_MEMORY_STORE=/ &&
@@ -677,6 +681,8 @@ Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo 
 Nats__AuthCallout__Subject=${escaped_callout_subject}
 Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}
 Nats__XKeySeed=${NATS_XKEY_SEED:-}
+Nats__AccountPublicKey=${NATS_ACCOUNT_PUBLIC_KEY:-}
+Nats__XKeyPublicKey=${NATS_XKEY_PUBLIC_KEY:-}
 NATS_JS_ENABLED=${NATS_JS_ENABLED:-1}
 NATS_JS_STORE_DIR=${NATS_JS_STORE_DIR:-${DISCOVERY_OPS_DIR:-/opt/discovery-ops}/nats/jetstream}
 NATS_JS_MAX_MEMORY_STORE=${NATS_JS_MAX_MEMORY_STORE:-64M}
