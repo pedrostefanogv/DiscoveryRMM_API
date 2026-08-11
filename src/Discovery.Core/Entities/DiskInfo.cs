@@ -12,6 +12,12 @@ public class DiskInfo
     public string? MediaType { get; set; }
     public DateTime CollectedAt { get; set; }
 
+    // ── Saúde SMART (opcional; preenchido quando o agent expõe os dados) ──
+    public string? SmartStatus { get; set; }
+    public int? TemperatureC { get; set; }
+    public int? PowerOnHours { get; set; }
+    public int? ReallocatedSectors { get; set; }
+
     // ── Report field aliases ────────────────────────────────────────────
     public string Name => DriveLetter;
     public long SizeBytes => TotalSizeBytes;
@@ -19,5 +25,5 @@ public class DiskInfo
     public string? Interface => MediaType;
     public string? Type => MediaType;
     public string? SerialNumber => null;
-    public string? HealthStatus => null;
+    public string? HealthStatus => SmartStatus;
 }

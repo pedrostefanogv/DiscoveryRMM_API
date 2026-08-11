@@ -108,7 +108,11 @@ public sealed record AgentHardwareDiskDto(
     string? FileSystem,
     long TotalSizeBytes,
     long FreeSpaceBytes,
-    string? MediaType
+    string? MediaType,
+    string? SmartStatus = null,
+    int? TemperatureC = null,
+    int? PowerOnHours = null,
+    int? ReallocatedSectors = null
 );
 
 public sealed record AgentHardwareNetworkAdapterDto(

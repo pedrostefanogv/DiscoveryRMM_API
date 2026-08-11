@@ -89,6 +89,10 @@ internal static class HardwareInventoryParser
                 TotalSizeBytes = ParseJson.GetLong(item, "totalSizeBytes"),
                 FreeSpaceBytes = ParseJson.GetLong(item, "freeSpaceBytes"),
                 MediaType = ParseJson.GetString(item, "mediaType"),
+                SmartStatus = ParseJson.GetString(item, "smartStatus"),
+                TemperatureC = ParseJson.GetNullableInt(item, "temperatureC"),
+                PowerOnHours = ParseJson.GetNullableInt(item, "powerOnHours"),
+                ReallocatedSectors = ParseJson.GetNullableInt(item, "reallocatedSectors"),
                 CollectedAt = collectedAt
             });
         }

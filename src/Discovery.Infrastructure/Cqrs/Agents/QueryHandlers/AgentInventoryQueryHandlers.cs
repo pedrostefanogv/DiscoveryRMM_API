@@ -84,7 +84,7 @@ public sealed class GetAgentHardwareReportQueryHandler(
                 hardware.GpuModel,
                 hardware.GpuMemoryBytes,
                 hardware.OsName,
-                hardware.OsVersion,                hardware.OsBuild,                hardware.OsArchitecture
+                hardware.OsVersion, hardware.OsBuild, hardware.OsArchitecture
             );
         }
 
@@ -107,7 +107,8 @@ public sealed class GetAgentHardwareReportQueryHandler(
             )).ToList(),
             Disks: components.Disks.Select(d => new AgentHardwareDiskDto(
                 d.DriveLetter, d.Label, d.FileSystem,
-                d.TotalSizeBytes, d.FreeSpaceBytes, d.MediaType
+                d.TotalSizeBytes, d.FreeSpaceBytes, d.MediaType,
+                d.SmartStatus, d.TemperatureC, d.PowerOnHours, d.ReallocatedSectors
             )).ToList(),
             NetworkAdapters: components.NetworkAdapters.Select(na => new AgentHardwareNetworkAdapterDto(
                 na.Name, na.MacAddress, na.IpAddress, na.SubnetMask, na.Gateway,
@@ -211,7 +212,8 @@ public sealed class GetAgentHardwareComponentsQueryHandler(
             )).ToList(),
             components.Disks.Select(d => new AgentHardwareDiskDto(
                 d.DriveLetter, d.Label, d.FileSystem,
-                d.TotalSizeBytes, d.FreeSpaceBytes, d.MediaType
+                d.TotalSizeBytes, d.FreeSpaceBytes, d.MediaType,
+                d.SmartStatus, d.TemperatureC, d.PowerOnHours, d.ReallocatedSectors
             )).ToList(),
             components.NetworkAdapters.Select(na => new AgentHardwareNetworkAdapterDto(
                 na.Name, na.MacAddress, na.IpAddress, na.SubnetMask,
