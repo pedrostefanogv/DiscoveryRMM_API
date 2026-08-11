@@ -224,19 +224,19 @@ public class AiChatToolOrchestrator
         sb.AppendLine();
 
         if (hasSearchPackages)
-            sb.AppendLine("🔴 `search_packages`: use APENAS para buscar softwares para instalação. NÃO use para scripts, configurações ou hardware. O parâmetro `query` é OBRIGATÓRIO — extraia o nome do programa da mensagem do usuário. Ex: 'Quero instalar o Adobe Acrobat' → query='Adobe Acrobat'. Query vazia causa falha.");
+            sb.AppendLine(" `search_packages`: use APENAS para buscar softwares para instalação. NÃO use para scripts, configurações ou hardware. O parâmetro `query` é OBRIGATÓRIO — extraia o nome do programa da mensagem do usuário. Ex: 'Quero instalar o Adobe Acrobat' → query='Adobe Acrobat'. Query vazia causa falha.");
 
         if (hasInstallPackage)
         {
-            sb.AppendLine("🔗 `install_package`: REQUER que `search_packages` tenha sido chamada primeiro para obter o `packageId`. NUNCA invente um ID — se não tem o ID, execute `search_packages` antes. SEMPRE aguarde a confirmação do usuário antes de instalar.");
-            sb.AppendLine("   ⛔ NÃO use `install_package` para desinstalar, atualizar ou reparar — apenas para instalação limpa.");
+            sb.AppendLine(" `install_package`: REQUER que `search_packages` tenha sido chamada primeiro para obter o `packageId`. NUNCA invente um ID — se não tem o ID, execute `search_packages` antes. SEMPRE aguarde a confirmação do usuário antes de instalar.");
+            sb.AppendLine("    NÃO use `install_package` para desinstalar, atualizar ou reparar — apenas para instalação limpa.");
         }
 
         if (hasAskUser)
-            sb.AppendLine("⚠️ `ask_user`: use APENAS como último recurso, quando a informação NÃO está no histórico. O parâmetro `question` é OBRIGATÓRIO — SEMPRE preencha com uma pergunta clara e contextualizada.");
+            sb.AppendLine(" `ask_user`: use APENAS como último recurso, quando a informação NÃO está no histórico. O parâmetro `question` é OBRIGATÓRIO — SEMPRE preencha com uma pergunta clara e contextualizada.");
 
         if (hasCreateTicket)
-            sb.AppendLine("⚠️ `create_ticket`: use APENAS quando esgotou as tentativas de solução OU o usuário pediu explicitamente. Preencha title, description, category e priority baseado no que foi discutido. Só execute APÓS confirmação do usuário.");
+            sb.AppendLine(" `create_ticket`: use APENAS quando esgotou as tentativas de solução OU o usuário pediu explicitamente. Preencha title, description, category e priority baseado no que foi discutido. Só execute APÓS confirmação do usuário.");
 
         sb.AppendLine();
         sb.AppendLine("Use estas ferramentas quando o usuário solicitar ações relacionadas. Sempre preencha todos os parâmetros obrigatórios com os valores fornecidos pelo usuário.");
