@@ -112,31 +112,17 @@ public sealed class GetKnowledgeArticleHandler(
 }
 
 public sealed class GetKnowledgeArticlePagesHandler(
-    IAgentRepository agentRepo,
-    ISiteRepository siteRepo,
     IKnowledgeArticleRepository knowledgeRepo,
     IKnowledgeArticlePageRepository pageRepo)
     : IRequestHandler<GetKnowledgeArticlePagesQuery, Result<IReadOnlyList<ArticlePageTreeNode>>>
 {
     public async Task<Result<IReadOnlyList<ArticlePageTreeNode>>> Handle(GetKnowledgeArticlePagesQuery q, CancellationToken ct)
     {
-        var agent = await agentRepo.GetByIdAsync(q.AgentId);
-        if (agent is null)
-            return Result<IReadOnlyList<ArticlePageTreeNode>>.Failure(Error.NotFound("Agent not found."));
-
+        // Consistente com GetKnowledgeArticleHandler (detalhe): não valida escopo aqui,
+        // pois o agente obtém os artigos da lista já filtrada por escopo (ListByUserScopeAsync).
         var article = await knowledgeRepo.GetByIdAsync(q.ArticleId, ct);
         if (article is null)
             return Result<IReadOnlyList<ArticlePageTreeNode>>.Failure(Error.NotFound("Knowledge article not found."));
-
-        // Validação de escopo: o agente só pode ver artigos do seu site (ou herdados client/global).
-        var site = await siteRepo.GetByIdAsync(agent.SiteId);
-        var clientId = site?.ClientId;
-        var articleInScope =
-            article.SiteId == agent.SiteId ||
-            (clientId.HasValue && article.ClientId == clientId.Value) ||
-            (article.ClientId is null && article.SiteId is null); // global
-        if (!articleInScope)
-            return Result<IReadOnlyList<ArticlePageTreeNode>>.Failure(Error.Forbidden("Agent has no access to this article."));
 
         var pages = await pageRepo.ListByArticleAsync(q.ArticleId, ct);
         var roots = BuildTree(pages);
