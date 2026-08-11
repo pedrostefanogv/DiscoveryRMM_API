@@ -110,3 +110,86 @@ public sealed class GetKnowledgeArticleHandler(
         catch { return []; }
     }
 }
+
+public sealed class GetKnowledgeArticlePagesHandler(
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IKnowledgeArticleRepository knowledgeRepo,
+    IKnowledgeArticlePageRepository pageRepo)
+    : IRequestHandler<GetKnowledgeArticlePagesQuery, Result<IReadOnlyList<ArticlePageTreeNode>>>
+{
+    public async Task<Result<IReadOnlyList<ArticlePageTreeNode>>> Handle(GetKnowledgeArticlePagesQuery q, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<IReadOnlyList<ArticlePageTreeNode>>.Failure(Error.NotFound("Agent not found."));
+
+        var article = await knowledgeRepo.GetByIdAsync(q.ArticleId, ct);
+        if (article is null)
+            return Result<IReadOnlyList<ArticlePageTreeNode>>.Failure(Error.NotFound("Knowledge article not found."));
+
+        // Validação de escopo: o agente só pode ver artigos do seu site (ou herdados client/global).
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var clientId = site?.ClientId;
+        var articleInScope =
+            article.SiteId == agent.SiteId ||
+            (clientId.HasValue && article.ClientId == clientId.Value) ||
+            (article.ClientId is null && article.SiteId is null); // global
+        if (!articleInScope)
+            return Result<IReadOnlyList<ArticlePageTreeNode>>.Failure(Error.Forbidden("Agent has no access to this article."));
+
+        var pages = await pageRepo.ListByArticleAsync(q.ArticleId, ct);
+        var roots = BuildTree(pages);
+        return Result<IReadOnlyList<ArticlePageTreeNode>>.Success(roots);
+    }
+
+    private static IReadOnlyList<ArticlePageTreeNode> BuildTree(List<KnowledgeArticlePage> pages)
+    {
+        var childrenMap = new Dictionary<Guid, List<KnowledgeArticlePage>>();
+        foreach (var p in pages)
+        {
+            var key = p.ParentPageId ?? Guid.Empty;
+            if (!childrenMap.TryGetValue(key, out var list))
+            {
+                list = new List<KnowledgeArticlePage>();
+                childrenMap[key] = list;
+            }
+            list.Add(p);
+        }
+
+        foreach (var list in childrenMap.Values)
+        {
+            list.Sort((x, y) =>
+            {
+                var c = x.SortOrder.CompareTo(y.SortOrder);
+                return c != 0 ? c : string.Compare(x.Title, y.Title, StringComparison.OrdinalIgnoreCase);
+            });
+        }
+
+        IReadOnlyList<ArticlePageTreeNode> Build(Guid? parentId, int depth = 0)
+        {
+            if (depth > 10) return []; // proteção contra ciclos
+            var key = parentId ?? Guid.Empty;
+            if (!childrenMap.TryGetValue(key, out var siblings))
+                return [];
+
+            var nodes = new List<ArticlePageTreeNode>(siblings.Count);
+            foreach (var p in siblings)
+            {
+                var children = Build(p.Id, depth + 1);
+                nodes.Add(new ArticlePageTreeNode(
+                    Id: p.Id,
+                    ArticleId: p.ArticleId,
+                    ParentPageId: p.ParentPageId,
+                    Title: p.Title,
+                    Content: p.Content,
+                    SortOrder: p.SortOrder,
+                    ChildCount: children.Count,
+                    Children: children));
+            }
+            return nodes;
+        }
+
+        return Build(null);
+    }
+}

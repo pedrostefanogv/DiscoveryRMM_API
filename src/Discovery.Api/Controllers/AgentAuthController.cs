@@ -289,6 +289,15 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetKnowledgeArticleQuery(id, articleId), ct), Ok);
     }
 
+    [HttpGet("knowledge/{articleId:guid}/pages")]
+    public async Task<IActionResult> GetKnowledgeArticlePages(Guid articleId, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(new GetKnowledgeArticlePagesQuery(id, articleId), ct), Ok);
+    }
+
     // ── Misc ──────────────────────────────────────────────────────────────
 
     [HttpGet("me")]
