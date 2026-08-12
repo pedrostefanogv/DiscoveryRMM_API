@@ -101,4 +101,32 @@ public class ReportsController(IMediator mediator) : ControllerBase
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
+
+    // --- Preview ---
+    [HttpPost("preview")]
+    public async Task<IActionResult> Preview([FromBody] PreviewReportCommand cmd)
+    {
+        var result = await mediator.Send(cmd);
+        return result.Match<IActionResult>(
+            success: dto =>
+            {
+                Response.Headers["X-Report-RowCount"] = dto.RowCount?.ToString();
+                Response.Headers["X-Report-Title"] = dto.Title;
+                Response.Headers["X-Report-Format"] = dto.Format;
+                Response.Headers["X-Report-Preview"] = "true";
+                if (!string.IsNullOrWhiteSpace(dto.Disposition))
+                    Response.Headers["Content-Disposition"] = dto.Disposition;
+
+                if (!string.IsNullOrWhiteSpace(dto.Html))
+                    return Content(dto.Html, dto.ContentType);
+
+                if (dto.Content is not null)
+                    return File(dto.Content, dto.ContentType);
+
+                return NoContent();
+            },
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
 }

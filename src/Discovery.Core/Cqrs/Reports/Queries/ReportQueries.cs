@@ -57,6 +57,35 @@ public sealed record RunReportNowCommand(
     Guid? ClientId = null,
     Guid? ScheduleId = null) : ICommand<Result<ReportDto>>;
 
+// --- Report Preview ---
+public sealed record ReportPreviewTemplateInput(
+    string Name,
+    string? DatasetKey = null,
+    object? DatasetType = null,
+    string? Description = null,
+    string? LayoutJson = null,
+    string? FiltersJson = null);
+
+public sealed record PreviewReportCommand(
+    Guid? TemplateId = null,
+    ReportPreviewTemplateInput? Template = null,
+    int? Format = null,
+    string? FiltersJson = null,
+    string? PreviewMode = "document",
+    string? ResponseDisposition = "inline",
+    string? FileName = null) : ICommand<Result<ReportPreviewResultDto>>;
+
+public sealed record ReportPreviewResultDto(
+    string Mode,
+    string ContentType,
+    int? RowCount,
+    string? Title,
+    string? Format,
+    bool IsPreview,
+    string? Disposition,
+    string? Html = null,
+    byte[]? Content = null);
+
 // --- Dataset Catalog ---
 public sealed record GetReportDatasetCatalogQuery() : IQuery<Result<IReadOnlyList<ReportDatasetCatalogItemDto>>>;
 

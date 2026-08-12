@@ -167,3 +167,104 @@ public sealed class RunReportNowCommandHandler(IReportService reportService, IRe
             execution.Format.ToString(), execution.CreatedAt, execution.FinishedAt));
     }
 }
+
+// new — report preview
+public sealed class PreviewReportCommandHandler(
+    IReportService reportService,
+    IReportTemplateRepository templateRepo)
+    : IRequestHandler<PreviewReportCommand, Result<ReportPreviewResultDto>>
+{
+    public async Task<Result<ReportPreviewResultDto>> Handle(PreviewReportCommand cmd, CancellationToken ct)
+    {
+        var template = await ResolveTemplateAsync(cmd, ct);
+        if (template is null)
+            return Result<ReportPreviewResultDto>.Failure(Error.NotFound("ReportTemplate not found"));
+
+        var isHtml = string.Equals(cmd.PreviewMode, "html", StringComparison.OrdinalIgnoreCase);
+
+        if (isHtml)
+        {
+            var htmlResult = await reportService.PreviewHtmlAsync(template, cmd.FiltersJson, ct);
+            return Result<ReportPreviewResultDto>.Success(new ReportPreviewResultDto(
+                Mode: "html",
+                ContentType: "text/html; charset=utf-8",
+                RowCount: htmlResult.RowCount,
+                Title: htmlResult.Title,
+                Format: "html",
+                IsPreview: true,
+                Disposition: cmd.ResponseDisposition,
+                Html: htmlResult.Html));
+        }
+
+        var format = cmd.Format.HasValue ? (ReportFormat)cmd.Format.Value : template.DefaultFormat;
+        var result = await reportService.PreviewAsync(template, format, cmd.FiltersJson, ct);
+        var contentType = format switch
+        {
+            ReportFormat.Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ReportFormat.Csv => "text/csv",
+            ReportFormat.Markdown => "text/markdown",
+            _ => "application/pdf"
+        };
+
+        return Result<ReportPreviewResultDto>.Success(new ReportPreviewResultDto(
+            Mode: "document",
+            ContentType: contentType,
+            RowCount: result.RowCount,
+            Title: result.Title,
+            Format: format.ToString().ToLowerInvariant(),
+            IsPreview: true,
+            Disposition: cmd.ResponseDisposition,
+            Content: result.Document.Content));
+    }
+
+    private async Task<ReportTemplate?> ResolveTemplateAsync(PreviewReportCommand cmd, CancellationToken ct)
+    {
+        if (cmd.TemplateId.HasValue)
+            return await templateRepo.GetByIdAsync(cmd.TemplateId.Value, null);
+
+        if (cmd.Template is null)
+            return null;
+
+        var input = cmd.Template;
+        var datasetType = ResolveDatasetType(input.DatasetType, input.DatasetKey);
+        if (datasetType is null)
+            return null;
+
+        return new ReportTemplate
+        {
+            Id = Guid.NewGuid(),
+            Name = input.Name ?? "Preview",
+            DatasetType = datasetType.Value,
+            DefaultFormat = ReportFormat.Pdf,
+            LayoutJson = input.LayoutJson ?? "{}",
+            FiltersJson = input.FiltersJson,
+            IsActive = true,
+            IsBuiltIn = false,
+            Version = 1,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+    }
+
+    private static ReportDatasetType? ResolveDatasetType(string? datasetType, string? datasetKey)
+    {
+        var raw = datasetType ?? datasetKey;
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        // Número (ex: "4")
+        if (int.TryParse(raw, out var numeric) && Enum.IsDefined(typeof(ReportDatasetType), numeric))
+            return (ReportDatasetType)numeric;
+
+        // Nome do enum (ex: "AgentHardware")
+        if (Enum.TryParse<ReportDatasetType>(raw, ignoreCase: true, out var parsed))
+            return parsed;
+
+        // camelCase (ex: "agentHardware") → PascalCase
+        var pascal = char.ToUpperInvariant(raw[0]) + raw[1..];
+        if (Enum.TryParse<ReportDatasetType>(pascal, ignoreCase: true, out var parsedPascal))
+            return parsedPascal;
+
+        return null;
+    }
+}
