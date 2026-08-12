@@ -1,3 +1,4 @@
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 
 namespace Discovery.Core.Interfaces;
@@ -17,4 +18,7 @@ public interface ILabelService
     Task<AgentLabelRule> CreateRuleAsync(AgentLabelRule rule, CancellationToken ct = default);
     Task UpdateRuleAsync(AgentLabelRule rule, CancellationToken ct = default);
     Task DeleteRuleAsync(Guid id, CancellationToken ct = default);
+
+    // Agents matched by a rule
+    Task<IReadOnlyList<AgentLabelRuleAgentResponse>> GetAgentsByRuleIdAsync(Guid ruleId, CancellationToken ct = default);
 }

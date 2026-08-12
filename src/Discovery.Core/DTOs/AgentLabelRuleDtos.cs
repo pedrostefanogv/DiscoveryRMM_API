@@ -74,6 +74,17 @@ public class AgentLabelRuleAgentResponse
     public DateTime LastEvaluatedAt { get; set; }
 }
 
+/// <summary>Composite response for "agents matched by a rule". Matches the frontend contract.</summary>
+public class AgentLabelRuleAgentsResponse
+{
+    public Guid RuleId { get; set; }
+    public string RuleName { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public int TotalAgents { get; set; }
+    public IReadOnlyList<AgentLabelRuleAgentResponse> Agents { get; set; } = [];
+}
+
 public class AddManualLabelRequest
 {
     public Guid AgentId { get; set; }

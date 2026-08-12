@@ -1,4 +1,5 @@
-﻿using Discovery.Core.Entities;
+﻿using Discovery.Core.DTOs;
+using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Infrastructure.Services;
@@ -19,4 +20,5 @@ public sealed class LabelService : ILabelService
     public Task<AgentLabelRule> CreateRuleAsync(AgentLabelRule rule, CancellationToken ct = default) => _rules.CreateAsync(rule);
     public Task UpdateRuleAsync(AgentLabelRule rule, CancellationToken ct = default) => _rules.UpdateAsync(rule);
     public Task DeleteRuleAsync(Guid id, CancellationToken ct = default) => _rules.DeleteAsync(id);
+    public Task<IReadOnlyList<AgentLabelRuleAgentResponse>> GetAgentsByRuleIdAsync(Guid ruleId, CancellationToken ct = default) => _labels.GetAgentsByRuleIdAsync(ruleId);
 }

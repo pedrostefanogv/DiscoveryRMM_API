@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.Cqrs.AgentLabels.Queries;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -84,5 +85,47 @@ public sealed class GetAvailableCustomFieldsQueryHandler(ICustomFieldService svc
             d.Id, d.Name, d.DataType.ToString(), d.Description
         )).ToList().AsReadOnly();
         return Result<IReadOnlyList<AvailableCustomFieldDto>>.Success(dtos);
+    }
+}
+
+public sealed class ListAgentsByRuleQueryHandler(ILabelService svc)
+    : IRequestHandler<ListAgentsByRuleQuery, Result<AgentLabelRuleAgentsResponse>>
+{
+    public async Task<Result<AgentLabelRuleAgentsResponse>> Handle(ListAgentsByRuleQuery q, CancellationToken ct)
+    {
+        var rule = await svc.GetRuleByIdAsync(q.RuleId, ct);
+        if (rule is null)
+            return Result<AgentLabelRuleAgentsResponse>.Failure(Error.NotFound($"Label rule {q.RuleId} not found"));
+
+        var agents = await svc.GetAgentsByRuleIdAsync(q.RuleId, ct);
+        return Result<AgentLabelRuleAgentsResponse>.Success(new AgentLabelRuleAgentsResponse
+        {
+            RuleId = rule.Id,
+            RuleName = rule.Name,
+            Label = rule.Label,
+            Description = rule.Description,
+            TotalAgents = agents.Count,
+            Agents = agents
+        });
+    }
+}
+
+public sealed class DryRunLabelRuleQueryHandler(IAgentAutoLabelingService svc)
+    : IRequestHandler<DryRunLabelRuleQuery, Result<AgentLabelRuleDryRunResponse>>
+{
+    public async Task<Result<AgentLabelRuleDryRunResponse>> Handle(DryRunLabelRuleQuery q, CancellationToken ct)
+    {
+        if (q.Request.AgentId == Guid.Empty)
+            return Result<AgentLabelRuleDryRunResponse>.Failure(Error.Validation("agentId", "Agent ID is required."));
+
+        try
+        {
+            var response = await svc.DryRunAsync(q.Request, ct);
+            return Result<AgentLabelRuleDryRunResponse>.Success(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Result<AgentLabelRuleDryRunResponse>.Failure(Error.NotFound(ex.Message));
+        }
     }
 }

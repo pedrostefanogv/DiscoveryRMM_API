@@ -73,3 +73,13 @@ public sealed class DeleteLabelRuleCommandHandler(ILabelService svc) : IRequestH
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }
+
+public sealed class ReprocessLabelsCommandHandler(IAgentAutoLabelingService svc)
+    : IRequestHandler<ReprocessLabelsCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(ReprocessLabelsCommand cmd, CancellationToken ct)
+    {
+        await svc.ReprocessAllAgentsAsync("manual-reprocess", cancellationToken: ct);
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
