@@ -57,6 +57,9 @@ public static class NatsServiceCollectionExtensions
         services.AddSingleton<IAiChatJobQueue, AiChatJobBackgroundService>();
         services.AddHostedService(sp => (AiChatJobBackgroundService)sp.GetRequiredService<IAiChatJobQueue>());
 
+        services.AddSingleton<ILabelReprocessQueue, LabelReprocessBackgroundService>();
+        services.AddHostedService(sp => (LabelReprocessBackgroundService)sp.GetRequiredService<ILabelReprocessQueue>());
+
         services.AddSingleton<INatsAuthCalloutReloadSignal, NatsAuthCalloutReloadSignal>();
         services.AddHostedService<NatsAuthCalloutBackgroundService>();
 

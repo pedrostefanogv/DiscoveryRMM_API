@@ -118,6 +118,9 @@ public sealed class DryRunLabelRuleQueryHandler(IAgentAutoLabelingService svc)
         if (q.Request.AgentId == Guid.Empty)
             return Result<AgentLabelRuleDryRunResponse>.Failure(Error.Validation("agentId", "Agent ID is required."));
 
+        if (q.Request.Expression is null)
+            return Result<AgentLabelRuleDryRunResponse>.Failure(Error.Validation("expression", "Expression is required."));
+
         try
         {
             var response = await svc.DryRunAsync(q.Request, ct);
@@ -126,6 +129,10 @@ public sealed class DryRunLabelRuleQueryHandler(IAgentAutoLabelingService svc)
         catch (InvalidOperationException ex)
         {
             return Result<AgentLabelRuleDryRunResponse>.Failure(Error.NotFound(ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return Result<AgentLabelRuleDryRunResponse>.Failure(Error.Internal($"Falha ao executar prévia da regra: {ex.Message}"));
         }
     }
 }

@@ -36,6 +36,7 @@ public class AgentLabelsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("manual")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
     public async Task<IActionResult> AddManual([FromBody] AddAgentLabelCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -50,6 +51,7 @@ public class AgentLabelsController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("manual/{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
     public async Task<IActionResult> RemoveManual(Guid id)
     {
         var result = await mediator.Send(new RemoveAgentLabelCommand(id));
@@ -57,6 +59,7 @@ public class AgentLabelsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("reprocess")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> Reprocess()
     {
         var result = await mediator.Send(new ReprocessLabelsCommand());

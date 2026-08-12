@@ -74,12 +74,14 @@ public sealed class DeleteLabelRuleCommandHandler(ILabelService svc) : IRequestH
     }
 }
 
-public sealed class ReprocessLabelsCommandHandler(IAgentAutoLabelingService svc)
+public sealed class ReprocessLabelsCommandHandler(ILabelReprocessQueue queue)
     : IRequestHandler<ReprocessLabelsCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(ReprocessLabelsCommand cmd, CancellationToken ct)
     {
-        await svc.ReprocessAllAgentsAsync("manual-reprocess", cancellationToken: ct);
+        // Enfileira o reprocessamento para rodar em background, evitando bloquear
+        // a requisição HTTP com uma operação em lote potencialmente longa.
+        await queue.EnqueueAsync(ct);
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }
