@@ -69,7 +69,7 @@ public sealed record ReportPreviewTemplateInput(
 public sealed record PreviewReportCommand(
     Guid? TemplateId = null,
     ReportPreviewTemplateInput? Template = null,
-    int? Format = null,
+    object? Format = null,
     string? FiltersJson = null,
     string? PreviewMode = "document",
     string? ResponseDisposition = "inline",

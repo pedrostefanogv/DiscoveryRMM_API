@@ -246,9 +246,9 @@ public sealed class PreviewReportCommandHandler(
         };
     }
 
-    private static ReportDatasetType? ResolveDatasetType(string? datasetType, string? datasetKey)
+    private static ReportDatasetType? ResolveDatasetType(object? datasetType, string? datasetKey)
     {
-        var raw = datasetType ?? datasetKey;
+        var raw = datasetType?.ToString() ?? datasetKey;
         if (string.IsNullOrWhiteSpace(raw))
             return null;
 
