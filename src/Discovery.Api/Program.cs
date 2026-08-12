@@ -97,6 +97,9 @@ builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionMana
 builder.Services.AddScoped<IAgentTransferService, AgentTransferService>();
 builder.Services.AddSingleton(TimeProvider.System);
 
+// Static catalog of report datasets (singleton — content is fixed)
+builder.Services.AddSingleton<IReportDatasetCatalogProvider, ReportDatasetCatalogProvider>();
+
 // Remote access (acesso remoto nativo)
 builder.Services.AddScoped<IRemoteSessionManager, RemoteSessionManager>();
 builder.Services.AddScoped<IRemoteSessionRepository, RemoteSessionRepository>();

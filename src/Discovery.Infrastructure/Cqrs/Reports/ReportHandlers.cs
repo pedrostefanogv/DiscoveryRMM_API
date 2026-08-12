@@ -3,6 +3,7 @@ using Discovery.Core.Cqrs.Reports.Queries;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Services;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Reports;
@@ -11,6 +12,14 @@ namespace Discovery.Infrastructure.Cqrs.Reports;
 public sealed class ListReportsQueryHandler : IRequestHandler<ListReportsQuery, Result<IReadOnlyList<ReportDto>>>
 {
     public Task<Result<IReadOnlyList<ReportDto>>> Handle(ListReportsQuery q, CancellationToken ct) => Task.FromResult(Result<IReadOnlyList<ReportDto>>.Success(Array.Empty<ReportDto>()));
+}
+
+// new — dataset catalog
+public sealed class GetReportDatasetCatalogQueryHandler(IReportDatasetCatalogProvider provider)
+    : IRequestHandler<GetReportDatasetCatalogQuery, Result<IReadOnlyList<ReportDatasetCatalogItemDto>>>
+{
+    public Task<Result<IReadOnlyList<ReportDatasetCatalogItemDto>>> Handle(GetReportDatasetCatalogQuery q, CancellationToken ct)
+        => Task.FromResult(Result<IReadOnlyList<ReportDatasetCatalogItemDto>>.Success(provider.GetAll()));
 }
 
 public sealed class GetReportExecutionQueryHandler : IRequestHandler<GetReportExecutionQuery, Result<ReportDto>>

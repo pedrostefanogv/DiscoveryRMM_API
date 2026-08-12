@@ -25,6 +25,14 @@ public class ReportsController(IMediator mediator) : ControllerBase
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
+    // --- Dataset Catalog ---
+    [HttpGet("datasets")]
+    public async Task<IActionResult> GetDatasetCatalog()
+    {
+        var result = await mediator.Send(new GetReportDatasetCatalogQuery());
+        return result.ToActionResult();
+    }
+
     // --- Templates ---
     [HttpGet("templates")]
     public async Task<IActionResult> ListTemplates([FromQuery] Guid? clientId = null, [FromQuery] bool? isActive = true)

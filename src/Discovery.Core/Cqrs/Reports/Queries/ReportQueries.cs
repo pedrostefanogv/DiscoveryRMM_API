@@ -56,3 +56,41 @@ public sealed record RunReportNowCommand(
     string? FiltersJson = null,
     Guid? ClientId = null,
     Guid? ScheduleId = null) : ICommand<Result<ReportDto>>;
+
+// --- Dataset Catalog ---
+public sealed record GetReportDatasetCatalogQuery() : IQuery<Result<IReadOnlyList<ReportDatasetCatalogItemDto>>>;
+
+public sealed record ReportDatasetFieldMetadataDto(
+    string Field,
+    string? Label = null,
+    string? Reference = null,
+    string? DataType = null,
+    bool IsJoinKey = false,
+    string? DefaultAlias = null,
+    string? DatasetName = null,
+    string? Description = null);
+
+public sealed record ReportDatasetFilterDto(
+    string Name,
+    string Type,
+    bool Required,
+    string? Label = null);
+
+public sealed record ReportDatasetJoinCapabilityDto(
+    string SourceKey,
+    string TargetKey,
+    IReadOnlyList<string>? JoinTypes = null,
+    string? Description = null);
+
+public sealed record ReportDatasetCatalogItemDto(
+    string Key,
+    string Type,
+    int DatasetType,
+    string Name,
+    string Description,
+    IReadOnlyList<string> Fields,
+    IReadOnlyList<ReportDatasetFieldMetadataDto> FieldMetadata,
+    IReadOnlyList<ReportDatasetFilterDto> Filters,
+    IReadOnlyList<ReportDatasetJoinCapabilityDto> JoinCapabilities,
+    string DefaultFormat,
+    IReadOnlyList<string> SupportedFormats);
