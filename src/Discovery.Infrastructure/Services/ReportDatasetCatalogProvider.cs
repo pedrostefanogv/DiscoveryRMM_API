@@ -53,7 +53,10 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
                         Label: meta.Label ?? FormatLabel(field),
                         DataType: meta.DataType ?? InferDataType(field),
                         IsJoinKey: joinKeys.Contains(field) || meta.IsJoinKey,
-                        DefaultAlias: GetDefaultAlias(key),
+                        // Alias único por campo: {prefixo do dataset}.{campo}
+                        // (ex: "sw.softwareName"). Garante unicidade global, já que
+                        // o prefixo sozinho se repetiria para todos os campos.
+                        DefaultAlias: $"{GetDefaultAlias(key)}.{field}",
                         DatasetName: name);
                 })
                 .ToList();
@@ -62,7 +65,11 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
                 .Select(f => new ReportDatasetFilterDto(f, InferFilterType(f), Required: false, Label: FormatLabel(f)))
                 .ToList();
 
-            var joinCapabilities = joinKeys
+            // Join capabilities devem referenciar APENAS campos que existem no
+            // dataset (fields). Filtra chaves de join ausentes (ex: um dataset
+            // que expõe clientName em vez de clientId).
+            var effectiveJoinKeys = joinKeys.Where(k => fields.Contains(k)).ToArray();
+            var joinCapabilities = effectiveJoinKeys
                 .Select(k => new ReportDatasetJoinCapabilityDto(
                     SourceKey: k,
                     TargetKey: k,

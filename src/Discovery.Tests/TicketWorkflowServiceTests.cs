@@ -1,3 +1,4 @@
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -213,21 +214,23 @@ public class TicketWorkflowServiceTests
             _newState = new WorkflowState { Id = newId, Name = "New", PausesSla = newPausesSla, IsFinal = true };
         }
 
-        public Task<bool> IsTransitionValidAsync(Guid fromStateId, Guid toStateId, Guid clientId) =>
-            Task.FromResult(_isValid);
         public Task<WorkflowState?> GetStateByIdAsync(Guid id) =>
             Task.FromResult<WorkflowState?>(id == _oldState.Id ? _oldState : id == _newState.Id ? _newState : null);
-        public Task<WorkflowState?> GetInitialStateAsync(Guid clientId) =>
-            Task.FromResult<WorkflowState?>(_oldState);
-        public Task<IEnumerable<WorkflowState>> GetByClientAsync(Guid clientId) =>
+        public Task<IEnumerable<WorkflowState>> GetStatesAsync(Guid? clientId = null) =>
             Task.FromResult<IEnumerable<WorkflowState>>(new[] { _oldState, _newState });
-        public Task<WorkflowState> CreateAsync(WorkflowState state) => throw new NotImplementedException();
-        public Task UpdateAsync(WorkflowState state) => throw new NotImplementedException();
-        public Task DeleteAsync(Guid id) => throw new NotImplementedException();
-        public Task<IEnumerable<WorkflowTransition>> GetTransitionsByFromStateAsync(Guid fromStateId) =>
+        public Task<WorkflowState?> GetInitialStateAsync(Guid? clientId = null) =>
+            Task.FromResult<WorkflowState?>(_oldState);
+        public Task<WorkflowState> CreateStateAsync(WorkflowState state) => throw new NotImplementedException();
+        public Task UpdateStateAsync(WorkflowState state) => throw new NotImplementedException();
+        public Task DeleteStateAsync(Guid id) => throw new NotImplementedException();
+        public Task<IEnumerable<WorkflowTransition>> GetTransitionsAsync(Guid? clientId = null) =>
             Task.FromResult<IEnumerable<WorkflowTransition>>(Array.Empty<WorkflowTransition>());
+        public Task<IEnumerable<WorkflowTransition>> GetTransitionsFromStateAsync(Guid fromStateId, Guid? clientId = null) =>
+            Task.FromResult<IEnumerable<WorkflowTransition>>(Array.Empty<WorkflowTransition>());
+        public Task<bool> IsTransitionValidAsync(Guid fromStateId, Guid toStateId, Guid? clientId = null) =>
+            Task.FromResult(_isValid);
         public Task<WorkflowTransition> CreateTransitionAsync(WorkflowTransition transition) => throw new NotImplementedException();
-        public Task DeleteTransitionAsync(Guid transitionId) => throw new NotImplementedException();
+        public Task DeleteTransitionAsync(Guid id) => throw new NotImplementedException();
     }
 
     private sealed class FakeSlaService : ISlaService
@@ -248,32 +251,48 @@ public class TicketWorkflowServiceTests
     {
         public List<TicketActivityLog> RecordedActivities { get; } = [];
 
-        public Task LogActivityAsync(Guid ticketId, TicketActivityType type, Guid? changedByUserId, string? oldValue, string? newValue, string? comment)
+        private Task<TicketActivityLog> Record(Guid ticketId, TicketActivityType type, Guid? changedByUserId,
+            string? oldValue = null, string? newValue = null, string? comment = null)
         {
-            RecordedActivities.Add(new TicketActivityLog { TicketId = ticketId, Type = type, CreatedAt = DateTime.UtcNow });
-            return Task.CompletedTask;
+            var log = new TicketActivityLog
+            {
+                TicketId = ticketId,
+                Type = type,
+                CreatedAt = DateTime.UtcNow,
+                OldValue = oldValue,
+                NewValue = newValue,
+                Comment = comment
+            };
+            RecordedActivities.Add(log);
+            return Task.FromResult(log);
         }
 
-        public Task LogStateChangeAsync(Guid ticketId, Guid? changedByUserId, Guid oldStateId, Guid newStateId) =>
-            LogActivityAsync(ticketId, TicketActivityType.StateChanged, changedByUserId, oldStateId.ToString(), newStateId.ToString(), null);
-        public Task LogAssignmentAsync(Guid ticketId, Guid? changedByUserId, Guid? oldAssignee, Guid? newAssignee) =>
-            LogActivityAsync(ticketId, TicketActivityType.Assigned, changedByUserId, oldAssignee?.ToString(), newAssignee?.ToString(), null);
-        public Task LogPriorityChangeAsync(Guid ticketId, Guid? changedByUserId, string oldPriority, string newPriority) =>
-            LogActivityAsync(ticketId, TicketActivityType.PriorityChanged, changedByUserId, oldPriority, newPriority, null);
-        public Task LogDepartmentChangeAsync(Guid ticketId, Guid? changedByUserId, string oldDept, string newDept) =>
-            LogActivityAsync(ticketId, TicketActivityType.DepartmentChanged, changedByUserId, oldDept, newDept, null);
+        public Task<TicketActivityLog> LogActivityAsync(Guid ticketId, TicketActivityType type, Guid? changedByUserId, string? oldValue, string? newValue, string? comment)
+            => Record(ticketId, type, changedByUserId, oldValue, newValue, comment);
+
+        public Task<TicketActivityLog> LogStateChangeAsync(Guid ticketId, Guid? changedByUserId, Guid oldStateId, Guid newStateId)
+            => Record(ticketId, TicketActivityType.StateChanged, changedByUserId, oldStateId.ToString(), newStateId.ToString());
+
+        public Task<TicketActivityLog> LogAssignmentAsync(Guid ticketId, Guid? changedByUserId, Guid? oldUserId, Guid? newUserId)
+            => Record(ticketId, TicketActivityType.Assigned, changedByUserId, oldUserId?.ToString(), newUserId?.ToString());
+
+        public Task<TicketActivityLog> LogPriorityChangeAsync(Guid ticketId, Guid? changedByUserId, string oldPriority, string newPriority)
+            => Record(ticketId, TicketActivityType.PriorityChanged, changedByUserId, oldPriority, newPriority);
+
+        public Task<TicketActivityLog> LogDepartmentChangeAsync(Guid ticketId, Guid? changedByUserId, string oldDept, string newDept)
+            => Record(ticketId, TicketActivityType.DepartmentChanged, changedByUserId, oldDept, newDept);
     }
 
     private sealed class FakeTicketAlertRuleRepository : ITicketAlertRuleRepository
     {
-        public Task<IEnumerable<TicketAlertRule>> GetByWorkflowStateIdAsync(Guid workflowStateId) =>
-            Task.FromResult<IEnumerable<TicketAlertRule>>(Array.Empty<TicketAlertRule>());
         public Task<TicketAlertRule?> GetByIdAsync(Guid id) => Task.FromResult<TicketAlertRule?>(null);
-        public Task<IEnumerable<TicketAlertRule>> GetAllAsync() =>
-            Task.FromResult<IEnumerable<TicketAlertRule>>(Array.Empty<TicketAlertRule>());
+        public Task<IReadOnlyList<TicketAlertRule>> GetAllAsync() =>
+            Task.FromResult<IReadOnlyList<TicketAlertRule>>(Array.Empty<TicketAlertRule>());
+        public Task<IReadOnlyList<TicketAlertRule>> GetByWorkflowStateIdAsync(Guid workflowStateId) =>
+            Task.FromResult<IReadOnlyList<TicketAlertRule>>(Array.Empty<TicketAlertRule>());
         public Task<TicketAlertRule> CreateAsync(TicketAlertRule rule) => throw new NotImplementedException();
-        public Task UpdateAsync(TicketAlertRule rule) => throw new NotImplementedException();
-        public Task DeleteAsync(Guid id) => throw new NotImplementedException();
+        public Task<TicketAlertRule> UpdateAsync(TicketAlertRule rule) => throw new NotImplementedException();
+        public Task<bool> DeleteAsync(Guid id) => throw new NotImplementedException();
     }
 
     private sealed class FakeAlertDispatchService : IAlertDispatchService
@@ -286,10 +305,29 @@ public class TicketWorkflowServiceTests
     {
         public List<NotificationPublishRequest> PublishedNotifications { get; } = [];
 
-        public Task PublishAsync(NotificationPublishRequest notification, CancellationToken ct = default)
+        public Task<AppNotification> PublishAsync(NotificationPublishRequest request, CancellationToken cancellationToken = default)
         {
-            PublishedNotifications.Add(notification);
-            return Task.CompletedTask;
+            PublishedNotifications.Add(request);
+            return Task.FromResult(new AppNotification
+            {
+                Id = Guid.NewGuid(),
+                EventType = request.EventType,
+                Topic = request.Topic,
+                Title = request.Title,
+                Message = request.Message,
+                Severity = request.Severity,
+                IsRead = false,
+                CreatedAt = DateTime.UtcNow
+            });
         }
+
+        public Task<IReadOnlyList<AppNotification>> GetRecentAsync(Guid? recipientUserId = null, Guid? recipientAgentId = null, string? recipientKey = null, string? topic = null, NotificationSeverity? severity = null, bool? isRead = null, int limit = 50)
+            => Task.FromResult<IReadOnlyList<AppNotification>>(Array.Empty<AppNotification>());
+
+        public Task<bool> MarkAsReadAsync(Guid id, Guid? recipientUserId = null, Guid? recipientAgentId = null, string? recipientKey = null)
+            => Task.FromResult(true);
+
+        public Task<bool> DeleteAsync(Guid id, Guid? recipientUserId = null, Guid? recipientAgentId = null)
+            => Task.FromResult(true);
     }
 }

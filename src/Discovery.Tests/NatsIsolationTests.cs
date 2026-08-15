@@ -43,6 +43,9 @@ public class NatsIsolationTests
         Assert.That(overlap, Is.EquivalentTo(new[]
         {
             "$JS.API.STREAM.NAMES",
+            "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
+            "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
+            "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
             "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
@@ -69,14 +72,14 @@ public class NatsIsolationTests
     }
 
     [Test]
-    public void AgentSubjects_ContainInfraSubjects_FivePublishEightSubscribe()
+    public void AgentSubjects_ContainInfraSubjects_NinePublishTenSubscribe()
     {
         var (pub, sub) = BuildAgentSubjectLists(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
-        Assert.That(pub, Has.Count.EqualTo(5),
-            "Agente deve publicar em 5 subjects: 4 telemetrias canônicas + lookup de stream JetStream.");
-        Assert.That(sub, Has.Count.EqualTo(9),
-            "Agente deve assinar em 9 subjects: 6 canônicos + p2p.events + remote.session + inbox para respostas de request/reply.");
+        Assert.That(pub, Has.Count.EqualTo(9),
+            "Agente deve publicar em 9 subjects: 4 telemetrias canônicas + remote.session + 4 lookup JetStream.");
+        Assert.That(sub, Has.Count.EqualTo(10),
+            "Agente deve assinar em 10 subjects: comandos + p2p + remote.session + inbox.");
     }
 
     [Test]
@@ -97,7 +100,11 @@ public class NatsIsolationTests
                 expectedPrefix + "result",
                 expectedPrefix + "hardware",
                 expectedPrefix + "remote-debug.log",
+                $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "$JS.API.STREAM.NAMES",
+                "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
+                "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
+                "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
             }),
             "Publish subjects devem conter somente os message types canônicos.");
 
@@ -112,6 +119,7 @@ public class NatsIsolationTests
                 "tenant.global.pong",
                 expectedPrefix + "sync.ping",
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
+                NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "_INBOX.>",
             }),
@@ -145,6 +153,9 @@ public class NatsIsolationTests
         Assert.That(overlap, Is.EquivalentTo(new[]
         {
             "$JS.API.STREAM.NAMES",
+            "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
+            "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
+            "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
             "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
@@ -167,14 +178,22 @@ public class NatsIsolationTests
         var creds = await service.IssueForAgentAsync(agentId);
 
         Assert.That(creds.PublishSubjects, Is.Not.Empty);
+        // Formato canônico sem hífens (ex: remote.session.> usa {id:N})
+        var agentIdNoHyphens = agentId.ToString("N");
+        var clientIdNoHyphens = clientId.ToString("N");
+
         foreach (var s in creds.PublishSubjects)
         {
             if (s.StartsWith("$JS.", StringComparison.Ordinal))
                 continue;
 
-            Assert.That(s, Does.Contain(agentId.ToString()),
+            Assert.That(
+                s.Contains(agentId.ToString(), StringComparison.Ordinal)
+                || s.Contains(agentIdNoHyphens, StringComparison.Ordinal),
                 $"Publish subject '{s}' não contém o agentId correto.");
-            Assert.That(s, Does.Contain(clientId.ToString()),
+            Assert.That(
+                s.Contains(clientId.ToString(), StringComparison.Ordinal)
+                || s.Contains(clientIdNoHyphens, StringComparison.Ordinal),
                 $"Publish subject '{s}' não contém o clientId correto.");
         }
     }
@@ -433,7 +452,11 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "result"),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "hardware"),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "remote-debug.log"),
+                $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "$JS.API.STREAM.NAMES",
+                "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
+                "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
+                "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
             ],
             Subscribe:
             [
@@ -444,6 +467,7 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.ServerPongSubject(),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
+                NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "_INBOX.>",
             ]);
@@ -525,6 +549,9 @@ public class NatsIsolationTests
             Task.FromResult(id == site.Id ? (Site?)site : null);
 
         public Task<IEnumerable<Site>> GetByClientIdAsync(Guid clientId, bool includeInactive = false) => throw new NotImplementedException();
+
+        public Task<IEnumerable<Site>> GetByClientIdsAsync(IEnumerable<Guid> clientIds, bool includeInactive = false) => throw new NotImplementedException();
+
         public Task<Site> CreateAsync(Site s) => throw new NotImplementedException();
         public Task UpdateAsync(Site s) => throw new NotImplementedException();
         public Task DeleteAsync(Guid id) => throw new NotImplementedException();

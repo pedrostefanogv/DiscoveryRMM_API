@@ -267,4 +267,28 @@ public sealed class PreviewReportCommandHandler(
 
         return null;
     }
+
+    // Resolve o formato de relatório a partir de um valor flexível (int, nome do
+    // enum ou camelCase), seguindo o mesmo padrão do ResolveDatasetType.
+    private static ReportFormat? ResolveFormat(object? format)
+    {
+        var raw = format?.ToString();
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        // Número (ex: "1" = Pdf)
+        if (int.TryParse(raw, out var numeric) && Enum.IsDefined(typeof(ReportFormat), numeric))
+            return (ReportFormat)numeric;
+
+        // Nome do enum (ex: "Pdf")
+        if (Enum.TryParse<ReportFormat>(raw, ignoreCase: true, out var parsed))
+            return parsed;
+
+        // camelCase (ex: "pdf") → PascalCase
+        var pascal = char.ToUpperInvariant(raw[0]) + raw[1..];
+        if (Enum.TryParse<ReportFormat>(pascal, ignoreCase: true, out var parsedPascal))
+            return parsedPascal;
+
+        return null;
+    }
 }

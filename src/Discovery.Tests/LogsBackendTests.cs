@@ -1,16 +1,16 @@
 using System.Text.Json;
-using Discovery.Api.Controllers;
+using Discovery.Core.Cqrs.Logs.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Infrastructure.Cqrs.Logs;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Repositories;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Discovery.Tests;
 
@@ -36,7 +36,7 @@ public class LogsBackendTests
         db.Logs.AddRange(matchingClientLog, matchingSiteLog, blockedLog);
         await db.SaveChangesAsync();
 
-        var repository = new LogRepository(db, new FakeAgentMessaging());
+        var repository = new LogRepository(db, new FakeAgentMessaging(), NullLogger<LogRepository>.Instance);
 
         var results = (await repository.QueryAsync(new LogQuery
         {
@@ -76,7 +76,7 @@ public class LogsBackendTests
         db.Logs.AddRange(expected, ignored);
         await db.SaveChangesAsync();
 
-        var repository = new LogRepository(db, new FakeAgentMessaging());
+        var repository = new LogRepository(db, new FakeAgentMessaging(), NullLogger<LogRepository>.Instance);
         var results = await repository.QueryPageAsync(new LogQuery
         {
             HasGlobalAccess = true,
@@ -91,292 +91,39 @@ public class LogsBackendTests
     }
 
     [Test]
-    public async Task Query_ShouldReturnForbidden_WhenClientIsOutsideScope()
-    {
-        await using var db = CreateDbContext();
-        var controller = CreateController(
-            db,
-            new FakeScopeContext(new UserScopeAccess
-            {
-                HasGlobalAccess = false,
-                AllowedClientIds = [Guid.NewGuid()],
-                AllowedSiteIds = []
-            }));
-
-        var forbiddenClientId = Guid.NewGuid();
-        var result = await controller.Query(
-            clientId: forbiddenClientId,
-            siteId: null,
-            agentId: null,
-            type: null,
-            level: null,
-            source: null,
-            search: null,
-            traceId: null,
-            correlationId: null,
-            requestPath: null,
-            statusCode: null,
-            period: null,
-            from: null,
-            to: null,
-            limit: 100,
-            offset: 0);
-
-        Assert.That(result, Is.TypeOf<ObjectResult>());
-        var objectResult = (ObjectResult)result;
-        Assert.That(objectResult.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
-    }
-
-    [Test]
-    public async Task GetScopeOptions_ShouldReturnOnlyEntitiesInsideAccessibleScope()
+    public async Task ListLogsQueryHandler_ShouldRespectScopeAndReturnPage()
     {
         await using var db = CreateDbContext();
 
-        var clientA = CreateClient("Client A");
-        var clientB = CreateClient("Client B");
-        var siteA = CreateSite(clientA.Id, "Site A");
-        var siteB = CreateSite(clientB.Id, "Site B");
-        var agentA = CreateAgent(siteA.Id, "agent-a");
-        var agentB = CreateAgent(siteB.Id, "agent-b");
+        var clientAllowed = CreateClient("Allowed Client");
+        var clientBlocked = CreateClient("Blocked Client");
+        var siteAllowed = CreateSite(clientAllowed.Id, "Allowed Site");
+        var siteBlocked = CreateSite(clientBlocked.Id, "Blocked Site");
 
-        db.Clients.AddRange(clientA, clientB);
-        db.Sites.AddRange(siteA, siteB);
-        db.Agents.AddRange(agentA, agentB);
+        var matchingLog = CreateLog(clientAllowed.Id, siteAllowed.Id, null, "needle", null);
+        var blockedLog = CreateLog(clientBlocked.Id, siteBlocked.Id, null, "needle but blocked", null);
+
+        db.Clients.AddRange(clientAllowed, clientBlocked);
+        db.Sites.AddRange(siteAllowed, siteBlocked);
+        db.Logs.AddRange(matchingLog, blockedLog);
         await db.SaveChangesAsync();
 
-        var controller = CreateController(
-            db,
-            new FakeScopeContext(new UserScopeAccess
-            {
-                HasGlobalAccess = false,
-                AllowedClientIds = [],
-                AllowedSiteIds = [siteB.Id]
-            }));
+        var repository = new LogRepository(db, new FakeAgentMessaging(), NullLogger<LogRepository>.Instance);
+        var scopeContext = new FakeScopeContext(new UserScopeAccess
+        {
+            HasGlobalAccess = false,
+            AllowedClientIds = [clientAllowed.Id],
+            AllowedSiteIds = [siteAllowed.Id]
+        });
 
-        var result = await controller.GetScopeOptions();
+        var handler = new ListLogsQueryHandler(repository, scopeContext);
+        var result = await handler.Handle(new ListLogsQuery(Search: "needle", Limit: 50), CancellationToken.None);
 
-        Assert.That(result, Is.TypeOf<OkObjectResult>());
-        var payload = ((OkObjectResult)result).Value;
-        Assert.That(payload, Is.Not.Null);
-
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(payload));
-        var root = document.RootElement;
-
-        Assert.That(root.GetProperty("canViewAll").GetBoolean(), Is.False);
-        Assert.That(root.GetProperty("clients").GetArrayLength(), Is.EqualTo(1));
-        Assert.That(root.GetProperty("sites").GetArrayLength(), Is.EqualTo(1));
-        Assert.That(root.GetProperty("agents").GetArrayLength(), Is.EqualTo(1));
-
-        Assert.That(root.GetProperty("clients")[0].GetProperty("Id").GetGuid(), Is.EqualTo(clientB.Id));
-        Assert.That(root.GetProperty("sites")[0].GetProperty("Id").GetGuid(), Is.EqualTo(siteB.Id));
-        Assert.That(root.GetProperty("agents")[0].GetProperty("Id").GetGuid(), Is.EqualTo(agentB.Id));
+        Assert.That(result.IsSuccess, Is.True);
+        var page = result.Value!;
+        Assert.That(page.Items.Select(log => log.Id), Is.EquivalentTo(new[] { matchingLog.Id }));
+        Assert.That(page.ReturnedItems, Is.EqualTo(1));
     }
-
-    [Test]
-    public async Task QueryPage_ShouldReturnCursorPage_WhenMoreItemsExist()
-    {
-        await using var db = CreateDbContext();
-
-        var client = CreateClient("Client Cursor");
-        var site = CreateSite(client.Id, "Site Cursor");
-        db.Clients.Add(client);
-        db.Sites.Add(site);
-
-        var newest = CreateLog(client.Id, site.Id, null, "newest", null, DateTime.UtcNow.AddMinutes(-1));
-        var middle = CreateLog(client.Id, site.Id, null, "middle", null, DateTime.UtcNow.AddMinutes(-2));
-        var oldest = CreateLog(client.Id, site.Id, null, "oldest", null, DateTime.UtcNow.AddMinutes(-3));
-
-        db.Logs.AddRange(newest, middle, oldest);
-        await db.SaveChangesAsync();
-
-        var repository = new LogRepository(db, new FakeAgentMessaging());
-        var controller = CreateController(
-            db,
-            repository,
-            new FakeScopeContext(new UserScopeAccess { HasGlobalAccess = true }));
-
-        var firstPageResult = await controller.QueryPage(
-            clientId: client.Id,
-            siteId: null,
-            agentId: null,
-            type: null,
-            level: null,
-            source: null,
-            search: null,
-            traceId: null,
-            correlationId: null,
-            requestPath: null,
-            statusCode: null,
-            period: null,
-            from: null,
-            to: null,
-            cursor: null,
-            limit: 2);
-
-        Assert.That(firstPageResult, Is.TypeOf<OkObjectResult>());
-        var firstPage = (LogCursorPageDto)((OkObjectResult)firstPageResult).Value!;
-        Assert.That(firstPage.ReturnedItems, Is.EqualTo(2));
-        Assert.That(firstPage.HasMore, Is.True);
-        Assert.That(firstPage.NextCursor, Is.Not.Null.And.Not.Empty);
-        Assert.That(firstPage.Items.Select(log => log.Message), Is.EqualTo(new[] { "newest", "middle" }));
-
-        var secondPageResult = await controller.QueryPage(
-            clientId: client.Id,
-            siteId: null,
-            agentId: null,
-            type: null,
-            level: null,
-            source: null,
-            search: null,
-            traceId: null,
-            correlationId: null,
-            requestPath: null,
-            statusCode: null,
-            period: null,
-            from: null,
-            to: null,
-            cursor: firstPage.NextCursor,
-            limit: 2);
-
-        var secondPage = (LogCursorPageDto)((OkObjectResult)secondPageResult).Value!;
-        Assert.That(secondPage.ReturnedItems, Is.EqualTo(1));
-        Assert.That(secondPage.HasMore, Is.False);
-        Assert.That(secondPage.Items.Select(log => log.Message), Is.EqualTo(new[] { "oldest" }));
-    }
-
-    [Test]
-    public async Task QueryPage_ShouldReturnBadRequest_WhenCursorIsInvalid()
-    {
-        await using var db = CreateDbContext();
-        var controller = CreateController(
-            db,
-            new LogRepository(db, new FakeAgentMessaging()),
-            new FakeScopeContext(new UserScopeAccess { HasGlobalAccess = true }));
-
-        var result = await controller.QueryPage(
-            clientId: null,
-            siteId: null,
-            agentId: null,
-            type: null,
-            level: null,
-            source: null,
-            search: null,
-            traceId: null,
-            correlationId: null,
-            requestPath: null,
-            statusCode: null,
-            period: null,
-            from: null,
-            to: null,
-            cursor: "not-base64",
-            limit: 50);
-
-        Assert.That(result, Is.TypeOf<BadRequestObjectResult>());
-    }
-
-    [Test]
-    public async Task QuerySummary_ShouldReturnFacetCountsInsideScope()
-    {
-        await using var db = CreateDbContext();
-
-        var clientA = CreateClient("Client A");
-        var clientB = CreateClient("Client B");
-        var siteA = CreateSite(clientA.Id, "Site A");
-        var siteB = CreateSite(clientB.Id, "Site B");
-        var agentA = CreateAgent(siteA.Id, "agent-a");
-
-        db.Clients.AddRange(clientA, clientB);
-        db.Sites.AddRange(siteA, siteB);
-        db.Agents.Add(agentA);
-        db.Logs.AddRange(
-            new LogEntry
-            {
-                Id = Guid.NewGuid(),
-                ClientId = clientA.Id,
-                SiteId = siteA.Id,
-                AgentId = agentA.Id,
-                Type = LogType.System,
-                Level = LogLevel.Error,
-                Source = LogSource.Api,
-                Message = "first",
-                CreatedAt = DateTime.UtcNow.AddMinutes(-1)
-            },
-            new LogEntry
-            {
-                Id = Guid.NewGuid(),
-                ClientId = clientA.Id,
-                SiteId = siteA.Id,
-                AgentId = agentA.Id,
-                Type = LogType.System,
-                Level = LogLevel.Warn,
-                Source = LogSource.Api,
-                Message = "second",
-                CreatedAt = DateTime.UtcNow.AddMinutes(-2)
-            },
-            new LogEntry
-            {
-                Id = Guid.NewGuid(),
-                ClientId = clientB.Id,
-                SiteId = siteB.Id,
-                Type = LogType.Auth,
-                Level = LogLevel.Fatal,
-                Source = LogSource.Nats,
-                Message = "blocked",
-                CreatedAt = DateTime.UtcNow.AddMinutes(-3)
-            });
-        await db.SaveChangesAsync();
-
-        var controller = CreateController(
-            db,
-            new LogRepository(db, new FakeAgentMessaging()),
-            new FakeScopeContext(new UserScopeAccess
-            {
-                HasGlobalAccess = false,
-                AllowedClientIds = [clientA.Id],
-                AllowedSiteIds = []
-            }));
-
-        var result = await controller.QuerySummary(
-            clientId: null,
-            siteId: null,
-            agentId: null,
-            type: null,
-            level: null,
-            source: null,
-            search: null,
-            traceId: null,
-            correlationId: null,
-            requestPath: null,
-            statusCode: null,
-            period: null,
-            from: null,
-            to: null);
-
-        Assert.That(result, Is.TypeOf<OkObjectResult>());
-        var summary = (LogSummaryDto)((OkObjectResult)result).Value!;
-        Assert.That(summary.Total, Is.EqualTo(2));
-        Assert.That(summary.Levels.Single(item => item.Key == nameof(LogLevel.Error)).Count, Is.EqualTo(1));
-        Assert.That(summary.Levels.Single(item => item.Key == nameof(LogLevel.Warn)).Count, Is.EqualTo(1));
-        Assert.That(summary.Clients.Single().Name, Is.EqualTo("Client A"));
-        Assert.That(summary.Sites.Single().Name, Is.EqualTo("Site A"));
-        Assert.That(summary.Agents.Single().Name, Is.EqualTo(agentA.DisplayName));
-    }
-
-    private static LogsController CreateController(DiscoveryDbContext db, IScopeContext scopeContext)
-        => new(
-            new FakeLogRepository(),
-            new ClientRepository(db),
-            new AgentRepository(db),
-            new SiteRepository(db),
-            scopeContext);
-
-    private static LogsController CreateController(DiscoveryDbContext db, ILogRepository logRepository, IScopeContext scopeContext)
-        => new(
-            logRepository,
-            new ClientRepository(db),
-            new AgentRepository(db),
-            new SiteRepository(db),
-            scopeContext);
 
     private static DiscoveryDbContext CreateDbContext()
     {

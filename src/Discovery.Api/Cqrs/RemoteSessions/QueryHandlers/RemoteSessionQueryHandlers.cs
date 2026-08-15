@@ -102,6 +102,7 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.monitors",
             $"{natsSubject}.event",
             $"{natsSubject}.term.out",
+            $"{natsSubject}.term.ready",
             $"{natsSubject}.files.resp",
             $"{natsSubject}.proxy.resp",
             $"{natsSubject}.signal",

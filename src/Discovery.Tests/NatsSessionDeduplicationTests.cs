@@ -1,4 +1,5 @@
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services;
 
@@ -51,20 +52,17 @@ public class NatsSessionDeduplicationTests
         public Task<Agent?> GetByIdAsync(Guid id) => Task.FromResult(id == _agent.Id ? _agent : null)!;
 
         // Stubs for unused members
-        public Task<Agent?> GetByHostnameAsync(string hostname) => throw new NotImplementedException();
-        public Task<IReadOnlyList<Agent>> GetBySiteIdAsync(Guid siteId) => throw new NotImplementedException();
-        public Task<IReadOnlyList<Agent>> GetByClientIdAsync(Guid clientId) => throw new NotImplementedException();
+        public Task<IEnumerable<Agent>> GetAllAsync() => throw new NotImplementedException();
+        public Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId) => throw new NotImplementedException();
+        public Task<IEnumerable<Agent>> GetByClientIdAsync(Guid clientId) => throw new NotImplementedException();
         public Task<Agent> CreateAsync(Agent agent) => throw new NotImplementedException();
         public Task UpdateAsync(Agent agent) => throw new NotImplementedException();
-        public Task UpdateStatusAsync(Guid agentId, string status) => throw new NotImplementedException();
-        public Task SoftDeleteAsync(Guid agentId) => throw new NotImplementedException();
-        public Task SetZeroTouchPendingAsync(Guid agentId, bool pending) => throw new NotImplementedException();
-        public Task<IReadOnlyList<Agent>> GetAllAsync() => throw new NotImplementedException();
-        public Task UpdateLastSeenAsync(Guid agentId, DateTime lastSeen) => throw new NotImplementedException();
-        public Task<IReadOnlyList<Agent>> GetBySiteIdPaginatedAsync(Guid siteId, int limit, string? cursor) => throw new NotImplementedException();
-        public Task<IReadOnlyList<Agent>> GetByClientIdPaginatedAsync(Guid clientId, int limit, string? cursor) => throw new NotImplementedException();
-        public Task<int> GetCountBySiteIdAsync(Guid siteId) => throw new NotImplementedException();
-        public Task<int> GetCountByClientIdAsync(Guid clientId) => throw new NotImplementedException();
+        public Task UpdateStatusAsync(Guid id, AgentStatus status, string? ipAddress) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task ApproveZeroTouchAsync(Guid agentId) => throw new NotImplementedException();
+        public Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId) => throw new NotImplementedException();
+        public Task TransferSiteAsync(Guid agentId, Guid newSiteId) => throw new NotImplementedException();
+        public Task DeleteAsync(Guid id) => throw new NotImplementedException();
         public Task<IReadOnlyList<Agent>> FindByFingerprintAsync(string fingerprintHash, Guid clientId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
@@ -144,7 +142,7 @@ public class NatsSessionDeduplicationTests
     }
 
     [Test]
-    public async Task TryAcquireNatsSession_SecondAttemptWithSameToken_Fails()
+    public async Task TryAcquireNatsSession_SameAgentReacquires_Succeeds()
     {
         var tokenId = Guid.NewGuid();
         var agentId = Guid.NewGuid();
@@ -155,10 +153,29 @@ public class NatsSessionDeduplicationTests
             tokenId, agentId, "test_nkey", TimeSpan.FromMinutes(5));
         Assert.That(first, Is.True);
 
-        // Segunda tentativa com mesmo tokenId deve falhar
+        // Mesmo tokenId + MESMO agente (ex: troca de transporte nats→wss) — deve sobrescrever
         var second = await service.TryAcquireNatsSessionAsync(
             tokenId, agentId, "other_nkey", TimeSpan.FromMinutes(5));
-        Assert.That(second, Is.False, "Segunda tentativa com mesmo token deve falhar (token já em uso).");
+        Assert.That(second, Is.True, "Mesmo agente trocando de transporte deve readquirir a sessão.");
+    }
+
+    [Test]
+    public async Task TryAcquireNatsSession_DifferentAgentWithSameToken_Fails()
+    {
+        var tokenId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+        var otherAgentId = Guid.NewGuid();
+        var redis = new FakeRedisService();
+        var service = CreateService([], redis: redis);
+
+        var first = await service.TryAcquireNatsSessionAsync(
+            tokenId, agentId, "test_nkey", TimeSpan.FromMinutes(5));
+        Assert.That(first, Is.True);
+
+        // Mesmo tokenId mas OUTRO agente (roubo/reutilização indevida) — deve falhar
+        var stolen = await service.TryAcquireNatsSessionAsync(
+            tokenId, otherAgentId, "other_nkey", TimeSpan.FromMinutes(5));
+        Assert.That(stolen, Is.False, "Token em uso por outro agente deve ser rejeitado.");
     }
 
     [Test]

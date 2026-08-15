@@ -2,11 +2,16 @@ using Discovery.Api.Middleware;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Discovery.Tests;
 
 public class AgentAuthMiddlewareTests
 {
+    private static AgentAuthMiddleware CreateMiddleware(RequestDelegate next)
+        => new(next, new ConfigurationBuilder().Build(), NullLogger<AgentAuthMiddleware>.Instance);
+
     [Test]
     public async Task InvokeAsync_ShouldReturnUnauthorized_WhenAgentIdHeaderMissing()
     {
@@ -14,7 +19,7 @@ public class AgentAuthMiddlewareTests
         var authService = new FakeAgentAuthService(token);
 
         var nextCalled = false;
-        var middleware = new AgentAuthMiddleware(_ =>
+        var middleware = CreateMiddleware(_ =>
         {
             nextCalled = true;
             return Task.CompletedTask;
@@ -34,7 +39,7 @@ public class AgentAuthMiddlewareTests
         var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
         var authService = new FakeAgentAuthService(token);
 
-        var middleware = new AgentAuthMiddleware(_ => Task.CompletedTask);
+        var middleware = CreateMiddleware(_ => Task.CompletedTask);
         var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
         context.Request.Headers.Append("X-Agent-ID", "not-a-guid");
 
@@ -49,7 +54,7 @@ public class AgentAuthMiddlewareTests
         var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
         var authService = new FakeAgentAuthService(token);
 
-        var middleware = new AgentAuthMiddleware(_ => Task.CompletedTask);
+        var middleware = CreateMiddleware(_ => Task.CompletedTask);
         var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", "mdz_valid");
         context.Request.Headers.Append("X-Agent-ID", Guid.NewGuid().ToString());
 
@@ -65,7 +70,7 @@ public class AgentAuthMiddlewareTests
         var authService = new FakeAgentAuthService(token);
 
         var nextCalled = false;
-        var middleware = new AgentAuthMiddleware(_ =>
+        var middleware = CreateMiddleware(_ =>
         {
             nextCalled = true;
             return Task.CompletedTask;

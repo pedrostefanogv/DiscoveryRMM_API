@@ -115,6 +115,7 @@ public class RemoteSessionJwtIssuer
             $"sub.{natsSubject}.monitors",
             $"sub.{natsSubject}.event",
             $"sub.{natsSubject}.term.out",
+            $"sub.{natsSubject}.term.ready",
             $"sub.{natsSubject}.files.resp",
             $"sub.{natsSubject}.proxy.resp",
             $"sub.{natsSubject}.signal",

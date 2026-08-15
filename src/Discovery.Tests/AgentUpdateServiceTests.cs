@@ -204,7 +204,10 @@ public class AgentUpdateServiceTests
         {
             Assert.That(command.CommandType, Is.EqualTo(CommandType.Update));
             Assert.That(command.Status, Is.EqualTo(CommandStatus.Sent));
-            Assert.That(commandDispatcher.Commands, Has.Count.EqualTo(1));
+            // ShowProgress=true (default) + direct install → despacha update + alerta PSADT de progresso
+            Assert.That(commandDispatcher.Commands, Has.Count.EqualTo(2));
+            Assert.That(commandDispatcher.Commands[0].CommandType, Is.EqualTo(CommandType.Update));
+            Assert.That(commandDispatcher.Commands[1].CommandType, Is.EqualTo(CommandType.ShowPsadtAlert));
         });
 
         using var payload = JsonDocument.Parse(commandDispatcher.Commands[0].Payload);
