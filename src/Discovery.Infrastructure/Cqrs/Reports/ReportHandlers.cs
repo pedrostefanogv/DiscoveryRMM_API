@@ -196,7 +196,7 @@ public sealed class PreviewReportCommandHandler(
                 Html: htmlResult.Html));
         }
 
-        var format = cmd.Format.HasValue ? (ReportFormat)cmd.Format.Value : template.DefaultFormat;
+        var format = ResolveFormat(cmd.Format) ?? template.DefaultFormat;
         var result = await reportService.PreviewAsync(template, format, cmd.FiltersJson, ct);
         var contentType = format switch
         {
