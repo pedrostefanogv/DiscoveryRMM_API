@@ -1065,24 +1065,34 @@ Header binario (big-endian):
 
 ### 12.5 Transferencia de Arquivos
 
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.ready`
+
+| Propriedade | Valor                                                                                                                                                                            |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Direcao     | Agent -> Viewer                                                                                                                                                                  |
+| Publisher   | Agent (Go)                                                                                                                                                                       |
+| Subscriber  | Viewer (browser)                                                                                                                                                                 |
+| Payload     | JSON: `{rootPath: string, status: "ready"}`                                                                                                                                      |
+| Nota        | Publicado pelo agent assim que o subscribe em `files.req` está ativo. O viewer DEVE aguardar este evento antes de enviar o primeiro `list` (evita race do NATS core sem replay). |
+
 #### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.req`
 
-| Propriedade | Valor                  |
-| ----------- | ---------------------- | ----- | ----- | ------------------------------------ |
-| Direcao     | Viewer -> Agent        |
-| Publisher   | Viewer (browser)       |
-| Subscriber  | Agent (Go)             |
-| Payload     | JSON: `{action: "list" | "get" | "put" | "delete", path, chunkIndex?, data?}` |
+| Propriedade | Valor                                         |
+| ----------- | --------------------------------------------- | ----- | ----- | -------- | -------- | ------- | ------ | ------ | ---------------------------------------------------------------------- |
+| Direcao     | Viewer -> Agent                               |
+| Publisher   | Viewer (browser)                              |
+| Subscriber  | Agent (Go)                                    |
+| Payload     | JSON: `{version: 1, requestId, action: "list" | "get" | "put" | "delete" | "rename" | "mkdir" | "move" | "copy" | "stat", path, newPath?, chunkIndex?, chunkSize?, totalChunks?, data?}` |
 
 #### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.resp`
 
-| Propriedade | Valor                                                        |
-| ----------- | ------------------------------------------------------------ |
-| Direcao     | Agent -> Viewer                                              |
-| Publisher   | Agent (Go)                                                   |
-| Subscriber  | Viewer (browser)                                             |
-| Payload     | JSON: `{status, entries?, chunkData?, totalChunks?, error?}` |
-| Nota        | Transferencia chunked >1MB com suporte a resume              |
+| Propriedade | Valor                                                                                                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Direcao     | Agent -> Viewer                                                                                                                                                                 |
+| Publisher   | Agent (Go)                                                                                                                                                                      |
+| Subscriber  | Viewer (browser)                                                                                                                                                                |
+| Payload     | JSON: `{version: 1, requestId, success, entries?: [], data?, size?, chunkIndex?, totalChunks?, error?}`                                                                         |
+| Nota        | Transferencia chunked >1MB com suporte a resume. `entries` é sempre serializado (array vazio em diretório vazio). `chunkIndex` usa `*int` — ausência no JSON = arquivo inteiro. |
 
 ### 12.6 Proxy de Rede
 

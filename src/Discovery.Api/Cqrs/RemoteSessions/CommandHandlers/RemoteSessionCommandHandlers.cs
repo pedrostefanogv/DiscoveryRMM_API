@@ -61,7 +61,9 @@ public sealed class StartRemoteSessionCommandHandler(
             return Result<RemoteSessionResponseDto>.Failure(Error.Unauthorized("UserId is required to create a session."));
         }
 
-        // Se Force=true, mata sessões ativas do agent (incluindo órfãs com UserId vazio)
+        // Se Force=true, mata sessões ativas do agent (incluindo órfãs com UserId vazio).
+        // Além de fechar no banco, envia stop ao agent para evitar sessões órfãs no
+        // processo (o agent só fecha sessões do mesmo kind no superseded).
         if (cmd.Force)
         {
             var existingSessions = await sessionManager.GetActiveSessionsForAgentAsync(cmd.AgentId, ct);
@@ -71,6 +73,7 @@ public sealed class StartRemoteSessionCommandHandler(
                     "[RemoteSession] Force=true: encerrando sessão existente {SessionId} (UserId={SessionUserId}, Status={Status}) para agent {AgentId}",
                     existing.Id, existing.UserId, existing.Status, cmd.AgentId);
                 await sessionManager.CloseSessionAsync(existing.Id, "overridden-by-new-session", cmd.UserId, ct);
+                await NotifyAgentStopAsync(cmd.AgentId, existing.Id, ct);
             }
         }
 
@@ -150,6 +153,39 @@ public sealed class StartRemoteSessionCommandHandler(
             session.ExpiresAt,
             session.StartedAt,
             natsWsUrl));
+    }
+
+    /// <summary>
+    /// Envia um comando stop ao agent para encerrar a sessão remota no processo
+    /// (o agent só fecha sessões do mesmo kind no superseded). Best-effort:
+    /// falhas de transporte não impedem o fluxo principal.
+    /// </summary>
+    private async Task NotifyAgentStopAsync(Guid agentId, Guid sessionId, CancellationToken ct)
+    {
+        try
+        {
+            var stopPayload = JsonSerializer.Serialize(new
+            {
+                action = "stop",
+                sessionId,
+            });
+            var stopCommand = new AgentCommand
+            {
+                AgentId = agentId,
+                CommandType = CommandType.RemoteSessionStop,
+                Payload = stopPayload,
+            };
+            await dispatcher.DispatchAsync(stopCommand, ct);
+            logger.LogInformation(
+                "[RemoteSession] Stop enviado ao agent para sessão superseded {SessionId} (agent {AgentId})",
+                sessionId, agentId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "[RemoteSession] Falha ao notificar agent do stop da sessão {SessionId} (agent {AgentId})",
+                sessionId, agentId);
+        }
     }
 }
 
