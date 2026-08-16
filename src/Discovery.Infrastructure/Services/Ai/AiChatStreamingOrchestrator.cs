@@ -302,6 +302,17 @@ public class AiChatStreamingOrchestrator
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
+        // ── A2UI: extrai mensagens A2UI do conteúdo do LLM e emite como chunks ──
+        // O LLM pode ter gerado interfaces A2UI em blocos ```a2ui. Extraímos e
+        // emitimos cada mensagem como um chunk "a2ui" para o agent repassar ao
+        // renderer. O texto restante (sem os blocos) segue o fluxo markdown.
+        var (cleanContent, a2uiMessages) = AiChatA2uiExtractor.Extract(fullContent);
+        fullContent = cleanContent;
+        foreach (var a2uiMsg in a2uiMessages)
+        {
+            yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
+        }
+
         var shouldTryXmlFallback = availableTools.Count == 0 || !hasToolCalls;
         if (shouldTryXmlFallback)
         {
@@ -531,6 +542,14 @@ public class AiChatStreamingOrchestrator
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
         if (string.IsNullOrWhiteSpace(fullContent)) fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta.";
+
+        // ── A2UI: extrai mensagens A2UI do conteúdo do LLM e emite como chunks ──
+        var (cleanMultiContent, a2uiMultiMessages) = AiChatA2uiExtractor.Extract(fullContent);
+        fullContent = cleanMultiContent;
+        foreach (var a2uiMsg in a2uiMultiMessages)
+        {
+            yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
+        }
 
         try
         {
