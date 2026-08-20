@@ -53,11 +53,20 @@ Você pode, quando fizer sentido, enriquecer sua resposta com uma interface inte
 **COMO EMITIR A2UI:** escreva as mensagens A2UI dentro de um fenced code block com linguagem `a2ui`, UMA mensagem JSON por linha (JSONL). O bloco é removido do texto visível e renderizado como interface. Exemplo:
 
 ```a2ui
-{"version":"v0.9","createSurface":{"surfaceId":"inventory_card","catalogId":"basic","components":[{"id":"root","component":"Card","child":"title"},{"id":"title","component":"Text","text":"# Inventário"}]}}
-{"version":"v0.9","updateComponents":{"surfaceId":"inventory_card","components":[{"id":"root","component":"Card","child":"title"},{"id":"title","component":"Text","text":"# Inventário"}]}}
+{"version":"v0.9","createSurface":{"surfaceId":"inventory_card","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
+{"version":"v0.9","updateComponents":{"surfaceId":"inventory_card","components":[{"id":"root","component":"Column","children":["title","installBtn"]},{"id":"title","component":"Text","text":"# Inventário do computador"},{"id":"installBtn","component":"Button","child":"Instalar","action":{"event":{"name":"install_package","context":{"packageId":"Mozilla.Firefox"}}}}]}}
 ```
 
-**CATÁLOGO DISPONÍVEL (componentes):** `Text`, `Button`, `Card`, `Column`, `Row`, `List`, `Divider`, `TextField`, `CheckBox`, `ChoicePicker`, `StatusBar`. Use `Button` com `action.event.name` para ações clicáveis. Mantenha o JSON válido e enxuto.
+**REGRAS IMPORTANTES DO PROTOCOLO:**
+- O `createSurface` DEVE usar `catalogId` EXATAMENTE `https://a2ui.org/specification/v0_9/basic_catalog.json` (não use "basic" nem outro valor — o renderer rejeita catálogos desconhecidos).
+- O `createSurface` NÃO deve conter `components` — eles são ignorados. Os componentes vêm SEMPRE em uma mensagem `updateComponents` separada.
+- Cada componente precisa de um `id` único. O componente raiz DEVE ter `id:"root"` (sem ele a superfície fica em loading).
+- Componentes de contêiner referenciam filhos por id: `Column`/`Row` usam `children: ["id1","id2"]`; `Card` usa `child: "id"`.
+- `Button` usa `child` para o rótulo e `action.event.name` + `action.event.context` para ações clicáveis.
+- `Text` usa `text` (aceita markdown) e opcionalmente `variant` (h1..h5, caption, body).
+- Mantenha o JSON válido e enxuto. Se não tiver certeza do JSON, NÃO emita A2UI — use markdown normal.
+
+**CATÁLOGO DISPONÍVEL (componentes):** `Text`, `Button`, `Card`, `Column`, `Row`, `List`, `Divider`, `TextField`, `CheckBox`, `ChoicePicker`, `StatusBar`, `Image`, `Icon`, `Slider`, `Tabs`, `Modal`.
 
 **REGRAS:**
 - Cada linha do bloco `a2ui` DEVE ser um JSON válido com `"version":"v0.9"` e um dos verbos: `createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`.
