@@ -1,6 +1,24 @@
 # Discovery RMM installer – system dependency installation
 # Requires: common.sh (log, warn, fail)
 
+# ── Update de pacotes do sistema (antes de qualquer update da stack) ──────
+
+# Atualiza a lista de pacotes e faz upgrade completo do SO. Rodado ANTES de
+# qualquer update (API/site/agent) para que as toolchains (Go, Node, GCC,
+# NSIS, libs GTK/WebKit) estejam atualizadas antes de buildar.
+# --force-confold preserva arquivos de config locales e nunca trava em prompt
+# interativo (DEBIAN_FRONTEND=noninteractive).
+apply_system_updates() {
+  log "Atualizando sistema operacional (apt-get update + upgrade)..."
+  if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y; then
+    warn "apt-get update falhou; seguindo com upgrade (pode falhar se os indices nao atualizarem)"
+  fi
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold"
+  log "Upgrade do sistema concluido."
+}
+
 install_apt_dependencies() {
   local -a all_packages=(
     apt-transport-https ca-certificates curl git gnupg jq lsb-release
@@ -124,38 +142,43 @@ ensure_nodejs() {
   command -v npm  >/dev/null 2>&1 || fail "npm nao foi instalado com sucesso"
 }
 
-# ── Wails v3 CLI (wails3) ─────────────────────────────────────────────────
+# ── Wails CLI (wails v2 / wails3 v3) ─────────────────────────────────────
 
-# O agent Go foi migrado para Wails v3 (github.com/wailsapp/wails/v3), que
-# usa o binario `wails3` (nao mais `wails` v2). O wails3 e necessario durante
-# o build do agent para regenerar os bindings do frontend (frontend/bindings)
-# quando ha mudancas na API Go exposta.
-#
-# O processo de build roda sob o usuario de servico `discovery-api`, que nao
-# tem HOME gravavel -- por isso instalamos o binario em /usr/local/bin (global,
-# acessivel a todos e presente no PATH padrao do systemd), e nao em ~/go/bin.
-# Versao alinhada com src/go.mod do agent (github.com/wailsapp/wails/v3).
-WAILS3_VERSION="${WAILS3_VERSION:-v3.0.0-beta.3}"
-# Stock GTK do Wails v3 (Ubuntu 24.04+ / Debian 13+). Necessario para compilar
-# o wails3 via `go install` (releases beta nao publicam binario pre-compilado).
-# Em distros mais antigas, usar GTK3: libgtk-3-dev libwebkit2gtk-4.1-dev.
-WAILS3_APT_DEPS="build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev"
-WAILS3_APT_DEPS_GTK3="build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev"
+# O agent Go usa Wails (v2 ou v3). O CLI e necessario durante o build do agent
+# para regenerar os bindings do frontend (frontend/bindings) quando ha mudancas
+# na API Go exposta. O processo de build roda sob o usuario de servico
+# `discovery-api`, que nao tem HOME gravavel -- por isso instalamos o binario em
+# /usr/local/bin (global, acessivel a todos e presente no PATH padrao do systemd).
+# A versao/direcao e lida do go.mod LOCAL do agent APOS o git pull/clone, pois o
+# servidor segue a branch instalada (ex.: release=v2, dev=v3.0.0-beta.11).
+# Este fallback e usado apenas quando o go.mod nao e lido.
+WAILS_VERSION_FALLBACK="v3.0.0-beta.11"
 
-# Instala os pre-requisitos de build do Wails v3 (GTK4/WebKitGTK dev).
-# Isso e separado do install_apt_dependencies porque, no fluxo de update,
-# o install_apt_dependencies original nao re-roda. Detecta o fallback GTK3
-# para distros que ainda nao fornecem WebKitGTK 6.0 (pkg-config checa se existe).
+# Stack GTK padrao do Wails v3 (Ubuntu 24.04+ / Debian 13+), necessaria para
+# compilar o wails3 via `go install` (releases beta nao publicam binario
+# pre-compilado). Em distros mais antigas, usar GTK3. O Wails v2 usa GTK3.
+WAILS_APT_DEPS_G4="build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev"
+WAILS_APT_DEPS_GTK3="build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev"
+
+# Instala os pre-requisitos de build do Wails (GTK4/WebKitGTK p/ v3; GTK3 p/ v2
+# ou fallback quando WebKitGTK 6.0 nao existe na distro). Separado de
+# install_apt_dependencies porque, no fluxo de update, este nao re-roda.
 ensure_wails3_apt_deps() {
-  command -v apt-get >/dev/null 2>&1 || { warn "apt-get nao encontrado; nao e possivel garantir deps do wails3"; return; }
+  command -v apt-get >/dev/null 2>&1 || { warn "apt-get nao encontrado; nao e possivel garantir deps do wails"; return; }
 
-  local -a deps
-  mapfile -t deps <<< "${WAILS3_APT_DEPS// /$'\n'}"
+  local major="${WAILS_MAJOR:-3}"
+  local -a base_deps
+  if [[ "$major" == "2" ]]; then
+    mapfile -t base_deps <<< "${WAILS_APT_DEPS_GTK3// /$'\n'}"
+  else
+    mapfile -t base_deps <<< "${WAILS_APT_DEPS_G4// /$'\n'}"
+  fi
 
+  local -a deps=("${base_deps[@]}")
   # Se libwebkitgtk-6.0-dev nao existir no repositorio, usa o legado GTK3.
   if ! apt-cache show libwebkitgtk-6.0-dev >/dev/null 2>&1; then
-    warn "libwebkitgtk-6.0-dev indisponivel; usando stack legado GTK3 para o wails3."
-    mapfile -t deps <<< "${WAILS3_APT_DEPS_GTK3// /$'\n'}"
+    warn "libwebkitgtk-6.0-dev indisponivel; usando stack legado GTK3."
+    mapfile -t deps <<< "${WAILS_APT_DEPS_GTK3// /$'\n'}"
   fi
 
   local -a missing=()
@@ -170,44 +193,87 @@ ensure_wails3_apt_deps() {
     return
   fi
 
-  log "Instalando dependencias de build do wails3 via apt: ${missing[*]}"
+  log "Instalando dependencias de build do wails via apt: ${missing[*]}"
   sudo apt-get update -y
   sudo apt-get install -y "${missing[@]}" || \
-    warn "Falha ao instalar deps de build do wails3; o go install do wails3 pode falhar"
+    warn "Falha ao instalar deps de build do wails; o go install do wails pode falhar"
 }
 
-ensure_wails3_toolchain() {
+# Resolve versao/major do Wails a partir do go.mod LOCAL do agent (pos-pull).
+# Preenche: WAILS_MAJOR (2|3), WAILS_VERSION, WAILS_BIN (wails|wails3), WAILS_PKG.
+resolve_wails_version() {
+  local go_mod="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}/src/go.mod"
+  [[ -r "$go_mod" ]] || go_mod="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}/go.mod"
+  local resolved=""
+  local version=""
+  local major=""
+
+  if [[ -r "$go_mod" ]]; then
+    resolved="$(grep -E 'wailsapp/wails/v(2|3)[[:space:]]+v[0-9]' "$go_mod" | head -n1 || true)"
+    major="$(printf '%s' "$resolved" | sed -nE 's/.*wailsapp\/wails\/v([23]).*/\1/p')"
+    version="$(printf '%s' "$resolved" | sed -nE 's/.*wailsapp\/wails\/v[23][[:space:]]+v([^[:space:]]+).*/\1/p')"
+  fi
+
+  if [[ -z "$version" ]]; then
+    warn "Versao do wails nao detectada no go.mod do agent ($go_mod); usando fallback ${WAILS_VERSION_FALLBACK}"
+    major="3"; version="$WAILS_VERSION_FALLBACK"
+  fi
+
+  WAILS_MAJOR="${major:-3}"
+  WAILS_VERSION="$version"
+  if [[ "$WAILS_MAJOR" == "2" ]]; then
+    WAILS_BIN="wails" WAILS_PKG="github.com/wailsapp/wails/v2/cmd/wails" WAILS_CLI_LABEL="wails (v2)"
+  else
+    WAILS_MAJOR="3" WAILS_BIN="wails3" WAILS_PKG="github.com/wailsapp/wails/v3/cmd/wails3" WAILS_CLI_LABEL="wails3 (v3)"
+  fi
+  log "Wails resolvido via go.mod: ${WAILS_CLI_LABEL} ${WAILS_VERSION}"
+}
+
+# Garante o CLI do Wails na versao exata exigida pelo go.mod do agent.
+# Usa sentinela /opt/discovery-ops/wails-cli.version para saber o que esta
+# instalado e permitir UPGRADE E DOWNGRADE automaticos (v2<->v3, beta<->stable).
+ensure_wails_toolchain() {
   if ! command -v go >/dev/null 2>&1; then
-    # No fluxo de install, o Go e instalado por install_apt_dependencies antes.
-    # No fluxo de update, o host ja deveria ter o Go; se nao tiver, nao bloqueamos
-    # o update inteiro — apenas avisamos e deixamos o auto-install do build seguir.
-    warn "go nao encontrado; pulando instalacao do wails3 (instale golang-go antes de buildar o agent)"
+    warn "go nao encontrado; pulando instalacao do cli wails (instale golang-go antes de buildar)"
     return
   fi
 
-  if command -v wails3 >/dev/null 2>&1; then
-    log "wails3 ja instalado: $(command -v wails3)"
+  resolve_wails_version
+
+  local sentinel_file="/opt/discovery-ops/wails-cli.version"
+  local installed_marker=""
+  if [[ -f "$sentinel_file" ]]; then
+    installed_marker="$(cat "$sentinel_file" 2>/dev/null || true)"
+  fi
+
+  local want_marker="${WAILS_BIN}|${WAILS_VERSION}"
+  if [[ "$installed_marker" == "$want_marker" ]] && command -v "$WAILS_BIN" >/dev/null 2>&1; then
+    log "${WAILS_CLI_LABEL} ${WAILS_VERSION} ja instalado (sentinela ok)"
     return
   fi
 
   ensure_wails3_apt_deps
 
-  log "Instalando wails3 ${WAILS3_VERSION} (requerido pelo build do agent Wails v3)..."
-  # GOBIN=/usr/local/bin coloca o binario em local acessivel a todos os usuarios,
-  # independente do HOME inconsistente do usuario de servico. GOPATH explicito
-  # garante um module cache determinístico (execução sob sudo/root).
-  if ! sudo env GOBIN=/usr/local/bin GOPATH=/root/go go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS3_VERSION}"; then
-    warn "Falha ao instalar wails3 via go install; o build do agent dependera do auto-install do script de build (pode nao regerar bindings)."
-    warn "Instale manualmente: sudo env GOBIN=/usr/local/bin go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS3_VERSION}"
+  log "Instalando ${WAILS_CLI_LABEL} ${WAILS_VERSION} (requerido pelo build do agent)..."
+  if ! sudo env GOBIN=/usr/local/bin GOPATH=/root/go go install "${WAILS_PKG}@${WAILS_VERSION}"; then
+    warn "Falha ao instalar ${WAILS_BIN}; o build do agent dependera do auto-install (pode nao regerar bindings)."
     return
   fi
 
-  if [[ -f /usr/local/bin/wails3 ]]; then
-    sudo chmod 755 /usr/local/bin/wails3
-    log "wails3 instalado em /usr/local/bin/wails3"
+  local installed_bin="/usr/local/bin/${WAILS_BIN}"
+  if [[ -x "$installed_bin" ]]; then
+    sudo chmod 755 "$installed_bin"
+    # Grava versao no sentinela para upgrade/downgrade futuro.
+    printf '%s\n' "$want_marker" | sudo tee "$sentinel_file" >/dev/null
+    log "${WAILS_CLI_LABEL} ${WAILS_VERSION} instalado em ${installed_bin}"
   else
-    warn "wails3 instalado mas binario nao encontrado em /usr/local/bin; verifique GOBIN/go env"
+    warn "${WAILS_BIN} instalado mas binario nao encontrado em /usr/local/bin; verifique GOBIN/go env"
   fi
+}
+
+# Alias de compatibilidade (nome anterior mantido).
+ensure_wails3_toolchain() {
+  ensure_wails_toolchain
 }
 
 ensure_service_user() {

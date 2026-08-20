@@ -81,6 +81,9 @@ update_site() {
 update_agent() {
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
   log "Repositorio do agent atualizado em $DISCOVERY_AGENT_SRC"
+  # Revalida o CLI do Wails a partir do go.mod atualizado do agent (v2<->v3 e
+  # upgrade/downgrade de versao beta).
+  ensure_wails_toolchain
   _trigger_agent_rebuild_via_api
 }
 
@@ -141,6 +144,8 @@ update_all_components() {
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
+  # Revalida o CLI do Wails a partir do go.mod atualizado do agent antes do rebuild.
+  ensure_wails_toolchain
   publish_api
   update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
   publish_site
@@ -199,6 +204,9 @@ prompt_update_scope() {
 apply_stack_update_only() {
   set_log_context "update"
   log "Modo de update da stack"
+
+  # Atualiza o SO (apt-get update + upgrade) ANTES de qualquer build.
+  apply_system_updates
 
   load_update_defaults
 

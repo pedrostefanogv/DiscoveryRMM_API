@@ -203,6 +203,8 @@ main() {
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
   clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
+  # Revalida o CLI do Wails a partir do go.mod do agent recem-clonado.
+  ensure_wails_toolchain
 
   publish_api
   publish_site

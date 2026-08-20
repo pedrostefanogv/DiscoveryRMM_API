@@ -136,6 +136,135 @@ mkdir -p "$DISCOVERY_SITE_RELEASES"
 
 export GIT_TERMINAL_PROMPT=0
 
+# ── Update de pacotes do sistema (antes de qualquer update da stack) ──────
+
+# Atualiza lista de pacotes e faz upgrade completo do SO. --force-confold
+# preserva config local e nao trava em prompt (DEBIAN_FRONTEND=noninteractive).
+apply_system_updates() {
+  log "Atualizando sistema operacional (apt-get update + upgrade)..."
+  if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y; then
+    warn "apt-get update falhou; seguindo com upgrade (pode falhar se os indices nao atualizarem)"
+  fi
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold"
+  log "Upgrade do sistema concluido."
+}
+
+# Resolve versao/major do Wails a partir do go.mod LOCAL do agent (pos-pull).
+# Preenche: WAILS_MAJOR (2|3), WAILS_VERSION, WAILS_BIN (wails|wails3),
+# WAILS_PKG (import path p/ go install).
+WAILS_VERSION_FALLBACK="v3.0.0-beta.11"
+# Stack GTK do Wails. v3=GTK4/WebKitGTK6 (Ubuntu 24.04+/Debian 13+). Em distros
+# antigas, fallback para GTK3. Wails v2 usa GTK3.
+WAILS_APT_DEPS_G4="build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev"
+WAILS_APT_DEPS_GTK3="build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev"
+
+# Instala os pre-requisitos de build do Wails (GTK4/WebKitGTK). Necessario para
+# `go install` do CLI (releases beta nao publicam binario pre-compilado).
+ensure_wails_apt_deps() {
+  command -v apt-get >/dev/null 2>&1 || { warn "apt-get nao encontrado; nao e possivel garantir deps do wails"; return; }
+
+  local major="${WAILS_MAJOR:-3}"
+  local -a base_deps
+  if [[ "$major" == "2" ]]; then
+    mapfile -t base_deps <<< "${WAILS_APT_DEPS_GTK3// /$'\n'}"
+  else
+    mapfile -t base_deps <<< "${WAILS_APT_DEPS_G4// /$'\n'}"
+  fi
+
+  local -a deps=("${base_deps[@]}")
+  if ! apt-cache show libwebkitgtk-6.0-dev >/dev/null 2>&1; then
+    warn "libwebkitgtk-6.0-dev indisponivel; usando stack legado GTK3."
+    mapfile -t deps <<< "${WAILS_APT_DEPS_GTK3// /$'\n'}"
+  fi
+
+  local -a missing=()
+  local pkg
+  for pkg in "${deps[@]}"; do
+    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+
+  if (( ${#missing[@]} == 0 )); then
+    return
+  fi
+
+  log "Instalando dependencias de build do wails via apt: ${missing[*]}"
+  sudo apt-get install -y "${missing[@]}" || \
+    warn "Falha ao instalar deps de build do wails; o go install do wails pode falhar"
+}
+
+resolve_wails_version() {
+  local go_mod="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}/src/go.mod"
+  [[ -r "$go_mod" ]] || go_mod="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}/go.mod"
+  local resolved=""
+  local version=""
+  local major=""
+
+  if [[ -r "$go_mod" ]]; then
+    resolved="$(grep -E 'wailsapp/wails/v(2|3)[[:space:]]+v[0-9]' "$go_mod" | head -n1 || true)"
+    major="$(printf '%s' "$resolved" | sed -nE 's/.*wailsapp\/wails\/v([23]).*/\1/p')"
+    version="$(printf '%s' "$resolved" | sed -nE 's/.*wailsapp\/wails\/v[23][[:space:]]+v([^[:space:]]+).*/\1/p')"
+  fi
+
+  if [[ -z "$version" ]]; then
+    warn "Versao do wails nao detectada no go.mod do agent ($go_mod); usando fallback ${WAILS_VERSION_FALLBACK}"
+    major="3"; version="$WAILS_VERSION_FALLBACK"
+  fi
+
+  WAILS_MAJOR="${major:-3}"
+  WAILS_VERSION="$version"
+  if [[ "$WAILS_MAJOR" == "2" ]]; then
+    WAILS_BIN="wails" WAILS_PKG="github.com/wailsapp/wails/v2/cmd/wails" WAILS_CLI_LABEL="wails (v2)"
+  else
+    WAILS_MAJOR="3" WAILS_BIN="wails3" WAILS_PKG="github.com/wailsapp/wails/v3/cmd/wails3" WAILS_CLI_LABEL="wails3 (v3)"
+  fi
+  log "Wails resolvido via go.mod: ${WAILS_CLI_LABEL} ${WAILS_VERSION}"
+}
+
+# Garante o CLI do Wails instalado na versao exata exigida pelo agent (com
+# upgrade/downgrade automatico via sentinela).
+ensure_wails_toolchain() {
+  command -v go >/dev/null 2>&1 || { warn "go nao encontrado; pulando instalacao do cli wails"; return; }
+  resolve_wails_version
+
+  local sentinel_file="/opt/discovery-ops/wails-cli.version"
+  local installed_marker=""
+  if [[ -f "$sentinel_file" ]]; then
+    installed_marker="$(cat "$sentinel_file" 2>/dev/null || true)"
+  fi
+
+  local want_marker="${WAILS_BIN}|${WAILS_VERSION}"
+  if [[ "$installed_marker" == "$want_marker" ]] && command -v "$WAILS_BIN" >/dev/null 2>&1; then
+    log "${WAILS_CLI_LABEL} ${WAILS_VERSION} ja instalado (sentinela ok)"
+    return
+  fi
+
+  # Garante libs de build e diretorio do sentinela antes de compilar/instalar.
+  ensure_wails_apt_deps
+  sudo mkdir -p /opt/discovery-ops
+
+  log "Instalando ${WAILS_CLI_LABEL} ${WAILS_VERSION} (requerido pelo build do agent)..."
+  if ! sudo env GOBIN=/usr/local/bin GOPATH=/root/go go install "${WAILS_PKG}@${WAILS_VERSION}"; then
+    warn "Falha ao instalar ${WAILS_BIN}; o build do agent dependera do auto-install (pode nao regerar bindings)."
+    return
+  fi
+
+  local installed_bin="/usr/local/bin/${WAILS_BIN}"
+  if [[ -x "$installed_bin" ]]; then
+    sudo chmod 755 "$installed_bin"
+    printf '%s\n' "$want_marker" | sudo tee "$sentinel_file" >/dev/null
+    log "${WAILS_CLI_LABEL} ${WAILS_VERSION} instalado em ${installed_bin}"
+  else
+    warn "${WAILS_BIN} instalado mas binario nao encontrado em /usr/local/bin; verifique GOBIN/go env"
+  fi
+}
+
+# Antes de qualquer clone/build do self-update, atualiza o SO.
+apply_system_updates
+
 clone_or_fetch_repo() {
   local repo_url="$1"
   local repo_dir="$2"
@@ -463,6 +592,9 @@ if [[ -n "$DISCOVERY_AGENT_GIT_REPO" ]] && [[ -d "$DISCOVERY_AGENT_SRC/.git" ]];
   if [[ -n "$agent_local" && -n "$agent_remote" && "$agent_local" != "$agent_remote" ]]; then
     git -C "$DISCOVERY_AGENT_SRC" checkout "$DISCOVERY_GIT_BRANCH" 2>/dev/null || true
     git -C "$DISCOVERY_AGENT_SRC" reset --hard "origin/$DISCOVERY_GIT_BRANCH" 2>/dev/null || true
+    # Revalida o CLI do Wails a partir do go.mod atualizado do agent (v2<->v3 e
+    # upgrade/downgrade de versao beta) antes de disparar o rebuild.
+    ensure_wails_toolchain
     log "Agent atualizado; disparando rebuild via API..."
     if sudo systemctl is-active --quiet discovery-api.service 2>/dev/null; then
       curl -s -X POST "http://127.0.0.1:8080/api/v1/agent-updates/build/rebuild" \

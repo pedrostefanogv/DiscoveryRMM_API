@@ -321,6 +321,10 @@ Type=oneshot
 User=discovery-api
 Group=discovery-api
 EnvironmentFile=/etc/discovery-api/discovery.env
+# O self-update roda apt-get upgrade + builds (.NET/Go/npm) que podem levar
+# varios minutos. Sem TimeoutStartSec=infinity o systemd poderia matar o
+# processo no timeout padrao (~90s), abortando o update no meio.
+TimeoutStartSec=infinity
 ExecStart=${target_script}
 StandardOutput=journal
 StandardError=journal
