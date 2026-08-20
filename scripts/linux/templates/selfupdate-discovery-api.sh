@@ -206,7 +206,7 @@ resolve_wails_version() {
   if [[ -r "$go_mod" ]]; then
     resolved="$(grep -E 'wailsapp/wails/v(2|3)[[:space:]]+v[0-9]' "$go_mod" | head -n1 || true)"
     major="$(printf '%s' "$resolved" | sed -nE 's/.*wailsapp\/wails\/v([23]).*/\1/p')"
-    version="$(printf '%s' "$resolved" | sed -nE 's/.*wailsapp\/wails\/v[23][[:space:]]+v([^[:space:]]+).*/\1/p')"
+    version="$(printf '%s' "$resolved" | sed -nE 's/.*wailsapp\/wails\/v[23][[:space:]]+[[:space:]]*(v[^[:space:]]+).*/\1/p')"
   fi
 
   if [[ -z "$version" ]]; then
