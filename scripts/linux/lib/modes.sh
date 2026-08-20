@@ -392,7 +392,9 @@ run_reset_mfa_only() {
     printf '%s\n' "$output"
     echo
     if (( exit_code == 1 )); then
-      log "O usuario '$target_login' nao foi encontrado. Para criar, use as opcoes 1, 2 ou 4 do menu."
+      log "O usuario '$target_login' nao foi encontrado (nem por login, nem por email)."
+      log "Dica: confirme se '$target_login' e o login OU o email correto da conta."
+      log "Para criar um usuario, use as opcoes 1, 2 ou 4 do menu."
     fi
     return "$exit_code"
   }
@@ -465,21 +467,21 @@ apply_maintenance_mode() {
     case "$selected_option" in
       1)
         local target_login target_password
-        target_login="$(prompt_maintenance_login "Login alvo [admin]: " "admin")"
+        target_login="$(prompt_maintenance_login "Login ou email alvo [admin]: " "admin")"
         target_password="$(prompt_maintenance_password_optional)"
         log "Executando recover-admin para '$target_login' com reset de MFA"
         run_recover_admin_maintenance "$target_login" "$target_password" "1" "1" "1"
         pause_maintenance_menu ;;
       2)
         local keep_login keep_password
-        keep_login="$(prompt_maintenance_login "Login alvo [admin]: " "admin")"
+        keep_login="$(prompt_maintenance_login "Login ou email alvo [admin]: " "admin")"
         keep_password="$(prompt_maintenance_password_optional)"
         log "Executando recover-admin para '$keep_login' mantendo MFA atual"
         run_recover_admin_maintenance "$keep_login" "$keep_password" "0" "1" "1"
         pause_maintenance_menu ;;
       3)
         local mfa_login
-        mfa_login="$(prompt_maintenance_login "Login alvo [admin]: " "admin")"
+        mfa_login="$(prompt_maintenance_login "Login ou email alvo [admin]: " "admin")"
         run_reset_mfa_only "$mfa_login" || true
         pause_maintenance_menu ;;
       4)

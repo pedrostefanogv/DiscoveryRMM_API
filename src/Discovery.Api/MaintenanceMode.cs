@@ -122,7 +122,7 @@ internal static class MaintenanceMode
         Console.WriteLine("Usage:");
         Console.WriteLine("  dotnet run --project src/Discovery.Api -- --recover-admin [options]");
         Console.WriteLine("Options:");
-        Console.WriteLine("  --login <value>             Target login (default: admin)");
+        Console.WriteLine("  --login <value>             Target login or email (default: admin)");
         Console.WriteLine("  --password <value>          Explicit password (less secure: appears in history)");
         Console.WriteLine("  --password-stdin            Read password from standard input");
         Console.WriteLine("  --create-if-missing         Create the admin account if it does not exist (default)");
@@ -148,14 +148,14 @@ internal static class MaintenanceMode
         var db = scope.ServiceProvider.GetRequiredService<DiscoveryDbContext>();
 
         var login = options.Login.Trim();
-        var user = await users.GetByLoginAsync(login);
+        var user = await users.GetByLoginOrEmailAsync(login);
 
         // --reset-mfa-only: apenas reseta MFA, sem alterar senha, sem criar usuario
         if (options.ResetMfaOnly)
         {
             if (user is null)
             {
-                Console.Error.WriteLine($"User '{login}' not found. Use --recover-admin to create it first.");
+                Console.Error.WriteLine($"User '{login}' not found (neither by login nor email). Use --recover-admin to create it first.");
                 return 1;
             }
 
