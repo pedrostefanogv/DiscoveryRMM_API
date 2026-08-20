@@ -48,7 +48,10 @@ load_update_defaults() {
   ensure_service_user
   ensure_service_user_home
   create_directories
-  ensure_wails3_toolchain
+  # NOTA: o CLI do Wails NAO e instalado aqui (pre-clone) para evitar resolver
+  # o go.mod antigo do agent. Ele e instalado/revalidado APOS o clone do agent,
+  # em update_agent() e update_all_components(), onde o go.mod ja reflete a
+  # branch atual do servidor (upgrade/downgrade v2<->v3 corretos).
 
   trap cleanup_on_exit EXIT
   setup_git_askpass

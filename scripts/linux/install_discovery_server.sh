@@ -185,7 +185,9 @@ main() {
   ensure_service_user
   ensure_service_user_home
   create_directories
-  ensure_wails3_toolchain
+  # NOTA: o CLI do Wails NAO e instalado aqui (pre-clone). No fresh install o
+  # go.mod do agent ainda nao existe e usaria o fallback. A instalacao correta
+  # acontece APOS o clone do agent (logo abaixo), lendo o go.mod real.
 
   setup_postgres
   setup_redis
