@@ -4,6 +4,7 @@ using Discovery.Core.Cqrs.Mfa.Queries;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Entities.Security;
 using Discovery.Core.Enums.Security;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
@@ -16,7 +17,7 @@ public sealed class ListMfaKeysQueryHandler(IUserMfaKeyRepository repo) : IReque
     public async Task<Result<IReadOnlyList<MfaKeyDto>>> Handle(ListMfaKeysQuery q, CancellationToken ct)
     {
         var keys = await repo.GetActiveByUserIdAsync(q.UserId);
-        var items = keys.Select(k => new MfaKeyDto(k.Id, k.UserId, k.KeyType.ToString(), k.Name, k.IsActive, k.CreatedAt, k.LastUsedAt)).ToList().AsReadOnly();
+        var items = keys.Select(k => new MfaKeyDto(k.Id, k.UserId, (int)k.KeyType, k.Name, k.IsActive, k.CreatedAt, k.LastUsedAt)).ToList().AsReadOnly();
         return Result<IReadOnlyList<MfaKeyDto>>.Success(items);
     }
 }
@@ -66,16 +67,20 @@ public sealed class CompleteFido2RegistrationCommandHandler(
             if (string.IsNullOrWhiteSpace(cmd.AttestationResponseJson))
                 return Result<CompleteFido2RegistrationResult>.Failure(Error.Validation("attestationResponseJson", "Resposta de attestation é obrigatoria."));
 
+            var keyName = cmd.KeyName?.Trim();
+            if (string.IsNullOrWhiteSpace(keyName) || keyName.Length < 2 || keyName.Length > 80)
+                return Result<CompleteFido2RegistrationResult>.Failure(Error.Validation("keyName", "Informe um nome entre 2 e 80 caracteres."));
+
             var result = await fido2Service.CompleteRegistrationAsync(cmd.UserId, cmd.AttestationResponseJson);
             if (!result.Success)
                 return Result<CompleteFido2RegistrationResult>.Failure(Error.Unauthorized(result.ErrorMessage ?? "Registro FIDO2 inválido."));
 
             var key = new UserMfaKey
             {
-                Id = Guid.NewGuid(),
+                Id = IdGenerator.NewId(),
                 UserId = cmd.UserId,
                 KeyType = MfaKeyType.Fido2,
-                Name = string.IsNullOrWhiteSpace(cmd.KeyName) ? "Chave FIDO2" : cmd.KeyName.Trim(),
+                Name = keyName,
                 IsActive = true,
                 CredentialIdBase64 = result.CredentialIdBase64,
                 PublicKeyBase64 = result.PublicKeyBase64,
@@ -94,6 +99,50 @@ public sealed class CompleteFido2RegistrationCommandHandler(
         catch (Exception ex)
         {
             return Result<CompleteFido2RegistrationResult>.Failure(Error.Internal(ex.Message));
+        }
+    }
+}
+
+public sealed class RenameMfaKeyCommandHandler(
+    IUserMfaKeyRepository mfaKeyRepo
+) : IRequestHandler<RenameMfaKeyCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(RenameMfaKeyCommand cmd, CancellationToken ct)
+    {
+        try
+        {
+            var keyName = cmd.KeyName?.Trim();
+            if (string.IsNullOrWhiteSpace(keyName) || keyName.Length < 2 || keyName.Length > 80)
+                return Result<VoidResult>.Failure(Error.Validation("keyName", "Informe um nome entre 2 e 80 caracteres."));
+
+            var ok = await mfaKeyRepo.RenameAsync(cmd.KeyId, cmd.UserId, keyName);
+            return ok
+                ? Result<VoidResult>.Success(VoidResult.Value)
+                : Result<VoidResult>.Failure(Error.NotFound("Chave MFA não encontrada."));
+        }
+        catch (Exception ex)
+        {
+            return Result<VoidResult>.Failure(Error.Internal(ex.Message));
+        }
+    }
+}
+
+public sealed class DeleteMfaKeyCommandHandler(
+    IUserMfaKeyRepository mfaKeyRepo
+) : IRequestHandler<DeleteMfaKeyCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(DeleteMfaKeyCommand cmd, CancellationToken ct)
+    {
+        try
+        {
+            var ok = await mfaKeyRepo.DeactivateAsync(cmd.KeyId, cmd.UserId);
+            return ok
+                ? Result<VoidResult>.Success(VoidResult.Value)
+                : Result<VoidResult>.Failure(Error.NotFound("Chave MFA não encontrada."));
+        }
+        catch (Exception ex)
+        {
+            return Result<VoidResult>.Failure(Error.Internal(ex.Message));
         }
     }
 }

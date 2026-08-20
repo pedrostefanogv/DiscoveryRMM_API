@@ -14,13 +14,6 @@ namespace Discovery.Api.Controllers;
 [Route("api/v{version:apiVersion}/mfa")]
 public class MfaController(IMediator mediator) : ControllerBase
 {
-    [HttpGet]
-    public async Task<IActionResult> GetKeys([FromQuery] Guid userId)
-    {
-        var result = await mediator.Send(new ListMfaKeysQuery(userId));
-        return result.ToActionResult();
-    }
-
     [HttpGet("keys")]
     public async Task<IActionResult> GetMyKeys()
     {
@@ -71,6 +64,44 @@ public class MfaController(IMediator mediator) : ControllerBase
             failure: errors => errors[0].Code switch
             {
                 "Unauthorized" => Unauthorized(new { errors = errors.Select(e => new { e.Code, e.Message }) }),
+                _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+            });
+    }
+
+    /// <summary>
+    /// Renomeia uma chave MFA do usuário autenticado.
+    /// </summary>
+    [HttpPatch("keys/{keyId:guid}/name")]
+    public async Task<IActionResult> RenameKey(Guid keyId, [FromBody] RegisterMfaKeyNameDto dto)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "Not authenticated." });
+
+        var result = await mediator.Send(new RenameMfaKeyCommand(keyId, userId, dto.KeyName));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }),
+                _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+            });
+    }
+
+    /// <summary>
+    /// Remove (desativa) uma chave MFA do usuário autenticado.
+    /// </summary>
+    [HttpDelete("keys/{keyId:guid}")]
+    public async Task<IActionResult> DeleteKey(Guid keyId)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "Not authenticated." });
+
+        var result = await mediator.Send(new DeleteMfaKeyCommand(keyId, userId));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }),
                 _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
             });
     }

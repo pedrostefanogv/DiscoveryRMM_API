@@ -12,3 +12,14 @@ public sealed record CompleteFido2RegistrationCommand(
 ) : ICommand<Result<CompleteFido2RegistrationResult>>;
 
 public sealed record CompleteFido2RegistrationResult(Guid KeyId, string Message);
+
+public sealed record RenameMfaKeyCommand(
+    Guid KeyId,
+    Guid UserId,
+    string KeyName
+) : ICommand<Result<VoidResult>>;
+
+public sealed record DeleteMfaKeyCommand(
+    Guid KeyId,
+    Guid UserId
+) : ICommand<Result<VoidResult>>;
