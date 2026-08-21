@@ -12,7 +12,8 @@ namespace Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
 public sealed class GetAgentByIdQueryHandler(
     IAgentRepository agentRepo,
     IHeartbeatCacheService heartbeatCache,
-    IConfigurationResolver configResolver
+    IConfigurationResolver configResolver,
+    ISiteRepository siteRepo
 ) : IRequestHandler<GetAgentByIdQuery, Result<AgentDto>>
 {
     public async Task<Result<AgentDto>> Handle(GetAgentByIdQuery q, CancellationToken ct)
@@ -26,7 +27,16 @@ public sealed class GetAgentByIdQueryHandler(
         var grace = await AgentQueryHelper.GetOnlineGraceSecondsAsync(configResolver, agent.SiteId);
         AgentQueryHelper.ApplyEffectiveStatus(agent, grace);
 
-        return Result<AgentDto>.Success(AgentQueryHelper.MapToDto(agent));
+        var dto = AgentQueryHelper.MapToDto(agent);
+
+        // Popula o ClientId do agente (o site guarda a associação ao cliente).
+        // Necessário para o frontend resolver a cadeia Cliente → Site → Hostname
+        // na interface de acesso remoto.
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is not null)
+            dto = dto with { ClientId = site.ClientId };
+
+        return Result<AgentDto>.Success(dto);
     }
 }
 
