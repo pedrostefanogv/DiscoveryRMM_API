@@ -105,6 +105,7 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.term.ready",
             $"{natsSubject}.files.ready",
             $"{natsSubject}.files.resp",
+            $"{natsSubject}.files.progress",
             $"{natsSubject}.proxy.resp",
             $"{natsSubject}.signal",
         };

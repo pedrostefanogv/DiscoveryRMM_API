@@ -118,6 +118,7 @@ public class RemoteSessionJwtIssuer
             $"sub.{natsSubject}.term.ready",
             $"sub.{natsSubject}.files.ready",
             $"sub.{natsSubject}.files.resp",
+            $"sub.{natsSubject}.files.progress",
             $"sub.{natsSubject}.proxy.resp",
             $"sub.{natsSubject}.signal",
         };
