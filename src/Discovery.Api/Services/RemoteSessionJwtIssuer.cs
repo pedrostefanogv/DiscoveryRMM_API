@@ -105,6 +105,7 @@ public class RemoteSessionJwtIssuer
             $"pub.{natsSubject}.term.in",
             $"pub.{natsSubject}.files.req",
             $"pub.{natsSubject}.proxy.req",
+            $"pub.{natsSubject}.proc.req",
             $"pub.{natsSubject}.signal",
 
             // Viewer subscreve (recebe stream)
@@ -120,6 +121,8 @@ public class RemoteSessionJwtIssuer
             $"sub.{natsSubject}.files.resp",
             $"sub.{natsSubject}.files.progress",
             $"sub.{natsSubject}.proxy.resp",
+            $"sub.{natsSubject}.proc.resp",
+            $"sub.{natsSubject}.proc.ready",
             $"sub.{natsSubject}.signal",
         };
     }

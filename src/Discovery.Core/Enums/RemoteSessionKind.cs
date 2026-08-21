@@ -9,5 +9,6 @@ public enum RemoteSessionKind
     Terminal = 1,
     Files = 2,
     Proxy = 3,
-    All = 4
+    All = 4,
+    Processes = 5
 }
