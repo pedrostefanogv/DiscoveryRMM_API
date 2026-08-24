@@ -107,6 +107,7 @@ public class RemoteSessionJwtIssuer
             $"pub.{natsSubject}.proxy.req",
             $"pub.{natsSubject}.proc.req",
             $"pub.{natsSubject}.signal",
+            $"pub.{natsSubject}.clipboard.req",
 
             // Viewer subscreve (recebe stream)
             $"sub.{natsSubject}.frame",
@@ -115,6 +116,7 @@ public class RemoteSessionJwtIssuer
             $"sub.{natsSubject}.cursor.img",
             $"sub.{natsSubject}.monitors",
             $"sub.{natsSubject}.event",
+            $"sub.{natsSubject}.clipboard",
             $"sub.{natsSubject}.term.out",
             $"sub.{natsSubject}.term.ready",
             $"sub.{natsSubject}.files.ready",

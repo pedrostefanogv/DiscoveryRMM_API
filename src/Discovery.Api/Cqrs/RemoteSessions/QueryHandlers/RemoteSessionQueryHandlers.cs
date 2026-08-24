@@ -93,6 +93,7 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.proxy.req",
             $"{natsSubject}.proc.req",
             $"{natsSubject}.signal",
+            $"{natsSubject}.clipboard.req",
         };
         var subSubjects = new[]
         {
@@ -102,6 +103,7 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.cursor.img",
             $"{natsSubject}.monitors",
             $"{natsSubject}.event",
+            $"{natsSubject}.clipboard",
             $"{natsSubject}.term.out",
             $"{natsSubject}.term.ready",
             $"{natsSubject}.files.ready",
