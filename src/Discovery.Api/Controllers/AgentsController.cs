@@ -14,7 +14,9 @@ using Discovery.Core.Cqrs.Agents.RemoteDebug.Queries;
 using Discovery.Core.Cqrs.Agents.Transfer.Commands;
 using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
+using Discovery.Core.Entities;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -25,10 +27,24 @@ namespace Discovery.Api.Controllers;
 public class AgentsController : ControllerBase
 {
     private readonly IMediator _mediator;
+    private readonly INoteService _noteService;
 
-    public AgentsController(IMediator mediator)
+    public AgentsController(IMediator mediator, INoteService noteService)
     {
         _mediator = mediator;
+        _noteService = noteService;
+    }
+
+    /// <summary>Username do usuário autenticado (ou fallback).</summary>
+    private string CurrentUser => HttpContext.Items["Username"] as string ?? "api";
+
+    /// <summary>
+    /// Busca a nota e valida que ela pertence ao agente da rota, prevenindo IDOR.
+    /// </summary>
+    private async Task<bool> NoteBelongsToAsync(Guid noteId, Guid agentId, CancellationToken ct = default)
+    {
+        var note = await _noteService.GetByIdAsync(noteId, ct);
+        return note is not null && note.AgentId == agentId;
     }
 
     /// <summary>Username do usuário autenticado (ou fallback).</summary>
@@ -461,9 +477,12 @@ public class AgentsController : ControllerBase
 
     [HttpGet("{id:guid}/notes/{noteId:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetNoteById(Guid id, Guid noteId)
+    public async Task<IActionResult> GetNoteById(Guid id, Guid noteId, CancellationToken ct = default)
     {
-        var result = await _mediator.Send(new GetNoteByIdQuery(noteId));
+        if (!await NoteBelongsToAsync(noteId, id, ct))
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
+
+        var result = await _mediator.Send(new GetNoteByIdQuery(noteId), ct);
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound"
@@ -484,10 +503,13 @@ public class AgentsController : ControllerBase
 
     [HttpPut("{id:guid}/notes/{noteId:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
-    public async Task<IActionResult> UpdateNote(Guid id, Guid noteId, [FromBody] UpdateNoteRequest request)
+    public async Task<IActionResult> UpdateNote(Guid id, Guid noteId, [FromBody] UpdateNoteRequest request, CancellationToken ct = default)
     {
+        if (!await NoteBelongsToAsync(noteId, id, ct))
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
+
         var cmd = new UpdateNoteCommand(noteId, request.Content, request.IsPinned);
-        var result = await _mediator.Send(cmd);
+        var result = await _mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound"
@@ -497,9 +519,12 @@ public class AgentsController : ControllerBase
 
     [HttpDelete("{id:guid}/notes/{noteId:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
-    public async Task<IActionResult> DeleteNote(Guid id, Guid noteId)
+    public async Task<IActionResult> DeleteNote(Guid id, Guid noteId, CancellationToken ct = default)
     {
-        var result = await _mediator.Send(new DeleteNoteCommand(noteId));
+        if (!await NoteBelongsToAsync(noteId, id, ct))
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
+
+        var result = await _mediator.Send(new DeleteNoteCommand(noteId), ct);
         return result.Match<IActionResult>(
             success: _ => NoContent(),
             failure: errors => errors[0].Code == "NotFound"

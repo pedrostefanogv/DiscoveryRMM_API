@@ -2,8 +2,10 @@ using Discovery.Core.Cqrs.Clients.Commands;
 using Discovery.Core.Cqrs.Clients.Queries;
 using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
+using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Interfaces;
 using Discovery.Api.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -14,8 +16,17 @@ namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/[controller]")]
-public class ClientsController(IMediator mediator) : ControllerBase
+public class ClientsController(IMediator mediator, INoteService noteService) : ControllerBase
 {
+    /// <summary>Username do usuário autenticado (ou fallback).</summary>
+    private string CurrentUser => HttpContext.Items["Username"] as string ?? "api";
+
+    /// <summary>Valida que a nota pertence ao client da rota, prevenindo IDOR.</summary>
+    private async Task<bool> NoteBelongsToAsync(Guid noteId, Guid clientId, CancellationToken ct = default)
+    {
+        var note = await noteService.GetByIdAsync(noteId, ct);
+        return note is not null && note.ClientId == clientId;
+    }
     [HttpGet]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
     [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
@@ -79,7 +90,7 @@ public class ClientsController(IMediator mediator) : ControllerBase
     [RequirePermission(ResourceType.Clients, ActionType.Edit)]
     public async Task<IActionResult> CreateNote(Guid id, [FromBody] CreateNoteRequest request, CancellationToken ct = default)
     {
-        var source = HttpContext.Items["Username"] as string ?? "api";
+        var source = CurrentUser;
         var cmd = new CreateNoteCommand(id, null, null, request.Content, source, request.IsPinned);
         var result = await mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
@@ -89,9 +100,12 @@ public class ClientsController(IMediator mediator) : ControllerBase
 
     [HttpGet("{id:guid}/notes/{noteId:guid}")]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
-    public async Task<IActionResult> GetNoteById(Guid id, Guid noteId)
+    public async Task<IActionResult> GetNoteById(Guid id, Guid noteId, CancellationToken ct = default)
     {
-        var result = await mediator.Send(new GetNoteByIdQuery(noteId));
+        if (!await NoteBelongsToAsync(noteId, id, ct))
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
+
+        var result = await mediator.Send(new GetNoteByIdQuery(noteId), ct);
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
@@ -101,6 +115,9 @@ public class ClientsController(IMediator mediator) : ControllerBase
     [RequirePermission(ResourceType.Clients, ActionType.Edit)]
     public async Task<IActionResult> UpdateNote(Guid id, Guid noteId, [FromBody] UpdateNoteRequest request, CancellationToken ct = default)
     {
+        if (!await NoteBelongsToAsync(noteId, id, ct))
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
+
         var cmd = new UpdateNoteCommand(noteId, request.Content, request.IsPinned);
         var result = await mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
@@ -112,6 +129,9 @@ public class ClientsController(IMediator mediator) : ControllerBase
     [RequirePermission(ResourceType.Clients, ActionType.Edit)]
     public async Task<IActionResult> DeleteNote(Guid id, Guid noteId, CancellationToken ct = default)
     {
+        if (!await NoteBelongsToAsync(noteId, id, ct))
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
+
         var result = await mediator.Send(new DeleteNoteCommand(noteId), ct);
         return result.Match<IActionResult>(
             success: _ => NoContent(),
