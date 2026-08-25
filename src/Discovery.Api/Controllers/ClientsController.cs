@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs.Clients.Commands;
 using Discovery.Core.Cqrs.Clients.Queries;
+using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
@@ -72,6 +73,49 @@ public class ClientsController(IMediator mediator) : ControllerBase
     {
         var result = await mediator.Send(new ListNotesPageQuery(id, null, null, cursor, limit), ct);
         return result.ToActionResult();
+    }
+
+    [HttpPost("{id:guid}/notes")]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
+    public async Task<IActionResult> CreateNote(Guid id, [FromBody] CreateNoteRequest request, CancellationToken ct = default)
+    {
+        var source = HttpContext.Items["Username"] as string ?? "api";
+        var cmd = new CreateNoteCommand(id, null, null, request.Content, source, request.IsPinned);
+        var result = await mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: dto => CreatedAtAction(nameof(GetNoteById), new { id, noteId = dto.Id }, dto),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    [HttpGet("{id:guid}/notes/{noteId:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    public async Task<IActionResult> GetNoteById(Guid id, Guid noteId)
+    {
+        var result = await mediator.Send(new GetNoteByIdQuery(noteId));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+    }
+
+    [HttpPut("{id:guid}/notes/{noteId:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
+    public async Task<IActionResult> UpdateNote(Guid id, Guid noteId, [FromBody] UpdateNoteRequest request, CancellationToken ct = default)
+    {
+        var cmd = new UpdateNoteCommand(noteId, request.Content, request.IsPinned);
+        var result = await mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+    }
+
+    [HttpDelete("{id:guid}/notes/{noteId:guid}")]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
+    public async Task<IActionResult> DeleteNote(Guid id, Guid noteId, CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new DeleteNoteCommand(noteId), ct);
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: _ => NotFound());
     }
 
     [HttpGet("{id:guid}/custom-fields")]

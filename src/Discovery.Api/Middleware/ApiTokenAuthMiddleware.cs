@@ -1,4 +1,5 @@
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Core.Interfaces.Identity;
 
 namespace Discovery.Api.Middleware;
 
@@ -19,7 +20,7 @@ public class ApiTokenAuthMiddleware
 
     public ApiTokenAuthMiddleware(RequestDelegate next) => _next = next;
 
-    public async Task InvokeAsync(HttpContext context, IApiTokenService tokenService, IUserAuthService userAuthService)
+    public async Task InvokeAsync(HttpContext context, IApiTokenService tokenService, IUserAuthService userAuthService, IUserRepository userRepository)
     {
         var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
 
@@ -63,6 +64,13 @@ public class ApiTokenAuthMiddleware
 
                 context.Items["UserId"] = userId.Value;
                 context.Items["IsApiTokenAuth"] = true;
+
+                // Resolve o username do dono do token para consistência com o
+                // fluxo JWT (HttpContext.Items["Username"]), evitando que ações
+                // (notas, custom fields, tickets) caiam no fallback "api".
+                var owner = await userRepository.GetByIdAsync(userId.Value);
+                if (owner is not null && !string.IsNullOrWhiteSpace(owner.Login))
+                    context.Items["Username"] = owner.Login;
             }
             else
             {

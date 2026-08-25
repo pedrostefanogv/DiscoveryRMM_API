@@ -31,6 +31,9 @@ public class AgentsController : ControllerBase
         _mediator = mediator;
     }
 
+    /// <summary>Username do usuário autenticado (ou fallback).</summary>
+    private string CurrentUser => HttpContext.Items["Username"] as string ?? "api";
+
     // ── CRUD ──────────────────────────────────────────────────────────────
 
     [HttpPost("{agentId:guid}/approve-zero-touch")]
@@ -470,9 +473,10 @@ public class AgentsController : ControllerBase
 
     [HttpPost("{id:guid}/notes")]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
-    public async Task<IActionResult> CreateNote(Guid id, [FromBody] CreateNoteCommand cmd)
+    public async Task<IActionResult> CreateNote(Guid id, [FromBody] CreateNoteRequest request)
     {
-        var result = await _mediator.Send(cmd with { AgentId = id });
+        var cmd = new CreateNoteCommand(null, null, id, request.Content, CurrentUser, request.IsPinned);
+        var result = await _mediator.Send(cmd);
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetNoteById), new { id, noteId = dto.Id }, dto),
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
@@ -480,9 +484,10 @@ public class AgentsController : ControllerBase
 
     [HttpPut("{id:guid}/notes/{noteId:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
-    public async Task<IActionResult> UpdateNote(Guid id, Guid noteId, [FromBody] UpdateNoteCommand cmd)
+    public async Task<IActionResult> UpdateNote(Guid id, Guid noteId, [FromBody] UpdateNoteRequest request)
     {
-        var result = await _mediator.Send(cmd with { Id = noteId });
+        var cmd = new UpdateNoteCommand(noteId, request.Content, request.IsPinned);
+        var result = await _mediator.Send(cmd);
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound"

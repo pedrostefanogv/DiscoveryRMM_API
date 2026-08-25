@@ -78,7 +78,7 @@ public sealed class UpdateNoteCommandHandler(
             return Result<NoteDto>.Failure(Error.NotFound($"Note {cmd.Id} not found"));
 
         if (cmd.Content is not null) note.Content = cmd.Content;
-        if (cmd.Author is not null) note.Author = cmd.Author;
+        // Autor é preservado em edições: não pode ser alterado aqui.
         if (cmd.IsPinned.HasValue) note.IsPinned = cmd.IsPinned.Value;
 
         await service.UpdateAsync(note, ct);

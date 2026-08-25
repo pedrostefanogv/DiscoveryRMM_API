@@ -1,5 +1,7 @@
 using Discovery.Core.Cqrs.Sites.Commands;
 using Discovery.Core.Cqrs.Sites.Queries;
+using Discovery.Core.Cqrs.Notes.Commands;
+using Discovery.Core.Cqrs.Notes.Queries;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Api.Filters;
@@ -77,6 +79,66 @@ public class SitesController(IMediator mediator) : ControllerBase
         var cmd = new UpsertSiteCustomFieldCommand(clientId, id, definitionId, request.Value.GetRawText(), username);
         var result = await mediator.Send(cmd, ct);
         return result.ToActionResult();
+    }
+
+    // ── Notes ────────────────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/notes/page")]
+    [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
+    public async Task<IActionResult> GetNotesPage(
+        Guid clientId, Guid id,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new ListNotesPageQuery(null, id, null, cursor, limit), ct);
+        return result.ToActionResult();
+    }
+
+    [HttpGet("{id:guid}/notes/{noteId:guid}")]
+    [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
+    public async Task<IActionResult> GetNoteById(Guid clientId, Guid id, Guid noteId)
+    {
+        var result = await mediator.Send(new GetNoteByIdQuery(noteId));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+    }
+
+    [HttpPost("{id:guid}/notes")]
+    [RequirePermission(ResourceType.Sites, ActionType.Edit, ScopeSource.FromRoute)]
+    public async Task<IActionResult> CreateNote(
+        Guid clientId, Guid id, [FromBody] CreateNoteRequest request, CancellationToken ct = default)
+    {
+        var source = HttpContext.Items["Username"] as string ?? "api";
+        var cmd = new CreateNoteCommand(null, id, null, request.Content, source, request.IsPinned);
+        var result = await mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: dto => CreatedAtAction(nameof(GetNoteById), new { clientId, id, noteId = dto.Id }, dto),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    [HttpPut("{id:guid}/notes/{noteId:guid}")]
+    [RequirePermission(ResourceType.Sites, ActionType.Edit, ScopeSource.FromRoute)]
+    public async Task<IActionResult> UpdateNote(
+        Guid clientId, Guid id, Guid noteId, [FromBody] UpdateNoteRequest request, CancellationToken ct = default)
+    {
+        var cmd = new UpdateNoteCommand(noteId, request.Content, request.IsPinned);
+        var result = await mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+    }
+
+    [HttpDelete("{id:guid}/notes/{noteId:guid}")]
+    [RequirePermission(ResourceType.Sites, ActionType.Edit, ScopeSource.FromRoute)]
+    public async Task<IActionResult> DeleteNote(
+        Guid clientId, Guid id, Guid noteId, CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new DeleteNoteCommand(noteId), ct);
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: _ => NotFound());
     }
 
     private IActionResult Problem(IReadOnlyList<Discovery.Core.Cqrs.Error> errors)

@@ -72,6 +72,9 @@ public class UserAuthMiddleware
                 if (Guid.TryParse(userIdClaim, out var userId))
                 {
                     context.Items["UserId"] = userId;
+                    context.Items["Username"] = principal.FindFirstValue("unique_name")
+                        ?? principal.FindFirstValue(ClaimTypes.Name)
+                        ?? principal.FindFirstValue("name");
                     context.Items["MfaPending"] = principal.FindFirstValue("mfa_pending") == "true";
                     context.Items["MfaSetup"] = principal.FindFirstValue("mfa_setup") == "true";
                     context.Items["MfaVerified"] = principal.FindFirstValue("mfa_verified") == "true";

@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Discovery.Core.DTOs.Auth;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Entities.Security;
@@ -373,7 +374,13 @@ public class UserAuthService : IUserAuthService
     {
         var sessionId = IdGenerator.NewId();
         var (_, refreshBase64, refreshHash) = _jwtService.GenerateRefreshToken();
-        var accessToken = _jwtService.GenerateAccessToken(userId, sessionId);
+
+        // Inclui o username (login) como claim para que o autor de ações
+        // (notas, custom fields, tickets, etc.) possa ser resolvido da identidade
+        // autenticada e não de campos enviados pelo cliente.
+        var loginClaim = await ResolveUsernameClaimAsync(userId);
+        var extraClaims = loginClaim is not null ? new[] { loginClaim } : null;
+        var accessToken = _jwtService.GenerateAccessToken(userId, sessionId, extraClaims);
 
         var accessHash = Convert.ToBase64String(
             System.Security.Cryptography.SHA256.HashData(
@@ -406,6 +413,22 @@ public class UserAuthService : IUserAuthService
 
     private static bool HasKeyType(IEnumerable<UserMfaKey> keys, MfaKeyType type)
         => keys.Any(k => k.IsActive && k.KeyType == type);
+
+    /// <summary>
+    /// Resolve o username (login) de um usuário para incluir como claim no access token.
+    /// </summary>
+    private async Task<Claim?> ResolveUsernameClaimAsync(Guid userId)
+    {
+        var user = await _users.GetByIdAsync(userId);
+        if (user is null || string.IsNullOrWhiteSpace(user.Login))
+        {
+            _logger.LogWarning(
+                "ResolveUsernameClaimAsync: usuário {UserId} não encontrado ou sem login — pulando claim de username.",
+                userId);
+            return null;
+        }
+        return new Claim("unique_name", user.Login);
+    }
 
     /// <summary>
     /// Registra falha de login e aplica lockout progressivo:
