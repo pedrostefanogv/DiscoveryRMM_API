@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
+using Discovery.Core.Entities;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
@@ -17,73 +18,79 @@ namespace Discovery.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v{version:apiVersion}/notes")]
-public class NotesController(IMediator mediator, IPermissionService permission, INoteService noteService) : ControllerBase
+public class NotesController(IMediator mediator, IPermissionService permission, INoteService noteService, ISiteRepository siteRepository) : ControllerBase
 {
     /// <summary>Username do usuário autenticado (ou fallback).</summary>
     private string CurrentUser => HttpContext.Items["Username"] as string ?? "api";
 
     private Guid? CurrentUserId => HttpContext.Items["UserId"] is Guid uid ? uid : null;
 
-    private static bool TryGetResource(
-        Guid? clientId, Guid? siteId, Guid? agentId,
-        out ResourceType resource, out ScopeLevel scopeLevel, out Guid? scopeId, out Guid? parentScopeId)
+    private readonly record struct ResourceTarget(
+        ResourceType Resource, ScopeLevel ScopeLevel, Guid? ScopeId, Guid? ParentScopeId);
+
+    /// <summary>
+    /// Resolve o recurso e o escopo do alvo da nota.
+    /// Quando o alvo é um site e o clientId não foi informado, busca o
+    /// clientId do site no repositório para permitir herança de permissão
+    /// por Client (parentScopeId).
+    /// </summary>
+    private async Task<ResourceTarget?> ResolveResourceAsync(
+        Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct = default)
     {
+        var alvoCount = (clientId.HasValue ? 1 : 0) + (siteId.HasValue ? 1 : 0) + (agentId.HasValue ? 1 : 0);
+        if (alvoCount != 1)
+            return null;
+
         if (agentId.HasValue)
+            return new ResourceTarget(ResourceType.Agents, ScopeLevel.Global, null, null);
+
+        if (siteId.HasValue)
         {
-            resource = ResourceType.Agents; scopeLevel = ScopeLevel.Global; scopeId = null; parentScopeId = null;
+            var parentClientId = clientId;
+            if (!parentClientId.HasValue)
+            {
+                var site = await siteRepository.GetByIdAsync(siteId.Value);
+                parentClientId = site?.ClientId;
+            }
+            return new ResourceTarget(ResourceType.Sites, ScopeLevel.Site, siteId, parentClientId);
         }
-        else if (siteId.HasValue)
-        {
-            resource = ResourceType.Sites; scopeLevel = ScopeLevel.Site; scopeId = siteId; parentScopeId = clientId;
-        }
-        else if (clientId.HasValue)
-        {
-            resource = ResourceType.Clients; scopeLevel = ScopeLevel.Client; scopeId = clientId; parentScopeId = null;
-        }
-        else
-        {
-            resource = default; scopeLevel = default; scopeId = null; parentScopeId = null;
-            return false;
-        }
-        return true;
+
+        return new ResourceTarget(ResourceType.Clients, ScopeLevel.Client, clientId, null);
     }
 
     /// <summary>Infere o alvo de uma nota a partir dos IDs de vínculo.</summary>
-    private static (ResourceType resource, ScopeLevel scopeLevel, Guid? scopeId, Guid? parentScopeId)? ResolveTarget(Discovery.Core.Entities.EntityNote? note)
+    private async Task<ResourceTarget?> ResolveTargetAsync(EntityNote? note, CancellationToken ct = default)
     {
         if (note is null)
             return null;
 
-        Guid? clientId = note.ClientId, siteId = note.SiteId, agentId = note.AgentId;
-        Guid? scopeId; ScopeLevel scopeLevel; Guid? parentScopeId; ResourceType resource;
+        if (note.AgentId.HasValue)
+            return new ResourceTarget(ResourceType.Agents, ScopeLevel.Global, null, null);
 
-        if (agentId.HasValue)
+        if (note.SiteId.HasValue)
         {
-            resource = ResourceType.Agents; scopeLevel = ScopeLevel.Global; scopeId = null; parentScopeId = null;
-        }
-        else if (siteId.HasValue)
-        {
-            resource = ResourceType.Sites; scopeLevel = ScopeLevel.Site; scopeId = siteId; parentScopeId = clientId;
-        }
-        else if (clientId.HasValue)
-        {
-            resource = ResourceType.Clients; scopeLevel = ScopeLevel.Client; scopeId = clientId; parentScopeId = null;
-        }
-        else
-        {
-            return null;
+            var parentClientId = note.ClientId;
+            if (!parentClientId.HasValue)
+            {
+                var site = await siteRepository.GetByIdAsync(note.SiteId.Value);
+                parentClientId = site?.ClientId;
+            }
+            return new ResourceTarget(ResourceType.Sites, ScopeLevel.Site, note.SiteId, parentClientId);
         }
 
-        return (resource, scopeLevel, scopeId, parentScopeId);
+        if (note.ClientId.HasValue)
+            return new ResourceTarget(ResourceType.Clients, ScopeLevel.Client, note.ClientId, null);
+
+        return null;
     }
 
-    private async Task<IActionResult?> EnforceAsync(ResourceType resource, ActionType action,
-        ScopeLevel scopeLevel, Guid? scopeId, Guid? parentScopeId)
+    private async Task<IActionResult?> EnforceAsync(ResourceTarget target, ActionType action)
     {
         if (CurrentUserId is not Guid userId)
             return Unauthorized(new { message = "Autenticação necessária." });
 
-        var ok = await permission.HasPermissionAsync(userId, resource, action, scopeLevel, scopeId, parentScopeId);
+        var ok = await permission.HasPermissionAsync(
+            userId, target.Resource, action, target.ScopeLevel, target.ScopeId, target.ParentScopeId);
         if (!ok)
             return StatusCode(StatusCodes.Status403Forbidden, new { message = "Permissão insuficiente." });
         return null;
@@ -98,10 +105,11 @@ public class NotesController(IMediator mediator, IPermissionService permission, 
         [FromQuery] int limit = 50,
         CancellationToken ct = default)
     {
-        if (!TryGetResource(clientId, siteId, agentId, out var resource, out var scopeLevel, out var scopeId, out var parentScopeId))
-            return BadRequest(new { errors = new[] { new { code = "Validation", message = "Informe clientId, siteId ou agentId." } } });
+        var target = await ResolveResourceAsync(clientId, siteId, agentId, ct);
+        if (target is null)
+            return BadRequest(new { errors = new[] { new { code = "Validation", message = "Informe exatamente um alvo (clientId, siteId ou agentId) para a nota." } } });
 
-        var denied = await EnforceAsync(resource, ActionType.View, scopeLevel, scopeId, parentScopeId);
+        var denied = await EnforceAsync(target.Value, ActionType.View);
         if (denied is not null) return denied;
 
         var result = await mediator.Send(new ListNotesPageQuery(clientId, siteId, agentId, cursor, limit), ct);
@@ -112,12 +120,11 @@ public class NotesController(IMediator mediator, IPermissionService permission, 
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct = default)
     {
         var note = await noteService.GetByIdAsync(id, ct);
-        var target = ResolveTarget(note);
+        var target = await ResolveTargetAsync(note, ct);
         if (target is null)
             return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {id} not found" } } });
 
-        var (resource, scopeLevel, scopeId, parentScopeId) = target.Value;
-        var denied = await EnforceAsync(resource, ActionType.View, scopeLevel, scopeId, parentScopeId);
+        var denied = await EnforceAsync(target.Value, ActionType.View);
         if (denied is not null) return denied;
 
         var result = await mediator.Send(new GetNoteByIdQuery(id), ct);
@@ -131,10 +138,11 @@ public class NotesController(IMediator mediator, IPermissionService permission, 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateNoteRequest request, CancellationToken ct = default)
     {
-        if (!TryGetResource(request.ClientId, request.SiteId, request.AgentId, out var resource, out var scopeLevel, out var scopeId, out var parentScopeId))
-            return BadRequest(new { errors = new[] { new { code = "Validation", message = "Informe clientId, siteId ou agentId." } } });
+        var target = await ResolveResourceAsync(request.ClientId, request.SiteId, request.AgentId, ct);
+        if (target is null)
+            return BadRequest(new { errors = new[] { new { code = "Validation", message = "Informe exatamente um alvo (clientId, siteId ou agentId) para a nota." } } });
 
-        var denied = await EnforceAsync(resource, ActionType.Edit, scopeLevel, scopeId, parentScopeId);
+        var denied = await EnforceAsync(target.Value, ActionType.Edit);
         if (denied is not null) return denied;
 
         var cmd = new CreateNoteCommand(
@@ -150,12 +158,11 @@ public class NotesController(IMediator mediator, IPermissionService permission, 
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateNoteRequest request, CancellationToken ct = default)
     {
         var note = await noteService.GetByIdAsync(id, ct);
-        var target = ResolveTarget(note);
+        var target = await ResolveTargetAsync(note, ct);
         if (target is null)
             return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {id} not found" } } });
 
-        var (resource, scopeLevel, scopeId, parentScopeId) = target.Value;
-        var denied = await EnforceAsync(resource, ActionType.Edit, scopeLevel, scopeId, parentScopeId);
+        var denied = await EnforceAsync(target.Value, ActionType.Edit);
         if (denied is not null) return denied;
 
         var cmd = new UpdateNoteCommand(id, request.Content, request.IsPinned);
@@ -171,12 +178,11 @@ public class NotesController(IMediator mediator, IPermissionService permission, 
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct = default)
     {
         var note = await noteService.GetByIdAsync(id, ct);
-        var target = ResolveTarget(note);
+        var target = await ResolveTargetAsync(note, ct);
         if (target is null)
             return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {id} not found" } } });
 
-        var (resource, scopeLevel, scopeId, parentScopeId) = target.Value;
-        var denied = await EnforceAsync(resource, ActionType.Edit, scopeLevel, scopeId, parentScopeId);
+        var denied = await EnforceAsync(target.Value, ActionType.Edit);
         if (denied is not null) return denied;
 
         var result = await mediator.Send(new DeleteNoteCommand(id), ct);

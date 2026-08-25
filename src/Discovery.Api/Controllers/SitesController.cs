@@ -16,8 +16,17 @@ namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/clients/{clientId:guid}/[controller]")]
-public class SitesController(IMediator mediator) : ControllerBase
+public class SitesController(IMediator mediator, INoteService noteService) : ControllerBase
 {
+    /// <summary>
+    /// Busca a nota e valida que ela pertence ao site da rota, prevenindo IDOR.
+    /// </summary>
+    private async Task<bool> NoteBelongsToSiteAsync(Guid noteId, Guid siteId, CancellationToken ct = default)
+    {
+        var note = await noteService.GetByIdAsync(noteId, ct);
+        return note is not null && note.SiteId == siteId;
+    }
+
     [HttpGet]
     [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetByClient(Guid clientId, [FromQuery] bool includeInactive = false)
@@ -99,9 +108,12 @@ public class SitesController(IMediator mediator) : ControllerBase
 
     [HttpGet("{id:guid}/notes/{noteId:guid}")]
     [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
-    public async Task<IActionResult> GetNoteById(Guid clientId, Guid id, Guid noteId)
+    public async Task<IActionResult> GetNoteById(Guid clientId, Guid id, Guid noteId, CancellationToken ct = default)
     {
-        var result = await mediator.Send(new GetNoteByIdQuery(noteId));
+        if (!await NoteBelongsToSiteAsync(noteId, id, ct))
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
+
+        var result = await mediator.Send(new GetNoteByIdQuery(noteId), ct);
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
@@ -125,6 +137,9 @@ public class SitesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> UpdateNote(
         Guid clientId, Guid id, Guid noteId, [FromBody] UpdateNoteRequest request, CancellationToken ct = default)
     {
+        if (!await NoteBelongsToSiteAsync(noteId, id, ct))
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
+
         var cmd = new UpdateNoteCommand(noteId, request.Content, request.IsPinned);
         var result = await mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
@@ -137,6 +152,9 @@ public class SitesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> DeleteNote(
         Guid clientId, Guid id, Guid noteId, CancellationToken ct = default)
     {
+        if (!await NoteBelongsToSiteAsync(noteId, id, ct))
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
+
         var result = await mediator.Send(new DeleteNoteCommand(noteId), ct);
         return result.Match<IActionResult>(
             success: _ => NoContent(),

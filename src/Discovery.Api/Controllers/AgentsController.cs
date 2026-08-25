@@ -47,9 +47,6 @@ public class AgentsController : ControllerBase
         return note is not null && note.AgentId == agentId;
     }
 
-    /// <summary>Username do usuário autenticado (ou fallback).</summary>
-    private string CurrentUser => HttpContext.Items["Username"] as string ?? "api";
-
     // ── CRUD ──────────────────────────────────────────────────────────────
 
     [HttpPost("{agentId:guid}/approve-zero-touch")]
