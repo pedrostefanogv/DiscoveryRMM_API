@@ -1,11 +1,13 @@
 using Discovery.Core.Cqrs.Sites.Commands;
 using Discovery.Core.Cqrs.Sites.Queries;
+using Discovery.Core.Cqrs.Sites.PowerManagement.Commands;
 using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Api.Controllers.Sites;
 using Discovery.Api.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -159,6 +161,51 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
         return result.Match<IActionResult>(
             success: _ => NoContent(),
             failure: _ => NotFound());
+    }
+
+    // ── Power Management (todos os agentes do site) ─────────────────────
+
+    [HttpPost("{id:guid}/power/restart")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> RestartSite(Guid clientId, Guid id, [FromBody] SiteRestartRequest request, CancellationToken ct = default)
+    {
+        var cmd = new SiteRestartCommand(id, request.DelaySeconds, request.Force, request.Message);
+        var result = await mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: dto => Accepted(dto),
+            failure: errors => FirstErrorResult(errors));
+    }
+
+    [HttpPost("{id:guid}/power/shutdown")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> ShutdownSite(Guid clientId, Guid id, [FromBody] SiteShutdownRequest request, CancellationToken ct = default)
+    {
+        var cmd = new SiteShutdownCommand(id, request.DelaySeconds, request.Force, request.Message);
+        var result = await mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: dto => Accepted(dto),
+            failure: errors => FirstErrorResult(errors));
+    }
+
+    [HttpPost("{id:guid}/power/wake-on-lan")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> WakeOnLanSite(Guid clientId, Guid id, CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new SiteWakeOnLanCommand(id), ct);
+        return result.Match<IActionResult>(
+            success: dto => Accepted(dto),
+            failure: errors => FirstErrorResult(errors));
+    }
+
+    private IActionResult FirstErrorResult(IReadOnlyList<Discovery.Core.Cqrs.Error> errors)
+    {
+        var first = errors[0];
+        return first.Code switch
+        {
+            "NotFound" => NotFound(new { errors }),
+            "Validation" => StatusCode(StatusCodes.Status412PreconditionFailed, new { error = first.Message }),
+            _ => StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = first.Message })
+        };
     }
 
     private IActionResult Problem(IReadOnlyList<Discovery.Core.Cqrs.Error> errors)
