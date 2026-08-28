@@ -30,9 +30,9 @@ public interface ILlmProvider
 }
 
 public record LlmMessage(
-    string Role, 
-    string Content, 
-    string? ToolCallId = null, 
+    string Role,
+    string Content,
+    string? ToolCallId = null,
     string? ToolName = null,
     List<LlmAssistantToolCall>? ToolCalls = null);
 
@@ -57,11 +57,12 @@ public record LlmOptions(
     string? OpenRouterTitle = null,
     string? OpenRouterCategories = null,
     string? Provider = null,
-    string? SessionId = null);
+    string? SessionId = null,
+    int TimeoutMs = 0);
 
 public record LlmTool(
-    string Name, 
-    string Description, 
+    string Name,
+    string Description,
     object Schema);
 
 public record LlmResponse(
@@ -71,8 +72,8 @@ public record LlmResponse(
     List<LlmToolCall>? ToolCalls = null);
 
 public record LlmToolCall(
-    string Id, 
-    string Name, 
+    string Id,
+    string Name,
     string ArgumentsJson);
 
 /// <summary>

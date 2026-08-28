@@ -28,4 +28,18 @@ internal static class AiChatHelpers
         catch { }
         return argumentsJson;
     }
+
+    /// <summary>
+    /// Resolve o timeout HTTP para chamadas LLM a partir das configurações.
+    /// Streaming de LLM pode demorar (reasoning, tool chains longas), então usa
+    /// piso de 60s para não cortar gerações que o HttpClient "AiChat" (antigo
+    /// 60s fixo) já permitia. Valores configurados acima do piso são honrados.
+    /// Retorna 0 quando não configurado, deixando o HttpClient usar seu default.
+    /// </summary>
+    public static int ClampAiTimeoutMs(AIIntegrationSettings settings)
+    {
+        var ms = settings.TimeoutMs;
+        if (ms <= 0) return 0;
+        return Math.Max(ms, 60_000);
+    }
 }

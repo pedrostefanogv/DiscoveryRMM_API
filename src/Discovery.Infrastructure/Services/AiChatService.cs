@@ -126,7 +126,8 @@ public class AiChatService : IAiChatService
                 aiSettings.ChatModel, aiSettings.BaseUrl, aiSettings.ApiKey,
                 availableTools.Count > 0, availableTools, aiSettings.Provider,
                 aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
-                SessionId: session.Id.ToString("D"));
+                SessionId: session.Id.ToString("D"),
+                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
 
             LlmResponse llmResponse;
             var toolIterations = 0;
@@ -214,9 +215,9 @@ public class AiChatService : IAiChatService
     // StreamAsync — delega para AiChatStreamingOrchestrator
     // ══════════════════════════════════════════════════════════════════════════
 
-    public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(Guid agentId, string message, Guid? sessionId, Guid? departmentId = null, [EnumeratorCancellation] CancellationToken ct = default)
+    public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(Guid agentId, string message, Guid? sessionId, Guid? departmentId = null, string? systemNote = null, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var chunk in _streamingOrchestrator.StreamAsync(agentId, message, sessionId, ResolveAiSettingsAsync, departmentId, ct))
+        await foreach (var chunk in _streamingOrchestrator.StreamAsync(agentId, message, sessionId, ResolveAiSettingsAsync, departmentId, systemNote, ct))
             yield return chunk;
     }
 
@@ -244,9 +245,9 @@ public class AiChatService : IAiChatService
     // StreamMultiRoundAsync — delega para AiChatStreamingOrchestrator
     // ══════════════════════════════════════════════════════════════════════════
 
-    public async IAsyncEnumerable<AiChatStreamChunk> StreamMultiRoundAsync(Guid agentId, string? message, Guid? sessionId, List<ToolResultItem>? toolResults, Guid? departmentId = null, [EnumeratorCancellation] CancellationToken ct = default)
+    public async IAsyncEnumerable<AiChatStreamChunk> StreamMultiRoundAsync(Guid agentId, string? message, Guid? sessionId, List<ToolResultItem>? toolResults, Guid? departmentId = null, string? systemNote = null, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var chunk in _streamingOrchestrator.StreamMultiRoundAsync(agentId, message, sessionId, toolResults, ResolveAiSettingsAsync, departmentId, ct))
+        await foreach (var chunk in _streamingOrchestrator.StreamMultiRoundAsync(agentId, message, sessionId, toolResults, ResolveAiSettingsAsync, departmentId, systemNote, ct))
             yield return chunk;
     }
 
@@ -261,9 +262,15 @@ public class AiChatService : IAiChatService
 
         var session = await _sessionRepository.CreateAsync(new AiChatSession
         {
-            Id = Guid.NewGuid(), AgentId = agentId, SiteId = scopeSiteId, ClientId = scopeClientId,
-            Topic = "general", CreatedAt = startTime, CreatedByIp = createdByIp ?? "unknown",
-            TraceId = traceId, ExpiresAt = startTime.AddDays(AiChatConstants.SessionExpirationDays)
+            Id = Guid.NewGuid(),
+            AgentId = agentId,
+            SiteId = scopeSiteId,
+            ClientId = scopeClientId,
+            Topic = "general",
+            CreatedAt = startTime,
+            CreatedByIp = createdByIp ?? "unknown",
+            TraceId = traceId,
+            ExpiresAt = startTime.AddDays(AiChatConstants.SessionExpirationDays)
         }, ct);
 
         _logger.LogInformation("[{TraceId}] Nova sessão criada: SessionId={SessionId}", traceId, session.Id);

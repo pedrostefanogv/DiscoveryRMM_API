@@ -1,8 +1,6 @@
 using System.Text.Json.Serialization;
 using FluentValidation;
 using FluentValidation.AspNetCore;
-using Polly;
-using Polly.Extensions.Http;
 using Discovery.Api;
 using Discovery.Api.Cqrs.DependencyInjection;
 using Discovery.Api.DependencyInjection;
@@ -136,9 +134,7 @@ builder.Services.AddHttpClient("AiChat", client =>
 {
     client.Timeout = TimeSpan.FromSeconds(60);
     client.DefaultRequestHeaders.Add("Accept", "application/json");
-})
-.AddTransientHttpErrorPolicy(policy =>
-    policy.WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromMilliseconds(Math.Pow(2, retryAttempt) * 200)));
+});
 
 // Generic HttpClient for other services
 builder.Services.AddHttpClient();
@@ -154,8 +150,6 @@ builder.Services.AddScoped<IMcpToolExecutor, McpToolExecutor>();
 builder.Services.AddScoped<IAiCostControlService, AiCostControlService>();
 // Sub-services internos do chat IA
 builder.Services.AddScoped<AiChatSettingsResolver>();
-builder.Services.AddScoped<AiChatAgentToolRegistry>();
-builder.Services.AddScoped<AiChatXmlToolParser>();
 builder.Services.AddScoped<AiChatSystemPromptBuilder>();
 builder.Services.AddScoped<AiChatToolOrchestrator>();
 builder.Services.AddScoped<AiChatQuickReply>();

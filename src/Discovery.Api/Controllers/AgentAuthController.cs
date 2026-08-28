@@ -428,8 +428,8 @@ public class AgentAuthController : ControllerBase
             var toolResults = cmd.ToolResults?.Select(tr => new ToolResultItem(tr.CallId, tr.Name, tr.Result)).ToList();
 
             IAsyncEnumerable<AiChatStreamChunk> stream = (cmd.Message != null)
-                ? _aiChat.StreamAsync(agentId, cmd.Message, sessionGuid, cmd.DepartmentId, ct)
-                : _aiChat.StreamMultiRoundAsync(agentId, null, sessionGuid, toolResults, cmd.DepartmentId, ct);
+                ? _aiChat.StreamAsync(agentId, cmd.Message, sessionGuid, cmd.DepartmentId, cmd.SystemNote, ct)
+                : _aiChat.StreamMultiRoundAsync(agentId, null, sessionGuid, toolResults, cmd.DepartmentId, cmd.SystemNote, ct);
 
             await foreach (var chunk in stream)
             {

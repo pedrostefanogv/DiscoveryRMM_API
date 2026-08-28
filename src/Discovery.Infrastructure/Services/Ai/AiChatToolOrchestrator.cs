@@ -39,6 +39,34 @@ public class AiChatToolOrchestrator
         ["postgresquery"] = "postgres.query",
     };
 
+    // ── Fonte única de verdade para hints de "argumentos vazios" ─────────────
+    // Evita drift entre os 3 pontos que emitem hints de erro (antes havia 3
+    // switches duplicados com textos levemente diferentes, bug de packageId).
+    private const string EmptyArgHintDefault = "VOCÊ ENVIOU PARÂMETROS VAZIOS. Leia o histórico, extraia os valores corretos e tente novamente AGORA.";
+    private const string EmptyArgHintDefaultAscii = "VOCE ENVIOU PARAMETROS VAZIOS. Leia o historico, extraia os valores corretos e tente novamente AGORA.";
+
+    private static readonly Dictionary<string, string> EmptyArgHints = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["search_packages"] = "VOCÊ CHAMOU search_packages COM query VAZIA. ISSO É UM ERRO GRAVE. Leia a mensagem do usuário no histórico e extraia o nome do programa. Se o usuário disse \"Quero instalar o Foxit\", você DEVE chamar search_packages com query=\"Foxit\". NÃO desista. NÃO mude de assunto. NÃO pergunte ao usuário o que ele quer — ele JÁ disse. CORRIJA o parâmetro query e chame search_packages novamente AGORA.",
+        ["ask_user"] = "VOCÊ CHAMOU ask_user COM question VAZIA. Leia o histórico da conversa e formule uma pergunta clara baseada no contexto.",
+        ["create_ticket"] = "VOCÊ CHAMOU create_ticket COM PARÂMETROS VAZIOS. Extraia do histórico: título, descrição, categoria e prioridade. NÃO pergunte ao usuário — ele JÁ forneceu as informações.",
+        ["install_package"] = "VOCÊ CHAMOU install_package COM PARÂMETROS VAZIOS. Você precisa do 'id' exato — execute search_packages PRIMEIRO para obter o ID correto do programa. NUNCA invente um ID. Se ainda não executou search_packages, faça isso AGORA.",
+    };
+
+    private static readonly Dictionary<string, string> EmptyArgHintsAscii = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["search_packages"] = "VOCE CHAMOU search_packages COM query VAZIA. Leia a mensagem do usuario no historico e extraia o nome do programa. Se o usuario disse \"Quero instalar o Adobe Acrobat\", voce DEVE chamar search_packages com query=\"Adobe Acrobat\". NAO desista. CORRIJA o parametro query e chame search_packages novamente AGORA.",
+        ["ask_user"] = "VOCE CHAMOU ask_user COM question VAZIA. Leia o historico e formule uma pergunta clara.",
+        ["create_ticket"] = "VOCE CHAMOU create_ticket COM PARAMETROS VAZIOS. Extraia do historico: titulo, descricao, categoria e prioridade.",
+        ["install_package"] = "VOCE CHAMOU install_package COM PARAMETROS VAZIOS. Extraia do historico o nome/id do programa.",
+    };
+
+    public static string GetEmptyArgHint(string toolName)
+        => EmptyArgHints.TryGetValue(toolName, out var hint) ? hint : EmptyArgHintDefault;
+
+    public static string GetEmptyArgHintAscii(string toolName)
+        => EmptyArgHintsAscii.TryGetValue(toolName, out var hint) ? hint : EmptyArgHintDefaultAscii;
+
     public AiChatToolOrchestrator(IMemoryCache cache, IMcpToolExecutor mcpToolExecutor, ILogger<AiChatService> logger)
     {
         _cache = cache;
@@ -103,7 +131,7 @@ public class AiChatToolOrchestrator
             var missingRequired = toolName switch
             {
                 "search_packages" => !requiredList.Contains("query"),
-                "install_package" => !requiredList.Contains("packageId") && !requiredList.Contains("package_name"),
+                "install_package" => !requiredList.Contains("id"),
                 "ask_user" => !requiredList.Contains("question"),
                 "create_ticket" => !requiredList.Contains("title") || !requiredList.Contains("description"),
                 _ => false
@@ -123,7 +151,7 @@ public class AiChatToolOrchestrator
             var toAdd = toolName switch
             {
                 "search_packages" => new[] { "query" },
-                "install_package" => new[] { "packageId" },
+                "install_package" => new[] { "id" },
                 "ask_user" => new[] { "question" },
                 "create_ticket" => new[] { "title", "description", "category", "priority" },
                 _ => Array.Empty<string>()
@@ -159,7 +187,7 @@ public class AiChatToolOrchestrator
             var expected = toolName switch
             {
                 "search_packages" => new[] { "query" },
-                "install_package" => new[] { "packageId", "package_name", "packageName" },
+                "install_package" => new[] { "id" },
                 "ask_user" => new[] { "question" },
                 "create_ticket" => new[] { "title", "description" },
                 _ => Array.Empty<string>()
@@ -185,7 +213,7 @@ public class AiChatToolOrchestrator
         {
             "search_packages" => "Busca softwares e aplicativos disponíveis para instalação nos repositórios do RMM. Use APENAS quando o usuário solicitar instalar, atualizar ou buscar informações sobre programas (ex: 'Quero o Firefox', 'Tem Adobe?'). NÃO use esta ferramenta para buscar scripts de automação, configurações de rede, status de hardware ou logs de eventos. O parâmetro 'query' é OBRIGATÓRIO e deve conter o nome ou parte do nome do software (ex: 'chrome', 'office 365', 'adobe'). NUNCA envie query vazia. Se o usuário não especificou qual software, pergunte antes de chamar a ferramenta.",
 
-            "install_package" => "Instala um programa no computador do usuário. PRÉ-REQUISITO: você DEVE ter obtido o 'packageId' ou 'package_name' exato da ferramenta 'search_packages' ANTES de chamar esta função. NUNCA invente ou adivinhe um ID — se ainda não tem o ID, chame 'search_packages' primeiro. NÃO use para desinstalar, atualizar ou reparar programas — apenas para instalação limpa. Aguarde a confirmação do usuário antes de instalar.",
+            "install_package" => "Instala um programa no computador do usuário. PRÉ-REQUISITO: você DEVE ter obtido o 'id' exato da ferramenta 'search_packages' ANTES de chamar esta função. NUNCA invente ou adivinhe um ID — se ainda não tem o ID, chame 'search_packages' primeiro. NÃO use para desinstalar, atualizar ou reparar programas — apenas para instalação limpa. Aguarde a confirmação do usuário antes de instalar.",
 
             "ask_user" => "Faz uma pergunta ao usuário quando você precisar de mais informações para prosseguir. Use APENAS como último recurso, quando a informação necessária NÃO estiver disponível no histórico da conversa. NÃO use para perguntar o que o usuário já disse ou para iniciar conversa. O parâmetro 'question' é OBRIGATÓRIO e deve ser uma pergunta clara e contextualizada (ex: 'Qual versão do Office você precisa: 2019, 2021 ou Microsoft 365?'). NUNCA envie question vazia.",
 
@@ -228,7 +256,7 @@ public class AiChatToolOrchestrator
 
         if (hasInstallPackage)
         {
-            sb.AppendLine(" `install_package`: REQUER que `search_packages` tenha sido chamada primeiro para obter o `packageId`. NUNCA invente um ID — se não tem o ID, execute `search_packages` antes. SEMPRE aguarde a confirmação do usuário antes de instalar.");
+            sb.AppendLine(" `install_package`: REQUER que `search_packages` tenha sido chamada primeiro para obter o `id`. NUNCA invente um ID — se não tem o ID, execute `search_packages` antes. SEMPRE aguarde a confirmação do usuário antes de instalar.");
             sb.AppendLine("    NÃO use `install_package` para desinstalar, atualizar ou reparar — apenas para instalação limpa.");
         }
 
@@ -256,14 +284,7 @@ public class AiChatToolOrchestrator
             || lower.Contains("é obrigatório") || lower.Contains("e obrigatorio")
             || lower.Contains("parameter") && lower.Contains("missing"))
         {
-            var hint = toolName switch
-            {
-                "search_packages" => "VOCÊ CHAMOU search_packages COM query VAZIA. ISSO É UM ERRO GRAVE. Leia a mensagem do usuário no histórico e extraia o nome do programa. Se o usuário disse \"Quero instalar o Foxit\", você DEVE chamar search_packages com query=\"Foxit\". NÃO desista. NÃO mude de assunto. NÃO pergunte ao usuário o que ele quer — ele JÁ disse. CORRIJA o parâmetro query e chame search_packages novamente AGORA.",
-                "ask_user" => "VOCÊ CHAMOU ask_user COM question VAZIA. Leia o histórico da conversa e formule uma pergunta clara baseada no contexto.",
-                "create_ticket" => "VOCÊ CHAMOU create_ticket COM PARÂMETROS VAZIOS. Extraia do histórico: título, descrição, categoria e prioridade. NÃO pergunte ao usuário — ele JÁ forneceu as informações.",
-                "install_package" => "VOCÊ CHAMOU install_package COM PARÂMETROS VAZIOS. Você precisa do packageId exato — execute search_packages PRIMEIRO para obter o ID correto do programa. NUNCA invente um ID. Se ainda não executou search_packages, faça isso AGORA.",
-                _ => "VOCÊ ENVIOU PARÂMETROS VAZIOS. Leia o histórico, extraia os valores corretos e tente novamente AGORA."
-            };
+            var hint = GetEmptyArgHint(toolName);
 
             return JsonSerializer.Serialize(new { error = rawResult.Trim(), tool = toolName, hint });
         }
@@ -287,18 +308,11 @@ public class AiChatToolOrchestrator
                 "search_packages" => "query nao pode ser vazia",
                 "create_ticket" => "title nao pode ser vazio",
                 "ask_user" => "question nao pode ser vazia",
-                "install_package" => "packageId nao pode ser vazio",
+                "install_package" => "id nao pode ser vazio",
                 _ => "parametros obrigatorios nao preenchidos"
             };
 
-            var hint = toolName switch
-            {
-                "search_packages" => "VOCÊ CHAMOU search_packages COM query VAZIA. ISSO É UM ERRO GRAVE. Leia a mensagem do usuário no histórico e extraia o nome do programa. Se o usuário disse \"Quero instalar o Foxit\", você DEVE chamar search_packages com query=\"Foxit\". NÃO desista. NÃO mude de assunto. NÃO pergunte ao usuário o que ele quer — ele JÁ disse. CORRIJA o parâmetro query e chame search_packages novamente AGORA.",
-                "ask_user" => "VOCÊ CHAMOU ask_user COM question VAZIA. Leia o histórico da conversa e formule uma pergunta clara baseada no contexto.",
-                "create_ticket" => "VOCÊ CHAMOU create_ticket COM PARÂMETROS VAZIOS. Extraia do histórico: título, descrição, categoria e prioridade. NÃO pergunte ao usuário — ele JÁ forneceu as informações.",
-                "install_package" => "VOCÊ CHAMOU install_package COM PARÂMETROS VAZIOS. Você precisa do packageId exato — execute search_packages PRIMEIRO para obter o ID correto do programa. NUNCA invente um ID. Se ainda não executou search_packages, faça isso AGORA.",
-                _ => "VOCÊ ENVIOU PARÂMETROS VAZIOS. Leia o histórico, extraia os valores corretos e tente novamente AGORA."
-            };
+            var hint = GetEmptyArgHint(toolName);
 
             return (false, JsonSerializer.Serialize(new { error = errorMsg, tool = toolName, hint }));
         }
@@ -319,7 +333,7 @@ public class AiChatToolOrchestrator
                 "search_packages" => new[] { "query" },
                 "ask_user" => new[] { "question" },
                 "create_ticket" => new[] { "title", "description" },
-                "install_package" => new[] { "packageId", "package_name", "packageName" },
+                "install_package" => new[] { "id" },
                 _ => Array.Empty<string>()
             };
 
@@ -336,14 +350,7 @@ public class AiChatToolOrchestrator
                         _ => $"{propName} nao pode ser vazio"
                     };
 
-                    var hint = toolName switch
-                    {
-                        "search_packages" => "VOCE CHAMOU search_packages COM query VAZIA. Leia a mensagem do usuario no historico e extraia o nome do programa. Se o usuario disse \"Quero instalar o Adobe Acrobat\", voce DEVE chamar search_packages com query=\"Adobe Acrobat\". NAO desista. CORRIJA o parametro query e chame search_packages novamente AGORA.",
-                        "ask_user" => "VOCE CHAMOU ask_user COM question VAZIA. Leia o historico e formule uma pergunta clara.",
-                        "create_ticket" => "VOCE CHAMOU create_ticket COM PARAMETROS VAZIOS. Extraia do historico: titulo, descricao, categoria e prioridade.",
-                        "install_package" => "VOCE CHAMOU install_package COM PARAMETROS VAZIOS. Extraia do historico o nome/id do programa.",
-                        _ => "VOCE ENVIOU PARAMETROS VAZIOS. Leia o historico, extraia os valores corretos e tente novamente AGORA."
-                    };
+                    var hint = GetEmptyArgHintAscii(toolName);
 
                     return (false, JsonSerializer.Serialize(new { error = errorMsg, tool = toolName, hint }));
                 }

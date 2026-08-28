@@ -12,34 +12,34 @@ public interface IAiChatService
     /// Processa uma mensagem de chat síncrona (rápida)
     /// </summary>
     Task<AgentChatSyncResponse> ProcessSyncAsync(
-        Guid agentId, 
-        string message, 
+        Guid agentId,
+        string message,
         Guid? sessionId,
         string? createdByIp = null,
         int? requestMaxTokens = null,
         Guid? departmentId = null,
         CancellationToken ct = default);
-    
+
     /// <summary>
     /// Processa uma mensagem de chat assíncrona (longa)
     /// Cria um job e retorna imediatamente o JobId
     /// </summary>
     Task<Guid> ProcessAsyncAsync(
-        Guid agentId, 
-        string message, 
+        Guid agentId,
+        string message,
         Guid? sessionId,
         int? requestMaxTokens = null,
         Guid? departmentId = null,
         CancellationToken ct = default);
-    
+
     /// <summary>
     /// Consulta o status de um job assíncrono
     /// </summary>
     Task<AgentChatJobStatus> GetJobStatusAsync(
-        Guid jobId, 
-        Guid agentId, 
+        Guid jobId,
+        Guid agentId,
         CancellationToken ct);
-    
+
     /// <summary>
     /// Processa uma mensagem para contexto de ticket (triagem/resumo/sugestão).
     /// Diferente do chat do agent, tem contextos mais focados sem histórico persistente.
@@ -62,6 +62,7 @@ public interface IAiChatService
         string message,
         Guid? sessionId,
         Guid? departmentId = null,
+        string? systemNote = null,
         CancellationToken ct = default);
 
     /// <summary>
@@ -76,7 +77,7 @@ public interface IAiChatService
     /// </summary>
     IAsyncEnumerable<AiChatStreamChunk> StreamMultiRoundAsync(
         Guid agentId, string? message, Guid? sessionId,
-        List<ToolResultItem>? toolResults, Guid? departmentId = null, CancellationToken ct = default);
+        List<ToolResultItem>? toolResults, Guid? departmentId = null, string? systemNote = null, CancellationToken ct = default);
 }
 
 /// <summary>

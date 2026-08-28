@@ -21,6 +21,20 @@ public class OpenAiProvider : ILlmProvider
     }
 
     /// <summary>
+    /// Cria um HttpClient para chamadas LLM. Quando TimeoutMs é especificado no
+    /// LlmOptions, aplica esse timeout por request; caso contrário usa o client
+    /// nomeado "AiChat" (default 60s). Isso torna o timeout configurável via
+    /// AIIntegrationSettings.TimeoutMs, que antes era ignorado.
+    /// </summary>
+    private HttpClient BuildHttpClient(LlmOptions options)
+    {
+        var client = _httpClientFactory.CreateClient("AiChat");
+        if (options.TimeoutMs > 0)
+            client.Timeout = TimeSpan.FromMilliseconds(options.TimeoutMs);
+        return client;
+    }
+
+    /// <summary>
     /// Resolve a BaseUrl padrão ou da opção. Suporta Ollama como provider explícito.
     /// </summary>
     internal static string ResolveDefaultBaseUrl(string? provider)
@@ -199,9 +213,9 @@ public class OpenAiProvider : ILlmProvider
             AddSessionIdToPayload(payloadDict, options);
 
             var content = new StringContent(
-                JsonSerializer.Serialize(payloadDict, new JsonSerializerOptions 
-                { 
-                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull 
+                JsonSerializer.Serialize(payloadDict, new JsonSerializerOptions
+                {
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
                 }),
                 Encoding.UTF8,
                 "application/json");
@@ -216,13 +230,13 @@ public class OpenAiProvider : ILlmProvider
             var openRouterOpts = options with { Provider = effectiveProvider };
             ApplyOpenRouterHeaders(request, openRouterOpts);
 
-            var httpClient = _httpClientFactory.CreateClient("AiChat");
+            var httpClient = BuildHttpClient(options);
             var response = await httpClient.SendAsync(request, cancellationToken);
-            
+
             if (!response.IsSuccessStatusCode)
             {
                 var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                _logger.LogError("OpenAI API error: {StatusCode} - {Error}", 
+                _logger.LogError("OpenAI API error: {StatusCode} - {Error}",
                     response.StatusCode, errorBody);
                 throw new HttpRequestException($"OpenAI API returned {response.StatusCode}");
             }
@@ -327,7 +341,7 @@ public class OpenAiProvider : ILlmProvider
         var openRouterOpts = options with { Provider = effectiveProvider };
         ApplyOpenRouterHeaders(request, openRouterOpts);
 
-        var httpClient = _httpClientFactory.CreateClient("AiChat");
+        var httpClient = BuildHttpClient(options);
         using var response = await httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
@@ -476,7 +490,7 @@ public class OpenAiProvider : ILlmProvider
         var openRouterOpts = options with { Provider = effectiveProvider };
         ApplyOpenRouterHeaders(request, openRouterOpts);
 
-        var httpClient = _httpClientFactory.CreateClient("AiChat");
+        var httpClient = BuildHttpClient(options);
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
         if (!response.IsSuccessStatusCode)

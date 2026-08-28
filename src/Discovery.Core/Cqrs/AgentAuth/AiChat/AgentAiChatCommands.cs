@@ -17,7 +17,8 @@ public sealed record ChatStreamCommand(
     string? SessionId,
     List<ToolResultDto>? ToolResults,
     Guid? DepartmentId,
-    string? ClientIp);
+    string? ClientIp,
+    string? SystemNote);
 
 /// <summary>
 /// Resultado de uma tool executada pelo agent no fluxo multi-round.

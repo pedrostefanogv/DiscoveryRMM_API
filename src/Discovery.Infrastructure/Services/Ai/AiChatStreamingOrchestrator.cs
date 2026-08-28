@@ -55,6 +55,7 @@ public class AiChatStreamingOrchestrator
         Guid agentId, string message, Guid? sessionId,
         Func<Guid, CancellationToken, Task<AIIntegrationSettings>> resolveAiSettings,
         Guid? departmentId = null,
+        string? systemNote = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
@@ -120,6 +121,8 @@ public class AiChatStreamingOrchestrator
             (systemPrompt, _) = await _promptBuilder.BuildAsync(agent, session, message, aiSettings, departmentId, ct);
 
             llmMessages = AiChatToolOrchestrator.BuildLlmMessagesFromHistory(history);
+            if (!string.IsNullOrWhiteSpace(systemNote))
+                llmMessages.Add(new LlmMessage("system", systemNote));
             llmMessages.Add(new LlmMessage("user", message));
             setupOk = true;
         }
@@ -184,7 +187,8 @@ public class AiChatStreamingOrchestrator
                 OpenRouterReferer: aiSettings.OpenRouterReferer,
                 OpenRouterTitle: aiSettings.OpenRouterTitle,
                 OpenRouterCategories: aiSettings.OpenRouterCategories,
-                SessionId: session!.Id.ToString("D"));
+                SessionId: session!.Id.ToString("D"),
+                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
 
             hasToolCalls = false;
             hasAgentToolCallPending = false;
@@ -334,7 +338,8 @@ public class AiChatStreamingOrchestrator
                 string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
                 false, null, aiSettings.Provider,
                 aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
-                SessionId: session!.Id.ToString("D"));
+                SessionId: session!.Id.ToString("D"),
+                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
             await foreach (var token in _llmProvider.StreamAsync(systemPrompt!, llmMessages, retryOptions, ct))
             {
                 contentBuilder.Append(token);
@@ -369,6 +374,7 @@ public class AiChatStreamingOrchestrator
         List<ToolResultItem>? toolResults,
         Func<Guid, CancellationToken, Task<AIIntegrationSettings>> resolveAiSettings,
         Guid? departmentId = null,
+        string? systemNote = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
@@ -393,6 +399,9 @@ public class AiChatStreamingOrchestrator
         var nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
 
         var llmMessages = AiChatToolOrchestrator.BuildLlmMessagesFromHistory(history);
+
+        if (!string.IsNullOrWhiteSpace(systemNote))
+            llmMessages.Add(new LlmMessage("system", systemNote));
 
         if (!string.IsNullOrWhiteSpace(message))
         {
@@ -458,7 +467,8 @@ public class AiChatStreamingOrchestrator
                 string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
                 availableTools.Count > 0, availableTools, aiSettings.Provider,
                 aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
-                SessionId: session.Id.ToString("D"));
+                SessionId: session.Id.ToString("D"),
+                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
 
             hasToolCalls = false;
             bool hasAgentToolCall = false;
