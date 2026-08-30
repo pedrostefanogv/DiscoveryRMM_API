@@ -385,7 +385,7 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), Ok);
+        return MapResult(await _mediator.Send(cmd with { AgentId = id, ClientIp = ResolveAgentClientIp() }, ct), Ok);
     }
 
     [HttpPost("me/ai-chat/async")]
@@ -420,16 +420,32 @@ public class AgentAuthController : ControllerBase
         HttpContext.Response.Headers.Append("Connection", "keep-alive");
         HttpContext.Response.Headers.Append("X-Accel-Buffering", "no");
 
+        // Preenche o ClientIp do comando (antes era campo morto no contrato).
+        cmd = cmd with { ClientIp = ResolveAgentClientIp() };
+
         try
         {
             // ToolResults != null → round 2+ (agent executou tools)
             // Message != null → round 1 (nova mensagem do usuário)
             var sessionGuid = Guid.TryParse(cmd.SessionId, out var g) ? g : (Guid?)null;
-            var toolResults = cmd.ToolResults?.Select(tr => new ToolResultItem(tr.CallId, tr.Name, tr.Result)).ToList();
+            var toolResults = cmd.ToolResults?.Select(tr => new ToolResultItem(
+                tr.CallId,
+                tr.Name,
+                TruncateToolResult(tr.Name, tr.Result))).ToList();
 
-            IAsyncEnumerable<AiChatStreamChunk> stream = (cmd.Message != null)
-                ? _aiChat.StreamAsync(agentId, cmd.Message, sessionGuid, cmd.DepartmentId, cmd.SystemNote, ct)
-                : _aiChat.StreamMultiRoundAsync(agentId, null, sessionGuid, toolResults, cmd.DepartmentId, cmd.SystemNote, ct);
+            // Modo explícito (agentes novos) tem prioridade; fallback para a
+            // convenção legada (Message == null → multi-round) em agentes antigos.
+            var stream = cmd.Mode switch
+            {
+                "tool_results" or "a2ui_action" =>
+                    _aiChat.StreamMultiRoundAsync(agentId, null, sessionGuid, toolResults, cmd.DepartmentId, cmd.SystemNote, ct),
+                "user_message" =>
+                    _aiChat.StreamAsync(agentId, cmd.Message ?? string.Empty, sessionGuid, cmd.DepartmentId, cmd.SystemNote, ct),
+                _ when cmd.Message != null =>
+                    _aiChat.StreamAsync(agentId, cmd.Message, sessionGuid, cmd.DepartmentId, cmd.SystemNote, ct),
+                _ =>
+                    _aiChat.StreamMultiRoundAsync(agentId, null, sessionGuid, toolResults, cmd.DepartmentId, cmd.SystemNote, ct),
+            };
 
             await foreach (var chunk in stream)
             {
@@ -463,6 +479,152 @@ public class AgentAuthController : ControllerBase
             t.Name, t.Description, t.ParametersSchema.GetRawText())).ToList();
         await _aiChat.RegisterAgentToolsAsync(agentId, agent!.SiteId, tools, ct);
         return Ok(new { registered = tools.Count });
+    }
+
+    /// <summary>
+    /// Ranges IPv4/IPv6 oficiais da Cloudflare (https://www.cloudflare.com/ips/).
+    /// Espelha os defaults de ForwardedHeadersOptions em Program.cs — o header
+    /// CF-Connecting-IP só é aceito quando a conexão vem de um desses ranges.
+    /// </summary>
+    private static readonly System.Net.IPNetwork[] CloudflareNetworks =
+    [
+        new(System.Net.IPAddress.Parse("173.245.48.0"), 20),
+        new(System.Net.IPAddress.Parse("103.21.244.0"), 22),
+        new(System.Net.IPAddress.Parse("103.22.200.0"), 22),
+        new(System.Net.IPAddress.Parse("103.31.4.0"), 22),
+        new(System.Net.IPAddress.Parse("141.101.64.0"), 18),
+        new(System.Net.IPAddress.Parse("108.162.192.0"), 18),
+        new(System.Net.IPAddress.Parse("190.93.240.0"), 20),
+        new(System.Net.IPAddress.Parse("188.114.96.0"), 20),
+        new(System.Net.IPAddress.Parse("197.234.240.0"), 22),
+        new(System.Net.IPAddress.Parse("198.41.128.0"), 17),
+        new(System.Net.IPAddress.Parse("162.158.0.0"), 15),
+        new(System.Net.IPAddress.Parse("104.16.0.0"), 13),
+        new(System.Net.IPAddress.Parse("104.24.0.0"), 14),
+        new(System.Net.IPAddress.Parse("172.64.0.0"), 13),
+        new(System.Net.IPAddress.Parse("131.0.72.0"), 22),
+        new(System.Net.IPAddress.Parse("2400:cb00::"), 32),
+        new(System.Net.IPAddress.Parse("2606:4700::"), 32),
+        new(System.Net.IPAddress.Parse("2803:f800::"), 32),
+        new(System.Net.IPAddress.Parse("2405:b500::"), 32),
+        new(System.Net.IPAddress.Parse("2405:8100::"), 32),
+        new(System.Net.IPAddress.Parse("2a06:98c0::"), 29),
+        new(System.Net.IPAddress.Parse("2c0f:f248::"), 32),
+    ];
+
+    /// <summary>
+    /// Verifica se o IP remoto pertence a um range da Cloudflare.
+    /// </summary>
+    private static bool IsCloudflareIp(System.Net.IPAddress? remoteIp)
+    {
+        if (remoteIp is null) return false;
+        foreach (var net in CloudflareNetworks)
+        {
+            if (net.Contains(remoteIp)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Resolve o IP real do agent de forma confiável:
+    /// 1. Connection.RemoteIpAddress — já resolvido pelo middleware
+    ///    ForwardedHeaders (X-Forwarded-For aceito apenas de proxies confiáveis:
+    ///    ranges Cloudflare + localhost, configurados em Program.cs).
+    /// 2. CF-Connecting-IP — aceito SOMENTE se a conexão direta veio de um IP
+    ///    Cloudflare (impede spoof por clients autenticados).
+    /// 3. Fallback: RemoteIpAddress cru.
+    /// Nunca lê X-Forwarded-For manualmente (spoofável pelo agent).
+    /// </summary>
+    private string ResolveAgentClientIp()
+    {
+        var remoteIp = HttpContext.Connection.RemoteIpAddress;
+
+        // 1. ForwardedHeaders middleware já resolveu o IP real de proxy confiável.
+        if (remoteIp is not null && !IsCloudflareIp(remoteIp) && !System.Net.IPAddress.IsLoopback(remoteIp))
+        {
+            return remoteIp.ToString();
+        }
+
+        // 2. Conexão direta da Cloudflare: usa o header oficial CF-Connecting-IP.
+        if (IsCloudflareIp(remoteIp))
+        {
+            var cfIp = HttpContext.Request.Headers["CF-Connecting-IP"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(cfIp) && System.Net.IPAddress.TryParse(cfIp.Trim(), out _))
+            {
+                return cfIp.Trim();
+            }
+        }
+
+        // 3. Fallback (desenvolvimento/local sem proxy).
+        return remoteIp?.ToString() ?? "unknown";
+    }
+
+    /// <summary>
+    /// Limite de tamanho por tool result enviado ao LLM (defesa em profundidade:
+    /// o agent Go já trunca em 16 KB; aqui garantimos o teto também server-side).
+    /// </summary>
+    private const int MaxToolResultLength = 32 * 1024;
+
+    /// <summary>
+    /// Trunca o resultado de uma tool para MaxToolResultLength. Tenta fechar
+    /// estruturas JSON abertas; se o resultado truncado não for JSON válido,
+    /// devolve texto cru com marcador (nunca JSON quebrado).
+    /// </summary>
+    private static string TruncateToolResult(string toolName, string? result)
+    {
+        var r = result ?? string.Empty;
+        if (r.Length <= MaxToolResultLength) return r;
+
+        var cut = r[..MaxToolResultLength];
+        var trimmed = cut.TrimEnd(' ', '\t', '\r', '\n', ',');
+
+        // Fecha estruturas JSON abertas (contagem de delimitadores fora de strings).
+        var stack = new Stack<char>();
+        var inStr = false;
+        var esc = false;
+        foreach (var c in trimmed)
+        {
+            if (inStr)
+            {
+                if (esc) { esc = false; }
+                else if (c == '\\') { esc = true; }
+                else if (c == '"') { inStr = false; }
+                continue;
+            }
+            switch (c)
+            {
+                case '"': inStr = true; break;
+                case '{': stack.Push('}'); break;
+                case '[': stack.Push(']'); break;
+                case '}' or ']': if (stack.Count > 0) stack.Pop(); break;
+            }
+        }
+
+        var closed = trimmed + string.Concat(stack);
+        if (inStr) closed += "\"";
+
+        // Só usa a versão fechada se for JSON válido; caso contrário, texto cru.
+        if (IsValidJson(closed) && !inStr)
+        {
+            return closed;
+        }
+        return cut + $"\n...[truncado pelo servidor; tool={toolName}; total={r.Length} chars]";
+    }
+
+    /// <summary>
+    /// Validação leve de JSON usando System.Text.Json.
+    /// </summary>
+    private static bool IsValidJson(string s)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(s);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static readonly JsonSerializerOptions SseJsonOptions = new()

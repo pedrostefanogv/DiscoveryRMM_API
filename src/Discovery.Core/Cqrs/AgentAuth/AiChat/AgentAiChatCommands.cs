@@ -11,6 +11,12 @@ public sealed record GetAiChatJobQuery(Guid AgentId, Guid JobId) : IQuery<Result
 /// Round 1: Message preenchida, ToolResults null.
 /// Rounds 2+: Message null, ToolResults preenchido com resultados das tools executadas pelo agent.
 /// </summary>
+/// <remarks>
+/// Mode (opcional, agentes novos): discrimina explicitamente o fluxo —
+/// "user_message" (round 1), "tool_results" (rounds 2+ com ToolResults) ou
+/// "a2ui_action" (turno iniciado por ação A2UI). Quando ausente (agentes
+/// antigos), o controller cai na convenção legada Message == null.
+/// </remarks>
 public sealed record ChatStreamCommand(
     Guid AgentId,
     string? Message,
@@ -18,7 +24,8 @@ public sealed record ChatStreamCommand(
     List<ToolResultDto>? ToolResults,
     Guid? DepartmentId,
     string? ClientIp,
-    string? SystemNote);
+    string? SystemNote,
+    string? Mode);
 
 /// <summary>
 /// Resultado de uma tool executada pelo agent no fluxo multi-round.

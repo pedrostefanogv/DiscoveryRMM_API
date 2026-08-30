@@ -48,6 +48,15 @@ public sealed class CreateMyTicketHandler(
         if (site is null)
             return Result<object>.Failure(Error.NotFound("Site not found for agent."));
 
+        // Defesa em profundidade: o agent Go já valida, mas o endpoint é
+        // autenticado por agent e pode receber payloads arbitrários.
+        if (string.IsNullOrWhiteSpace(cmd.Title))
+            return Result<object>.Failure(Error.Validation("Title", "Title é obrigatório."));
+        if (cmd.Title.Length > 200)
+            return Result<object>.Failure(Error.Validation("Title", "Title excede 200 caracteres."));
+        if (cmd.Description is { Length: > 8000 })
+            return Result<object>.Failure(Error.Validation("Description", "Description excede 8000 caracteres."));
+
         var ticket = new Ticket
         {
             Title = cmd.Title,
