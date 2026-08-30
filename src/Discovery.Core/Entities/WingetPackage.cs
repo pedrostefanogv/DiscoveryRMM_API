@@ -17,6 +17,12 @@ public class WingetPackage
     public string Icon { get; set; } = string.Empty;
     public string InstallCommand { get; set; } = string.Empty;
 
+    /// <summary>Switches para instalação silenciosa (ex.: "/S /PreventRebootRequired=true").</summary>
+    public string SilentCommand { get; set; } = string.Empty;
+
+    /// <summary>Switches para instalação silenciosa com progresso (fallback de SilentCommand).</summary>
+    public string SilentWithProgressCommand { get; set; } = string.Empty;
+
     /// <summary>Tags stored as space-separated values.</summary>
     public string Tags { get; set; } = string.Empty;
 

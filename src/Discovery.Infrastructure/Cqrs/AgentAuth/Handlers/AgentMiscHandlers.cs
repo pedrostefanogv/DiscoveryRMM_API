@@ -70,8 +70,8 @@ public sealed class GetAppStoreEffectiveHandler(
             return Result<object>.Success(new { enabled = false, policy = policy.ToString(), installationType = q.InstallationType, count = 0, items = Array.Empty<object>() });
 
         // Busca os apps efetivos aprovados para o escopo do agent
-        var apps = await appStoreService.GetEffectiveAppsAsync(clientId, agent.SiteId, agent.Id, 
-            Enum.TryParse<Core.Enums.AppInstallationType>(q.InstallationType, true, out var instType) ? instType : Core.Enums.AppInstallationType.Winget, 
+        var apps = await appStoreService.GetEffectiveAppsAsync(clientId, agent.SiteId, agent.Id,
+            Enum.TryParse<Core.Enums.AppInstallationType>(q.InstallationType, true, out var instType) ? instType : Core.Enums.AppInstallationType.Winget,
             ct);
         var items = apps.Select(a => new
         {
@@ -83,6 +83,8 @@ public sealed class GetAppStoreEffectiveHandler(
             publisher = a.Publisher,
             version = a.Version,
             installCommand = a.InstallCommand,
+            silent = a.SilentCommand,
+            silentWithProgress = a.SilentWithProgressCommand,
             installerUrlsByArch = a.InstallerUrlsByArch,
             autoUpdateEnabled = a.AutoUpdateEnabled,
             sourceScope = a.SourceScope

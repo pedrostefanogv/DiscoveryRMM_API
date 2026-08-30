@@ -14,6 +14,12 @@ public class AppCatalogPackageDto
     public string Category { get; set; } = string.Empty;
     public string Icon { get; set; } = string.Empty;
     public string InstallCommand { get; set; } = string.Empty;
+
+    /// <summary>Switches para instalação silenciosa (fallback: SilentWithProgressCommand → InstallCommand).</summary>
+    public string SilentCommand { get; set; } = string.Empty;
+
+    /// <summary>Switches para instalação silenciosa com progresso.</summary>
+    public string SilentWithProgressCommand { get; set; } = string.Empty;
     public DateTime? LastUpdated { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = [];
     public IReadOnlyDictionary<string, string> InstallerUrlsByArch { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -74,6 +80,12 @@ public class EffectiveApprovedAppDto
     public string Publisher { get; set; } = string.Empty;
     public string Version { get; set; } = string.Empty;
     public string InstallCommand { get; set; } = string.Empty;
+
+    /// <summary>Switches para instalação silenciosa (fallback: SilentWithProgressCommand → InstallCommand).</summary>
+    public string SilentCommand { get; set; } = string.Empty;
+
+    /// <summary>Switches para instalação silenciosa com progresso.</summary>
+    public string SilentWithProgressCommand { get; set; } = string.Empty;
     public IReadOnlyDictionary<string, string> InstallerUrlsByArch { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     public bool AutoUpdateEnabled { get; set; }
     public AppApprovalScopeType SourceScope { get; set; }

@@ -103,6 +103,8 @@ public class WingetPackageRepository : IWingetPackageRepository
                     current.Category = incoming.Category;
                     current.Icon = incoming.Icon;
                     current.InstallCommand = incoming.InstallCommand;
+                    current.SilentCommand = incoming.SilentCommand;
+                    current.SilentWithProgressCommand = incoming.SilentWithProgressCommand;
                     current.Tags = incoming.Tags;
                     current.InstallerUrlsJson = incoming.InstallerUrlsJson;
                     current.LastUpdated = incoming.LastUpdated;
@@ -124,6 +126,8 @@ public class WingetPackageRepository : IWingetPackageRepository
                         Category = incoming.Category,
                         Icon = incoming.Icon,
                         InstallCommand = incoming.InstallCommand,
+                        SilentCommand = incoming.SilentCommand,
+                        SilentWithProgressCommand = incoming.SilentWithProgressCommand,
                         Tags = incoming.Tags,
                         InstallerUrlsJson = incoming.InstallerUrlsJson,
                         LastUpdated = incoming.LastUpdated,

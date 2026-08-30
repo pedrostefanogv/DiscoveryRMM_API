@@ -55,7 +55,9 @@ public class AppCatalogSyncService : IAppCatalogSyncService
                             license = p.License,
                             category = p.Category,
                             tags = p.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
-                            installerUrlsByArch = SafeParseInstallerUrls(p.InstallerUrlsJson)
+                            installerUrlsByArch = SafeParseInstallerUrls(p.InstallerUrlsJson),
+                            silent = p.SilentCommand,
+                            silentWithProgress = p.SilentWithProgressCommand
                         }),
                         SourceGeneratedAt = p.SourceGeneratedAt,
                         LastUpdated = p.LastUpdated

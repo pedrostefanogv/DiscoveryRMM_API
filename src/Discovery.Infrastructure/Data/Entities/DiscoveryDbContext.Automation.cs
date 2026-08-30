@@ -290,6 +290,8 @@ public partial class DiscoveryDbContext
             entity.Property(p => p.Category).HasColumnName("category").HasMaxLength(250);
             entity.Property(p => p.Icon).HasColumnName("icon").HasMaxLength(2000);
             entity.Property(p => p.InstallCommand).HasColumnName("install_command").HasMaxLength(1000);
+            entity.Property(p => p.SilentCommand).HasColumnName("silent_command").HasMaxLength(1000);
+            entity.Property(p => p.SilentWithProgressCommand).HasColumnName("silent_with_progress_command").HasMaxLength(1000);
             entity.Property(p => p.Tags).HasColumnName("tags").HasColumnType("text");
             entity.Property(p => p.InstallerUrlsJson).HasColumnName("installer_urls_json").HasColumnType("text");
             entity.Property(p => p.LastUpdated).HasColumnName("last_updated").HasColumnType("timestamptz");

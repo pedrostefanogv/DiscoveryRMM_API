@@ -851,6 +851,8 @@ public class AppStoreService : IAppStoreService
                     Publisher = package.Publisher,
                     Version = package.Version,
                     InstallCommand = package.InstallCommand,
+                    SilentCommand = package.SilentCommand,
+                    SilentWithProgressCommand = package.SilentWithProgressCommand,
                     InstallerUrlsByArch = package.InstallerUrlsByArch,
                     AutoUpdateEnabled = x.AutoUpdateEnabled,
                     SourceScope = x.SourceScope
@@ -993,6 +995,8 @@ public class AppStoreService : IAppStoreService
         var tags = Array.Empty<string>();
         var category = string.Empty;
         var license = string.Empty;
+        var silentCommand = string.Empty;
+        var silentWithProgressCommand = string.Empty;
 
         if (!string.IsNullOrWhiteSpace(pkg.MetadataJson))
         {
@@ -1006,6 +1010,8 @@ public class AppStoreService : IAppStoreService
                 license = TryGetString(root, "license");
                 if (string.IsNullOrWhiteSpace(license))
                     license = TryGetString(root, "licenseUrl");
+                silentCommand = TryGetStringIgnoreCase(root, "silent");
+                silentWithProgressCommand = TryGetStringIgnoreCase(root, "silentWithProgress");
             }
             catch (JsonException)
             {
@@ -1025,6 +1031,8 @@ public class AppStoreService : IAppStoreService
             Category = category,
             Icon = ResolveIconUrl(pkg.IconUrl, pkg.SiteUrl),
             InstallCommand = pkg.InstallCommand ?? string.Empty,
+            SilentCommand = silentCommand,
+            SilentWithProgressCommand = silentWithProgressCommand,
             LastUpdated = pkg.LastUpdated,
             Tags = tags,
             InstallerUrlsByArch = installerUrls
@@ -1046,6 +1054,8 @@ public class AppStoreService : IAppStoreService
             Publisher = package.Publisher,
             Version = package.Version,
             InstallCommand = package.InstallCommand,
+            SilentCommand = package.SilentCommand,
+            SilentWithProgressCommand = package.SilentWithProgressCommand,
             InstallerUrlsByArch = package.InstallerUrlsByArch,
             AutoUpdateEnabled = false,
             SourceScope = sourceScope
@@ -1178,6 +1188,27 @@ public class AppStoreService : IAppStoreService
             JsonValueKind.False => "false",
             _ => value.GetRawText()
         };
+    }
+
+    /// <summary>Busca uma propriedade string ignorando diferenças de caixa no nome da propriedade.</summary>
+    private static string TryGetStringIgnoreCase(JsonElement element, string propertyName)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var value = property.Value;
+            if (value.ValueKind == JsonValueKind.String)
+                return value.GetString()?.Trim() ?? string.Empty;
+
+            if (value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
+                return value.GetRawText();
+
+            return string.Empty;
+        }
+
+        return string.Empty;
     }
 
     private static IReadOnlyList<string> ParseStringArray(JsonElement element, string propertyName)

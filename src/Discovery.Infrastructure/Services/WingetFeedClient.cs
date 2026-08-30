@@ -40,6 +40,7 @@ public sealed class WingetFeedClient
                     continue;
 
                 var installerUrls = ParseInstallerUrls(item);
+                var silentSwitches = ParseSilentSwitches(item);
                 var tags = ParseStringArray(item, "tags");
 
                 packages.Add(new WingetPackage
@@ -54,6 +55,8 @@ public sealed class WingetFeedClient
                     Category = TryGetString(item, "category"),
                     Icon = TryGetString(item, "icon"),
                     InstallCommand = TryGetString(item, "installCommand"),
+                    SilentCommand = silentSwitches.Silent,
+                    SilentWithProgressCommand = silentSwitches.SilentWithProgress,
                     LastUpdated = TryGetDateTime(item, "lastUpdated"),
                     SourceGeneratedAt = generated,
                     Tags = string.Join(' ', tags),
@@ -144,6 +147,75 @@ public sealed class WingetFeedClient
         }
 
         return result;
+    }
+
+    private sealed record SilentSwitches(string Silent, string SilentWithProgress);
+
+    /// <summary>
+    /// Extrai os switches silenciosos de "installerSwitches" (objeto por arquitetura).
+    /// Preferência de arquitetura: x64 → x86 → arm64 → arm → neutral.
+    /// Fallback dentro da arquitetura escolhida: Silent → SilentWithProgress.
+    /// Todas as comparações de chave são case-insensitive.
+    /// </summary>
+    private static SilentSwitches ParseSilentSwitches(JsonElement item)
+    {
+        if (!TryGetPropertyIgnoreCase(item, "installerSwitches", out var switchesObj) ||
+            switchesObj.ValueKind != JsonValueKind.Object)
+        {
+            return new SilentSwitches(string.Empty, string.Empty);
+        }
+
+        // Indexa as arquiteturas por nome normalizado (case-insensitive).
+        // Usa indexer para tolerar chaves duplicadas no feed (ex.: "x64" e "X64").
+        var archs = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        foreach (var arch in switchesObj.EnumerateObject())
+            archs[arch.Name.Trim()] = arch.Value;
+
+        foreach (var preferred in new[] { "x64", "x86", "arm64", "arm", "neutral" })
+        {
+            if (!archs.TryGetValue(preferred, out var archObj) || archObj.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var silent = TryGetStringIgnoreCase(archObj, "Silent");
+            var silentWithProgress = TryGetStringIgnoreCase(archObj, "SilentWithProgress");
+
+            // Fallback: se a arquitetura preferida não tem Silent, usa SilentWithProgress dela.
+            if (!string.IsNullOrWhiteSpace(silent) || !string.IsNullOrWhiteSpace(silentWithProgress))
+                return new SilentSwitches(silent, silentWithProgress);
+        }
+
+        return new SilentSwitches(string.Empty, string.Empty);
+    }
+
+    /// <summary>Busca uma propriedade ignorando diferenças de caixa no nome.</summary>
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    /// <summary>Busca uma propriedade string ignorando diferenças de caixa no nome da propriedade.</summary>
+    private static string TryGetStringIgnoreCase(JsonElement element, string propertyName)
+    {
+        if (!TryGetPropertyIgnoreCase(element, propertyName, out var value))
+            return string.Empty;
+
+        if (value.ValueKind == JsonValueKind.String)
+            return value.GetString()?.Trim() ?? string.Empty;
+
+        if (value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
+            return value.GetRawText();
+
+        return string.Empty;
     }
 
     private static HttpClient CreateHttpClient()
