@@ -12,6 +12,12 @@ public class M145_AddWingetSilentSwitches : Migration
 {
     public override void Up()
     {
+        // A tabela winget_packages pode não existir em servidores que usam apenas
+        // o catálogo unificado (app_packages) — M055_RemoveLegacyAppStoreTables a removeu.
+        // Nesses casos não há nada a fazer: os switches silenciosos vivem no MetadataJson.
+        if (!Schema.Table("winget_packages").Exists())
+            return;
+
         if (!Schema.Table("winget_packages").Column("silent_command").Exists())
         {
             Alter.Table("winget_packages")
@@ -27,6 +33,9 @@ public class M145_AddWingetSilentSwitches : Migration
 
     public override void Down()
     {
+        if (!Schema.Table("winget_packages").Exists())
+            return;
+
         if (Schema.Table("winget_packages").Column("silent_with_progress_command").Exists())
         {
             Delete.Column("silent_with_progress_command").FromTable("winget_packages");
