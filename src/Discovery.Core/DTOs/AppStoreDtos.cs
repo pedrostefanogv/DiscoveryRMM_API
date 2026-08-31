@@ -117,6 +117,15 @@ public class AppCatalogSyncResultDto
     public string? Error { get; set; }
 }
 
+/// <summary>Status de um job de sincronização de catálogo em background.</summary>
+public class AppCatalogSyncStatusDto
+{
+    /// <summary>Indica se existe um job em andamento para o tipo informado.</summary>
+    public bool Running { get; set; }
+    /// <summary>Resultado da última sincronização concluída (sucesso ou falha). Null se nunca sincronizado nesta instância.</summary>
+    public AppCatalogSyncResultDto? LastResult { get; set; }
+}
+
 public class ChocolateySyncResultDto
 {
     public bool Success { get; set; }

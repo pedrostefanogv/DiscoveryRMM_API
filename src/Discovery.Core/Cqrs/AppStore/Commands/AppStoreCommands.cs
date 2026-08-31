@@ -42,8 +42,3 @@ public sealed record DeleteAppApprovalRuleCommand(
     string? ChangedBy = null,
     string? IpAddress = null
 ) : ICommand<Result<VoidResult>>;
-
-// ── Sync ─────────────────────────────────────────────────────────────
-public sealed record SyncAppStoreCatalogCommand(
-    AppInstallationType InstallationType = AppInstallationType.Winget
-) : ICommand<Result<AppCatalogSyncResultDto>>;

@@ -129,6 +129,8 @@ builder.Services.AddScoped<IObjectStorageService>(sp =>
 // Special singletons
 builder.Services.AddSingleton<ChocolateyApiClient>();
 builder.Services.AddSingleton<WingetFeedClient>();
+// Sync de catálogo em background (singleton: mantém estado de jobs/último resultado entre requests)
+builder.Services.AddSingleton<AppCatalogBackgroundSyncService>();
 
 builder.Services.AddHttpClient("AiChat", client =>
 {

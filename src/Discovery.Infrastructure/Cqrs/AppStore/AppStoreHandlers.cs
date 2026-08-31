@@ -161,13 +161,6 @@ public sealed class GetAppStoreEffectiveDiffsQueryHandler(IAppStoreService svc)
 }
 
 // ── Sync ─────────────────────────────────────────────────────────────
-
-public sealed class SyncAppStoreCatalogCommandHandler(IAppCatalogSyncService syncSvc)
-    : IRequestHandler<SyncAppStoreCatalogCommand, Result<AppCatalogSyncResultDto>>
-{
-    public async Task<Result<AppCatalogSyncResultDto>> Handle(SyncAppStoreCatalogCommand cmd, CancellationToken ct)
-    {
-        var result = await syncSvc.SyncCatalogAsync(cmd.InstallationType, ct);
-        return Result<AppCatalogSyncResultDto>.Success(result);
-    }
-}
+// A sincronização de catálogo não usa mais MediatR: é disparada em background
+// via AppCatalogBackgroundSyncService (POST app-store/sync → 202) e o resultado
+// é consultável em GET app-store/sync/status.

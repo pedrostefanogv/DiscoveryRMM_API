@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs.AppStore.Commands;
 using Discovery.Core.Cqrs.AppStore.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Infrastructure.Services;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -74,12 +75,40 @@ public class AppStoreController(IMediator mediator) : ControllerBase
     // Sync
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>Sync catalog from Winget (0) or Chocolatey (1). Custom (2) is manual.</summary>
+    /// <summary>
+    /// Dispara a sincronização do catálogo (Winget 0 / Chocolatey 1) em background e retorna 202 imediatamente.
+    /// Consulte o progresso/resultado via GET sync/status. Custom (2) é manual.
+    /// </summary>
     [HttpPost("sync")]
-    public async Task<IActionResult> SyncCatalog([FromQuery] int installationType = 0)
+    public IActionResult SyncCatalog(
+        [FromServices] AppCatalogBackgroundSyncService backgroundSync,
+        [FromQuery] int installationType = 0)
     {
-        var result = await mediator.Send(new SyncAppStoreCatalogCommand((AppInstallationType)installationType));
-        return result.ToActionResult();
+        var type = (AppInstallationType)installationType;
+        if (!Enum.IsDefined(type) || type == AppInstallationType.Custom)
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = "Invalid installationType. Use 0 (Winget) or 1 (Chocolatey)." } } });
+
+        var started = backgroundSync.TryStartSync(type);
+        var message = started
+            ? "Sync started. Poll sync/status for progress."
+            : "Sync already in progress for this installation type.";
+        return Accepted(new { running = true, installationType, message });
+    }
+
+    /// <summary>Status da sincronização: se há job em andamento e o resultado da última execução.</summary>
+    [HttpGet("sync/status")]
+    public IActionResult GetSyncStatus(
+        [FromServices] AppCatalogBackgroundSyncService backgroundSync,
+        [FromQuery] int installationType = 0)
+    {
+        var type = (AppInstallationType)installationType;
+        if (!Enum.IsDefined(type))
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = "Invalid installationType." } } });
+        return Ok(new AppCatalogSyncStatusDto
+        {
+            Running = backgroundSync.IsRunning(type),
+            LastResult = backgroundSync.GetLastResult(type)
+        });
     }
 
     // ═══════════════════════════════════════════════════════════════
