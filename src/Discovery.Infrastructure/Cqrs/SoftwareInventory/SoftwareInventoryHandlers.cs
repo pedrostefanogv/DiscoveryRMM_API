@@ -38,7 +38,7 @@ public sealed class ListSoftwareInventoryQueryHandler(ISoftwareInventoryService 
         if (hasMore && items.Count > 0)
         {
             var last = items[^1];
-            nextCursor = CursorPaginationHelper.EncodeGuidCursor(last.SoftwareId);
+            nextCursor = CursorPaginationHelper.EncodeNameCursor(last.Name, last.SoftwareId);
         }
 
         var dtos = items.Select(i => new SoftwareInventoryCatalogItemDto(

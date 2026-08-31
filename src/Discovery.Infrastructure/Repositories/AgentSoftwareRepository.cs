@@ -521,11 +521,14 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         if (siteId.HasValue)
             query = query.Where(x => x.site.Id == siteId.Value);
 
-        if (CursorPaginationHelper.TryDecodeGuidCursor(cursor, out var cursorId))
+        if (CursorPaginationHelper.TryDecodeNameCursor(cursor, out var cursorName, out var cursorId))
         {
+            // Cursor composto (Name, Id) — keyset estável independente de inserções.
             query = descending
-                ? query.Where(x => x.catalog.Id.CompareTo(cursorId) < 0)
-                : query.Where(x => x.catalog.Id.CompareTo(cursorId) > 0);
+                ? query.Where(x => string.Compare(x.catalog.Name, cursorName, StringComparison.Ordinal) < 0
+                    || (x.catalog.Name == cursorName && x.catalog.Id.CompareTo(cursorId) < 0))
+                : query.Where(x => string.Compare(x.catalog.Name, cursorName, StringComparison.Ordinal) > 0
+                    || (x.catalog.Name == cursorName && x.catalog.Id.CompareTo(cursorId) > 0));
         }
 
         if (pattern is not null)
@@ -552,8 +555,8 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             });
 
         grouped = descending
-            ? grouped.OrderByDescending(x => x.SoftwareId)
-            : grouped.OrderBy(x => x.SoftwareId);
+            ? grouped.OrderByDescending(x => x.Name).ThenByDescending(x => x.SoftwareId)
+            : grouped.OrderBy(x => x.Name).ThenBy(x => x.SoftwareId);
 
         return await grouped
             .Take(safeLimit)
