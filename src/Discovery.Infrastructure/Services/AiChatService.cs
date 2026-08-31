@@ -129,7 +129,7 @@ public class AiChatService : IAiChatService
             llmMessages.Add(new LlmMessage("user", message));
 
             var availableTools = await BuildAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, aiSettings, ct);
-            var maxIterations = aiSettings.MaxToolCallIterations is >= 1 and <= 10 ? aiSettings.MaxToolCallIterations : AiChatConstants.DefaultMaxToolCallIterations;
+            var maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
             var clampedMaxTokens = requestMaxTokens.HasValue ? Math.Clamp(requestMaxTokens.Value, 100, 8000) : AiChatHelpers.ClampMaxTokens(aiSettings);
 
             var llmOptions = new LlmOptions(clampedMaxTokens, AiChatHelpers.ClampTemperature(aiSettings),
@@ -155,6 +155,23 @@ public class AiChatService : IAiChatService
                     var toolResult = await _mcpToolExecutor.ExecuteAsync(tc.Name, tc.ArgumentsJson, scopeClientId, scopeSiteId, agentId, aiSettings, injectedArticleIds, departmentId, session.Id, ct);
                     await _messageRepository.CreateAsync(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "tool", Content = toolResult, ToolCallId = tc.Id, ToolName = tc.Name, CreatedAt = DateTime.UtcNow, TraceId = traceId }, ct);
                     llmMessages.Add(new LlmMessage("tool", toolResult, tc.Id, tc.Name));
+                }
+            }
+
+            // ── Síntese forçada (agent loop resiliente) ──
+            // Conteúdo vazio (ou orçamento esgotado com tool calls pendentes e
+            // sem texto) → chamadas finais SEM tools até obter resposta.
+            var budgetExhausted = llmResponse.ToolCalls is { Count: > 0 } && toolIterations >= maxIterations;
+            if (string.IsNullOrWhiteSpace(llmResponse.Content))
+            {
+                llmMessages.Add(new LlmMessage("system", budgetExhausted
+                    ? AiChatHelpers.SynthesisBudgetNote
+                    : AiChatHelpers.EmptyContentNote));
+                var synthesisOptions = llmOptions with { EnableTools = false, Tools = null };
+                for (var attempt = 1; attempt <= AiChatConstants.MaxSynthesisRetries && string.IsNullOrWhiteSpace(llmResponse.Content); attempt++)
+                {
+                    llmResponse = await _llmProvider.CompleteAsync(systemPrompt, llmMessages, synthesisOptions, ct);
+                    if (!string.IsNullOrWhiteSpace(llmResponse.Content)) break;
                 }
             }
 

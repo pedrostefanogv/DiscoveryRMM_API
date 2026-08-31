@@ -7,19 +7,19 @@ public class AIIntegrationSettings
 {
     /// <summary>Habilita recursos de IA (chat, análise, etc)</summary>
     public bool Enabled { get; set; } = false;
-    
+
     /// <summary>Habilita Chat IA para usuários</summary>
     public bool ChatAIEnabled { get; set; } = false;
-    
+
     /// <summary>Habilita Base de Conhecimento (assistido por IA)</summary>
     public bool KnowledgeBaseEnabled { get; set; } = false;
-    
+
     /// <summary>Lista de servidores MSP para processamento de IA</summary>
     public string[] MSPServers { get; set; } = [];
-    
+
     /// <summary>Timeout para chamadas de IA (milissegundos)</summary>
     public int TimeoutMs { get; set; } = 30000; // 30s
-    
+
     /// <summary>Máximo de tokens por requisição</summary>
     public int MaxTokensPerRequest { get; set; } = 2000;
 
@@ -155,8 +155,12 @@ public class AIIntegrationSettings
     /// <summary>Providers de fallback em ordem de prioridade (ex: ["openrouter", "openai"]).</summary>
     public string[]? FallbackProviders { get; set; }
 
-    /// <summary>Máximo de iterações de tool call (1-10). Default: 3.</summary>
-    public int MaxToolCallIterations { get; set; } = 3;
+    /// <summary>
+    /// Orçamento de iterações do agent loop (rounds de tool call). 1-20. Default: 10.
+    /// Ao esgotar, o orquestrador força uma chamada final de síntese sem tools
+    /// para garantir resposta completa ao usuário.
+    /// </summary>
+    public int MaxToolCallIterations { get; set; } = 10;
 
     /// <summary>Habilita detecção de PII/secrets na saída do LLM (guardrails).</summary>
     public bool OutputGuardrailsEnabled { get; set; } = true;

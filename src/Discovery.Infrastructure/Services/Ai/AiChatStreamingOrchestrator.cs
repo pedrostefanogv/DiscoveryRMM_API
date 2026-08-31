@@ -6,6 +6,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
@@ -26,6 +27,7 @@ public class AiChatStreamingOrchestrator
     private readonly AiChatSystemPromptBuilder _promptBuilder;
     private readonly AiChatToolOrchestrator _toolOrchestrator;
     private readonly AiChatQuickReply _quickReply;
+    private readonly IMemoryCache _memoryCache;
 
     public AiChatStreamingOrchestrator(
         IAiChatSessionRepository sessionRepository,
@@ -37,7 +39,8 @@ public class AiChatStreamingOrchestrator
         ILogger<AiChatService> logger,
         AiChatSystemPromptBuilder promptBuilder,
         AiChatToolOrchestrator toolOrchestrator,
-        AiChatQuickReply quickReply)
+        AiChatQuickReply quickReply,
+        IMemoryCache memoryCache)
     {
         _sessionRepository = sessionRepository;
         _messageRepository = messageRepository;
@@ -49,6 +52,7 @@ public class AiChatStreamingOrchestrator
         _promptBuilder = promptBuilder;
         _toolOrchestrator = toolOrchestrator;
         _quickReply = quickReply;
+        _memoryCache = memoryCache;
     }
 
     public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(
@@ -76,7 +80,6 @@ public class AiChatStreamingOrchestrator
         try
         {
             AiChatGuardrails.ValidateUserInput(message, AiChatConstants.MaxMessageSizeBytes);
-
             var agent = await _agentRepository.GetByIdAsync(agentId);
             if (agent == null) throw new ArgumentException($"Agent {agentId} não encontrado");
 
@@ -90,8 +93,7 @@ public class AiChatStreamingOrchestrator
             if (!aiSettings.Enabled || !aiSettings.ChatAIEnabled)
                 throw new InvalidOperationException("Chat IA está desabilitado para este escopo.");
 
-            maxIterations = aiSettings.MaxToolCallIterations is >= 1 and <= 10
-                ? aiSettings.MaxToolCallIterations : AiChatConstants.DefaultMaxToolCallIterations;
+            maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
 
             if (sessionId.HasValue)
             {
@@ -175,16 +177,29 @@ public class AiChatStreamingOrchestrator
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
         bool hasAgentToolCallPending = false;
         var agentToolCallsPending = new List<LlmAssistantToolCall>();
+        bool kbExhausted = false;
 
         while (true)
         {
+            // Heartbeat de progresso do agent loop — agent/frontend exibem "round X/Y".
+            // Só é emitido quando há tools (sem tools o loop é single-pass e o
+            // heartbeat seria enganoso).
+            if (availableTools.Count > 0)
+                yield return new AiChatStreamChunk(Type: "loop_progress", LoopRound: toolIterations + 1, LoopMaxRounds: maxIterations);
+
+            // KB esgotada: remove knowledge_search das tools disponíveis deste round
+            // (mais determinístico que confiar apenas na nota de sistema).
+            var roundTools = kbExhausted
+                ? availableTools.Where(t => t.Name != "knowledge_search").ToList()
+                : availableTools;
+
             var streamOptions = new LlmOptions(
                 MaxTokens: AiChatHelpers.ClampMaxTokens(aiSettings),
                 Temperature: AiChatHelpers.ClampTemperature(aiSettings),
                 Model: string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
                 BaseUrl: string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
                 ApiKey: string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
-                EnableTools: availableTools.Count > 0, Tools: availableTools,
+                EnableTools: roundTools.Count > 0, Tools: roundTools,
                 Provider: aiSettings.Provider,
                 OpenRouterReferer: aiSettings.OpenRouterReferer,
                 OpenRouterTitle: aiSettings.OpenRouterTitle,
@@ -195,7 +210,7 @@ public class AiChatStreamingOrchestrator
             hasToolCalls = false;
             hasAgentToolCallPending = false;
 
-            if (availableTools.Count > 0)
+            if (roundTools.Count > 0)
             {
                 await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
                 {
@@ -257,6 +272,14 @@ public class AiChatStreamingOrchestrator
                             if (toolCall.Name == "knowledge_search" && toolResult.Contains("\"found\":false"))
                                 consecutiveEmptyKbSearches++;
 
+                            // KB esgotada: nota de sistema + remove a tool no próximo round
+                            // (em vez de break silencioso que cortava a resposta).
+                            if (consecutiveEmptyKbSearches >= 2 && !kbExhausted)
+                            {
+                                kbExhausted = true;
+                                llmMessages.Add(new LlmMessage("system", AiChatHelpers.KbExhaustedNote));
+                            }
+
                             llmMessages.Add(new LlmMessage("tool", toolResult, toolCall.Id, toolCall.Name));
                             toolMessagesToPersist.Add(new AiChatMessage
                             {
@@ -274,6 +297,11 @@ public class AiChatStreamingOrchestrator
 
                         if (hasAgentToolCallPending)
                         {
+                            // Registra round pendente para o watchdog (mesmo mecanismo
+                            // do multi-round): se o agent não devolver ToolResults
+                            // dentro do TTL, o próximo multi-round desta sessão
+                            // injeta nota de expiração.
+                            _memoryCache.Set($"pending_round:{session.Id}", DateTime.UtcNow, AiChatConstants.PendingRoundTtl);
                             yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
                             stopwatch.Stop();
                             try
@@ -300,7 +328,6 @@ public class AiChatStreamingOrchestrator
             }
 
             if (!hasToolCalls || toolIterations >= maxIterations - 1) break;
-            if (consecutiveEmptyKbSearches >= 2) break;
             toolIterations++;
         }
 
@@ -341,24 +368,39 @@ public class AiChatStreamingOrchestrator
             nextSeq = updatedNextSeq;
         }
 
-        if (string.IsNullOrWhiteSpace(fullContent) && toolIterations > 0)
+        // ── Síntese forçada (agent loop resiliente) ──
+        // Dispara quando o conteúdo final ficou vazio — inclusive quando o
+        // orçamento de iterações esgotou com o LLM ainda querendo tools, ou
+        // com toolIterations == 0 (ex.: só tool calls textuais sanitizados).
+        // Faz até MaxSynthesisRetries chamadas SEM tools para garantir resposta.
+        if (string.IsNullOrWhiteSpace(fullContent))
         {
-            llmMessages.Add(new LlmMessage("user", "[SISTEMA] Você não forneceu uma resposta visível ao usuário. Forneça uma resposta direta e útil à última pergunta do usuário."));
-            var retryOptions = new LlmOptions(
-                AiChatHelpers.ClampMaxTokens(aiSettings), AiChatHelpers.ClampTemperature(aiSettings),
-                string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
-                string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
-                string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
-                false, null, aiSettings.Provider,
-                aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
-                SessionId: session!.Id.ToString("D"),
-                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
-            await foreach (var token in _llmProvider.StreamAsync(systemPrompt!, llmMessages, retryOptions, ct))
+            if (hasToolCalls && toolIterations >= maxIterations - 1)
+                llmMessages.Add(new LlmMessage("system", AiChatHelpers.SynthesisBudgetNote));
+            else
+                llmMessages.Add(new LlmMessage("user", AiChatHelpers.EmptyContentNote));
+
+            for (var attempt = 1; attempt <= AiChatConstants.MaxSynthesisRetries && string.IsNullOrWhiteSpace(fullContent); attempt++)
             {
-                contentBuilder.Append(token);
-                yield return new AiChatStreamChunk(Type: "token", Content: token);
+                contentBuilder.Clear(); // evita resíduo de tokens descartados
+                var synthesisOptions = new LlmOptions(
+                    AiChatHelpers.ClampMaxTokens(aiSettings), AiChatHelpers.ClampTemperature(aiSettings),
+                    string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
+                    string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
+                    string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
+                    false, null, aiSettings.Provider,
+                    aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
+                    SessionId: session!.Id.ToString("D"),
+                    TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
+                await foreach (var token in _llmProvider.StreamAsync(systemPrompt!, llmMessages, synthesisOptions, ct))
+                {
+                    contentBuilder.Append(token);
+                    yield return new AiChatStreamChunk(Type: "token", Content: token);
+                }
+                fullContent = contentBuilder.ToString();
+                if (!string.IsNullOrWhiteSpace(fullContent)) break;
             }
-            fullContent = contentBuilder.ToString();
+
             if (string.IsNullOrWhiteSpace(fullContent))
             {
                 fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta ou entre em contato com o suporte.";
@@ -459,8 +501,27 @@ public class AiChatStreamingOrchestrator
         var agentTools = _toolOrchestrator.GetCachedAgentTools(agentId);
         if (agentTools is { Count: > 0 }) availableTools.AddRange(agentTools);
 
-        var maxIterations = aiSettings.MaxToolCallIterations is >= 1 and <= 10
-            ? aiSettings.MaxToolCallIterations : AiChatConstants.DefaultMaxToolCallIterations;
+        var maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
+
+        // ── Watchdog de round pendente ──
+        // Se EXISTE registro de round delegado ao agent e este request NÃO
+        // traz ToolResults (ex.: usuário mandou nova mensagem), o round nunca
+        // foi concluído — injeta nota de expiração para o LLM concluir com
+        // resposta em vez de deixar a conversa "aberta".
+        // IMPORTANTE: quando ToolResults chegam, o round foi concluído com
+        // sucesso — apenas remove o registro SEM injetar nota (TryGetValue
+        // retorna true enquanto a chave não expirou, então a presença da
+        // chave sozinha NÃO significa expiração).
+        var pendingKey = $"pending_round:{session.Id}";
+        if (_memoryCache.TryGetValue(pendingKey, out _))
+        {
+            _memoryCache.Remove(pendingKey);
+            if (toolResults is not { Count: > 0 })
+            {
+                llmMessages.Add(new LlmMessage("system", AiChatHelpers.AgentRoundExpiredNote));
+                _logger.LogWarning("[{TraceId}] Round pendente sem ToolResults para SessionId={SessionId} — nota de expiração injetada", traceId, session.Id);
+            }
+        }
 
         var contentBuilder = new StringBuilder();
         var toolIterations = 0;
@@ -470,15 +531,24 @@ public class AiChatStreamingOrchestrator
         bool hasToolCalls = false;
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
         var consecutiveToolErrors = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        bool kbExhausted = false;
 
         while (true)
         {
+            // Heartbeat de progresso do agent loop (só com tools disponíveis).
+            if (availableTools.Count > 0)
+                yield return new AiChatStreamChunk(Type: "loop_progress", LoopRound: toolIterations + 1, LoopMaxRounds: maxIterations);
+
+            var roundTools = kbExhausted
+                ? availableTools.Where(t => t.Name != "knowledge_search").ToList()
+                : availableTools;
+
             var streamOptions = new LlmOptions(
                 AiChatHelpers.ClampMaxTokens(aiSettings), AiChatHelpers.ClampTemperature(aiSettings),
                 string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
                 string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
                 string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
-                availableTools.Count > 0, availableTools, aiSettings.Provider,
+                roundTools.Count > 0, roundTools, aiSettings.Provider,
                 aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
                 SessionId: session.Id.ToString("D"),
                 TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
@@ -486,87 +556,102 @@ public class AiChatStreamingOrchestrator
             hasToolCalls = false;
             bool hasAgentToolCall = false;
 
-            await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
+            if (roundTools.Count > 0)
             {
-                if (evt.Type == "token" && !string.IsNullOrWhiteSpace(evt.Content))
+                await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
                 {
-                    contentBuilder.Append(evt.Content);
-                    yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
-                }
-                else if (evt.Type == "tool_calls" && evt.ToolCalls is { Count: > 0 })
-                {
-                    hasToolCalls = true;
-                    totalTokens = evt.TokensUsed;
-                    var assistantToolCalls = evt.ToolCalls.Select(tc =>
-                        new LlmAssistantToolCall(tc.Id, tc.Name, tc.ArgumentsJson)).ToList();
-                    llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString(), ToolCalls: assistantToolCalls));
-                    contentBuilder.Clear();
-
-                    foreach (var tc in evt.ToolCalls)
+                    if (evt.Type == "token" && !string.IsNullOrWhiteSpace(evt.Content))
                     {
-                        if (agentToolCallNames.Contains(tc.Name))
+                        contentBuilder.Append(evt.Content);
+                        yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
+                    }
+                    else if (evt.Type == "tool_calls" && evt.ToolCalls is { Count: > 0 })
+                    {
+                        hasToolCalls = true;
+                        totalTokens = evt.TokensUsed;
+                        var assistantToolCalls = evt.ToolCalls.Select(tc =>
+                            new LlmAssistantToolCall(tc.Id, tc.Name, tc.ArgumentsJson)).ToList();
+                        llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString(), ToolCalls: assistantToolCalls));
+                        contentBuilder.Clear();
+
+                        foreach (var tc in evt.ToolCalls)
                         {
-                            var (isValid, errorJson) = AiChatToolOrchestrator.ValidateAgentToolArguments(tc.Name, tc.ArgumentsJson);
-                            if (!isValid)
+                            if (agentToolCallNames.Contains(tc.Name))
                             {
-                                var errCount = consecutiveToolErrors.GetValueOrDefault(tc.Name, 0) + 1;
-                                consecutiveToolErrors[tc.Name] = errCount;
-                                if (errCount >= 2) { contentBuilder.Append("Não foi possível processar sua solicitação automaticamente. Tente reformular sua pergunta ou contate o suporte pelo menu de chamados."); hasToolCalls = false; goto streamMultiRoundDone; }
-                                llmMessages.Add(new LlmMessage("tool", errorJson!, tc.Id, tc.Name));
-                                continue;
+                                var (isValid, errorJson) = AiChatToolOrchestrator.ValidateAgentToolArguments(tc.Name, tc.ArgumentsJson);
+                                if (!isValid)
+                                {
+                                    var errCount = consecutiveToolErrors.GetValueOrDefault(tc.Name, 0) + 1;
+                                    consecutiveToolErrors[tc.Name] = errCount;
+                                    if (errCount >= 2) { contentBuilder.Append("Não foi possível processar sua solicitação automaticamente. Tente reformular sua pergunta ou contate o suporte pelo menu de chamados."); hasToolCalls = false; goto streamMultiRoundDone; }
+                                    llmMessages.Add(new LlmMessage("tool", errorJson!, tc.Id, tc.Name));
+                                    continue;
+                                }
+                                hasAgentToolCall = true;
+                                yield return new AiChatStreamChunk(Type: "tool_call", ToolCallId: tc.Id, ToolName: tc.Name, ToolArgumentsDelta: tc.ArgumentsJson);
                             }
-                            hasAgentToolCall = true;
-                            yield return new AiChatStreamChunk(Type: "tool_call", ToolCallId: tc.Id, ToolName: tc.Name, ToolArgumentsDelta: tc.ArgumentsJson);
+                            else
+                            {
+                                if (tc.Name == "knowledge_search")
+                                {
+                                    var kbQuery = AiChatHelpers.ExtractKbQuery(tc.ArgumentsJson);
+                                    if (!string.IsNullOrEmpty(kbQuery) && !executedKbQueries.Add(kbQuery)) continue;
+                                }
+                                var toolResult = await _mcpToolExecutor.ExecuteAsync(tc.Name, tc.ArgumentsJson,
+                                    session.ClientId, session.SiteId, agentId, aiSettings, null, departmentId, session.Id, ct);
+                                yield return new AiChatStreamChunk(Type: "tool_result", ToolCallId: tc.Id, ToolResult: toolResult);
+                                llmMessages.Add(new LlmMessage("tool", toolResult, tc.Id, tc.Name));
+                                if (tc.Name == "knowledge_search" && toolResult.Contains("\"found\":false")) consecutiveEmptyKbSearches++;
+
+                                if (consecutiveEmptyKbSearches >= 2 && !kbExhausted)
+                                {
+                                    kbExhausted = true;
+                                    llmMessages.Add(new LlmMessage("system", AiChatHelpers.KbExhaustedNote));
+                                }
+                            }
                         }
-                        else
+
+                        if (hasAgentToolCall)
                         {
-                            if (tc.Name == "knowledge_search")
+                            // Registra round pendente para o watchdog: se o agent não
+                            // devolver ToolResults dentro do TTL, o próximo multi-round
+                            // desta sessão injeta nota de expiração.
+                            _memoryCache.Set(pendingKey, DateTime.UtcNow, AiChatConstants.PendingRoundTtl);
+                            try
                             {
-                                var kbQuery = AiChatHelpers.ExtractKbQuery(tc.ArgumentsJson);
-                                if (!string.IsNullOrEmpty(kbQuery) && !executedKbQueries.Add(kbQuery)) continue;
+                                await _messageRepository.CreateAsync(new AiChatMessage
+                                {
+                                    Id = Guid.NewGuid(),
+                                    SessionId = session.Id,
+                                    SequenceNumber = nextSeq,
+                                    Role = "assistant",
+                                    Content = contentBuilder.Length > 0 ? contentBuilder.ToString() : string.Empty,
+                                    ToolCallsJson = JsonSerializer.Serialize(assistantToolCalls.Select(tc => new { id = tc.Id, name = tc.Name, arguments = tc.ArgumentsJson })),
+                                    CreatedAt = DateTime.UtcNow,
+                                    TraceId = traceId
+                                }, ct);
                             }
-                            var toolResult = await _mcpToolExecutor.ExecuteAsync(tc.Name, tc.ArgumentsJson,
-                                session.ClientId, session.SiteId, agentId, aiSettings, null, departmentId, session.Id, ct);
-                            yield return new AiChatStreamChunk(Type: "tool_result", ToolCallId: tc.Id, ToolResult: toolResult);
-                            llmMessages.Add(new LlmMessage("tool", toolResult, tc.Id, tc.Name));
-                            if (tc.Name == "knowledge_search" && toolResult.Contains("\"found\":false")) consecutiveEmptyKbSearches++;
+                            catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir assistant no multi-round", traceId); }
+                            yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
+                            yield break;
                         }
                     }
-
-                    if (hasAgentToolCall)
-                    {
-                        try
-                        {
-                            await _messageRepository.CreateAsync(new AiChatMessage
-                            {
-                                Id = Guid.NewGuid(),
-                                SessionId = session.Id,
-                                SequenceNumber = nextSeq,
-                                Role = "assistant",
-                                Content = contentBuilder.Length > 0 ? contentBuilder.ToString() : string.Empty,
-                                ToolCallsJson = JsonSerializer.Serialize(assistantToolCalls.Select(tc => new { id = tc.Id, name = tc.Name, arguments = tc.ArgumentsJson })),
-                                CreatedAt = DateTime.UtcNow,
-                                TraceId = traceId
-                            }, ct);
-                        }
-                        catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir assistant no multi-round", traceId); }
-                        yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
-                        yield break;
-                    }
+                    else if (evt.Type == "done") { totalTokens = evt.TokensUsed; }
                 }
-                else if (evt.Type == "done") { totalTokens = evt.TokensUsed; }
             }
 
-            if (!hasToolCalls || toolIterations >= maxIterations - 1 || consecutiveEmptyKbSearches >= 2) break;
+            if (!hasToolCalls || toolIterations >= maxIterations - 1) break;
             toolIterations++;
         }
 
     streamMultiRoundDone:
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
-        if (string.IsNullOrWhiteSpace(fullContent)) fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta.";
 
         // ── Sanitização de vazamentos de tool calls ──
+        // Roda ANTES da síntese forçada: se o conteúdo era só vazamento (DSML,
+        // invokes textuais), a sanitização o esvazia e a síntese dispara com a
+        // nota correta — mesma ordem do StreamAsync.
         var (sanitizedMultiContent, multiWasSanitized) = AiChatLeakSanitizer.Sanitize(fullContent);
         if (multiWasSanitized)
         {
@@ -582,6 +667,37 @@ public class AiChatStreamingOrchestrator
         {
             yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
         }
+
+        // ── Síntese forçada: conteúdo vazio → chamadas sem tools até obter resposta ──
+        if (string.IsNullOrWhiteSpace(fullContent))
+        {
+            if (hasToolCalls && toolIterations >= maxIterations - 1)
+                llmMessages.Add(new LlmMessage("system", AiChatHelpers.SynthesisBudgetNote));
+            else
+                llmMessages.Add(new LlmMessage("user", AiChatHelpers.EmptyContentNote));
+
+            for (var attempt = 1; attempt <= AiChatConstants.MaxSynthesisRetries && string.IsNullOrWhiteSpace(fullContent); attempt++)
+            {
+                contentBuilder.Clear();
+                var synthesisOptions = new LlmOptions(
+                    AiChatHelpers.ClampMaxTokens(aiSettings), AiChatHelpers.ClampTemperature(aiSettings),
+                    string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
+                    string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
+                    string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
+                    false, null, aiSettings.Provider,
+                    aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
+                    SessionId: session.Id.ToString("D"),
+                    TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
+                await foreach (var token in _llmProvider.StreamAsync(systemPrompt, llmMessages, synthesisOptions, ct))
+                {
+                    contentBuilder.Append(token);
+                    yield return new AiChatStreamChunk(Type: "token", Content: token);
+                }
+                fullContent = contentBuilder.ToString();
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(fullContent)) fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta.";
 
         try
         {

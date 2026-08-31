@@ -47,6 +47,7 @@ public record AgentChatJobStatus(
 /// Type = "tool_call"        → ToolCallId + ToolName + ToolArgumentsDelta (args JSON completo). Agent deve executar.
 /// Type = "tool_result"      → ToolCallId + ToolResult preenchidos (resultado da tool).
 /// Type = "round_end"        → SessionId preenchido. Stream fecha, agent deve enviar próximo POST com ToolResults.
+/// Type = "loop_progress"    → LoopRound/LoopMaxRounds preenchidos. Progresso do agent loop (heartbeat informativo).
 /// Type = "a2ui"             → A2uiJson contém uma mensagem A2UI (createSurface/updateComponents/updateDataModel/deleteSurface).
 /// Type = "done"             → SessionId, TokensUsed e LatencyMs estão preenchidos.
 /// Type = "error"            → Error contém a mensagem de erro.
@@ -62,5 +63,7 @@ public record AiChatStreamChunk(
     string? ToolName = null,
     string? ToolArgumentsDelta = null,
     string? ToolResult = null,
-    string? A2uiJson = null
+    string? A2uiJson = null,
+    int? LoopRound = null,
+    int? LoopMaxRounds = null
 );
