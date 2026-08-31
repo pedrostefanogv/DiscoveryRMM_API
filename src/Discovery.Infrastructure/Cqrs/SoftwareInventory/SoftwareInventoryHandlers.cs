@@ -28,7 +28,7 @@ public sealed class ListSoftwareInventoryQueryHandler(ISoftwareInventoryService 
         var (clientId, siteId) = ResolveScope(q.Scope, q.ScopeId);
 
         // Fetch limit + 1 to detect hasMore
-        var items = await svc.GetInventoryPagedAsync(clientId, siteId, q.Cursor, q.Limit + 1, q.Search, q.Descending, ct);
+        var items = await svc.GetCatalogPagedAsync(clientId, siteId, q.Cursor, q.Limit + 1, q.Search, q.Descending, ct);
 
         var hasMore = items.Count > q.Limit;
         if (hasMore)
@@ -38,15 +38,12 @@ public sealed class ListSoftwareInventoryQueryHandler(ISoftwareInventoryService 
         if (hasMore && items.Count > 0)
         {
             var last = items[^1];
-            nextCursor = CursorPaginationHelper.EncodeGuidCursor(last.InventoryId);
+            nextCursor = CursorPaginationHelper.EncodeGuidCursor(last.SoftwareId);
         }
 
-        var dtos = items.Select(i => new SoftwareInventoryItemDto(
-            i.InventoryId, i.AgentId, i.SiteId, i.ClientId,
-            i.SoftwareId, i.Name, i.Version, i.Publisher,
-            i.InstallDate?.ToString("o"),
-            i.Hostname, i.AgentDisplayName, i.SiteName, i.ClientName,
-            i.CollectedAt
+        var dtos = items.Select(i => new SoftwareInventoryCatalogItemDto(
+            i.SoftwareId, i.Name, i.Publisher, i.Source,
+            i.InstalledCount, i.FirstSeenAt, i.LastCollectedAt, i.LastSeenAt
         )).ToList().AsReadOnly();
 
         return Result<SoftwareInventoryListDto>.Success(new SoftwareInventoryListDto(dtos, nextCursor, hasMore));
@@ -60,6 +57,47 @@ public sealed class ListSoftwareInventoryQueryHandler(ISoftwareInventoryService 
             SoftwareInventoryScope.Site => (null, scopeId),
             _ => (null, null)
         };
+    }
+}
+
+public sealed class ListSoftwareInstallationsQueryHandler(ISoftwareInventoryService svc) : IRequestHandler<ListSoftwareInstallationsQuery, Result<SoftwareInstallationsDto>>
+{
+    public async Task<Result<SoftwareInstallationsDto>> Handle(ListSoftwareInstallationsQuery q, CancellationToken ct)
+    {
+        Guid? clientId = null;
+        Guid? siteId = null;
+
+        switch (q.Scope)
+        {
+            case SoftwareInventoryScope.Client:
+                clientId = q.ScopeId;
+                break;
+            case SoftwareInventoryScope.Site:
+                siteId = q.ScopeId;
+                break;
+        }
+
+        var items = await svc.GetSoftwareInstallationsPagedAsync(q.SoftwareId, clientId, siteId, q.Cursor, q.Limit + 1, q.Descending, ct);
+
+        var hasMore = items.Count > q.Limit;
+        if (hasMore)
+            items = items.Take(q.Limit).ToList();
+
+        string? nextCursor = null;
+        if (hasMore && items.Count > 0)
+        {
+            // Cursor por software+agent não é possível com Guid simples; usamos o AgentId da última linha.
+            nextCursor = CursorPaginationHelper.EncodeGuidCursor(items[^1].AgentId);
+        }
+
+        var dtos = items.Select(i => new SoftwareInstallationItemDto(
+            i.AgentId, i.Hostname, i.AgentDisplayName,
+            i.SiteId, i.SiteName, i.ClientId, i.ClientName,
+            i.Version, i.Source,
+            i.CollectedAt, i.FirstSeenAt, i.LastSeenAt
+        )).ToList().AsReadOnly();
+
+        return Result<SoftwareInstallationsDto>.Success(new SoftwareInstallationsDto(dtos, nextCursor, hasMore));
     }
 }
 

@@ -42,4 +42,19 @@ public class SoftwareInventoryController(IMediator mediator) : ControllerBase
         var result = await mediator.Send(new GetSoftwareInventoryScopeSnapshotQuery(scope, scopeId));
         return result.ToActionResult();
     }
+
+    /// <summary>Installations of a specific software, scoped (for details modal).</summary>
+    [HttpGet("{softwareId:guid}/installations")]
+    public async Task<IActionResult> GetInstallations(
+        Guid softwareId,
+        [FromQuery] SoftwareInventoryScope scope = SoftwareInventoryScope.Global,
+        [FromQuery] Guid? scopeId = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        [FromQuery] string order = "asc")
+    {
+        var descending = string.Equals(order, "desc", StringComparison.OrdinalIgnoreCase);
+        var result = await mediator.Send(new ListSoftwareInstallationsQuery(softwareId, scope, scopeId, cursor, limit, descending));
+        return result.ToActionResult();
+    }
 }

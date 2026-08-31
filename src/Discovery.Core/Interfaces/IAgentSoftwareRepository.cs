@@ -40,6 +40,19 @@ public interface IAgentSoftwareRepository
         int limit,
         string? search,
         bool descending);
+    Task<IReadOnlyList<SoftwareInventoryCatalogItem>> GetInventoryCatalogBySitePagedAsync(
+        Guid siteId,
+        string? cursor,
+        int limit,
+        string? search,
+        bool descending);
+    Task<IReadOnlyList<SoftwareInstallationRow>> GetSoftwareInstallationsPagedAsync(
+        Guid softwareId,
+        Guid? clientId,
+        Guid? siteId,
+        string? cursor,
+        int limit,
+        bool descending);
     Task<SoftwareInventoryScopeSnapshot> GetInventoryGlobalSnapshotAsync();
     Task<SoftwareInventoryScopeSnapshot> GetInventoryByClientSnapshotAsync(Guid clientId);
     Task<SoftwareInventoryScopeSnapshot> GetInventoryBySiteSnapshotAsync(Guid siteId);

@@ -39,16 +39,37 @@ public sealed record GetSoftwareInventoryScopeSnapshotQuery(
 ) : IQuery<Result<ScopeSnapshotDto>>;
 
 public sealed record SoftwareInventoryListDto(
-    IReadOnlyList<SoftwareInventoryItemDto> Items,
+    IReadOnlyList<SoftwareInventoryCatalogItemDto> Items,
     string? NextCursor,
     bool HasMore
 );
 
-public sealed record SoftwareInventoryItemDto(
-    Guid InventoryId, Guid AgentId, Guid SiteId, Guid ClientId,
-    Guid SoftwareId, string Name, string? Version, string? Publisher,
-    string? InstallDate, string Hostname, string? AgentDisplayName,
-    string SiteName, string ClientName, DateTime CollectedAt
+public sealed record SoftwareInventoryCatalogItemDto(
+    Guid SoftwareId, string Name, string? Publisher, string? Source,
+    int InstalledCount, DateTime? FirstSeenAt, DateTime? LastCollectedAt,
+    DateTime? LastSeenAt
+);
+
+public sealed record ListSoftwareInstallationsQuery(
+    Guid SoftwareId,
+    SoftwareInventoryScope Scope,
+    Guid? ScopeId,
+    string? Cursor,
+    int Limit,
+    bool Descending
+) : IQuery<Result<SoftwareInstallationsDto>>;
+
+public sealed record SoftwareInstallationsDto(
+    IReadOnlyList<SoftwareInstallationItemDto> Items,
+    string? NextCursor,
+    bool HasMore
+);
+
+public sealed record SoftwareInstallationItemDto(
+    Guid AgentId, string Hostname, string? AgentDisplayName,
+    Guid SiteId, string SiteName, Guid ClientId, string ClientName,
+    string? Version, string? Source,
+    DateTime CollectedAt, DateTime FirstSeenAt, DateTime LastSeenAt
 );
 
 public sealed record ScopeSnapshotDto(

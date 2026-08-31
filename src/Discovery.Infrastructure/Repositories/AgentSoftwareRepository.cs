@@ -162,7 +162,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         int limit,
         string? search,
         bool descending)
-        => await GetInventoryCatalogPagedInternalAsync(null, cursor, limit, search, descending);
+        => await GetInventoryCatalogPagedInternalAsync(null, null, cursor, limit, search, descending);
 
     public async Task<IReadOnlyList<SoftwareInventoryCatalogItem>> GetInventoryCatalogByClientPagedAsync(
         Guid clientId,
@@ -170,7 +170,70 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         int limit,
         string? search,
         bool descending)
-        => await GetInventoryCatalogPagedInternalAsync(clientId, cursor, limit, search, descending);
+        => await GetInventoryCatalogPagedInternalAsync(clientId, null, cursor, limit, search, descending);
+
+    public async Task<IReadOnlyList<SoftwareInventoryCatalogItem>> GetInventoryCatalogBySitePagedAsync(
+        Guid siteId,
+        string? cursor,
+        int limit,
+        string? search,
+        bool descending)
+        => await GetInventoryCatalogPagedInternalAsync(null, siteId, cursor, limit, search, descending);
+
+    public async Task<IReadOnlyList<SoftwareInstallationRow>> GetSoftwareInstallationsPagedAsync(
+        Guid softwareId,
+        Guid? clientId,
+        Guid? siteId,
+        string? cursor,
+        int limit,
+        bool descending)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+
+        var query =
+            from inv in _db.AgentSoftwareInventories.AsNoTracking()
+            join agent in _db.Agents.AsNoTracking() on inv.AgentId equals agent.Id
+            join site in _db.Sites.AsNoTracking() on agent.SiteId equals site.Id
+            join client in _db.Clients.AsNoTracking() on site.ClientId equals client.Id
+            where inv.IsPresent && inv.SoftwareId == softwareId
+            select new { inv, agent, site, client };
+
+        if (CursorPaginationHelper.TryDecodeGuidCursor(cursor, out var cursorId))
+        {
+            query = descending
+                ? query.Where(x => x.inv.Id.CompareTo(cursorId) < 0)
+                : query.Where(x => x.inv.Id.CompareTo(cursorId) > 0);
+        }
+
+        if (clientId.HasValue)
+            query = query.Where(x => x.client.Id == clientId.Value);
+
+        if (siteId.HasValue)
+            query = query.Where(x => x.site.Id == siteId.Value);
+
+        query = descending
+            ? query.OrderByDescending(x => x.inv.Id)
+            : query.OrderBy(x => x.inv.Id);
+
+        return await query
+            .Take(safeLimit)
+            .Select(x => new SoftwareInstallationRow
+            {
+                AgentId = x.agent.Id,
+                Hostname = x.agent.Hostname,
+                AgentDisplayName = x.agent.DisplayName,
+                SiteId = x.site.Id,
+                SiteName = x.site.Name,
+                ClientId = x.client.Id,
+                ClientName = x.client.Name,
+                Version = x.inv.Version,
+                Source = x.inv.InstallSource,
+                CollectedAt = x.inv.CollectedAt,
+                FirstSeenAt = x.inv.FirstSeenAt,
+                LastSeenAt = x.inv.LastSeenAt
+            })
+            .ToListAsync();
+    }
 
     public async Task<SoftwareInventoryScopeSnapshot> GetInventoryGlobalSnapshotAsync()
         => await GetInventorySnapshotInternalAsync(null, null);
@@ -434,6 +497,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
 
     private async Task<IReadOnlyList<SoftwareInventoryCatalogItem>> GetInventoryCatalogPagedInternalAsync(
         Guid? clientId,
+        Guid? siteId,
         string? cursor,
         int limit,
         string? search,
@@ -449,10 +513,13 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             join client in _db.Clients.AsNoTracking() on site.ClientId equals client.Id
             join catalog in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals catalog.Id
             where inv.IsPresent
-            select new { inv, client, catalog };
+            select new { inv, client, site, catalog };
 
         if (clientId.HasValue)
             query = query.Where(x => x.client.Id == clientId.Value);
+
+        if (siteId.HasValue)
+            query = query.Where(x => x.site.Id == siteId.Value);
 
         if (CursorPaginationHelper.TryDecodeGuidCursor(cursor, out var cursorId))
         {
