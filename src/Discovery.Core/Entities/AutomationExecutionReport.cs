@@ -5,7 +5,12 @@ namespace Discovery.Core.Entities;
 public class AutomationExecutionReport
 {
     public Guid Id { get; set; }
-    public Guid CommandId { get; set; }
+
+    /// <summary>
+    /// Null para execuções automáticas (policy-sync: immediate/recurring/user-login/check-in)
+    /// que não passam pelo dispatcher de comandos do servidor.
+    /// </summary>
+    public Guid? CommandId { get; set; }
     public Guid AgentId { get; set; }
     public Guid? TaskId { get; set; }
     public Guid? ScriptId { get; set; }

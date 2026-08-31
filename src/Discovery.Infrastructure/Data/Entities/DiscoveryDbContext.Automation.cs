@@ -120,7 +120,9 @@ public partial class DiscoveryDbContext
         {
             entity.ToTable("automation_execution_reports");
             entity.HasKey(r => r.Id);
-            entity.HasIndex(r => r.CommandId).IsUnique().HasDatabaseName("ux_automation_execution_reports_command");
+            // Unique parcial (agent_id, command_id) — command_id é null para execuções automáticas de policy-sync.
+            entity.HasIndex(r => new { r.AgentId, r.CommandId }).IsUnique().HasDatabaseName("ux_automation_execution_reports_agent_command");
+            entity.HasIndex(r => new { r.TaskId, r.CreatedAt }).HasDatabaseName("ix_automation_execution_reports_task_created");
             entity.HasIndex(r => new { r.AgentId, r.CreatedAt }).HasDatabaseName("ix_automation_execution_reports_agent_created");
 
             entity.Property(r => r.Id).HasColumnName("id").ValueGeneratedNever();

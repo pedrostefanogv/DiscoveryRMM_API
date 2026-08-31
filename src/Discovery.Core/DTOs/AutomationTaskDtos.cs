@@ -61,6 +61,22 @@ public class AutomationTaskAuditDto
     public DateTime ChangedAt { get; set; }
 }
 
+/// <summary>Execução de uma automation task (RunNow ou automática via policy-sync).</summary>
+public class AutomationTaskExecutionDto
+{
+    public Guid Id { get; set; }
+    public Guid? CommandId { get; set; }
+    public Guid AgentId { get; set; }
+    public string SourceType { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string? CorrelationId { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? AcknowledgedAt { get; set; }
+    public DateTime? ResultReceivedAt { get; set; }
+    public int? ExitCode { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
 public class AutomationTaskTargetPreviewItemDto
 {
     public Guid AgentId { get; set; }

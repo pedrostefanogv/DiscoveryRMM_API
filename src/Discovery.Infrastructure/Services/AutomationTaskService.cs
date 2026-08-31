@@ -641,6 +641,12 @@ public class AutomationTaskService : IAutomationTaskService
 
         if (task.TriggerRecurring && string.IsNullOrWhiteSpace(task.ScheduleCron))
             throw new InvalidOperationException("ScheduleCron is required when TriggerRecurring is enabled.");
+
+        // Mesmo dialeto do agent (robfig/cron padrão: 5 campos, sem segundos).
+        if (task.TriggerRecurring && !string.IsNullOrWhiteSpace(task.ScheduleCron)
+            && !CronScheduleValidator.IsValid(task.ScheduleCron))
+            throw new InvalidOperationException(
+                $"ScheduleCron '{task.ScheduleCron}' is not a valid 5-field cron expression (minute hour day-of-month month day-of-week).");
     }
 
     private static (Guid? clientId, Guid? siteId, Guid? agentId) ResolveScope(AppApprovalScopeType scopeType, Guid? scopeId)
@@ -713,6 +719,11 @@ public class AutomationTaskService : IAutomationTaskService
         return include.Any(requested.Contains) || exclude.Any(requested.Contains);
     }
 
+    /// <summary>
+    /// Chave semântica da policy: inclui todos os campos que afetam a execução no agent
+    /// (triggers, cron, tags, payload, approval). LastUpdatedAt fica como garantia extra —
+    /// qualquer update bumpa o timestamp, mas o fingerprint não deve DEPENDER disso.
+    /// </summary>
     private static string BuildPolicyKey(IReadOnlyList<AutomationTaskDefinition> tasks)
     {
         var builder = new StringBuilder();
@@ -722,8 +733,24 @@ public class AutomationTaskService : IAutomationTaskService
                 .Append(task.Id).Append('|')
                 .Append(task.LastUpdatedAt.ToUniversalTime().Ticks).Append('|')
                 .Append(task.ActionType).Append('|')
+                .Append(task.InstallationType).Append('|')
                 .Append(task.ScriptId?.ToString() ?? string.Empty).Append('|')
-                .Append(task.PackageId ?? string.Empty).Append(';');
+                .Append(task.PackageId ?? string.Empty).Append('|')
+                .Append(task.CommandPayload ?? string.Empty).Append('|')
+                .Append(task.ScopeType).Append('|')
+                .Append(task.ClientId?.ToString() ?? string.Empty).Append('|')
+                .Append(task.SiteId?.ToString() ?? string.Empty).Append('|')
+                .Append(task.AgentId?.ToString() ?? string.Empty).Append('|')
+                .Append(task.IncludeTagsJson ?? string.Empty).Append('|')
+                .Append(task.ExcludeTagsJson ?? string.Empty).Append('|')
+                .Append(task.TriggerImmediate ? '1' : '0')
+                .Append(task.TriggerRecurring ? '1' : '0')
+                .Append(task.TriggerOnUserLogin ? '1' : '0')
+                .Append(task.TriggerOnAgentCheckIn ? '1' : '0').Append('|')
+                .Append(task.ScheduleCron ?? string.Empty).Append('|')
+                .Append(task.RequiresApproval ? '1' : '0')
+                .Append(task.IsActive ? '1' : '0')
+                .Append(';');
         }
 
         return builder.ToString();

@@ -50,9 +50,41 @@ public sealed class GetAutomationTaskAuditQueryHandler(IAutomationTaskService sv
     }
 }
 
+public sealed class GetAutomationTaskExecutionsQueryHandler(
+    IAutomationTaskService taskService,
+    IAutomationExecutionReportRepository reportRepo) : IRequestHandler<GetAutomationTaskExecutionsQuery, Result<IReadOnlyList<AutomationTaskExecutionDto>>>
+{
+    public async Task<Result<IReadOnlyList<AutomationTaskExecutionDto>>> Handle(GetAutomationTaskExecutionsQuery q, CancellationToken ct)
+    {
+        var task = await taskService.GetByIdAsync(q.Id, includeInactive: true, ct);
+        if (task is null)
+            return Result<IReadOnlyList<AutomationTaskExecutionDto>>.Failure(Error.NotFound($"Task {q.Id} not found"));
+
+        var items = await reportRepo.GetByTaskIdAsync(q.Id, q.Limit);
+        var dtos = items.Select(e => new AutomationTaskExecutionDto
+        {
+            Id = e.Id,
+            CommandId = e.CommandId,
+            AgentId = e.AgentId,
+            SourceType = e.SourceType.ToString(),
+            Status = e.Status.ToString(),
+            CorrelationId = e.CorrelationId,
+            CreatedAt = e.CreatedAt,
+            AcknowledgedAt = e.AcknowledgedAt,
+            ResultReceivedAt = e.ResultReceivedAt,
+            ExitCode = e.ExitCode,
+            ErrorMessage = e.ErrorMessage
+        }).ToList();
+
+        return Result<IReadOnlyList<AutomationTaskExecutionDto>>.Success(dtos);
+    }
+}
+
 // ── Commands ─────────────────────────────────────────────────────────
 
-public sealed class CreateAutomationTaskCommandHandler(IAutomationTaskService svc) : IRequestHandler<CreateAutomationTaskCommand, Result<AutomationTaskDetailDto>>
+public sealed class CreateAutomationTaskCommandHandler(
+    IAutomationTaskService svc,
+    ISyncInvalidationPublisher syncPublisher) : IRequestHandler<CreateAutomationTaskCommand, Result<AutomationTaskDetailDto>>
 {
     public async Task<Result<AutomationTaskDetailDto>> Handle(CreateAutomationTaskCommand cmd, CancellationToken ct)
     {
@@ -78,12 +110,48 @@ public sealed class CreateAutomationTaskCommandHandler(IAutomationTaskService sv
             IsActive = cmd.IsActive
         };
 
-        var result = await svc.CreateAsync(request, cmd.ChangedBy, cmd.IpAddress, cmd.CorrelationId ?? "api", ct);
-        return Result<AutomationTaskDetailDto>.Success(result);
+        var (created, createError) = await AutomationTaskValidationGuard.TryAsync(async () => await svc.CreateAsync(request, cmd.ChangedBy, cmd.IpAddress, cmd.CorrelationId ?? "api", ct));
+        if (createError is not null) return Result<AutomationTaskDetailDto>.Failure(createError);
+        var result = Result<AutomationTaskDetailDto>.Success(created!);
+        if (result.IsSuccess && cmd.TriggerImmediate)
+        {
+            // Push imediato: agents do escopo fazem policy-sync em segundos em vez de esperar até 5 min.
+            await syncPublisher.PublishByScopeAsync(
+                SyncResourceType.AutomationPolicy,
+                cmd.ScopeType,
+                cmd.ScopeId,
+                "automation-task-created-immediate",
+                null,
+                cmd.CorrelationId,
+                ct);
+        }
+
+        return result;
     }
 }
 
-public sealed class UpdateAutomationTaskCommandHandler(IAutomationTaskService svc) : IRequestHandler<UpdateAutomationTaskCommand, Result<AutomationTaskDetailDto>>
+/// <summary>
+/// Converte exceções de validação de domínio (InvalidOperationException do AutomationTaskService)
+/// em Error.Validation (HTTP 400) em vez de deixar estourar como 500.
+/// </summary>
+internal static class AutomationTaskValidationGuard
+{
+    internal static async Task<(T? Value, Error? Error)> TryAsync<T>(Func<Task<T>> action)
+    {
+        try
+        {
+            return (await action().ConfigureAwait(false), null);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (default, Error.Validation("task", ex.Message));
+        }
+    }
+}
+
+public sealed class UpdateAutomationTaskCommandHandler(
+    IAutomationTaskService svc,
+    ISyncInvalidationPublisher syncPublisher) : IRequestHandler<UpdateAutomationTaskCommand, Result<AutomationTaskDetailDto>>
 {
     public async Task<Result<AutomationTaskDetailDto>> Handle(UpdateAutomationTaskCommand cmd, CancellationToken ct)
     {
@@ -110,9 +178,24 @@ public sealed class UpdateAutomationTaskCommandHandler(IAutomationTaskService sv
             Reason = cmd.Reason
         };
 
-        var result = await svc.UpdateAsync(cmd.Id, request, cmd.ChangedBy, cmd.IpAddress, cmd.CorrelationId ?? "api", ct);
-        if (result is null) return Result<AutomationTaskDetailDto>.Failure(Error.NotFound($"Task {cmd.Id} not found"));
-        return Result<AutomationTaskDetailDto>.Success(result);
+        var (updated, updateError) = await AutomationTaskValidationGuard.TryAsync(async () => await svc.UpdateAsync(cmd.Id, request, cmd.ChangedBy, cmd.IpAddress, cmd.CorrelationId ?? "api", ct));
+        if (updateError is not null) return Result<AutomationTaskDetailDto>.Failure(updateError);
+        if (updated is null) return Result<AutomationTaskDetailDto>.Failure(Error.NotFound($"Task {cmd.Id} not found"));
+        var result = Result<AutomationTaskDetailDto>.Success(updated);
+
+        if (result.IsSuccess && cmd.TriggerImmediate == true)
+        {
+            await syncPublisher.PublishByScopeAsync(
+                SyncResourceType.AutomationPolicy,
+                cmd.ScopeType ?? AppApprovalScopeType.Global,
+                cmd.ScopeId,
+                "automation-task-updated-immediate",
+                null,
+                cmd.CorrelationId,
+                ct);
+        }
+
+        return result;
     }
 }
 

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Automation;
 using Discovery.Core.DTOs;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using MediatR;
 
@@ -72,18 +73,110 @@ public sealed class GetAgentCommandsHandler(
     }
 }
 
-public sealed class AckAutomationExecutionHandler() : IRequestHandler<AckAutomationExecutionCommand, Result<VoidResult>>
+public sealed class AckAutomationExecutionHandler(
+    IAutomationExecutionReportRepository reportRepo
+) : IRequestHandler<AckAutomationExecutionCommand, Result<VoidResult>>
 {
-    public Task<Result<VoidResult>> Handle(AckAutomationExecutionCommand cmd, CancellationToken ct)
+    public async Task<Result<VoidResult>> Handle(AckAutomationExecutionCommand cmd, CancellationToken ct)
     {
-        return Task.FromResult(Result<VoidResult>.Success(VoidResult.Value));
+        var payload = DeserializeAck(cmd.Request, cmd);
+        var sourceType = MapSourceType((int)payload.SourceType);
+
+        await reportRepo.UpdateAckAsync(
+            cmd.CommandId,
+            payload.TaskId,
+            payload.ScriptId,
+            payload.MetadataJson,
+            DateTime.UtcNow,
+            cmd.CorrelationId);
+
+        // Upsert garante que execuções automáticas (sem comando dispatchado pelo servidor)
+        // também tenham um registro de execução para ack/result.
+        await reportRepo.UpsertPolicyExecutionAsync(
+            cmd.AgentId, cmd.CommandId, payload.TaskId, payload.ScriptId, sourceType,
+            AutomationExecutionStatus.Acknowledged, cmd.CorrelationId);
+
+        return Result<VoidResult>.Success(VoidResult.Value);
     }
+
+    private static AutomationExecutionAckRequest DeserializeAck(object? request, AckAutomationExecutionCommand cmd)
+    {
+        if (request is JsonElement json)
+        {
+            return JsonSerializer.Deserialize<AutomationExecutionAckRequest>(json.GetRawText(), SyncJsonOptions)
+                ?? new AutomationExecutionAckRequest();
+        }
+
+        // Fallback: propriedades já materializadas no comando (via `with`).
+        return new AutomationExecutionAckRequest
+        {
+            TaskId = cmd.TaskId,
+            ScriptId = cmd.ScriptId,
+            SourceType = (AutomationExecutionSourceType)cmd.SourceType,
+            MetadataJson = cmd.MetadataJson
+        };
+    }
+
+    private static AutomationExecutionSourceType MapSourceType(int raw)
+        => Enum.IsDefined(typeof(AutomationExecutionSourceType), raw)
+            ? (AutomationExecutionSourceType)raw
+            : AutomationExecutionSourceType.ForceSync;
+
+    private static readonly JsonSerializerOptions SyncJsonOptions = new(JsonSerializerDefaults.Web);
 }
 
-public sealed class CompleteAutomationExecutionHandler() : IRequestHandler<CompleteAutomationExecutionCommand, Result<VoidResult>>
+public sealed class CompleteAutomationExecutionHandler(
+    IAutomationExecutionReportRepository reportRepo
+) : IRequestHandler<CompleteAutomationExecutionCommand, Result<VoidResult>>
 {
-    public Task<Result<VoidResult>> Handle(CompleteAutomationExecutionCommand cmd, CancellationToken ct)
+    public async Task<Result<VoidResult>> Handle(CompleteAutomationExecutionCommand cmd, CancellationToken ct)
     {
-        return Task.FromResult(Result<VoidResult>.Success(VoidResult.Value));
+        var payload = DeserializeResult(cmd.Request, cmd);
+        var sourceType = MapSourceType((int)payload.SourceType);
+
+        await reportRepo.UpdateResultAsync(
+            cmd.CommandId,
+            payload.TaskId,
+            payload.ScriptId,
+            payload.Success,
+            payload.ExitCode,
+            payload.ErrorMessage,
+            payload.MetadataJson,
+            DateTime.UtcNow,
+            cmd.CorrelationId);
+
+        await reportRepo.UpsertPolicyExecutionAsync(
+            cmd.AgentId, cmd.CommandId, payload.TaskId, payload.ScriptId, sourceType,
+            payload.Success ? AutomationExecutionStatus.Completed : AutomationExecutionStatus.Failed,
+            cmd.CorrelationId);
+
+        return Result<VoidResult>.Success(VoidResult.Value);
     }
+
+    private static AutomationExecutionResultRequest DeserializeResult(object? request, CompleteAutomationExecutionCommand cmd)
+    {
+        if (request is JsonElement json)
+        {
+            return JsonSerializer.Deserialize<AutomationExecutionResultRequest>(json.GetRawText(), SyncJsonOptions)
+                ?? new AutomationExecutionResultRequest();
+        }
+
+        return new AutomationExecutionResultRequest
+        {
+            TaskId = cmd.TaskId,
+            ScriptId = cmd.ScriptId,
+            SourceType = (AutomationExecutionSourceType)cmd.SourceType,
+            Success = cmd.Success,
+            ExitCode = cmd.ExitCode,
+            ErrorMessage = cmd.ErrorMessage,
+            MetadataJson = cmd.MetadataJson
+        };
+    }
+
+    private static AutomationExecutionSourceType MapSourceType(int raw)
+        => Enum.IsDefined(typeof(AutomationExecutionSourceType), raw)
+            ? (AutomationExecutionSourceType)raw
+            : AutomationExecutionSourceType.ForceSync;
+
+    private static readonly JsonSerializerOptions SyncJsonOptions = new(JsonSerializerDefaults.Web);
 }

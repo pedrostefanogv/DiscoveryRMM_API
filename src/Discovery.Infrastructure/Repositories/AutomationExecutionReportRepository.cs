@@ -56,6 +56,66 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<AutomationExecutionReport>> GetByTaskIdAsync(Guid taskId, int limit = 100)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        return await _db.AutomationExecutionReports
+            .AsNoTracking()
+            .Where(x => x.TaskId == taskId)
+            .OrderByDescending(x => x.CreatedAt)
+            .Take(safeLimit)
+            .ToListAsync();
+    }
+
+    public async Task UpsertPolicyExecutionAsync(
+        Guid agentId,
+        Guid commandId,
+        Guid? taskId,
+        Guid? scriptId,
+        AutomationExecutionSourceType sourceType,
+        AutomationExecutionStatus status,
+        string? correlationId)
+    {
+        var existing = await _db.AutomationExecutionReports
+            .SingleOrDefaultAsync(x => x.AgentId == agentId && x.CommandId == commandId);
+
+        if (existing is not null)
+        {
+            // Não regride status (ex.: Acknowledged → Dispatched).
+            if (status > existing.Status || existing.Status == AutomationExecutionStatus.Dispatched)
+            {
+                existing.Status = status;
+                existing.UpdatedAt = DateTime.UtcNow;
+                if (status == AutomationExecutionStatus.Acknowledged && existing.AcknowledgedAt is null)
+                    existing.AcknowledgedAt = DateTime.UtcNow;
+                if (status is AutomationExecutionStatus.Completed or AutomationExecutionStatus.Failed && existing.ResultReceivedAt is null)
+                    existing.ResultReceivedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync();
+            }
+
+            return;
+        }
+
+        var report = new AutomationExecutionReport
+        {
+            Id = IdGenerator.NewId(),
+            CommandId = commandId,
+            AgentId = agentId,
+            TaskId = taskId,
+            ScriptId = scriptId,
+            SourceType = sourceType,
+            Status = status,
+            CorrelationId = correlationId,
+            AcknowledgedAt = status >= AutomationExecutionStatus.Acknowledged ? DateTime.UtcNow : null,
+            ResultReceivedAt = status >= AutomationExecutionStatus.Completed ? DateTime.UtcNow : null,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        _db.AutomationExecutionReports.Add(report);
+        await _db.SaveChangesAsync();
+    }
+
     public async Task UpdateAckAsync(Guid commandId, Guid? taskId, Guid? scriptId, string? ackMetadataJson, DateTime acknowledgedAt, string? correlationId)
     {
         var report = await _db.AutomationExecutionReports
@@ -106,7 +166,7 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
     private async Task PublishDashboardEventAsync(
         string eventType,
         Guid agentId,
-        Guid commandId,
+        Guid? commandId,
         AutomationExecutionStatus status,
         Guid? taskId,
         Guid? scriptId,
