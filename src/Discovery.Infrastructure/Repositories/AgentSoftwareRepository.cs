@@ -524,10 +524,11 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         if (CursorPaginationHelper.TryDecodeNameCursor(cursor, out var cursorName, out var cursorId))
         {
             // Cursor composto (Name, Id) — keyset estável independente de inserções.
+            // Comparação via operadores (traduzível para SQL pelo Npgsql); string.Compare não é.
             query = descending
-                ? query.Where(x => string.Compare(x.catalog.Name, cursorName, StringComparison.Ordinal) < 0
+                ? query.Where(x => x.catalog.Name.CompareTo(cursorName) < 0
                     || (x.catalog.Name == cursorName && x.catalog.Id.CompareTo(cursorId) < 0))
-                : query.Where(x => string.Compare(x.catalog.Name, cursorName, StringComparison.Ordinal) > 0
+                : query.Where(x => x.catalog.Name.CompareTo(cursorName) > 0
                     || (x.catalog.Name == cursorName && x.catalog.Id.CompareTo(cursorId) > 0));
         }
 
