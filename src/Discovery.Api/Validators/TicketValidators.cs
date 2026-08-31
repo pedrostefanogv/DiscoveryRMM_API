@@ -44,7 +44,9 @@ public class AddTicketCommentCommandValidator : AbstractValidator<AddTicketComme
 {
     public AddTicketCommentCommandValidator()
     {
-        RuleFor(x => x.UserName).NotEmpty().Length(2, 100);
+        // UserName/UserId são preenchidos pelo controller a partir do token autenticado
+        // (após o model binding) — não devem ser validados aqui, senão a
+        // FluentValidation auto-validation rejeita o request com 400 antes do controller.
         RuleFor(x => x.Content).NotEmpty().Length(3, 4000);
     }
 }
