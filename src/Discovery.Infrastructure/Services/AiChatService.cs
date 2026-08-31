@@ -89,6 +89,12 @@ public class AiChatService : IAiChatService
         var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
         var startTime = DateTime.UtcNow;
         var stopwatch = Stopwatch.StartNew();
+        // Rastreia se TryAcquireAsync consumiu um slot de rate limit — se a
+        // requisição falhar antes de consumir o LLM, o slot é devolvido no catch.
+        var costControlAcquired = false;
+        Guid scopeClientIdRelease = Guid.Empty;
+        Guid scopeSiteIdRelease = Guid.Empty;
+        AIIntegrationSettings? settingsRelease = null;
 
         try
         {
@@ -108,6 +114,10 @@ public class AiChatService : IAiChatService
             {
                 if (!await _costControl.TryAcquireAsync(scopeClientId, scopeSiteId, aiSettings, ct))
                     throw new InvalidOperationException("Limite de uso de IA excedido.");
+                costControlAcquired = true;
+                scopeClientIdRelease = scopeClientId;
+                scopeSiteIdRelease = scopeSiteId;
+                settingsRelease = aiSettings;
             }
 
             var session = await GetOrCreateSessionAsync(sessionId, agentId, scopeSiteId, scopeClientId, startTime, traceId, createdByIp, ct);
@@ -179,6 +189,23 @@ public class AiChatService : IAiChatService
         catch (Exception ex)
         {
             _logger.LogError(ex, "[{TraceId}] Erro em ProcessSyncAsync AgentId={AgentId}", traceId, agentId);
+
+            // Devolve o slot de rate limit se a requisição falhou antes de
+            // consumir o LLM (erro de rede, LLM indisponível, etc.) — evita
+            // que erros transientes consumam o quota do usuário.
+            if (costControlAcquired && settingsRelease is not null)
+            {
+                try
+                {
+                    await _costControl.ReleaseAsync(scopeClientIdRelease, scopeSiteIdRelease, settingsRelease, ct);
+                    _logger.LogInformation("[{TraceId}] Slot de rate limit devolvido (falha antes do LLM)", traceId);
+                }
+                catch (Exception releaseEx)
+                {
+                    _logger.LogWarning(releaseEx, "[{TraceId}] Falha ao devolver slot de rate limit", traceId);
+                }
+            }
+
             await _loggingService.LogExceptionAsync(ex, LogType.AiChat, LogSource.Api, $"Erro chat sync AgentId={agentId}", new { SessionId = sessionId, Message = message }, agentId: agentId.ToString(), cancellationToken: ct);
             throw;
         }

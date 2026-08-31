@@ -48,6 +48,20 @@ public class RedisService : IRedisService
         }
     }
 
+    public async Task<long> IncrementByAsync(string key, long amount)
+    {
+        try
+        {
+            var db = _connection.GetDatabase();
+            return await db.StringIncrementAsync(key, amount);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error incrementing key {Key} by {Amount} in Redis", LogSanitizer.Sanitize(key), amount);
+            return 0;
+        }
+    }
+
     public async Task SetAsync(string key, string value, int expirySeconds = 3600)
     {
         try

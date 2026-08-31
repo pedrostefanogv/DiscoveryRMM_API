@@ -86,6 +86,7 @@ public class NatsSessionDeduplicationTests
             return Task.FromResult(_store.TryGetValue(key, out var val) ? val : null);
         }
         public Task<long> IncrementAsync(string key) => throw new NotImplementedException();
+        public Task<long> IncrementByAsync(string key, long amount) => throw new NotImplementedException();
         public Task SetAsync(string key, string value, int expirySeconds = 3600)
         {
             _store[key] = value;

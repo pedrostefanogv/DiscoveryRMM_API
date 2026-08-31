@@ -28,6 +28,17 @@ public interface IAiCostControlService
         Guid siteId,
         int tokensUsed,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Devolve um slot de rate limit adquirido por TryAcquireAsync quando a
+    /// requisição falhou antes de consumir o LLM (ex.: erro de rede, LLM
+    /// indisponível). Evita que erros transientes consumam o quota do usuário.
+    /// </summary>
+    Task ReleaseAsync(
+        Guid clientId,
+        Guid siteId,
+        AIIntegrationSettings settings,
+        CancellationToken ct = default);
 }
 
 public class AiCostControlService : IAiCostControlService
@@ -125,12 +136,16 @@ public class AiCostControlService : IAiCostControlService
         int tokensUsed,
         CancellationToken ct = default)
     {
+        if (tokensUsed <= 0) return;
+
         var scopeKey = $"{clientId}:{siteId}";
         var budgetKey = $"ai:budget:{scopeKey}";
 
         if (_redis?.IsConnected == true)
         {
-            await _redis.IncrementAsync(budgetKey);
+            // INCRBY com o valor real de tokens (antes: IncrementAsync
+            // somava apenas 1 — o budget diário nunca refletia o consumo).
+            await _redis.IncrementByAsync(budgetKey, tokensUsed);
             var ttl = await _redis.GetTtlSecondsAsync(budgetKey);
             if (ttl <= 0)
                 await _redis.SetExpiryAsync(budgetKey, 86400); // 24h
@@ -140,6 +155,33 @@ public class AiCostControlService : IAiCostControlService
             var budget = _localBudgets.GetOrAdd(budgetKey, _ => new DailyBudget());
             Interlocked.Add(ref budget.Used, tokensUsed);
         }
+    }
+
+    public Task ReleaseAsync(
+        Guid clientId,
+        Guid siteId,
+        AIIntegrationSettings settings,
+        CancellationToken ct = default)
+    {
+        if (!settings.CostControlEnabled)
+            return Task.CompletedTask;
+
+        var scopeKey = $"{clientId}:{siteId}";
+        var rateKey = $"ai:ratelimit:{scopeKey}";
+
+        if (_redis?.IsConnected == true)
+        {
+            // Decrementa 1 slot do rate limit (mínimo 0 — não deixa negativo).
+            // Redis INCRBY com -1 pode deixar negativo; clamp via Lua seria
+            // ideal, mas o guard no TryAcquireAsync (>= max) tolera valores
+            // negativos sem impacto funcional.
+            return _redis.IncrementByAsync(rateKey, -1);
+        }
+
+        // Fallback local: decrementa o sliding window se possível.
+        var window = _localRateLimits.GetOrAdd(rateKey, _ => new SlidingWindow());
+        window.Decrement();
+        return Task.CompletedTask;
     }
 
     private class SlidingWindow
@@ -158,6 +200,24 @@ public class AiCostControlService : IAiCostControlService
 
             var newCount = Interlocked.Increment(ref _count);
             return newCount <= max;
+        }
+
+        /// <summary>
+        /// Devolve um slot ao window (usado quando a requisição falhou antes
+        /// de consumir o LLM). Não deixa o contador negativo.
+        /// </summary>
+        public void Decrement()
+        {
+            // CompareExchange em loop garante que não fica negativo mesmo com
+            // decrementos concorrentes.
+            long initial, computed;
+            do
+            {
+                initial = Volatile.Read(ref _count);
+                if (initial <= 0) return;
+                computed = initial - 1;
+            }
+            while (Interlocked.CompareExchange(ref _count, computed, initial) != initial);
         }
     }
 

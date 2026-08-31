@@ -138,16 +138,18 @@ public class AiChatStreamingOrchestrator
             yield break;
         }
 
-        if (!sessionId.HasValue)
+        // Quick-reply: saudações e mensagens triviais curtas são respondidas
+        // via cache sem chamada ao LLM — reduz latência e custo. Aplica-se
+        // tanto à primeira mensagem (sem sessão) quanto a saudações puras no
+        // meio da conversa (ex.: usuário manda "oi" de novo) — o matcher só
+        // responde mensagens triviais; mensagens com contexto real vão ao LLM.
+        var quickReplyMatch = AiChatQuickReply.TryGetReply(message, history: null);
+        if (quickReplyMatch != null)
         {
-            var quickReply = AiChatQuickReply.TryGetReply(message, null);
-            if (quickReply != null)
-            {
-                await _quickReply.PersistAsync(session.Id, message, quickReply, nextSeq, startTime, traceId, aiSettings, stopwatch, ct);
-                yield return new AiChatStreamChunk(Type: "token", Content: quickReply);
-                yield return new AiChatStreamChunk(Type: "done", SessionId: session.Id, LatencyMs: (int)stopwatch.ElapsedMilliseconds);
-                yield break;
-            }
+            await _quickReply.PersistAsync(session.Id, message, quickReplyMatch, nextSeq, startTime, traceId, aiSettings, stopwatch, ct);
+            yield return new AiChatStreamChunk(Type: "token", Content: quickReplyMatch);
+            yield return new AiChatStreamChunk(Type: "done", SessionId: session.Id, LatencyMs: (int)stopwatch.ElapsedMilliseconds);
+            yield break;
         }
 
         // ── Streaming com tool call loop ──

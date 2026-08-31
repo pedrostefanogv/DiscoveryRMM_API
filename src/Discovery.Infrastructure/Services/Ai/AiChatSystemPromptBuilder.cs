@@ -315,10 +315,26 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
 
     /// <summary>
     /// Gera um hash curto da mensagem do usuário para chave de cache RAG.
+    /// Normaliza acentos, pontuação e espaços para aumentar o hit rate:
+    /// "não consigo imprimir" e "nao consigo imprimir" compartilham o cache.
     /// </summary>
     public static string ComputeMessageHash(string message)
     {
         var normalized = message.Trim().ToLowerInvariant();
+        // Remove acentos (form normalization NFC → NFD e descarta marcas).
+        normalized = normalized.Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new StringBuilder(normalized.Length);
+        foreach (var c in normalized)
+        {
+            if (char.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark)
+                sb.Append(c);
+        }
+        normalized = sb.ToString().Normalize(System.Text.NormalizationForm.FormC);
+        // Remove pontuação comum (mantém letras, dígitos e espaços).
+        normalized = new string(normalized.Where(c => char.IsLetterOrDigit(c) || char.IsWhiteSpace(c)).ToArray());
+        // Colapsa espaços múltiplos.
+        normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"\s+", " ");
+
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
         return Convert.ToHexStringLower(hashBytes)[..16];
     }

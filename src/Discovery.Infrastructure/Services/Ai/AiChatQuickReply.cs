@@ -35,17 +35,27 @@ public class AiChatQuickReply
 
     /// <summary>
     /// Tenta responder via cache rápido. Retorna null se não houver match.
-    /// Só funciona para mensagens curtas, sem histórico (primeira mensagem).
+    /// Match EXATO (saudações puras: "oi", "bom dia") funciona em qualquer
+    /// ponto da conversa — responder "oi" com LLM completo é desperdício.
+    /// Match PARCIAL ("oi, tudo bem?" → "oi") só na primeira mensagem (sem
+    /// histórico): no meio da conversa, uma mensagem curta pode ser resposta
+    /// a uma pergunta anterior e não uma saudação.
     /// </summary>
     public static string? TryGetReply(string message, IReadOnlyList<AiChatMessage>? history)
     {
-        if (history is { Count: > 0 }) return null;
         var trimmed = message.Trim().ToLowerInvariant();
+        var hasHistory = history is { Count: > 0 };
+
+        // Match exato: sempre válido (saudação pura é trivial em qualquer contexto).
         if (QuickReplies.TryGetValue(trimmed, out var quick)) return quick;
-        // Match parcial: "oi, tudo bem?" → "oi" (primeiras 3 palavras)
-        if (trimmed.Length <= 20 && trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries) is { Length: <= 3 } words)
+
+        // Match parcial: apenas primeira mensagem (sem histórico).
+        if (!hasHistory && trimmed.Length <= 20 && trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries) is { Length: <= 3 } words)
         {
-            if (QuickReplies.TryGetValue(words[0], out var partial)) return partial;
+            // Limpa pontuação da primeira palavra ("oi," → "oi") para o match
+            // com o dicionário de saudações.
+            var firstWord = new string(words[0].Where(char.IsLetter).ToArray());
+            if (firstWord.Length > 0 && QuickReplies.TryGetValue(firstWord, out var partial)) return partial;
         }
         return null;
     }

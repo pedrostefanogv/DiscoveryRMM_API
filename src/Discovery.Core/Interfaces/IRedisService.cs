@@ -8,6 +8,9 @@ public interface IRedisService
 
     Task<long> IncrementAsync(string key);
 
+    /// <summary>INCRBY key amount — incrementa o valor em uma quantidade arbitrária.</summary>
+    Task<long> IncrementByAsync(string key, long amount);
+
     Task SetAsync(string key, string value, int expirySeconds = 3600);
 
     Task<bool> SetExpiryAsync(string key, int expirySeconds);
