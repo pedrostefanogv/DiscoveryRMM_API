@@ -306,6 +306,17 @@ public class AiChatStreamingOrchestrator
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
+        // ── Sanitização de vazamentos de tool calls ──
+        // O LLM pode ter emitido tool calls como TEXTO (DSML, blocos ```json
+        // com invokes) em vez de function call nativa. Remove antes de seguir.
+        var (sanitizedContent, contentWasSanitized) = AiChatLeakSanitizer.Sanitize(fullContent);
+        if (contentWasSanitized)
+        {
+            _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output ({OrigLen} -> {CleanLen} chars)",
+                traceId, fullContent.Length, sanitizedContent.Length);
+            fullContent = sanitizedContent;
+        }
+
         // ── A2UI: extrai mensagens A2UI do conteúdo do LLM e emite como chunks ──
         // O LLM pode ter gerado interfaces A2UI em blocos ```a2ui. Extraímos e
         // emitimos cada mensagem como um chunk "a2ui" para o agent repassar ao
@@ -552,6 +563,15 @@ public class AiChatStreamingOrchestrator
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
         if (string.IsNullOrWhiteSpace(fullContent)) fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta.";
+
+        // ── Sanitização de vazamentos de tool calls ──
+        var (sanitizedMultiContent, multiWasSanitized) = AiChatLeakSanitizer.Sanitize(fullContent);
+        if (multiWasSanitized)
+        {
+            _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output multi-round ({OrigLen} -> {CleanLen} chars)",
+                traceId, fullContent.Length, sanitizedMultiContent.Length);
+            fullContent = sanitizedMultiContent;
+        }
 
         // ── A2UI: extrai mensagens A2UI do conteúdo do LLM e emite como chunks ──
         var (cleanMultiContent, a2uiMultiMessages) = AiChatA2uiExtractor.Extract(fullContent);

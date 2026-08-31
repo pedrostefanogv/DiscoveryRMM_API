@@ -152,6 +152,20 @@ public class AiChatService : IAiChatService
             if (aiSettings.CostControlEnabled) await _costControl.RecordUsageAsync(scopeClientId, scopeSiteId, llmResponse.TokensUsed, ct);
 
             var safeContent = AiChatGuardrails.ApplyOutputGuardrails(llmResponse.Content, aiSettings);
+
+            // Sanitização de vazamentos de tool calls: o LLM pode ter emitido
+            // tool calls como TEXTO (DSML, blocos ```json com invokes) em vez
+            // de function call nativa. Remove antes de devolver ao agent.
+            var (sanitizedContent, wasSanitized) = AiChatLeakSanitizer.Sanitize(safeContent);
+            if (wasSanitized)
+            {
+                _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output sync ({OrigLen} -> {CleanLen} chars)",
+                    traceId, safeContent.Length, sanitizedContent.Length);
+                safeContent = sanitizedContent;
+            }
+            if (string.IsNullOrWhiteSpace(safeContent))
+                safeContent = "Não consegui concluir a ação solicitada. Tente reformular o pedido.";
+
             await _messageRepository.CreateBatchAsync([
                 new() { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq, Role = "user", Content = message, CreatedAt = startTime, TraceId = traceId },
                 new() { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq + 1, Role = "assistant", Content = safeContent, TokensUsed = llmResponse.TokensUsed, LatencyMs = (int)stopwatch.ElapsedMilliseconds, ModelVersion = llmResponse.ModelVersion, CreatedAt = DateTime.UtcNow, TraceId = traceId }

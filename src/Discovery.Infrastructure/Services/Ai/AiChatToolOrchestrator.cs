@@ -25,6 +25,16 @@ public class AiChatToolOrchestrator
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
         TimeSpan.FromMilliseconds(200));
 
+    // Detecta a marcação DSML nativa do modelo (DeepSeek) — o LLM às vezes
+    // emite tool calls nessa marcação em vez de function call nativa. O
+    // separador ｜ é U+FF5C (fullwidth); também aceita | ASCII. O nome da
+    // seção (ex.: tool_invokes) é opcional. Usada apenas para LOG de
+    // diagnóstico — a remoção do texto é feita pelo AiChatLeakSanitizer.
+    private static readonly Regex DsmlDiagnosticRegex = new(
+        @"<[/]?[｜|]DSML[｜|][a-z_]*>",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(200));
+
     private static readonly Dictionary<string, string> XmlToolAliases = new(StringComparer.OrdinalIgnoreCase)
     {
         ["knowledgesearch"] = "knowledge_search",
@@ -374,6 +384,16 @@ public class AiChatToolOrchestrator
         Guid sessionId, int nextSeq, string traceId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(content)) return (content, nextSeq);
+
+        // Diagnóstico: detecta marcação DSML nativa do modelo no output.
+        // Não executa (não há como mapear invokes DSML para tools com
+        // segurança), mas registra para monitorar a frequência do problema.
+        if (DsmlDiagnosticRegex.IsMatch(content))
+        {
+            _logger.LogWarning("[{TraceId}] Marcação DSML nativa detectada no output do LLM (tool calls emitidas como texto). " +
+                "Verifique o System Prompt / modelo — o ideal é que o modelo use function call nativa. " +
+                "O conteúdo será sanitizado pelo AiChatLeakSanitizer.", traceId);
+        }
 
         var matches = XmlToolCallRegex.Matches(content);
         if (matches.Count == 0) return (content, nextSeq);

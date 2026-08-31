@@ -150,7 +150,6 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
 {{AGENT_TOOLS_SECTION}}
 
 **Diretrizes para uso de ferramentas:**
-- Use SEMPRE function calls JSON nativas para invocar ferramentas. NUNCA escreva tags XML como <tool> ou <function>.
 - Preencha TODOS os parâmetros obrigatórios com valores extraídos da conversa. NUNCA envie parâmetros vazios.
 - Se uma ferramenta retornar erro de parâmetro faltando, RELEIA o histórico e corrija — não pergunte ao usuário novamente.
 - Se knowledge_search retornar sem resultados, responda com seu conhecimento próprio ou oriente abrir um chamado.
@@ -202,15 +201,40 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
     {
         var basePrompt = BuildSystemPrompt(agent, aiSettings);
 
-        // Injetar ferramentas do agente no prompt
+        // Diretrizes anti-vazamento de tool calls: aplicadas SEMPRE, mesmo em
+        // templates customizados do banco. O modelo às vezes emite tool calls
+        // como TEXTO (DSML, blocos ```json com invokes) em vez de function
+        // call nativa — esta seção reforça a instrução independentemente do
+        // template configurado.
+        const string antiLeakSection = """
+
+###  FORMATO DE CHAMADA DE FERRAMENTAS (OBRIGATÓRIO)
+- Use SEMPRE function calls JSON nativas para invocar ferramentas. NUNCA escreva tags XML como <tool> ou <function>.
+- NUNCA escreva chamadas de ferramenta como texto visível: não emita blocos de código ```json contendo tool calls (arrays JSON com campos name/arguments), não escreva marcações internas do modelo (ex.: <｜DSML｜tool_invokes>, <invoke>, <parameter>) e não descreva a chamada que pretende fazer. Se você precisa executar uma ferramenta, EMITA a function call nativa — o sistema a executa e devolve o resultado automaticamente.
+- Se você não tem acesso à function call nativa (ela não está listada nas ferramentas disponíveis), simplesmente responda ao usuário com texto — nunca simule a chamada.
+
+""";
+
+        // Injeta a seção após o placeholder de ferramentas (se presente) ou no fim.
+        // Ordem importa: primeiro duplas (template banco), depois simples (default prompt)
         var agentTools = _toolOrchestrator.GetCachedAgentTools(agent.Id);
         var toolsText = agentTools is { Count: > 0 }
             ? AiChatToolOrchestrator.FormatAgentToolsDescription(agentTools)
             : "Nenhuma ferramenta do agente disponível. Oriente o usuário com passos manuais.";
 
-        // Ordem importa: primeiro duplas (template banco), depois simples (default prompt)
-        basePrompt = basePrompt.Replace("{{AGENT_TOOLS_SECTION}}", toolsText);
-        basePrompt = basePrompt.Replace("{AGENT_TOOLS_SECTION}", toolsText);
+        if (basePrompt.Contains("{{AGENT_TOOLS_SECTION}}"))
+        {
+            basePrompt = basePrompt.Replace("{{AGENT_TOOLS_SECTION}}", toolsText + antiLeakSection);
+        }
+        else if (basePrompt.Contains("{AGENT_TOOLS_SECTION}"))
+        {
+            basePrompt = basePrompt.Replace("{AGENT_TOOLS_SECTION}", toolsText + antiLeakSection);
+        }
+        else
+        {
+            // Template customizado sem placeholder: anexa ferramentas + diretrizes no fim.
+            basePrompt = basePrompt + "\n\n**Ferramentas do agente (executadas no computador do usuário):**\n" + toolsText + antiLeakSection;
+        }
         var injected = new List<Guid>();
 
         if (!aiSettings.KnowledgeBaseEnabled || !aiSettings.EmbeddingEnabled || !aiSettings.EmbeddingArticlesEnabled)
