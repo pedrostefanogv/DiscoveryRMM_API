@@ -23,6 +23,7 @@ public class TicketsController(
     ITicketQueryService queryService) : ControllerBase
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
+    private Guid? CurrentUserId => HttpContext.Items["UserId"] as Guid?;
 
     // ── Listagem com paginação cursor ─────────────────────────────────
 
@@ -78,7 +79,8 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> AddComment(Guid id, [FromBody] AddTicketCommentCommand command)
     {
-        var result = await mediator.Send(command with { TicketId = id }, HttpContext.RequestAborted);
+        // Autoria sempre vem do token autenticado — nunca do payload do cliente.
+        var result = await mediator.Send(command with { TicketId = id, UserId = CurrentUserId, UserName = Username }, HttpContext.RequestAborted);
         return result.Match<IActionResult>(success: r => CreatedAtAction(nameof(GetComments), new { id }, r), failure: NotFound);
     }
 
