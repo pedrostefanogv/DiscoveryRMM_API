@@ -15,8 +15,31 @@ public class M146_AutomationPolicyExecutions : Migration
 {
     public override void Up()
     {
+        // O nome da FK varia entre ambientes (M065 não definiu nome explícito — Postgres
+        // gera "FK_automation_execution_reports_command_id_agent_commands_id").
+        // Descobre o nome real da FK em command_id e remove dinamicamente.
+        // Execute.WithConnection é a API oficial do FluentMigrator para DDL dinâmico
+        // que a DSL fluente não cobre (drop de constraint com nome desconhecido).
+        Execute.WithConnection((connection, transaction) =>
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                SELECT conname FROM pg_constraint
+                WHERE conrelid = 'automation_execution_reports'::regclass
+                  AND contype = 'f'
+                  AND pg_get_constraintdef(oid) LIKE '%command_id%REFERENCES%agent_commands%'
+                """;
+
+            var fkName = command.ExecuteScalar() as string;
+            if (!string.IsNullOrEmpty(fkName))
+            {
+                command.CommandText = $"ALTER TABLE automation_execution_reports DROP CONSTRAINT \"{fkName.Replace("\"", "\"\"")}\"";
+                command.ExecuteNonQuery();
+            }
+        });
+
         Delete.Index("ux_automation_execution_reports_command").OnTable("automation_execution_reports");
-        Delete.ForeignKey("fk_automation_execution_reports_command_id_agent_commands").OnTable("automation_execution_reports");
 
         Alter.Table("automation_execution_reports")
             .AlterColumn("command_id").AsGuid().Nullable();
@@ -41,6 +64,7 @@ public class M146_AutomationPolicyExecutions : Migration
         Alter.Table("automation_execution_reports")
             .AlterColumn("command_id").AsGuid().NotNullable();
 
+        // Recria a FK com nome explícito (o Up sempre a remove, então é seguro criar direto).
         Create.ForeignKey("fk_automation_execution_reports_command_id_agent_commands")
             .FromTable("automation_execution_reports").ForeignColumn("command_id")
             .ToTable("agent_commands").PrimaryColumn("id")
