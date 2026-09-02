@@ -49,7 +49,7 @@ public static class QuartzServiceCollectionExtensions
                 .WithSimpleSchedule(s => s.WithIntervalInSeconds(30).RepeatForever())
                 .WithDescription("Re-chunk articles, generate embeddings in batch, process LISTEN/NOTIFY queue"));
 
-            // ── Winget Catalog Sync: every N days at midnight ───────────
+            // ── Winget Catalog Sync (feed legado): every N days at midnight ───────────
             var wingetEnabled = configuration.GetValue<bool?>("BackgroundJobs:WingetCatalogSync:Enabled") ?? false;
             var wingetIntervalDays = Math.Max(1, configuration.GetValue<int?>("BackgroundJobs:WingetCatalogSync:IntervalDays") ?? 5);
 
@@ -60,6 +60,19 @@ public static class QuartzServiceCollectionExtensions
                     .WithIdentity($"{WingetCatalogSyncJob.Key.Name}-trigger", WingetCatalogSyncJob.Key.Group)
                     .WithCronSchedule(wingetCron)
                     .WithDescription($"Sync Winget package catalog every {wingetIntervalDays} day(s) at midnight"));
+            }
+
+            // ── Winget Manifests Sync (shallow clone winget-pkgs, fonte primária): every N minutes ──
+            var manifestsEnabled = configuration.GetValue<bool?>("AppCatalog:Winget:Enabled") ?? true;
+            var manifestsSource = configuration.GetValue<string?>("AppCatalog:Winget:Source") ?? "manifests";
+            var manifestsIntervalMin = Math.Max(15, configuration.GetValue<int?>("AppCatalog:Winget:ManifestsPollIntervalMinutes") ?? 60);
+
+            if (manifestsEnabled && !manifestsSource.Equals("feed", StringComparison.OrdinalIgnoreCase))
+            {
+                q.ScheduleJob<WingetManifestsSyncJob>(trigger => trigger
+                    .WithIdentity($"{WingetManifestsSyncJob.Key.Name}-trigger", WingetManifestsSyncJob.Key.Group)
+                    .WithSimpleSchedule(s => s.WithIntervalInMinutes(manifestsIntervalMin).RepeatForever())
+                    .WithDescription($"Sync Winget catalog from manifests clone every {manifestsIntervalMin} minute(s)"));
             }
 
             // ── Alert Scheduler: every 30 seconds ─────────────────────

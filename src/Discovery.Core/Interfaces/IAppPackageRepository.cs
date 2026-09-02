@@ -22,7 +22,8 @@ public interface IAppPackageRepository
     Task<int> BulkUpsertAsync(
         IReadOnlyList<AppPackage> packages,
         AppInstallationType installationType,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool preventDowngrade = false);
 
     Task<AppPackage> UpsertCustomAsync(AppPackage package, CancellationToken cancellationToken = default);
 }

@@ -7,14 +7,22 @@ namespace Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
 
 public sealed class ValidateAgentTransferQueryHandler(
     IAgentTransferService transferService
-) : IRequestHandler<ValidateAgentTransferQuery, Result<AgentTransferDto>>
+) : IRequestHandler<ValidateAgentTransferQuery, Result<ValidateTransferResponseDto>>
 {
-    public async Task<Result<AgentTransferDto>> Handle(ValidateAgentTransferQuery q, CancellationToken ct)
+    public async Task<Result<ValidateTransferResponseDto>> Handle(ValidateAgentTransferQuery q, CancellationToken ct)
     {
         var validation = await transferService.ValidateAsync(q.AgentId, q.TargetSiteId, Guid.Empty, ct);
-        return Result<AgentTransferDto>.Success(new AgentTransferDto(
-            validation.IsValid,
-            validation.Messages.Count > 0 ? string.Join("; ", validation.Messages) : null,
-            validation.IsValid ? q.TargetSiteId : null));
+
+        var dto = new ValidateTransferResponseDto(
+            IsValid: validation.IsValid,
+            Messages: validation.Messages,
+            IsCrossClient: validation.IsCrossClient,
+            PreviousSiteName: validation.PreviousSiteName,
+            TargetSiteName: validation.TargetSiteName,
+            PreviousClientName: validation.PreviousClientName,
+            TargetClientName: validation.TargetClientName
+        );
+
+        return Result<ValidateTransferResponseDto>.Success(dto);
     }
 }

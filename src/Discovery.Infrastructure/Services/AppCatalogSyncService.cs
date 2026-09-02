@@ -3,6 +3,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
@@ -12,17 +13,23 @@ public class AppCatalogSyncService : IAppCatalogSyncService
     private readonly WingetFeedClient _wingetFeedClient;
     private readonly ChocolateyApiClient _chocolateyApiClient;
     private readonly IAppPackageRepository _appPackageRepository;
+    private readonly IWingetManifestsSyncService? _manifestsSyncService;
+    private readonly IConfiguration? _configuration;
     private readonly ILogger<AppCatalogSyncService> _logger;
 
     public AppCatalogSyncService(
         WingetFeedClient wingetFeedClient,
         ChocolateyApiClient chocolateyApiClient,
         IAppPackageRepository appPackageRepository,
-        ILogger<AppCatalogSyncService> logger)
+        ILogger<AppCatalogSyncService> logger,
+        IWingetManifestsSyncService? manifestsSyncService = null,
+        IConfiguration? configuration = null)
     {
         _wingetFeedClient = wingetFeedClient;
         _chocolateyApiClient = chocolateyApiClient;
         _appPackageRepository = appPackageRepository;
+        _manifestsSyncService = manifestsSyncService;
+        _configuration = configuration;
         _logger = logger;
     }
 
@@ -35,6 +42,62 @@ public class AppCatalogSyncService : IAppCatalogSyncService
 
         if (installationType == AppInstallationType.Winget)
         {
+            // Fonte primária = manifests do winget-pkgs (rev. 3); feed packages.json = fallback.
+            var source = _configuration?.GetValue<string?>("AppCatalog:Winget:Source") ?? "manifests";
+            var feedEnabled = source.Equals("feed", StringComparison.OrdinalIgnoreCase)
+                              || source.Equals("both", StringComparison.OrdinalIgnoreCase);
+
+            if (_manifestsSyncService is not null
+                && (source.Equals("manifests", StringComparison.OrdinalIgnoreCase) || source.Equals("both", StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    var manifestsResult = await _manifestsSyncService.SyncFromManifestsAsync(cancellationToken);
+                    if (!feedEnabled)
+                        return manifestsResult;
+
+                    // "both": se o manifests falhou, cai para o feed; se sucesso, sincroniza o feed com anti-downgrade.
+                    if (!manifestsResult.Success)
+                        _logger.LogWarning("Manifests sync falhou ({Error}); caindo para o feed.", manifestsResult.Error);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    if (!feedEnabled)
+                    {
+                        _logger.LogError(ex, "Winget manifests sync falhou.");
+                        return new AppCatalogSyncResultDto
+                        {
+                            InstallationType = installationType,
+                            Success = false,
+                            PackagesUpserted = 0,
+                            PagesProcessed = 0,
+                            SyncedAt = startedAt,
+                            Duration = stopwatch.Elapsed,
+                            Error = ex.Message
+                        };
+                    }
+                    _logger.LogWarning(ex, "Winget manifests sync falhou; caindo para o feed.");
+                }
+            }
+
+            if (!feedEnabled)
+            {
+                return new AppCatalogSyncResultDto
+                {
+                    InstallationType = installationType,
+                    Success = false,
+                    PackagesUpserted = 0,
+                    PagesProcessed = 0,
+                    SyncedAt = startedAt,
+                    Duration = stopwatch.Elapsed,
+                    Error = "Winget source configurada como 'manifests' mas o serviço de manifests não está disponível."
+                };
+            }
+
             try
             {
                 var snapshot = await _wingetFeedClient.FetchLatestAsync(cancellationToken);
@@ -64,7 +127,9 @@ public class AppCatalogSyncService : IAppCatalogSyncService
                     })
                     .ToList();
 
-                var upserted = await _appPackageRepository.BulkUpsertAsync(mappedPackages, AppInstallationType.Winget, cancellationToken);
+                var upserted = await _appPackageRepository.BulkUpsertAsync(
+                    mappedPackages, AppInstallationType.Winget, cancellationToken,
+                    preventDowngrade: feedEnabled && _manifestsSyncService is not null);
                 stopwatch.Stop();
 
                 return new AppCatalogSyncResultDto

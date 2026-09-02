@@ -100,7 +100,8 @@ public class AppPackageRepository : IAppPackageRepository
     public async Task<int> BulkUpsertAsync(
         IReadOnlyList<AppPackage> packages,
         AppInstallationType installationType,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool preventDowngrade = false)
     {
         if (packages.Count == 0)
             return 0;
@@ -128,9 +129,15 @@ public class AppPackageRepository : IAppPackageRepository
                 upserted++;
                 if (existing.TryGetValue(normalizedId, out var current))
                 {
+                    // Anti-downgrade (fonte manifests do winget-pkgs): commits fora de ordem são normais no git;
+                    // nunca rebaixar a Version — metadata (nome/descrição/switches) continua sendo atualizada.
+                    var versionDowngraded = preventDowngrade
+                        && Services.WingetVersionComparer.Compare(incoming.Version, current.Version) < 0;
+
                     current.Name = incoming.Name;
                     current.Publisher = incoming.Publisher;
-                    current.Version = incoming.Version;
+                    if (!versionDowngraded)
+                        current.Version = incoming.Version;
                     current.Description = incoming.Description;
                     current.IconUrl = incoming.IconUrl;
                     current.SiteUrl = incoming.SiteUrl;
