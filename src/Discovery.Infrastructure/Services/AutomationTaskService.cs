@@ -21,6 +21,7 @@ public class AutomationTaskService : IAutomationTaskService
     private readonly IAutomationScriptRepository _scriptRepository;
     private readonly IAgentRepository _agentRepository;
     private readonly ISiteRepository _siteRepository;
+    private readonly IClientRepository _clientRepository;
     private readonly IAgentLabelRepository _agentLabelRepository;
     private readonly ILoggingService _loggingService;
 
@@ -30,6 +31,7 @@ public class AutomationTaskService : IAutomationTaskService
         IAutomationScriptRepository scriptRepository,
         IAgentRepository agentRepository,
         ISiteRepository siteRepository,
+        IClientRepository clientRepository,
         IAgentLabelRepository agentLabelRepository,
         ILoggingService loggingService)
     {
@@ -38,6 +40,7 @@ public class AutomationTaskService : IAutomationTaskService
         _scriptRepository = scriptRepository;
         _agentRepository = agentRepository;
         _siteRepository = siteRepository;
+        _clientRepository = clientRepository;
         _agentLabelRepository = agentLabelRepository;
         _loggingService = loggingService;
     }
@@ -72,6 +75,7 @@ public class AutomationTaskService : IAutomationTaskService
 
         var slice = CursorPaginationHelper.SlicePage(filteredItems, safeLimit);
         var pageItems = slice.Page.Select(ToSummaryDto).ToList();
+        await EnrichScopeNamesAsync(pageItems);
 
         return new CursorPageDto<AutomationTaskSummaryDto>(
             pageItems.AsReadOnly(),
@@ -88,7 +92,10 @@ public class AutomationTaskService : IAutomationTaskService
     {
         _ = cancellationToken;
         var task = await _taskRepository.GetByIdIncludingDeletedAsync(id, includeInactive);
-        return task is null ? null : ToDetailDto(task);
+        if (task is null) return null;
+        var dto = ToDetailDto(task);
+        await EnrichScopeNamesAsync([dto]);
+        return dto;
     }
 
     public async Task<AutomationTaskDetailDto> CreateAsync(
@@ -771,6 +778,75 @@ public class AutomationTaskService : IAutomationTaskService
             AppApprovalScopeType.Agent => task.AgentId,
             _ => null
         };
+    }
+
+    /// <summary>Resolve os nomes de client/site/agent para exibição nos DTOs de tarefa.</summary>
+    private async Task EnrichScopeNamesAsync(IReadOnlyList<AutomationTaskSummaryDto> dtos)
+    {
+        if (dtos.Count == 0) return;
+
+        var clientIds = new HashSet<Guid>();
+        var siteIds = new HashSet<Guid>();
+        var agentIds = new HashSet<Guid>();
+
+        foreach (var dto in dtos)
+        {
+            if (dto.ScopeId is not { } scopeId) continue;
+            switch (dto.ScopeType)
+            {
+                case AppApprovalScopeType.Client: clientIds.Add(scopeId); break;
+                case AppApprovalScopeType.Site: siteIds.Add(scopeId); break;
+                case AppApprovalScopeType.Agent: agentIds.Add(scopeId); break;
+            }
+        }
+
+        var clients = clientIds.Count == 0
+            ? []
+            : (await Task.WhenAll(clientIds.Select(async id => (id, client: await _clientRepository.GetByIdAsync(id)))))
+                .Where(x => x.client is not null).ToDictionary(x => x.id, x => x.client!.Name);
+
+        var sites = siteIds.Count == 0
+            ? []
+            : (await Task.WhenAll(siteIds.Select(async id => (id, site: await _siteRepository.GetByIdAsync(id)))))
+                .Where(x => x.site is not null).ToDictionary(x => x.id, x => x.site!);
+
+        var agents = agentIds.Count == 0
+            ? []
+            : (await Task.WhenAll(agentIds.Select(async id => (id, agent: await _agentRepository.GetByIdAsync(id)))))
+                .Where(x => x.agent is not null).ToDictionary(x => x.id, x => x.agent!);
+
+        foreach (var dto in dtos)
+        {
+            if (dto.ScopeId is not { } scopeId) continue;
+            switch (dto.ScopeType)
+            {
+                case AppApprovalScopeType.Client:
+                    dto.ScopeName = clients.GetValueOrDefault(scopeId);
+                    break;
+                case AppApprovalScopeType.Site:
+                    if (sites.TryGetValue(scopeId, out var site))
+                    {
+                        dto.ScopeName = site.Name;
+                        dto.SiteName = site.Name;
+                        dto.ClientName = clients.GetValueOrDefault(site.ClientId)
+                            ?? (await _clientRepository.GetByIdAsync(site.ClientId))?.Name;
+                    }
+                    break;
+                case AppApprovalScopeType.Agent:
+                    if (agents.TryGetValue(scopeId, out var agent))
+                    {
+                        dto.ScopeName = agent.DisplayName ?? agent.Hostname;
+                        dto.AgentName = agent.DisplayName ?? agent.Hostname;
+                        if (sites.TryGetValue(agent.SiteId, out var agentSite))
+                        {
+                            dto.SiteName = agentSite.Name;
+                            dto.ClientName = clients.GetValueOrDefault(agentSite.ClientId)
+                                ?? (await _clientRepository.GetByIdAsync(agentSite.ClientId))?.Name;
+                        }
+                    }
+                    break;
+            }
+        }
     }
 
     private static AutomationTaskSummaryDto ToSummaryDto(AutomationTaskDefinition task)

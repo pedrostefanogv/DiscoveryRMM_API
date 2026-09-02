@@ -10,6 +10,10 @@ public class AutomationTaskSummaryDto
     public AutomationTaskActionType ActionType { get; set; }
     public AppApprovalScopeType ScopeType { get; set; }
     public Guid? ScopeId { get; set; }
+    public string? ScopeName { get; set; }
+    public string? ClientName { get; set; }
+    public string? SiteName { get; set; }
+    public string? AgentName { get; set; }
     public bool IsActive { get; set; }
     public bool RequiresApproval { get; set; }
     public DateTime LastUpdatedAt { get; set; }
