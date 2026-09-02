@@ -8,26 +8,22 @@ using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.AutomationTasks;
 
-public sealed class ListAutomationTasksQueryHandler(IAutomationTaskService svc) : IRequestHandler<ListAutomationTasksQuery, Result<CursorPageDto<AutomationTaskDto>>>
+public sealed class ListAutomationTasksQueryHandler(IAutomationTaskService svc) : IRequestHandler<ListAutomationTasksQuery, Result<CursorPageDto<AutomationTaskSummaryDto>>>
 {
-    public async Task<Result<CursorPageDto<AutomationTaskDto>>> Handle(ListAutomationTasksQuery q, CancellationToken ct)
+    public async Task<Result<CursorPageDto<AutomationTaskSummaryDto>>> Handle(ListAutomationTasksQuery q, CancellationToken ct)
     {
-        // Mapeia clientId para os parâmetros do service
-        Guid? scopeId = q.ClientId;
-        AppApprovalScopeType? scopeType = q.ClientId.HasValue ? AppApprovalScopeType.Client : null;
-
+        // Escopo livre: quando scopeType/scopeId não forem informados, clientId pode
+        // refinar tanto por escopo Client quanto apenas como filtro de coluna.
         var page = await svc.GetListPageAsync(
-            scopeType, scopeId,
-            activeOnly: true, deletedOnly: false, includeDeleted: false,
-            search: null,
+            q.ScopeType, q.ScopeId,
+            activeOnly: q.ActiveOnly, deletedOnly: q.DeletedOnly, includeDeleted: q.IncludeDeleted,
+            search: q.Search,
             clientId: q.ClientId,
-            siteId: null, agentId: null,
-            scopeTypes: null, actionTypes: null, labels: null,
+            siteId: q.SiteId, agentId: q.AgentId,
+            scopeTypes: q.ScopeTypes, actionTypes: q.ActionTypes, labels: q.Labels,
             q.Cursor, q.Limit, ct);
 
-        var dtos = page.Items.Select(t => new AutomationTaskDto(t.Id, t.Name, t.Description, t.IsActive, t.LastUpdatedAt, t.LastUpdatedAt)).ToList();
-        return Result<CursorPageDto<AutomationTaskDto>>.Success(
-            new CursorPageDto<AutomationTaskDto>(dtos.AsReadOnly(), dtos.Count, page.Cursor, page.NextCursor, page.HasMore, page.Limit));
+        return Result<CursorPageDto<AutomationTaskSummaryDto>>.Success(page);
     }
 }
 

@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs.AutomationTasks.Commands;
 using Discovery.Core.Cqrs.AutomationTasks.Queries;
+using Discovery.Core.Enums;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,9 +13,25 @@ namespace Discovery.Api.Controllers;
 public class AutomationTasksController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null, [FromQuery] string? cursor = null, [FromQuery] int limit = 50)
+    public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] Guid? agentId = null,
+        [FromQuery] AppApprovalScopeType? scopeType = null,
+        [FromQuery] Guid? scopeId = null,
+        [FromQuery] string? search = null,
+        [FromQuery] IReadOnlyList<AppApprovalScopeType>? scopeTypes = null,
+        [FromQuery] IReadOnlyList<AutomationTaskActionType>? actionTypes = null,
+        [FromQuery] IReadOnlyList<string>? labels = null,
+        [FromQuery] bool activeOnly = false,
+        [FromQuery] bool deletedOnly = false,
+        [FromQuery] bool includeDeleted = false)
     {
-        var result = await mediator.Send(new ListAutomationTasksQuery(clientId, cursor, limit));
+        var result = await mediator.Send(new ListAutomationTasksQuery(
+            clientId, cursor, limit, siteId, agentId, scopeType, scopeId, search,
+            scopeTypes, actionTypes, labels, activeOnly, deletedOnly, includeDeleted));
         return result.ToActionResult();
     }
 
