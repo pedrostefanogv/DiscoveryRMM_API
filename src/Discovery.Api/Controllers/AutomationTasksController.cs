@@ -30,7 +30,7 @@ public class AutomationTasksController(IMediator mediator) : ControllerBase
         [FromQuery] bool includeDeleted = false)
     {
         var result = await mediator.Send(new ListAutomationTasksQuery(
-            clientId, cursor, limit, siteId, agentId, scopeType, scopeId, search,
+            clientId, cursor, Math.Clamp(limit, 1, 200), siteId, agentId, scopeType, scopeId, search,
             scopeTypes, actionTypes, labels, activeOnly, deletedOnly, includeDeleted));
         return result.ToActionResult();
     }

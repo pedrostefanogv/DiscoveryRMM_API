@@ -65,9 +65,16 @@ public class AutomationTaskService : IAutomationTaskService
         _ = cancellationToken;
         var safeLimit = Math.Clamp(limit, 1, 200);
 
+        // Quando labels estão presentes o filtro é aplicado em memória (pós-query).
+        // Over-fetch para reduzir o risco de páginas menores que o limite e de
+        // "pular" tarefas que casam com o filtro mas ficam fora da janela buscada.
+        var fetchLimit = labels is { Count: > 0 }
+            ? Math.Clamp(safeLimit * 5, safeLimit, 500)
+            : safeLimit;
+
         var items = await _taskRepository.GetListPageAsync(
             scopeType, scopeId, activeOnly, deletedOnly, includeDeleted,
-            search, clientId, siteId, agentId, scopeTypes, actionTypes, cursor, safeLimit);
+            search, clientId, siteId, agentId, scopeTypes, actionTypes, cursor, fetchLimit);
 
         var filteredItems = labels is { Count: > 0 }
             ? items.Where(task => MatchesTaskLabels(task, labels)).ToList()
