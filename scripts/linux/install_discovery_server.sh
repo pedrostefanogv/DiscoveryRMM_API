@@ -184,6 +184,7 @@ main() {
   ensure_nodejs
   ensure_service_user
   ensure_service_user_home
+  ensure_winget_clone_dir
   create_directories
   # NOTA: o CLI do Wails NAO e instalado aqui (pre-clone). No fresh install o
   # go.mod do agent ainda nao existe e usaria o fallback. A instalacao correta

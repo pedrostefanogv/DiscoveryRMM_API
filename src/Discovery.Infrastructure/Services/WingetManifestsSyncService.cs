@@ -18,7 +18,11 @@ public sealed class WingetManifestsSyncOptions
     /// <summary>"manifests" (default) | "feed" | "both".</summary>
     public string Source { get; set; } = "manifests";
     public int ManifestsPollIntervalMinutes { get; set; } = 60;
-    public string ClonePath { get; set; } = "/var/lib/discovery/winget-pkgs";
+    // Default dentro do HOME do usuário de serviço (/var/lib/discovery-api),
+    // que é o diretório garantido como gravável pelo instalador
+    // (ensure_service_user_home em scripts/linux/lib/install.sh).
+    // /var/lib/discovery não é criável pelo usuário discovery-api (root dono de /var/lib).
+    public string ClonePath { get; set; } = "/var/lib/discovery-api/winget-pkgs";
     public string RepoUrl { get; set; } = "https://github.com/microsoft/winget-pkgs.git";
     public string Branch { get; set; } = "master";
     public int GitTimeoutSeconds { get; set; } = 900;

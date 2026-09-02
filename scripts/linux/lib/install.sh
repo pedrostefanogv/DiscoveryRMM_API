@@ -310,6 +310,18 @@ ensure_service_user_home() {
   fi
 }
 
+# Garante o diretorio do shallow clone do winget-pkgs usado pelo
+# WingetManifestsSyncService (AppCatalog:Winget:ClonePath). O servico roda como
+# discovery-api e nao consegue criar diretorios em /var/lib (root), por isso o
+# clone vive dentro do HOME do servico.
+ensure_winget_clone_dir() {
+  local clone_dir="/var/lib/discovery-api/winget-pkgs"
+  if ! sudo test -d "$clone_dir"; then
+    log "Criando diretorio do clone winget-pkgs em $clone_dir"
+    sudo install -d -m 750 -o discovery-api -g discovery-api "$clone_dir"
+  fi
+}
+
 create_directories() {
   log "Criando estrutura de diretorios"
   sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_API_BASE"
