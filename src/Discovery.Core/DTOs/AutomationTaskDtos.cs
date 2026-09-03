@@ -14,6 +14,10 @@ public class AutomationTaskSummaryDto
     public string? ClientName { get; set; }
     public string? SiteName { get; set; }
     public string? AgentName { get; set; }
+    /// <summary>ClientId resolvido do escopo (para popular cascata de selects na edição).</summary>
+    public Guid? ScopeClientId { get; set; }
+    /// <summary>SiteId resolvido do escopo (para popular cascata de selects na edição).</summary>
+    public Guid? ScopeSiteId { get; set; }
     public bool IsActive { get; set; }
     public bool RequiresApproval { get; set; }
     public DateTime LastUpdatedAt { get; set; }

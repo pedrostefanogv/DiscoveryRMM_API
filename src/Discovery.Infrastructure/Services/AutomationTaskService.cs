@@ -829,12 +829,15 @@ public class AutomationTaskService : IAutomationTaskService
             {
                 case AppApprovalScopeType.Client:
                     dto.ScopeName = clients.GetValueOrDefault(scopeId);
+                    dto.ScopeClientId = scopeId;
                     break;
                 case AppApprovalScopeType.Site:
                     if (sites.TryGetValue(scopeId, out var site))
                     {
                         dto.ScopeName = site.Name;
                         dto.SiteName = site.Name;
+                        dto.ScopeSiteId = site.Id;
+                        dto.ScopeClientId = site.ClientId;
                         dto.ClientName = clients.GetValueOrDefault(site.ClientId)
                             ?? (await _clientRepository.GetByIdAsync(site.ClientId))?.Name;
                     }
@@ -846,6 +849,8 @@ public class AutomationTaskService : IAutomationTaskService
                         dto.AgentName = agent.DisplayName ?? agent.Hostname;
                         if (sites.TryGetValue(agent.SiteId, out var agentSite))
                         {
+                            dto.ScopeSiteId = agentSite.Id;
+                            dto.ScopeClientId = agentSite.ClientId;
                             dto.SiteName = agentSite.Name;
                             dto.ClientName = clients.GetValueOrDefault(agentSite.ClientId)
                                 ?? (await _clientRepository.GetByIdAsync(agentSite.ClientId))?.Name;
