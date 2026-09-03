@@ -44,6 +44,7 @@ public sealed class WingetManifestParser
 
             var installersByArch = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var shaByArch = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var installerTypesByArch = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var entry in installer.Installers)
             {
@@ -54,6 +55,11 @@ public sealed class WingetManifestParser
                 installersByArch[arch] = entry.InstallerUrl.Trim();
                 if (!string.IsNullOrWhiteSpace(entry.InstallerSha256))
                     shaByArch[arch] = entry.InstallerSha256!.Trim();
+                // InstallerType (ex.: "wix", "burn", "exe", "msi", "nullsoft",
+                // "inno", "zip", "portable") permite ao agent decidir como
+                // executar o instalador baixado sem adivinhar pela extensão.
+                if (!string.IsNullOrWhiteSpace(entry.InstallerType))
+                    installerTypesByArch[arch] = entry.InstallerType!.Trim().ToLowerInvariant();
             }
 
             if (installersByArch.Count == 0)
@@ -69,6 +75,7 @@ public sealed class WingetManifestParser
                 tags,
                 installerUrlsByArch = installersByArch,
                 installerSha256ByArch = shaByArch,
+                installerTypesByArch = installerTypesByArch,
                 silent = switches.Silent,
                 silentWithProgress = switches.SilentWithProgress,
                 installLocation = switches.InstallLocation

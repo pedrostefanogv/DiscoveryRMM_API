@@ -23,6 +23,13 @@ public class AppCatalogPackageDto
     public DateTime? LastUpdated { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = [];
     public IReadOnlyDictionary<string, string> InstallerUrlsByArch { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// InstallerType por arquitetura (ex.: "wix", "burn", "nullsoft", "inno", "zip", "portable"),
+    /// lido do manifesto winget. Permite ao agent executar o instalador baixado
+    /// com a estratégia correta (msiexec vs exe vs portable) sem adivinhar pela extensão.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> InstallerTypesByArch { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 }
 
 public class AppCatalogSearchResultDto
@@ -87,6 +94,7 @@ public class EffectiveApprovedAppDto
     /// <summary>Switches para instalação silenciosa com progresso.</summary>
     public string SilentWithProgressCommand { get; set; } = string.Empty;
     public IReadOnlyDictionary<string, string> InstallerUrlsByArch { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyDictionary<string, string> InstallerTypesByArch { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     public bool AutoUpdateEnabled { get; set; }
     public AppApprovalScopeType SourceScope { get; set; }
 }

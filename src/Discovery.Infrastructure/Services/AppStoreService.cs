@@ -854,6 +854,7 @@ public class AppStoreService : IAppStoreService
                     SilentCommand = package.SilentCommand,
                     SilentWithProgressCommand = package.SilentWithProgressCommand,
                     InstallerUrlsByArch = package.InstallerUrlsByArch,
+                    InstallerTypesByArch = package.InstallerTypesByArch,
                     AutoUpdateEnabled = x.AutoUpdateEnabled,
                     SourceScope = x.SourceScope
                 };
@@ -992,6 +993,7 @@ public class AppStoreService : IAppStoreService
     private static AppCatalogPackageDto MapUnifiedToDto(Discovery.Core.Entities.AppPackage pkg)
     {
         var installerUrls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var installerTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var tags = Array.Empty<string>();
         var category = string.Empty;
         var license = string.Empty;
@@ -1006,6 +1008,7 @@ public class AppStoreService : IAppStoreService
                 var root = json.RootElement;
                 tags = ParseStringArray(root, "tags").ToArray();
                 installerUrls = ParseInstallerUrls(root).ToDictionary(k => k.Key, v => v.Value, StringComparer.OrdinalIgnoreCase);
+                installerTypes = ParseInstallerTypes(root).ToDictionary(k => k.Key, v => v.Value, StringComparer.OrdinalIgnoreCase);
                 category = TryGetString(root, "category");
                 license = TryGetString(root, "license");
                 if (string.IsNullOrWhiteSpace(license))
@@ -1035,7 +1038,8 @@ public class AppStoreService : IAppStoreService
             SilentWithProgressCommand = silentWithProgressCommand,
             LastUpdated = pkg.LastUpdated,
             Tags = tags,
-            InstallerUrlsByArch = installerUrls
+            InstallerUrlsByArch = installerUrls,
+            InstallerTypesByArch = installerTypes
         };
     }
 
@@ -1057,6 +1061,7 @@ public class AppStoreService : IAppStoreService
             SilentCommand = package.SilentCommand,
             SilentWithProgressCommand = package.SilentWithProgressCommand,
             InstallerUrlsByArch = package.InstallerUrlsByArch,
+            InstallerTypesByArch = package.InstallerTypesByArch,
             AutoUpdateEnabled = false,
             SourceScope = sourceScope
         };
@@ -1245,6 +1250,31 @@ public class AppStoreService : IAppStoreService
             var url = value.GetString();
             if (!string.IsNullOrWhiteSpace(url))
                 result[property.Name] = url.Trim();
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Extrai installerTypesByArch do metadata JSON (quando presente — pacotes
+    /// sincronizados após a correção do parser o incluem; antigos não têm e
+    /// retornam dicionário vazio, mantendo compatibilidade).
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> ParseInstallerTypes(JsonElement element)
+    {
+        if (!element.TryGetProperty("installerTypesByArch", out var obj) || obj.ValueKind != JsonValueKind.Object)
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in obj.EnumerateObject())
+        {
+            var value = property.Value;
+            if (value.ValueKind != JsonValueKind.String)
+                continue;
+
+            var installerType = value.GetString();
+            if (!string.IsNullOrWhiteSpace(installerType))
+                result[property.Name] = installerType.Trim();
         }
 
         return result;
