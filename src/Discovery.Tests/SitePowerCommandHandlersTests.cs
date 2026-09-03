@@ -73,6 +73,8 @@ public class SitePowerCommandHandlersTests
         public Task PublishGlobalFanoutCommandAsync(CommandDispatchEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
         public Task PublishDashboardEventAsync(DashboardEventMessage message, CancellationToken ct = default) => Task.CompletedTask;
         public Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, CancellationToken ct = default) => Task.CompletedTask;
+        public Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, Guid overrideClientId, Guid overrideSiteId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task SendCommandToSubjectAsync(Guid clientId, Guid siteId, Guid agentId, Guid commandId, string commandType, string payload) => Task.CompletedTask;
         public Task SubscribeToAgentMessagesAsync(CancellationToken ct) => Task.CompletedTask;
     }
 

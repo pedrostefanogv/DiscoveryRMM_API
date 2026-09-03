@@ -5,6 +5,7 @@ using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 
 namespace Discovery.Api.Services;
 
@@ -21,6 +22,7 @@ public sealed class AgentTransferService : IAgentTransferService
     private readonly IPermissionService _permissionService;
     private readonly IAgentMessaging _messaging;
     private readonly IRedisService _redis;
+    private readonly ISyncPingDeliveryRepository _syncPingDeliveryRepo;
     private readonly ILogger<AgentTransferService> _logger;
 
     public AgentTransferService(
@@ -30,6 +32,7 @@ public sealed class AgentTransferService : IAgentTransferService
         IPermissionService permissionService,
         IAgentMessaging messaging,
         IRedisService redis,
+        ISyncPingDeliveryRepository syncPingDeliveryRepo,
         ILogger<AgentTransferService> logger)
     {
         _agentRepo = agentRepo;
@@ -38,6 +41,7 @@ public sealed class AgentTransferService : IAgentTransferService
         _permissionService = permissionService;
         _messaging = messaging;
         _redis = redis;
+        _syncPingDeliveryRepo = syncPingDeliveryRepo;
         _logger = logger;
     }
 
@@ -84,27 +88,12 @@ public sealed class AgentTransferService : IAgentTransferService
         // 5. Invalidar caches Redis
         await InvalidateCachesAsync(agentId, agent.SiteId, targetSiteId);
 
-        // 6. Publicar sync ping para o agent
-        try
-        {
-            var ping = new SyncInvalidationPingDto
-            {
-                EventId = Guid.NewGuid(),
-                AgentId = agentId,
-                Resource = SyncResourceType.Configuration,
-                ScopeType = AppApprovalScopeType.Agent,
-                ScopeId = agentId,
-                Revision = $"transfer:{DateTime.UtcNow:O}",
-                Reason = reason ?? "agent-transferred",
-                ChangedAtUtc = DateTime.UtcNow,
-            };
-            var pingMsg = SyncInvalidationPingMessage.FromDto(ping);
-            await _messaging.PublishSyncPingAsync(agentId, pingMsg, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to publish sync ping after transfer of agent {AgentId}.", agentId);
-        }
+        // 6. Notificar o agent — dual-publish + comando de reconnect (Fase 1/2 do plano
+        //    AGENT_TRANSFER_SYNC_FIX_PLAN).
+        //    O agent ainda está subscrito (JWT/ACL NATS) nos subjects do site ANTIGO;
+        //    publicar apenas no novo faria a notificação se perder silenciosamente.
+        var notified = await NotifyAgentAfterTransferAsync(
+            agentId, previousSite, targetSite, reason, cancellationToken);
 
         // 7. Publicar evento de dashboard
         try
@@ -144,6 +133,7 @@ public sealed class AgentTransferService : IAgentTransferService
             PreviousClientId = previousClient.Id,
             TargetClientId = targetClient.Id,
             Reason = reason,
+            AgentNotified = notified,
         };
     }
 
@@ -332,6 +322,103 @@ public sealed class AgentTransferService : IAgentTransferService
             if (!hasTargetClientPermission)
                 throw new UnauthorizedAccessException("User does not have Edit permission on the target client (cross-client transfer).");
         }
+    }
+
+    /// <summary>
+    /// Notifica o agent após a transferência: dual-publish do sync ping (subjects antigo
+    /// e novo), persistência do delivery para auditoria e comando nats.reconnect no
+    /// subject antigo para forçar re-auth imediata (JWT com subjects do site novo).
+    /// </summary>
+    private async Task<bool> NotifyAgentAfterTransferAsync(
+        Guid agentId,
+        Site previousSite,
+        Site targetSite,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        var notified = false;
+        var revision = $"transfer:{DateTime.UtcNow:O}";
+
+        try
+        {
+            var ping = new SyncInvalidationPingDto
+            {
+                EventId = Guid.NewGuid(),
+                AgentId = agentId,
+                Resource = SyncResourceType.Configuration,
+                ScopeType = AppApprovalScopeType.Agent,
+                ScopeId = agentId,
+                Revision = revision,
+                Reason = reason ?? "agent-transferred",
+                ChangedAtUtc = DateTime.UtcNow,
+            };
+            var pingMsg = SyncInvalidationPingMessage.FromDto(ping);
+
+            // a) Subject ANTIGO — único canal garantido (agent ainda está subscrito nele).
+            await _messaging.PublishSyncPingAsync(
+                agentId, pingMsg, previousSite.ClientId, previousSite.Id, cancellationToken);
+            notified = true;
+
+            // b) Subject NOVO — cobre agents que já reconectaram (best-effort).
+            await _messaging.PublishSyncPingAsync(
+                agentId, pingMsg, targetSite.ClientId, targetSite.Id, cancellationToken);
+
+            // c) Persistência do delivery para auditoria/retry (padrão do
+            //    SyncPingDispatchBackgroundService).
+            try
+            {
+                await _syncPingDeliveryRepo.CreateSentAsync(
+                    ping.EventId, agentId, ping.Resource, ping.Revision);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to persist sync ping delivery for transferred agent {AgentId}.",
+                    agentId);
+            }
+
+            // d) Comando nats.reconnect no subject ANTIGO: força o agent a re-buscar a
+            //    config e reconectar ao NATS, recebendo JWT com os subjects do site novo
+            //    via auth callout — fecha a janela de quebra em segundos em vez de esperar
+            //    o TTL do JWT.
+            try
+            {
+                var reconnectPayload = JsonSerializer.Serialize(new
+                {
+                    version = 1,
+                    reason = "agent-transferred",
+                    newSiteId = targetSite.Id,
+                    newClientId = targetSite.ClientId,
+                    revision,
+                });
+
+                await _messaging.SendCommandToSubjectAsync(
+                    previousSite.ClientId,
+                    previousSite.Id,
+                    agentId,
+                    Guid.NewGuid(),
+                    "nats.reconnect",
+                    reconnectPayload);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to send nats.reconnect command to transferred agent {AgentId} on previous site subject.",
+                    agentId);
+            }
+
+            _logger.LogInformation(
+                "Agent {AgentId} transferred: sync ping dual-published (old site {PreviousSiteId}, new site {TargetSiteId}) and nats.reconnect sent. Notified={Notified}",
+                agentId, previousSite.Id, targetSite.Id, notified);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to notify agent {AgentId} after transfer. Auto-recovery relies on agent config polling.",
+                agentId);
+        }
+
+        return notified;
     }
 
     /// <summary>

@@ -276,6 +276,12 @@ public class LogsBackendTests
         public Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
+        public Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, Guid overrideClientId, Guid overrideSiteId, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task SendCommandToSubjectAsync(Guid clientId, Guid siteId, Guid agentId, Guid commandId, string commandType, string payload)
+            => Task.CompletedTask;
+
         public Task SendCommandAsync(Guid agentId, Guid commandId, string commandType, string payload)
             => Task.CompletedTask;
 

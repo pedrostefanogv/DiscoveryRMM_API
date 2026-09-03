@@ -71,6 +71,13 @@ public sealed record AgentTransferResult
 
     /// <summary>Motivo registrado para a transferência.</summary>
     public string? Reason { get; init; }
+
+    /// <summary>
+    /// Indica se o agent foi notificado em tempo real (sync ping dual-publish + comando
+    /// nats.reconnect). Se false, o agent será atualizado no próximo ciclo de polling
+    /// de configuração — o frontend pode exibir "Agent será atualizado em instantes".
+    /// </summary>
+    public bool AgentNotified { get; init; }
 }
 
 /// <summary>

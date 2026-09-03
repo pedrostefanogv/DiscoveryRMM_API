@@ -193,12 +193,44 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             return;
 
         var subject = await BuildAgentSubjectAsync(agentId, "sync.ping");
+        await PublishSyncPingToSubjectAsync(subject, agentId, ping, cancellationToken);
+    }
+
+    public async Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, Guid overrideClientId, Guid overrideSiteId, CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return;
+
+        var subject = NatsSubjectBuilder.AgentSubject(overrideClientId, overrideSiteId, agentId, "sync.ping");
+        await PublishSyncPingToSubjectAsync(subject, agentId, ping, cancellationToken);
+    }
+
+    private async Task PublishSyncPingToSubjectAsync(string subject, Guid agentId, SyncInvalidationPingMessage ping, CancellationToken cancellationToken)
+    {
         var message = JsonSerializer.Serialize(ping, JsonOptions);
-        await _connection.PublishAsync(subject, message);
-        _logger.LogDebug("Sync ping published to agent {AgentId} for resource {Resource} (revision {Revision})",
+        await _connection.PublishAsync(subject, message, cancellationToken: cancellationToken);
+        _logger.LogDebug("Sync ping published to agent {AgentId} for resource {Resource} (revision {Revision}) on subject {Subject}",
             agentId,
             ping.Resource,
-            ping.Revision);
+            ping.Revision,
+            subject);
+    }
+
+    /// <inheritdoc />
+    public async Task SendCommandToSubjectAsync(Guid clientId, Guid siteId, Guid agentId, Guid commandId, string commandType, string payload)
+    {
+        var subject = NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "command");
+        var message = JsonSerializer.Serialize(new
+        {
+            CommandId = commandId,
+            CommandType = commandType,
+            Payload = payload
+        }, JsonOptions);
+
+        await _connection.PublishAsync(subject, message);
+        _logger.LogInformation(
+            "Command {CommandId} ({CommandType}) sent to agent {AgentId} on explicit subject {Subject}",
+            commandId, commandType, agentId, subject);
     }
 
     public async Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken)
@@ -210,7 +242,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         {
             try
             {
-            await foreach (var msg in _connection.SubscribeAsync<string>("tenant.*.site.*.agent.*.heartbeat", cancellationToken: cancellationToken))
+                await foreach (var msg in _connection.SubscribeAsync<string>("tenant.*.site.*.agent.*.heartbeat", cancellationToken: cancellationToken))
                 {
                     try
                     {
@@ -335,7 +367,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         {
             try
             {
-            await foreach (var msg in _connection.SubscribeAsync<string>("tenant.*.site.*.agent.*.result", cancellationToken: cancellationToken))
+                await foreach (var msg in _connection.SubscribeAsync<string>("tenant.*.site.*.agent.*.result", cancellationToken: cancellationToken))
                 {
                     try
                     {
@@ -398,7 +430,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         {
             try
             {
-            await foreach (var msg in _connection.SubscribeAsync<string>("tenant.*.site.*.agent.*.hardware", cancellationToken: cancellationToken))
+                await foreach (var msg in _connection.SubscribeAsync<string>("tenant.*.site.*.agent.*.hardware", cancellationToken: cancellationToken))
                 {
                     try
                     {
