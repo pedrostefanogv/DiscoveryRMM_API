@@ -15,6 +15,25 @@ public class AgentAutomationPolicySyncResponse
     public DateTime GeneratedAt { get; set; }
     public int TaskCount { get; set; }
     public IReadOnlyList<AgentAutomationTaskPolicyDto> Tasks { get; set; } = [];
+
+    /// <summary>
+    /// Packages que o agent deve avaliar para PRÉ-CARGA no cache P2P
+    /// (download+publish sem instalar), vindos das tasks ativas do escopo do
+    /// agent com o ActionType de origem. O AGENT decide pela necessidade real:
+    /// InstallPackage → baixa só se o pacote NÃO está instalado;
+    /// UpdatePackage → baixa só se há update pendente;
+    /// UpdateOrInstallPackage → baixa se não instalado OU há update pendente.
+    /// Assim o instalador não é re-baixado quando o pacote já está em estado
+    /// final (instalado/atualizado), evitando desperdiçar disco/banda — com o
+    /// tempo o TTL local remove o arquivo e ele não volta.
+    /// </summary>
+    public IReadOnlyList<AgentPreloadPackageDto>? PreloadPackages { get; set; }
+}
+
+public class AgentPreloadPackageDto
+{
+    public string PackageId { get; set; } = string.Empty;
+    public AutomationTaskActionType ActionType { get; set; }
 }
 
 public class AgentAutomationTaskPolicyDto

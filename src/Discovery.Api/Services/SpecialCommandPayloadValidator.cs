@@ -131,6 +131,7 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.RemoteSessionQuality => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.RecordingStart => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.RecordingStop => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.P2pPreload => TryNormalizeP2pPreload(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }
@@ -145,6 +146,46 @@ public sealed class SpecialCommandPayloadValidator
         // A validação de schema é feita pelo handler; aqui apenas normalizamos (re-serializamos).
         normalizedPayload = payload.GetRawText();
         validationError = string.Empty;
+        return true;
+    }
+
+    private static bool TryNormalizeP2pPreload(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!TryGetRequiredString(payload, "action", out var action, out validationError))
+            return false;
+
+        action = action.ToLowerInvariant();
+        if (action is not ("preload" or "cancel"))
+        {
+            validationError = "field 'action' must be one of: preload, cancel.";
+            return false;
+        }
+
+        if (!payload.TryGetProperty("packages", out var packages) || packages.ValueKind != JsonValueKind.Array || packages.GetArrayLength() == 0)
+        {
+            validationError = "field 'packages' must be a non-empty array.";
+            return false;
+        }
+
+        foreach (var pkg in packages.EnumerateArray())
+        {
+            if (pkg.ValueKind != JsonValueKind.Object
+                || !pkg.TryGetProperty("packageId", out var packageId)
+                || packageId.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(packageId.GetString()))
+            {
+                validationError = "each item in 'packages' must be an object with a non-empty string 'packageId'.";
+                return false;
+            }
+        }
+
+        normalizedPayload = payload.GetRawText();
         return true;
     }
 

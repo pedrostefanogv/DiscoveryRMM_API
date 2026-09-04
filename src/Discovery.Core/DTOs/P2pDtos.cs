@@ -46,7 +46,12 @@ public class P2pTelemetryRequest
 
 public class P2pArtifactPresenceDto
 {
-    public Guid ArtifactId { get; set; }
+    /// <summary>
+    /// ID do artifact. Pode ser um Guid (AppPackage.Id) ou um ID sintético
+    /// do agent (ex.: "winget:7zip7zip", "name:app"). IDs sintéticos são
+    /// resolvidos para um Guid determinístico no ingest (IdIsSynthetic=true).
+    /// </summary>
+    public string ArtifactId { get; set; } = string.Empty;
     public string ArtifactName { get; set; } = string.Empty;
     public string Sha256 { get; set; } = string.Empty;
     public long SizeBytes { get; set; }

@@ -213,22 +213,25 @@ public class P2pService : IP2pService
             var now = DateTime.UtcNow;
             foreach (var artifact in request.Artifacts)
             {
-                if (artifact.ArtifactId == Guid.Empty) continue;
+                var (presenceId, isSynthetic) = ResolveArtifactPresenceId(artifact.ArtifactId);
+                if (presenceId == Guid.Empty) continue;
 
                 var existing = await _db.P2pArtifactPresences
-                    .FirstOrDefaultAsync(p => p.ArtifactId == artifact.ArtifactId && p.AgentId == agentId, ct);
+                    .FirstOrDefaultAsync(p => p.ArtifactId == presenceId && p.AgentId == agentId, ct);
 
                 if (existing is not null)
                 {
                     existing.LastSeenAt = now;
                     existing.ArtifactName = artifact.ArtifactName;
+                    existing.IdIsSynthetic = isSynthetic;
                 }
                 else
                 {
                     _db.P2pArtifactPresences.Add(new P2pArtifactPresence
                     {
-                        ArtifactId = artifact.ArtifactId,
+                        ArtifactId = presenceId,
                         ArtifactName = artifact.ArtifactName,
+                        IdIsSynthetic = isSynthetic,
                         AgentId = agentId,
                         SiteId = agent.SiteId,
                         ClientId = clientId,
@@ -241,6 +244,40 @@ public class P2pService : IP2pService
         }
 
         return errors;
+    }
+
+    /// <summary>
+    /// Namespace fixo (UUIDv5) para derivar Guids determinísticos de IDs
+    /// sintéticos de artifact enviados pelo agent (ex.: "winget:7zip7zip").
+    /// Mesma string → mesmo Guid em qualquer ingest.
+    /// </summary>
+    private static readonly Guid P2pSyntheticArtifactNamespace =
+        new("6f1d0f35-2a5e-4c3b-9a0e-1f2b3c4d5e6f");
+
+    /// <summary>
+    /// Converte o artifactId informado pelo agent em (Guid, isSynthetic).
+    /// Guid parseável → usado direto (isSynthetic=false). String sintética
+    /// (ex.: "winget:7zip7zip") → Guid determinístico via UUIDv5 (MD5) do
+    /// namespace acima (isSynthetic=true). Vazio/inválido → (Guid.Empty, false).
+    /// </summary>
+    private static (Guid Id, bool IsSynthetic) ResolveArtifactPresenceId(string? artifactId)
+    {
+        var raw = artifactId?.Trim();
+        if (string.IsNullOrEmpty(raw)) return (Guid.Empty, false);
+
+        if (Guid.TryParse(raw, out var guid)) return (guid, false);
+
+        // UUIDv5 (RFC 4122): MD5(namespace_bytes + name_bytes), versão 5, variante RFC.
+        var nameBytes = System.Text.Encoding.UTF8.GetBytes(raw);
+        var nsBytes = P2pSyntheticArtifactNamespace.ToByteArray();
+        var hashInput = new byte[nsBytes.Length + nameBytes.Length];
+        nsBytes.CopyTo(hashInput, 0);
+        nameBytes.CopyTo(hashInput, nsBytes.Length);
+        using var md5 = System.Security.Cryptography.MD5.Create();
+        var hash = md5.ComputeHash(hashInput);
+        hash[6] = (byte)((hash[6] & 0x0F) | 0x50); // version 5
+        hash[8] = (byte)((hash[8] & 0x3F) | 0x80); // variant RFC 4122
+        return (new Guid(hash), true);
     }
 
     // ──────────────────────────────────────────────────────────────────────

@@ -465,7 +465,8 @@ public class AutomationTaskService : IAutomationTaskService
                 PolicyFingerprint = fingerprint,
                 GeneratedAt = DateTime.UtcNow,
                 TaskCount = applicable.Count,
-                Tasks = []
+                Tasks = [],
+                PreloadPackages = BuildPreloadPackages(applicable)
             };
         }
 
@@ -540,8 +541,44 @@ public class AutomationTaskService : IAutomationTaskService
             PolicyFingerprint = fingerprint,
             GeneratedAt = DateTime.UtcNow,
             TaskCount = taskDtos.Count,
-            Tasks = taskDtos
+            Tasks = taskDtos,
+            PreloadPackages = BuildPreloadPackages(applicable)
         };
+    }
+
+    /// <summary>
+    /// Extrai os packages das tasks de instalação/atualização ativas do escopo
+    /// do agent, para pré-carga no cache P2P (fetch proativo sem instalar).
+    /// Deduplicado por packageId (mantém a ação mais abrangente: UpdateOrInstall
+    /// > Update > Install) e ordenado — o fingerprint da policy NÃO muda por
+    /// causa desta lista (precarregar não é um evento de política).
+    /// </summary>
+    private static IReadOnlyList<AgentPreloadPackageDto> BuildPreloadPackages(IEnumerable<AutomationTaskDefinition> tasks)
+    {
+        var byPackage = new Dictionary<string, AutomationTaskActionType>(StringComparer.OrdinalIgnoreCase);
+        foreach (var task in tasks)
+        {
+            if (!task.IsActive || string.IsNullOrWhiteSpace(task.PackageId)) continue;
+            if (task.ActionType is not (AutomationTaskActionType.InstallPackage
+                or AutomationTaskActionType.UpdatePackage
+                or AutomationTaskActionType.UpdateOrInstallPackage)) continue;
+
+            var packageId = task.PackageId.Trim();
+            if (byPackage.TryGetValue(packageId, out var existing))
+            {
+                // Mantém a ação mais abrangente para o mesmo pacote.
+                byPackage[packageId] = (AutomationTaskActionType)Math.Max((int)existing, (int)task.ActionType);
+            }
+            else
+            {
+                byPackage[packageId] = task.ActionType;
+            }
+        }
+
+        return byPackage
+            .Select(kv => new AgentPreloadPackageDto { PackageId = kv.Key, ActionType = kv.Value })
+            .OrderBy(p => p.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     public async Task<string> GetPolicyFingerprintForAgentAsync(Guid agentId, CancellationToken cancellationToken = default)

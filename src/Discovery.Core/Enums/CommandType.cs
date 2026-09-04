@@ -18,5 +18,6 @@ public enum CommandType
     RemoteSessionStop = 13,
     RemoteSessionQuality = 14,
     RecordingStart = 15,
-    RecordingStop = 16
+    RecordingStop = 16,
+    P2pPreload = 17
 }
