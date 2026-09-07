@@ -108,6 +108,12 @@ public class RemoteSessionJwtIssuer
             $"pub.{natsSubject}.proc.req",
             $"pub.{natsSubject}.signal",
             $"pub.{natsSubject}.clipboard.req",
+            // Controle do viewer (ex.: action "keyframe" quando a aba volta a
+            // ficar visível — o agent força o próximo frame completo).
+            // LIÇÃO (mesma do files.progress): sem essa permissão o NATS responde
+            // -ERR Permissions Violation e o WebSocket do viewer cai (loop de
+            // reconexão), derrubando a sessão inteira.
+            $"pub.{natsSubject}.control",
 
             // Viewer subscreve (recebe stream)
             $"sub.{natsSubject}.frame",

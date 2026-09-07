@@ -94,6 +94,10 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.proc.req",
             $"{natsSubject}.signal",
             $"{natsSubject}.clipboard.req",
+            // Controle do viewer (keyframe ao voltar para a aba). Alinhado com
+            // RemoteSessionJwtIssuer.BuildDefaultPermissions — sem isso o NATS
+            // rejeita o PUB com -ERR e derruba o WebSocket do viewer.
+            $"{natsSubject}.control",
         };
         var subSubjects = new[]
         {
