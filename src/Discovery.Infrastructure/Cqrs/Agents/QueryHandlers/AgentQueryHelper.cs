@@ -52,6 +52,7 @@ internal static class AgentQueryHelper
             hb.MemoryTotalGb, hb.MemoryUsedGb, hb.DiskTotalGb, hb.DiskUsedGb,
             hb.DiskReadPercent, hb.DiskWritePercent, hb.DiskResponseMs,
             hb.P2pPeers, hb.UptimeSeconds, hb.ProcessCount,
+            hb.UiOnline,
             hb.IpAddress, hb.Hostname, hb.AgentVersion, null,
             hb.LastHeartbeatAt, hb.LastHeartbeatAt));
 

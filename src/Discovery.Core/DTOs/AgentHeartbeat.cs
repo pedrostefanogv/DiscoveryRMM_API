@@ -30,5 +30,10 @@ public record AgentHeartbeat(
     // ── NOVOS: dados de descoberta P2P ──
     string? PeerId = null,
     IReadOnlyList<string>? Addrs = null,
-    int? Port = null
+    int? Port = null,
+
+    // ── NOVOS: separação serviço × UI (PLANO_SEPARACAO_SERVICO_UI.md) ──
+    // Enviado apenas pelo serviço (modo SYSTEM): true quando há UI companion
+    // conectada via IPC, false quando não há. Absente em agentes antigos/standalone.
+    bool? UiOnline = null
 );

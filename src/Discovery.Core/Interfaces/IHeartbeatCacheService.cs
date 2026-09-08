@@ -80,4 +80,7 @@ public class HeartbeatCacheEntry
     public string? PeerId { get; init; }
     public IReadOnlyList<string>? Addrs { get; init; }
     public int? Port { get; init; }
+
+    // ── NOVOS: separação serviço × UI — UI companion conectada ao serviço via IPC ──
+    public bool? UiOnline { get; init; }
 }

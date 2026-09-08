@@ -332,7 +332,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 heartbeat.DiskResponseMs,
                                 heartbeat.P2pPeers,
                                 heartbeat.UptimeSeconds,
-                                heartbeat.ProcessCount
+                                heartbeat.ProcessCount,
+                                heartbeat.UiOnline
                             };
 
                             var dashboardMessage = DashboardEventMessage.Create(

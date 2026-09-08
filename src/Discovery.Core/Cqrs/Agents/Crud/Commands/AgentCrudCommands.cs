@@ -43,6 +43,7 @@ public sealed record HeartbeatMetricsDto(
     int? P2pPeers,
     long? UptimeSeconds,
     int? ProcessCount,
+    bool? UiOnline,
     string? IpAddress,
     string? Hostname,
     string? AgentVersion,

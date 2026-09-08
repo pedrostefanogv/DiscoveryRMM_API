@@ -9,7 +9,7 @@ namespace Discovery.Infrastructure.Services;
 
 /// <summary>
 /// Cache de heartbeat em Redis — fonte de verdade para status Online.
-/// 
+///
 /// Estratégia:
 /// - Redis é a fonte de verdade: chave existe = Online, chave expirou = Offline
 /// - DB só é escrito quando há transição de status (Online↔Offline)
@@ -133,7 +133,9 @@ public class HeartbeatCacheService : IHeartbeatCacheService
                 // ── Dados de descoberta P2P ──
                 PeerId = heartbeat.PeerId,
                 Addrs = heartbeat.Addrs,
-                Port = heartbeat.Port
+                Port = heartbeat.Port,
+                // ── Separção serviço × UI ──
+                UiOnline = heartbeat.UiOnline
             };
 
             var json = JsonSerializer.Serialize(entry, JsonOptions);
