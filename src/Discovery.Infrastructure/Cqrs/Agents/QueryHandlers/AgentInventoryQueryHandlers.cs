@@ -111,7 +111,7 @@ public sealed class GetAgentHardwareReportQueryHandler(
                 d.SmartStatus, d.TemperatureC, d.PowerOnHours, d.ReallocatedSectors
             )).ToList(),
             NetworkAdapters: components.NetworkAdapters.Select(na => new AgentHardwareNetworkAdapterDto(
-                na.Name, na.MacAddress, na.IpAddress, na.SubnetMask, na.Gateway,
+                na.Name, na.MacAddress, na.IpAddress, na.Ipv6Address, na.SubnetMask, na.Gateway,
                 na.DnsServers is not null ? [na.DnsServers] : null,
                 na.IsDhcpEnabled, na.AdapterType, na.Speed
             )).ToList(),
@@ -216,7 +216,7 @@ public sealed class GetAgentHardwareComponentsQueryHandler(
                 d.SmartStatus, d.TemperatureC, d.PowerOnHours, d.ReallocatedSectors
             )).ToList(),
             components.NetworkAdapters.Select(na => new AgentHardwareNetworkAdapterDto(
-                na.Name, na.MacAddress, na.IpAddress, na.SubnetMask,
+                na.Name, na.MacAddress, na.IpAddress, na.Ipv6Address, na.SubnetMask,
                 na.Gateway, na.DnsServers is not null ? [.. na.DnsServers.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)] : null,
                 na.IsDhcpEnabled, na.AdapterType, na.Speed
             )).ToList(),

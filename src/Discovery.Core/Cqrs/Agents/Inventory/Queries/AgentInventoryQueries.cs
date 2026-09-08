@@ -119,6 +119,7 @@ public sealed record AgentHardwareNetworkAdapterDto(
     string Name,
     string? MacAddress,
     string? IpAddress,
+    string? Ipv6Address,
     string? SubnetMask,
     string? Gateway,
     List<string>? DnsServers,
