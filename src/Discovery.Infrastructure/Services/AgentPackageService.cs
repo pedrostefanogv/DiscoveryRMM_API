@@ -45,7 +45,9 @@ public class AgentPackageService : IAgentPackageService
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
         var binaryPath = GetBinaryPath();
-        if (!forceRebuild && File.Exists(binaryPath))
+        var serviceBinaryPath = GetServiceBinaryPath();
+        var serviceSourceExists = Directory.Exists(Path.Combine(projectPath, "src", "cmd", "discovery-service"));
+        if (!forceRebuild && File.Exists(binaryPath) && (!serviceSourceExists || File.Exists(serviceBinaryPath)))
             return;
 
         _logger.LogInformation(
@@ -58,30 +60,117 @@ public class AgentPackageService : IAgentPackageService
         try
         {
             // Re-check after waiting for lock.
-            if (!forceRebuild && File.Exists(binaryPath))
+            if (!forceRebuild && File.Exists(binaryPath) && (!serviceSourceExists || File.Exists(serviceBinaryPath)))
                 return;
 
-            // Clean previous binary so stale artifacts don't survive a failed build.
-            if (forceRebuild && File.Exists(binaryPath))
-                File.Delete(binaryPath);
+            // Clean previous binaries so stale artifacts don't survive a failed build.
+            if (forceRebuild)
+            {
+                if (File.Exists(binaryPath))
+                    File.Delete(binaryPath);
+                if (serviceSourceExists && File.Exists(serviceBinaryPath))
+                    File.Delete(serviceBinaryPath);
+            }
+
+            var agentBinaryMissing = !File.Exists(binaryPath);
+            var serviceBinaryMissing = serviceSourceExists && !File.Exists(serviceBinaryPath);
 
             // Use the build script from the agent repository
             if (OperatingSystem.IsWindows())
             {
-                await BuildOnWindowsAsync(projectPath, cancellationToken);
+                // The PS build script builds BOTH the agent UI binary and the
+                // discovery-service.exe Windows service binary.
+                if (agentBinaryMissing || serviceBinaryMissing)
+                    await BuildOnWindowsAsync(projectPath, cancellationToken);
             }
             else
             {
-                await BuildOnLinuxAsync(projectPath, cancellationToken);
+                if (agentBinaryMissing)
+                    await BuildOnLinuxAsync(projectPath, cancellationToken);
             }
 
             if (!File.Exists(binaryPath))
                 throw new FileNotFoundException("Prebuild finished but binary was not found.", binaryPath);
+
+            // The agent repo may not carry the service source (older versions);
+            // in that case the NSIS installer falls back to standalone mode.
+            if (serviceSourceExists && !File.Exists(serviceBinaryPath))
+                await BuildServiceBinaryAsync(projectPath, cancellationToken);
         }
         finally
         {
             BuildLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Builds the discovery-service.exe Windows service binary (cmd/discovery-service).
+    /// Pure-Go cross-compilation: no Wails/desktop tags, no CGO, no syso — so it
+    /// builds on Linux (GOOS=windows) and Windows alike.
+    /// </summary>
+    private async Task BuildServiceBinaryAsync(string projectPath, CancellationToken cancellationToken)
+    {
+        var serviceBinaryPath = GetServiceBinaryPath();
+        var moduleRoot = Path.Combine(projectPath, "src");
+        if (!File.Exists(Path.Combine(moduleRoot, "go.mod")))
+            moduleRoot = projectPath;
+
+        var serviceCmdDir = Path.Combine(moduleRoot, "cmd", "discovery-service");
+        if (!Directory.Exists(serviceCmdDir))
+        {
+            _logger.LogWarning(
+                "Service source not found ({ServiceCmdDir}); installer will be built without discovery-service.exe (agent runs standalone).",
+                serviceCmdDir);
+            return;
+        }
+
+        var agentVersion = DetectAgentVersion(projectPath);
+        if (string.IsNullOrWhiteSpace(agentVersion))
+            agentVersion = "1.0.0";
+
+        // Module path is "discovery" (see src/go.mod); buildinfo lives at
+        // discovery/internal/buildinfo. Matches the ldflags used by the agent's
+        // own build scripts (build-install-installer.ps1 / build-bootstrap-installer.ps1).
+        var ldflags = $"-w -s -X discovery/internal/buildinfo.Version={agentVersion}";
+
+        var extraEnv = new Dictionary<string, string>
+        {
+            ["GOFLAGS"] = "-buildvcs=false",
+            ["CGO_ENABLED"] = "0"
+        };
+
+        if (!OperatingSystem.IsWindows())
+        {
+            // Cross-compile the Windows service binary from the Linux server.
+            extraEnv["GOOS"] = "windows";
+            extraEnv["GOARCH"] = "amd64";
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(serviceBinaryPath)!);
+
+        _logger.LogInformation(
+            "Building discovery-service.exe: output={Output}, version={Version}, moduleRoot={ModuleRoot}",
+            serviceBinaryPath,
+            agentVersion,
+            moduleRoot);
+
+        await RunProcessAsync(
+            fileName: "go",
+            workingDirectory: moduleRoot,
+            arguments:
+            [
+                "build",
+                "-trimpath",
+                "-buildvcs=false",
+                "-ldflags", ldflags,
+                "-o", serviceBinaryPath,
+                "./cmd/discovery-service"
+            ],
+            extraEnvironment: extraEnv,
+            cancellationToken: cancellationToken);
+
+        if (!File.Exists(serviceBinaryPath))
+            throw new FileNotFoundException("Service build finished but discovery-service.exe was not found.", serviceBinaryPath);
     }
 
     private async Task BuildOnLinuxAsync(string projectPath, CancellationToken cancellationToken)
@@ -340,6 +429,7 @@ public class AgentPackageService : IAgentPackageService
         await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
 
         var binaryPath = GetBinaryPath();
+        var serviceBinaryArg = GetServiceBinaryNsisArg();
 
         var arguments = new List<string>
         {
@@ -349,6 +439,9 @@ public class AgentPackageService : IAgentPackageService
             $"-DARG_WAILS_AMD64_BINARY={binaryPath}",
             $"-DARG_OUTFILE_NAME={outputName}"
         };
+
+        if (serviceBinaryArg is not null)
+            arguments.Add(serviceBinaryArg);
 
         if (includeBootstrapDefaults)
         {
@@ -419,6 +512,7 @@ public class AgentPackageService : IAgentPackageService
         await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
 
         var binaryPath = GetBinaryPath();
+        var serviceBinaryArg = GetServiceBinaryNsisArg();
 
         var arguments = new List<string>
         {
@@ -437,6 +531,9 @@ public class AgentPackageService : IAgentPackageService
             $"-DARG_DEFAULT_DISCOVERY={defaultDiscovery}",
             "-DARG_DEFAULT_MINIMAL=1"
         };
+
+        if (serviceBinaryArg is not null)
+            arguments.Add(serviceBinaryArg);
 
         // NOTE: ARG_PAYLOAD_SHA256 is intentionally NOT passed.
         // The bootstrap derives the SHA256 endpoint from the payload URL
@@ -497,6 +594,7 @@ public class AgentPackageService : IAgentPackageService
         await EnsureWebView2BootstrapperAsync(installerDir, cancellationToken);
 
         var binaryPath = GetBinaryPath();
+        var serviceBinaryArg = GetServiceBinaryNsisArg();
 
         var arguments = new List<string>
         {
@@ -511,6 +609,9 @@ public class AgentPackageService : IAgentPackageService
             "-DARG_DEFAULT_URL=",
             "-DARG_DEFAULT_KEY="
         };
+
+        if (serviceBinaryArg is not null)
+            arguments.Add(serviceBinaryArg);
 
         arguments.Add("project.nsi");
 
@@ -615,6 +716,31 @@ public class AgentPackageService : IAgentPackageService
             ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
         var outputName = GetAgentPackageSetting("OutputName") ?? "discovery-agent.exe";
         return Path.Combine(projectPath, "src", "build", "bin", outputName);
+    }
+
+    private string GetServiceBinaryPath()
+    {
+        var configured = GetAgentPackageSetting("ServiceBinaryPath");
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured;
+
+        // Derive default ServiceBinaryPath from DiscoveryProjectPath
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+        return Path.Combine(projectPath, "src", "build", "bin", "discovery-service.exe");
+    }
+
+    /// <summary>
+    /// Returns the NSIS argument that passes the discovery-service.exe binary to
+    /// makensis (ARG_SERVICE_AMD64_BINARY), or null when the binary is absent —
+    /// in which case the installer falls back to standalone mode (Task Scheduler).
+    /// </summary>
+    private string? GetServiceBinaryNsisArg()
+    {
+        var serviceBinaryPath = GetServiceBinaryPath();
+        return File.Exists(serviceBinaryPath)
+            ? $"-DARG_SERVICE_AMD64_BINARY={serviceBinaryPath}"
+            : null;
     }
 
     private string ResolveMakensisPath()

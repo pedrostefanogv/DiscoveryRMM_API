@@ -206,6 +206,7 @@ AgentPackage__PublicApiScheme=https
 AgentPackage__PublicApiServer=${public_host}
 AgentPackage__Profiles__linux__DiscoveryProjectPath=${DISCOVERY_AGENT_SRC}
 AgentPackage__Profiles__linux__BinaryPath=${DISCOVERY_AGENT_SRC}/src/build/bin/discovery-agent.exe
+AgentPackage__Profiles__linux__ServiceBinaryPath=${DISCOVERY_AGENT_SRC}/src/build/bin/discovery-service.exe
 AgentPackage__Profiles__linux__OutputName=discovery-agent.exe
 Authentication__Jwt__Issuer=discovery
 Authentication__Jwt__Audience=discovery
