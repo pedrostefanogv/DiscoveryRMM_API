@@ -103,6 +103,24 @@ _trigger_agent_rebuild_via_api() {
     return
   fi
 
+  # Wait for the API to actually answer requests before triggering the rebuild.
+  # systemd considers the service "started" as soon as the process is spawned,
+  # but the listener can take 30s+ to come up (DB, Quartz, NATS init). The
+  # anonymous /health endpoint is a cheap readiness probe.
+  log "Aguardando API responder (readiness)..."
+  local readiness_ok=0
+  for _ in $(seq 1 60); do
+    if curl -sf -o /dev/null --max-time 5 --connect-timeout 2 "http://127.0.0.1:8080/health" 2>/dev/null; then
+      readiness_ok=1
+      break
+    fi
+    sleep 2
+  done
+  if [[ "$readiness_ok" -ne 1 ]]; then
+    warn "API nao ficou pronta em 120s; rebuild do agent nao disparado"
+    return
+  fi
+
   log "Disparando rebuild do agent via API (sem restart)..."
   local response http_code retry=0 max_retries=5
 
