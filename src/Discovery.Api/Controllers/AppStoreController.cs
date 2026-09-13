@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs.AppStore.Commands;
 using Discovery.Core.Cqrs.AppStore.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -95,19 +96,36 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         return Accepted(new { running = true, installationType, message });
     }
 
-    /// <summary>Status da sincronização: se há job em andamento e o resultado da última execução.</summary>
+    /// <summary>
+    /// Status da sincronização: se há job em andamento e o resultado da última execução.
+    /// O último resultado é o mais recente entre a execução em memória (manual) e a
+    /// persistida no ServerConfiguration (manual ou automática via Quartz).
+    /// </summary>
     [HttpGet("sync/status")]
-    public IActionResult GetSyncStatus(
+    public async Task<IActionResult> GetSyncStatus(
         [FromServices] AppCatalogBackgroundSyncService backgroundSync,
+        [FromServices] IAppCatalogSyncStatusStore statusStore,
         [FromQuery] int installationType = 0)
     {
         var type = (AppInstallationType)installationType;
         if (!Enum.IsDefined(type))
             return BadRequest(new { errors = new[] { new { Code = "Validation", Message = "Invalid installationType." } } });
+
+        var inMemory = backgroundSync.GetLastResult(type);
+        var persisted = await statusStore.GetResultAsync(type);
+
+        var lastResult = (inMemory, persisted) switch
+        {
+            (null, null) => null,
+            (null, var p) => p,
+            (var m, null) => m,
+            (var m, var p) => p.SyncedAt > m.SyncedAt ? p : m
+        };
+
         return Ok(new AppCatalogSyncStatusDto
         {
             Running = backgroundSync.IsRunning(type),
-            LastResult = backgroundSync.GetLastResult(type)
+            LastResult = lastResult
         });
     }
 

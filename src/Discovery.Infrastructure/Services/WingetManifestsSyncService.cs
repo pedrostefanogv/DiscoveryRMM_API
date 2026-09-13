@@ -110,7 +110,7 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
                     _logger.LogInformation(
                         "Winget manifests sync: upstream sem alterações e catálogo íntegro ({Total} pacotes) — import pulado em {Duration}.",
                         totalInCatalog, stopwatch.Elapsed);
-                    return Ok(0, startedAt, stopwatch, commitDate);
+                    return Ok(0, 0, startedAt, stopwatch, commitDate);
                 }
 
                 // Auto-cura: catálogo vazio (primeira carga, wipe no banco) força
@@ -123,7 +123,7 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
             {
                 stopwatch.Stop();
                 _logger.LogInformation("Winget manifests sync: nenhuma alteração a importar.");
-                return Ok(0, startedAt, stopwatch, commitDate);
+                return Ok(0, 0, startedAt, stopwatch, commitDate);
             }
 
             var upserted = await ImportAsync(versionDirs, commitDate, cancellationToken);
@@ -136,7 +136,7 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
                 "Winget manifests sync concluído: {Dirs} dirs de versão avaliados, {Upserted} pacotes upserted em {Duration}.",
                 versionDirs.Count, upserted, stopwatch.Elapsed);
 
-            return Ok(upserted, startedAt, stopwatch, commitDate);
+            return Ok(upserted, versionDirs.Count, startedAt, stopwatch, commitDate);
         }
         catch (OperationCanceledException)
         {
@@ -154,12 +154,14 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
         }
     }
 
-    private AppCatalogSyncResultDto Ok(int upserted, DateTime startedAt, Stopwatch stopwatch, DateTime? commitDate) => new()
+    private AppCatalogSyncResultDto Ok(int upserted, int dirsEvaluated, DateTime startedAt, Stopwatch stopwatch, DateTime? commitDate) => new()
     {
         InstallationType = AppInstallationType.Winget,
         Success = true,
         PackagesUpserted = upserted,
-        PagesProcessed = upserted,
+        // "Páginas" no manifests path = diretórios de versão avaliados (no feed
+        // são as páginas do packages.json). Antes repetia o total de pacotes.
+        PagesProcessed = dirsEvaluated,
         SyncedAt = startedAt,
         SourceGeneratedAt = commitDate,
         Duration = stopwatch.Elapsed

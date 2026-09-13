@@ -75,8 +75,14 @@ public class AppCatalogBackgroundSyncService
             // Cria scope próprio: o sync service e repositórios são scoped.
             using var scope = _serviceProvider.CreateScope();
             var syncService = scope.ServiceProvider.GetRequiredService<IAppCatalogSyncService>();
+            var statusStore = scope.ServiceProvider.GetRequiredService<IAppCatalogSyncStatusStore>();
             var result = await syncService.SyncCatalogAsync(installationType, cts.Token);
             _lastResults[installationType] = result;
+
+            // Persiste também no ServerConfiguration: o status fica visível em
+            // qualquer browser e sobrevive a restarts (execuções automáticas e
+            // manuais compartilham a mesma fonte de verdade).
+            await statusStore.SaveResultAsync(installationType, result, CancellationToken.None);
 
             if (result.Success)
                 _logger.LogInformation("Background catalog sync completed for {Type}: {Upserted} packages, {Pages} pages, {Duration}.",
@@ -87,7 +93,7 @@ public class AppCatalogBackgroundSyncService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Background catalog sync crashed for {Type}.", installationType);
-            _lastResults[installationType] = new AppCatalogSyncResultDto
+            var failedResult = new AppCatalogSyncResultDto
             {
                 InstallationType = installationType,
                 Success = false,
@@ -97,6 +103,18 @@ public class AppCatalogBackgroundSyncService
                 Duration = TimeSpan.Zero,
                 Error = ex.Message
             };
+            _lastResults[installationType] = failedResult;
+
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var statusStore = scope.ServiceProvider.GetRequiredService<IAppCatalogSyncStatusStore>();
+                await statusStore.SaveResultAsync(installationType, failedResult, CancellationToken.None);
+            }
+            catch (Exception persistEx)
+            {
+                _logger.LogWarning(persistEx, "Falha ao persistir status de falha do sync de catálogo ({Type}).", installationType);
+            }
         }
         finally
         {

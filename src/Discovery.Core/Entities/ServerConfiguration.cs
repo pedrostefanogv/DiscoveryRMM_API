@@ -40,6 +40,13 @@ public class ServerConfiguration
     /// <summary>Política de acesso à loja de aplicativos</summary>
     public AppStorePolicyType AppStorePolicy { get; set; } = AppStorePolicyType.PreApproved;
 
+    /// <summary>
+    /// Resultado da última sincronização de catálogo por tipo (JSON:
+    /// {"Winget": AppCatalogSyncResultDto, "Chocolatey": ...}). Gravado pelo job
+    /// automático (Quartz) e pelo sync manual — alimenta o status no console web.
+    /// </summary>
+    public string AppCatalogSyncSettingsJson { get; set; } = "{}";
+
     // ============ Inventário e updates ============
 
     /// <summary>Intervalo padrão de inventário (horas)</summary>

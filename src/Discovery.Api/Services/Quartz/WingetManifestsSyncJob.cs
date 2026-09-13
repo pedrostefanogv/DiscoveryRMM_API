@@ -1,3 +1,5 @@
+using Discovery.Core.DTOs;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
@@ -9,6 +11,8 @@ namespace Discovery.Api.Services.Quartz;
 /// Quartz job que sincroniza o catálogo Winget a partir do shallow clone do
 /// microsoft/winget-pkgs (fonte primária, rev. 3 do plano).
 /// Config: AppCatalog:Winget:Enabled / ManifestsPollIntervalMinutes / Source.
+/// O resultado de cada execução (sucesso ou falha) é persistido no
+/// IAppCatalogSyncStatusStore para aparecer no status do console web.
 /// </summary>
 [DisallowConcurrentExecution]
 public sealed class WingetManifestsSyncJob : IJob
@@ -35,10 +39,17 @@ public sealed class WingetManifestsSyncJob : IJob
 
         await using var scope = scopeFactory.CreateAsyncScope();
         var syncService = scope.ServiceProvider.GetRequiredService<IWingetManifestsSyncService>();
+        var statusStore = scope.ServiceProvider.GetRequiredService<IAppCatalogSyncStatusStore>();
 
         try
         {
             var result = await syncService.SyncFromManifestsAsync(ct);
+
+            // Persiste o resultado para o console web: execuções automáticas
+            // antes não atualizavam o status, que era alimentado apenas pelo
+            // sync manual (AppCatalogBackgroundSyncService, em memória).
+            await statusStore.SaveResultAsync(AppInstallationType.Winget, result, ct);
+
             context.Result = result;
 
             if (result.Success)
@@ -51,6 +62,27 @@ public sealed class WingetManifestsSyncJob : IJob
         catch (Exception ex)
         {
             logger.LogError(ex, "Winget manifests sync failed.");
+
+            // Persiste a falha também: o status no console precisa refletir o
+            // problema mesmo quando o job termina com exceção.
+            try
+            {
+                await statusStore.SaveResultAsync(AppInstallationType.Winget, new AppCatalogSyncResultDto
+                {
+                    InstallationType = AppInstallationType.Winget,
+                    Success = false,
+                    PackagesUpserted = 0,
+                    PagesProcessed = 0,
+                    SyncedAt = DateTime.UtcNow,
+                    Duration = TimeSpan.Zero,
+                    Error = ex.Message
+                }, CancellationToken.None);
+            }
+            catch (Exception persistEx)
+            {
+                logger.LogWarning(persistEx, "Falha ao persistir status de falha do sync Winget.");
+            }
+
             throw new JobExecutionException(ex) { RefireImmediately = false };
         }
     }
