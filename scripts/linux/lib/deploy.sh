@@ -401,6 +401,19 @@ EOF
 
 write_site_proxy_config() {
   log "Configurando Nginx para portal web + proxy da API"
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+
+  # M-fix (site fora apos update — homologacao 13/09): no modo UPDATE o shell
+  # nao tem as vars de dominio/access-mode (sao definidas na instalacao, e o
+  # update roda em shell limpo). Resultado: server_name renderizava apenas
+  # "localhost 127.0.0.1" e o catch-all (server_name _; return 444) descartava
+  # TODO o trafego do dominio real. Carrega do env o que estiver ausente.
+  _env_key() { sudo awk -F= -v k="$1" '$1==k{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null; }
+  ACCESS_MODE="${ACCESS_MODE:-$(_env_key ACCESS_MODE)}"
+  DISCOVERY_FIDO2_SERVER_DOMAIN="${DISCOVERY_FIDO2_SERVER_DOMAIN:-$(_env_key DISCOVERY_FIDO2_SERVER_DOMAIN)}"
+  INTERNAL_API_HOST="${INTERNAL_API_HOST:-$(_env_key INTERNAL_API_HOST)}"
+  EXTERNAL_API_HOST="${EXTERNAL_API_HOST:-$(_env_key EXTERNAL_API_HOST)}"
+
   local access_mode="${ACCESS_MODE:-internal}"
   local fido2_server_domain; fido2_server_domain="$(resolve_fido2_server_domain)"
 
@@ -411,6 +424,22 @@ write_site_proxy_config() {
   fi
   if [[ "$access_mode" == "external" || "$access_mode" == "hybrid" ]] && [[ -n "${EXTERNAL_API_HOST:-}" ]]; then
     server_names+=("$EXTERNAL_API_HOST")
+  fi
+
+  # M-fix: o dominio do CERTIFICADO sempre entra no server_name — o cert so
+  # cobre ele, e instalacoes antigas podem nao ter persistido ACCESS_MODE/hosts
+  # no env (caso da homologacao: apenas ZEROSSL_CERT_DOMAIN=tngplacas.com.br).
+  local cert_domain cert_alt
+  cert_domain="$(_env_key ZEROSSL_CERT_DOMAIN)"
+  [[ -z "$cert_domain" ]] && cert_domain="$(_env_key LETSENCRYPT_CERT_DOMAIN)"
+  [[ -n "$cert_domain" ]] && server_names+=("$cert_domain")
+  cert_alt="$(_env_key ZEROSSL_CERT_ALT_DOMAINS)"
+  [[ -z "$cert_alt" ]] && cert_alt="$(_env_key LETSENCRYPT_CERT_ALT_DOMAINS)"
+  if [[ -n "$cert_alt" ]]; then
+    local alt
+    for alt in ${cert_alt//,/ }; do
+      [[ -n "$alt" ]] && server_names+=("$alt")
+    done
   fi
 
   local server_name_list; server_name_list="$(printf '%s ' "${server_names[@]}")"
@@ -456,6 +485,21 @@ write_site_proxy_config() {
 
   sudo rm -f /etc/nginx/sites-enabled/default
   sudo ln -sfn /etc/nginx/sites-available/discovery-rmm /etc/nginx/sites-enabled/discovery-rmm
+
+  # M-fix (warnings "conflicting server name"/"protocol options redefined"):
+  # versoes antigas do instalador deixavam arquivos de trabalho em sites-enabled
+  # (ex.: discovery-rmm.working). O nginx CARREGA esses arquivos e reporta
+  # dezenas de warnings por servidor duplicado. Remove os nossos residuais.
+  sudo find /etc/nginx/sites-enabled -maxdepth 1 -name "discovery-rmm.working*" -delete 2>/dev/null || true
+
+  # Diagnostico: configs de TERCEIROS que declaram localhost/127.0.0.1 geram os
+  # mesmos warnings. Nao removemos (nao sao nossos), apenas avisamos.
+  local conflict_files
+  conflict_files="$(sudo grep -lE "server_name[[:space:]].*(localhost|127\.0\.0\.1)" /etc/nginx/sites-enabled/* 2>/dev/null | grep -v discovery-rmm || true)"
+  if [[ -n "$conflict_files" ]]; then
+    warn "Server names localhost/127.0.0.1 declarados em outros configs do nginx (nginx ignora duplicados): $conflict_files"
+  fi
+
   sudo nginx -t
   sudo systemctl enable nginx
   sudo systemctl restart nginx
