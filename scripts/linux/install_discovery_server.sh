@@ -6,7 +6,6 @@ SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 LIB_DIR="$SCRIPT_DIR/lib"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
 NGINX_TEMPLATE_PATH="$TEMPLATES_DIR/nginx-discovery.conf.tpl"
-SELFUPDATE_TEMPLATE_PATH="$TEMPLATES_DIR/selfupdate-discovery-api.sh"
 ZEROSSL_ACME_TEMPLATE_PATH="$TEMPLATES_DIR/zerossl-acme-certificate.sh"
 LETSENCRYPT_ACME_TEMPLATE_PATH="$TEMPLATES_DIR/letsencrypt-acme-certificate.sh"
 
@@ -178,6 +177,9 @@ main() {
 
   confirm_installation
 
+  check_disk_space "${DISCOVERY_API_BASE:-/opt/discovery-api}" 2048
+  check_disk_space "${DISCOVERY_SITE_BASE:-/opt/discovery-site}" 1024
+
   install_apt_dependencies
   install_nsis_nsjson_plugin
   ensure_dotnet_sdk
@@ -194,10 +196,13 @@ main() {
   setup_redis
   generate_nats_account_keys
   setup_nats
+  # O env PRECISA ser escrito antes da emissao do certificado: os templates
+  # ACME leem as credenciais (EAB, dominios, hook) do discovery.env — nunca
+  # via argv (segredo visivel em /proc/*/cmdline).
+  write_environment_file
   setup_proxy_certificate
   setup_jwt_signing_keys
   setup_cloudflare_tunnel
-  write_environment_file
   setup_zerossl_renewal_timer
   setup_letsencrypt_renewal_timer
 
@@ -211,7 +216,8 @@ main() {
 
   publish_api
   publish_site
-  install_selfupdate_script
+  # Update e sempre manual: remove qualquer automacao remanescente de versoes antigas.
+  remove_selfupdate_automation
   write_systemd_service
   write_site_proxy_config
   run_db_migrations

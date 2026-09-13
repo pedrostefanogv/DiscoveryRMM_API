@@ -123,7 +123,9 @@ normalize_branch() {
       ;;
   esac
 
-  [[ "$raw" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Branch invalida: $raw"
+  # Sem '-' inicial (injecao de flag em `git clone -b`) e sem '..' (traversal).
+  [[ "$raw" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || fail "Branch invalida: $raw"
+  [[ "$raw" != *..* ]] || fail "Branch invalida (sequencia '..' nao permitida): $raw"
   printf '%s' "$raw"
 }
 
@@ -148,8 +150,10 @@ exec_installer() {
   shift
 
   log "Executando instalador"
+  # `${VAR:-}` e obrigatorio: o fast-path de maintenance executa esta funcao
+  # ANTES da deteccao de runtime (com set -u, referenciar var unset aborta).
   exec env \
-    DISCOVERY_DOTNET_RUNTIME="$DISCOVERY_DOTNET_RUNTIME" \
+    DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-}" \
     DISCOVERY_GIT_BRANCH="$BOOTSTRAP_BRANCH" \
     DISCOVERY_RELEASE_CHANNEL="$BOOTSTRAP_BRANCH" \
     bash "$installer_path" "$@"
@@ -267,8 +271,9 @@ choose_branch_interactive() {
 
 choose_operation_mode_interactive() {
   local installed=0
-  if command -v sudo >/dev/null 2>&1 && sudo test -f /etc/discovery-api/discovery.env 2>/dev/null && \
-     sudo systemctl list-unit-files discovery-api.service &>/dev/null; then
+  # `systemctl list-unit-files PATTERN` sai 0 mesmo sem match — testar o unit file.
+  if command -v sudo >/dev/null 2>&1 && sudo test -f /etc/discovery-api/discovery.env 2>/dev/null \
+     && sudo test -e /etc/systemd/system/discovery-api.service 2>/dev/null; then
     installed=1
   fi
 
@@ -487,7 +492,9 @@ if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
   fi
   warn "Branch solicitada '$BOOTSTRAP_BRANCH' nao disponivel; fallback para '$CLONED_BRANCH'."
   echo "Branch '$BOOTSTRAP_BRANCH' nao encontrada. Usar '$CLONED_BRANCH'? (S/n): " >&2
-  local confirm_fallback
+  # SEM `local` aqui: este trecho roda no top-level do script e `local` fora de
+  # funcao falha fatalmente com set -e ("local: can only be used in a function").
+  confirm_fallback=""
   read -r confirm_fallback
   confirm_fallback="$(printf '%s' "${confirm_fallback:-s}" | tr '[:upper:]' '[:lower:]')"
   case "$confirm_fallback" in

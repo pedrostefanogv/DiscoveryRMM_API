@@ -11,8 +11,20 @@ cleanup_old_releases() {
   if (( ${#release_dirs[@]} <= keep )); then
     return
   fi
+
+  # Nunca apagar a release apontada pelo symlink `current` (alvo de rollback).
+  local current_link current_target=""
+  current_link="$(dirname "$releases_dir")/current"
+  if [[ -L "$current_link" ]]; then
+    current_target="$(readlink -f "$current_link" 2>/dev/null || true)"
+  fi
+
   log "Removendo $(( ${#release_dirs[@]} - keep )) release(s) antiga(s) em $releases_dir"
   for old_release in "${release_dirs[@]:$keep}"; do
+    if [[ -n "$current_target" && "$(readlink -f "$old_release" 2>/dev/null || true)" == "$current_target" ]]; then
+      warn "Pulando release atual em uso (rollback): $(basename "$old_release")"
+      continue
+    fi
     # Corrige ownership caso a release tenha sido criada como root (deploy manual)
     sudo chown -R discovery-api:discovery-api "$old_release" 2>/dev/null || true
     if sudo -u discovery-api rm -rf "$old_release" 2>/dev/null; then
@@ -65,11 +77,12 @@ publish_api() {
     -c Release -r "$DISCOVERY_DOTNET_RUNTIME" --self-contained false -o "$release_dir" /p:UseAppHost=true
 
   sudo -u discovery-api rm -f "$release_dir"/appsettings*.json || true
-  sudo -u discovery-api ln -sfn "$release_dir" "$DISCOVERY_API_CURRENT"
-
+  # Valida o binario ANTES de trocar o symlink: falha de publish parcial nao
+  # pode deixar `current` apontando para uma release quebrada.
   if ! sudo -u discovery-api test -x "$release_dir/Discovery.Api"; then
-    fail "Binario Discovery.Api nao gerado"
+    fail "Binario Discovery.Api nao gerado na release $release_id"
   fi
+  sudo -u discovery-api ln -sfn "$release_dir" "$DISCOVERY_API_CURRENT"
 
   cleanup_old_releases "$DISCOVERY_API_RELEASES"
 }
@@ -180,7 +193,9 @@ ASPNETCORE_URLS=http://127.0.0.1:8080
 OPENAPI__ENABLED=$( [[ "${OPENAPI_ENABLED:-0}" == "1" ]] && echo true || echo false )
 OpenApi__Scalar__Enabled=$( [[ "${OPENAPI_SCALAR_ENABLED:-$OPENAPI_ENABLED}" == "1" ]] && echo true || echo false )
 ConnectionStrings__DefaultConnection=Host=127.0.0.1;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-Nats__Url=nats://${NATS_AUTH_USER}:${NATS_AUTH_PASSWORD}@127.0.0.1:4222
+# Credenciais ficam em Nats__AuthUser/Nats__AuthPassword (abaixo) — nunca na URL:
+# caracteres especiais da senha quebrariam o parser de URI.
+Nats__Url=nats://127.0.0.1:4222
 Nats__AuthUser=${NATS_AUTH_USER}
 Nats__AuthPassword=${NATS_AUTH_PASSWORD}
 Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}
@@ -222,11 +237,10 @@ DISCOVERY_API_SOURCE=${DISCOVERY_API_SOURCE}
 DISCOVERY_API_RELEASES=${DISCOVERY_API_RELEASES}
 DISCOVERY_API_CURRENT=${DISCOVERY_API_CURRENT}
 DISCOVERY_GIT_REPO=${DISCOVERY_GIT_REPO}
+DISCOVERY_AGENT_GIT_REPO=${DISCOVERY_AGENT_GIT_REPO:-}
 DISCOVERY_GIT_BRANCH=${DISCOVERY_GIT_BRANCH}
 DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}
 DISCOVERY_DOTNET_RUNTIME=${DISCOVERY_DOTNET_RUNTIME}
-SELFUPDATE_ENABLED=${SELFUPDATE_ENABLED:-1}
-SELFUPDATE_INTERVAL=${SELFUPDATE_INTERVAL:-24h}
 DISCOVERY_CLEAN_BUILD=${DISCOVERY_CLEAN_BUILD:-1}
 DISCOVERY_SITE_GIT_REPO=${DISCOVERY_SITE_GIT_REPO}
 DISCOVERY_SITE_BASE=${DISCOVERY_SITE_BASE}
@@ -292,61 +306,34 @@ EOF
   sudo chown root:discovery-api /etc/discovery-api/discovery.env
 }
 
-# ── Self-update script and timer ───────────────────────────────────────────
+# ── Self-update automation (REMOVED) ──────────────────────────────────────
+#
+# O self-update AUTOMATICO foi removido por decisao de produto: atualizacoes do
+# servidor devem ser sempre MANUAIS, executadas pelo administrador via
+# `install_discovery_server.sh --mode update` (opcao 3 do bootstrap/menu).
+# Esta funcao apenas limpa qualquer automatizacao remanescente de instalacoes
+# antigas (timer/service systemd + script standalone em /opt/discovery-ops).
+remove_selfupdate_automation() {
+  local removed=0
 
-install_selfupdate_script() {
-  local target_script="$DISCOVERY_OPS_DIR/selfupdate-discovery-api.sh"
-  log "Escrevendo script de self-update em $target_script"
-  [[ -f "$SELFUPDATE_TEMPLATE_PATH" ]] || fail "Template de self-update nao encontrado: $SELFUPDATE_TEMPLATE_PATH"
-  sudo install -m 750 -o discovery-api -g discovery-api "$SELFUPDATE_TEMPLATE_PATH" "$target_script"
-  sudo chmod 750 "$target_script"
-  sudo chown discovery-api:discovery-api "$target_script"
-
-  if [[ "${SELFUPDATE_ENABLED:-1}" != "1" ]]; then
-    log "Self-update automatico desativado; removendo timer se existir"
+  if sudo systemctl list-unit-files --no-legend discovery-selfupdate.timer 2>/dev/null | grep -q .; then
+    log "Removendo timer de self-update automatico (update passa a ser sempre manual)..."
     sudo systemctl disable --now discovery-selfupdate.timer >/dev/null 2>&1 || true
-    return
+    sudo rm -f /etc/systemd/system/discovery-selfupdate.timer
+    removed=1
+  fi
+  if sudo systemctl list-unit-files --no-legend discovery-selfupdate.service 2>/dev/null | grep -q .; then
+    sudo systemctl stop discovery-selfupdate.service >/dev/null 2>&1 || true
+    sudo rm -f /etc/systemd/system/discovery-selfupdate.service
+    removed=1
+  fi
+  if [[ "$removed" -eq 1 ]]; then
+    sudo systemctl daemon-reload
+    log "Automacao de self-update removida com sucesso."
   fi
 
-  local interval="${SELFUPDATE_INTERVAL:-24h}"
-  log "Configurando timer de self-update (intervalo: ${interval})"
-
-  sudo tee /etc/systemd/system/discovery-selfupdate.service >/dev/null <<EOF
-[Unit]
-Description=Discovery RMM Self-Update
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=discovery-api
-Group=discovery-api
-EnvironmentFile=/etc/discovery-api/discovery.env
-# O self-update roda apt-get upgrade + builds (.NET/Go/npm) que podem levar
-# varios minutos. Sem TimeoutStartSec=infinity o systemd poderia matar o
-# processo no timeout padrao (~90s), abortando o update no meio.
-TimeoutStartSec=infinity
-ExecStart=${target_script}
-StandardOutput=journal
-StandardError=journal
-EOF
-
-  sudo tee /etc/systemd/system/discovery-selfupdate.timer >/dev/null <<EOF
-[Unit]
-Description=Discovery RMM Self-Update Timer
-
-[Timer]
-OnBootSec=5min
-OnUnitInactiveSec=${interval}
-Unit=discovery-selfupdate.service
-
-[Install]
-WantedBy=timers.target
-EOF
-
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now discovery-selfupdate.timer
-  log "Timer discovery-selfupdate ativo (intervalo: ${interval})"
+  # Remove o script standalone (somente executavel pelo fluxo automatico antigo).
+  sudo rm -f "${DISCOVERY_OPS_DIR:-/opt/discovery-ops}/selfupdate-discovery-api.sh" 2>/dev/null || true
 }
 
 # ── Systemd service ────────────────────────────────────────────────────────
@@ -493,6 +480,51 @@ wait_for_discovery_api_ready() {
   fail "discovery-api nao ficou pronta a tempo; bootstrap administrativo abortado."
 }
 
+# Reinicia a discovery-api apos um update e espera o /health responder.
+# Se a nova release nao ficar saudavel, religa a release anterior (symlink
+# `current` capturado antes do restart) e reinicia novamente. Retorna 1 em
+# falha (com rollback ja aplicado) — o chamador decide abortar ou seguir.
+restart_api_with_rollback() {
+  local previous_release=""
+  if [[ -L "${DISCOVERY_API_CURRENT:-}" ]]; then
+    previous_release="$(readlink -f "$DISCOVERY_API_CURRENT" 2>/dev/null || true)"
+  fi
+
+  if ! sudo systemctl restart discovery-api; then
+    warn "Falha ao reiniciar discovery-api."
+    return 1
+  fi
+
+  local attempt
+  for attempt in $(seq 1 60); do
+    if sudo systemctl is-active --quiet discovery-api 2>/dev/null \
+       && curl -fsS --max-time 5 http://127.0.0.1:8080/health >/dev/null 2>&1; then
+      log "discovery-api saudavel apos o update."
+      return 0
+    fi
+    if sudo systemctl is-failed --quiet discovery-api 2>/dev/null; then break; fi
+    sleep 2
+  done
+
+  warn "API nao ficou saudavel apos o update; executando rollback para a release anterior."
+  if [[ -n "$previous_release" && -d "$previous_release" ]]; then
+    sudo -u discovery-api ln -sfn "$previous_release" "$DISCOVERY_API_CURRENT"
+    sudo systemctl restart discovery-api || true
+    for attempt in $(seq 1 60); do
+      if sudo systemctl is-active --quiet discovery-api 2>/dev/null \
+         && curl -fsS --max-time 5 http://127.0.0.1:8080/health >/dev/null 2>&1; then
+        warn "Rollback concluido: release anterior ativa novamente."
+        return 1
+      fi
+      sleep 2
+    done
+    warn "Rollback aplicado, mas a API segue sem resposta. Verifique: sudo journalctl -u discovery-api -n 100"
+  else
+    warn "Sem release anterior para rollback. Verifique: sudo journalctl -u discovery-api -n 100"
+  fi
+  return 1
+}
+
 persist_bootstrap_admin_login_in_env() {
   local bootstrap_login="$1"
   local env_file="${2:-/etc/discovery-api/discovery.env}"
@@ -584,14 +616,15 @@ update_remote_access_environment_file() {
     log "Arquivo $env_file nao encontrado. Pulando atualizacao de variaveis RemoteAccess da API."; return
   fi
 
-  # Gera chave JWT se nao existir
+  # Gera chave JWT se nao existir (generate_random_password trata o SIGPIPE
+  # do `tr|head` de forma segura — nao usar pipeline cru aqui).
   local jwt_key="${REMOTE_ACCESS_NATS_JWT_SIGNING_KEY:-}"
   if [[ -z "$jwt_key" ]]; then
     jwt_key="$(sudo awk -F= '/^REMOTE_ACCESS_NATS_JWT_SIGNING_KEY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
   fi
   if [[ -z "$jwt_key" ]]; then
     log "Gerando chave JWT para RemoteAccess (NATS session tokens)..."
-    jwt_key="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)"
+    jwt_key="$(generate_random_password 64)"
   fi
 
   log "Atualizando variaveis RemoteAccess no $env_file"
@@ -676,7 +709,8 @@ update_nats_environment_file() {
   local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
 
   cat >> "$tmp_file" <<EOF
-Nats__Url=nats://${NATS_AUTH_USER}:${NATS_AUTH_PASSWORD}@127.0.0.1:4222
+# Credenciais ficam em Nats__AuthUser/Nats__AuthPassword — nunca na URL.
+Nats__Url=nats://127.0.0.1:4222
 Nats__AuthUser=${NATS_AUTH_USER}
 Nats__AuthPassword=${NATS_AUTH_PASSWORD}
 Nats__ServerHostExternal=${nats_server_external_host}

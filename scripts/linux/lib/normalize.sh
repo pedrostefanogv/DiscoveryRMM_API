@@ -140,8 +140,19 @@ normalize_tls_certificate_provider() {
 }
 
 validate_security_inputs() {
-  if [[ -n "${POSTGRES_PASSWORD:-}" ]] && (( ${#POSTGRES_PASSWORD} < 12 )); then
-    fail "POSTGRES_PASSWORD precisa ter pelo menos 12 caracteres."
+  # Senha Postgres: comprimento minimo + rejeicao de placeholders de exemplo.
+  if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
+    if (( ${#POSTGRES_PASSWORD} < 12 )); then
+      fail "POSTGRES_PASSWORD precisa ter pelo menos 12 caracteres."
+    fi
+    local pw_lower
+    pw_lower="$(printf '%s' "$POSTGRES_PASSWORD" | tr '[:upper:]' '[:lower:]')"
+    local weak_password
+    for weak_password in "troque-esta-senha" "changeme" "changeme123" "password" "password1" "password123" "123456" "12345678" "admin123" "discovery" "discovery123"; do
+      if [[ "$pw_lower" == "$weak_password" ]]; then
+        fail "POSTGRES_PASSWORD usa um valor de exemplo/placeholder; defina uma senha forte e unica."
+      fi
+    done
   fi
 
   local effective_nats_password
@@ -150,6 +161,27 @@ validate_security_inputs() {
 
   if (( ${#effective_nats_password} < 12 )); then
     fail "NATS_PASSWORD precisa ter pelo menos 12 caracteres."
+  fi
+
+  # Charset da senha NATS: a senha entra em heredoc do nats-server.conf e na
+  # CLI — caracteres como aspas, $, backtick ou espaco quebram/injetam config.
+  if [[ ! "$effective_nats_password" =~ ^[A-Za-z0-9._+!@#%^*-]{12,128}$ ]]; then
+    fail "NATS_PASSWORD invalida: use 12-128 caracteres de [A-Za-z0-9._+!@#%^*-] (sem aspas, espacos, \$ ou backtick)."
+  fi
+
+  # Usuario NATS entra no conf do servidor entre aspas.
+  local effective_nats_user="${NATS_AUTH_USER:-${NATS_USER:-}}"
+  if [[ -n "$effective_nats_user" && ! "$effective_nats_user" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; then
+    fail "NATS_USER invalido: use 1-64 caracteres de [A-Za-z0-9._-]."
+  fi
+
+  # Identificadores PostgreSQL entram interpolados em SQL — exigir identificador
+  # valido elimina quebra/injecao via aspas/semicolon.
+  if [[ -n "${POSTGRES_USER:-}" && ! "${POSTGRES_USER}" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]]; then
+    fail "POSTGRES_USER invalido: use letras/digito/underscore (ate 64, iniciando por letra ou _)."
+  fi
+  if [[ -n "${POSTGRES_DB:-}" && ! "${POSTGRES_DB}" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]]; then
+    fail "POSTGRES_DB invalido: use letras/digitos/underscore (ate 64, iniciando por letra ou _)."
   fi
 }
 
@@ -185,7 +217,9 @@ normalize_install_branch_input() {
   case "$normalized_branch" in
     lts|release|beta|dev) printf '%s' "$normalized_branch"; return ;;
   esac
-  [[ "$raw_branch" =~ ^[A-Za-z0-9._/-]+$ ]] || fail "Branch invalida: $raw_branch"
+  # Sem '-' inicial (injecao de flag em `git clone -b`) e sem '..' (traversal).
+  [[ "$raw_branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || fail "Branch invalida: $raw_branch"
+  [[ "$raw_branch" != *..* ]] || fail "Branch invalida (sequencia '..' nao permitida): $raw_branch"
   printf '%s' "$raw_branch"
 }
 
@@ -350,9 +384,20 @@ print_server_installation_data() {
   internal_ip="$(detect_internal_ipv4)"
   if [[ -n "$internal_ip" ]]; then echo "- IP interno detectado: $internal_ip"; fi
 
-  echo; echo "[discovery.env]"
-  if sudo test -f /etc/discovery-api/discovery.env; then sudo sed 's/^/  /' /etc/discovery-api/discovery.env
-  else echo "  Arquivo /etc/discovery-api/discovery.env nao encontrado."; fi
+  echo; echo "[discovery.env] (valores sensiveis mascarados)"
+  if sudo test -f /etc/discovery-api/discovery.env; then
+    sudo awk -F= '
+      {
+        v = toupper($1)
+        if (NF > 1 && v ~ /PASSWORD|PASSWD|SEED|TOKEN|SECRET|EAB|HMAC|SIGNINGKEY|CONNECTIONSTRINGS|PRIVATEKEY/) {
+          print $1 "=********"
+        } else {
+          print
+        }
+      }' /etc/discovery-api/discovery.env | sed 's/^/  /'
+  else
+    echo "  Arquivo /etc/discovery-api/discovery.env nao encontrado."
+  fi
 
   echo; echo "[paths de chaves/certificados]"
   if sudo test -f /etc/discovery-api/certs/jwt-public.pem; then echo "  JWT public key: /etc/discovery-api/certs/jwt-public.pem"

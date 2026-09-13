@@ -7,15 +7,15 @@ set_log_context() {
 }
 
 log() {
-  printf '[%s] %s %s\n' "$(date +%H:%M:%S)" "$LOG_CONTEXT" "$*"
+  printf '[%s] %s %s\n' "$(date +%H:%M:%S)" "${LOG_CONTEXT:-install}" "$*"
 }
 
 warn() {
-  printf '[%s] %s [aviso] %s\n' "$(date +%H:%M:%S)" "$LOG_CONTEXT" "$*" >&2
+  printf '[%s] %s [aviso] %s\n' "$(date +%H:%M:%S)" "${LOG_CONTEXT:-install}" "$*" >&2
 }
 
 fail() {
-  printf '[%s] %s [erro] %s\n' "$(date +%H:%M:%S)" "$LOG_CONTEXT" "$*" >&2
+  printf '[%s] %s [erro] %s\n' "$(date +%H:%M:%S)" "${LOG_CONTEXT:-install}" "$*" >&2
   exit 1
 }
 
@@ -133,20 +133,49 @@ generate_random_password() {
   local length="${1:-24}"
   local generated
 
+  # tr recebe SIGPIPE quando `head` fecha o pipe (exit 141). Salva e restaura o
+  # estado real do pipefail em vez de forcar um estado global.
+  local pipefail_was_on=0
+  if [[ -o pipefail ]]; then pipefail_was_on=1; fi
   set +o pipefail
   generated="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$length")"
-  set -o pipefail
+  if [[ "$pipefail_was_on" -eq 1 ]]; then
+    set -o pipefail
+  fi
 
   [[ -n "$generated" ]] || fail "Nao foi possivel gerar senha aleatoria."
   (( ${#generated} == length )) || fail "Senha aleatoria gerada com comprimento insuficiente: ${#generated} de ${length}."
   printf '%s' "$generated"
 }
 
+# Falha cedo (mensagem clara) se nao houver espaco em disco para builds.
+check_disk_space() {
+  local path="${1:-/opt}"
+  local required_mb="${2:-2048}"
+  local available_mb
+
+  if [[ ! -d "$path" ]]; then
+    return 0
+  fi
+
+  available_mb="$(df -Pm "$path" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [[ -z "$available_mb" ]]; then
+    warn "Nao foi possivel verificar espaco em disco em $path."
+    return 0
+  fi
+
+  if (( available_mb < required_mb )); then
+    fail "Espaco insuficiente em $path: ${available_mb}MB livres (minimo exigido: ${required_mb}MB)."
+  fi
+}
+
 # ── Installation detection ─────────────────────────────────────────────────
 
 is_discovery_installed() {
-  if sudo test -f /etc/discovery-api/discovery.env 2>/dev/null && \
-     sudo systemctl list-unit-files discovery-api.service &>/dev/null; then
+  # `systemctl list-unit-files PATTERN` sai 0 mesmo sem nenhum match — comparar
+  # o exit code e sempre-verdadeiro. Testar a existencia do unit file.
+  if sudo test -f /etc/discovery-api/discovery.env 2>/dev/null \
+     && sudo test -e /etc/systemd/system/discovery-api.service 2>/dev/null; then
     return 0
   fi
   return 1

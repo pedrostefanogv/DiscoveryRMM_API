@@ -208,59 +208,24 @@ prompt_nats_configuration() {
   prompt_if_empty NATS_AUTH_CALLOUT_SUBJECT "Subject do auth callout" 0 "\$SYS.REQ.USER.AUTH"
 }
 
-# ── Self-update wizard ─────────────────────────────────────────────────────
+# ── Update policy wizard ───────────────────────────────────────────────────
 
 prompt_selfupdate_settings() {
-  wizard_header "Self-Update Automatico" "$(wizard_step_label "9/10" "8/9")"
-  echo "O Discovery pode verificar e aplicar atualizacoes automaticamente."
-  echo "O script compara o commit local com o remoto e faz dotnet publish/npm build apenas se houver mudanca."
+  wizard_header "Politica de atualizacao" "$(wizard_step_label "9/10" "8/9")"
+  echo "O update do servidor e SEMPRE manual, executado pelo administrador via:"
+  echo "  ./scripts/linux/install_discovery_server.sh --mode update"
+  echo "  (ou a opcao 3 'Atualizar instalacao existente' do bootstrap)"
+  echo "Nao existe atualizacao automatica agendada."
   echo "----------------------------------------"
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-    SELFUPDATE_ENABLED="${SELFUPDATE_ENABLED:-1}"
-    SELFUPDATE_INTERVAL="${SELFUPDATE_INTERVAL:-24h}"
     DISCOVERY_CLEAN_BUILD="${DISCOVERY_CLEAN_BUILD:-1}"
     return
   fi
 
-  if [[ -z "${SELFUPDATE_ENABLED:-}" ]]; then
-    local selfupdate_choice
-    read -r -p "Ativar self-update automatico? (S/n): " selfupdate_choice
-    selfupdate_choice="$(printf '%s' "${selfupdate_choice:-s}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    case "$selfupdate_choice" in
-      s|sim|y|yes|1) SELFUPDATE_ENABLED=1 ;;
-      *) SELFUPDATE_ENABLED=0; SELFUPDATE_INTERVAL="" ;;
-    esac
-  fi
-
-  if [[ "${SELFUPDATE_ENABLED:-1}" == "1" && -z "${SELFUPDATE_INTERVAL:-}" ]]; then
-    echo
-    echo "Intervalo de verificacao:"
-    echo "  1) 5 minutos   [dev]"
-    echo "  2) 10 minutos  [dev]"
-    echo "  3) 15 minutos  [dev]"
-    echo "  4) 24 horas    (recomendado para producao)"
-    echo "  5) 48 horas"
-    echo "  6) 72 horas"
-    echo
-    local interval_choice
-    read -r -p "Escolha [4]: " interval_choice
-    interval_choice="${interval_choice:-4}"
-    case "$interval_choice" in
-      1) SELFUPDATE_INTERVAL="5min" ;;
-      2) SELFUPDATE_INTERVAL="10min" ;;
-      3) SELFUPDATE_INTERVAL="15min" ;;
-      4) SELFUPDATE_INTERVAL="24h" ;;
-      5) SELFUPDATE_INTERVAL="48h" ;;
-      6) SELFUPDATE_INTERVAL="72h" ;;
-      *) SELFUPDATE_INTERVAL="24h" ;;
-    esac
-    log "Self-update ativado com intervalo: ${SELFUPDATE_INTERVAL}"
-  fi
-
   if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" ]]; then
     echo
-    echo "Modo de build para updates (manual e automatico):"
+    echo "Modo de build para os updates manuais:"
     echo "  1) Limpo (remove cache antes do build)"
     echo "  2) Incremental (mais rapido, sem limpeza de cache)"
     local clean_build_choice

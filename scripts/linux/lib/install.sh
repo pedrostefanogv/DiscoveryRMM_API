@@ -3,19 +3,29 @@
 
 # ── Update de pacotes do sistema (antes de qualquer update da stack) ──────
 
-# Atualiza a lista de pacotes e faz upgrade completo do SO. Rodado ANTES de
-# qualquer update (API/site/agent) para que as toolchains (Go, Node, GCC,
-# NSIS, libs GTK/WebKit) estejam atualizadas antes de buildar.
-# --force-confold preserva arquivos de config locales e nunca trava em prompt
+# Atualiza a lista de pacotes e faz upgrade completo do SO.
+# OPT-IN: roda apenas com DISCOVERY_APPLY_SYSTEM_UPDATES=1 — o apt-get upgrade
+# e lento, pode restartar servicos de infra (postgres/nginx) e travar o update
+# da aplicacao se um pacote problematico aparecer. A ferramenta correta para
+# atualizar o SO e o fluxo de patches do proprio sistema.
+# --force-confold preserva arquivos de config locais e nunca trava em prompt
 # interativo (DEBIAN_FRONTEND=noninteractive).
 apply_system_updates() {
+  if [[ "${DISCOVERY_APPLY_SYSTEM_UPDATES:-0}" != "1" ]]; then
+    log "Update de pacotes do SO pulado (opt-in: defina DISCOVERY_APPLY_SYSTEM_UPDATES=1)."
+    return 0
+  fi
+
   log "Atualizando sistema operacional (apt-get update + upgrade)..."
   if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y; then
     warn "apt-get update falhou; seguindo com upgrade (pode falhar se os indices nao atualizarem)"
   fi
-  sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+  if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
     -o Dpkg::Options::="--force-confdef" \
-    -o Dpkg::Options::="--force-confold"
+    -o Dpkg::Options::="--force-confold"; then
+    warn "apt-get upgrade falhou; seguindo com o update da aplicacao (nao-bloqueante)."
+    return 0
+  fi
   log "Upgrade do sistema concluido."
 }
 
@@ -66,7 +76,7 @@ install_nsis_nsjson_plugin() {
   fi
 
   log "Baixando nsJSON NSIS plugin v${version} de GitHub..."
-  if ! curl -fsSL -o "$tmp_zip" "$download_url"; then
+  if ! curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 -o "$tmp_zip" "$download_url"; then
     warn "Falha ao baixar nsJSON de $download_url; o build NSIS pode falhar"
     return
   fi
@@ -97,9 +107,12 @@ ensure_dotnet_sdk() {
 
   log "Instalando dotnet SDK 10.0"
   local ubuntu_version
-  ubuntu_version="$(. /etc/os-release && printf '%s' "$VERSION_ID")"
-
-  if curl -fsSL "https://packages.microsoft.com/config/ubuntu/${ubuntu_version}/packages-microsoft-prod.deb" -o /tmp/packages-microsoft-prod.deb; then
+  # VERSION_ID esta ausente em Debian testing/sid — nunca expandir sem default
+  # (set -u abortaria o instalador).
+  ubuntu_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")"
+  if [[ -z "$ubuntu_version" ]]; then
+    log "VERSION_ID ausente em /etc/os-release; usando fallback dotnet-install.sh"
+  elif curl -fsSL --connect-timeout 10 --retry 2 "https://packages.microsoft.com/config/ubuntu/${ubuntu_version}/packages-microsoft-prod.deb" -o /tmp/packages-microsoft-prod.deb; then
     sudo dpkg -i /tmp/packages-microsoft-prod.deb
     rm -f /tmp/packages-microsoft-prod.deb
     sudo apt-get update -y
@@ -109,7 +122,7 @@ ensure_dotnet_sdk() {
     log "Repositorio apt da Microsoft indisponivel para Ubuntu ${ubuntu_version}, aplicando fallback com dotnet-install.sh"
   fi
 
-  curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+  curl -fsSL --connect-timeout 10 --retry 2 https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
   chmod +x /tmp/dotnet-install.sh
   sudo mkdir -p /usr/share/dotnet
   sudo /tmp/dotnet-install.sh --channel 10.0 --install-dir /usr/share/dotnet

@@ -49,6 +49,13 @@ load_update_defaults() {
   ensure_service_user_home
   ensure_winget_clone_dir
   create_directories
+
+  # Update e sempre manual: garante que nenhuma automatizacao antiga remain.
+  remove_selfupdate_automation
+
+  # Builds (.NET/npm/Go) precisam de disco; falha cedo com mensagem clara.
+  check_disk_space "${DISCOVERY_API_BASE:-/opt}" 2048
+  check_disk_space "${DISCOVERY_SITE_BASE:-/opt}" 1024
   # NOTA: o CLI do Wails NAO e instalado aqui (pre-clone) para evitar resolver
   # o go.mod antigo do agent. Ele e instalado/revalidado APOS o clone do agent,
   # em update_agent() e update_all_components(), onde o go.mod ja reflete a
@@ -63,22 +70,30 @@ load_update_defaults() {
 update_api() {
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   publish_api
-  update_remote_access_environment_file
+  update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
   if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-0}" == "1" ]]; then
-    log "Atualizando tambem infraestrutura auxiliar (self-update + Nginx) por solicitacao explicita"
-    install_selfupdate_script
-    write_site_proxy_config
+    log "Atualizando tambem infraestrutura auxiliar (Nginx) por solicitacao explicita"
+    write_site_proxy_config || warn "Falha ao escrever config do Nginx (nao-bloqueante)"
   fi
-  if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
-    sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api"
-  else warn "Servico discovery-api nao encontrado; pulando restart"; fi
+  if sudo systemctl list-unit-files --no-legend discovery-api.service 2>/dev/null | grep -q .; then
+    # Health check pos-restart com rollback automatico para a release anterior.
+    if ! restart_api_with_rollback; then
+      fail "Update da API nao ficou saudavel apos o restart (rollback aplicado quando possivel)."
+    fi
+  else
+    warn "Servico discovery-api nao encontrado; pulando restart"
+  fi
 }
 
 update_site() {
   clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
   publish_site
-  if sudo systemctl list-unit-files nginx.service >/dev/null 2>&1; then
-    sudo systemctl restart nginx || warn "Falha ao reiniciar nginx"
+  if sudo systemctl list-unit-files --no-legend nginx.service 2>/dev/null | grep -q .; then
+    if sudo nginx -t >/dev/null 2>&1; then
+      sudo systemctl reload nginx || sudo systemctl restart nginx || warn "Falha ao recarregar nginx"
+    else
+      warn "Configuracao do nginx invalida; reload pulado (verifique: sudo nginx -t)."
+    fi
   fi
 }
 
@@ -172,16 +187,24 @@ update_all_components() {
   update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
   publish_site
   if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-0}" == "1" ]]; then
-    log "Atualizando tambem infraestrutura auxiliar (self-update + Nginx) por solicitacao explicita"
-    install_selfupdate_script || warn "Falha ao instalar script de self-update (nao-bloqueante)"
+    log "Atualizando tambem infraestrutura auxiliar (Nginx) por solicitacao explicita"
     write_site_proxy_config || warn "Falha ao escrever config do Nginx (nao-bloqueante)"
   fi
   log "Reiniciando servicos..."
-  if sudo systemctl list-unit-files discovery-api.service >/dev/null 2>&1; then
-    sudo systemctl restart discovery-api || warn "Falha ao reiniciar discovery-api"
-  else warn "Servico discovery-api nao encontrado; pulando restart"; fi
-  if sudo systemctl list-unit-files nginx.service >/dev/null 2>&1; then
-    sudo systemctl restart nginx || warn "Falha ao reiniciar nginx"
+  if sudo systemctl list-unit-files --no-legend discovery-api.service 2>/dev/null | grep -q .; then
+    # Health check pos-restart com rollback automatico para a release anterior.
+    if ! restart_api_with_rollback; then
+      fail "Update nao ficou saudavel apos o restart (rollback aplicado quando possivel)."
+    fi
+  else
+    warn "Servico discovery-api nao encontrado; pulando restart"
+  fi
+  if sudo systemctl list-unit-files --no-legend nginx.service 2>/dev/null | grep -q .; then
+    if sudo nginx -t >/dev/null 2>&1; then
+      sudo systemctl reload nginx || sudo systemctl restart nginx || warn "Falha ao recarregar nginx"
+    else
+      warn "Configuracao do nginx invalida; reload pulado (verifique: sudo nginx -t)."
+    fi
   fi
   _trigger_agent_rebuild_via_api || warn "Falha ao disparar rebuild do agent (nao-bloqueante)"
 }
@@ -284,6 +307,10 @@ apply_nats_reconfiguration_only() {
 
 load_existing_maintenance_defaults() {
   local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+
+  # Manutencao roda fora do fluxo de instalacao/update: garantir paths padrao
+  # (com set -u, `$DISCOVERY_OPS_DIR/...` sem default abortaria o modo).
+  DISCOVERY_OPS_DIR="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"
 
   if sudo test -f "$env_file"; then
     local env_api_base env_api_current
@@ -582,12 +609,8 @@ switch_tls_provider() {
   TLS_CERT_PROVIDER="$new_provider"
   normalize_tls_certificate_provider
 
-  log "Trocando provedor TLS para $TLS_CERT_PROVIDER"
-
-  # Emite o novo certificado.
-  setup_proxy_certificate
-
-  # Atualiza o discovery.env com o novo provider.
+  # Persiste as credenciais do novo provedor ANTES de emitir: o template ACME
+  # le os valores do discovery.env (nunca via argv — segredo em /proc).
   local tmp_file; tmp_file="$(mktemp)"
   cp "$env_file" "$tmp_file"
 
@@ -624,6 +647,10 @@ switch_tls_provider() {
 
   sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
   rm -f "$tmp_file"
+
+  # Emite o novo certificado (le os valores recem-persistidos do discovery.env).
+  log "Trocando provedor TLS para $TLS_CERT_PROVIDER"
+  setup_proxy_certificate
 
   # Ajusta os timers de renovacao (desativa o antigo, ativa o novo).
   sudo systemctl disable --now discovery-zerossl-renew.timer >/dev/null 2>&1 || true

@@ -2,6 +2,11 @@
 # Discovery RMM - Correcao da renovacao ZeroSSL (2026-08-01)
 # 1) Atualiza /etc/discovery-api/discovery.env para provider zerossl-acme + hook DNS
 # 2) Torna EAB opcional no zerossl-acme-certificate.sh quando a conta acme.sh ja existe
+#
+# USO: sudo ./fix-zerossl-renewal.sh [dominio] [email]
+#   - Sem argumentos, le ZEROSSL_CERT_DOMAIN e ZEROSSL_ACME_EMAIL do proprio
+#     /etc/discovery-api/discovery.env (o script NAO traz mais valores fixos de
+#     nenhuma instalacao — rodar em outro servidor nao sobrescreve a config TLS).
 set -euo pipefail
 
 ENV_FILE="/etc/discovery-api/discovery.env"
@@ -10,12 +15,38 @@ ACME_HOME="/etc/discovery-api/acme"
 ACCOUNT_DIR="$ACME_HOME/ca/acme.zerossl.com/v2/DV90"
 
 log() { printf '[fix] %s\n' "$*"; }
+fail() { printf '[fix][erro] %s\n' "$*" >&2; exit 1; }
+
+require_cmd() { command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"; }
+
+[[ "$(id -u)" -eq 0 ]] || fail "Execute como root (o script altera $ENV_FILE e $SCRIPT)."
+require_cmd python3
+[[ -f "$ENV_FILE" ]] || fail "Arquivo $ENV_FILE nao encontrado (execute o instalador primeiro)."
+
+arg_domain="${1:-}"
+arg_email="${2:-}"
+
+get_env_key() {
+  awk -F= -v k="$1" '$1==k {sub("^[^=]*=",""); print; exit}' "$ENV_FILE" 2>/dev/null || true
+}
+
+ZEROSSL_DOMAIN="${arg_domain:-$(get_env_key ZEROSSL_CERT_DOMAIN)}"
+ZEROSSL_EMAIL="${arg_email:-$(get_env_key ZEROSSL_ACME_EMAIL)}"
+
+if [[ -z "$ZEROSSL_DOMAIN" ]]; then
+  fail "Dominio ZeroSSL nao informado. Use: $0 <dominio> [email] (ou defina ZEROSSL_CERT_DOMAIN no $ENV_FILE)"
+fi
+if [[ -z "$ZEROSSL_EMAIL" ]]; then
+  fail "Email ACME nao informado. Use: $0 <dominio> <email> (ou defina ZEROSSL_ACME_EMAIL no $ENV_FILE)"
+fi
+
+STAMP="$(date +%Y%m%d%H%M%S)"
 
 # ── 1) Atualiza discovery.env ─────────────────────────────────────────────
 log "Atualizando $ENV_FILE"
 
-# Backup
-cp "$ENV_FILE" "$ENV_FILE.bak-20260801-fix"
+# Backup com timestamp (reruns nao sobrescrevem o backup original)
+cp "$ENV_FILE" "$ENV_FILE.bak-fix-$STAMP"
 
 # Funcao: define ou atualiza chave
 set_env_key() {
@@ -28,11 +59,11 @@ set_env_key() {
 }
 
 set_env_key "TLS_CERT_PROVIDER" "zerossl-acme"
-set_env_key "ZEROSSL_CERT_DOMAIN" "tngplacas.com.br"
-set_env_key "ZEROSSL_CERT_ALT_DOMAINS" ""
-set_env_key "ZEROSSL_ACME_EMAIL" "pedrostefanogv@gmail.com"
-set_env_key "ZEROSSL_ACME_EAB_KID" ""
-set_env_key "ZEROSSL_ACME_EAB_HMAC_KEY" ""
+set_env_key "ZEROSSL_CERT_DOMAIN" "$ZEROSSL_DOMAIN"
+set_env_key "ZEROSSL_CERT_ALT_DOMAINS" "$(get_env_key ZEROSSL_CERT_ALT_DOMAINS)"
+set_env_key "ZEROSSL_ACME_EMAIL" "$ZEROSSL_EMAIL"
+set_env_key "ZEROSSL_ACME_EAB_KID" "$(get_env_key ZEROSSL_ACME_EAB_KID)"
+set_env_key "ZEROSSL_ACME_EAB_HMAC_KEY" "$(get_env_key ZEROSSL_ACME_EAB_HMAC_KEY)"
 set_env_key "ZEROSSL_DNS_RESOLVERS" "1.1.1.1,8.8.8.8"
 set_env_key "ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS" "600"
 set_env_key "ZEROSSL_DNS_POLL_INTERVAL_SECONDS" "15"
@@ -42,15 +73,15 @@ set_env_key "ZEROSSL_DNS_AUTOMATION_HOOK" "/opt/discovery-ops/cloudflare-dns-hoo
 
 chmod 640 "$ENV_FILE"
 chown root:discovery-api "$ENV_FILE"
-log "discovery.env atualizado"
+log "discovery.env atualizado (dominio: $ZEROSSL_DOMAIN)"
 
 # ── 2) Torna EAB opcional quando a conta acme.sh ja existe ────────────────
 log "Ajustando $SCRIPT para EAB opcional (conta ja registrada)"
 
 # Backup do script
-cp "$SCRIPT" "$SCRIPT.bak-20260801"
+cp "$SCRIPT" "$SCRIPT.bak-fix-$STAMP"
 
-# 2a) Validação de EAB: só exige se a conta não estiver registrada
+# 2a) Validacao de EAB: so exige se a conta nao estiver registrada
 python3 - "$SCRIPT" "$ACCOUNT_DIR" <<'PYEOF'
 import sys, re
 

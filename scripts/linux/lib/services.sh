@@ -12,7 +12,13 @@ env_file_get() {
 setup_redis() {
   log "Configurando Redis"
   sudo systemctl enable redis-server
-  sudo systemctl restart redis-server
+  # Nao modificamos configuracao do redis: restart incondicional derrubaria
+  # cache/sessoes a cada reexecucao do instalador sem necessidade.
+  if sudo systemctl is-active --quiet redis-server; then
+    log "redis-server ja ativo; pulando restart."
+  else
+    sudo systemctl start redis-server
+  fi
 }
 
 ensure_pgvector_package() {
@@ -39,21 +45,40 @@ setup_postgres() {
   local escaped_db_password="${POSTGRES_PASSWORD//\'/\'\'}"
 
   sudo systemctl enable postgresql
-  sudo systemctl restart postgresql
+  # Nao alteramos configuracao do postgres: restart incondicional derrubaria
+  # conexoes a cada reexecucao. Start apenas se nao estiver ativo.
+  if sudo systemctl is-active --quiet postgresql; then
+    log "PostgreSQL ja ativo; pulando restart."
+  else
+    sudo systemctl restart postgresql
+  fi
   ensure_pgvector_package
 
-  if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${escaped_db_user}'" | grep -q 1; then
+  # Resultado via command substitution (sem pipeline psql|grep, imune a SIGPIPE).
+  local user_exists db_exists
+  user_exists="$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${escaped_db_user}'" 2>/dev/null || true)"
+  if [[ "$user_exists" != "1" ]]; then
     sudo -u postgres psql -c "CREATE USER \"${POSTGRES_USER}\" WITH PASSWORD '${escaped_db_password}';"
   else
     sudo -u postgres psql -c "ALTER USER \"${POSTGRES_USER}\" WITH PASSWORD '${escaped_db_password}';"
   fi
 
-  if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${escaped_db_name}'" | grep -q 1; then
+  db_exists="$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${escaped_db_name}'" 2>/dev/null || true)"
+  if [[ "$db_exists" != "1" ]]; then
     sudo -u postgres psql -c "CREATE DATABASE \"${POSTGRES_DB}\" OWNER \"${POSTGRES_USER}\";"
   fi
 
   sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE \"${POSTGRES_DB}\" TO \"${POSTGRES_USER}\";"
-  sudo -u postgres psql -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+  # C6: o design e warn-and-continue quando o pacote pgvector nao existe —
+  # o CREATE EXTENSION nunca pode abortar a instalacao inteira nesse cenario.
+  local vector_available
+  vector_available="$(sudo -u postgres psql -d "${POSTGRES_DB}" -tAc "SELECT 1 FROM pg_available_extensions WHERE name='vector'" 2>/dev/null || true)"
+  if [[ "$vector_available" == "1" ]]; then
+    sudo -u postgres psql -d "${POSTGRES_DB}" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+  else
+    warn "Extensao vector indisponivel neste host; continuando sem pgvector (embeddings/IA vetorial desativados)."
+  fi
 }
 
 # ── nk tool ────────────────────────────────────────────────────────────────
@@ -74,17 +99,19 @@ install_nk_tool() {
   local tmp_dir; tmp_dir="$(mktemp -d)"
   local nk_zip="$tmp_dir/nkeys.zip"; local nk_path=""
   local release_tag
-  release_tag="$(curl -fsSL "https://api.github.com/repos/nats-io/nkeys/releases/latest" | jq -r '.tag_name')"
+  release_tag="$(curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "https://api.github.com/repos/nats-io/nkeys/releases/latest" | jq -r '.tag_name')"
   [[ -n "$release_tag" && "$release_tag" != "null" ]] || fail "Nao foi possivel descobrir a versao mais recente do nkeys."
 
   local nk_url="https://github.com/nats-io/nkeys/releases/download/${release_tag}/nkeys-${release_tag}-linux-${nk_arch}.zip"
   log "Baixando ferramenta nk (geracao de chaves NATS)..."
-  curl -fsSL "$nk_url" -o "$nk_zip"
+  curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "$nk_url" -o "$nk_zip"
   unzip -q "$nk_zip" -d "$tmp_dir"
 
   nk_path="$(cd "$tmp_dir" && find . -type f -name nk | head -n 1)"
   nk_path="${nk_path#./}"; nk_path="$tmp_dir/$nk_path"
-  [[ -n "$nk_path" ]] || fail "Nao foi possivel localizar o binario nk no pacote baixado."
+  # [[ -f ]] e obrigatorio: com find vazio, nk_path vira "$tmp_dir/" (nao-vazio)
+  # e o check por -n passaria vazio, falhando no install com erro criptico.
+  [[ -f "$nk_path" ]] || fail "Nao foi possivel localizar o binario nk no pacote baixado."
 
   sudo install -m 0755 "$nk_path" "$nk_bin"
   rm -rf "$tmp_dir"
@@ -108,13 +135,13 @@ install_nats_cli() {
   local nats_bin="/usr/local/bin/nats"
   local release_json asset_url nats_path
 
-  release_json="$(curl -fsSL "https://api.github.com/repos/nats-io/natscli/releases/latest")"
+  release_json="$(curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "https://api.github.com/repos/nats-io/natscli/releases/latest")"
   asset_url="$(printf '%s' "$release_json" | jq -r --arg arch "$nats_arch" '.assets[]?.browser_download_url | select(test("linux-" + $arch + "\\.zip$"))' | head -n 1)"
 
   [[ -n "$asset_url" && "$asset_url" != "null" ]] || fail "Nao foi possivel localizar asset Linux do nats CLI para arquitetura $nats_arch."
 
   log "Baixando nats CLI para bootstrap de streams JetStream..."
-  curl -fsSL "$asset_url" -o "$nats_zip"
+  curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "$asset_url" -o "$nats_zip"
   unzip -q "$nats_zip" -d "$tmp_dir"
 
   nats_path="$(cd "$tmp_dir" && find . -type f -name nats | head -n 1)"
@@ -265,12 +292,15 @@ detect_nats_service_group() {
 }
 
 ensure_nats_fanout_stream() {
-  if [[ "${NATS_JS_ENABLED:-1}" != "1" ]]; then
+  # Aceita "1"/"true" (o valor pode vir cru do discovery.env sem normalizacao).
+  local js_enabled="${NATS_JS_ENABLED:-1}"
+  if [[ "$js_enabled" != "1" && "$js_enabled" != "true" ]]; then
     log "JetStream desativado; pulando bootstrap do stream de fan-out."
     return
   fi
 
-  if [[ "${NATS_JS_FANOUT_STREAM_ENABLED:-1}" != "1" ]]; then
+  local stream_enabled="${NATS_JS_FANOUT_STREAM_ENABLED:-1}"
+  if [[ "$stream_enabled" != "1" && "$stream_enabled" != "true" ]]; then
     log "Bootstrap automatico do stream de fan-out desativado por configuracao."
     return
   fi
@@ -282,17 +312,20 @@ ensure_nats_fanout_stream() {
   local stream_max_age="${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}"
   local stream_max_bytes="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}"
   local stream_dupe_window="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}"
-  local -a nats_cmd=(
-    nats
-    --server "nats://127.0.0.1:4222"
-    --user "$NATS_AUTH_USER"
-    --password "$NATS_AUTH_PASSWORD"
-  )
+
+  # Credenciais via ambiente (NATS_URL/NATS_USER/NATS_PASSWORD sao lidas pelo
+  # nats CLI) — nunca em argv, que fica visivel em /proc/*/cmdline.
+  run_nats_cli() {
+    NATS_URL="nats://127.0.0.1:4222" \
+    NATS_USER="$NATS_AUTH_USER" \
+    NATS_PASSWORD="$NATS_AUTH_PASSWORD" \
+    nats "$@"
+  }
 
   local attempt delay
   for attempt in $(seq 1 15); do
-    if "${nats_cmd[@]}" stream info "$stream_name" >/dev/null 2>&1; then
-      if "${nats_cmd[@]}" stream update "$stream_name" \
+    if run_nats_cli stream info "$stream_name" >/dev/null 2>&1; then
+      if run_nats_cli stream update "$stream_name" \
         --subjects "$stream_subjects" \
         --storage file \
         --retention limits \
@@ -305,7 +338,7 @@ ensure_nats_fanout_stream() {
         return
       fi
     else
-      if "${nats_cmd[@]}" stream add "$stream_name" \
+      if run_nats_cli stream add "$stream_name" \
         --subjects "$stream_subjects" \
         --storage file \
         --retention limits \
@@ -464,13 +497,21 @@ EOF
   if sudo test -f "$nats_conf"; then
     if ! sudo diff -q "$new_nats_conf" "$nats_conf" >/dev/null 2>&1; then
       log "Configuracao do NATS alterada; aplicando."
-      sudo install -m 640 -o root -g nats "$new_nats_conf" "$nats_conf" || sudo install -m 640 -o root -g root "$new_nats_conf" "$nats_conf"
+      if ! sudo install -m 640 -o root -g nats "$new_nats_conf" "$nats_conf" 2>/dev/null \
+         && ! sudo install -m 640 -o root -g root "$new_nats_conf" "$nats_conf"; then
+        rm -f "$new_nats_conf"
+        fail "Falha ao escrever a configuracao do NATS em $nats_conf"
+      fi
       needs_restart=1
     else
       log "Configuracao do NATS inalterada; mantendo atual."
     fi
   else
-    sudo install -m 640 -o root -g nats "$new_nats_conf" "$nats_conf" || sudo install -m 640 -o root -g root "$new_nats_conf" "$nats_conf"
+    if ! sudo install -m 640 -o root -g nats "$new_nats_conf" "$nats_conf" 2>/dev/null \
+       && ! sudo install -m 640 -o root -g root "$new_nats_conf" "$nats_conf"; then
+      rm -f "$new_nats_conf"
+      fail "Falha ao escrever a configuracao do NATS em $nats_conf"
+    fi
     needs_restart=1
   fi
   rm -f "$new_nats_conf"

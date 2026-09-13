@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Chaves privadas passam por este script: umask restritiva desde o inicio
+# (o acme.sh cria a key com a umask do processo ate o chmod final).
+umask 077
 
 ACTION="${1:-issue}"
 DISCOVERY_ENV_FILE="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
@@ -106,10 +109,16 @@ install_acme_sh() {
   fi
 
   log "Instalando acme.sh em $ZEROSSL_ACME_SH_DIR"
-  install -d -m 750 -o root -g discovery-api "$(dirname "$ZEROSSL_ACME_SH_DIR")"
+  install -d -m 750 -o root -g root "$(dirname "$ZEROSSL_ACME_SH_DIR")"
   rm -rf "$ZEROSSL_ACME_SH_DIR"
-  git clone --depth 1 https://github.com/acmesh-official/acme.sh.git "$ZEROSSL_ACME_SH_DIR"
-  chown -R root:discovery-api "$ZEROSSL_ACME_SH_DIR"
+  # Pin de versao: clonar master no momento da renovacao executa codigo
+  # arbitrario como root (supply chain). Se o tag fixado nao existir, cai para
+  # o default com alerta explicito no log.
+  if ! git clone --depth 1 --branch "${ACME_SH_VERSION:-v3.1.1}" \
+      https://github.com/acmesh-official/acme.sh.git "$ZEROSSL_ACME_SH_DIR" 2>/dev/null; then
+    warn "Tag ${ACME_SH_VERSION:-v3.1.1} do acme.sh indisponivel; usando branch padrao (SEM pin)."
+    git clone --depth 1 https://github.com/acmesh-official/acme.sh.git "$ZEROSSL_ACME_SH_DIR"
+  fi
   chmod 750 "$ZEROSSL_ACME_SH_DIR/acme.sh"
 }
 
@@ -129,7 +138,8 @@ build_domain_args() {
 }
 
 register_account() {
-  install -d -m 750 -o root -g discovery-api "$ZEROSSL_ACME_HOME"
+  # Estado da conta ACME (account.key) e material sensivel do servidor: 700 root.
+  install -d -m 700 -o root -g root "$ZEROSSL_ACME_HOME"
   # Se a conta ja esta registrada, nao precisa de EAB novamente.
   if [[ -f "$ZEROSSL_ACME_HOME/ca/acme.zerossl.com/v2/DV90/account.key" || -f "$ZEROSSL_ACME_HOME/ca/acme.zerossl.com/v2/DV90/account.json" ]]; then
     log "Conta ACME ja registrada; pulando register-account."
@@ -373,7 +383,7 @@ install_certificate() {
     -d "$ZEROSSL_CERT_DOMAIN" \
     --key-file "$ZEROSSL_CERT_KEY_PATH" \
     --fullchain-file "$ZEROSSL_CERT_FULLCHAIN_PATH" \
-    --reloadcmd "systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true" \
+    --reloadcmd "systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1; systemctl try-restart nats-server >/dev/null 2>&1 || true" \
     2>&1 | tee "$output_file"
   local exit_code=${PIPESTATUS[0]}
   set -e
@@ -389,6 +399,15 @@ install_certificate() {
   chmod 644 "$ZEROSSL_CERT_FULLCHAIN_PATH"
   chown root:discovery-api "$ZEROSSL_CERT_KEY_PATH"
   chown root:discovery-api "$ZEROSSL_CERT_FULLCHAIN_PATH"
+
+  # Valida o certificado instalado: expirado ou de outro dominio = falha
+  # explicita (antes, um cert errado ficava ativo ate a proxima renovacao).
+  if ! openssl x509 -in "$ZEROSSL_CERT_FULLCHAIN_PATH" -noout -checkend 0 >/dev/null 2>&1; then
+    fail "Certificado instalado invalido ou expirado ($ZEROSSL_CERT_FULLCHAIN_PATH)."
+  fi
+  if ! openssl x509 -in "$ZEROSSL_CERT_FULLCHAIN_PATH" -noout -checkhost "$ZEROSSL_CERT_DOMAIN" >/dev/null 2>&1; then
+    fail "Certificado instalado nao corresponde ao dominio $ZEROSSL_CERT_DOMAIN."
+  fi
 }
 
 certificate_needs_renewal() {
@@ -469,19 +488,30 @@ recover_already_issued_certificate() {
 issue_or_renew() {
   local command_action="$1"
 
-  install_acme_sh
-  build_domain_args
-  register_account
+  # Serializa emissao/renovacao: o timer diario pode correr junto com uma
+  # emissao manual no mesmo --home e corromper account.conf/orders.
+  exec 9>/run/lock/discovery-acme-zerossl.lock
+  if ! flock -n 9; then
+    fail "Outra emissao/renovacao ZeroSSL em andamento (lock em /run/lock)."
+  fi
 
+  # Gate ANTES de qualquer rede/instalacao do acme.sh: o timer diario nao deve
+  # nem baixar o acme.sh (nem chamar a CA) quando nao ha renovacao a fazer.
   if [[ "$command_action" == "--renew" ]] && ! certificate_needs_renewal; then
     log "Certificado ainda valido por mais de $ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY dias; renovacao ignorada."
     exit 0
   fi
 
+  # DNS-01 manual sem hook e sem terminal nao tem como prosseguir: falhar
+  # (exit != 0) para o systemd registrar o erro — nunca "sucesso" silencioso,
+  # que deixaria o certificado expirar com o timer aparentemente verde.
   if [[ "$command_action" == "--renew" && -z "${ZEROSSL_DNS_AUTOMATION_HOOK:-}" && ! -t 0 ]]; then
-    warn "Renovacao ZeroSSL usa DNS manual e nao ha terminal interativo. Execute este script manualmente ou configure ZEROSSL_DNS_AUTOMATION_HOOK."
-    exit 0
+    fail "Renovacao ZeroSSL usa DNS manual e nao ha terminal interativo. Execute este script manualmente ou configure ZEROSSL_DNS_AUTOMATION_HOOK."
   fi
+
+  install_acme_sh
+  build_domain_args
+  register_account
 
   # Antes de re-emitir, tenta recuperar um certificado ja emitido pela CA.
   # Isso evita repetir o processo de renovacao (e o rate-limit) quando o
@@ -494,6 +524,8 @@ issue_or_renew() {
   local challenge_file
   output_file="$(mktemp)"
   challenge_file="$(mktemp)"
+  # Cleanup garantido em qualquer saida (sucesso, fail ou abort do set -e).
+  trap 'rm -f "$output_file" "$challenge_file"' EXIT
 
   if request_dns_challenges "$output_file" "$challenge_file" "$command_action"; then
     if [[ -s "$challenge_file" ]]; then

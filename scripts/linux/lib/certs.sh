@@ -5,8 +5,23 @@ setup_jwt_signing_keys() {
   local private_key_path="/etc/discovery-api/certs/jwt-private.pem"
   local public_key_path="/etc/discovery-api/certs/jwt-public.pem"
 
-  if sudo test -f "$private_key_path" && sudo test -f "$public_key_path"; then
+  local has_private=0 has_public=0
+  sudo test -f "$private_key_path" && has_private=1
+  sudo test -f "$public_key_path" && has_public=1
+
+  if [[ "$has_private" -eq 1 && "$has_public" -eq 1 ]]; then
     log "Par de chaves JWT ja existe; mantendo arquivos atuais"
+    return
+  fi
+
+  # So a publica sumiu: deriva da privada (regenerar o par invalidaria TODAS
+  # as sessoes/tokens emitidos com a chave atual).
+  if [[ "$has_private" -eq 1 && "$has_public" -eq 0 ]]; then
+    log "Chave publica JWT ausente; derivando da chave privada existente (sessoes preservadas)."
+    local public_tmp; public_tmp="$(mktemp)"
+    sudo openssl rsa -in "$private_key_path" -pubout -out "$public_tmp"
+    sudo install -m 644 -o root -g discovery-api "$public_tmp" "$public_key_path"
+    rm -f "$public_tmp"
     return
   fi
 
@@ -28,14 +43,27 @@ setup_self_signed_proxy_certificate() {
 
   # Verifica se o certificado ja existe e e valido (nao expirado) e cobre os SANs atuais
   if sudo test -f "$cert_path" && sudo test -f "$key_path"; then
-    if sudo openssl x509 -in "$cert_path" -noout -checkend 0 >/dev/null 2>&1; then
-      log "Certificado self-signed existente ainda valido; mantendo atual."
+    local cert_ok=1
+    sudo openssl x509 -in "$cert_path" -noout -checkend 0 >/dev/null 2>&1 || cert_ok=0
+    # O comentario original prometia validar os SANs: verifica o host primario
+    # atual — se o host mudou, o cert errado ficaria ativo ate expirar.
+    if [[ "$cert_ok" -eq 1 ]]; then
+      local fido2_domain_now
+      fido2_domain_now="$(resolve_fido2_server_domain)"
+      if [[ -n "$fido2_domain_now" ]] \
+         && ! sudo openssl x509 -in "$cert_path" -noout -checkhost "$fido2_domain_now" >/dev/null 2>&1; then
+        cert_ok=0
+      fi
+    fi
+
+    if [[ "$cert_ok" -eq 1 ]]; then
+      log "Certificado self-signed existente valido e cobrindo o host atual; mantendo atual."
       sudo chmod 640 "$key_path"
       sudo chmod 644 "$cert_path"
       sudo chown root:discovery-api "$key_path" 2>/dev/null || true
       return
     fi
-    log "Certificado self-signed existente expirado; regenerando."
+    log "Certificado self-signed existente expirado ou nao cobre o host atual; regenerando."
   fi
 
   log "Gerando certificado self-signed para o proxy web local"
@@ -79,17 +107,20 @@ extendedKeyUsage = serverAuth
 keyUsage = digitalSignature, keyEncipherment
 EOF
 
-  sudo rm -f "$key_path" "$cert_path"
-  sudo openssl req -x509 -nodes -days 825 \
+  # Geracao em arquivos temporarios + install atomico: uma falha do openssl no
+  # meio nao pode deixar o nginx sem chave.
+  local key_tmp; key_tmp="$(mktemp)"
+  local cert_tmp; cert_tmp="$(mktemp)"
+  openssl req -x509 -nodes -days 825 \
     -newkey rsa:2048 \
-    -keyout "$key_path" \
-    -out "$cert_path" \
+    -keyout "$key_tmp" \
+    -out "$cert_tmp" \
     -config "$cert_conf"
   rm -f "$cert_conf"
 
-  sudo chmod 640 "$key_path"
-  sudo chmod 644 "$cert_path"
-  sudo chown root:discovery-api "$key_path"
+  sudo install -m 640 -o root -g discovery-api "$key_tmp" "$key_path"
+  sudo install -m 644 -o root -g discovery-api "$cert_tmp" "$cert_path"
+  rm -f "$key_tmp" "$cert_tmp"
 }
 
 # ── ZeroSSL ACME ───────────────────────────────────────────────────────────
@@ -103,19 +134,11 @@ setup_zerossl_acme_certificate() {
   log "Emitindo certificado ZeroSSL via ACME"
   install_zerossl_acme_certificate_script
 
-  sudo env \
-    TLS_CERT_PROVIDER="$TLS_CERT_PROVIDER" \
-    ZEROSSL_CERT_DOMAIN="$ZEROSSL_CERT_DOMAIN" \
-    ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-}" \
-    ZEROSSL_ACME_EMAIL="$ZEROSSL_ACME_EMAIL" \
-    ZEROSSL_ACME_EAB_KID="$ZEROSSL_ACME_EAB_KID" \
-    ZEROSSL_ACME_EAB_HMAC_KEY="$ZEROSSL_ACME_EAB_HMAC_KEY" \
-    ZEROSSL_DNS_RESOLVERS="${ZEROSSL_DNS_RESOLVERS:-1.1.1.1,8.8.8.8}" \
-    ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS="${ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS:-600}" \
-    ZEROSSL_DNS_POLL_INTERVAL_SECONDS="${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-15}" \
-    ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-30}" \
-    ZEROSSL_DNS_AUTOMATION_HOOK="${ZEROSSL_DNS_AUTOMATION_HOOK:-}" \
-    "$DISCOVERY_OPS_DIR/zerossl-acme-certificate.sh" issue
+  # Segredos (EAB HMAC etc.) NAO vao em argv (`sudo env KEY=...` fica visivel
+  # em /proc/*/cmdline). O template carrega os valores de
+  # /etc/discovery-api/discovery.env via load_env_file — o instalador garante
+  # que o env esteja atualizado ANTES de chamar esta funcao.
+  sudo "$DISCOVERY_OPS_DIR/zerossl-acme-certificate.sh" issue
 }
 
 setup_zerossl_renewal_timer() {
@@ -137,7 +160,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-EnvironmentFile=/etc/discovery-api/discovery.env
+# Prefixo '-': a ausencia do arquivo nao impede o timer de iniciar (os valores
+# tambem sao carregados pelo proprio template via load_env_file).
+EnvironmentFile=-/etc/discovery-api/discovery.env
 ExecStart=${DISCOVERY_OPS_DIR}/zerossl-acme-certificate.sh renew
 EOF
 
@@ -169,17 +194,9 @@ setup_letsencrypt_acme_certificate() {
   log "Emitindo certificado Let's Encrypt via ACME"
   install_letsencrypt_acme_certificate_script
 
-  sudo env \
-    TLS_CERT_PROVIDER="$TLS_CERT_PROVIDER" \
-    LETSENCRYPT_CERT_DOMAIN="$LETSENCRYPT_CERT_DOMAIN" \
-    LETSENCRYPT_CERT_ALT_DOMAINS="${LETSENCRYPT_CERT_ALT_DOMAINS:-}" \
-    LETSENCRYPT_ACME_EMAIL="$LETSENCRYPT_ACME_EMAIL" \
-    LETSENCRYPT_DNS_RESOLVERS="${LETSENCRYPT_DNS_RESOLVERS:-1.1.1.1,8.8.8.8}" \
-    LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS="${LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS:-600}" \
-    LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS="${LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS:-15}" \
-    LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY="${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY:-30}" \
-    LETSENCRYPT_DNS_AUTOMATION_HOOK="${LETSENCRYPT_DNS_AUTOMATION_HOOK:-}" \
-    "$DISCOVERY_OPS_DIR/letsencrypt-acme-certificate.sh" issue
+  # Sem segredos em argv: o template le os valores do discovery.env (ver
+  # setup_zerossl_acme_certificate).
+  sudo "$DISCOVERY_OPS_DIR/letsencrypt-acme-certificate.sh" issue
 }
 
 setup_proxy_certificate() {
@@ -214,7 +231,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-EnvironmentFile=/etc/discovery-api/discovery.env
+# Prefixo '-': a ausencia do arquivo nao impede o timer de iniciar (os valores
+# tambem sao carregados pelo proprio template via load_env_file).
+EnvironmentFile=-/etc/discovery-api/discovery.env
 ExecStart=${DISCOVERY_OPS_DIR}/letsencrypt-acme-certificate.sh renew
 EOF
 
@@ -274,7 +293,7 @@ setup_cloudflare_tunnel() {
   log "Instalando e configurando cloudflared"
 
   if ! command -v cloudflared >/dev/null 2>&1; then
-    if ! curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-main.gpg; then
+    if ! curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-main.gpg; then
       if [[ "$tunnel_critical" -eq 1 ]]; then
         fail "Nao foi possivel configurar repositorio do cloudflared (critico em ACCESS_MODE=external)."
       fi
@@ -302,6 +321,11 @@ setup_cloudflare_tunnel() {
       fail "Falha ao configurar cloudflared service install (critico em ACCESS_MODE=external)."
     fi
     warn "Falha ao configurar cloudflared service install; siga com configuracao manual do tunnel."; return
+  fi
+
+  # O unit gerado pelo cloudflared embute o token do tunnel; restringir a leitura.
+  if sudo test -f /etc/systemd/system/cloudflared.service; then
+    sudo chmod 640 /etc/systemd/system/cloudflared.service 2>/dev/null || true
   fi
 
   sudo systemctl enable cloudflared || warn "Nao foi possivel habilitar servico cloudflared automaticamente."
