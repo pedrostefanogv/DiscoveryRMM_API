@@ -119,10 +119,21 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.signal",
         };
 
+        // FIX (terminal/acesso remoto — item 1 do plano): TTL da credencial do
+        // viewer deve cobrir TODO o tempo restante da sessão + margem. Antes
+        // era fixo em 30 min (igual à duração padrão da sessão): sessão
+        // renovada, duração > 30 min ou fetch tardio das credenciais fazia o
+        // JWT expirar ANTES da sessão — o WebSocket do viewer caía no meio do
+        // uso (terminal/tela "morrem sozinhos" com -ERR authorization).
+        var remaining = session.ExpiresAt - DateTime.UtcNow;
+        var ttlMinutes = remaining > TimeSpan.Zero
+            ? (int)Math.Ceiling(remaining.Add(TimeSpan.FromMinutes(10)).TotalMinutes)
+            : 30;
+
         var (jwt, nkeySeed, _) = await credentialsService.IssueSessionCredentialsAsync(
             pubSubjects,
             subSubjects,
-            ttlMinutes: 30,
+            ttlMinutes: ttlMinutes,
             $"session:{session.Id:N}",
             ct);
 
