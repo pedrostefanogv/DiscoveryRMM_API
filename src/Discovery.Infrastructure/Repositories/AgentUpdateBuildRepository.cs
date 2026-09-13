@@ -63,4 +63,20 @@ public class AgentUpdateBuildRepository(DiscoveryDbContext db) : IAgentUpdateBui
 
         await db.SaveChangesAsync(cancellationToken);
     }
+
+    public async Task<IReadOnlyList<AgentUpdateBuild>> ListInactiveAsync(CancellationToken cancellationToken = default)
+    {
+        return await db.AgentUpdateBuilds
+            .AsNoTracking()
+            .Where(build => !build.IsActive)
+            .OrderByDescending(build => build.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        await db.AgentUpdateBuilds
+            .Where(build => build.Id == id)
+            .ExecuteDeleteAsync(cancellationToken);
+    }
 }

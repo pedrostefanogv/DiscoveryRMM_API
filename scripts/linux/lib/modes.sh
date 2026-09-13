@@ -513,6 +513,7 @@ apply_maintenance_mode() {
     echo "4) Recriar/garantir admin padrao (login admin, senha automatica, reset MFA)"
     echo "5) Ver ajuda completa do recover-admin"
     echo "6) Trocar provedor de certificado TLS (self-signed/ZeroSSL/Let's Encrypt)"
+    echo "7) Limpeza de dados (builds antigos, temp, journal, cache)"
     echo "0) Sair"
     echo "----------------------------------------"
 
@@ -550,6 +551,9 @@ apply_maintenance_mode() {
         pause_maintenance_menu ;;
       6)
         switch_tls_provider
+        pause_maintenance_menu ;;
+      7)
+        data_cleanup_menu
         pause_maintenance_menu ;;
       0|sair|exit|q|quit)
         log "Saindo do modo de manutencao"
@@ -659,4 +663,115 @@ switch_tls_provider() {
   setup_letsencrypt_renewal_timer
 
   log "Provedor TLS alterado para $TLS_CERT_PROVIDER com sucesso."
+}
+
+# ── Limpeza de dados (M-fix: menu de manutenção, opção 7) ──────────────────
+
+data_cleanup_menu() {
+  wizard_header "Limpeza de dados" "Manutenção"
+  echo "Selecione o que deseja limpar (0 para sair, T para todos de uma vez):"
+  echo "1) Builds antigos do agente (agent-update-builds)"
+  echo "2) Journal do systemd (logs do systemd-journald)"
+  echo "3) Cache do Go build (GOCACHE)"
+  echo "4) Temp files (/tmp e staging)"
+  echo "T) TODOS os itens de uma vez"
+  echo "0) Voltar"
+  echo "----------------------------------------"
+
+  local selected_option
+  read -r -p "Opcao [0]: " selected_option
+  selected_option="${selected_option:-0}"
+
+  case "$selected_option" in
+    1)
+      cleanup_agent_builds
+      pause_maintenance_menu ;;
+    2)
+      cleanup_journal
+      pause_maintenance_menu ;;
+    3)
+      cleanup_go_cache
+      pause_maintenance_menu ;;
+    4)
+      cleanup_temp_files
+      pause_maintenance_menu ;;
+    T|t)
+      echo "--- Executando limpeza completa ---"
+      cleanup_agent_builds
+      cleanup_journal
+      cleanup_go_cache
+      cleanup_temp_files
+      echo "--- Limpeza completa concluída ---"
+      pause_maintenance_menu ;;
+    0)
+      return ;;
+    *)
+      echo "Opção inválida." >&2 ;;
+  esac
+}
+
+cleanup_agent_builds() {
+  local builds_dir="${DISCOVERY_API_SHARED:-/opt/discovery-api/shared}/agent-update-builds"
+  if [[ ! -d "$builds_dir" ]]; then
+    echo "[cleanup] diretório não existe: $builds_dir"
+    return
+  fi
+  local total_size before after
+  before=$(du -sh "$builds_dir" 2>/dev/null | cut -f1)
+  echo "[cleanup] builds antigos — antes: $before"
+  # Remove TODOS os builds EXCETO a versão ativa (a mais recente).
+  local active_version
+  active_version=$(ls "$builds_dir/agent-updates/current/" 2>/dev/null | sort -V | tail -1)
+  if [[ -n "$active_version" ]]; then
+    echo "[cleanup] versão ativa: $active_version (preservada)"
+    for ver_dir in "$builds_dir/agent-updates/current/"*/; do
+      local ver_name
+      ver_name=$(basename "$ver_dir")
+      if [[ "$ver_name" != "$active_version" ]]; then
+        local size
+        size=$(du -sh "$ver_dir" 2>/dev/null | cut -f1)
+        echo "[cleanup] removendo build antigo: $ver_name ($size)"
+        rm -rf "$ver_dir"
+      fi
+    done
+  fi
+  # Remove diretórios vazios.
+  find "$builds_dir" -type d -empty -delete 2>/dev/null || true
+  after=$(du -sh "$builds_dir" 2>/dev/null | cut -f1)
+  echo "[cleanup] builds antigos — depois: $after"
+}
+
+cleanup_journal() {
+  local before
+  before=$(journalctl --disk-usage 2>/dev/null | grep -oP "[\d.]+[GKM]" | head -1 || echo "?")
+  echo "[cleanup] journal — antes: $before"
+  # Reduz o journal para 200 MB máximo e 2 semanas de retenção.
+  journalctl --vacuum-size=200M --vacuum-time=14d 2>/dev/null || true
+  local after
+  after=$(journalctl --disk-usage 2>/dev/null | grep -oP "[\d.]+[GKM]" | head -1 || echo "?")
+  echo "[cleanup] journal — depois: $after"
+}
+
+cleanup_go_cache() {
+  local gocache
+  gocache=$(go env GOCACHE 2>/dev/null || echo "")
+  if [[ -z "$gocache" || ! -d "$gocache" ]]; then
+    echo "[cleanup] Go cache não encontrado (go não instalado ou GOCACHE vazio)"
+    return
+  fi
+  local before
+  before=$(du -sh "$gocache" 2>/dev/null | cut -f1)
+  echo "[cleanup] Go cache — antes: $before"
+  go clean -cache 2>/dev/null || true
+  echo "[cleanup] Go cache limpo"
+}
+
+cleanup_temp_files() {
+  echo "[cleanup] limpando temp files..."
+  # Staging de instaladores P2P (agent-side, já limpos pelo agente)
+  rm -rf /tmp/Discovery 2>/dev/null || true
+  rm -rf "$DISCOVERY_API_BASE/shared/tmp" 2>/dev/null || true
+  # Temp do sistema (arquivos com mais de 7 dias)
+  find /tmp -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null || true
+  echo "[cleanup] temp files limpos"
 }

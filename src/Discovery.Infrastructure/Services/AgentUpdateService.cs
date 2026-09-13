@@ -42,6 +42,7 @@ public class AgentUpdateService(
             cancellationToken);
     }
 
+    /// <param name="cleanupOldBuilds">M-fix: quando true (default), após registrar o novo build remove os builds inativos antigos do DB e do disco. Previne acúmulo de ~47 MB por build no servidor.</param>
     public async Task<AgentUpdateBuild> RefreshCurrentBuildAsync(
         string version,
         string platform,
@@ -53,6 +54,7 @@ public class AgentUpdateService(
         string? signatureThumbprint = null,
         string? commitHash = null,
         string? actor = null,
+        bool cleanupOldBuilds = true,
         CancellationToken cancellationToken = default)
     {
         var normalizedVersion = NormalizeAndValidateVersion(version, nameof(version));
@@ -123,6 +125,15 @@ public class AgentUpdateService(
             !string.Equals(previousBuild.StorageObjectKey, created.StorageObjectKey, StringComparison.Ordinal))
         {
             TryDeleteLocalStage2Artifact(previousBuild.StorageObjectKey);
+        }
+
+        // M-fix: limpa builds inativos antigos (DB + disco) após registrar o novo —
+        // evita acúmulo de ~47 MB por build no servidor (37 builds = 1 GB na homologação).
+        if (cleanupOldBuilds)
+        {
+            var removedCount = await CleanupInactiveBuildsAsync(keepRecentCount: 3, cancellationToken);
+            if (removedCount > 0)
+                logger.LogInformation("Cleanup pós-upload: {Count} build(s) inativo(s) removido(s) do disco e DB.", removedCount);
         }
 
         return created;
@@ -969,6 +980,72 @@ public class AgentUpdateService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to remove previous local stage2 artifact {ObjectKey}.", objectKey);
+        }
+    }
+
+    /// <summary>
+    /// M-fix (limpeza de disco): remove builds INATIVOS do DB e do disco.
+    /// O RefreshCurrentBuildAsync desativa os builds antigos mas nunca os
+    /// deletava — 37 instaladores (~1 GB) acumulavam no servidor.
+    /// Mantém os <paramref name="keepRecentCount"/> builds inativos mais
+    /// recentes (para rollback) e remove o resto (DB + arquivo físico).
+    /// </summary>
+    public async Task<int> CleanupInactiveBuildsAsync(int keepRecentCount = 3, CancellationToken cancellationToken = default)
+    {
+        var inactive = await agentUpdateBuildRepository.ListInactiveAsync(cancellationToken);
+        if (inactive.Count <= keepRecentCount)
+            return 0;
+
+        // Mantém os keepRecentCount mais recentes; remove o resto.
+        var toRemove = inactive.Skip(keepRecentCount).ToList();
+        var removed = 0;
+
+        foreach (var build in toRemove)
+        {
+            // Deleta o arquivo físico do disco (staging local).
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(build.StorageObjectKey))
+                    TryDeleteLocalStage2Artifact(build.StorageObjectKey);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Cleanup: falha ao deletar arquivo do build {BuildId} ({ObjectKey}).", build.Id, build.StorageObjectKey);
+            }
+
+            // Deleta o registro do DB.
+            await agentUpdateBuildRepository.DeleteAsync(build.Id, cancellationToken);
+            removed++;
+
+            logger.LogInformation("Cleanup: build inativo removido — version={Version} fileName={FileName} id={Id}",
+                build.Version, build.FileName, build.Id);
+        }
+
+        // Limpa diretórios vazios que sobraram (por version/platform/arch).
+        try
+        {
+            var rootPath = ResolveStage2ArtifactsRootPath();
+            CleanupEmptyDirectories(rootPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Cleanup: não foi possível limpar diretórios vazios.");
+        }
+
+        return removed;
+    }
+
+    /// <summary>Remove recursivamente diretórios vazios abaixo de root (cleanup pós-delete de builds).</summary>
+    private void CleanupEmptyDirectories(string root)
+    {
+        foreach (var dir in Directory.GetDirectories(root))
+        {
+            CleanupEmptyDirectories(dir);
+            if (Directory.GetFiles(dir).Length == 0 && Directory.GetDirectories(dir).Length == 0)
+            {
+                try { Directory.Delete(dir); }
+                catch { /* best-effort */ }
+            }
         }
     }
 

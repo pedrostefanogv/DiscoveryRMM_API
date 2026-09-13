@@ -23,6 +23,7 @@ public interface IAgentUpdateService
         string? signatureThumbprint = null,
         string? commitHash = null,
         string? actor = null,
+        bool cleanupOldBuilds = true,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<AgentRelease>> ListReleasesAsync(bool includeInactive = false, string? channel = null, CancellationToken cancellationToken = default);
@@ -60,4 +61,7 @@ public interface IAgentUpdateService
         string? architecture = null,
         AgentReleaseArtifactType? artifactType = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>M-fix: limpa builds inativos antigos (DB + disco). Mantém os N mais recentes para rollback.</summary>
+    Task<int> CleanupInactiveBuildsAsync(int keepRecentCount = 3, CancellationToken cancellationToken = default);
 }

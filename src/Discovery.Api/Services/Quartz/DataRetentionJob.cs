@@ -111,6 +111,20 @@ public sealed class DataRetentionJob : IJob
         logger.LogInformation("DataRetention completed. Total purged: {Total} records across {Tables} tables.",
             totalDeleted, results.Count(r => r.Value > 0));
 
+        // M-fix: limpeza periódica de builds inativos antigos (DB + disco).
+        // Mantém os 3 builds inativos mais recentes para rollback; remove o resto.
+        try
+        {
+            var agentUpdateService = scope.ServiceProvider.GetRequiredService<IAgentUpdateService>();
+            var removedBuilds = await agentUpdateService.CleanupInactiveBuildsAsync(keepRecentCount: 3, ct);
+            if (removedBuilds > 0)
+                logger.LogInformation("DataRetention: {Count} agent update build(s) inativo(s) removido(s) do disco e DB.", removedBuilds);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "DataRetention: falha ao limpar agent update builds antigos.");
+        }
+
         context.Result = results;
     }
 

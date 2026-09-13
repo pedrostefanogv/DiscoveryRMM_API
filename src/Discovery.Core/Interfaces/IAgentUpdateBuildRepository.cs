@@ -19,4 +19,10 @@ public interface IAgentUpdateBuildRepository
         AgentReleaseArtifactType artifactType,
         Guid keepActiveBuildId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>M builds inativos (IsActive = false) — para cleanup de disco.</summary>
+    Task<IReadOnlyList<AgentUpdateBuild>> ListInactiveAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Remove um build do DB (o caller é responsável por deletar o arquivo físico).</summary>
+    Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 }
