@@ -62,17 +62,22 @@ public static class QuartzServiceCollectionExtensions
                     .WithDescription($"Sync Winget package catalog every {wingetIntervalDays} day(s) at midnight"));
             }
 
-            // ── Winget Manifests Sync (shallow clone winget-pkgs, fonte primária): every N minutes ──
+            // ── Winget Manifests Sync (shallow clone winget-pkgs, fonte primária): startup + a cada N minutos ──
             var manifestsEnabled = configuration.GetValue<bool?>("AppCatalog:Winget:Enabled") ?? true;
             var manifestsSource = configuration.GetValue<string?>("AppCatalog:Winget:Source") ?? "manifests";
-            var manifestsIntervalMin = Math.Max(15, configuration.GetValue<int?>("AppCatalog:Winget:ManifestsPollIntervalMinutes") ?? 60);
+            // Cadência default: 6h. Piso de 15 min protege contra config agressiva
+            // (clone/pull + import são custosos para rodar em loop curto).
+            var manifestsIntervalMin = Math.Max(15, configuration.GetValue<int?>("AppCatalog:Winget:ManifestsPollIntervalMinutes") ?? 360);
+            // Primeira execução logo após o startup (catch-up pós restart/deploy); 0 = no start do scheduler.
+            var manifestsStartupDelayMin = Math.Max(0, configuration.GetValue<int?>("AppCatalog:Winget:StartupSyncDelayMinutes") ?? 2);
 
             if (manifestsEnabled && !manifestsSource.Equals("feed", StringComparison.OrdinalIgnoreCase))
             {
                 q.ScheduleJob<WingetManifestsSyncJob>(trigger => trigger
                     .WithIdentity($"{WingetManifestsSyncJob.Key.Name}-trigger", WingetManifestsSyncJob.Key.Group)
+                    .StartAt(DateTimeOffset.UtcNow.AddMinutes(manifestsStartupDelayMin))
                     .WithSimpleSchedule(s => s.WithIntervalInMinutes(manifestsIntervalMin).RepeatForever())
-                    .WithDescription($"Sync Winget catalog from manifests clone every {manifestsIntervalMin} minute(s)"));
+                    .WithDescription($"Sync Winget catalog from manifests clone {manifestsStartupDelayMin} min after startup, then every {manifestsIntervalMin} minute(s)"));
             }
 
             // ── Alert Scheduler: every 30 seconds ─────────────────────

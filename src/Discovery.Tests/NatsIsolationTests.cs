@@ -119,7 +119,9 @@ public class NatsIsolationTests
                 "tenant.global.pong",
                 expectedPrefix + "sync.ping",
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
+#pragma warning disable CS0618 // Subject legado do P2P discovery: segue na lista canônica durante a transição com agents antigos (ver NatsCredentialsService).
                 NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
+#pragma warning restore CS0618
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "_INBOX.>",
             }),
@@ -467,7 +469,9 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.ServerPongSubject(),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
+#pragma warning disable CS0618 // Subject legado do P2P discovery: segue na lista canônica durante a transição com agents antigos (ver NatsCredentialsService).
                 NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
+#pragma warning restore CS0618
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "_INBOX.>",
             ]);

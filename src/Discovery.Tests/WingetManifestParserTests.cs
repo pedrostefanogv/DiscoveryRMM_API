@@ -171,4 +171,47 @@ public class WingetManifestParserTests
         Assert.That(meta.RootElement.GetProperty("silent").GetString(), Is.EqualTo("/PASSIVE"));
         Assert.That(meta.RootElement.GetProperty("silentWithProgress").GetString(), Is.EqualTo("/PASSIVE"));
     }
+
+    [Test]
+    public async Task Parse_ConcurrentCalls_IsThreadSafe()
+    {
+        // O sync de manifests parseia em paralelo (WingetManifestsSyncService.ImportAsync);
+        // o deserializer YamlDotNet precisa ser por thread. Este teste falha (resultados
+        // corrompidos/null) se Parse for usado concorrentemente com um IDeserializer compartilhado.
+        var entries = new List<(string Id, string Version, string Dir)>();
+        for (var i = 0; i < 64; i++)
+        {
+            var id = $"Contest.App{i}";
+            var version = $"1.0.{i}";
+            var dir = CreateVersionDir(
+                $"""
+                PackageIdentifier: {id}
+                PackageVersion: {version}
+                Installers:
+                  - Architecture: x64
+                    InstallerUrl: https://example.com/{i}-x64.exe
+                    InstallerType: exe
+                """,
+                $"""
+                PackageIdentifier: {id}
+                PackageName: Contest App {i}
+                """);
+            entries.Add((id, version, dir));
+        }
+
+        var results = new AppPackage?[entries.Count];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, entries.Count),
+            new ParallelOptions { MaxDegreeOfParallelism = 16 },
+            (i, _) =>
+            {
+                var (id, version, dir) = entries[i];
+                results[i] = Parser.Parse(id, version, dir);
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.That(results, Has.All.Not.Null);
+        for (var i = 0; i < entries.Count; i++)
+            Assert.That(results[i]!.Name, Is.EqualTo($"Contest App {i}"));
+    }
 }

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
@@ -17,7 +18,22 @@ public sealed class WingetManifestsSyncOptions
 
     /// <summary>"manifests" (default) | "feed" | "both".</summary>
     public string Source { get; set; } = "manifests";
-    public int ManifestsPollIntervalMinutes { get; set; } = 60;
+
+    /// <summary>Cadência do git pull + import em minutos (default 6h).</summary>
+    public int ManifestsPollIntervalMinutes { get; set; } = 360;
+
+    /// <summary>
+    /// Atraso (minutos) da primeira execução após o startup — catch-up pós restart/deploy.
+    /// 0 = dispara assim que o scheduler inicia.
+    /// </summary>
+    public int StartupSyncDelayMinutes { get; set; } = 2;
+
+    /// <summary>
+    /// Grau máximo de paralelismo do parse dos manifests. 0 = auto (núcleos da máquina).
+    /// Piso de 1 (sequencial) e teto de 32.
+    /// </summary>
+    public int MaxParseParallelism { get; set; } = 0;
+
     // Default dentro do HOME do usuário de serviço (/var/lib/discovery-api),
     // que é o diretório garantido como gravável pelo instalador
     // (ensure_service_user_home em scripts/linux/lib/install.sh).
@@ -34,12 +50,15 @@ public sealed class WingetManifestsSyncOptions
 /// do branch master do microsoft/winget-pkgs.
 ///
 /// Fluxo: garantir clone (--depth 1 --single-branch) → git pull --depth 1 →
-/// diff incremental entre pulls (fallback: varredura completa) → parse YAML →
-/// BulkUpsertAsync com anti-downgrade. Upsert-only: falha nunca limpa o catálogo.
+/// se o upstream não mudou e o catálogo está íntegro, nada é importado (no-op barato) →
+/// senão diff incremental entre o HEAD anterior e o novo (fallback: varredura completa) →
+/// parse YAML em paralelo → BulkUpsertAsync com anti-downgrade. Upsert-only:
+/// falha nunca limpa o catálogo.
 /// </summary>
 public class WingetManifestsSyncService : IWingetManifestsSyncService
 {
     private const string ManifestsDirName = "manifests";
+    private const int UpsertBatchSize = 500;
 
     private readonly WingetManifestsSyncOptions _options;
     private readonly IAppPackageRepository _appPackageRepository;
@@ -75,10 +94,31 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
             await SyncGate.WaitAsync(cancellationToken);
             acquired = true;
 
-            var changed = await EnsureCloneAndPullAsync(cancellationToken);
+            var (changed, diffBase) = await EnsureCloneAndPullAsync(cancellationToken);
             var commitDate = await GetHeadCommitDateAsync(cancellationToken);
 
-            var versionDirs = await CollectVersionDirectoriesAsync(changed, cancellationToken);
+            // No-op barato: upstream sem alterações e catálogo íntegro → nada a importar.
+            // (Antes disso, toda execução varria e reimportava o catálogo inteiro.)
+            if (!changed)
+            {
+                var (_, totalInCatalog) = await _appPackageRepository.SearchPageAsync(
+                    AppInstallationType.Winget, search: null, architecture: null, cursor: null, limit: 1, cancellationToken);
+
+                if (totalInCatalog > 0)
+                {
+                    stopwatch.Stop();
+                    _logger.LogInformation(
+                        "Winget manifests sync: upstream sem alterações e catálogo íntegro ({Total} pacotes) — import pulado em {Duration}.",
+                        totalInCatalog, stopwatch.Elapsed);
+                    return Ok(0, startedAt, stopwatch, commitDate);
+                }
+
+                // Auto-cura: catálogo vazio (primeira carga, wipe no banco) força
+                // varredura completa mesmo sem mudanças upstream.
+                _logger.LogInformation("Winget manifests sync: catálogo vazio — executando carga completa.");
+            }
+
+            var versionDirs = await CollectVersionDirectoriesAsync(changed ? diffBase : null, cancellationToken);
             if (versionDirs.Count == 0)
             {
                 stopwatch.Stop();
@@ -88,6 +128,7 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
 
             var upserted = await ImportAsync(versionDirs, commitDate, cancellationToken);
 
+            // gc somente após import real (execuções no-op não pagam este custo).
             await RunGitAsync(["gc", "--prune=now"], cancellationToken, logErrorsAsWarning: true);
 
             stopwatch.Stop();
@@ -137,8 +178,15 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
 
     // ── Git ──────────────────────────────────────────────────────────────
 
-    /// <summary>Garante o clone raso e faz pull. Retorna true se houve mudança (fast-forward).</summary>
-    private async Task<bool> EnsureCloneAndPullAsync(CancellationToken ct)
+    /// <summary>
+    /// Garante o clone raso e faz pull. Retorna (Changed, DiffBase):
+    /// Changed=false → upstream idêntico ao HEAD local (nada a importar);
+    /// DiffBase = hash do HEAD anterior ao pull (base do diff incremental),
+    /// null quando não há base confiável (primeira carga → varredura completa).
+    /// Usa rev-parse antes/depois do pull em vez do reflog (HEAD@{1}), que o
+    /// gc --prune=now pode invalidar.
+    /// </summary>
+    private async Task<(bool Changed, string? DiffBase)> EnsureCloneAndPullAsync(CancellationToken ct)
     {
         var clonePath = _options.ClonePath;
         var tmpPath = clonePath + ".tmp";
@@ -168,25 +216,30 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
             Directory.Move(tmpPath, clonePath);
             _logger.LogInformation("Clone inicial do winget-pkgs concluído.");
 
-            return true; // primeira carga: import completo
+            return (true, null); // primeira carga: import completo
         }
+
+        var (headOk, headOut) = await TryRunGitAsync(["rev-parse", "HEAD"], ct);
+        var diffBase = headOk ? headOut.Trim() : null;
 
         var (ok, output) = await TryRunGitAsync(["pull", "--depth", "1", "--ff-only"], ct);
-        if (ok)
+        if (!ok)
         {
-            var upToDate = output.Contains("Already up to date", StringComparison.OrdinalIgnoreCase)
-                           || output.Contains("Já está atualizado", StringComparison.OrdinalIgnoreCase);
-            return !upToDate;
+            // Shallow pull pode falhar por falta de ref-history; força reset ao origin.
+            _logger.LogWarning("git pull falhou ({Error}); tentando fetch --depth 1 + reset --hard.", Truncate(output));
+            await RunGitAsync(["fetch", "--depth", "1", "origin", _options.Branch], ct);
+            var (resetOk, resetOut) = await TryRunGitAsync(["reset", "--hard", $"origin/{_options.Branch}"], ct);
+            if (!resetOk)
+                throw new InvalidOperationException($"git reset falhou: {Truncate(resetOut)}");
         }
 
-        // Shallow pull pode falhar por falta de ref-history; força reset ao origin.
-        _logger.LogWarning("git pull falhou ({Error}); tentando fetch --depth 1 + reset --hard.", Truncate(output));
-        await RunGitAsync(["fetch", "--depth", "1", "origin", _options.Branch], ct);
-        var (resetOk, resetOut) = await TryRunGitAsync(["reset", "--hard", $"origin/{_options.Branch}"], ct);
-        if (!resetOk)
-            throw new InvalidOperationException($"git reset falhou: {Truncate(resetOut)}");
+        var (newOk, newHeadOut) = await TryRunGitAsync(["rev-parse", "HEAD"], ct);
+        if (!newOk)
+            return (true, diffBase); // sem base confiável: caminho seguro = varredura completa
 
-        return true;
+        var newHead = newHeadOut.Trim();
+        var changed = diffBase is null || !string.Equals(diffBase, newHead, StringComparison.Ordinal);
+        return (changed, changed ? diffBase : null);
     }
 
     private async Task<DateTime?> GetHeadCommitDateAsync(CancellationToken ct)
@@ -200,10 +253,10 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
     // ── Coleta de manifests ──────────────────────────────────────────────
 
     /// <summary>
-    /// Determina os diretórios de versão a importar: incremental (diff entre pulls)
-    /// ou varredura completa. Cada diretório de versão vira no máx. 1 candidato.
+    /// Determina os diretórios de versão a importar: incremental (diff entre o HEAD
+    /// anterior e o atual) ou varredura completa. Cada diretório de versão vira no máx. 1 candidato.
     /// </summary>
-    private async Task<List<(string PackageId, string Version, string Dir)>> CollectVersionDirectoriesAsync(bool changed, CancellationToken ct)
+    private async Task<List<(string PackageId, string Version, string Dir)>> CollectVersionDirectoriesAsync(string? diffBase, CancellationToken ct)
     {
         var manifestsRoot = Path.Combine(_options.ClonePath, ManifestsDirName);
         var result = new List<(string, string, string)>();
@@ -214,7 +267,8 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
             return result;
         }
 
-        if (changed && await TryGetChangedPackageVersionsAsync(ct) is { Count: > 0 } incremental)
+        if (!string.IsNullOrEmpty(diffBase)
+            && await TryGetChangedPackageVersionsAsync(diffBase, ct) is { Count: > 0 } incremental)
         {
             foreach (var (packageId, version) in incremental)
             {
@@ -271,10 +325,10 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
         return result;
     }
 
-    /// <summary>Tenta derivar (PackageId, Version) alterados via git diff entre o pull anterior e o HEAD.</summary>
-    private async Task<List<(string PackageId, string Version)>?> TryGetChangedPackageVersionsAsync(CancellationToken ct)
+    /// <summary>Tenta derivar (PackageId, Version) alterados via git diff entre o HEAD anterior ao pull e o HEAD atual.</summary>
+    private async Task<List<(string PackageId, string Version)>?> TryGetChangedPackageVersionsAsync(string baseRev, CancellationToken ct)
     {
-        var (ok, output) = await TryRunGitAsync(["diff", "--name-only", "HEAD@{1}", "HEAD", "--", ManifestsDirName], ct);
+        var (ok, output) = await TryRunGitAsync(["diff", "--name-only", baseRev, "HEAD", "--", ManifestsDirName], ct);
         if (!ok)
             return null;
 
@@ -371,36 +425,43 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
             list.Add((version, dir));
         }
 
-        var packages = new List<AppPackage>();
+        // Parse em paralelo: leitura + desserialização YAML é IO/CPU-bound e domina
+        // a duração da varredura completa (~150k pacotes). O parser é thread-safe
+        // (deserializer por thread).
+        var parseDop = _options.MaxParseParallelism > 0
+            ? Math.Clamp(_options.MaxParseParallelism, 1, 32)
+            : Math.Clamp(Environment.ProcessorCount, 1, 32);
+
+        var packages = new ConcurrentBag<AppPackage>();
         var parseFailures = 0;
 
-        foreach (var (packageId, versions) in versionsPerPackage)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            AppPackage? parsed = null;
-
-            foreach (var (version, dir) in versions
-                         .OrderByDescending(v => v.Version, WingetVersionComparer.Default))
+        await Parallel.ForEachAsync(
+            versionsPerPackage,
+            new ParallelOptions { MaxDegreeOfParallelism = parseDop, CancellationToken = ct },
+            (entry, _) =>
             {
-                parsed = _parser.Parse(packageId, version, dir, commitDate);
+                AppPackage? parsed = null;
+
+                foreach (var (version, dir) in entry.Value.OrderByDescending(v => v.Version, WingetVersionComparer.Default))
+                {
+                    parsed = _parser.Parse(entry.Key, version, dir, commitDate);
+                    if (parsed is not null)
+                        break;
+
+                    Interlocked.Increment(ref parseFailures);
+                }
+
                 if (parsed is not null)
-                    break;
+                    packages.Add(parsed);
 
-                parseFailures++;
-            }
-
-            if (parsed is null)
-                continue;
-
-            packages.Add(parsed);
-        }
+                return ValueTask.CompletedTask;
+            });
 
         if (parseFailures > 0)
             _logger.LogWarning("Winget manifests sync: {Count} manifests malformados ignorados.", parseFailures);
 
         var upserted = 0;
-        foreach (var batch in packages.Chunk(200))
+        foreach (var batch in packages.Chunk(UpsertBatchSize))
         {
             upserted += await _appPackageRepository.BulkUpsertAsync(
                 batch,

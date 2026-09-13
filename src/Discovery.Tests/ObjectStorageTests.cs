@@ -128,8 +128,10 @@ public class TestLogger : ILogger<LocalObjectStorageProvider>
     
     public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
     
-    public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, EventId eventId, TState state, 
-        Exception? exception, Func<TState, Exception?, string> formatter) where TState : notnull
+    // Sem `where TState : notnull`: ILogger.Log<TState> não tem essa constraint na
+    // interface — a divergência dispara CS8633 (a constraint existe só em BeginScope).
+    public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, EventId eventId, TState state,
+        Exception? exception, Func<TState, Exception?, string> formatter)
     {
         var message = formatter(state, exception);
         Console.WriteLine($"[{logLevel}] {message}");

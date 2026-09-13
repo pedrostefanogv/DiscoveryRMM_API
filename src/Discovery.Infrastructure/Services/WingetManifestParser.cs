@@ -11,10 +11,15 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public sealed class WingetManifestParser
 {
-    private static readonly IDeserializer Yaml = new DeserializerBuilder()
-        .WithNamingConvention(PascalCaseNamingConvention.Instance)
-        .IgnoreUnmatchedProperties()
-        .Build();
+    // IDeserializer do YamlDotNet não é thread-safe para Deserialize concorrente;
+    // uma instância por thread habilita o parse paralelo no WingetManifestsSyncService.
+    private static readonly ThreadLocal<IDeserializer> YamlPerThread = new(() =>
+        new DeserializerBuilder()
+            .WithNamingConvention(PascalCaseNamingConvention.Instance)
+            .IgnoreUnmatchedProperties()
+            .Build());
+
+    private static IDeserializer Yaml => YamlPerThread.Value!;
 
     /// <summary>
     /// Parseia o diretório de uma versão de pacote (padrão winget-pkgs:
