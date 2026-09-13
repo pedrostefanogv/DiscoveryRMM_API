@@ -128,10 +128,38 @@ public class AgentPackageService : IAgentPackageService
         if (string.IsNullOrWhiteSpace(agentVersion))
             agentVersion = "1.0.0";
 
+        // M-fix: injeta o commit do agente (git rev-parse do source no servidor)
+        // — o selfupdate compara version+commit, sem o commit o rebuild nunca
+        // é detectado.
+        string gitCommit = "";
+        try {
+            var psi = new System.Diagnostics.ProcessStartInfo {
+                FileName = "git",
+                Arguments = "rev-parse --short=8 HEAD",
+                WorkingDirectory = projectPath,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var gitProc = System.Diagnostics.Process.Start(psi);
+            if (gitProc != null) {
+                gitCommit = gitProc.StandardOutput.ReadToEnd().Trim();
+                gitProc.WaitForExit(5000);
+            }
+        } catch (Exception gitEx) {
+            _logger.LogWarning("git rev-parse falhou: {Error} — buildinfo.Commit ficará unknown", gitEx.Message);
+        }
+
         // Module path is "discovery" (see src/go.mod); buildinfo lives at
-        // discovery/internal/buildinfo. Matches the ldflags used by the agent's
-        // own build scripts (build-install-installer.ps1 / build-bootstrap-installer.ps1).
-        var ldflags = $"-w -s -X discovery/internal/buildinfo.Version={agentVersion}";
+        // discovery/app/core/buildinfo (src/app/core/buildinfo/version.go).
+        // FIX (loop de self-update, homologação 13/09): o caminho anterior era
+        // discovery/internal/buildinfo — NÃO existe no agente; o linker ignora
+        // -X de variável inexistente silenciosamente, e o binário ficava com
+        // buildinfo.Version=0.0.0/Commit=unknown para sempre → o self-update
+        // reinstalava em loop (o marker agora também protege no lado do agente).
+        var ldflags = $"-w -s -X discovery/app/core/buildinfo.Version={agentVersion}";
+        if (!string.IsNullOrWhiteSpace(gitCommit))
+            ldflags += $" -X discovery/app/core/buildinfo.Commit={gitCommit}";
 
         var extraEnv = new Dictionary<string, string>
         {
