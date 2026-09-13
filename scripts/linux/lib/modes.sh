@@ -71,8 +71,13 @@ update_api() {
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   publish_api
   update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
-  if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-0}" == "1" ]]; then
-    log "Atualizando tambem infraestrutura auxiliar (Nginx) por solicitacao explicita"
+  # M-fix (413 homologacao): o nginx config e REGENERADO por padrao no update —
+  # o template do repo evolui (client_max_body_size, upstream keepalive, TLS) e
+  # o config implantado ficava para tras (builds antigos sem 413 fix). O config
+  # anterior e preservado em .bak pelo write_site_proxy_config. Opt-out:
+  # DISCOVERY_REFRESH_INFRA_CONFIG=0 (mantem o config existente intocado).
+  if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-1}" != "0" ]]; then
+    log "Atualizando infraestrutura auxiliar (Nginx) a partir do template do repo (config anterior salvo em .bak)"
     write_site_proxy_config || warn "Falha ao escrever config do Nginx (nao-bloqueante)"
   fi
   if sudo systemctl list-unit-files --no-legend discovery-api.service 2>/dev/null | grep -q .; then
@@ -186,8 +191,9 @@ update_all_components() {
   publish_api
   update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
   publish_site
-  if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-0}" == "1" ]]; then
-    log "Atualizando tambem infraestrutura auxiliar (Nginx) por solicitacao explicita"
+  # M-fix: nginx regenerado por padrao (mesmo contrato do update_api; opt-out =0).
+  if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-1}" != "0" ]]; then
+    log "Atualizando infraestrutura auxiliar (Nginx) a partir do template do repo (config anterior salvo em .bak)"
     write_site_proxy_config || warn "Falha ao escrever config do Nginx (nao-bloqueante)"
   fi
   log "Reiniciando servicos..."

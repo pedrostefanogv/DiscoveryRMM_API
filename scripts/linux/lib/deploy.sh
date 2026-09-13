@@ -446,6 +446,11 @@ write_site_proxy_config() {
       print
     }' "$NGINX_TEMPLATE_PATH" > "$rendered_conf"
 
+  # M-fix: preserva o config anterior em .bak antes de sobrescrever — o update
+  # agora regenera o nginx por padrao, e customizacoes manuais ficam recuperaveis.
+  if sudo test -f /etc/nginx/sites-available/discovery-rmm; then
+    sudo cp -f /etc/nginx/sites-available/discovery-rmm /etc/nginx/sites-available/discovery-rmm.bak
+  fi
   sudo install -m 644 -o root -g root "$rendered_conf" /etc/nginx/sites-available/discovery-rmm
   rm -f "$rendered_conf"
 

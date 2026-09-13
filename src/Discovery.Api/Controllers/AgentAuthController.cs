@@ -75,6 +75,11 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetAgentHardwareQuery(id)), Ok);
     }
 
+    // M-fix (413 homologação 13/09): o payload de hardware embute o inventário
+    // bruto em inventoryRaw (JSON escapado — tamanho 2-4x o original) e pode
+    // passar do default do Kestrel (~28,6 MB) com inventários grandes.
+    // Limite explícito de 64 MB alinhado ao client_max_body_size 100m do nginx.
+    [RequestSizeLimit(64_000_000)]
     [HttpPost("me/hardware")]
     public async Task<IActionResult> ReportHardwarePost([FromBody] ReportAgentHardwareCommand cmd)
     {
