@@ -285,7 +285,22 @@ public class AiChatToolOrchestrator
 
     public static string WrapAgentToolError(string rawResult, string toolName)
     {
-        if (rawResult.TrimStart().StartsWith("{")) return rawResult;
+        // B10: contrato estruturado com o agent — resultados são JSON e erros
+        // vêm como {"error":"..."}. Se o resultado é um objeto JSON, respeita
+        // como veio (as heurísticas de substring abaixo ficam apenas para
+        // agents LEGADOS que devolvem texto cru).
+        var trimmed = rawResult.TrimStart();
+        if (trimmed.StartsWith("{"))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("error", out _))
+                    return rawResult; // erro estruturado explícito — não reembrulhar
+            }
+            catch (JsonException) { } // JSON inválido: cai nas heurísticas
+            return rawResult; // JSON válido sem "error" = resultado de sucesso
+        }
 
         var lower = rawResult.ToLowerInvariant();
 
@@ -305,6 +320,76 @@ public class AiChatToolOrchestrator
         }
 
         return rawResult;
+    }
+
+    // ── B11: extração XML com balanceamento de chaves ──────────────────────
+
+    public sealed record BalancedXmlToolCall(string FullMatch, string ToolName, string ArgumentsJson);
+
+    /// <summary>
+    /// Encontra chamadas <toolname>{json}</toolname> no texto extraindo o JSON
+    /// com contagem balanceada de chaves (respeitando strings). Substitui a
+    /// regex XmlToolCallRegex, que não suportava objetos/arrays aninhados.
+    /// </summary>
+    internal static List<BalancedXmlToolCall> ExtractBalancedXmlToolCalls(string content)
+    {
+        var calls = new List<BalancedXmlToolCall>();
+        var openIdx = content.IndexOf('<');
+        while (openIdx >= 0 && openIdx < content.Length - 1)
+        {
+            var closeName = content.IndexOf('>', openIdx + 1);
+            if (closeName < 0) break;
+            var toolName = content.Substring(openIdx + 1, closeName - openIdx - 1).Trim();
+            if (toolName.Length == 0 || toolName.Contains('<') || toolName.Contains(' '))
+            {
+                openIdx = content.IndexOf('<', openIdx + 1);
+                continue;
+            }
+
+            // Procura o primeiro '{' após a tag de abertura
+            var jsonStart = content.IndexOf('{', closeName + 1);
+            var closingTag = "</" + toolName + ">";
+            var tagEnd = content.IndexOf(closingTag, closeName + 1, StringComparison.OrdinalIgnoreCase);
+            if (jsonStart < 0 || tagEnd < 0 || jsonStart > tagEnd)
+            {
+                openIdx = content.IndexOf('<', openIdx + 1);
+                continue;
+            }
+
+            // Scanner balanceado de chaves (string-aware)
+            var depth = 0; var inStr = false; var esc = false; var jsonEnd = -1;
+            for (var i = jsonStart; i < tagEnd; i++)
+            {
+                var c = content[i];
+                if (inStr)
+                {
+                    if (esc) esc = false;
+                    else if (c == '\\') esc = true;
+                    else if (c == '"') inStr = false;
+                    continue;
+                }
+                if (c == '"') inStr = true;
+                else if (c == '{') depth++;
+                else if (c == '}')
+                {
+                    depth--;
+                    if (depth == 0) { jsonEnd = i; break; }
+                }
+            }
+
+            if (jsonEnd > 0)
+            {
+                var full = content.Substring(openIdx, jsonEnd - openIdx + 1);
+                full += content.Substring(jsonEnd + 1, tagEnd - (jsonEnd + 1));
+                calls.Add(new BalancedXmlToolCall(full, toolName, content.Substring(jsonStart, jsonEnd - jsonStart + 1)));
+                openIdx = tagEnd + closingTag.Length;
+            }
+            else
+            {
+                openIdx = content.IndexOf('<', openIdx + 1);
+            }
+        }
+        return calls;
     }
 
     // ── Argument Validation ──────────────────────────────────────────────────
@@ -395,17 +480,19 @@ public class AiChatToolOrchestrator
                 "O conteúdo será sanitizado pelo AiChatLeakSanitizer.", traceId);
         }
 
-        var matches = XmlToolCallRegex.Matches(content);
+        // B11: extração com balanceamento de chaves (string-aware) — a regex
+        // antiga \{[^}]*\} falhava em argumentos com objetos/arrays aninhados.
+        var matches = ExtractBalancedXmlToolCalls(content);
         if (matches.Count == 0) return (content, nextSeq);
 
         var knownToolNames = availableTools.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var result = content;
         var executedCount = 0;
 
-        foreach (Match match in matches)
+        foreach (var match in matches)
         {
-            var rawToolName = match.Groups[1].Value;
-            var argsJson = match.Groups[2].Value;
+            var rawToolName = match.ToolName;
+            var argsJson = match.ArgumentsJson;
 
             var toolName = XmlToolAliases.TryGetValue(rawToolName, out var resolved) ? resolved : rawToolName;
 
@@ -446,7 +533,7 @@ public class AiChatToolOrchestrator
                 _logger.LogWarning(ex, "[{TraceId}] XML tool '{ToolName}' falhou", traceId, toolName);
             }
 
-            result = result.Replace(match.Value, string.Empty);
+            result = result.Replace(match.FullMatch, string.Empty);
         }
 
         if (executedCount > 0)
@@ -472,7 +559,32 @@ public class AiChatToolOrchestrator
             {
                 var id = item.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String ? idProp.GetString()! : string.Empty;
                 var name = item.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String ? nameProp.GetString()! : string.Empty;
-                var args = item.TryGetProperty("arguments", out var argsProp) && argsProp.ValueKind == JsonValueKind.String ? argsProp.GetString()! : "{}";
+                // B12: formato único de arguments = STRING JSON (padrão OpenAI).
+                // Aceita objeto (serializa), string (valida) e normaliza inválido
+                // para "{}" em vez de propagar JSON quebrado ao provedor.
+                string args;
+                if (item.TryGetProperty("arguments", out var argsProp))
+                {
+                    if (argsProp.ValueKind == JsonValueKind.String)
+                    {
+                        var raw = argsProp.GetString();
+                        if (string.IsNullOrWhiteSpace(raw)) raw = "{}";
+                        else if (raw.TrimStart().StartsWith("{"))
+                        {
+                            try { using var v = JsonDocument.Parse(raw); }
+                            catch (JsonException) { raw = "{}"; } // argumento inválido normalizado
+                        }
+                        args = raw;
+                    }
+                    else
+                    {
+                        args = argsProp.GetRawText(); // objeto → string JSON
+                    }
+                }
+                else
+                {
+                    args = "{}";
+                }
                 result.Add(new LlmAssistantToolCall(id, name, args));
             }
             return result.Count > 0 ? result : null;

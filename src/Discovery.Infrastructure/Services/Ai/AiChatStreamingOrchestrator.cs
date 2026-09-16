@@ -69,6 +69,7 @@ public class AiChatStreamingOrchestrator
         AiChatSession? session = null;
         string? systemPrompt = null;
         List<LlmMessage>? llmMessages = null;
+        List<AiChatMessage>? history = null; // B15: visivel fora do try (quick-reply)
         int nextSeq = 1;
         bool setupOk = false;
         string? setupError = null;
@@ -116,7 +117,7 @@ public class AiChatStreamingOrchestrator
                 }, ct);
             }
 
-            var history = await _messageRepository.GetRecentBySessionAsync(session.Id,
+            history = await _messageRepository.GetRecentBySessionAsync(session.Id,
                 AiChatHelpers.ClampHistoryMessages(aiSettings), ct);
             nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
 
@@ -145,7 +146,9 @@ public class AiChatStreamingOrchestrator
         // tanto à primeira mensagem (sem sessão) quanto a saudações puras no
         // meio da conversa (ex.: usuário manda "oi" de novo) — o matcher só
         // responde mensagens triviais; mensagens com contexto real vão ao LLM.
-        var quickReplyMatch = AiChatQuickReply.TryGetReply(message, history: null);
+        // B15: passa o histórico real — "oi" no meio de uma conversa técnica
+        // não deve receber a saudação em cache.
+        var quickReplyMatch = AiChatQuickReply.TryGetReply(message, history: history);
         if (quickReplyMatch != null)
         {
             await _quickReply.PersistAsync(session.Id, message, quickReplyMatch, nextSeq, startTime, traceId, aiSettings, stopwatch, ct);
@@ -205,7 +208,11 @@ public class AiChatStreamingOrchestrator
                 OpenRouterTitle: aiSettings.OpenRouterTitle,
                 OpenRouterCategories: aiSettings.OpenRouterCategories,
                 SessionId: session!.Id.ToString("D"),
-                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
+                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
+                // A7: amostragem configurável
+                TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
+                PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
+                ResponseFormat: aiSettings.ResponseFormat);
 
             hasToolCalls = false;
             hasAgentToolCallPending = false;
@@ -302,8 +309,10 @@ public class AiChatStreamingOrchestrator
                             // dentro do TTL, o próximo multi-round desta sessão
                             // injeta nota de expiração.
                             _memoryCache.Set($"pending_round:{session.Id}", DateTime.UtcNow, AiChatConstants.PendingRoundTtl);
-                            yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
                             stopwatch.Stop();
+                            // B3: persistir ANTES de emitir round_end — se o client
+                            // cair logo após receber round_end, o enumerator é
+                            // descartado e as mensagens nunca seriam persistidas.
                             try
                             {
                                 var msgs = new List<AiChatMessage> { new() { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "user", Content = message, CreatedAt = startTime, TraceId = traceId } };
@@ -312,6 +321,7 @@ public class AiChatStreamingOrchestrator
                                 await _messageRepository.CreateBatchAsync(msgs, ct);
                             }
                             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir user message do round 1", traceId); }
+                            yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
                             yield break;
                         }
                     }
@@ -391,7 +401,11 @@ public class AiChatStreamingOrchestrator
                     false, null, aiSettings.Provider,
                     aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
                     SessionId: session!.Id.ToString("D"),
-                    TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
+                    TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
+                // A7: amostragem configurável
+                TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
+                PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
+                ResponseFormat: aiSettings.ResponseFormat);
                 await foreach (var token in _llmProvider.StreamAsync(systemPrompt!, llmMessages, synthesisOptions, ct))
                 {
                     contentBuilder.Append(token);
@@ -458,6 +472,10 @@ public class AiChatStreamingOrchestrator
         if (!string.IsNullOrWhiteSpace(systemNote))
             llmMessages.Add(new LlmMessage("system", systemNote));
 
+        // B6: guarda de input também no multi-round (antes só StreamAsync validava).
+        if (!string.IsNullOrWhiteSpace(message))
+            AiChatGuardrails.ValidateUserInput(message, AiChatConstants.MaxMessageSizeBytes);
+
         if (!string.IsNullOrWhiteSpace(message))
         {
             try
@@ -478,12 +496,41 @@ public class AiChatStreamingOrchestrator
 
         if (toolResults is { Count: > 0 })
         {
+            // B1: valida cada toolResult contra as tool calls pendentes emitidas
+            // no round anterior (último assistant com ToolCallsJson). Sem isso,
+            // um agent comprometido podia injetar resultado falso de qualquer
+            // tool (ex.: sucesso de install_package).
+            List<LlmAssistantToolCall>? pendingCalls = null;
+            var lastAssistantWithCalls = history.LastOrDefault(m =>
+                m.Role == "assistant" && !string.IsNullOrWhiteSpace(m.ToolCallsJson));
+            if (lastAssistantWithCalls != null)
+            {
+                try { pendingCalls = AiChatToolOrchestrator.ParseToolCallsFromJson(lastAssistantWithCalls.ToolCallsJson); }
+                catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao parsear ToolCallsJson para validação B1", traceId); }
+            }
+            var pendingIds = new HashSet<string>(pendingCalls?.Select(c => c.Id) ?? [], StringComparer.OrdinalIgnoreCase);
+            var pendingNames = new HashSet<string>(pendingCalls?.Select(c => c.Name) ?? [], StringComparer.OrdinalIgnoreCase);
+
             var toolMsgs = new List<AiChatMessage>();
             foreach (var tr in toolResults)
             {
+                // "a2ui_action" é a sentinela de interação com surfaces (não é
+                // tool call real) — permitida sempre.
+                var isA2uiAction = string.Equals(tr.Name, "a2ui_action", StringComparison.OrdinalIgnoreCase);
+                if (pendingCalls != null && !isA2uiAction
+                    && (!pendingIds.Contains(tr.CallId) || !pendingNames.Contains(tr.Name)))
+                {
+                    _logger.LogWarning("[{TraceId}] ToolResult rejeitado (não corresponde a tool call pendente): CallId={CallId}, Name={Name}, SessionId={SessionId}",
+                        traceId, tr.CallId, tr.Name, session.Id);
+                    continue;
+                }
+
                 var wrapped = AiChatToolOrchestrator.WrapAgentToolError(tr.Result, tr.Name);
-                llmMessages.Add(new LlmMessage("tool", wrapped, $"agent_{tr.CallId}", tr.Name));
-                toolMsgs.Add(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "tool", Content = wrapped, ToolCallId = $"agent_{tr.CallId}", ToolName = tr.Name, CreatedAt = DateTime.UtcNow, TraceId = traceId });
+                // B2: usa o CallId ORIGINAL do tool call — o assistant do round
+                // anterior foi persistido com tc.Id; o prefixo "agent_" quebrava
+                // o pareamento tool_call/tool_message em OpenAI/DeepSeek.
+                llmMessages.Add(new LlmMessage("tool", wrapped, tr.CallId, tr.Name));
+                toolMsgs.Add(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "tool", Content = wrapped, ToolCallId = tr.CallId, ToolName = tr.Name, CreatedAt = DateTime.UtcNow, TraceId = traceId });
             }
             try { await _messageRepository.CreateBatchAsync(toolMsgs, ct); }
             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir tool results", traceId); }
@@ -492,8 +539,11 @@ public class AiChatStreamingOrchestrator
         var agent = await _agentRepository.GetByIdAsync(agentId);
         if (agent == null) { yield return new AiChatStreamChunk(Type: "error", Error: "Agent não encontrado."); yield break; }
 
+        // B13: usa a última mensagem do usuário do histórico (o 1º toolResult
+        // pode ser ruído e degradava o contexto do prompt).
+        var lastUserMessage = history.LastOrDefault(m => m.Role == "user")?.Content;
         var (systemPrompt, _) = await _promptBuilder.BuildAsync(agent, session,
-            message ?? toolResults?.FirstOrDefault()?.Result ?? "", aiSettings, departmentId, ct);
+            message ?? lastUserMessage ?? toolResults?.FirstOrDefault()?.Result ?? "", aiSettings, departmentId, ct);
 
         var availableTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(session.ClientId, session.SiteId, agentId, ct)
@@ -551,7 +601,11 @@ public class AiChatStreamingOrchestrator
                 roundTools.Count > 0, roundTools, aiSettings.Provider,
                 aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
                 SessionId: session.Id.ToString("D"),
-                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
+                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
+                // A7: amostragem configurável
+                TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
+                PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
+                ResponseFormat: aiSettings.ResponseFormat);
 
             hasToolCalls = false;
             bool hasAgentToolCall = false;
@@ -601,6 +655,8 @@ public class AiChatStreamingOrchestrator
                                     session.ClientId, session.SiteId, agentId, aiSettings, null, departmentId, session.Id, ct);
                                 yield return new AiChatStreamChunk(Type: "tool_result", ToolCallId: tc.Id, ToolResult: toolResult);
                                 llmMessages.Add(new LlmMessage("tool", toolResult, tc.Id, tc.Name));
+                                // B14: sucesso reseta o contador de erros da tool.
+                                consecutiveToolErrors.Remove(tc.Name);
                                 if (tc.Name == "knowledge_search" && toolResult.Contains("\"found\":false")) consecutiveEmptyKbSearches++;
 
                                 if (consecutiveEmptyKbSearches >= 2 && !kbExhausted)
@@ -687,7 +743,11 @@ public class AiChatStreamingOrchestrator
                     false, null, aiSettings.Provider,
                     aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
                     SessionId: session.Id.ToString("D"),
-                    TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
+                    TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
+                // A7: amostragem configurável
+                TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
+                PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
+                ResponseFormat: aiSettings.ResponseFormat);
                 await foreach (var token in _llmProvider.StreamAsync(systemPrompt, llmMessages, synthesisOptions, ct))
                 {
                     contentBuilder.Append(token);

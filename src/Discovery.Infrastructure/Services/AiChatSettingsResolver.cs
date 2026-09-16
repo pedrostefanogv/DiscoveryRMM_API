@@ -37,7 +37,9 @@ public class AiChatSettingsResolver
                 if (!string.IsNullOrWhiteSpace(credential.BaseUrl)) ai.BaseUrl = credential.BaseUrl;
                 if (!string.IsNullOrWhiteSpace(credential.EmbeddingBaseUrl)) ai.EmbeddingBaseUrl = credential.EmbeddingBaseUrl;
                 if (!string.IsNullOrWhiteSpace(credential.EmbeddingApiKey)) ai.EmbeddingApiKey = credential.EmbeddingApiKey;
-                if (!string.IsNullOrWhiteSpace(credential.Provider)) ai.Provider = credential.Provider;
+                // A13: provider/baseUrl resolvidos como conjunto coerente - se a
+                // credencial trocou o provider e não trouxe BaseUrl, usa o default
+                // do provider (evita provider novo com BaseUrl do antigo).
             }
         }
         return ai;

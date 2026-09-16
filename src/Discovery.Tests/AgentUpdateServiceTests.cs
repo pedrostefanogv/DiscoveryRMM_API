@@ -605,6 +605,7 @@ public class AgentUpdateServiceTests
 
             return Task.CompletedTask;
         }
+
     }
 
     private sealed class FakeAgentUpdateEventRepository : IAgentUpdateEventRepository
@@ -678,6 +679,20 @@ public class AgentUpdateServiceTests
                 build.UpdatedAt = DateTime.UtcNow;
             }
 
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<AgentUpdateBuild>> ListInactiveAsync(CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<AgentUpdateBuild> inactive = _builds.Where(item => !item.IsActive).ToList();
+            return Task.FromResult(inactive);
+        }
+
+        public Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            var build = _builds.FirstOrDefault(item => item.Id == id);
+            if (build != null)
+                _builds.Remove(build);
             return Task.CompletedTask;
         }
     }

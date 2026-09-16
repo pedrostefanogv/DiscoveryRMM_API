@@ -39,8 +39,12 @@ public class AiCredentialResolver : IAiCredentialResolver
             .OrderByDescending(c => (int)c.ScopeType)
             .ToList();
 
-        // Pega a primeira que tenha API key (chat)
-        var best = ordered.FirstOrDefault();
+        // A11: pega a primeira que tenha API key de chat OU embedding - uma
+        // credencial de escopo maior com ApiKey em branco nao deve sombrear
+        // uma credencial valida de escopo inferior.
+        var best = ordered.FirstOrDefault(c =>
+            !string.IsNullOrWhiteSpace(c.ApiKeyEncrypted) ||
+            !string.IsNullOrWhiteSpace(c.EmbeddingApiKeyEncrypted));
 
         if (best is null)
         {

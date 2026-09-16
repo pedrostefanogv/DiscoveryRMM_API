@@ -29,13 +29,18 @@ public class AgentAuthController : ControllerBase
     private readonly IMediator _mediator;
     private readonly IAgentRepository _agentRepo;
     private readonly IAiChatService _aiChat;
+    private readonly ILogger<AgentAuthController> _logger;
 
-    public AgentAuthController(IMediator mediator, IAgentRepository agentRepo, IAiChatService aiChat)
+    public AgentAuthController(IMediator mediator, IAgentRepository agentRepo, IAiChatService aiChat, ILogger<AgentAuthController> logger)
     {
         _mediator = mediator;
         _agentRepo = agentRepo;
         _aiChat = aiChat;
+        _logger = logger;
     }
+
+    /// <summary>B5: limite de toolResults aceitos por request (anti-abuso).</summary>
+    private const int MaxToolResultsPerRequest = 20;
 
     // ── Auth Helpers ──────────────────────────────────────────────────────
 
@@ -438,18 +443,27 @@ public class AgentAuthController : ControllerBase
                 tr.Name,
                 TruncateToolResult(tr.Name, tr.Result))).ToList();
 
-            // Modo explícito (agentes novos) tem prioridade; fallback para a
-            // convenção legada (Message == null → multi-round) em agentes antigos.
-            var stream = cmd.Mode switch
+            // B5: limita a contagem de toolResults por request (o teto por item
+            // é 32 KB, mas N itens podiam estourar o contexto/custo do LLM).
+            if (toolResults is { Count: > MaxToolResultsPerRequest })
             {
-                "tool_results" or "a2ui_action" =>
-                    _aiChat.StreamMultiRoundAsync(agentId, null, sessionGuid, toolResults, cmd.DepartmentId, cmd.SystemNote, ct),
-                "user_message" =>
-                    _aiChat.StreamAsync(agentId, cmd.Message ?? string.Empty, sessionGuid, cmd.DepartmentId, cmd.SystemNote, ct),
-                _ when cmd.Message != null =>
-                    _aiChat.StreamAsync(agentId, cmd.Message, sessionGuid, cmd.DepartmentId, cmd.SystemNote, ct),
-                _ =>
-                    _aiChat.StreamMultiRoundAsync(agentId, null, sessionGuid, toolResults, cmd.DepartmentId, cmd.SystemNote, ct),
+                toolResults = toolResults!.Take(MaxToolResultsPerRequest).ToList();
+            }
+
+            // B4: ToolResults presentes → SEMPRE multi-round, independente de
+            // Mode ou de Message (antes, {message:"", toolResults:[...]} caía no
+            // branch legado e os toolResults eram descartados silenciosamente).
+            IAsyncEnumerable<AiChatStreamChunk> stream;
+            if (toolResults is { Count: > 0 })
+            {
+                stream = _aiChat.StreamMultiRoundAsync(agentId,
+                    string.IsNullOrWhiteSpace(cmd.Message) ? null : cmd.Message,
+                    sessionGuid, toolResults, cmd.DepartmentId, cmd.SystemNote, ct);
+            }
+            else
+            {
+                stream = _aiChat.StreamAsync(agentId, cmd.Message ?? string.Empty,
+                    sessionGuid, cmd.DepartmentId, cmd.SystemNote, ct);
             };
 
             await foreach (var chunk in stream)
@@ -469,7 +483,14 @@ public class AgentAuthController : ControllerBase
         catch (Exception ex)
         {
             if (!ct.IsCancellationRequested)
-                await WriteSseJsonAsync(HttpContext, new { type = "error", error = ex.Message }, ct);
+            {
+                // B7: não expor exceções internas (DB/provedor/paths) ao client.
+                // Log completo + mensagem genérica com traceId.
+                var traceId = HttpContext.TraceIdentifier;
+                _logger.LogError(ex, "[ChatStream] Exceção não tratada. TraceId={TraceId}", traceId);
+                await WriteSseJsonAsync(HttpContext,
+                    new { type = "error", error = "Erro interno ao processar o chat.", traceId }, ct);
+            }
         }
     }
 

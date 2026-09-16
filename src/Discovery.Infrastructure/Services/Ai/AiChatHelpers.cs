@@ -71,7 +71,8 @@ internal static class AiChatHelpers
     public static int ClampAiTimeoutMs(AIIntegrationSettings settings)
     {
         var ms = settings.TimeoutMs;
-        if (ms <= 0) return 0;
+        // B9: piso de 60s também quando não configurado (o comentário já dizia isso).
+        if (ms <= 0) return 60_000;
         return Math.Max(ms, 60_000);
     }
 }

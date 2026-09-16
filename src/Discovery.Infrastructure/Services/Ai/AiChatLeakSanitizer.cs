@@ -6,25 +6,14 @@ namespace Discovery.Infrastructure.Services;
 /// Sanitização de vazamentos de tool calls / marcações internas do LLM no
 /// texto enviado ao usuário (agent).
 ///
-/// Contexto (2026-08-30): o modelo às vezes emite tool calls como TEXTO em
-/// vez de function call nativa, em três formatos observados:
-///
-///  1. Blocos ```json com array de invokes: [{"name":"get_inventory",...}]
-///  2. Marcação DSML nativa do modelo (DeepSeek):
-///     <｜DSML｜tool_invokes><invoke name="...">...</invoke></｜DSML｜tool_invokes>
-///  3. Blocos ```json com ação A2UI: {"version":"a2ui","action":"search",...}
-///
-/// Esses vazamentos aparecem principalmente quando o LLM responde sem usar
-/// tools (promessas de ação) e no endpoint sync. A sanitização remove o que
-/// for reconhecido como vazamento, preservando blocos json legítimos.
+/// 2026 (revisão do processo de chat): além dos padrões originais (DSML,
+/// arrays de invokes, ação A2UI), adicionados: objeto único de invoke,
+/// mensagens A2UI com version "v0.9" e blocos a2ui completos (fallback
+/// para caminhos que não passam pelo A2uiExtractor).
 /// </summary>
 public static partial class AiChatLeakSanitizer
 {
-    // Marcação DSML nativa do modelo. Formato real:
-    // <｜DSML｜tool_invokes>...</｜DSML｜tool_invokes> — separador ｜ (U+FF5C
-    // fullwidth) ou | ASCII, nome da seção em [a-z_]. Regex em partial class
-    // para usar source generator (compilado) e evitar recompilação em runtime.
-    [GeneratedRegex(@"<[/]?[｜|]DSML[｜|][a-z_]*>.*?<[/][｜|]DSML[｜|][a-z_]*>", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<[｜|]DSML[｜|][a-z_]*>.*?</｜DSML｜[a-z_]*>", RegexOptions.Singleline)]
     private static partial Regex DsmlBlockRegex();
 
     [GeneratedRegex(@"</?[｜|]DSML[｜|][a-z_]*>")]
@@ -39,15 +28,27 @@ public static partial class AiChatLeakSanitizer
     [GeneratedRegex(@"</?[｜|]?tool_invokes[｜|]?>")]
     private static partial Regex ToolInvokesTagRegex();
 
-    // Blocos de código ```json ... ``` (ou ``` ... ```) com conteúdo de vazamento.
+    // Blocos de código json (```json ... ``` ou ``` ... ```) com vazamento.
     [GeneratedRegex("```(?:json)?\\s*([\\s\\S]*?)```", RegexOptions.Singleline)]
     private static partial Regex JsonFenceRegex();
+
+    // Blocos ```a2ui ... ``` (C7): fallback para caminhos sem extractor.
+    [GeneratedRegex("```a2ui[\\s\\S]*?(?:```|$)", RegexOptions.Singleline)]
+    private static partial Regex A2uiFenceRegex();
 
     [GeneratedRegex(@"^\s*\[\s*\{\s*""name""\s*:")]
     private static partial Regex InvokeArrayRegex();
 
+    // C6: objeto único de tool call emitido como texto.
+    [GeneratedRegex(@"^\s*\{\s*""name""\s*:")]
+    private static partial Regex InvokeObjectRegex();
+
     [GeneratedRegex(@"^\s*\{\s*""version""\s*:\s*""a2ui""")]
     private static partial Regex A2uiActionRegex();
+
+    // C5: protocolo A2UI real usa version "v0.9" com verbos do catálogo.
+    [GeneratedRegex(@"^\s*\{\s*""(createSurface|updateComponents|updateDataModel|deleteSurface)""")]
+    private static partial Regex A2uiV09Regex();
 
     /// <summary>
     /// Remove vazamentos de tool calls e marcações internas do LLM de um
@@ -74,7 +75,7 @@ public static partial class AiChatLeakSanitizer
             clean = DsmlOrphanRegex().Replace(clean, string.Empty);
             removed = true;
         }
-        // 3. Remove <invoke>/<parameter>/<tool_invokes> soltos.
+        // 3. Remove invoke/parameter/tool_invokes soltos.
         foreach (var re in new[] { InvokeTagRegex(), ParameterTagRegex(), ToolInvokesTagRegex() })
         {
             if (re.IsMatch(clean))
@@ -84,12 +85,12 @@ public static partial class AiChatLeakSanitizer
             }
         }
 
-        // 4. Remove blocos ```json cujo conteúdo seja um array de invokes ou
-        // uma ação A2UI (o LLM "prometeu" executar tools como texto).
+        // 4. Remove blocos json com invokes/A2UI (o LLM "prometeu" executar
+        // tools como texto).
         clean = JsonFenceRegex().Replace(clean, m =>
         {
             var body = m.Groups[1].Value.Trim();
-            if (InvokeArrayRegex().IsMatch(body) || A2uiActionRegex().IsMatch(body))
+            if (InvokeArrayRegex().IsMatch(body) || A2uiActionRegex().IsMatch(body) || A2uiV09Regex().IsMatch(body) || InvokeObjectRegex().IsMatch(body))
             {
                 removed = true;
                 return string.Empty;
@@ -97,12 +98,20 @@ public static partial class AiChatLeakSanitizer
             return m.Value;
         });
 
+        // 5. Remove blocos a2ui que sobraram (fallback — o caminho normal
+        // extrai via A2uiExtractor antes da sanitização).
+        if (A2uiFenceRegex().IsMatch(clean))
+        {
+            clean = A2uiFenceRegex().Replace(clean, string.Empty);
+            removed = true;
+        }
+
         if (!removed)
             return (text, false);
 
-        // Limpeza final: colapsa linhas vazias em excesso deixadas pelas remoções.
+        // Limpeza final: colapsa linhas vazias em excesso das remoções.
         clean = clean.Trim();
-        clean = Regex.Replace(clean, @"\n{3,}", "\n\n");
+        clean = Regex.Replace(clean, "\n{3,}", "\n\n");
         return (clean, true);
     }
 }

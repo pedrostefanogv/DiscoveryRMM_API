@@ -24,7 +24,8 @@ public class AIIntegrationSettings
     public int MaxTokensPerRequest { get; set; } = 2000;
 
     /// <summary>Provedor de IA (ex: openai, azure-openai, anthropic)</summary>
-    public string Provider { get; set; } = "openai";
+    // A15: OpenRouter é o fornecedor principal do produto.
+    public string Provider { get; set; } = "openrouter";
 
     /// <summary>API key do provedor (somente gravação via API; nunca deve ser exposta em respostas)</summary>
     public string? ApiKey { get; set; }

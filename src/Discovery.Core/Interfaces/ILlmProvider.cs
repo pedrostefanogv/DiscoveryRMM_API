@@ -58,7 +58,13 @@ public record LlmOptions(
     string? OpenRouterCategories = null,
     string? Provider = null,
     string? SessionId = null,
-    int TimeoutMs = 0);
+    int TimeoutMs = 0,
+    // A7: parametros de amostragem antes ignorados (config morta).
+    double? TopP = null,
+    double? FrequencyPenalty = null,
+    double? PresencePenalty = null,
+    int? Seed = null,
+    string? ResponseFormat = null);
 
 public record LlmTool(
     string Name,

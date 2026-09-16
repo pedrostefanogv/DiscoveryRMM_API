@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -26,6 +27,9 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public static class AiChatA2uiExtractor
 {
+    // C8: abertura de bloco tolerante (espacos e maiusculas variando).
+    private static readonly Regex A2uiOpenRegex = new("^```\\s*a2ui\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly string[] A2uiVerbs =
     {
         "createSurface", "updateComponents", "updateDataModel", "deleteSurface"
@@ -41,6 +45,8 @@ public static class AiChatA2uiExtractor
             return (content ?? string.Empty, new List<string>());
 
         var clean = new StringBuilder(content.Length);
+        var surfaceEmitted = false; // C2: no máximo 1 surface por resposta
+        var discardBlock = false;
         var messages = new List<string>();
 
         var lines = content.Replace("\r\n", "\n").Split('\n');
@@ -54,7 +60,7 @@ public static class AiChatA2uiExtractor
             if (!inA2uiBlock)
             {
                 // Abre bloco: ```a2ui (com ou sem trailing spaces)
-                if (line.StartsWith("```a2ui", StringComparison.OrdinalIgnoreCase))
+                if (A2uiOpenRegex.IsMatch(line))
                 {
                     inA2uiBlock = true;
                     blockBuffer.Clear();
@@ -68,11 +74,22 @@ public static class AiChatA2uiExtractor
             if (line.StartsWith("```"))
             {
                 inA2uiBlock = false;
-                foreach (var msg in ParseBlock(blockBuffer.ToString()))
-                    messages.Add(msg);
+                if (discardBlock)
+                {
+                    continue; // C2: surface extra descartada
+                }
+                var blockMsgs = ParseBlock(blockBuffer.ToString()).ToList();
+                // C2: no maximo 1 createSurface por resposta - updateComponents/
+                // updateDataModel/deleteSurface da MESMA surface sao permitidos.
+                var hasCreate = blockMsgs.Any(m => m.Contains("createSurface"));
+                if (hasCreate && surfaceEmitted)
+                {
+                    continue; // C2: segunda surface descartada
+                }
+                if (hasCreate) surfaceEmitted = true;
+                messages.AddRange(blockMsgs);
                 continue;
             }
-
             blockBuffer.Append(rawLine).Append('\n');
         }
 

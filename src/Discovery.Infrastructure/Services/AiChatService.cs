@@ -137,7 +137,8 @@ public class AiChatService : IAiChatService
                 availableTools.Count > 0, availableTools, aiSettings.Provider,
                 aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
                 SessionId: session.Id.ToString("D"),
-                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings));
+                TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
+                    TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty, PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed, ResponseFormat: aiSettings.ResponseFormat);
 
             LlmResponse llmResponse;
             var toolIterations = 0;

@@ -28,10 +28,10 @@ public class OpenAiProvider : ILlmProvider
     /// </summary>
     private HttpClient BuildHttpClient(LlmOptions options)
     {
-        var client = _httpClientFactory.CreateClient("AiChat");
-        if (options.TimeoutMs > 0)
-            client.Timeout = TimeSpan.FromMilliseconds(options.TimeoutMs);
-        return client;
+        // A6: NÃO mutar client.Timeout em HttpClient da IHttpClientFactory
+        // (race/InvalidOperationException em concorrência). O timeout é
+        // aplicado por request via CancelAfter nos chamadores.
+        return _httpClientFactory.CreateClient("AiChat");
     }
 
     /// <summary>
@@ -193,7 +193,12 @@ public class OpenAiProvider : ILlmProvider
                 ["model"] = model,
                 ["messages"] = openAiMessages,
                 ["max_tokens"] = options.MaxTokens,
-                ["temperature"] = options.Temperature
+                ["temperature"] = options.Temperature,
+                ["top_p"] = options.TopP,
+                ["frequency_penalty"] = options.FrequencyPenalty,
+                ["presence_penalty"] = options.PresencePenalty,
+                ["seed"] = options.Seed,
+                ["response_format"] = options.ResponseFormat,
             };
 
             if (options.EnableTools && options.Tools != null)
@@ -213,14 +218,11 @@ public class OpenAiProvider : ILlmProvider
             AddSessionIdToPayload(payloadDict, options);
 
             var content = new StringContent(
-                JsonSerializer.Serialize(payloadDict, new JsonSerializerOptions
-                {
-                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-                }),
+                JsonSerializer.Serialize(payloadDict, SJsonOpts),
                 Encoding.UTF8,
                 "application/json");
 
-            var requestUri = new Uri(new Uri(baseUrl), "chat/completions");
+            var requestUri = BuildRequestUri(baseUrl);
             using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
             {
                 Content = content
@@ -238,7 +240,7 @@ public class OpenAiProvider : ILlmProvider
                 var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 _logger.LogError("OpenAI API error: {StatusCode} - {Error}",
                     response.StatusCode, errorBody);
-                throw new HttpRequestException($"OpenAI API returned {response.StatusCode}");
+                throw new HttpRequestException(BuildProviderErrorMessage(response.StatusCode, errorBody));
             }
 
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -261,7 +263,7 @@ public class OpenAiProvider : ILlmProvider
 
             return new LlmResponse(
                 choice.Message.Content ?? string.Empty,
-                result.Usage.TotalTokens,
+                result.Usage?.TotalTokens ?? 0,
                 result.Model,
                 toolCalls
             );
@@ -304,16 +306,10 @@ public class OpenAiProvider : ILlmProvider
             "StreamAsync LLM provider={Provider}: {MessageCount} messages, model={Model}",
             effectiveProvider, messages.Count, model);
 
-        // Montar mensagens
-        var openAiMessages = new List<object>
-        {
-            new { role = "system", content = systemPrompt }
-        };
-
-        foreach (var msg in messages)
-        {
-            openAiMessages.Add(new { role = msg.Role, content = msg.Content });
-        }
+        // A8: serialização comum — antes o StreamAsync descartava histórico
+        // com tool calls (role=tool / assistant.tool_calls), gerando 400 no
+        // turno seguinte em qualquer provider.
+        var openAiMessages = BuildOpenAiMessages(systemPrompt, messages);
 
         var payloadDict = new Dictionary<string, object?>
         {
@@ -321,17 +317,23 @@ public class OpenAiProvider : ILlmProvider
             ["messages"] = openAiMessages,
             ["max_tokens"] = options.MaxTokens,
             ["temperature"] = options.Temperature,
+            // A7: parametros opcionais (null = omitido no payload)
+            ["top_p"] = options.TopP,
+            ["frequency_penalty"] = options.FrequencyPenalty,
+            ["presence_penalty"] = options.PresencePenalty,
+            ["seed"] = options.Seed,
+            ["response_format"] = options.ResponseFormat,
             ["stream"] = true
         };
 
         AddSessionIdToPayload(payloadDict, options);
 
         var requestBody = new StringContent(
-            JsonSerializer.Serialize(payloadDict),
+            JsonSerializer.Serialize(payloadDict, SJsonOpts),
             Encoding.UTF8,
             "application/json");
 
-        var requestUri = new Uri(new Uri(baseUrl), "chat/completions");
+        var requestUri = BuildRequestUri(baseUrl);
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
         {
             Content = requestBody
@@ -351,7 +353,7 @@ public class OpenAiProvider : ILlmProvider
         {
             var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
             _logger.LogError("OpenAI stream error: {StatusCode} - {Error}", response.StatusCode, errorBody);
-            throw new HttpRequestException($"OpenAI API returned {response.StatusCode}");
+            throw new HttpRequestException(BuildProviderErrorMessage(response.StatusCode, errorBody));
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -366,10 +368,12 @@ public class OpenAiProvider : ILlmProvider
                 continue;
 
             // Cada linha SSE começa com "data: "
-            if (!line.StartsWith("data: ", StringComparison.Ordinal))
+            if (!line.StartsWith("data:", StringComparison.Ordinal))
                 continue;
 
-            var data = line["data: ".Length..];
+            var data = line.StartsWith("data: ", StringComparison.Ordinal)
+                ? line["data: ".Length..]
+                : line["data:".Length..];
 
             if (data == "[DONE]")
                 yield break;
@@ -479,11 +483,11 @@ public class OpenAiProvider : ILlmProvider
         AddSessionIdToPayload(payloadDict, options);
 
         var requestBody = new StringContent(
-            JsonSerializer.Serialize(payloadDict, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull }),
+            JsonSerializer.Serialize(payloadDict, SJsonOpts),
             Encoding.UTF8,
             "application/json");
 
-        var requestUri = new Uri(new Uri(baseUrl), "chat/completions");
+        var requestUri = BuildRequestUri(baseUrl);
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = requestBody };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         // Usa effectiveProvider para decidir headers OpenRouter
@@ -497,7 +501,7 @@ public class OpenAiProvider : ILlmProvider
         {
             var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
             _logger.LogError("OpenAI stream error: {StatusCode} - {Error}", response.StatusCode, errorBody);
-            throw new HttpRequestException($"OpenAI API returned {response.StatusCode}");
+            throw new HttpRequestException(BuildProviderErrorMessage(response.StatusCode, errorBody));
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -513,9 +517,20 @@ public class OpenAiProvider : ILlmProvider
             if (string.IsNullOrEmpty(line)) continue;
             if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
 
-            var data = line["data: ".Length..];
+            var data = line.StartsWith("data: ", StringComparison.Ordinal)
+                ? line["data: ".Length..]
+                : line["data:".Length..]; // A10: gateways que enviam "data:{json}" sem espaço
             if (data == "[DONE]")
             {
+                // A2: alguns providers terminam o stream com [DONE] SEM
+                // finish_reason=tool_calls — sem isso as tool calls acumuladas
+                // eram descartadas silenciosamente e o loop parava.
+                if (pendingToolCalls.Count > 0)
+                {
+                    yield return new LlmStreamEvent(Type: "tool_calls",
+                        ToolCalls: pendingToolCalls.Values.Select(tc => new LlmToolCall(
+                            tc.Id, tc.Name, tc.Args.ToString())).ToList());
+                }
                 yield return new LlmStreamEvent(Type: "done");
                 yield break;
             }
@@ -582,7 +597,20 @@ public class OpenAiProvider : ILlmProvider
                 }
 
                 var existing = pendingToolCalls[index];
+                // A1: alguns providers (OpenRouter/Anthropic/Gemini) enviam id/name
+                // em chunks SUBSEQUENTES ao de criação — sem merge aqui, a tool
+                // call perdia id/nome e era rejeitada.
+                if (tc.TryGetProperty("id", out var idDelta) && idDelta.ValueKind == JsonValueKind.String)
+                {
+                    var idVal = idDelta.GetString();
+                    if (!string.IsNullOrEmpty(idVal)) existing.Id = idVal;
+                }
                 var fnDelta = tc.GetProperty("function");
+                if (fnDelta.TryGetProperty("name", out var nameDelta) && nameDelta.ValueKind == JsonValueKind.String)
+                {
+                    var nameVal = nameDelta.GetString();
+                    if (!string.IsNullOrEmpty(nameVal)) existing.Name = nameVal;
+                }
                 if (fnDelta.TryGetProperty("arguments", out var argsProp) && argsProp.ValueKind == JsonValueKind.String)
                     existing.Args.Append(argsProp.GetString());
             }
@@ -625,7 +653,7 @@ public class OpenAiProvider : ILlmProvider
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("model")] string Model,
         [property: JsonPropertyName("choices")] List<OpenAiChoice> Choices,
-        [property: JsonPropertyName("usage")] OpenAiUsage Usage
+        [property: JsonPropertyName("usage")] OpenAiUsage? Usage
     );
 
     private record OpenAiChoice(
@@ -656,4 +684,67 @@ public class OpenAiProvider : ILlmProvider
         [property: JsonPropertyName("completion_tokens")] int CompletionTokens,
         [property: JsonPropertyName("total_tokens")] int TotalTokens
     );
+
+    // A9: options JSON estáticas — antes cada chamada instanciava uma nova.
+    private static readonly JsonSerializerOptions SJsonOpts = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+
+    // A4: Uri relativa via new Uri(new Uri(baseUrl), ...) perde o último
+    // segmento quando baseUrl não termina em "/" (ex.: ".../v1" some).
+    private static Uri BuildRequestUri(string baseUrl)
+        => new(baseUrl.TrimEnd('/') + "/chat/completions");
+
+    // A8: serialização comum de mensagens (role=tool e assistant.tool_calls) —
+    // compartilhada por CompleteAsync, StreamAsync e StreamWithToolsAsync.
+    private static List<object> BuildOpenAiMessages(string systemPrompt, List<LlmMessage> messages)
+    {
+        var openAiMessages = new List<object> { new { role = "system", content = systemPrompt } };
+        foreach (var msg in messages)
+        {
+            if (msg.Role == "tool")
+            {
+                openAiMessages.Add(new { role = "tool", tool_call_id = msg.ToolCallId, content = msg.Content });
+            }
+            else if (msg.Role == "assistant" && msg.ToolCalls is { Count: > 0 })
+            {
+                openAiMessages.Add(new
+                {
+                    role = "assistant",
+                    content = string.IsNullOrEmpty(msg.Content) ? null : msg.Content,
+                    tool_calls = msg.ToolCalls.Select(tc => new
+                    {
+                        id = tc.Id,
+                        type = "function",
+                        function = new
+                        {
+                            name = tc.Name,
+                            arguments = tc.ArgumentsJson
+                        }
+                    }).ToList()
+                });
+            }
+            else
+            {
+                openAiMessages.Add(new { role = msg.Role, content = msg.Content });
+            }
+        }
+        return openAiMessages;
+    }
+
+    // A3: mensagem de erro rica (status + corpo truncado) com mapeamento
+    // específico de erros comuns do OpenRouter (402 créditos, 429 rate limit).
+    internal static string BuildProviderErrorMessage(System.Net.HttpStatusCode statusCode, string errorBody)
+    {
+        var body = errorBody;
+        if (body.Length > 500) body = body[..500] + "...";
+        return statusCode switch
+        {
+            System.Net.HttpStatusCode.PaymentRequired =>
+                $"Provedor LLM retornou 402 (créditos insuficientes — verifique saldo OpenRouter). Detalhe: {body}",
+            System.Net.HttpStatusCode.TooManyRequests =>
+                $"Provedor LLM retornou 429 (limite de requisições). Tente novamente em instantes. Detalhe: {body}",
+            System.Net.HttpStatusCode.Unauthorized =>
+                $"Provedor LLM retornou 401 (API key inválida). Detalhe: {body}",
+            _ => $"Provedor LLM retornou {(int)statusCode}. Detalhe: {body}"
+        };
+    }
 }
