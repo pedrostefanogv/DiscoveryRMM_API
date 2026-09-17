@@ -44,8 +44,10 @@ public sealed class GetRemoteDebugCredentialsQueryHandler(
                 remoteDebugScopeAccess);
 
             var serverConfig = await configurationService.GetServerConfigAsync();
+            // Normaliza garantindo barra final no path: navegadores NAO seguem
+            // redirect (nginx 308 "/nats" -> "/nats/") no handshake de WebSocket.
             var natsWsUrl = !string.IsNullOrWhiteSpace(serverConfig.NatsWebSocketExternalUrl)
-                ? serverConfig.NatsWebSocketExternalUrl
+                ? Services.NatsWebSocketUrlNormalizer.Normalize(serverConfig.NatsWebSocketExternalUrl)
                 : null;
 
             sessionManager.Touch(query.SessionId);

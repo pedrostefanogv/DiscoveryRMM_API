@@ -44,8 +44,11 @@ public sealed class StartRemoteDebugCommandHandler(
         await dispatcher.DispatchAsync(command, ct);
 
         var serverConfig = await configurationService.GetServerConfigAsync();
+        // Normaliza garantindo barra final no path: navegadores NAO seguem
+        // redirect (nginx 308 "/nats" -> "/nats/") no handshake de WebSocket,
+        // e o viewer do browser e o unico cliente que usa o path da URL.
         var natsWsUrl = !string.IsNullOrWhiteSpace(serverConfig.NatsWebSocketExternalUrl)
-            ? serverConfig.NatsWebSocketExternalUrl
+            ? Services.NatsWebSocketUrlNormalizer.Normalize(serverConfig.NatsWebSocketExternalUrl)
             : null;
 
         return Result<RemoteDebugResponseDto>.Success(new RemoteDebugResponseDto(
