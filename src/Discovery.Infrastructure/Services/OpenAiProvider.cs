@@ -62,7 +62,14 @@ public class OpenAiProvider : ILlmProvider
             && !model.StartsWith("o3", StringComparison.OrdinalIgnoreCase)
             && !model.StartsWith("o4", StringComparison.OrdinalIgnoreCase);
 
-        if (isOpenRouterModel)
+        // Credencial por escopo pode ter BaseUrl = openrouter.ai com Provider
+        // diferente de "openrouter" (default "openai" do AiProviderCredential) e
+        // modelo sem "/" (ex: gpt-oss-120b sem prefixo). O alvo real da
+        // requisição é a baseUrl — ela define o provider efetivo.
+        var isOpenRouterBaseUrl = !string.IsNullOrWhiteSpace(baseUrl)
+            && baseUrl.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase);
+
+        if (isOpenRouterModel || isOpenRouterBaseUrl)
         {
             var effectiveProvider = AIIntegrationSettings.ProviderOpenRouter;
             var effectiveBaseUrl = !string.IsNullOrWhiteSpace(baseUrl)
@@ -78,10 +85,20 @@ public class OpenAiProvider : ILlmProvider
         return (provider ?? AIIntegrationSettings.ProviderOpenAi, finalBaseUrl!);
     }
 
-    /// <summary>Aplica headers OpenRouter se o provider for openrouter</summary>
-    private static void ApplyOpenRouterHeaders(HttpRequestMessage request, LlmOptions options)
+    /// <summary>
+    /// Aplica headers OpenRouter se o provider for openrouter OU se a baseUrl
+    /// resolver para openrouter.ai. Credenciais por escopo (AiProviderCredential)
+    /// podem ter BaseUrl apontando pro OpenRouter com Provider diferente
+    /// (default "openai") — nesse caso o OpenRouter registrava o app como
+    /// "Unknown". Espelha a lógica do OpenAiEmbeddingProvider (check por baseUrl).
+    /// </summary>
+    internal static void ApplyOpenRouterHeaders(HttpRequestMessage request, LlmOptions options, string baseUrl)
     {
-        if (!string.Equals(options.Provider, AIIntegrationSettings.ProviderOpenRouter, StringComparison.OrdinalIgnoreCase))
+        var isOpenRouter = string.Equals(options.Provider, AIIntegrationSettings.ProviderOpenRouter, StringComparison.OrdinalIgnoreCase)
+            || (!string.IsNullOrWhiteSpace(baseUrl)
+                && baseUrl.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase));
+
+        if (!isOpenRouter)
             return;
 
         // Sempre enviar HTTP-Referer e X-Title para identificar o app nos logs do OpenRouter
@@ -230,7 +247,7 @@ public class OpenAiProvider : ILlmProvider
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             // Usa effectiveProvider para decidir headers OpenRouter
             var openRouterOpts = options with { Provider = effectiveProvider };
-            ApplyOpenRouterHeaders(request, openRouterOpts);
+            ApplyOpenRouterHeaders(request, openRouterOpts, baseUrl);
 
             var httpClient = BuildHttpClient(options);
             var response = await httpClient.SendAsync(request, cancellationToken);
@@ -341,7 +358,7 @@ public class OpenAiProvider : ILlmProvider
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         // Usa effectiveProvider para decidir headers OpenRouter
         var openRouterOpts = options with { Provider = effectiveProvider };
-        ApplyOpenRouterHeaders(request, openRouterOpts);
+        ApplyOpenRouterHeaders(request, openRouterOpts, baseUrl);
 
         var httpClient = BuildHttpClient(options);
         using var response = await httpClient.SendAsync(
@@ -492,7 +509,7 @@ public class OpenAiProvider : ILlmProvider
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         // Usa effectiveProvider para decidir headers OpenRouter
         var openRouterOpts = options with { Provider = effectiveProvider };
-        ApplyOpenRouterHeaders(request, openRouterOpts);
+        ApplyOpenRouterHeaders(request, openRouterOpts, baseUrl);
 
         var httpClient = BuildHttpClient(options);
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
