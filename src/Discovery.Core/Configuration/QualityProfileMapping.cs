@@ -18,14 +18,16 @@ public static class QualityProfileMapping
         // ScalePercent SEMPRE 100: a resolução é a nativa do monitor.
         // O viewer redimensiona via CSS para caber na janela do navegador.
         // Unlimited: Fps 0 = sem limite (captura o mais rápido possível).
-        QualityProfile.Ultra => (30, 100, 92, 90),
+        // Qualidades alinhadas à escada do modo AUTO: 10 a 90, de 10 em 10
+        // (não existem mais valores fora da grade — ex. 92, 75, 25).
+        QualityProfile.Ultra => (30, 100, 90, 90),
         QualityProfile.Fast => (20, 100, 80, 80),
-        QualityProfile.High => (15, 100, 75, 75),
-        QualityProfile.Medium => (12, 100, 60, 65),
-        QualityProfile.Low => (5, 100, 40, 50),
-        QualityProfile.UltraLow => (2, 100, 25, 35),
-        QualityProfile.Unlimited => (0, 100, 75, 75),
-        _ => (15, 100, 75, 75)
+        QualityProfile.High => (15, 100, 70, 70),
+        QualityProfile.Medium => (12, 100, 60, 60),
+        QualityProfile.Low => (5, 100, 40, 40),
+        QualityProfile.UltraLow => (2, 100, 30, 30),
+        QualityProfile.Unlimited => (0, 100, 80, 80),
+        _ => (15, 100, 70, 70)
     };
 
     /// <summary>
@@ -33,13 +35,13 @@ public static class QualityProfileMapping
     /// </summary>
     public static string GetLabel(QualityProfile profile) => profile switch
     {
-        QualityProfile.Ultra => "Ultra (30 FPS, escala 100%, JPEG 92%)",
+        QualityProfile.Ultra => "Ultra (30 FPS, escala 100%, JPEG 90%)",
         QualityProfile.Fast => "Rápido (20 FPS, escala 100%, JPEG 80%)",
-        QualityProfile.High => "Alta (15 FPS, escala 100%, JPEG 75%)",
+        QualityProfile.High => "Alta (15 FPS, escala 100%, JPEG 70%)",
         QualityProfile.Medium => "Média (12 FPS, escala 100%, JPEG 60%)",
         QualityProfile.Low => "Baixa (5 FPS, escala 100%, JPEG 40%)",
-        QualityProfile.UltraLow => "Mínima (2 FPS, escala 100%, JPEG 25%)",
-        QualityProfile.Unlimited => "Sem limite (FPS máximo, JPEG 75%)",
+        QualityProfile.UltraLow => "Mínima (2 FPS, escala 100%, JPEG 30%)",
+        QualityProfile.Unlimited => "Sem limite (FPS máximo, JPEG 80%)",
         _ => "Desconhecido"
     };
 

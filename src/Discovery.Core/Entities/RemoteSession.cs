@@ -24,9 +24,9 @@ public class RemoteSession
     /// <summary>Perfil de qualidade do stream (preset inicial).</summary>
     public QualityProfile QualityProfile { get; set; } = QualityProfile.High;
 
-    /// <summary>Qualidade da imagem (compressão JPEG/WebP). 1-100. Runtime — não persistido.</summary>
+    /// <summary>Qualidade da imagem (compressão JPEG/WebP). 10-90, de 10 em 10. Runtime — não persistido.</summary>
     [NotMapped]
-    public int ImageQuality { get; set; } = 75;
+    public int ImageQuality { get; set; } = 80;
 
     /// <summary>Taxa máxima de quadros por segundo. Runtime — não persistido.</summary>
     [NotMapped]

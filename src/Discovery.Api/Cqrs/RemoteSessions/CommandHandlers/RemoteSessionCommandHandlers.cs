@@ -117,10 +117,16 @@ public sealed class StartRemoteSessionCommandHandler(
             shell = cmd.Shell ?? "powershell",
             termCols = cmd.TermCols ?? 120,
             termRows = cmd.TermRows ?? 40,
-            // Raiz do explorador de arquivos (opcional; agent usa C:\ por padrão)
+            // Raiz do explorador de arquivos (opcional; agent usa C:\\ por padrão)
             rootPath = cmd.RootPath ?? "C:\\",
             // Monitor para captura de tela (0 = primário). Opcional; agent usa 0 por padrão.
-            monitorIndex = cmd.MonitorIndex ?? 0
+            monitorIndex = cmd.MonitorIndex ?? 0,
+            // Modo auto é o padrão no start (fix card 75%): o agent semeia a
+            // escada 10-90 (de 10 em 10) pela POTÊNCIA DA MÁQUINA no início da
+            // conexão e refina com as netstats do viewer. Sem este flag, o
+            // agent interpretava start como MODO MANUAL com o override do
+            // perfil (unlimited = 75%) e o card nunca saía de 75%.
+            auto = true
         });
 
         if (!payloadValidator.TryNormalize(CommandType.RemoteSessionStart, payload, out var normalizedPayload, out var validationError))
