@@ -11,6 +11,13 @@ public interface IAgentSoftwareRepository
         int limit,
         string? search,
         bool descending);
+    Task<AgentSoftwarePageResult> GetCurrentByAgentIdOffsetAsync(
+        Guid agentId,
+        int page,
+        int pageSize,
+        string? search,
+        bool descending,
+        CancellationToken ct = default);
     Task<AgentSoftwareSnapshot> GetSnapshotByAgentIdAsync(Guid agentId);
     Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryGlobalPagedAsync(
         string? cursor,

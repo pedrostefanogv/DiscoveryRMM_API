@@ -78,6 +78,7 @@ public class AgentRepository : IAgentRepository
         existingAgent.OperatingSystem = agent.OperatingSystem;
         existingAgent.OsVersion = agent.OsVersion;
         existingAgent.AgentVersion = agent.AgentVersion;
+        existingAgent.CommitHash = agent.CommitHash;
         existingAgent.LastIpAddress = agent.LastIpAddress;
         existingAgent.MacAddress = agent.MacAddress;
         existingAgent.LastSeenAt = agent.LastSeenAt;

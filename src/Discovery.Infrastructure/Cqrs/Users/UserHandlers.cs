@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Users.Commands;
 using Discovery.Core.Cqrs.Users.Queries;
 using Discovery.Core.Entities.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using MediatR;
@@ -18,8 +19,12 @@ public sealed class ListUsersQueryHandler(
         var count = await repo.CountAsync();
         var items = users.Select(Map).ToList().AsReadOnly();
         var hasMore = items.Count >= q.Limit;
+        // Cursor DEVE ser codificado via helper — o decoder (UserRepository →
+        // TryDecodeCreatedAtCursor) espera Base64 "ticks|guidN". Emitir só o Id
+        // cru quebrava a paginação da lista de usuários (decode falhava →
+        // repetia a 1ª página).
         var nextCursor = hasMore && items.Count > 0
-            ? items[^1].Id.ToString()
+            ? CursorPaginationHelper.EncodeCreatedAtCursor(items[^1].CreatedAt, items[^1].Id)
             : null;
 
         return Result<UsersPageDto>.Success(new UsersPageDto(items, nextCursor, hasMore, count));

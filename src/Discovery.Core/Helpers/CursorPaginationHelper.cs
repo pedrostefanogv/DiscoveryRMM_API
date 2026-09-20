@@ -53,6 +53,12 @@ public static class CursorPaginationHelper
         => Convert.ToBase64String(Encoding.UTF8.GetBytes(id.ToString("N")));
 
     /// <summary>Decodifica cursor Type B.</summary>
+    /// <remarks>
+    /// Aceita o formato canônico (Base64 de GUID "N") e, por compatibilidade,
+    /// cursor cru legado ("N"/"D" com hífens) emitido por versões anteriores
+    /// da API — ex.: GetAgentSoftwareQueryHandler emitia <c>InventoryId.ToString()</c>,
+    /// que falhava no decode e degradava a paginação para "sempre a 1ª página".
+    /// </remarks>
     public static bool TryDecodeGuidCursor(string? cursor, out Guid id)
     {
         id = default;
@@ -62,12 +68,15 @@ public static class CursorPaginationHelper
         try
         {
             var raw = Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
-            return Guid.TryParseExact(raw, "N", out id);
+            if (Guid.TryParseExact(raw, "N", out id)) return true;
         }
         catch
         {
-            return false;
+            // Não é Base64 — cai no fallback do formato cru abaixo.
         }
+
+        // Compatibilidade: cursor cru (formato N ou D, com hífens).
+        return Guid.TryParse(cursor, out id);
     }
 
     // ── Type C: Name (string) + Id (Guid) — para Winget/AppPackage ──────────

@@ -9,6 +9,17 @@ public sealed record GetAgentHardwareComponentsQuery(Guid AgentId) : IQuery<Resu
 public sealed record GetAgentSoftwareQuery(Guid AgentId, string? Cursor = null, int Limit = 100, string? Search = null, bool Descending = false) : IQuery<Result<CursorPageDto<AgentSoftwareItemDto>>>;
 public sealed record GetAgentSoftwareSnapshotQuery(Guid AgentId) : IQuery<Result<AgentSoftwareSnapshotDto>>;
 
+/// <summary>
+/// Paginação por offset (número de página) para o detalhe do agente — suporta
+/// navegação aleatória de páginas com total filtrado, sem fetch-all no cliente.
+/// </summary>
+public sealed record GetAgentSoftwarePageQuery(
+    Guid AgentId,
+    int Page = 1,
+    int PageSize = 50,
+    string? Search = null,
+    bool Descending = false) : IQuery<Result<AgentSoftwarePageDto>>;
+
 public sealed record AgentHardwareDto(
     string Manufacturer,
     string Model,
@@ -57,6 +68,18 @@ public sealed record AgentSoftwareItemDto(
     DateTime? CollectedAt
 );
 public sealed record AgentSoftwareSnapshotDto(Guid AgentId, int TotalInstalled, DateTime? LastCollectedAt);
+
+/// <summary>
+/// Página de inventário de software com total filtrado — fonte única de
+/// verdade para paginação server-side no detalhe do agente (o total reflete
+/// o filtro de busca ativo, corrigindo o número de páginas sob filtro).
+/// </summary>
+public sealed record AgentSoftwarePageDto(
+    IReadOnlyList<AgentSoftwareItemDto> Items,
+    int TotalCount,
+    int Page,
+    int PageSize,
+    int TotalPages);
 
 public sealed record AgentHardwareComponentsDto(
     List<AgentHardwarePrinterDto> Printers,

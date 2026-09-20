@@ -91,10 +91,14 @@ public sealed class ReportAgentHardwareCommandHandler(
             agent.OperatingSystem = cmd.OperatingSystem;
         if (!string.IsNullOrWhiteSpace(cmd.OsVersion))
             agent.OsVersion = cmd.OsVersion;
-        if (!string.IsNullOrWhiteSpace(cmd.AgentVersion))
-            agent.AgentVersion = cmd.AgentVersion;
-        if (!string.IsNullOrWhiteSpace(cmd.CommitHash))
-            agent.CommitHash = cmd.CommitHash;
+        // Placeholders de build sem ldflags ("dev"/"0.0.0"/"unknown") nunca
+        // sobrescrevem um valor real já conhecido (AgentVersionNormalizer).
+        var reportedAgentVersion = AgentVersionNormalizer.PickVersion(cmd.AgentVersion);
+        if (reportedAgentVersion is not null && agent.AgentVersion != reportedAgentVersion)
+            agent.AgentVersion = reportedAgentVersion;
+        var reportedCommitHash = AgentVersionNormalizer.NormalizeCommit(cmd.CommitHash);
+        if (reportedCommitHash is not null && agent.CommitHash != reportedCommitHash)
+            agent.CommitHash = reportedCommitHash;
         if (!string.IsNullOrWhiteSpace(cmd.LastIpAddress))
             agent.LastIpAddress = cmd.LastIpAddress;
         if (!string.IsNullOrWhiteSpace(cmd.MacAddress))

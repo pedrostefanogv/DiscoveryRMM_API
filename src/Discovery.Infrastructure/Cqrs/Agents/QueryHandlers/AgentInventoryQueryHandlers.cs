@@ -141,27 +141,70 @@ public sealed class GetAgentSoftwareQueryHandler(
 
         var hasMore = page.Count > limit;
         var items = (hasMore ? page.Take(limit) : page)
-            .Select(s => new AgentSoftwareItemDto(
-                s.InventoryId,
-                s.Name,
-                s.Version,
-                s.Publisher,
-                s.Source,
-                s.InstallId,
-                s.Serial,
-                s.InstallDate,
-                s.CollectedAt))
+            .Select(AgentSoftwareItemMappers.ToDto)
             .ToList().AsReadOnly();
 
         string? nextCursor = null;
         if (hasMore && items.Count > 0)
         {
-            var last = page[limit];
-            nextCursor = last.InventoryId.ToString();
+            // IMPORTANTE: cursor DEVE ser codificado (Base64 "N") — o decoder
+            // TryDecodeGuidCursor espera Base64. Cursor cru aqui quebrava a
+            // paginação (decode falhava → repetia sempre a 1ª página → loop
+            // infinito de requests no frontend). Fallback do decoder cobre
+            // cursores crus legados já em circulação.
+            // E DEVE apontar para o ÚLTIMO ITEM EMITIDO (items[^1]) — usar a
+            // linha probe page[limit] (limit+1-ésima) pularia 1 item por página.
+            nextCursor = CursorPaginationHelper.EncodeGuidCursor(items[^1].InventoryId);
         }
 
         return Result<CursorPageDto<AgentSoftwareItemDto>>.Success(
             new CursorPageDto<AgentSoftwareItemDto>(items, items.Count, q.Cursor, nextCursor, hasMore, q.Limit));
+    }
+}
+
+/// <summary>
+/// Mapeamento compartilhado AgentInstalledSoftware → AgentSoftwareItemDto
+/// entre os handlers de paginação por cursor e por offset.
+/// </summary>
+public static class AgentSoftwareItemMappers
+{
+    public static AgentSoftwareItemDto ToDto(AgentInstalledSoftware s) => new(
+        s.InventoryId,
+        s.Name,
+        s.Version,
+        s.Publisher,
+        s.Source,
+        s.InstallId,
+        s.Serial,
+        s.InstallDate,
+        s.CollectedAt);
+}
+
+public sealed class GetAgentSoftwarePageQueryHandler(
+    IAgentRepository agentRepo,
+    IAgentSoftwareRepository softwareRepo
+) : IRequestHandler<GetAgentSoftwarePageQuery, Result<AgentSoftwarePageDto>>
+{
+    public async Task<Result<AgentSoftwarePageDto>> Handle(GetAgentSoftwarePageQuery q, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<AgentSoftwarePageDto>.Failure(Error.NotFound("Agent not found."));
+
+        var safePage = Math.Max(1, q.Page);
+        var safePageSize = Math.Clamp(q.PageSize, 1, 2000);
+
+        var result = await softwareRepo.GetCurrentByAgentIdOffsetAsync(
+            q.AgentId, safePage, safePageSize, q.Search, q.Descending, ct);
+
+        var totalPages = Math.Max(1, (int)Math.Ceiling(result.TotalCount / (double)safePageSize));
+
+        return Result<AgentSoftwarePageDto>.Success(new AgentSoftwarePageDto(
+            result.Items.Select(AgentSoftwareItemMappers.ToDto).ToList(),
+            result.TotalCount,
+            safePage,
+            safePageSize,
+            totalPages));
     }
 }
 

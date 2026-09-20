@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs.Agents.Crud.Commands;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
@@ -18,8 +19,8 @@ internal static class AgentQueryHelper
         a.EffectiveStatus.ToString(),
         a.OperatingSystem,
         a.OsVersion,
-        a.AgentVersion,
-        a.CommitHash,
+        AgentVersionNormalizer.PickVersion(a.AgentVersion),
+        AgentVersionNormalizer.NormalizeCommit(a.CommitHash),
         a.MacAddress,
         a.LastIpAddress,
         a.EffectiveStatus == AgentStatus.Online,
@@ -29,32 +30,44 @@ internal static class AgentQueryHelper
         a.UpdatedAt,
         null);
 
-    internal static AgentDto MapToDto(Agent a, HeartbeatCacheEntry? hb) => new(
-        a.Id,
-        hb?.Hostname ?? a.Hostname,
-        a.DisplayName,
-        Guid.Empty,
-        a.SiteId,
-        a.EffectiveStatus.ToString(),
-        a.OperatingSystem,
-        a.OsVersion,
-        hb?.AgentVersion ?? a.AgentVersion,
-        a.CommitHash,
-        a.MacAddress,
-        hb?.IpAddress ?? a.LastIpAddress,
-        a.EffectiveStatus == AgentStatus.Online,
-        hb?.LastHeartbeatAt ?? a.LastSeenAt,
-        a.ZeroTouchPending,
-        a.CreatedAt,
-        a.UpdatedAt,
-        hb is null ? null : new HeartbeatMetricsDto(
-            hb.CpuPercent, hb.CpuTemperatureCelsius, hb.MemoryPercent, hb.DiskPercent,
-            hb.MemoryTotalGb, hb.MemoryUsedGb, hb.DiskTotalGb, hb.DiskUsedGb,
-            hb.DiskReadPercent, hb.DiskWritePercent, hb.DiskResponseMs,
-            hb.P2pPeers, hb.UptimeSeconds, hb.ProcessCount,
-            hb.UiOnline,
-            hb.IpAddress, hb.Hostname, hb.AgentVersion, null,
-            hb.LastHeartbeatAt, hb.LastHeartbeatAt));
+    internal static AgentDto MapToDto(Agent a, HeartbeatCacheEntry? hb)
+    {
+        // Versão: o heartbeat é a fonte mais fresca (reflete o binário em
+        // execução, inclusive logo após um self-update), mas placeholders de
+        // build local ("0.0.0"/"dev") não podem ofuscar a versão real já
+        // persistida pelo hardware report — daí o PickVersion. O commit não
+        // viaja no heartbeat (dado estático, atualiza via inventário), então
+        // vem sempre da entidade, normalizado.
+        var version = AgentVersionNormalizer.PickVersion(hb?.AgentVersion, a.AgentVersion);
+        var commitHash = AgentVersionNormalizer.NormalizeCommit(a.CommitHash);
+
+        return new AgentDto(
+            a.Id,
+            hb?.Hostname ?? a.Hostname,
+            a.DisplayName,
+            Guid.Empty,
+            a.SiteId,
+            a.EffectiveStatus.ToString(),
+            a.OperatingSystem,
+            a.OsVersion,
+            version,
+            commitHash,
+            a.MacAddress,
+            hb?.IpAddress ?? a.LastIpAddress,
+            a.EffectiveStatus == AgentStatus.Online,
+            hb?.LastHeartbeatAt ?? a.LastSeenAt,
+            a.ZeroTouchPending,
+            a.CreatedAt,
+            a.UpdatedAt,
+            hb is null ? null : new HeartbeatMetricsDto(
+                hb.CpuPercent, hb.CpuTemperatureCelsius, hb.MemoryPercent, hb.DiskPercent,
+                hb.MemoryTotalGb, hb.MemoryUsedGb, hb.DiskTotalGb, hb.DiskUsedGb,
+                hb.DiskReadPercent, hb.DiskWritePercent, hb.DiskResponseMs,
+                hb.P2pPeers, hb.UptimeSeconds, hb.ProcessCount,
+                hb.UiOnline,
+                hb.IpAddress, hb.Hostname, version, commitHash,
+                hb.LastHeartbeatAt, hb.LastHeartbeatAt));
+    }
 
     internal static void ApplyRealtimeHeartbeat(Agent agent, HeartbeatCacheEntry? heartbeat)
     {

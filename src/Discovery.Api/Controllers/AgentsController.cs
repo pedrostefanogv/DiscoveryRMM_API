@@ -181,6 +181,29 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
     }
 
+    /// <summary>
+    /// Paginação por offset com total filtrado — usada pelo detalhe do agente
+    /// para navegação direta de páginas (sem fetch-all por cursor no cliente).
+    /// </summary>
+    [HttpGet("{id:guid}/software/page")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetSoftwarePage(
+        Guid id,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? search = null,
+        [FromQuery] string order = "asc")
+    {
+        var normalizedOrder = order.Trim().ToLowerInvariant();
+        if (normalizedOrder is not ("asc" or "desc"))
+            return BadRequest(new { error = "Invalid order. Use 'asc' or 'desc'." });
+
+        var result = await _mediator.Send(new GetAgentSoftwarePageQuery(id, page, pageSize, search, normalizedOrder == "desc"));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+    }
+
     // ── Automation ────────────────────────────────────────────────────────
 
     [HttpPost("{id:guid}/automation/tasks/{taskId:guid}/run-now")]

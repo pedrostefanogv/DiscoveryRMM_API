@@ -48,7 +48,10 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         bool descending)
     {
         var pattern = BuildSearchPattern(search);
-        var safeLimit = Math.Clamp(limit, 1, 500);
+        // Limite superior 501: o handler GetAgentSoftwareQueryHandler pede
+        // limit+1 como "probe" de hasMore (500 + 1). Clampear para 500 aqui
+        // fazia hasMore nunca ficar true (paginação truncava em 500 itens).
+        var safeLimit = Math.Clamp(limit, 1, 501);
 
         var query =
             from inv in _db.AgentSoftwareInventories.AsNoTracking()
@@ -99,6 +102,72 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 LastSeenAt = x.inv.LastSeenAt
             })
             .ToListAsync();
+    }
+
+    /// <summary>
+    /// Paginação por offset (número de página) com total filtrado — usada pelo
+    /// detalhe do agente para navegação aleatória de páginas sem fetch-all.
+    /// Mantém o MESMO filtro/join/ordenação de <see cref="GetCurrentByAgentIdPagedAsync"/>.
+    /// </summary>
+    public async Task<AgentSoftwarePageResult> GetCurrentByAgentIdOffsetAsync(
+        Guid agentId,
+        int page,
+        int pageSize,
+        string? search,
+        bool descending,
+        CancellationToken ct = default)
+    {
+        var pattern = BuildSearchPattern(search);
+        var safePage = Math.Max(1, page);
+        var safePageSize = Math.Clamp(pageSize, 1, 2000);
+
+        var query =
+            from inv in _db.AgentSoftwareInventories.AsNoTracking()
+            join catalog in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals catalog.Id
+            where inv.AgentId == agentId && inv.IsPresent
+            select new { inv, catalog };
+
+        if (pattern is not null)
+        {
+            query = query.Where(x =>
+                (x.inv.Version != null && EF.Functions.ILike(x.inv.Version, pattern)) ||
+                (x.inv.InstallSource != null && EF.Functions.ILike(x.inv.InstallSource, pattern)) ||
+                EF.Functions.ILike(x.catalog.Name, pattern) ||
+                (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, pattern)) ||
+                (x.catalog.InstallId != null && EF.Functions.ILike(x.catalog.InstallId, pattern)) ||
+                (x.catalog.Serial != null && EF.Functions.ILike(x.catalog.Serial, pattern)) ||
+                (x.catalog.Source != null && EF.Functions.ILike(x.catalog.Source, pattern)));
+        }
+
+        var totalCount = await query.CountAsync(ct);
+
+        var ordered = descending
+            ? query.OrderByDescending(x => x.inv.Id)
+            : query.OrderBy(x => x.inv.Id);
+
+        var items = await ordered
+            .Skip((safePage - 1) * safePageSize)
+            .Take(safePageSize)
+            .Select(x => new AgentInstalledSoftware
+            {
+                InventoryId = x.inv.Id,
+                AgentId = x.inv.AgentId,
+                SoftwareId = x.inv.SoftwareId,
+                Name = x.catalog.Name,
+                Version = x.inv.Version,
+                Publisher = x.catalog.Publisher,
+                InstallId = x.catalog.InstallId,
+                Serial = x.catalog.Serial,
+                Source = x.catalog.Source,
+                InstallDate = x.inv.InstallDate,
+                InstallSource = x.inv.InstallSource,
+                CollectedAt = x.inv.CollectedAt,
+                FirstSeenAt = x.inv.FirstSeenAt,
+                LastSeenAt = x.inv.LastSeenAt
+            })
+            .ToListAsync(ct);
+
+        return new AgentSoftwarePageResult { Items = items, TotalCount = totalCount };
     }
 
     public async Task<AgentSoftwareSnapshot> GetSnapshotByAgentIdAsync(Guid agentId)
