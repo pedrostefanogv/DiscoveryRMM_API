@@ -316,10 +316,14 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         int limit = 20,
         Guid? filterClientId = null,
         Guid? filterSiteId = null,
+        string? sortBy = null,
+        string? sortDirection = null,
         CancellationToken ct = default)
     {
+        // Perf: sem Include(Chunks) — carregaria Content + Embedding (1536 dims) de
+        // todos os chunks só para expor ChunkCount. Os totais vêm de uma query
+        // agregada leve sobre a página retornada (ver ChunkCounts / BuildPageAsync).
         var query = db.KnowledgeArticles
-            .Include(a => a.Chunks)
             .Where(a => a.DeletedAt == null);
 
         // Filtro de status
@@ -360,53 +364,118 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
         }
 
-        // Filtro de departamento (para artigos Internal)
+        // Filtro de departamento (para artigos Internal).
+        // Com acesso global (admin), Internal fica visível mesmo sem departmentId;
+        // sem acesso global, Internal só aparece quando o departamento confere.
         if (departmentId.HasValue)
         {
             query = query.Where(a =>
                 a.Status != ArticleStatus.Internal.ToString() ||
                 a.DepartmentId == departmentId.Value);
         }
-        else
+        else if (!hasGlobalAccess)
         {
-            // Sem departmentId, Internal não aparece
             query = query.Where(a => a.Status != ArticleStatus.Internal.ToString());
         }
 
         if (!string.IsNullOrWhiteSpace(category))
             query = query.Where(a => a.Category != null && a.Category.ToLower() == category.ToLower());
 
-        // Paginação cursor-based: cursor = base64(name|guid)
-        // Usamos Title + Id como chave composta (ordena por Title, desempata por Id)
+        // Ordenação suportada: "title" (padrão legacy) e "updatedAt".
+        // Direção: title default asc (compatível); updatedAt default desc (esperado pela UI).
+        var sort = string.IsNullOrWhiteSpace(sortBy) ? "title" : sortBy.Trim().ToLowerInvariant();
+        var direction = string.IsNullOrWhiteSpace(sortDirection) ? "" : sortDirection.Trim().ToLowerInvariant();
+
+        if (sort is "updatedat" or "updated_at" or "updated")
+        {
+            var descending = direction != "asc";
+
+            // Cursor Type A (ticks|guidN) sobre UpdatedAt + Id
+            if (!string.IsNullOrWhiteSpace(cursor) &&
+                CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorDate, out var cursorId))
+            {
+                query = descending
+                    ? query.Where(a =>
+                        a.UpdatedAt < cursorDate ||
+                        (a.UpdatedAt == cursorDate && a.Id.CompareTo(cursorId) < 0))
+                    : query.Where(a =>
+                        a.UpdatedAt > cursorDate ||
+                        (a.UpdatedAt == cursorDate && a.Id.CompareTo(cursorId) > 0));
+            }
+
+            var ordered = descending
+                ? query.OrderByDescending(a => a.UpdatedAt).ThenByDescending(a => a.Id)
+                : query.OrderBy(a => a.UpdatedAt).ThenBy(a => a.Id);
+            var page = await ordered.Take(limit + 1).ToListAsync(ct);
+
+            var hasMore = page.Count > limit;
+            var items = hasMore ? page.Take(limit).ToList() : page;
+
+            string? nextCursor = null;
+            if (hasMore && items.Count > 0)
+            {
+                var last = items[^1];
+                nextCursor = CursorPaginationHelper.EncodeCreatedAtCursor(last.UpdatedAt, last.Id);
+            }
+
+            return await BuildPageAsync(items, hasMore, nextCursor, ct);
+        }
+
+        // Paginação cursor-based por Title: cursor = base64(name|guid) (Type C)
+        // Chave composta Title + Id; title desc desempata por Id asc.
         if (!string.IsNullOrWhiteSpace(cursor))
         {
             if (CursorPaginationHelper.TryDecodeNameCursor(cursor, out var cursorName, out var cursorId))
             {
-                query = query.Where(a =>
-                    string.Compare(a.Title, cursorName) > 0 ||
-                    (a.Title == cursorName && a.Id.CompareTo(cursorId) > 0));
+                query = direction == "desc"
+                    ? query.Where(a =>
+                        string.Compare(a.Title, cursorName) < 0 ||
+                        (a.Title == cursorName && a.Id.CompareTo(cursorId) > 0))
+                    : query.Where(a =>
+                        string.Compare(a.Title, cursorName) > 0 ||
+                        (a.Title == cursorName && a.Id.CompareTo(cursorId) > 0));
             }
         }
 
-        var orderedQuery = query.OrderBy(a => a.Title).ThenBy(a => a.Id);
-        var page = await orderedQuery.Take(limit + 1).ToListAsync(ct);
+        var orderedQuery = direction == "desc"
+            ? query.OrderByDescending(a => a.Title).ThenBy(a => a.Id)
+            : query.OrderBy(a => a.Title).ThenBy(a => a.Id);
+        var titlePage = await orderedQuery.Take(limit + 1).ToListAsync(ct);
 
-        var hasMore = page.Count > limit;
-        var items = hasMore ? page.Take(limit).ToList() : page;
+        var titleHasMore = titlePage.Count > limit;
+        var titleItems = titleHasMore ? titlePage.Take(limit).ToList() : titlePage;
 
-        string? nextCursor = null;
-        if (hasMore && items.Count > 0)
+        string? titleNextCursor = null;
+        if (titleHasMore && titleItems.Count > 0)
         {
-            var last = items[^1];
-            nextCursor = CursorPaginationHelper.EncodeNameCursor(last.Title, last.Id);
+            var last = titleItems[^1];
+            titleNextCursor = CursorPaginationHelper.EncodeNameCursor(last.Title, last.Id);
         }
+
+        return await BuildPageAsync(titleItems, titleHasMore, titleNextCursor, ct);
+    }
+
+    /// <summary>
+    /// Monta ArticleListPageData com ChunkCounts agregados (uma query GROUP BY leve
+    /// sobre a página retornada, sem materializar chunks/embeddings).
+    /// </summary>
+    private async Task<ArticleListPageData> BuildPageAsync(
+        List<KnowledgeArticle> items, bool hasMore, string? nextCursor, CancellationToken ct)
+    {
+        var ids = items.Select(a => a.Id).ToList();
+        var counts = await db.KnowledgeArticleChunks
+            .Where(c => ids.Contains(c.ArticleId))
+            .GroupBy(c => c.ArticleId)
+            .Select(g => new { g.Key, Total = g.Count() })
+            .ToListAsync(ct);
 
         return new ArticleListPageData
         {
             Items = items,
             Count = items.Count,
             NextCursor = nextCursor,
-            HasMore = hasMore
+            HasMore = hasMore,
+            ChunkCounts = counts.ToDictionary(x => x.Key, x => x.Total)
         };
     }
 
@@ -431,13 +500,14 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
 
         query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
 
+        // Mesma regra da listagem: com acesso global, Internal fica visível.
         if (departmentId.HasValue)
         {
             query = query.Where(a =>
                 a.Status != ArticleStatus.Internal.ToString() ||
                 a.DepartmentId == departmentId.Value);
         }
-        else
+        else if (!hasGlobalAccess)
         {
             query = query.Where(a => a.Status != ArticleStatus.Internal.ToString());
         }

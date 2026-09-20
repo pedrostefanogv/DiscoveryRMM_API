@@ -1,9 +1,13 @@
-﻿using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs;
 using Discovery.Core.DTOs;
 
 namespace Discovery.Core.Cqrs.Knowledge.Queries;
 
-public sealed record SearchKnowledgeQuery(string Query, Guid? ClientId, Guid? SiteId, int MaxResults = 10) : IQuery<Result<IReadOnlyList<ArticleResponse>>>;
+/// <param name="Mode">"semantic" | "keyword" | "hybrid" (default hybrid — semântico com fallback keyword).</param>
+public sealed record SearchKnowledgeQuery(string Query, Guid? ClientId, Guid? SiteId, int MaxResults = 10, Guid? DepartmentId = null, string Mode = "hybrid") : IQuery<Result<IReadOnlyList<ArticleResponse>>>;
+
+/// <summary>Busca de sugestões na KB (POST /knowledge/chat-search) — chunks com score para IA/chat.</summary>
+public sealed record SearchKbSuggestionsQuery(KbSearchRequest Request) : IQuery<Result<KbSuggestResult>>;
 
 /// <summary>
 /// Lista artigos com base na ACL do usuário (multi-escopo).
@@ -17,6 +21,8 @@ public sealed record ListKnowledgeArticlesByUserScopeQuery(
     Guid? DepartmentId = null,
     string? Category = null,
     Guid? ClientId = null,
-    Guid? SiteId = null) : IQuery<Result<CursorPageDto<ArticleListItem>>>;
+    Guid? SiteId = null,
+    string? SortBy = null,
+    string? SortDirection = null) : IQuery<Result<CursorPageDto<ArticleListItem>>>;
 
 public sealed record GetKnowledgeArticleByIdQuery(Guid Id) : IQuery<Result<ArticleResponse>>;

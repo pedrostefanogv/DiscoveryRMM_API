@@ -25,6 +25,9 @@ public sealed class GetKnowledgeArticlesHandler(
         // Usa o método unificado (ACL-based) com filtro de escopo.
         // Agents têm escopo fixo (site → client → global) — passamos filterClientId/filterSiteId
         // que fazem herança de escopo automaticamente.
+        // Paginação keyset por UpdatedAt desc + Id (cursor opaco Type A) — antes o
+        // teto de 500 truncava silenciosamente tenants maiores.
+        var limit = Math.Clamp(q.Limit <= 0 ? 200 : q.Limit, 1, 500);
         var data = await knowledgeRepo.ListByUserScopeAsync(
             hasGlobalAccess: false,
             allowedClientIds: new HashSet<Guid>(),
@@ -32,15 +35,18 @@ public sealed class GetKnowledgeArticlesHandler(
             status: "Published",
             departmentId: null,
             category: q.Category,
-            cursor: null,
-            limit: 500,
+            cursor: q.Cursor,
+            limit: limit,
             filterClientId: site?.ClientId,
             filterSiteId: agent.SiteId,
+            sortBy: "updatedAt",
+            sortDirection: "desc",
             ct: ct);
 
         // Mapeia para DTO plano (sem navigation properties → sem ciclo de serialização)
         var dtos = data.Items.Select(MapToDto).ToList();
-        return Result<object>.Success(dtos);
+        return Result<object>.Success(new AgentKnowledgeArticlePage(
+            dtos, data.NextCursor, data.HasMore, limit));
     }
 
     private static AgentKnowledgeArticleDto MapToDto(KnowledgeArticle a) => new(

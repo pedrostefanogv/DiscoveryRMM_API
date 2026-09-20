@@ -200,14 +200,14 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         // Filtro multi-escopo
         chunksQuery = ApplyMultiScopeFilter(chunksQuery, hasGlobalAccess, allowedClientIds, allowedSiteIds);
 
-        // Filtro de departamento
+        // Filtro de departamento (com acesso global, Internal fica visível)
         if (departmentId.HasValue)
         {
             chunksQuery = chunksQuery.Where(c =>
                 c.Article.Status != ArticleStatus.Internal.ToString() ||
                 c.Article.DepartmentId == departmentId.Value);
         }
-        else
+        else if (!hasGlobalAccess)
         {
             chunksQuery = chunksQuery.Where(c =>
                 c.Article.Status != ArticleStatus.Internal.ToString());

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Knowledge.Commands;
 using Discovery.Core.Cqrs.Knowledge.Queries;
@@ -13,33 +13,19 @@ using MediatR;
 namespace Discovery.Infrastructure.Cqrs.Knowledge;
 
 public sealed class SearchKnowledgeQueryHandler(
-    IKnowledgeArticleRepository repo,
-    IScopeContext scopeContext
+    IKnowledgeSearchService searchService
 ) : IRequestHandler<SearchKnowledgeQuery, Result<IReadOnlyList<ArticleResponse>>>
 {
     public async Task<Result<IReadOnlyList<ArticleResponse>>> Handle(SearchKnowledgeQuery q, CancellationToken ct)
     {
-        // Se o usuário selecionou um escopo específico (clientId/siteId), usa keyword search legado com escopo.
-        // Caso contrário, usa busca multi-escopo via ACL do usuário.
-        List<KnowledgeArticle> articles;
+        // Busca unificada: semantic/keyword/hybrid com ACL multi-escopo do usuário
+        // (ou escopo legado clientId/siteId quando informados).
+        var hits = await searchService.SearchAsync(new KnowledgeSearchRequest(
+            q.Query, q.Mode,
+            UseUserScope: !q.ClientId.HasValue && !q.SiteId.HasValue,
+            q.ClientId, q.SiteId, q.DepartmentId, q.MaxResults), ct);
 
-        if (q.ClientId.HasValue || q.SiteId.HasValue)
-        {
-            articles = await repo.SearchKeywordAsync(q.Query, q.ClientId, q.SiteId, null, ct);
-        }
-        else
-        {
-            var scope = await scopeContext.GetAccessAsync(ResourceType.KnowledgeBase, ActionType.View);
-            articles = await repo.SearchKeywordByUserScopeAsync(
-                q.Query,
-                scope.HasGlobalAccess,
-                scope.AllowedClientIds.ToHashSet(),
-                scope.AllowedSiteIds.ToHashSet(),
-                departmentId: null,
-                ct: ct);
-        }
-
-        var dtos = articles.Select(MapToResponse).ToList();
+        var dtos = hits.Select(h => MapToResponse(h.Article)).ToList();
         return Result<IReadOnlyList<ArticleResponse>>.Success(dtos);
     }
 
@@ -78,6 +64,58 @@ public sealed class SearchKnowledgeQueryHandler(
         };
 }
 
+/// <summary>
+/// POST /knowledge/chat-search — sugestões com score para IA/chat/feedback.
+/// Antes esse endpoint era chamado pelo front sem existir na API (404).
+/// </summary>
+public sealed class SearchKbSuggestionsQueryHandler(IKnowledgeSearchService searchService)
+    : IRequestHandler<SearchKbSuggestionsQuery, Result<KbSuggestResult>>
+{
+    public async Task<Result<KbSuggestResult>> Handle(SearchKbSuggestionsQuery q, CancellationToken ct)
+    {
+        var req = q.Request;
+        var useUserScope = req.ScopeMode == "all-visible" || (!req.ClientId.HasValue && !req.SiteId.HasValue);
+
+        var hits = await searchService.SearchAsync(new KnowledgeSearchRequest(
+            req.Query, req.Mode, useUserScope, req.ClientId, req.SiteId, req.DepartmentId, req.MaxResults), ct);
+
+        return Result<KbSuggestResult>.Success(new KbSuggestResult(BuildSuggestions(hits)));
+    }
+
+    private static List<KbSearchResult> BuildSuggestions(List<KnowledgeSearchHit> hits)
+    {
+        return hits.Select(h =>
+        {
+            var excerpt = h.Chunk is not null
+                ? (h.Chunk.ChunkContent.Length > 300 ? h.Chunk.ChunkContent[..300] + "..." : h.Chunk.ChunkContent)
+                : (h.Article.Content.Length > 300 ? h.Article.Content[..300] + "..." : h.Article.Content);
+
+            return new KbSearchResult(
+                h.Article.Id, h.Article.Title,
+                h.Chunk?.SectionTitle, excerpt, h.Article.Category,
+                ResolveScope(h.Article.ClientId, h.Article.SiteId),
+                ResolveScopeOrigin(h.Article.ClientId, h.Article.SiteId),
+                h.Article.ClientId, h.Article.SiteId, null, null, h.Score);
+        }).ToList();
+    }
+
+    private static string ResolveScope(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "Global",
+            (not null, null) => "Client",
+            _ => "Site"
+        };
+
+    private static string ResolveScopeOrigin(Guid? clientId, Guid? siteId)
+        => (clientId, siteId) switch
+        {
+            (null, null) => "global",
+            (not null, null) => "client",
+            _ => "site"
+        };
+}
+
 public sealed class ListKnowledgeArticlesByUserScopeQueryHandler(
     IKnowledgeArticleRepository repo,
     IScopeContext scopeContext
@@ -93,7 +131,7 @@ public sealed class ListKnowledgeArticlesByUserScopeQueryHandler(
         var data = await repo.ListByUserScopeAsync(
             hasGlobal, allowedClientIds, allowedSiteIds,
             q.Status, q.DepartmentId, q.Category, q.Cursor, q.Limit,
-            q.ClientId, q.SiteId, ct);
+            q.ClientId, q.SiteId, q.SortBy, q.SortDirection, ct);
 
         var items = data.Items.Select(a => new ArticleListItem(
             Id: a.Id, Title: a.Title, Category: a.Category,
@@ -106,7 +144,7 @@ public sealed class ListKnowledgeArticlesByUserScopeQueryHandler(
             DepartmentId: a.DepartmentId,
             CurrentVersionNumber: a.CurrentVersionNumber,
             PublishedAt: a.PublishedAt,
-            ChunkCount: a.Chunks?.Count ?? 0,
+            ChunkCount: data.ChunkCounts.TryGetValue(a.Id, out var chunkCount) ? chunkCount : 0,
             CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt
         )).ToList();
 

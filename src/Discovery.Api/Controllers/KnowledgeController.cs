@@ -20,20 +20,38 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
         [FromQuery] int limit = 20,
         [FromQuery] string? status = null,
         [FromQuery] Guid? departmentId = null,
-        [FromQuery] string? category = null)
+        [FromQuery] string? category = null,
+        [FromQuery] string? sortBy = null,
+        [FromQuery] string? sortDirection = null)
     {
         // Listagem unificada: sempre usa ACL multi-escopo do usuário.
         // clientId/siteId refinam o resultado (ex.: dropdown de cliente na UI).
+        // sortBy: "title" (legacy) | "updatedAt"; sortDirection: asc | desc.
         var result = await mediator.Send(new ListKnowledgeArticlesByUserScopeQuery(
-            cursor, limit, status, departmentId, category, clientId, siteId));
+            cursor, limit, status, departmentId, category, clientId, siteId, sortBy, sortDirection));
         return result.ToActionResult();
     }
 
     [HttpGet("search")]
-    public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] int maxResults = 10)
+    public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] int maxResults = 10, [FromQuery] Guid? departmentId = null, [FromQuery] string mode = "hybrid")
     {
-        var result = await mediator.Send(new SearchKnowledgeQuery(q, clientId, siteId, maxResults));
+        // mode: semantic | keyword | hybrid (híbrido = semântico com fallback keyword).
+        // departmentId restringe artigos Internal ao departamento.
+        var result = await mediator.Send(new SearchKnowledgeQuery(q, clientId, siteId, maxResults, departmentId, mode));
         return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Busca de sugestões com score (chunks semânticos) para IA/chat.
+    /// Endpoint consumido pelo console web — antes não existia (404).
+    /// </summary>
+    [HttpPost("chat-search")]
+    public async Task<IActionResult> ChatSearch([FromBody] KbSearchRequest request, CancellationToken ct)
+    {
+        var result = await mediator.Send(new SearchKbSuggestionsQuery(request), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpGet("{id:guid}")]

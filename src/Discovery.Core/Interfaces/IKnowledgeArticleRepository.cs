@@ -41,6 +41,8 @@ public interface IKnowledgeArticleRepository
         int limit = 20,
         Guid? filterClientId = null,
         Guid? filterSiteId = null,
+        string? sortBy = null,
+        string? sortDirection = null,
         CancellationToken ct = default);
 
     /// <summary>

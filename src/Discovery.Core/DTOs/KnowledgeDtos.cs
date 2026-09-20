@@ -188,6 +188,8 @@ public class ArticleListPageData
     public int Count { get; init; }
     public string? NextCursor { get; init; }
     public bool HasMore { get; init; }
+    /// <summary>Contagem de chunks por artigo da página (query agregada leve — chunks não são materializados).</summary>
+    public IReadOnlyDictionary<Guid, int> ChunkCounts { get; init; } = new Dictionary<Guid, int>();
 }
 
 /// <summary>DTO plano para envio ao agent, sem navigation properties que causam recursão infinita.</summary>
@@ -209,3 +211,14 @@ public record AgentKnowledgeArticleDto(
     DateTime? PublishedAt,
     DateTime CreatedAt,
     DateTime UpdatedAt);
+
+/// <summary>
+/// Resposta paginada (keyset/cursor) da listagem de artigos para o agent.
+/// O cursor é opaco (base64 ticks|guidN sobre UpdatedAt desc + Id desc).
+/// Envelope {"items", "nextCursor", "hasMore"} — o parser do agent já aceita.
+/// </summary>
+public record AgentKnowledgeArticlePage(
+    IReadOnlyList<AgentKnowledgeArticleDto> Items,
+    string? NextCursor,
+    bool HasMore,
+    int Limit);

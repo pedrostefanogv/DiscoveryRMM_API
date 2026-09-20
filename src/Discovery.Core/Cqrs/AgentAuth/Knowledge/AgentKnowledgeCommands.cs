@@ -3,7 +3,9 @@ using Discovery.Core.DTOs;
 
 namespace Discovery.Core.Cqrs.AgentAuth.Knowledge;
 
-public sealed record GetKnowledgeArticlesQuery(Guid AgentId, string? Category = null) : IQuery<Result<object>>;
+/// <param name="Cursor">Cursor keyset (base64 ticks|guidN) da página anterior; null = primeira página.</param>
+/// <param name="Limit">Tamanho da página (clampado a 1–500).</param>
+public sealed record GetKnowledgeArticlesQuery(Guid AgentId, string? Category = null, string? Cursor = null, int Limit = 200) : IQuery<Result<object>>;
 public sealed record GetKnowledgeArticleQuery(Guid AgentId, Guid ArticleId) : IQuery<Result<object>>;
 
 /// <summary>

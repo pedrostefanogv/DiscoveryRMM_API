@@ -282,12 +282,13 @@ public class AgentAuthController : ControllerBase
     // ── Knowledge ─────────────────────────────────────────────────────────
 
     [HttpGet("knowledge")]
-    public async Task<IActionResult> GetKnowledgeArticles([FromQuery] string? category = null, CancellationToken ct = default)
+    public async Task<IActionResult> GetKnowledgeArticles([FromQuery] string? category = null, [FromQuery] string? cursor = null, [FromQuery] int limit = 200, CancellationToken ct = default)
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetKnowledgeArticlesQuery(id, category), ct), Ok);
+        // Paginação keyset: cursor opaco da página anterior (hasMore/nextCursor no envelope).
+        return MapResult(await _mediator.Send(new GetKnowledgeArticlesQuery(id, category, cursor, limit), ct), Ok);
     }
 
     [HttpGet("knowledge/{articleId:guid}")]
