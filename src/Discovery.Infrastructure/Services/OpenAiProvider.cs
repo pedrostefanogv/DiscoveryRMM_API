@@ -108,13 +108,23 @@ public class OpenAiProvider : ILlmProvider
                 ? options.OpenRouterReferer
                 : "https://discovery-rmm.local");
 
+        // Headers canônicos atuais (docs: app-attribution). X-OpenRouter-Title é
+        // exigido para URLs não rastreáveis publicamente (ex: .local); X-Title
+        // mantido por compatibilidade.
+        request.Headers.TryAddWithoutValidation("X-OpenRouter-Title",
+            !string.IsNullOrWhiteSpace(options.OpenRouterTitle)
+                ? options.OpenRouterTitle
+                : "Discovery RMM");
         request.Headers.TryAddWithoutValidation("X-Title",
             !string.IsNullOrWhiteSpace(options.OpenRouterTitle)
                 ? options.OpenRouterTitle
                 : "Discovery RMM");
 
         if (!string.IsNullOrWhiteSpace(options.OpenRouterCategories))
+        {
+            request.Headers.TryAddWithoutValidation("X-OpenRouter-Categories", options.OpenRouterCategories);
             request.Headers.TryAddWithoutValidation("X-Categories", options.OpenRouterCategories);
+        }
 
         // Sticky session routing: garante mesmo provider em todos os turnos da conversa
         // e habilita prompt caching para reduzir latência e custo

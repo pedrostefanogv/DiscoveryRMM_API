@@ -75,6 +75,7 @@ public class OpenAiProviderOpenRouterAttributionTests
         {
             Assert.That(request.Headers.GetValues("HTTP-Referer"), Does.Contain(RefererDefault));
             Assert.That(request.Headers.GetValues("X-Title"), Does.Contain(TitleDefault));
+            Assert.That(request.Headers.GetValues("X-OpenRouter-Title"), Does.Contain(TitleDefault));
         });
     }
 
@@ -90,6 +91,7 @@ public class OpenAiProviderOpenRouterAttributionTests
         {
             Assert.That(request.Headers.GetValues("HTTP-Referer"), Does.Contain(RefererDefault));
             Assert.That(request.Headers.GetValues("X-Title"), Does.Contain(TitleDefault));
+            Assert.That(request.Headers.GetValues("X-OpenRouter-Title"), Does.Contain(TitleDefault));
         });
     }
 
@@ -115,7 +117,8 @@ public class OpenAiProviderOpenRouterAttributionTests
         var options = new LlmOptions(
             Provider: "openrouter",
             OpenRouterReferer: "https://meuapp.exemplo",
-            OpenRouterTitle: "Meu App");
+            OpenRouterTitle: "Meu App",
+            OpenRouterCategories: "rmm,monitoring");
 
         OpenAiProvider.ApplyOpenRouterHeaders(request, options, AIIntegrationSettings.OpenRouterDefaultBaseUrl);
 
@@ -123,6 +126,9 @@ public class OpenAiProviderOpenRouterAttributionTests
         {
             Assert.That(request.Headers.GetValues("HTTP-Referer"), Does.Contain("https://meuapp.exemplo"));
             Assert.That(request.Headers.GetValues("X-Title"), Does.Contain("Meu App"));
+            Assert.That(request.Headers.GetValues("X-OpenRouter-Title"), Does.Contain("Meu App"));
+            Assert.That(request.Headers.GetValues("X-Categories"), Does.Contain("rmm,monitoring"));
+            Assert.That(request.Headers.GetValues("X-OpenRouter-Categories"), Does.Contain("rmm,monitoring"));
         });
     }
 }

@@ -55,6 +55,18 @@ public class AiChatStreamingOrchestrator
         _memoryCache = memoryCache;
     }
 
+    /// <summary>
+    /// Critério de propagação de token de texto do LLM. NÃO usar
+    /// IsNullOrWhiteSpace aqui: deltas contendo somente espaço/quebra de linha
+    /// (" ", "\n", "\n\n") são legítimos e separam palavras, itens de lista e
+    /// linhas de tabela markdown. Descartá-los colava o texto na saída do chat
+    /// ("últimas24h", "travando.2.", título|tabela na mesma linha) — bug visto
+    /// em produção em 19-20/09/2026 (a via sync, sem este filtro, saía limpa).
+    /// Apenas conteúdo vazio (null/"") é descartado.
+    /// </summary>
+    public static bool IsTextToken(LlmStreamEvent evt)
+        => evt.Type == "token" && !string.IsNullOrEmpty(evt.Content);
+
     public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(
         Guid agentId, string message, Guid? sessionId,
         Func<Guid, CancellationToken, Task<AIIntegrationSettings>> resolveAiSettings,
@@ -221,7 +233,7 @@ public class AiChatStreamingOrchestrator
             {
                 await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
                 {
-                    if (evt.Type == "token" && !string.IsNullOrWhiteSpace(evt.Content))
+                    if (IsTextToken(evt))
                     {
                         contentBuilder.Append(evt.Content);
                         yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
@@ -614,7 +626,7 @@ public class AiChatStreamingOrchestrator
             {
                 await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
                 {
-                    if (evt.Type == "token" && !string.IsNullOrWhiteSpace(evt.Content))
+                    if (IsTextToken(evt))
                     {
                         contentBuilder.Append(evt.Content);
                         yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
