@@ -53,3 +53,16 @@ public sealed class CreateTicketKnowledgeLinkCommandHandler(ITicketKnowledgeLink
 
 public sealed class DeleteTicketKnowledgeLinkCommandHandler(ITicketKnowledgeLinkRepository repo) : IRequestHandler<DeleteTicketKnowledgeLinkCommand, Result<VoidResult>>
 { public async Task<Result<VoidResult>> Handle(DeleteTicketKnowledgeLinkCommand cmd, CancellationToken ct) { await repo.DeleteAsync(cmd.LinkId, ct); return Result<VoidResult>.Success(VoidResult.Value); } }
+
+public sealed class SetTicketKnowledgeLinkFeedbackCommandHandler(ITicketKnowledgeLinkRepository repo)
+    : IRequestHandler<SetTicketKnowledgeLinkFeedbackCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(SetTicketKnowledgeLinkFeedbackCommand cmd, CancellationToken ct)
+    {
+        var link = await repo.GetByTicketAndArticleAsync(cmd.TicketId, cmd.ArticleId, ct);
+        if (link is null)
+            return Result<VoidResult>.Failure(Error.NotFound($"Knowledge link for article {cmd.ArticleId} not found on ticket {cmd.TicketId}."));
+        await repo.SetFeedbackAsync(link.Id, cmd.Useful, ct);
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}

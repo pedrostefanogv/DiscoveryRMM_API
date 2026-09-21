@@ -64,16 +64,6 @@ public record ArticleListItem(
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
-/// <summary>Resposta paginada (cursor-based) para listagem de artigos.</summary>
-[Obsolete("Substituído por CursorPageDto<ArticleListItem>. Remover na v2.")]
-public record ArticleListPage(
-    IReadOnlyList<ArticleListItem> Items,
-    int Count,
-    string? Cursor,         // cursor anterior (para voltar)
-    string? NextCursor,     // próximo cursor
-    bool HasMore,
-    int Limit);
-
 public record ArticleResponse(
     Guid Id,
     string Title,

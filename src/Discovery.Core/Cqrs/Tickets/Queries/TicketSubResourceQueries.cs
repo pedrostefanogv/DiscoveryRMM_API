@@ -16,6 +16,16 @@ public sealed record GetTicketAutomationLinksQuery(Guid TicketId) : IQuery<Resul
 // ── Knowledge Links ──────────────────────────────────────────────────────
 public sealed record GetTicketKnowledgeLinksQuery(Guid TicketId) : IQuery<Result<List<TicketKnowledgeLink>>>;
 
+/// <summary>Sugestões de artigos da KB para um ticket: busca híbrida (semântica + keyword)
+/// com ACL do usuário. Sem q, deriva o texto do título/descrição do ticket.</summary>
+public sealed record SuggestTicketKnowledgeQuery(
+    Guid TicketId,
+    string? Query = null,
+    Guid? ClientId = null,
+    Guid? SiteId = null,
+    Guid? DepartmentId = null,
+    int MaxResults = 5) : IQuery<Result<IReadOnlyList<ArticleResponse>>>;
+
 // ── Audit Timeline ───────────────────────────────────────────────────────
 public sealed record GetTicketAuditTimelineQuery(Guid TicketId) : IQuery<Result<List<TicketActivityLog>>>;
 

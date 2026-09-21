@@ -203,6 +203,32 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> DeleteKnowledgeLink(Guid id, Guid linkId) { await mediator.Send(new DeleteTicketKnowledgeLinkCommand(linkId)); return NoContent(); }
 
+    /// <summary>
+    /// Sugestões de artigos da KB para o ticket (busca híbrida; sem q usa título+descrição).
+    /// Endpoint consumido pelo console web — antes não existia (404).
+    /// </summary>
+    [HttpGet("{id:guid}/knowledge/suggest")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> SuggestKnowledge(Guid id, [FromQuery] string? q = null, [FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] Guid? departmentId = null, [FromQuery] int maxResults = 5, CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new SuggestTicketKnowledgeQuery(id, q, clientId, siteId, departmentId, maxResults), ct);
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Feedback (útil/não útil) em um vínculo ticket↔artigo. Completa a migration
+    /// M103 — o front chamava este endpoint sem ele existir (404).
+    /// </summary>
+    [HttpPost("{id:guid}/knowledge/{articleId:guid}/feedback")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> SetKnowledgeLinkFeedback(Guid id, Guid articleId, [FromBody] KbLinkFeedbackRequest body, CancellationToken ct)
+    {
+        var result = await mediator.Send(new SetTicketKnowledgeLinkFeedbackCommand(id, articleId, body.Useful), ct);
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
     // ── Attachments ─────────────────────────────────────────────────────
 
     /// <summary>

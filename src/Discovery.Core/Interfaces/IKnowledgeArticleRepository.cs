@@ -11,19 +11,6 @@ public interface IKnowledgeArticleRepository
     Task DeleteAsync(Guid id, CancellationToken ct = default); // soft delete
 
     /// <summary>
-    /// Lista artigos respeitando herança de escopo:
-    /// site → client → global (todos os níveis superiores são incluídos)
-    /// + filtro por status e departamento
-    /// </summary>
-    Task<List<KnowledgeArticle>> ListByScopeAsync(
-        Guid? clientId,
-        Guid? siteId,
-        string? status = null,
-        Guid? departmentId = null,
-        string? category = null,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Lista artigos de múltiplos escopos (ACL do usuário) com paginação cursor-based.
     /// Quando <paramref name="allowedClientIds"/> e <paramref name="allowedSiteIds"/> estão vazios
     /// e <paramref name="hasGlobalAccess"/> é false, retorna apenas artigos globais (client_id IS NULL, site_id IS NULL).

@@ -27,6 +27,8 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
         // Listagem unificada: sempre usa ACL multi-escopo do usuário.
         // clientId/siteId refinam o resultado (ex.: dropdown de cliente na UI).
         // sortBy: "title" (legacy) | "updatedAt"; sortDirection: asc | desc.
+        // Clamp do limit: guard contra valores absurdos (DoS via Take ilimitado).
+        limit = Math.Clamp(limit, 1, 200);
         var result = await mediator.Send(new ListKnowledgeArticlesByUserScopeQuery(
             cursor, limit, status, departmentId, category, clientId, siteId, sortBy, sortDirection));
         return result.ToActionResult();

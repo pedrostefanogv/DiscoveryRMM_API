@@ -45,62 +45,6 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         await db.SaveChangesAsync(ct);
     }
 
-    /// <summary>
-    /// Herança de escopo: site → client → global.
-    /// Filtro de status: null = retorna todos visíveis ao usuário atual
-    /// (Published/Internal no mesmo departamento, mais Drafts do próprio usuário se aplicável)
-    /// </summary>
-    public async Task<List<KnowledgeArticle>> ListByScopeAsync(
-        Guid? clientId,
-        Guid? siteId,
-        string? status = null,
-        Guid? departmentId = null,
-        string? category = null,
-        CancellationToken ct = default)
-    {
-        var query = db.KnowledgeArticles
-            .Include(a => a.Chunks)
-            .Where(a => a.DeletedAt == null);
-
-        // Filtro de status
-        if (!string.IsNullOrEmpty(status))
-        {
-            query = query.Where(a => a.Status == status);
-        }
-
-        // Filtro de herança de escopo
-        query = (clientId, siteId) switch
-        {
-            (not null, not null) => query.Where(a =>
-                (a.SiteId == siteId) ||
-                (a.ClientId == clientId && a.SiteId == null) ||
-                (a.ClientId == null && a.SiteId == null)),
-
-            (not null, null) => query.Where(a =>
-                (a.ClientId == clientId && a.SiteId == null) ||
-                (a.ClientId == null && a.SiteId == null)),
-
-            (null, not null) => query.Where(a =>
-                (a.SiteId == siteId) ||
-                (a.ClientId == null && a.SiteId == null)),
-
-            _ => query.Where(a => a.ClientId == null && a.SiteId == null)
-        };
-
-        // Filtro de departamento (para artigos Internal)
-        if (departmentId.HasValue)
-        {
-            query = query.Where(a =>
-                a.Status != ArticleStatus.Internal.ToString() ||
-                a.DepartmentId == departmentId.Value);
-        }
-
-        if (!string.IsNullOrWhiteSpace(category))
-            query = query.Where(a => a.Category != null && a.Category.ToLower() == category.ToLower());
-
-        return await query.OrderBy(a => a.Title).ToListAsync(ct);
-    }
-
     public async Task<List<KnowledgeArticle>> SearchKeywordAsync(
         string queryText,
         Guid? clientId,
