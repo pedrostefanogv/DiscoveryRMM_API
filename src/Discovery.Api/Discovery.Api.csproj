@@ -5,6 +5,17 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>SRV_Meduza_2-Discovery.Api-66265474-0a1b-4ea1-bad3-0e91cb4f5c8c</UserSecretsId>
+    <!--
+      AV0029/AV0030 (Asp.Versioning.Api.Analyzers 10.2): sugerem
+      "AddApiVersioning().AddOpenApi()" e "MapOpenApi().WithDocumentPerVersion()".
+      Essas APIs NÃO existem nas referências deste projeto (Asp.Versioning.Mvc
+      10.2.1 / Microsoft.AspNetCore.OpenApi 10.0.12) — verificamos os pacotes.
+      O projeto usa versionamento por segmento de URL com um ÚNICO documento
+      OpenAPI ("v1"), que é intencional: Scalar aponta para /openapi/{documentName}.json.
+      Um dos avisos vem de código gerado pelo OpenAPI source generator, por isso
+      a supressão fica no projeto (pragma na call-site não cobriria o arquivo gerado).
+    -->
+    <NoWarn>$(NoWarn);AV0029;AV0030</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

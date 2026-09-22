@@ -101,7 +101,8 @@ public sealed record AgentStartupItemDto(
     string Source,
     string Status,
     string Username,
-    string Detail
+    string Detail,
+    string Hive
 );
 
 public sealed record AgentScheduledTaskDto(

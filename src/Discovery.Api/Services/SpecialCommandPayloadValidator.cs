@@ -111,6 +111,15 @@ public sealed class SpecialCommandPayloadValidator
         "^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// Hive de um item de inicialização: HKLM, HKCU ou HKU:&lt;SID&gt; (itens de
+    /// outros usuários). Restringir o formato evita que um agente comprometido
+    /// monte caminhos de registro arbitrários via "hive".
+    /// </summary>
+    private static readonly Regex StartupItemHiveRegex = new(
+        "^(HKLM|HKCU|HKU:S-1-[0-9-]+)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     public bool TryNormalize(
         CommandType commandType,
         string payload,
@@ -928,12 +937,34 @@ public sealed class SpecialCommandPayloadValidator
                 source = null;
         }
 
+        string? hive = null;
+        if (payload.TryGetProperty("hive", out var hiveElement) && hiveElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(hiveElement, out var providedHive))
+            {
+                validationError = "field 'hive' must be a string.";
+                return false;
+            }
+
+            hive = providedHive.Trim();
+            if (hive.Length == 0)
+            {
+                hive = null;
+            }
+            else if (!StartupItemHiveRegex.IsMatch(hive))
+            {
+                validationError = "field 'hive' must be HKLM, HKCU or HKU:<SID>.";
+                return false;
+            }
+        }
+
         var normalized = new Dictionary<string, object?>
         {
             ["action"] = action,
             ["type"] = itemType,
             ["name"] = name,
-            ["source"] = source
+            ["source"] = source,
+            ["hive"] = hive
         };
 
         normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);

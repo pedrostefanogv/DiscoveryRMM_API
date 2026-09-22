@@ -13,10 +13,11 @@ namespace Discovery.Core.Cqrs.Agents.StartupTasks.Commands;
 /// </summary>
 public sealed record StartupItemActionCommand(
     Guid AgentId,
-    string Action,     // enable | disable
-    string Type,       // registry | folder | service
+    string Action,      // enable | disable
+    string Type,        // registry | folder | service
     string Name,
-    string? Source
+    string? Source,
+    string? Hive = null // HKLM | HKCU | HKU:<SID>
 ) : ICommand<Result<VoidResult>>;
 
 /// <summary>Campos editáveis de uma tarefa agendada (gatilho e ação).</summary>
@@ -57,6 +58,7 @@ public sealed class StartupItemActionCommandHandler(
             type = cmd.Type.ToLowerInvariant(),
             name = cmd.Name,
             source = cmd.Source,
+            hive = cmd.Hive,
             requestedAt = DateTime.UtcNow
         });
 

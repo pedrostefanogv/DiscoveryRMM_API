@@ -324,7 +324,8 @@ internal static class HardwareInventoryParser
                 Source = source,
                 Status = ParseJson.GetString(item, "status", "Status") ?? "enabled",
                 Username = ParseJson.GetString(item, "username") ?? string.Empty,
-                Detail = ParseJson.GetString(item, "detail") ?? string.Empty
+                Detail = ParseJson.GetString(item, "detail") ?? string.Empty,
+                Hive = ParseJson.GetString(item, "hive") ?? string.Empty
             });
 
             if (result.Count >= 500)
@@ -428,15 +429,36 @@ internal static class HardwareInventoryParser
         Guid agentId,
         DateTime collectedAt)
     {
-        if (hasIncoming && incoming.TryGetProperty(incomingProperty, out var incomingElement))
+        if (hasIncoming && incoming.ValueKind == JsonValueKind.Object && incoming.TryGetProperty(incomingProperty, out var incomingElement))
         {
             if (incomingElement.ValueKind == JsonValueKind.Array)
-                return parse(incomingElement, agentId, collectedAt);
+                return parse(WrapArrayAsRoot(incomingElement, incomingProperty), agentId, collectedAt);
         }
 
         if (hasRaw && ParseJson.TryGetArrayProperty(rawRoot, out var rawElement, incomingProperty))
-            return parse(rawElement, agentId, collectedAt);
+            return parse(WrapArrayAsRoot(rawElement, incomingProperty), agentId, collectedAt);
 
         return existing ?? [];
+    }
+
+    /// <summary>
+    /// Os parseadores consultam propriedades pelo nome no objeto raiz
+    /// (TryGetProperty), então um array isolado precisa voltar a ser um objeto:
+    /// { "<propriedade>": [ ... ] }. O propertyName é sempre o primeiro alias
+    /// canônico aceito pelo Parse* correspondente.
+    /// </summary>
+    private static JsonElement WrapArrayAsRoot(JsonElement array, string propertyName)
+    {
+        if (array.ValueKind != JsonValueKind.Array)
+            return array;
+
+        // Serializa { "prop": [ ... ] } para string e reparseia — o volume por
+        // lista é pequeno (<=500/1000 itens) e esse caminho é raro (apenas merge).
+        var json = JsonSerializer.Serialize(new Dictionary<string, JsonElement>
+        {
+            [propertyName] = array.Clone()
+        });
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
     }
 }

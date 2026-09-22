@@ -19,4 +19,10 @@ public class StartupItemInfo
     public string Username { get; set; } = string.Empty;
     /// <summary>Detalhe de exibição (ex.: serviços: "Automático (Atrasado)").</summary>
     public string Detail { get; set; } = string.Empty;
+    /// <summary>
+    /// Conta/hive do item: "HKLM", "HKCU" ou "HKU:&lt;SID&gt;" (itens de outros
+    /// usuários, lidos via HKEY_USERS quando o inventário roda como SYSTEM).
+    /// Usado pelo agent para gravar no hive correto ao habilitar/desabilitar.
+    /// </summary>
+    public string Hive { get; set; } = string.Empty;
 }

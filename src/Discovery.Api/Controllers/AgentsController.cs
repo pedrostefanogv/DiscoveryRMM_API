@@ -270,7 +270,8 @@ public class AgentsController : ControllerBase
             Action: request.Action,
             Type: request.Type,
             Name: request.Name,
-            Source: request.Source
+            Source: request.Source,
+            Hive: request.Hive
         );
         var result = await _mediator.Send(cmd, ct);
         return result.Match<IActionResult>(

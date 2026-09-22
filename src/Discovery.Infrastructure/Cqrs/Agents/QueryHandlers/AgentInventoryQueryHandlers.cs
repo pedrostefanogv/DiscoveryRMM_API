@@ -269,7 +269,7 @@ public sealed class GetAgentHardwareComponentsQueryHandler(
                 null, null
             )).ToList(),
             components.StartupItems.Select(si => new AgentStartupItemDto(
-                si.Name, si.Path, si.Args, si.Type, si.Source, si.Status, si.Username, si.Detail
+                si.Name, si.Path, si.Args, si.Type, si.Source, si.Status, si.Username, si.Detail, si.Hive
             )).ToList(),
             components.ScheduledTasks.Select(st => new AgentScheduledTaskDto(
                 st.TaskPath, st.TaskName, st.State, st.Status, st.Author,

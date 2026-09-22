@@ -16,7 +16,7 @@ public record HardwareComponentsPayload(List<DiskInfo>? Disks, List<NetworkAdapt
 public record CreateTokenRequest(string? Description);
 public record ForceAutomationSyncRequest(bool Policies = true, bool Inventory = false, bool Software = false, bool AppStore = false);
 public record RefreshAgentDataRequest(bool ListeningPorts = false, bool OpenConnections = false, bool Software = false, bool Printers = false, bool Hardware = false, bool StartupItems = false, bool ScheduledTasks = false);
-public record StartupItemActionRequest(string Action, string Type, string Name, string? Source = null);
+public record StartupItemActionRequest(string Action, string Type, string Name, string? Source = null, string? Hive = null);
 public record ScheduledTaskEditRequest(string TriggerType, string? Time = null, int[]? DaysOfWeek = null, int? DaysInterval = null, string? ActionPath = null, string? ActionArgs = null);
 public record ScheduledTaskActionRequest(string Action, string TaskName, string? TaskPath = null, ScheduledTaskEditRequest? Edit = null);
 public record SoftwareInventoryReportRequest(DateTime? CollectedAt, List<SoftwareInventoryItemRequest>? Software);

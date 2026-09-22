@@ -34,7 +34,6 @@ public class Fido2AuthService : IFido2Service
 
         _fido2 = new Fido2(new Fido2Configuration
         {
-            ServerDomain = serverDomain,
             // RPID e RPName substituem ServerDomain/ServerName (obsoletos no Fido2 4.1+;
             // serão removidos na próxima major)
             RPID = serverDomain,
