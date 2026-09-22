@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Discovery.Api.Controllers;
+namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 
 /// <summary>
 /// Low-level JSON element access helpers used by hardware/software inventory parsers.
@@ -36,6 +36,25 @@ internal static class ParseJson
             JsonValueKind.String when long.TryParse(value.GetString(), out var parsed) => parsed,
             _ => 0
         };
+    }
+
+    public static long GetLong(JsonElement obj, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!obj.TryGetProperty(propertyName, out var value))
+                continue;
+
+            switch (value.ValueKind)
+            {
+                case JsonValueKind.Number when value.TryGetInt64(out var number):
+                    return number;
+                case JsonValueKind.String when long.TryParse(value.GetString(), out var parsed):
+                    return parsed;
+            }
+        }
+
+        return 0;
     }
 
     public static int GetInt(JsonElement obj, params string[] propertyNames)

@@ -64,8 +64,18 @@ public sealed class LogoutCommandHandler(
         if (string.IsNullOrWhiteSpace(cmd.RefreshToken))
             return Result<VoidResult>.Failure(Error.Validation("RefreshToken", "Refresh token is required for logout"));
 
-        // Hash do refresh token para buscar a sessão
-        var refreshBytes = Convert.FromBase64String(cmd.RefreshToken);
+        // Hash do refresh token para buscar a sessão.
+        // Token malformado (não-Base64) não corresponde a nenhuma sessão —
+        // o logout é idempotente e não deve falhar com 500.
+        byte[] refreshBytes;
+        try
+        {
+            refreshBytes = Convert.FromBase64String(cmd.RefreshToken);
+        }
+        catch (FormatException)
+        {
+            return Result<VoidResult>.Success(VoidResult.Value);
+        }
         var refreshHash = Convert.ToBase64String(
             System.Security.Cryptography.SHA256.HashData(refreshBytes));
 

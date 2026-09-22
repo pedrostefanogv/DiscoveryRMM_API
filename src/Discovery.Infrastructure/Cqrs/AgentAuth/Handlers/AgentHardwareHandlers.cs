@@ -194,26 +194,33 @@ public sealed class ReportAgentHardwareCommandHandler(
             catch { /* keep defaults */ }
         }
 
-        // Parse components
-        AgentHardwareComponents? components = null;
+        // Merge de componentes: payload do agent + InventoryRaw + estado já
+        // armazenado. Listas ausentes no payload NÃO são apagadas (sync parcial
+        // de portas/sockets não perde impressoras/startup/tarefas).
+        JsonElement? incomingComponents = null;
         if (cmd.Components is JsonElement comp)
         {
-            try
-            {
-                var compJson = comp.GetRawText();
-                components = JsonSerializer.Deserialize<AgentHardwareComponents>(compJson, JsonOptions);
-            }
-            catch { /* invalid components, skip */ }
+            incomingComponents = comp;
         }
         else if (cmd.Components is not null)
         {
             try
             {
                 var compJson = JsonSerializer.Serialize(cmd.Components, JsonOptions);
-                components = JsonSerializer.Deserialize<AgentHardwareComponents>(compJson, JsonOptions);
+                using var doc = JsonDocument.Parse(compJson);
+                incomingComponents = doc.RootElement.Clone();
             }
             catch { /* invalid components, skip */ }
         }
+
+        var existingComponents = await hardwareRepo.GetComponentsAsync(cmd.AgentId);
+        var collectedAt = cmd.InventoryCollectedAt ?? DateTime.UtcNow;
+        var components = HardwareInventoryParser.MergeComponents(
+            incomingComponents,
+            cmd.InventoryRaw?.GetRawText(),
+            existingComponents,
+            cmd.AgentId,
+            collectedAt);
 
         await hardwareRepo.UpsertAsync(hardwareInfo, components);
 

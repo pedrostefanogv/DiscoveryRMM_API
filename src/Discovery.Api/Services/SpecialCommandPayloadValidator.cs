@@ -72,6 +72,37 @@ public sealed class SpecialCommandPayloadValidator
         "rollback"
     };
 
+    private static readonly HashSet<string> StartupItemTypes = new(StringComparer.Ordinal)
+    {
+        "registry",
+        "folder",
+        "service"
+    };
+
+    private static readonly HashSet<string> EnableDisableActions = new(StringComparer.Ordinal)
+    {
+        "enable",
+        "disable"
+    };
+
+    private static readonly HashSet<string> ScheduledTaskActions = new(StringComparer.Ordinal)
+    {
+        "enable",
+        "disable",
+        "run",
+        "delete",
+        "edit"
+    };
+
+    private static readonly HashSet<string> ScheduledTaskTriggerTypes = new(StringComparer.Ordinal)
+    {
+        "daily",
+        "weekly",
+        "once",
+        "logon",
+        "boot"
+    };
+
     private static readonly Regex SemVerRegex = new(
         "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -132,6 +163,8 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.RecordingStart => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.RecordingStop => TryNormalizeRemoteSession(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.P2pPreload => TryNormalizeP2pPreload(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.StartupItem => TryNormalizeStartupItem(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.ScheduledTask => TryNormalizeScheduledTask(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }
@@ -837,6 +870,205 @@ public sealed class SpecialCommandPayloadValidator
         {
             ["macAddress"] = macAddress,
             ["broadcastAddress"] = broadcastAddress
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    private static bool TryNormalizeStartupItem(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!TryGetRequiredString(payload, "action", out var action, out validationError))
+            return false;
+
+        action = action.ToLowerInvariant();
+        if (!EnableDisableActions.Contains(action))
+        {
+            validationError = "field 'action' must be one of: enable, disable.";
+            return false;
+        }
+
+        if (!TryGetRequiredString(payload, "name", out var name, out validationError))
+            return false;
+
+        var itemType = "registry";
+        if (payload.TryGetProperty("type", out var typeElement) && typeElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(typeElement, out var providedType))
+            {
+                validationError = "field 'type' must be a string.";
+                return false;
+            }
+
+            itemType = providedType.Trim().ToLowerInvariant();
+            if (!StartupItemTypes.Contains(itemType))
+            {
+                validationError = "field 'type' must be one of: registry, folder, service.";
+                return false;
+            }
+        }
+
+        string? source = null;
+        if (payload.TryGetProperty("source", out var sourceElement) && sourceElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(sourceElement, out var providedSource))
+            {
+                validationError = "field 'source' must be a string.";
+                return false;
+            }
+
+            source = providedSource.Trim();
+            if (source.Length == 0)
+                source = null;
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["action"] = action,
+            ["type"] = itemType,
+            ["name"] = name,
+            ["source"] = source
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    private static bool TryNormalizeScheduledTask(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!TryGetRequiredString(payload, "action", out var action, out validationError))
+            return false;
+
+        action = action.ToLowerInvariant();
+        if (!ScheduledTaskActions.Contains(action))
+        {
+            validationError = "field 'action' must be one of: enable, disable, run, delete, edit.";
+            return false;
+        }
+
+        if (!TryGetRequiredString(payload, "taskName", out var taskName, out validationError))
+            return false;
+
+        string? taskPath = null;
+        if (payload.TryGetProperty("taskPath", out var taskPathElement) && taskPathElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(taskPathElement, out var providedPath))
+            {
+                validationError = "field 'taskPath' must be a string.";
+                return false;
+            }
+
+            taskPath = providedPath.Trim();
+            if (taskPath.Length == 0)
+                taskPath = null;
+        }
+
+        Dictionary<string, object?>? edit = null;
+        if (action == "edit")
+        {
+            if (!payload.TryGetProperty("edit", out var editElement) || editElement.ValueKind != JsonValueKind.Object)
+            {
+                validationError = "field 'edit' must be an object when action is 'edit'.";
+                return false;
+            }
+
+            if (!TryGetRequiredString(editElement, "triggerType", out var triggerType, out validationError))
+                return false;
+
+            triggerType = triggerType.ToLowerInvariant();
+            if (!ScheduledTaskTriggerTypes.Contains(triggerType))
+            {
+                validationError = "field 'edit.triggerType' must be one of: daily, weekly, once, logon, boot.";
+                return false;
+            }
+
+            edit = new Dictionary<string, object?> { ["triggerType"] = triggerType };
+
+            if (triggerType is "daily" or "weekly" or "once")
+            {
+                if (!TryGetRequiredString(editElement, "time", out var time, out validationError))
+                    return false;
+
+                edit["time"] = time;
+            }
+
+            if (triggerType == "weekly")
+            {
+                var days = new List<int>();
+                if (editElement.TryGetProperty("daysOfWeek", out var daysElement) && daysElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var day in daysElement.EnumerateArray())
+                    {
+                        if (!day.TryGetInt32(out var dayValue) || dayValue < 0 || dayValue > 6)
+                        {
+                            validationError = "field 'edit.daysOfWeek' must contain integers between 0 (Sunday) and 6 (Saturday).";
+                            return false;
+                        }
+
+                        days.Add(dayValue);
+                    }
+                }
+
+                if (days.Count == 0)
+                {
+                    validationError = "field 'edit.daysOfWeek' must contain at least one day for weekly triggers.";
+                    return false;
+                }
+
+                edit["daysOfWeek"] = days;
+            }
+
+            if (triggerType == "daily" && editElement.TryGetProperty("daysInterval", out var intervalElement))
+            {
+                if (intervalElement.TryGetInt32(out var intervalValue) && intervalValue > 1)
+                    edit["daysInterval"] = intervalValue;
+            }
+
+            if (editElement.TryGetProperty("actionPath", out var actionPathElement) && actionPathElement.ValueKind != JsonValueKind.Null)
+            {
+                if (!TryReadString(actionPathElement, out var providedActionPath))
+                {
+                    validationError = "field 'edit.actionPath' must be a string.";
+                    return false;
+                }
+
+                var actionPathValue = providedActionPath.Trim();
+                if (actionPathValue.Length > 0)
+                    edit["actionPath"] = actionPathValue;
+
+                if (editElement.TryGetProperty("actionArgs", out var actionArgsElement) && actionArgsElement.ValueKind != JsonValueKind.Null)
+                {
+                    if (!TryReadString(actionArgsElement, out var providedActionArgs))
+                    {
+                        validationError = "field 'edit.actionArgs' must be a string.";
+                        return false;
+                    }
+
+                    var actionArgsValue = providedActionArgs.Trim();
+                    if (actionArgsValue.Length > 0)
+                        edit["actionArgs"] = actionArgsValue;
+                }
+            }
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["action"] = action,
+            ["taskPath"] = taskPath,
+            ["taskName"] = taskName,
+            ["edit"] = edit
         };
 
         normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);

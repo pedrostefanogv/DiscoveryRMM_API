@@ -20,9 +20,15 @@ public class UserRepository : IUserRepository
     public Task<User?> GetByEmailAsync(string email)
         => _db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Email == email);
 
+    // Comparação case-insensitive: no PostgreSQL o operador '=' é case-sensitive,
+    // então "Admin" não encontraria o usuário cadastrado como "admin".
+    // LOWER() de ambos os lados traduz para SQL nativo e funciona em qualquer provider.
     public Task<User?> GetByLoginOrEmailAsync(string loginOrEmail)
-        => _db.Users.AsNoTracking().SingleOrDefaultAsync(
-            u => u.Login == loginOrEmail || u.Email == loginOrEmail);
+    {
+        var normalized = loginOrEmail.Trim().ToLowerInvariant();
+        return _db.Users.AsNoTracking().SingleOrDefaultAsync(
+            u => u.Login.ToLower() == normalized || (u.Email != null && u.Email.ToLower() == normalized));
+    }
 
     public async Task<IReadOnlyList<User>> GetAllPageAsync(string? cursor, int take = 50)
     {
@@ -89,11 +95,13 @@ public class UserRepository : IUserRepository
         return rows > 0;
     }
 
+    // Case-insensitive: alinhado com as comparações OrdinalIgnoreCase do
+    // CompleteFirstAccessAsync — evita criar "ADMIN" quando "admin" já existe.
     public Task<bool> ExistsByLoginAsync(string login)
-        => _db.Users.AnyAsync(u => u.Login == login);
+        => _db.Users.AnyAsync(u => u.Login.ToLower() == login.Trim().ToLowerInvariant());
 
     public Task<bool> ExistsByEmailAsync(string email)
-        => _db.Users.AnyAsync(u => u.Email == email);
+        => _db.Users.AnyAsync(u => u.Email.ToLower() == email.Trim().ToLowerInvariant());
 
     public Task<int> CountAsync()
         => _db.Users.CountAsync();

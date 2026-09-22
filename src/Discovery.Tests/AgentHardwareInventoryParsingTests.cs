@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
-using Discovery.Api.Controllers;
 using Discovery.Core.Entities;
+using Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 
 namespace Discovery.Tests;
 
@@ -93,10 +93,11 @@ public class AgentHardwareInventoryParsingTests
 
     private static AgentHardwareComponents? InvokeTryBuildComponents(string inventoryRaw, Guid agentId, DateTime collectedAt)
     {
-        var parserType = typeof(AgentAuthController).Assembly.GetType("Discovery.Api.Controllers.HardwareInventoryParser");
+        // Parser movido para Discovery.Infrastructure (usado pelo handler de ingestão).
+        var parserType = typeof(Discovery.Infrastructure.Cqrs.AgentAuth.Handlers.HardwareInventoryParser);
         Assert.That(parserType, Is.Not.Null, "Could not find HardwareInventoryParser type.");
 
-        var method = parserType!.GetMethod(
+        var method = parserType.GetMethod(
             "TryBuildFromInventoryRaw",
             BindingFlags.Public | BindingFlags.Static);
 

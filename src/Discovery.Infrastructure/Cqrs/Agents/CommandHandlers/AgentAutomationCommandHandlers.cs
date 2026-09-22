@@ -239,6 +239,8 @@ public sealed class RefreshAgentDataCommandHandler(
             Software = cmd.Software,
             Printers = cmd.Printers,
             Hardware = cmd.Hardware,
+            StartupItems = cmd.StartupItems,
+            ScheduledTasks = cmd.ScheduledTasks,
             RequestedAt = DateTime.UtcNow
         });
 

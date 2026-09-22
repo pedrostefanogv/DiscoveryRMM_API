@@ -62,7 +62,10 @@ public class UserAuthService : IUserAuthService
         string? ipAddress,
         string? userAgent)
     {
-        var user = await _users.GetByLoginOrEmailAsync(loginOrEmail);
+        // Normaliza o identificador (espaços acidentais não devem invalidar o login);
+        // a senha NÃO é trimada — espaços podem ser intencionais.
+        var normalizedLogin = loginOrEmail?.Trim() ?? string.Empty;
+        var user = await _users.GetByLoginOrEmailAsync(normalizedLogin);
 
         // Sempre executar hash para evitar timing oracle, mesmo se usuário não existe
         var dummySalt = "AAAAAAAAAAAAAAAAAAAAAA==";
@@ -350,6 +353,18 @@ public class UserAuthService : IUserAuthService
             _logger.LogInformation(
                 "[Refresh] Sessão {SessionId} já revogada mas dentro do grace period — reutilizando (UserId={UserId})",
                 session.Id, session.UserId);
+        }
+
+        // Validação: o usuário precisa existir e estar ativo. Sem isto, contas
+        // desativadas continuam renovando sessão até a expiração do refresh token (7 dias).
+        var refreshUser = await _users.GetByIdAsync(session.UserId);
+        if (refreshUser is null || !refreshUser.IsActive)
+        {
+            await _sessions.RevokeAsync(session.Id);
+            _logger.LogWarning(
+                "[Refresh] Sessão {SessionId} encerrada: usuário {UserId} inexistente ou inativo",
+                session.Id, session.UserId);
+            throw new UnauthorizedAccessException("Sessão encerrada. Faça login novamente.");
         }
 
         // Rotação com grace period de 5 minutos

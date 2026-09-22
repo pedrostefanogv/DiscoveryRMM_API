@@ -26,6 +26,8 @@ public static class CommandTypeWireMapper
             CommandType.RecordingStart => "recordingstart",
             CommandType.RecordingStop => "recordingstop",
             CommandType.P2pPreload => "p2ppreload",
+            CommandType.StartupItem => "startupitem",
+            CommandType.ScheduledTask => "scheduledtask",
             _ => commandType.ToString().ToLowerInvariant()
         };
     }
@@ -44,6 +46,8 @@ public static class CommandTypeWireMapper
             or CommandType.RemoteSessionQuality
             or CommandType.RecordingStart
             or CommandType.RecordingStop
-            or CommandType.P2pPreload;
+            or CommandType.P2pPreload
+            or CommandType.StartupItem
+            or CommandType.ScheduledTask;
     }
 }

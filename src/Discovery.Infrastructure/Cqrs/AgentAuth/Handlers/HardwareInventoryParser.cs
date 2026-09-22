@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Discovery.Core.Entities;
 
-namespace Discovery.Api.Controllers;
+namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 
 /// <summary>
 /// Shared JSON parsing helpers extracted from AgentAuthController.
@@ -23,7 +23,9 @@ internal static class HardwareInventoryParser
             MemoryModules = ParseMemoryModules(root, agentId, collectedAt),
             Printers = ParsePrinters(root, agentId, collectedAt),
             ListeningPorts = ParseListeningPorts(root, agentId, collectedAt),
-            OpenSockets = ParseOpenSockets(root, agentId, collectedAt)
+            OpenSockets = ParseOpenSockets(root, agentId, collectedAt),
+            StartupItems = ParseStartupItems(root, agentId, collectedAt),
+            ScheduledTasks = ParseScheduledTasks(root, agentId, collectedAt)
         };
 
         return result.Disks.Count == 0
@@ -32,6 +34,8 @@ internal static class HardwareInventoryParser
             && result.Printers.Count == 0
             && result.ListeningPorts.Count == 0
             && result.OpenSockets.Count == 0
+            && result.StartupItems.Count == 0
+            && result.ScheduledTasks.Count == 0
             ? null
             : result;
     }
@@ -290,5 +294,149 @@ internal static class HardwareInventoryParser
         }
 
         return result;
+    }
+
+    private static List<StartupItemInfo> ParseStartupItems(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<StartupItemInfo>();
+        if (!ParseJson.TryGetArrayProperty(root, out var itemsElement, "startupItems", "startup_items"))
+            return result;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in itemsElement.EnumerateArray())
+        {
+            var name = ParseJson.GetString(item, "name")?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            var source = ParseJson.GetString(item, "source") ?? string.Empty;
+            var itemType = ParseJson.GetString(item, "type") ?? "registry";
+            var dedupeKey = string.Concat(itemType, "|", source, "|", name, "|", ParseJson.GetString(item, "username") ?? string.Empty);
+            if (!seen.Add(dedupeKey))
+                continue;
+
+            result.Add(new StartupItemInfo
+            {
+                Name = name,
+                Path = ParseJson.GetString(item, "path") ?? string.Empty,
+                Args = ParseJson.GetString(item, "args") ?? string.Empty,
+                Type = itemType,
+                Source = source,
+                Status = ParseJson.GetString(item, "status", "Status") ?? "enabled",
+                Username = ParseJson.GetString(item, "username") ?? string.Empty,
+                Detail = ParseJson.GetString(item, "detail") ?? string.Empty
+            });
+
+            if (result.Count >= 500)
+                break;
+        }
+
+        return result;
+    }
+
+    private static List<ScheduledTaskInfo> ParseScheduledTasks(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<ScheduledTaskInfo>();
+        if (!ParseJson.TryGetArrayProperty(root, out var tasksElement, "scheduledTasks", "scheduled_tasks"))
+            return result;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in tasksElement.EnumerateArray())
+        {
+            var taskName = ParseJson.GetString(item, "taskName", "task_name")?.Trim();
+            if (string.IsNullOrWhiteSpace(taskName))
+                continue;
+
+            var taskPath = ParseJson.GetString(item, "taskPath", "task_path") ?? string.Empty;
+            var dedupeKey = string.Concat(taskPath, "|", taskName);
+            if (!seen.Add(dedupeKey))
+                continue;
+
+            result.Add(new ScheduledTaskInfo
+            {
+                TaskPath = taskPath,
+                TaskName = taskName,
+                State = ParseJson.GetString(item, "state") ?? "enabled",
+                Status = ParseJson.GetString(item, "status") ?? string.Empty,
+                Author = ParseJson.GetString(item, "author") ?? string.Empty,
+                ActionPath = ParseJson.GetString(item, "actionPath", "action_path") ?? string.Empty,
+                ActionArgs = ParseJson.GetString(item, "actionArgs", "action_args") ?? string.Empty,
+                TriggerType = ParseJson.GetString(item, "triggerType", "trigger_type") ?? string.Empty,
+                TriggerDesc = ParseJson.GetString(item, "triggerDesc", "trigger_desc") ?? string.Empty,
+                NextRunTime = ParseJson.GetString(item, "nextRunTime", "next_run_time") ?? string.Empty,
+                LastRunTime = ParseJson.GetString(item, "lastRunTime", "last_run_time") ?? string.Empty,
+                LastResult = ParseJson.GetLong(item, "lastResult", "last_result")
+            });
+
+            if (result.Count >= 1000)
+                break;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Faz o merge entre o payload de componentes recebido do agent, o
+    /// InventoryRaw e os componentes já armazenados. Regra por lista:
+    /// 1) propriedade presente no payload do agent (mesmo array vazio) → usa o payload;
+    /// 2) senão, presente no InventoryRaw → usa o raw;
+    /// 3) senão, preserva a lista já armazenada.
+    /// Garante que sincronizações parciais (ex.: apenas portas) não apaguem
+    /// listas não reportadas (impressoras, startup, tarefas agendadas...).
+    /// </summary>
+    public static AgentHardwareComponents? MergeComponents(
+        JsonElement? incomingComponents,
+        string? inventoryRaw,
+        AgentHardwareComponents? existing,
+        Guid agentId,
+        DateTime collectedAt)
+    {
+        var incOpt = incomingComponents;
+        var hasIncoming = incOpt.HasValue && incOpt.Value.ValueKind == JsonValueKind.Object;
+        JsonElement inc = hasIncoming ? incOpt.GetValueOrDefault() : default;
+
+        var hasRaw = false;
+        JsonElement rawRoot = default;
+        if (!string.IsNullOrWhiteSpace(inventoryRaw))
+        {
+            hasRaw = TryParseInventoryRoot(inventoryRaw, out rawRoot);
+        }
+
+        var result = new AgentHardwareComponents
+        {
+            Disks = Pick(inc, hasIncoming, "disks", rawRoot, hasRaw, existing?.Disks, ParseDisks, agentId, collectedAt),
+            NetworkAdapters = Pick(inc, hasIncoming, "networkAdapters", rawRoot, hasRaw, existing?.NetworkAdapters, ParseNetworkAdapters, agentId, collectedAt),
+            MemoryModules = Pick(inc, hasIncoming, "memoryModules", rawRoot, hasRaw, existing?.MemoryModules, ParseMemoryModules, agentId, collectedAt),
+            Printers = Pick(inc, hasIncoming, "printers", rawRoot, hasRaw, existing?.Printers, ParsePrinters, agentId, collectedAt),
+            ListeningPorts = Pick(inc, hasIncoming, "listeningPorts", rawRoot, hasRaw, existing?.ListeningPorts, ParseListeningPorts, agentId, collectedAt),
+            OpenSockets = Pick(inc, hasIncoming, "openSockets", rawRoot, hasRaw, existing?.OpenSockets, ParseOpenSockets, agentId, collectedAt),
+            StartupItems = Pick(inc, hasIncoming, "startupItems", rawRoot, hasRaw, existing?.StartupItems, ParseStartupItems, agentId, collectedAt),
+            ScheduledTasks = Pick(inc, hasIncoming, "scheduledTasks", rawRoot, hasRaw, existing?.ScheduledTasks, ParseScheduledTasks, agentId, collectedAt)
+        };
+
+        return result;
+    }
+
+    private static List<T> Pick<T>(
+        JsonElement incoming,
+        bool hasIncoming,
+        string incomingProperty,
+        JsonElement rawRoot,
+        bool hasRaw,
+        List<T>? existing,
+        Func<JsonElement, Guid, DateTime, List<T>> parse,
+        Guid agentId,
+        DateTime collectedAt)
+    {
+        if (hasIncoming && incoming.TryGetProperty(incomingProperty, out var incomingElement))
+        {
+            if (incomingElement.ValueKind == JsonValueKind.Array)
+                return parse(incomingElement, agentId, collectedAt);
+        }
+
+        if (hasRaw && ParseJson.TryGetArrayProperty(rawRoot, out var rawElement, incomingProperty))
+            return parse(rawElement, agentId, collectedAt);
+
+        return existing ?? [];
     }
 }

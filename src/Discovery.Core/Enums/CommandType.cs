@@ -19,5 +19,8 @@ public enum CommandType
     RemoteSessionQuality = 14,
     RecordingStart = 15,
     RecordingStop = 16,
-    P2pPreload = 17
+    P2pPreload = 17,
+    // Controle de inicialização e tarefas agendadas (detalhe do agent)
+    StartupItem = 18,
+    ScheduledTask = 19
 }

@@ -11,6 +11,7 @@ using Discovery.Core.Cqrs.Agents.Maintenance.Commands;
 using Discovery.Core.Cqrs.Agents.PowerManagement.Commands;
 using Discovery.Core.Cqrs.Agents.RemoteDebug.Commands;
 using Discovery.Core.Cqrs.Agents.RemoteDebug.Queries;
+using Discovery.Core.Cqrs.Agents.StartupTasks.Commands;
 using Discovery.Core.Cqrs.Agents.Transfer.Commands;
 using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
@@ -246,12 +247,63 @@ public class AgentsController : ControllerBase
             OpenConnections: request.OpenConnections,
             Software: request.Software,
             Printers: request.Printers,
-            Hardware: request.Hardware
+            Hardware: request.Hardware,
+            StartupItems: request.StartupItems,
+            ScheduledTasks: request.ScheduledTasks
         );
         var result = await _mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
             success: _ => Ok(new { success = true }),
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>
+    /// Habilita/desabilita um item de inicialização do Windows no agent
+    /// (registro Run/RunOnce, pasta Startup ou serviço automático).
+    /// </summary>
+    [HttpPost("{id:guid}/startup-items/action")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> StartupItemAction(Guid id, [FromBody] StartupItemActionRequest request, CancellationToken ct = default)
+    {
+        var cmd = new StartupItemActionCommand(
+            AgentId: id,
+            Action: request.Action,
+            Type: request.Type,
+            Name: request.Name,
+            Source: request.Source
+        );
+        var result = await _mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: _ => Accepted(new { success = true, dispatched = true }),
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>
+    /// Executa uma ação sobre uma tarefa agendada do agent (habilitar,
+    /// desabilitar, executar agora, excluir ou editar gatilho/ação).
+    /// </summary>
+    [HttpPost("{id:guid}/scheduled-tasks/action")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> ScheduledTaskAction(Guid id, [FromBody] ScheduledTaskActionRequest request, CancellationToken ct = default)
+    {
+        var cmd = new ScheduledTaskActionCommand(
+            AgentId: id,
+            Action: request.Action,
+            TaskName: request.TaskName,
+            TaskPath: request.TaskPath,
+            Edit: request.Edit is null ? null : new ScheduledTaskEditDto(
+                TriggerType: request.Edit.TriggerType,
+                Time: request.Edit.Time,
+                DaysOfWeek: request.Edit.DaysOfWeek,
+                DaysInterval: request.Edit.DaysInterval ?? 1,
+                ActionPath: request.Edit.ActionPath,
+                ActionArgs: request.Edit.ActionArgs
+            )
+        );
+        var result = await _mediator.Send(cmd, ct);
+        return result.Match<IActionResult>(
+            success: _ => Accepted(new { success = true, dispatched = true }),
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
     }
 
     [HttpGet("{id:guid}/automation/executions")]

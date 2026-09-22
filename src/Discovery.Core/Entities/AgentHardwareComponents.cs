@@ -8,4 +8,8 @@ public class AgentHardwareComponents
     public List<PrinterInfo> Printers { get; set; } = [];
     public List<ListeningPortInfo> ListeningPorts { get; set; } = [];
     public List<OpenSocketInfo> OpenSockets { get; set; } = [];
+    // Itens de inicialização e tarefas agendadas (JSON no HardwareComponentsJson —
+    // sem coluna própria; agents antigos simplesmente não enviam as listas).
+    public List<StartupItemInfo> StartupItems { get; set; } = [];
+    public List<ScheduledTaskInfo> ScheduledTasks { get; set; } = [];
 }

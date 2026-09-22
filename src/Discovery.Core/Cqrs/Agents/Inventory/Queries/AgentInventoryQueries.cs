@@ -88,7 +88,35 @@ public sealed record AgentHardwareComponentsDto(
     List<AgentHardwareDiskDto> Disks,
     List<AgentHardwareNetworkAdapterDto> NetworkAdapters,
     List<AgentHardwareMemoryModuleDto> MemoryModules,
+    List<AgentStartupItemDto> StartupItems,
+    List<AgentScheduledTaskDto> ScheduledTasks,
     DateTime? CollectedAt
+);
+
+public sealed record AgentStartupItemDto(
+    string Name,
+    string Path,
+    string Args,
+    string Type,
+    string Source,
+    string Status,
+    string Username,
+    string Detail
+);
+
+public sealed record AgentScheduledTaskDto(
+    string TaskPath,
+    string TaskName,
+    string State,
+    string Status,
+    string Author,
+    string ActionPath,
+    string ActionArgs,
+    string TriggerType,
+    string TriggerDesc,
+    string NextRunTime,
+    string LastRunTime,
+    long LastResult
 );
 
 public sealed record AgentHardwarePrinterDto(
