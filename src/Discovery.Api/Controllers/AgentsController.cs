@@ -150,9 +150,9 @@ public class AgentsController : ControllerBase
 
     [HttpGet("{id:guid}/hardware/components")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetHardwareComponents(Guid id)
+    public async Task<IActionResult> GetHardwareComponents(Guid id, [FromQuery] bool includeNetwork = true)
     {
-        var result = await _mediator.Send(new GetAgentHardwareComponentsQuery(id));
+        var result = await _mediator.Send(new GetAgentHardwareComponentsQuery(id, includeNetwork));
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
@@ -189,9 +189,10 @@ public class AgentsController : ControllerBase
         Guid id,
         [FromQuery] string? cursor = null,
         [FromQuery] int limit = 50,
-        [FromQuery] string? search = null)
+        [FromQuery] string? search = null,
+        [FromQuery] string? state = null)
     {
-        var result = await _mediator.Send(new GetAgentOpenSocketsPageQuery(id, cursor, limit, search));
+        var result = await _mediator.Send(new GetAgentOpenSocketsPageQuery(id, cursor, limit, search, state));
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound"

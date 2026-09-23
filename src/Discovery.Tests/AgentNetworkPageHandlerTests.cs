@@ -151,7 +151,8 @@ public class AgentNetworkPageHandlerTests
                 ProcessId = 1000 + i,
                 Protocol = "tcp",
                 Address = "0.0.0.0",
-                Port = 10000 + i
+                Port = 10000 + i,
+                CollectedAt = DateTime.UtcNow
             })
             .ToList();
         var handler = PortsHandler(new AgentHardwareComponents { ListeningPorts = ports });
@@ -180,5 +181,92 @@ public class AgentNetworkPageHandlerTests
         Assert.That(result.Value!.Items, Is.Empty);
         Assert.That(result.Value!.HasMore, Is.False);
         Assert.That(result.Value.NextCursor, Is.Null);
+    }
+
+    [Test]
+    public async Task HardwareComponents_IncludeNetworkFalse_OmitsHeavyNetworkLists()
+    {
+        var components = ComponentsWithSockets(3);
+        components.ListeningPorts =
+        [
+            new ListeningPortInfo
+            {
+                Id = Guid.NewGuid(),
+                AgentId = AgentId,
+                ProcessName = "svc.exe",
+                ProcessId = 1,
+                Protocol = "tcp",
+                Address = "0.0.0.0",
+                Port = 41080,
+                CollectedAt = DateTime.UtcNow
+            }
+        ];
+        var handler = new GetAgentHardwareComponentsQueryHandler(
+            new FakeAgentRepository(new Agent { Id = AgentId }),
+            new FakeHardwareRepository(components));
+
+        var full = await handler.Handle(new GetAgentHardwareComponentsQuery(AgentId), CancellationToken.None);
+        var slim = await handler.Handle(new GetAgentHardwareComponentsQuery(AgentId, IncludeNetwork: false), CancellationToken.None);
+
+        Assert.That(full.IsSuccess, Is.True);
+        Assert.That(full.Value!.OpenSockets, Has.Count.EqualTo(3));
+        Assert.That(full.Value!.ListeningPorts, Has.Count.EqualTo(1));
+
+        // Abas de impressoras/startup/tarefas não precisam das listas de rede:
+        // o endpoint pode pular as listas pesadas sem alterar o resto do payload.
+        Assert.That(slim.IsSuccess, Is.True);
+        Assert.That(slim.Value!.OpenSockets, Is.Empty);
+        Assert.That(slim.Value!.ListeningPorts, Is.Empty);
+    }
+
+    [Test]
+    public async Task OpenSocketsPage_StateExact_FiltersTotal()
+    {
+        // 20 sockets alternando TIME_WAIT (par) e ESTABLISHED (ímpar).
+        var handler = SocketsHandler(ComponentsWithSockets(20));
+
+        var established = await handler.Handle(
+            new GetAgentOpenSocketsPageQuery(AgentId, Limit: 50, State: "ESTABLISHED"), CancellationToken.None);
+        var timeWait = await handler.Handle(
+            new GetAgentOpenSocketsPageQuery(AgentId, Limit: 50, State: "time_wait"), CancellationToken.None);
+
+        Assert.That(established.IsSuccess, Is.True);
+        Assert.That(established.Value!.TotalCount, Is.EqualTo(10));
+        Assert.That(established.Value!.Items.All(i => i.State == "ESTABLISHED"), Is.True);
+        // Comparação ignora caixa.
+        Assert.That(timeWait.Value!.TotalCount, Is.EqualTo(10));
+        Assert.That(timeWait.Value!.Items.All(i => i.State == "TIME_WAIT"), Is.True);
+    }
+
+    [Test]
+    public async Task OpenSocketsPage_StateOpen_ExcludesClosedStates()
+    {
+        var handler = SocketsHandler(ComponentsWithSockets(20));
+
+        var all = await handler.Handle(new GetAgentOpenSocketsPageQuery(AgentId, Limit: 50, State: "all"), CancellationToken.None);
+        var open = await handler.Handle(new GetAgentOpenSocketsPageQuery(AgentId, Limit: 50, State: "open"), CancellationToken.None);
+
+        Assert.That(all.Value!.TotalCount, Is.EqualTo(20));
+        // "open" tira TIME_WAIT — é o filtro que elimina o ruído de conexões já
+        // encerradas atribuídas ao próprio discovery-service.exe.
+        Assert.That(open.Value!.TotalCount, Is.EqualTo(10));
+        Assert.That(open.Value!.Items.All(i => i.State != "TIME_WAIT"), Is.True);
+    }
+
+    [Test]
+    public async Task OpenSocketsPage_StateFilterPreservesCursorPagination()
+    {
+        var handler = SocketsHandler(ComponentsWithSockets(20));
+
+        var first = await handler.Handle(
+            new GetAgentOpenSocketsPageQuery(AgentId, Cursor: null, Limit: 4, State: "ESTABLISHED"), CancellationToken.None);
+        var second = await handler.Handle(
+            new GetAgentOpenSocketsPageQuery(AgentId, Cursor: first.Value!.NextCursor, Limit: 4, State: "ESTABLISHED"), CancellationToken.None);
+
+        Assert.That(first.Value!.TotalCount, Is.EqualTo(10));
+        Assert.That(first.Value!.Items, Has.Count.EqualTo(4));
+        Assert.That(second.Value!.Items, Has.Count.EqualTo(4));
+        Assert.That(first.Value!.Items.Select(i => i.LocalPort).Intersect(second.Value!.Items.Select(i => i.LocalPort)), Is.Empty);
+        Assert.That(second.Value!.Items.All(i => i.State == "ESTABLISHED"), Is.True);
     }
 }

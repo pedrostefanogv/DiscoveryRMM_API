@@ -240,20 +240,25 @@ public sealed class GetAgentHardwareComponentsQueryHandler(
         var components = await hardwareRepo.GetComponentsAsync(q.AgentId);
         var hardware = await hardwareRepo.GetByAgentIdAsync(q.AgentId);
 
+        var includeNetwork = q.IncludeNetwork;
         return Result<AgentHardwareComponentsDto>.Success(new AgentHardwareComponentsDto(
             components.Printers.Select(p => new AgentHardwarePrinterDto(
                 p.Name, p.DriverName, p.PortName, p.PrinterStatus,
                 p.IsDefault, p.IsNetworkPrinter, p.Shared, p.ShareName, p.Location
             )).ToList(),
-            components.ListeningPorts.Select(lp => new AgentHardwareListeningPortDto(
-                lp.ProcessName, lp.ProcessId, lp.ProcessPath, lp.Protocol,
-                lp.Address, lp.Port, lp.State, lp.CollectedAt
-            )).ToList(),
-            components.OpenSockets.Select(os => new AgentHardwareOpenSocketDto(
-                os.ProcessName, os.ProcessId, os.ProcessPath,
-                os.LocalAddress, os.LocalPort, os.RemoteAddress, os.RemotePort,
-                os.Protocol, os.Family, os.State, os.CollectedAt
-            )).ToList(),
+            includeNetwork
+                ? components.ListeningPorts.Select(lp => new AgentHardwareListeningPortDto(
+                    lp.ProcessName, lp.ProcessId, lp.ProcessPath, lp.Protocol,
+                    lp.Address, lp.Port, lp.State, lp.CollectedAt
+                )).ToList()
+                : [],
+            includeNetwork
+                ? components.OpenSockets.Select(os => new AgentHardwareOpenSocketDto(
+                    os.ProcessName, os.ProcessId, os.ProcessPath,
+                    os.LocalAddress, os.LocalPort, os.RemoteAddress, os.RemotePort,
+                    os.Protocol, os.Family, os.State, os.CollectedAt
+                )).ToList()
+                : [],
             components.Disks.Select(d => new AgentHardwareDiskDto(
                 d.DriveLetter, d.Label, d.FileSystem,
                 d.TotalSizeBytes, d.FreeSpaceBytes, d.MediaType,
@@ -289,6 +294,12 @@ public sealed class GetAgentHardwareComponentsQueryHandler(
 /// </summary>
 internal static class AgentNetworkPageFilter
 {
+    /// <summary>Estados TCP que representam conexão já encerrada (MIB_TCP_STATE).</summary>
+    internal static readonly HashSet<string> ClosedTcpStates = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "TIME_WAIT", "FIN_WAIT1", "FIN_WAIT2", "CLOSE_WAIT", "CLOSING", "LAST_ACK", "CLOSED"
+    };
+
     public static bool MatchesListeningPort(ListeningPortInfo p, string search)
         => (p.ProcessName ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase)
            || p.ProcessId.ToString().Contains(search, StringComparison.Ordinal)
@@ -392,6 +403,19 @@ public sealed class GetAgentOpenSocketsPageQueryHandler(
         IEnumerable<OpenSocketInfo> filtered = components.OpenSockets;
         if (search.Length > 0)
             filtered = filtered.Where(s => AgentNetworkPageFilter.MatchesOpenSocket(s, search));
+
+        // Filtro por estado TCP. "open" exclui conexões já encerradas — é o que
+        // remove o ruído do discovery-service.exe (TIME_WAIT em massa). Sockets
+        // coletados por agentes antigos não têm estado; em "open" eles ficam
+        // (não há como saber), mas em filtro exato não casam.
+        var state = (q.State ?? string.Empty).Trim();
+        if (state.Length > 0 && !state.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            if (state.Equals("open", StringComparison.OrdinalIgnoreCase))
+                filtered = filtered.Where(s => s.State is null || !AgentNetworkPageFilter.ClosedTcpStates.Contains(s.State));
+            else
+                filtered = filtered.Where(s => string.Equals(s.State, state, StringComparison.OrdinalIgnoreCase));
+        }
 
         // Ordenação determinística: garante cursor estável entre requests sobre
         // o mesmo snapshot (o índice aponta para a posição na lista ordenada).

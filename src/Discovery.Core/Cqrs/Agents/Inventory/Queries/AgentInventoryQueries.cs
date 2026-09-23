@@ -5,7 +5,13 @@ namespace Discovery.Core.Cqrs.Agents.Inventory.Queries;
 
 public sealed record GetAgentHardwareQuery(Guid AgentId) : IQuery<Result<AgentHardwareDto>>;
 public sealed record GetAgentHardwareReportQuery(Guid AgentId) : IQuery<Result<AgentHardwareReportDto>>;
-public sealed record GetAgentHardwareComponentsQuery(Guid AgentId) : IQuery<Result<AgentHardwareComponentsDto>>;
+/// <summary>
+/// Componentes do agente. IncludeNetwork permite pular as listas pesadas
+/// (portas/sockets) quando o chamador usa os endpoints paginados dedicados
+/// (/hardware/network/ports|sockets) — evita trafegar até 5000 sockets em abas
+/// que só precisam de impressoras/startup/tarefas.
+/// </summary>
+public sealed record GetAgentHardwareComponentsQuery(Guid AgentId, bool IncludeNetwork = true) : IQuery<Result<AgentHardwareComponentsDto>>;
 
 /// <summary>
 /// Página por cursor (ponteiro) sobre listas derivadas do snapshot de
@@ -28,11 +34,18 @@ public sealed record GetAgentListeningPortsPageQuery(
     int Limit = 50,
     string? Search = null) : IQuery<Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>>;
 
+/// <summary>
+/// <paramref name="State"/> filtra o estado TCP: vazio/"all" = todos; "open"
+/// exclui estados encerrados (TIME_WAIT/FIN_WAIT/CLOSE_WAIT/CLOSING/LAST_ACK) —
+/// remove o ruído de conexões já fechadas atribuídas ao próprio agente; qualquer
+/// outro valor é comparado exatamente com o estado (ex.: "ESTABLISHED").
+/// </summary>
 public sealed record GetAgentOpenSocketsPageQuery(
     Guid AgentId,
     string? Cursor = null,
     int Limit = 50,
-    string? Search = null) : IQuery<Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>>;
+    string? Search = null,
+    string? State = null) : IQuery<Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>>;
 public sealed record GetAgentSoftwareQuery(Guid AgentId, string? Cursor = null, int Limit = 100, string? Search = null, bool Descending = false) : IQuery<Result<CursorPageDto<AgentSoftwareItemDto>>>;
 public sealed record GetAgentSoftwareSnapshotQuery(Guid AgentId) : IQuery<Result<AgentSoftwareSnapshotDto>>;
 
