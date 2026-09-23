@@ -36,6 +36,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private readonly IAgentAuthService _agentAuthService;
     private readonly IHeartbeatCacheService _heartbeatCache;
     private readonly IAgentHardwareRepository _hardwareRepo;
+    private readonly IAutomationExecutionReportRepository _automationReportRepo;
     private readonly DashboardEventContractNormalizer _contractNormalizer;
     private readonly ILogger<NatsAgentMessaging> _logger;
     private readonly IOptionsMonitor<NatsGlobalPongOptions> _globalPongOptions;
@@ -56,6 +57,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         IAgentAuthService agentAuthService,
         IHeartbeatCacheService heartbeatCache,
         IAgentHardwareRepository hardwareRepo,
+        IAutomationExecutionReportRepository automationReportRepo,
         DashboardEventContractNormalizer contractNormalizer,
         IOptionsMonitor<NatsGlobalPongOptions> globalPongOptions,
         ILogger<NatsAgentMessaging> logger)
@@ -67,6 +69,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         _agentAuthService = agentAuthService;
         _heartbeatCache = heartbeatCache;
         _hardwareRepo = hardwareRepo;
+        _automationReportRepo = automationReportRepo;
         _contractNormalizer = contractNormalizer;
         _globalPongOptions = globalPongOptions;
         _logger = logger;
@@ -393,6 +396,17 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
                         var status = result.ExitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
                         await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
+
+                        // Auditoria por execução: atualiza o report (update/uninstall de
+                        // software e automação) com o resultado do agent. No-op quando
+                        // não há report ou o resultado já foi aplicado.
+                        await _automationReportRepo.UpdateResultFromCommandAsync(
+                            result.CommandId,
+                            result.ExitCode == 0,
+                            result.ExitCode,
+                            result.ErrorMessage,
+                            result.Output,
+                            DateTime.UtcNow);
 
                         // Publica dashboard event com dispatchId para agregacao de campanha (contrato secao 2.3).
                         var resultData = new

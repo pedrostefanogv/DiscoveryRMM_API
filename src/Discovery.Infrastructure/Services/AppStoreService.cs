@@ -287,6 +287,29 @@ public class AppStoreService : IAppStoreService
         return await BuildEffectiveApprovedAppsAsync(clientId, siteId, agentId, installationType, cancellationToken);
     }
 
+    public async Task<bool> IsPackageApprovedAsync(
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        AppInstallationType installationType,
+        string packageId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(packageId))
+            return false;
+
+        var policy = await ResolvePolicyForDirectScopeAsync(clientId, siteId, agentId, cancellationToken);
+        if (policy == AppStorePolicyType.Disabled)
+            return false;
+
+        // Todos os pacotes do catálogo estão liberados: não enumera o catálogo.
+        if (policy == AppStorePolicyType.All)
+            return true;
+
+        var approved = await BuildEffectiveApprovedAppsAsync(clientId, siteId, agentId, installationType, cancellationToken);
+        return approved.Any(a => string.Equals(a.PackageId, packageId.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
     public async Task<EffectiveApprovedAppPageDto> GetEffectiveAppsPageAsync(
         AppApprovalScopeType scopeType,
         Guid? scopeId,

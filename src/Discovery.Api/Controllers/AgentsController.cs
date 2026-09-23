@@ -357,9 +357,35 @@ public class AgentsController : ControllerBase
     /// </summary>
     [HttpPost("{id:guid}/software/{inventoryId:guid}/update")]
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
-    public async Task<IActionResult> UpdateSoftware(Guid id, Guid inventoryId, CancellationToken ct = default)
+    public async Task<IActionResult> UpdateSoftware(
+        Guid id,
+        Guid inventoryId,
+        [FromBody] UpdateSoftwareRequest? request = null,
+        CancellationToken ct = default)
     {
-        var result = await _mediator.Send(new UpdateAgentSoftwareCommand(id, inventoryId), ct);
+        var result = await _mediator.Send(
+            new UpdateAgentSoftwareCommand(id, inventoryId, request?.ConfirmUnapproved ?? false), ct);
+
+        return result.Match<IActionResult>(
+            success: _ => Accepted(new { success = true, dispatched = true }),
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                // Pacote bloqueado pela loja: exige confirmação explícita.
+                "Conflict" => Conflict(new { requiresConfirmation = true, error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
+    }
+
+    /// <summary>
+    /// Desinstala um aplicativo instalado no agent. O agent resolve a
+    /// estratégia (gerenciador → MSI ProductCode → UninstallString).
+    /// </summary>
+    [HttpPost("{id:guid}/software/{inventoryId:guid}/uninstall")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> UninstallSoftware(Guid id, Guid inventoryId, CancellationToken ct = default)
+    {
+        var result = await _mediator.Send(new UninstallAgentSoftwareCommand(id, inventoryId), ct);
         return result.Match<IActionResult>(
             success: _ => Accepted(new { success = true, dispatched = true }),
             failure: errors => errors[0].Code == "NotFound"

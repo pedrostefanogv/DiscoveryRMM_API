@@ -49,7 +49,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         return await (
             from inv in _db.AgentSoftwareInventories.AsNoTracking()
             join catalog in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals catalog.Id
-            where inv.Id == inventoryId
+            where inv.Id == inventoryId && inv.IsPresent
             select new AgentInstalledSoftware
             {
                 InventoryId = inv.Id,
@@ -242,6 +242,14 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             TotalInstalled = 0,
             UpdatedAt = lastUpdatedAt
         };
+    }
+
+    public async Task<int> GetUpdateAvailableCountByAgentIdAsync(Guid agentId)
+    {
+        return await _db.AgentSoftwareInventories
+            .AsNoTracking()
+            .Where(inv => inv.AgentId == agentId && inv.IsPresent && inv.UpdateAvailable)
+            .CountAsync();
     }
 
     public async Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryGlobalPagedAsync(

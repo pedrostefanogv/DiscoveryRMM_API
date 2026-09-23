@@ -174,6 +174,8 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.P2pPreload => TryNormalizeP2pPreload(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.StartupItem => TryNormalizeStartupItem(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.ScheduledTask => TryNormalizeScheduledTask(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.SoftwareUpdate => TryNormalizeSoftwareUpdate(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.SoftwareUninstall => TryNormalizeSoftwareUninstall(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }
@@ -879,6 +881,112 @@ public sealed class SpecialCommandPayloadValidator
         {
             ["macAddress"] = macAddress,
             ["broadcastAddress"] = broadcastAddress
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    /// <summary>
+    /// Normaliza o comando de atualização de software: exige packageId e
+    /// canonicaliza installationType/source para winget|chocolatey.
+    /// </summary>
+    private static bool TryNormalizeSoftwareUpdate(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!TryGetRequiredString(payload, "packageId", out var packageId, out validationError))
+            return false;
+
+        packageId = packageId.Trim();
+        if (packageId.Length == 0)
+        {
+            validationError = "field 'packageId' must be a non-empty string.";
+            return false;
+        }
+
+        var installationType = "winget";
+        if (payload.TryGetProperty("installationType", out var typeElement) && typeElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(typeElement, out var providedType))
+            {
+                validationError = "field 'installationType' must be a string.";
+                return false;
+            }
+
+            var normalizedType = providedType.Trim().ToLowerInvariant();
+            installationType = normalizedType.Contains("choco") ? "chocolatey" : "winget";
+        }
+        else if (payload.TryGetProperty("source", out var sourceElement) && sourceElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(sourceElement, out var providedSource))
+            {
+                validationError = "field 'source' must be a string.";
+                return false;
+            }
+
+            installationType = providedSource.Trim().ToLowerInvariant().Contains("choco") ? "chocolatey" : "winget";
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["packageId"] = packageId,
+            ["installationType"] = installationType,
+            ["source"] = installationType
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    /// <summary>
+    /// Normaliza o comando de desinstalação: exige name e canonicaliza
+    /// installationType/source; packageId e os identificadores do registro são
+    /// opcionais (o agent escolhe a melhor estratégia).
+    /// </summary>
+    private static bool TryNormalizeSoftwareUninstall(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!TryGetRequiredString(payload, "name", out var name, out validationError))
+            return false;
+
+        name = name.Trim();
+        if (name.Length == 0)
+        {
+            validationError = "field 'name' must be a non-empty string.";
+            return false;
+        }
+
+        string? OptionalString(string property)
+        {
+            if (!payload.TryGetProperty(property, out var element) || element.ValueKind == JsonValueKind.Null)
+                return null;
+            if (!TryReadString(element, out var value))
+                return null;
+            return value.Trim() is { Length: > 0 } trimmed ? trimmed : null;
+        }
+
+        var typeHint = OptionalString("installationType") ?? OptionalString("source") ?? "winget";
+        var installationType = typeHint.ToLowerInvariant().Contains("choco") ? "chocolatey" : "winget";
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["name"] = name,
+            ["packageId"] = OptionalString("packageId"),
+            ["installationType"] = installationType,
+            ["source"] = installationType,
+            ["installId"] = OptionalString("installId"),
+            ["serial"] = OptionalString("serial"),
+            ["installSource"] = OptionalString("installSource")
         };
 
         normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);

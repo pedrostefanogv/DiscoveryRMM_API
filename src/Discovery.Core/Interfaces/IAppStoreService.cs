@@ -64,6 +64,19 @@ public interface IAppStoreService
         AppInstallationType installationType,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Verifica se um pacote está aprovado pela política da loja para o escopo
+    /// informado. Resolve o escopo direto (agente/site/cliente) e, para
+    /// PreApproved, avalia as regras efetivas sem enumerar o catálogo.
+    /// </summary>
+    Task<bool> IsPackageApprovedAsync(
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        AppInstallationType installationType,
+        string packageId,
+        CancellationToken cancellationToken = default);
+
     Task<EffectiveApprovedAppPageDto> GetEffectiveAppsPageAsync(
         AppApprovalScopeType scopeType,
         Guid? scopeId,

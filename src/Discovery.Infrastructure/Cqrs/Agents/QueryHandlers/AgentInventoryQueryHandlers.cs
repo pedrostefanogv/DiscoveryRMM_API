@@ -182,7 +182,58 @@ public static class AgentSoftwareItemMappers
         s.AvailableVersion,
         s.UpdateAvailable,
         s.UpdateSource,
-        s.UpdatePackageId);
+        s.UpdatePackageId,
+        s.InstallSource,
+        ComputeUninstallAvailable(s));
+
+    /// <summary>
+    /// Indica se a desinstalação é viável com os dados do inventário: pacote
+    /// reconhecido pelo gerenciador (winget/choco), ProductCode MSI ou um
+    /// UninstallString do registro. O agent revalida e escolhe a estratégia.
+    /// </summary>
+    private static bool ComputeUninstallAvailable(AgentInstalledSoftware s)
+    {
+        if (!string.IsNullOrWhiteSpace(s.UpdatePackageId))
+            return true;
+
+        if (LooksLikeMsiProductCode(s.InstallId))
+            return true;
+
+        // "serial" costuma carregar o UninstallString quando não há ProductCode
+        // (aceita .exe); "installSource" costuma ser o InstallLocation e exige
+        // um indício de desinstalador.
+        return LooksLikeUninstallCommand(s.Serial) || LooksLikeUninstallTarget(s.InstallSource);
+    }
+
+    private static bool LooksLikeMsiProductCode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var trimmed = value.Trim();
+        return trimmed.Length >= 32
+            && trimmed.StartsWith('{')
+            && trimmed.EndsWith('}')
+            && trimmed.Contains('-');
+    }
+
+    private static bool LooksLikeUninstallCommand(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var normalized = value.ToLowerInvariant();
+        return normalized.Contains("uninstall") || normalized.Contains("msiexec") || normalized.Contains(".exe");
+    }
+
+    private static bool LooksLikeUninstallTarget(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var normalized = value.ToLowerInvariant();
+        return normalized.Contains("uninstall") || normalized.Contains("unins") || normalized.Contains("msiexec");
+    }
 }
 
 public sealed class GetAgentSoftwarePageQueryHandler(
@@ -225,8 +276,10 @@ public sealed class GetAgentSoftwareSnapshotQueryHandler(
             return Result<AgentSoftwareSnapshotDto>.Failure(Error.NotFound("Agent not found."));
 
         var snapshot = await softwareRepo.GetSnapshotByAgentIdAsync(q.AgentId);
+        var updateCount = await softwareRepo.GetUpdateAvailableCountByAgentIdAsync(q.AgentId);
+
         return Result<AgentSoftwareSnapshotDto>.Success(new AgentSoftwareSnapshotDto(
-            q.AgentId, snapshot?.TotalInstalled ?? 0, snapshot?.LastCollectedAt));
+            q.AgentId, snapshot?.TotalInstalled ?? 0, snapshot?.LastCollectedAt, updateCount));
     }
 }
 

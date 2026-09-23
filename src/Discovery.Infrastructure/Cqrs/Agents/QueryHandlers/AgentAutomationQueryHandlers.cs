@@ -18,7 +18,23 @@ public sealed class GetAutomationExecutionsQueryHandler(
             return Result<IReadOnlyList<AutomationExecutionDto>>.Failure(Error.NotFound("Agent not found."));
 
         var items = await reportRepo.GetByAgentIdAsync(q.AgentId, q.Limit);
-        var dtos = items.Select(e => new AutomationExecutionDto(e.Id, e.Status.ToString(), e.CreatedAt)).ToList();
+        var dtos = items.Select(e => new AutomationExecutionDto(
+            e.Id,
+            e.Status.ToString(),
+            e.CreatedAt,
+            e.CommandId,
+            e.AgentId,
+            e.TaskId,
+            e.ScriptId,
+            e.SourceType.ToString(),
+            e.CorrelationId,
+            e.AcknowledgedAt,
+            e.ResultReceivedAt,
+            e.ExitCode,
+            e.ErrorMessage,
+            e.RequestMetadataJson,
+            e.AckMetadataJson,
+            e.ResultMetadataJson)).ToList();
         return Result<IReadOnlyList<AutomationExecutionDto>>.Success(dtos);
     }
 }

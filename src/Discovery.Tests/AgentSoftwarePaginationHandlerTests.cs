@@ -298,6 +298,9 @@ public class AgentSoftwarePaginationHandlerTests
         public Task<AgentSoftwareSnapshot> GetSnapshotByAgentIdAsync(Guid agentId)
             => Task.FromResult(new AgentSoftwareSnapshot { AgentId = agentId, TotalInstalled = inventory.Count });
 
+        public Task<int> GetUpdateAvailableCountByAgentIdAsync(Guid agentId)
+            => Task.FromResult(inventory.Count(x => x.UpdateAvailable));
+
         public Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryGlobalPagedAsync(string? cursor, int limit, string? search, bool descending)
             => throw new NotSupportedException();
         public Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryByClientPagedAsync(Guid clientId, string? cursor, int limit, string? search, bool descending)

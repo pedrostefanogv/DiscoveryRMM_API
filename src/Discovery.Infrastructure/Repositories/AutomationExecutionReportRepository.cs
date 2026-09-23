@@ -143,8 +143,21 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
             .AsNoTracking()
             .SingleOrDefaultAsync(x => x.CommandId == commandId);
 
-        await _db.AutomationExecutionReports
-            .Where(x => x.CommandId == commandId)
+        // Idempotência: o mesmo comando pode reportar o resultado por dois
+        // caminhos (NATS e endpoint de automação). Não reaplica nem republica
+        // o evento quando o report já está em estado terminal.
+        if (report is not null
+            && (report.Status == AutomationExecutionStatus.Completed || report.Status == AutomationExecutionStatus.Failed))
+        {
+            return;
+        }
+
+        // Filtro de status no próprio UPDATE: torna a idempotência atômica
+        // mesmo com NATS e endpoint de automação reportando em paralelo.
+        var affected = await _db.AutomationExecutionReports
+            .Where(x => x.CommandId == commandId
+                && x.Status != AutomationExecutionStatus.Completed
+                && x.Status != AutomationExecutionStatus.Failed)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(x => x.TaskId, _ => taskId)
                 .SetProperty(x => x.ScriptId, _ => scriptId)
@@ -156,11 +169,43 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
                 .SetProperty(x => x.CorrelationId, x => correlationId ?? x.CorrelationId)
                 .SetProperty(x => x.UpdatedAt, _ => DateTime.UtcNow));
 
-        if (report is not null)
+        if (affected > 0 && report is not null)
         {
             var finalStatus = success ? AutomationExecutionStatus.Completed : AutomationExecutionStatus.Failed;
             await PublishDashboardEventAsync("AutomationExecutionResult", report.AgentId, commandId, finalStatus, taskId, scriptId, correlationId ?? report.CorrelationId);
         }
+    }
+
+    public async Task UpdateResultFromCommandAsync(Guid commandId, bool success, int? exitCode, string? errorMessage, string? resultMetadataJson, DateTime resultReceivedAt)
+    {
+        var report = await _db.AutomationExecutionReports
+            .AsNoTracking()
+            .SingleOrDefaultAsync(x => x.CommandId == commandId);
+
+        if (report is null)
+            return;
+
+        // Idempotência: resultado já aplicado (NATS + endpoint de automação).
+        if (report.Status == AutomationExecutionStatus.Completed || report.Status == AutomationExecutionStatus.Failed)
+            return;
+
+        var finalStatus = success ? AutomationExecutionStatus.Completed : AutomationExecutionStatus.Failed;
+
+        // UPDATE condicional ao status terminal: atômico contra corrida NATS x HTTP.
+        var affected = await _db.AutomationExecutionReports
+            .Where(x => x.CommandId == commandId
+                && x.Status != AutomationExecutionStatus.Completed
+                && x.Status != AutomationExecutionStatus.Failed)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.ResultMetadataJson, _ => resultMetadataJson)
+                .SetProperty(x => x.ResultReceivedAt, _ => resultReceivedAt)
+                .SetProperty(x => x.ExitCode, _ => exitCode)
+                .SetProperty(x => x.ErrorMessage, _ => errorMessage)
+                .SetProperty(x => x.Status, _ => finalStatus)
+                .SetProperty(x => x.UpdatedAt, _ => DateTime.UtcNow));
+
+        if (affected > 0)
+            await PublishDashboardEventAsync("AutomationExecutionResult", report.AgentId, commandId, finalStatus, report.TaskId, report.ScriptId, report.CorrelationId);
     }
 
     private async Task PublishDashboardEventAsync(

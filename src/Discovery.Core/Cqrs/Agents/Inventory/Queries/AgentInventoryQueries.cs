@@ -109,9 +109,19 @@ public sealed record AgentSoftwareItemDto(
     string? AvailableVersion = null,
     bool UpdateAvailable = false,
     string? UpdateSource = null,
-    string? UpdatePackageId = null
+    string? UpdatePackageId = null,
+    // InstallSource/UninstallAvailable suportam o botão "Desinstalar" do
+    // detalhe do agente (desinstalação por gerenciador/MSI/UninstallString).
+    string? InstallSource = null,
+    bool UninstallAvailable = false
 );
-public sealed record AgentSoftwareSnapshotDto(Guid AgentId, int TotalInstalled, DateTime? LastCollectedAt);
+public sealed record AgentSoftwareSnapshotDto(
+    Guid AgentId,
+    int TotalInstalled,
+    DateTime? LastCollectedAt,
+    // Total de apps com atualização pendente (não só a página visível).
+    int UpdateAvailableCount = 0
+);
 
 /// <summary>
 /// Página de inventário de software com total filtrado — fonte única de

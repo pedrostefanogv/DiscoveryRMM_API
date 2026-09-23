@@ -21,6 +21,7 @@ public record ScheduledTaskEditRequest(string TriggerType, string? Time = null, 
 public record ScheduledTaskActionRequest(string Action, string TaskName, string? TaskPath = null, ScheduledTaskEditRequest? Edit = null);
 public record SoftwareInventoryReportRequest(DateTime? CollectedAt, List<SoftwareInventoryItemRequest>? Software);
 public record SoftwareInventoryItemRequest(string Name, string? Version, string? Publisher, string? InstallId, string? Serial, string? Source, string? InstallDate, string? InstallSource, string? AvailableVersion = null, bool UpdateAvailable = false, string? UpdateSource = null, string? UpdatePackageId = null);
+public record UpdateSoftwareRequest(bool ConfirmUnapproved = false);
 public record UpsertAgentCustomFieldValueRequest(JsonElement Value);
 public record SendFanoutCommandRequest(CommandType CommandType, string Payload, DateTime? ExpiresAtUtc = null, string? IdempotencyKey = null, Guid? CommandId = null);
 public record FanoutDispatchResponse(Guid DispatchId, string Subject, string TargetScope, Guid? TargetClientId, Guid? TargetSiteId, DateTime IssuedAtUtc, DateTime? ExpiresAtUtc, string IdempotencyKey);

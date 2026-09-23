@@ -28,6 +28,8 @@ public static class CommandTypeWireMapper
             CommandType.P2pPreload => "p2ppreload",
             CommandType.StartupItem => "startupitem",
             CommandType.ScheduledTask => "scheduledtask",
+            CommandType.SoftwareUpdate => "softwareupdate",
+            CommandType.SoftwareUninstall => "softwareuninstall",
             _ => commandType.ToString().ToLowerInvariant()
         };
     }
@@ -48,6 +50,8 @@ public static class CommandTypeWireMapper
             or CommandType.RecordingStop
             or CommandType.P2pPreload
             or CommandType.StartupItem
-            or CommandType.ScheduledTask;
+            or CommandType.ScheduledTask
+            or CommandType.SoftwareUpdate
+            or CommandType.SoftwareUninstall;
     }
 }

@@ -20,6 +20,7 @@ public interface IAgentSoftwareRepository
         bool descending,
         CancellationToken ct = default);
     Task<AgentSoftwareSnapshot> GetSnapshotByAgentIdAsync(Guid agentId);
+    Task<int> GetUpdateAvailableCountByAgentIdAsync(Guid agentId);
     Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryGlobalPagedAsync(
         string? cursor,
         int limit,

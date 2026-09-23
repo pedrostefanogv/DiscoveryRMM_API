@@ -22,5 +22,13 @@ public enum CommandType
     P2pPreload = 17,
     // Controle de inicialização e tarefas agendadas (detalhe do agent)
     StartupItem = 18,
-    ScheduledTask = 19
+    ScheduledTask = 19,
+    // Atualização de software instalado a partir do inventário (detalhe do
+    // agent). Delegada ao fluxo nativo de pacotes do agent (winget/choco),
+    // aproveitando P2P e switches silenciosos do catálogo.
+    SoftwareUpdate = 20,
+    // Desinstalação de software instalado a partir do inventário. O agent
+    // resolve a estratégia: gerenciador de pacotes → MSI (ProductCode) →
+    // UninstallString do registro.
+    SoftwareUninstall = 21
 }

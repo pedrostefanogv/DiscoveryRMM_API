@@ -13,6 +13,13 @@ public interface IAutomationExecutionReportRepository
     Task UpdateResultAsync(Guid commandId, Guid? taskId, Guid? scriptId, bool success, int? exitCode, string? errorMessage, string? resultMetadataJson, DateTime resultReceivedAt, string? correlationId);
 
     /// <summary>
+    /// Atualiza apenas o resultado de um report já existente (sem tocar em
+    /// task/script). Usado pelo handler de resultado de comando (NATS), que não
+    /// conhece o vínculo do report. Idempotente para estado terminal.
+    /// </summary>
+    Task UpdateResultFromCommandAsync(Guid commandId, bool success, int? exitCode, string? errorMessage, string? resultMetadataJson, DateTime resultReceivedAt);
+
+    /// <summary>
     /// Cria (ou atualiza) o registro de execução para execuções automáticas reportadas
     /// pelo agent via policy-sync (commandId gerado pelo próprio agent, sem comando dispatchado).
     /// </summary>

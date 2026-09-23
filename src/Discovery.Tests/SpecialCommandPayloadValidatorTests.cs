@@ -102,4 +102,77 @@ public class SpecialCommandPayloadValidatorTests
                 using var json = JsonDocument.Parse(normalizedPayload);
                 Assert.That(json.RootElement.GetProperty("stream").GetProperty("natsSubject").GetString(), Is.EqualTo("tenant.c.site.s.agent.a.remote-debug.log"));
     }
+
+    [Test]
+    public void SoftwareUpdate_ShouldRequirePackageIdAndNormalizeType()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "packageId": "Google.Chrome",
+              "installationType": "Chocolatey"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.SoftwareUpdate, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.RootElement.GetProperty("packageId").GetString(), Is.EqualTo("Google.Chrome"));
+            Assert.That(json.RootElement.GetProperty("installationType").GetString(), Is.EqualTo("chocolatey"));
+            Assert.That(json.RootElement.GetProperty("source").GetString(), Is.EqualTo("chocolatey"));
+        });
+    }
+
+    [Test]
+    public void SoftwareUninstall_ShouldRequireNameAndNormalizeType()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "name": "Google Chrome",
+              "packageId": "Google.Chrome",
+              "installationType": "winget"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.SoftwareUninstall, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.RootElement.GetProperty("name").GetString(), Is.EqualTo("Google Chrome"));
+            Assert.That(json.RootElement.GetProperty("packageId").GetString(), Is.EqualTo("Google.Chrome"));
+            Assert.That(json.RootElement.GetProperty("installationType").GetString(), Is.EqualTo("winget"));
+        });
+    }
+
+    [Test]
+    public void SoftwareUninstall_ShouldRejectMissingName()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var ok = validator.TryNormalize(CommandType.SoftwareUninstall, """{"packageId":"Google.Chrome"}""", out _, out var error);
+
+        Assert.That(ok, Is.False);
+        Assert.That(error, Does.Contain("name"));
+    }
+
+    [Test]
+    public void SoftwareUpdate_ShouldRejectMissingPackageId()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var ok = validator.TryNormalize(CommandType.SoftwareUpdate, """{"installationType":"winget"}""", out _, out var error);
+
+        Assert.That(ok, Is.False);
+        Assert.That(error, Does.Contain("packageId"));
+    }
 }

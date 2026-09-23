@@ -208,6 +208,29 @@ X-Agent-ID: {agentId}
 
 **Resposta 200:** Lista de recursos que o agent deve sincronizar periodicamente (ex.: políticas de automação, scripts, catálogo de apps).
 
+### 2.5 Inventário de Software (agent-auth/me/software)
+
+**Endpoint:** `POST` (ou `PUT`) `/api/v1/agent-auth/me/software`
+
+Enviado no inventário periódico (~6h), no startup/pós-bootstrap e após alterações de pacote/refresh sob demanda. Cada item aceita:
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `name` | string | Nome de exibição (obrigatório) |
+| `version` | string? | Versão instalada |
+| `publisher` | string? | Fabricante |
+| `installId` | string? | Identificador do registro (ProductCode MSI quando houver) |
+| `serial` | string? | Serial ou UninstallString |
+| `source` | string? | Origem do registro (ex.: `registry`, `native/registry`) |
+| `installDate` | string? | Data de instalação |
+| `installSource` | string? | InstallLocation ou UninstallString |
+| `availableVersion` | string? | Versão disponível quando há update pendente |
+| `updateAvailable` | bool | Há atualização pendente (winget/chocolatey) |
+| `updateSource` | string? | Gerenciador do update: `winget` ou `chocolatey` |
+| `updatePackageId` | string? | Id do pacote no gerenciador (winget/choco), usado em update/uninstall |
+
+Os campos de update/gerenciador são preenchidos pelo agent a partir de `winget upgrade` / `choco outdated` correlacionados com `winget list`, `choco list` e os `.nuspec` locais do Chocolatey. Campo ausente vira `false`/vazio no servidor.
+
 ---
 
 ## 3. Autenticação
@@ -332,6 +355,13 @@ Fan-out: `tenant.{c}.site.{s}.agents.command` | `tenant.{c}.agents.command` | `t
 	"payload": "json-string"
 }
 ```
+
+`commandType` especiais ligados ao inventário/detalhe do agente:
+
+- `systeminfo` — refresh sob demanda (`operation=refresh-on-demand`).
+- `startupitem` / `scheduledtask` — controle de itens de inicialização/tarefas.
+- `softwareupdate` — payload `{ packageId, installationType, source }`; o agent resolve winget/chocolatey e executa o upgrade (P2P inline + switches do catálogo).
+- `softwareuninstall` — payload `{ name, packageId, installationType, installId, serial, installSource }`; o agent tenta gerenciador de pacotes, MSI (ProductCode) e UninstallString do registro, devolvendo erro claro quando nada é identificável.
 
 ### Command Result (Agent → Servidor)
 
