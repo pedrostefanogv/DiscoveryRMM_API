@@ -1,5 +1,6 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -33,11 +34,33 @@ public sealed class LabelService : ILabelService
     public Task<AgentLabel?> GetByIdAsync(Guid id, CancellationToken ct = default) => _labels.GetByIdAsync(id);
     public Task<AgentLabel> AddAsync(AgentLabel label, CancellationToken ct = default) => _labels.AddAsync(label);
 
+    public async Task<AgentLabel> AddWithSuppressionClearAsync(AgentLabel label, CancellationToken ct = default)
+    {
+        // O usuario readicionou a label na mao: a supressao anterior nao faz mais sentido.
+        await _labels.ClearSuppressionAsync(label.AgentId, label.Label, ct);
+        return await _labels.AddAsync(label);
+    }
+
     public async Task<bool> DeleteAsync(Guid id, CancellationToken ct = default)
     {
         var label = await _labels.GetByIdAsync(id);
         if (label is null)
             return false;
+
+        await _labels.DeleteAsync(id);
+        return true;
+    }
+
+    public async Task<bool> DeleteWithSuppressionAsync(Guid id, string? suppressedBy, CancellationToken ct = default)
+    {
+        var label = await _labels.GetByIdAsync(id);
+        if (label is null)
+            return false;
+
+        // Label automatica removida manualmente: sem a supressao, a proxima
+        // reconciliacao recriaria a label porque o match da regra continua existindo.
+        if (label.SourceType == AgentLabelSourceType.Automatic)
+            await _labels.SuppressAutomaticLabelAsync(label.AgentId, label.Label, suppressedBy, ct);
 
         await _labels.DeleteAsync(id);
         return true;
@@ -68,6 +91,21 @@ public sealed class LabelService : ILabelService
     public Task<(int Total, IReadOnlyList<AgentLabelRuleAgentResponse> Agents)> GetAgentsByRuleIdPagedAsync(
         Guid ruleId, int page, int pageSize, CancellationToken ct = default)
         => _labels.GetAgentsByRuleIdPagedAsync(ruleId, page, pageSize, ct);
+
+    public Task<IReadOnlyList<Guid>> GetAgentIdsByLabelPagedAsync(string label, Guid? afterAgentId, int limit, CancellationToken ct = default)
+        => _labels.GetAgentIdsByLabelPagedAsync(label, afterAgentId, limit, ct);
+
+    public Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default)
+        => _labels.GetSuppressionsByAgentIdAsync(agentId, ct);
+
+    public Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default)
+        => _labels.ReleaseSuppressionAsync(suppressionId, ct);
+
+    public Task<int> CountAgentsByLabelAsync(string label, CancellationToken ct = default)
+        => _labels.CountAgentsByLabelAsync(label, ct);
+
+    public Task<IReadOnlyList<AgentLabelUsageDto>> GetLabelUsageAsync(int limit, CancellationToken ct = default)
+        => _labels.GetLabelUsageAsync(limit, ct);
 
     /// <summary>
     /// Remove o cache de regras habilitadas. Sem isso, criar/editar/desabilitar/excluir

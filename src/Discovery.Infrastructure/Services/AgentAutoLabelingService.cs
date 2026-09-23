@@ -179,6 +179,71 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     }
 
     /// <summary>
+    /// Seleciona uma amostra representativa de agentes.
+    ///
+    /// A amostragem e ESTRATIFICADA por cliente quando a amostra e menor que a
+    /// populacao: cada cliente contribui proporcionalmente, evitando que um cliente
+    /// grande (ou um lote de cadastro recente) domine a amostra. Dentro do estrato a
+    /// escolha e aleatoria, o que remove o vies de "primeiros N por Id".
+    /// </summary>
+    private async Task<List<Agent>> SampleAgentsAsync(
+        IQueryable<Agent> query,
+        int sampleSize,
+        int totalAgents,
+        CancellationToken cancellationToken)
+    {
+        // Populacao inteira cabe na amostra: nao ha o que estimar.
+        if (totalAgents <= sampleSize)
+            return await query.ToListAsync(cancellationToken);
+
+        // Distribuicao de agentes por site (proxy de cliente/similaridade).
+        var perSite = await query
+            .GroupBy(agent => agent.SiteId)
+            .Select(group => new { SiteId = group.Key, Count = group.Count() })
+            .ToListAsync(cancellationToken);
+
+        if (perSite.Count == 0)
+            return [];
+
+        var result = new List<Agent>(sampleSize);
+        var random = Random.Shared;
+
+        // Aloca por estrato de forma proporcional, com no minimo 1 agente por site,
+        // e sorteia dentro de cada estrato.
+        foreach (var bucket in perSite)
+        {
+            var share = (int)Math.Round((double)bucket.Count / totalAgents * sampleSize);
+            var take = Math.Clamp(share, 1, Math.Min(bucket.Count, sampleSize - result.Count));
+            if (take <= 0)
+                continue;
+
+            var ids = await query
+                .Where(agent => agent.SiteId == bucket.SiteId)
+                .Select(agent => agent.Id)
+                .ToListAsync(cancellationToken);
+
+            // Sorteio sem reposicao (Fisher-Yates parcial).
+            for (var i = 0; i < take && i < ids.Count; i++)
+            {
+                var j = random.Next(i, ids.Count);
+                (ids[i], ids[j]) = (ids[j], ids[i]);
+            }
+
+            var chosen = ids.Take(take).ToList();
+            var picked = await query
+                .Where(agent => chosen.Contains(agent.Id))
+                .ToListAsync(cancellationToken);
+            result.AddRange(picked);
+
+            if (result.Count >= sampleSize)
+                break;
+        }
+
+        // Garante que nao estouramos o tamanho pedido.
+        return result.Count > sampleSize ? result.Take(sampleSize).ToList() : result;
+    }
+
+    /// <summary>
     /// Avalia uma expressao contra uma amostra da frota e extrapola o impacto.
     /// Permite responder "quantos agentes esta regra afetaria?" antes de salvar,
     /// em vez de exigir a escolha de cliente+site e limitar a 25-100 agentes.
@@ -208,11 +273,11 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
 
         var totalAgents = await query.CountAsync(cancellationToken);
 
-        // Amostra deterministica por Id: estavel entre execucoes e barata (sem TABLESAMPLE).
-        var agents = await query
-            .OrderBy(agent => agent.Id)
-            .Take(sampleSize)
-            .ToListAsync(cancellationToken);
+        // Amostra ALEATORIA. Antes era "os primeiros N por Id", o que produzia vies
+        // grave: os Ids sao gerados em ordem de registro, entao a amostra tendia a
+        // concentrar agentes de um mesmo cliente/lote — uma frota heterogenea tinha
+        // a taxa de match estimada errada.
+        var agents = await SampleAgentsAsync(query, sampleSize, totalAgents, cancellationToken);
 
         if (agents.Count == 0)
         {
@@ -366,12 +431,27 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 group => group.Key,
                 group => group.ToDictionary(match => match.RuleId));
 
-        // Estado atual das labels automaticas do lote — 1 query (antes: 1 por agente).
-        var automaticLabelsByAgent = (await _db.AgentLabels
-                .Where(label => agentIds.Contains(label.AgentId) && label.SourceType == AgentLabelSourceType.Automatic)
+        // Todas as labels do lote (automaticas E manuais) — 1 query.
+        // Incluir as manuais e essencial: o indice unico e (agent_id, label) ignorando
+        // a origem, entao uma label manual "PROD" + uma regra que gera "PROD" causava
+        // violacao do indice e derrubava o SaveChanges do lote inteiro.
+        var labelsByAgent = (await _db.AgentLabels
+                .Where(label => agentIds.Contains(label.AgentId))
                 .ToListAsync(cancellationToken))
             .GroupBy(label => label.AgentId)
             .ToDictionary(group => group.Key, group => group.ToList());
+
+        // Labels removidas manualmente que nao devem ser recriadas pelo reconcile.
+        var suppressionsByAgent = (await _db.AgentLabelSuppressions
+                .Where(suppression => agentIds.Contains(suppression.AgentId))
+                .ToListAsync(cancellationToken))
+            .GroupBy(suppression => suppression.AgentId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.ToDictionary(
+                    suppression => suppression.Label,
+                    suppression => suppression,
+                    StringComparer.OrdinalIgnoreCase));
 
         // Regras habilitadas, restrito aos ids que estamos avaliando. Antes a consulta
         // varria a tabela inteira de regras a cada lote; agora e indexada pelos ids do
@@ -400,6 +480,13 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             var existingMatches = existingMatchesByAgent.TryGetValue(agentId, out var agentMatches)
                 ? agentMatches
                 : new Dictionary<Guid, AgentLabelRuleMatch>();
+
+            // Labels cuja condicao e VERDADEIRA nesta avaliacao, independentemente do
+            // ApplyMode. Diferente de effectiveLabelsByRule: em ApplyOnly o match antigo
+            // permanece valido (a label continua aplicada), mas aqui registramos se a
+            // condicao voltou a ser verdadeira agora — informacao necessaria para saber
+            // quando um novo "episodio" da condicao comeca.
+            var currentlyMatchingLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             // Mapa ruleId -> label dos matches EFETIVOS apos esta avaliacao.
             // Precisa ser construido aqui porque:
@@ -437,6 +524,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                     }
 
                     effectiveLabelsByRule[rule.RuleId] = rule.Label;
+                    currentlyMatchingLabels.Add(rule.Label);
                     continue;
                 }
 
@@ -460,7 +548,11 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 agentId,
                 enabledRuleIds,
                 effectiveLabelsByRule,
-                automaticLabelsByAgent.TryGetValue(agentId, out var currentLabels) ? currentLabels : [],
+                labelsByAgent.TryGetValue(agentId, out var currentLabels) ? currentLabels : [],
+                suppressionsByAgent.TryGetValue(agentId, out var suppressions)
+                    ? suppressions
+                    : new Dictionary<string, AgentLabelSuppression>(StringComparer.OrdinalIgnoreCase),
+                currentlyMatchingLabels,
                 now,
                 changes);
         }
@@ -485,7 +577,9 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         Guid agentId,
         IReadOnlySet<Guid> enabledRuleIds,
         IReadOnlyDictionary<Guid, string> effectiveLabelsByRule,
-        IReadOnlyList<AgentLabel> existingAutomaticLabels,
+        IReadOnlyList<AgentLabel> existingLabels,
+        IReadOnlyDictionary<string, AgentLabelSuppression> suppressions,
+        IReadOnlySet<string> currentlyMatchingLabels,
         DateTime now,
         List<AgentLabelChange> changes)
     {
@@ -497,13 +591,39 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             .Where(label => !string.IsNullOrWhiteSpace(label))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var existingSet = existingAutomaticLabels
+        var existingAutomatic = existingLabels
+            .Where(label => label.SourceType == AgentLabelSourceType.Automatic)
+            .ToList();
+
+        // Nomes ja presentes por qualquer origem. Usado para nao tentar inserir uma
+        // label automatica que colida com uma manual do mesmo agente (indice unico).
+        var presentNames = existingLabels
             .Select(label => label.Label)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        // A supressao vale apenas para o EPISODIO ATUAL da condicao: quando a condicao
+        // deixa de ser verdadeira, a supressao e liberada e um novo match futuro volta a
+        // aplicar a label.
+        //
+        // Usar currentlyMatchingLabels (e nao shouldKeep) e essencial para ApplyOnly:
+        // nesse modo o match antigo nunca e removido, entao shouldKeep continuaria
+        // contendo a label para sempre e a supressao nunca seria liberada — a label
+        // nunca voltaria, contrariando o cenario de "HD enche, libera e enche de novo".
+        foreach (var suppression in suppressions.Values)
+        {
+            if (currentlyMatchingLabels.Contains(suppression.Label))
+                continue;
+
+            _db.AgentLabelSuppressions.Remove(suppression);
+        }
+
         foreach (var label in shouldKeep)
         {
-            if (existingSet.Contains(label))
+            // Removida manualmente pelo usuario: respeita a supressao.
+            if (suppressions.ContainsKey(label))
+                continue;
+
+            if (presentNames.Contains(label))
                 continue;
 
             _db.AgentLabels.Add(new AgentLabel
@@ -515,10 +635,13 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 CreatedAt = now,
                 UpdatedAt = now
             });
+            presentNames.Add(label);
             changes.Add(new AgentLabelChange(agentId, label, AgentLabelSourceType.Automatic, "Added"));
         }
 
-        foreach (var label in existingAutomaticLabels)
+        // Remove apenas as labels AUTOMATICAS que deixaram de ser produzidas.
+        // Labels manuais nunca sao removidas pelo motor.
+        foreach (var label in existingAutomatic)
         {
             if (shouldKeep.Contains(label.Label))
                 continue;

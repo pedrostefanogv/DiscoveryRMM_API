@@ -62,6 +62,78 @@ public sealed class GetDistinctLabelsQueryHandler(ILabelService svc)
     }
 }
 
+/// <summary>Labels com contagem de agentes. Permite montar o filtro sem carregar todas as labels.</summary>
+public sealed class GetLabelUsageQueryHandler(ILabelService svc)
+    : IRequestHandler<GetLabelUsageQuery, Result<IReadOnlyList<AgentLabelUsageDto>>>
+{
+    public async Task<Result<IReadOnlyList<AgentLabelUsageDto>>> Handle(GetLabelUsageQuery q, CancellationToken ct)
+    {
+        var usage = await svc.GetLabelUsageAsync(q.Limit, ct);
+        return Result<IReadOnlyList<AgentLabelUsageDto>>.Success(usage);
+    }
+}
+
+/// <summary>
+/// Ids de agentes que possuem uma label, paginados por cursor. Substitui a necessidade
+/// de trazer as labels de toda a frota para a UI filtrar (limite de 500 do lote).
+/// </summary>
+public sealed class GetAgentIdsByLabelQueryHandler(ILabelService svc)
+    : IRequestHandler<GetAgentIdsByLabelQuery, Result<AgentIdsByLabelResponse>>
+{
+    public async Task<Result<AgentIdsByLabelResponse>> Handle(GetAgentIdsByLabelQuery q, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(q.Label))
+            return Result<AgentIdsByLabelResponse>.Failure(Error.Validation("label", "Label is required."));
+
+        var label = q.Label.Trim();
+        var limit = Math.Clamp(q.Limit, 1, 1000);
+
+        var total = await svc.CountAgentsByLabelAsync(label, ct);
+
+        // Busca limit+1 para saber se ha proxima pagina sem uma segunda consulta.
+        var ids = await svc.GetAgentIdsByLabelPagedAsync(label, q.AfterAgentId, limit + 1, ct);
+        var hasMore = ids.Count > limit;
+        var page = hasMore ? ids.Take(limit).ToList() : ids.ToList();
+
+        return Result<AgentIdsByLabelResponse>.Success(new AgentIdsByLabelResponse
+        {
+            Label = label,
+            Total = total,
+            AgentIds = page,
+            NextCursor = hasMore && page.Count > 0 ? page[^1] : null,
+            HasMore = hasMore,
+            Limit = limit
+        });
+    }
+}
+
+/// <summary>Supressoes de labels de um agente (label removida manualmente que o reconcile respeita).</summary>
+public sealed class GetAgentLabelSuppressionsQueryHandler(ILabelService svc)
+    : IRequestHandler<GetAgentLabelSuppressionsQuery, Result<IReadOnlyList<AgentLabelSuppressionDto>>>
+{
+    public async Task<Result<IReadOnlyList<AgentLabelSuppressionDto>>> Handle(GetAgentLabelSuppressionsQuery q, CancellationToken ct)
+    {
+        if (q.AgentId == Guid.Empty)
+            return Result<IReadOnlyList<AgentLabelSuppressionDto>>.Failure(
+                Error.Validation("agentId", "Agent ID is required."));
+
+        var suppressions = await svc.GetSuppressionsByAgentIdAsync(q.AgentId, ct);
+        return Result<IReadOnlyList<AgentLabelSuppressionDto>>.Success(suppressions);
+    }
+}
+
+public sealed class ReleaseAgentLabelSuppressionCommandHandler(ILabelService svc)
+    : IRequestHandler<ReleaseAgentLabelSuppressionCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(ReleaseAgentLabelSuppressionCommand cmd, CancellationToken ct)
+    {
+        var released = await svc.ReleaseSuppressionAsync(cmd.SuppressionId, ct);
+        return released
+            ? Result<VoidResult>.Success(VoidResult.Value)
+            : Result<VoidResult>.Failure(Error.NotFound($"Suppression {cmd.SuppressionId} not found"));
+    }
+}
+
 public sealed class RemoveAgentLabelCommandHandler(ILabelService svc)
     : IRequestHandler<RemoveAgentLabelCommand, Result<VoidResult>>
 {
@@ -69,7 +141,9 @@ public sealed class RemoveAgentLabelCommandHandler(ILabelService svc)
     {
         // Antes o handler devolvia Success mesmo quando a label nao existia
         // (DELETE de id inexistente respondia 204 em vez de 404).
-        var deleted = await svc.DeleteAsync(cmd.LabelId, ct);
+        // Agora tambem registra a supressao quando a label e automatica, para que a
+        // remocao manual seja duradoura (o reconcile nao a recria).
+        var deleted = await svc.DeleteWithSuppressionAsync(cmd.LabelId, cmd.SuppressedBy, ct);
         return deleted
             ? Result<VoidResult>.Success(VoidResult.Value)
             : Result<VoidResult>.Failure(Error.NotFound($"Label {cmd.LabelId} not found"));

@@ -112,6 +112,54 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
+    /// <summary>
+    /// Supressoes de labels de um agente: labels automaticas removidas manualmente que o
+    /// reconcile esta respeitando. Ficam visiveis para o usuario poder libera-las.
+    /// </summary>
+    [HttpGet("agents/{agentId:guid}/suppressions")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetSuppressions(Guid agentId)
+    {
+        var result = await mediator.Send(new GetAgentLabelSuppressionsQuery(agentId));
+        return result.ToActionResult();
+    }
+
+    /// <summary>Libera uma supressao: a label volta a ser aplicada na proxima reconciliacao.</summary>
+    [HttpDelete("suppressions/{suppressionId:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> ReleaseSuppression(Guid suppressionId)
+    {
+        var result = await mediator.Send(new ReleaseAgentLabelSuppressionCommand(suppressionId));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    /// <summary>Labels com a contagem de agentes (filtro da lista de agentes).</summary>
+    [HttpGet("usage")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetUsage([FromQuery] int limit = 200)
+    {
+        var result = await mediator.Send(new GetLabelUsageQuery(limit));
+        return result.ToActionResult();
+    }
+
+    /// <summary>Ids de agentes que possuem uma label, paginados por cursor.</summary>
+    [HttpGet("agents-by-label")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetAgentsByLabel(
+        [FromQuery] string label,
+        [FromQuery] Guid? afterAgentId = null,
+        [FromQuery] int limit = 500)
+    {
+        var result = await mediator.Send(new GetAgentIdsByLabelQuery(label, afterAgentId, limit));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
     [HttpGet("distinct")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetDistinct()

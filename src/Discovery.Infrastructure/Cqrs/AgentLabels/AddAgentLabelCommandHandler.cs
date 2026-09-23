@@ -30,7 +30,7 @@ public sealed class AddAgentLabelCommandHandler(ILabelService svc) : IRequestHan
 
         try
         {
-            var created = await svc.AddAsync(new AgentLabel
+            var created = await svc.AddWithSuppressionClearAsync(new AgentLabel
             {
                 AgentId = cmd.AgentId,
                 Label = label,

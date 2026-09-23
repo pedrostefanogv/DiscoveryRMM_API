@@ -299,6 +299,16 @@ public class AgentLabelRegressionTests
         public Task<AgentLabel?> GetByIdAsync(Guid id) => Task.FromResult<AgentLabel?>(null);
         public Task<AgentLabel> AddAsync(AgentLabel label) => Task.FromResult(label);
         public Task DeleteAsync(Guid id) => Task.CompletedTask;
+        public Task SuppressAutomaticLabelAsync(Guid agentId, string label, string? suppressedBy, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ClearSuppressionAsync(Guid agentId, string label, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelSuppressionDto>>([]);
+        public Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default) => Task.FromResult(true);
+        public Task<IReadOnlyList<Guid>> GetAgentIdsByLabelPagedAsync(string label, Guid? afterAgentId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Guid>>([]);
+        public Task<int> CountAgentsByLabelAsync(string label, CancellationToken ct = default) => Task.FromResult(0);
+        public Task<IReadOnlyList<AgentLabelUsageDto>> GetLabelUsageAsync(int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelUsageDto>>([]);
     }
 
     private sealed class StubAgentLabelRuleRepository : IAgentLabelRuleRepository
@@ -326,7 +336,18 @@ public class AgentLabelRegressionTests
             => Task.FromResult<AgentLabel?>(null);
         public Task<AgentLabel> AddAsync(AgentLabel label, CancellationToken ct = default)
             => Task.FromResult(label);
+        public Task<AgentLabel> AddWithSuppressionClearAsync(AgentLabel label, CancellationToken ct = default)
+            => Task.FromResult(label);
         public Task<bool> DeleteAsync(Guid id, CancellationToken ct = default) => Task.FromResult(DeleteResult);
+        public Task<bool> DeleteWithSuppressionAsync(Guid id, string? suppressedBy, CancellationToken ct = default) => Task.FromResult(DeleteResult);
+        public Task<IReadOnlyList<Guid>> GetAgentIdsByLabelPagedAsync(string label, Guid? afterAgentId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Guid>>([]);
+        public Task<int> CountAgentsByLabelAsync(string label, CancellationToken ct = default) => Task.FromResult(0);
+        public Task<IReadOnlyList<AgentLabelUsageDto>> GetLabelUsageAsync(int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelUsageDto>>([]);
+        public Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelSuppressionDto>>([]);
+        public Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default) => Task.FromResult(true);
 
         public Task<IReadOnlyList<AgentLabelRule>> GetRulesAsync(bool includeDisabled = true, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelRule>>([]);

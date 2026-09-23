@@ -11,9 +11,20 @@ namespace Discovery.Api.Services;
 /// returns immediately while the batch runs async. Tambem mantem o progresso
 /// consultavel por jobId — antes o endpoint apenas dizia "iniciado" e nao havia
 /// como saber se o trabalho terminou ou quanto falta.
+///
+/// <para>
+/// IMPORTANTE (deploy multi-instancia): o estado dos jobs vive em memoria e e,
+/// portanto, POR INSTANCIA. Com mais de uma replica da API, um
+/// <c>GET /agent-labels/reprocess/{jobId}</c> pode cair em outra replica e responder
+/// 404 mesmo com o job em andamento. O deploy atual e de instancia unica, entao o
+/// comportamento e correto; se um dia houver replicas, mover este estado para o Redis
+/// (ver <see cref="Discovery.Core.Interfaces.IRedisService"/>) e o caminho natural —
+/// a fila em si ja e idempotente e continua funcionando.
+/// </para>
 /// </summary>
 public sealed class LabelReprocessBackgroundService : BackgroundService, ILabelReprocessQueue
 {
+    /// <summary>Quantos jobs concluidos manter em memoria (por instancia).</summary>
     private const int MaxTrackedJobs = 50;
 
     private readonly Channel<string> _queue = Channel.CreateUnbounded<string>();

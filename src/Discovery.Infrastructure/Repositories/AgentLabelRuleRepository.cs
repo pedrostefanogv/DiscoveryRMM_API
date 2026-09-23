@@ -59,16 +59,35 @@ public class AgentLabelRuleRepository : IAgentLabelRuleRepository
         if (existing is null)
             return;
 
-        existing.Name = rule.Name;
-        existing.Label = rule.Label;
-        existing.Description = rule.Description;
-        existing.IsEnabled = rule.IsEnabled;
-        existing.ApplyMode = rule.ApplyMode;
-        existing.ExpressionJson = rule.ExpressionJson;
-        existing.UpdatedBy = rule.UpdatedBy;
+        Apply(existing, rule);
         existing.UpdatedAt = DateTime.UtcNow;
 
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Concorrencia otimista (xmin): outro processo alterou a regra entre a
+            // leitura e a escrita. Antes isso era um lost update silencioso; agora a
+            // disputa e detectada. Recarrega e reaplica uma vez para convergir, mas
+            // preserva o UpdatedBy/UpdatedAt do autor mais recente.
+            await _db.Entry(existing).ReloadAsync();
+            Apply(existing, rule);
+            existing.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+        }
+    }
+
+    private static void Apply(AgentLabelRule target, AgentLabelRule source)
+    {
+        target.Name = source.Name;
+        target.Label = source.Label;
+        target.Description = source.Description;
+        target.IsEnabled = source.IsEnabled;
+        target.ApplyMode = source.ApplyMode;
+        target.ExpressionJson = source.ExpressionJson;
+        target.UpdatedBy = source.UpdatedBy;
     }
 
     public async Task DeleteAsync(Guid id)

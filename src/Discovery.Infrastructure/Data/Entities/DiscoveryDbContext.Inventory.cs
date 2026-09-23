@@ -134,6 +134,10 @@ public partial class DiscoveryDbContext
             entity.Property(rule => rule.UpdatedBy).HasColumnName("updated_by").HasMaxLength(256);
             entity.Property(rule => rule.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(rule => rule.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+
+            // Concorrencia otimista: xmin e a versao de linha do Postgres. Sem isso,
+            // duas edicoes concorrentes da mesma regra viravam lost update silencioso.
+            entity.Property<uint>("xmin").HasColumnName("xmin").HasColumnType("xid").IsRowVersion();
         });
 
         modelBuilder.Entity<AgentLabel>(entity =>
@@ -206,6 +210,26 @@ public partial class DiscoveryDbContext
             entity.HasOne<Agent>()
                 .WithMany()
                 .HasForeignKey(log => log.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentLabelSuppression>(entity =>
+        {
+            entity.ToTable("agent_label_suppressions");
+            entity.HasKey(suppression => suppression.Id);
+            entity.HasIndex(suppression => new { suppression.AgentId, suppression.Label })
+                .IsUnique()
+                .HasDatabaseName("ux_agent_label_suppressions_agent_label");
+
+            entity.Property(suppression => suppression.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(suppression => suppression.AgentId).HasColumnName("agent_id");
+            entity.Property(suppression => suppression.Label).HasColumnName("label").HasMaxLength(120);
+            entity.Property(suppression => suppression.SuppressedAt).HasColumnName("suppressed_at").HasColumnType("timestamptz");
+            entity.Property(suppression => suppression.SuppressedBy).HasColumnName("suppressed_by").HasMaxLength(256);
+
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(suppression => suppression.AgentId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }
