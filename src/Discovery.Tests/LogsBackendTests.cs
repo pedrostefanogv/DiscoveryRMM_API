@@ -27,7 +27,7 @@ public class LogsBackendTests
         var siteExplicit = CreateSite(clientBlocked.Id, "Explicit Site");
         var siteBlocked = CreateSite(clientBlocked.Id, "Blocked Site");
 
-        var matchingClientLog = CreateLog(clientAllowed.Id, siteAllowed.Id, null, "alpha failure", "{\"traceId\":\"trace-alpha\"}");
+        var matchingClientLog = CreateLog(clientAllowed.Id, siteAllowed.Id, null, "alpha failure", "{\"TraceId\":\"trace-alpha\"}");
         var matchingSiteLog = CreateLog(clientBlocked.Id, siteExplicit.Id, null, "boring message", "{\"context\":\"needle\"}");
         var blockedLog = CreateLog(clientBlocked.Id, siteBlocked.Id, null, "needle but blocked", null);
 
@@ -65,13 +65,13 @@ public class LogsBackendTests
             site.Id,
             null,
             "GET /api/v1/search retornou 500",
-            "{\"traceId\":\"trace-123\",\"correlationId\":\"corr-55\",\"path\":\"/api/v1/search\",\"statusCode\":500}");
+            "{\"TraceId\":\"trace-123\",\"CorrelationId\":\"corr-55\",\"Path\":\"/api/v1/search\",\"StatusCode\":500}");
         var ignored = CreateLog(
             client.Id,
             site.Id,
             null,
             "GET /api/v1/search retornou 404",
-            "{\"traceId\":\"trace-999\",\"correlationId\":\"corr-99\",\"path\":\"/api/v1/search\",\"statusCode\":404}");
+            "{\"TraceId\":\"trace-999\",\"CorrelationId\":\"corr-99\",\"Path\":\"/api/v1/search\",\"StatusCode\":404}");
 
         db.Logs.AddRange(expected, ignored);
         await db.SaveChangesAsync();
@@ -100,8 +100,8 @@ public class LogsBackendTests
         db.Clients.Add(client);
         db.Sites.Add(site);
 
-        var exact = CreateLog(client.Id, site.Id, null, "exato", "{\"traceId\":\"trace-123\"}");
-        var partial = CreateLog(client.Id, site.Id, null, "parcial", "{\"traceId\":\"trace-1234\"}");
+        var exact = CreateLog(client.Id, site.Id, null, "exato", "{\"TraceId\":\"trace-123\"}");
+        var partial = CreateLog(client.Id, site.Id, null, "parcial", "{\"TraceId\":\"trace-1234\"}");
         db.Logs.AddRange(exact, partial);
         await db.SaveChangesAsync();
 
@@ -162,9 +162,9 @@ public class LogsBackendTests
         db.Sites.Add(site);
 
         var now = DateTime.UtcNow;
-        var expected = CreateLog(client.Id, site.Id, null, "GET /api/v1/search 500", "{\"traceId\":\"trace-abc\",\"statusCode\":500}", now.AddMinutes(-5));
-        var older = CreateLog(client.Id, site.Id, null, "GET /api/v1/search 500", "{\"traceId\":\"trace-abc\",\"statusCode\":500}", now.AddHours(-3));
-        var wrongStatus = CreateLog(client.Id, site.Id, null, "GET /api/v1/search 404", "{\"traceId\":\"trace-abc\",\"statusCode\":404}", now.AddMinutes(-5));
+        var expected = CreateLog(client.Id, site.Id, null, "GET /api/v1/search 500", "{\"TraceId\":\"trace-abc\",\"StatusCode\":500}", now.AddMinutes(-5));
+        var older = CreateLog(client.Id, site.Id, null, "GET /api/v1/search 500", "{\"TraceId\":\"trace-abc\",\"StatusCode\":500}", now.AddHours(-3));
+        var wrongStatus = CreateLog(client.Id, site.Id, null, "GET /api/v1/search 404", "{\"TraceId\":\"trace-abc\",\"StatusCode\":404}", now.AddMinutes(-5));
 
         db.Logs.AddRange(expected, older, wrongStatus);
         await db.SaveChangesAsync();

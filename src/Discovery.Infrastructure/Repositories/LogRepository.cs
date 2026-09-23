@@ -239,13 +239,19 @@ public class LogRepository : ILogRepository
         // exato de chave-valor no texto.
         var useJsonb = _db.Database.IsNpgsql();
 
+        // As chaves gravadas em data_json são PascalCase (JsonSerializer.Serialize
+        // sem política de nomes), mas aceitamos também camelCase como defesa.
         if (!string.IsNullOrWhiteSpace(query.TraceId))
         {
             var traceId = query.TraceId.Trim();
             if (useJsonb)
             {
-                var document = JsonPairDocument("traceId", traceId);
-                logQuery = logQuery.Where(log => log.DataJson != null && EF.Functions.JsonContains(log.DataJson, document));
+                var pascal = JsonPairDocument("TraceId", traceId);
+                var camel = JsonPairDocument("traceId", traceId);
+                logQuery = logQuery.Where(log =>
+                    log.DataJson != null &&
+                    (EF.Functions.JsonContains(log.DataJson, pascal) ||
+                     EF.Functions.JsonContains(log.DataJson, camel)));
             }
             else
             {
@@ -257,8 +263,12 @@ public class LogRepository : ILogRepository
             var correlationId = query.CorrelationId.Trim();
             if (useJsonb)
             {
-                var document = JsonPairDocument("correlationId", correlationId);
-                logQuery = logQuery.Where(log => log.DataJson != null && EF.Functions.JsonContains(log.DataJson, document));
+                var pascal = JsonPairDocument("CorrelationId", correlationId);
+                var camel = JsonPairDocument("correlationId", correlationId);
+                logQuery = logQuery.Where(log =>
+                    log.DataJson != null &&
+                    (EF.Functions.JsonContains(log.DataJson, pascal) ||
+                     EF.Functions.JsonContains(log.DataJson, camel)));
             }
             else
             {
@@ -271,13 +281,17 @@ public class LogRepository : ILogRepository
             var lowerPath = requestPath.ToLowerInvariant();
             if (useJsonb)
             {
-                var pathDocument = JsonPairDocument("path", requestPath);
-                var requestPathDocument = JsonPairDocument("requestPath", requestPath);
+                var pathPascal = JsonPairDocument("Path", requestPath);
+                var requestPathPascal = JsonPairDocument("RequestPath", requestPath);
+                var pathCamel = JsonPairDocument("path", requestPath);
+                var requestPathCamel = JsonPairDocument("requestPath", requestPath);
                 logQuery = logQuery.Where(log =>
                     log.Message.ToLower().Contains(lowerPath) ||
                     (log.DataJson != null &&
-                     (EF.Functions.JsonContains(log.DataJson, pathDocument) ||
-                      EF.Functions.JsonContains(log.DataJson, requestPathDocument))));
+                     (EF.Functions.JsonContains(log.DataJson, pathPascal) ||
+                      EF.Functions.JsonContains(log.DataJson, requestPathPascal) ||
+                      EF.Functions.JsonContains(log.DataJson, pathCamel) ||
+                      EF.Functions.JsonContains(log.DataJson, requestPathCamel))));
             }
             else
             {
@@ -293,8 +307,12 @@ public class LogRepository : ILogRepository
             var statusCode = query.StatusCode.Value;
             if (useJsonb)
             {
-                var document = "{\"statusCode\":" + statusCode + "}";
-                logQuery = logQuery.Where(log => log.DataJson != null && EF.Functions.JsonContains(log.DataJson, document));
+                var pascal = "{\"StatusCode\":" + statusCode + "}";
+                var camel = "{\"statusCode\":" + statusCode + "}";
+                logQuery = logQuery.Where(log =>
+                    log.DataJson != null &&
+                    (EF.Functions.JsonContains(log.DataJson, pascal) ||
+                     EF.Functions.JsonContains(log.DataJson, camel)));
             }
             else
             {

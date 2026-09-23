@@ -117,6 +117,7 @@ public class SoftwareCommandHandlerTests
         public Task<IEnumerable<Site>> GetByClientIdAsync(Guid clientId, bool includeInactive = false) => throw new NotSupportedException();
         public Task<IEnumerable<Site>> GetByClientIdsAsync(IEnumerable<Guid> clientIds, bool includeInactive = false) => throw new NotSupportedException();
         public Task<IEnumerable<Site>> GetAllAsync(bool includeInactive = false) => throw new NotSupportedException();
+        public Task<IEnumerable<Site>> GetByIdsAsync(IEnumerable<Guid> siteIds, bool includeInactive = false) => throw new NotSupportedException();
         public Task<Site> CreateAsync(Site site) => throw new NotSupportedException();
         public Task UpdateAsync(Site site) => throw new NotSupportedException();
         public Task DeleteAsync(Guid id) => throw new NotSupportedException();

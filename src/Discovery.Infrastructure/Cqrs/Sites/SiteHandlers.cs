@@ -23,28 +23,59 @@ public sealed class GetSitesByClientQueryHandler(
 
 public sealed class GetAllSitesQueryHandler(
     ISiteRepository repo,
+    IClientRepository clientRepo,
     IScopeContext scopeContext
-) : IRequestHandler<GetAllSitesQuery, Result<IReadOnlyList<Site>>>
+) : IRequestHandler<GetAllSitesQuery, Result<IReadOnlyList<SiteWithClientDto>>>
 {
-    public async Task<Result<IReadOnlyList<Site>>> Handle(GetAllSitesQuery q, CancellationToken ct)
+    public async Task<Result<IReadOnlyList<SiteWithClientDto>>> Handle(GetAllSitesQuery q, CancellationToken ct)
     {
         var scope = await scopeContext.GetAccessAsync(ResourceType.Sites, ActionType.View);
 
-        IEnumerable<Site> sites;
+        List<Site> sites;
         if (scope.HasGlobalAccess)
         {
-            sites = await repo.GetAllAsync(q.IncludeInactive);
-        }
-        else if (scope.AllowedClientIds.Count > 0)
-        {
-            sites = await repo.GetByClientIdsAsync(scope.AllowedClientIds, q.IncludeInactive);
+            sites = (await repo.GetAllAsync(q.IncludeInactive)).ToList();
         }
         else
         {
+            // Acesso pode ser por cliente ou apenas por sites específicos: une as
+            // duas origens e remove duplicatas.
             sites = [];
+            if (scope.AllowedClientIds.Count > 0)
+                sites.AddRange(await repo.GetByClientIdsAsync(scope.AllowedClientIds, q.IncludeInactive));
+            if (scope.AllowedSiteIds.Count > 0)
+                sites.AddRange(await repo.GetByIdsAsync(scope.AllowedSiteIds, q.IncludeInactive));
         }
 
-        return Result<IReadOnlyList<Site>>.Success(sites.ToList());
+        var distinct = sites
+            .GroupBy(site => site.Id)
+            .Select(group => group.First())
+            .OrderBy(site => site.Name)
+            .ToList();
+
+        // Resolve nome/estado do cliente no servidor (o usuário pode não ter
+        // permissão de listar clientes).
+        var clientMap = (await clientRepo.GetAllAsync(includeInactive: true))
+            .ToDictionary(client => client.Id);
+
+        var result = distinct
+            .Select(site =>
+            {
+                clientMap.TryGetValue(site.ClientId, out var client);
+                return new SiteWithClientDto(
+                    site.Id,
+                    site.ClientId,
+                    site.Name,
+                    site.Notes,
+                    site.IsActive,
+                    site.CreatedAt,
+                    site.UpdatedAt,
+                    client?.Name,
+                    client?.IsActive ?? true);
+            })
+            .ToList();
+
+        return Result<IReadOnlyList<SiteWithClientDto>>.Success(result);
     }
 }
 

@@ -512,6 +512,16 @@ public class CustomFieldServiceTests
             return Task.FromResult<IEnumerable<Site>>(query.ToList());
         }
 
+        public Task<IEnumerable<Site>> GetByIdsAsync(IEnumerable<Guid> siteIds, bool includeInactive = false)
+        {
+            var ids = siteIds.ToArray();
+            var query = db.Sites.AsNoTracking().Where(item => ids.Contains(item.Id));
+            if (!includeInactive)
+                query = query.Where(item => item.IsActive);
+
+            return Task.FromResult<IEnumerable<Site>>(query.ToList());
+        }
+
         public Task<Site> CreateAsync(Site site) => throw new NotSupportedException();
         public Task UpdateAsync(Site site) => throw new NotSupportedException();
         public Task DeleteAsync(Guid id) => throw new NotSupportedException();
