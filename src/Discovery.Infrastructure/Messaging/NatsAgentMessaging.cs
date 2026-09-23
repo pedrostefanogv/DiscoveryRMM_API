@@ -8,6 +8,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NATS.Client.Core;
@@ -36,7 +37,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private readonly IAgentAuthService _agentAuthService;
     private readonly IHeartbeatCacheService _heartbeatCache;
     private readonly IAgentHardwareRepository _hardwareRepo;
-    private readonly IAutomationExecutionReportRepository _automationReportRepo;
+    // Resolvido por escopo (não por construtor): AutomationExecutionReportRepository
+    // depende de IAgentMessaging; injetá-lo aqui criaria dependência circular.
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly DashboardEventContractNormalizer _contractNormalizer;
     private readonly ILogger<NatsAgentMessaging> _logger;
     private readonly IOptionsMonitor<NatsGlobalPongOptions> _globalPongOptions;
@@ -57,7 +60,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         IAgentAuthService agentAuthService,
         IHeartbeatCacheService heartbeatCache,
         IAgentHardwareRepository hardwareRepo,
-        IAutomationExecutionReportRepository automationReportRepo,
+        IServiceScopeFactory scopeFactory,
         DashboardEventContractNormalizer contractNormalizer,
         IOptionsMonitor<NatsGlobalPongOptions> globalPongOptions,
         ILogger<NatsAgentMessaging> logger)
@@ -69,7 +72,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         _agentAuthService = agentAuthService;
         _heartbeatCache = heartbeatCache;
         _hardwareRepo = hardwareRepo;
-        _automationReportRepo = automationReportRepo;
+        _scopeFactory = scopeFactory;
         _contractNormalizer = contractNormalizer;
         _globalPongOptions = globalPongOptions;
         _logger = logger;
@@ -79,6 +82,32 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     /// Verifica que o agent possui ao menos um token ativo.
     /// Defesa contra spoofing via NATS: mensagens de AgentIds sem token válido são descartadas.
     /// </summary>
+    /// <summary>
+    /// Atualiza o report de execução (update/uninstall de software e automação)
+    /// com o resultado do agent. Resolve o repositório em um escopo próprio porque
+    /// AutomationExecutionReportRepository depende de IAgentMessaging — injetá-lo
+    /// no construtor criaria uma dependência circular.
+    /// </summary>
+    private async Task UpdateAutomationAuditAsync(CommandResultMessage result)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var reportRepo = scope.ServiceProvider.GetRequiredService<IAutomationExecutionReportRepository>();
+            await reportRepo.UpdateResultFromCommandAsync(
+                result.CommandId,
+                result.ExitCode == 0,
+                result.ExitCode,
+                result.ErrorMessage,
+                result.Output,
+                DateTime.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Falha ao atualizar auditoria do comando {CommandId}", result.CommandId);
+        }
+    }
+
     private async Task<bool> IsAgentAuthorizedAsync(Guid agentId)
     {
         // Cache local (TTL 30s) para evitar DB/Redis hit por heartbeat em alta carga.
@@ -397,16 +426,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                         var status = result.ExitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
                         await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
 
-                        // Auditoria por execução: atualiza o report (update/uninstall de
-                        // software e automação) com o resultado do agent. No-op quando
-                        // não há report ou o resultado já foi aplicado.
-                        await _automationReportRepo.UpdateResultFromCommandAsync(
-                            result.CommandId,
-                            result.ExitCode == 0,
-                            result.ExitCode,
-                            result.ErrorMessage,
-                            result.Output,
-                            DateTime.UtcNow);
+                        // Auditoria por execução (resolve por escopo para não criar
+                        // dependência circular de DI).
+                        await UpdateAutomationAuditAsync(result);
 
                         // Publica dashboard event com dispatchId para agregacao de campanha (contrato secao 2.3).
                         var resultData = new

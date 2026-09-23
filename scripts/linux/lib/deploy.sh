@@ -534,9 +534,24 @@ wait_for_discovery_api_ready() {
 # `current` capturado antes do restart) e reinicia novamente. Retorna 1 em
 # falha (com rollback ja aplicado) — o chamador decide abortar ou seguir.
 restart_api_with_rollback() {
-  local previous_release=""
+  # ATENCAO: publish_api troca o symlink `current` para a release NOVA antes
+  # deste restart. Usar `current` como "release anterior" fazia o rollback
+  # re-apontar para a propria release quebrada. O alvo correto e a release mais
+  # recente do diretorio de releases que nao seja a atual.
+  local current_release=""
   if [[ -L "${DISCOVERY_API_CURRENT:-}" ]]; then
-    previous_release="$(readlink -f "$DISCOVERY_API_CURRENT" 2>/dev/null || true)"
+    current_release="$(readlink -f "$DISCOVERY_API_CURRENT" 2>/dev/null || true)"
+  fi
+
+  local previous_release=""
+  local releases_root
+  releases_root="$(dirname "${current_release:-${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}}")"
+  if [[ -n "$current_release" && -d "$releases_root" ]]; then
+    local previous_candidate
+    previous_candidate="$(find "$releases_root" -mindepth 1 -maxdepth 1 -type d ! -path "$current_release" -printf '%f\n' 2>/dev/null | sort | tail -n 1 || true)"
+    if [[ -n "$previous_candidate" ]]; then
+      previous_release="$releases_root/$previous_candidate"
+    fi
   fi
 
   if ! sudo systemctl restart discovery-api; then
