@@ -91,6 +91,32 @@ public class LogsBackendTests
     }
 
     [Test]
+    public async Task QueryPageAsync_ShouldNotMatchPartialJsonValues()
+    {
+        await using var db = CreateDbContext();
+
+        var client = CreateClient("Client A");
+        var site = CreateSite(client.Id, "Site A");
+        db.Clients.Add(client);
+        db.Sites.Add(site);
+
+        var exact = CreateLog(client.Id, site.Id, null, "exato", "{\"traceId\":\"trace-123\"}");
+        var partial = CreateLog(client.Id, site.Id, null, "parcial", "{\"traceId\":\"trace-1234\"}");
+        db.Logs.AddRange(exact, partial);
+        await db.SaveChangesAsync();
+
+        var repository = new LogRepository(db, new FakeAgentMessaging(), NullLogger<LogRepository>.Instance);
+        var results = await repository.QueryPageAsync(new LogQuery
+        {
+            HasGlobalAccess = true,
+            TraceId = "trace-123",
+            Limit = 10
+        });
+
+        Assert.That(results.Select(log => log.Id), Is.EquivalentTo(new[] { exact.Id }));
+    }
+
+    [Test]
     public async Task ListLogsQueryHandler_ShouldRespectScopeAndReturnPage()
     {
         await using var db = CreateDbContext();
@@ -123,6 +149,41 @@ public class LogsBackendTests
         var page = result.Value!;
         Assert.That(page.Items.Select(log => log.Id), Is.EquivalentTo(new[] { matchingLog.Id }));
         Assert.That(page.ReturnedItems, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ListLogsQueryHandler_ShouldApplyStructuredAndDateFilters()
+    {
+        await using var db = CreateDbContext();
+
+        var client = CreateClient("Client A");
+        var site = CreateSite(client.Id, "Site A");
+        db.Clients.Add(client);
+        db.Sites.Add(site);
+
+        var now = DateTime.UtcNow;
+        var expected = CreateLog(client.Id, site.Id, null, "GET /api/v1/search 500", "{\"traceId\":\"trace-abc\",\"statusCode\":500}", now.AddMinutes(-5));
+        var older = CreateLog(client.Id, site.Id, null, "GET /api/v1/search 500", "{\"traceId\":\"trace-abc\",\"statusCode\":500}", now.AddHours(-3));
+        var wrongStatus = CreateLog(client.Id, site.Id, null, "GET /api/v1/search 404", "{\"traceId\":\"trace-abc\",\"statusCode\":404}", now.AddMinutes(-5));
+
+        db.Logs.AddRange(expected, older, wrongStatus);
+        await db.SaveChangesAsync();
+
+        var repository = new LogRepository(db, new FakeAgentMessaging(), NullLogger<LogRepository>.Instance);
+        var scopeContext = new FakeScopeContext(new UserScopeAccess
+        {
+            HasGlobalAccess = true,
+            AllowedClientIds = [],
+            AllowedSiteIds = []
+        });
+
+        var handler = new ListLogsQueryHandler(repository, scopeContext);
+        var result = await handler.Handle(
+            new ListLogsQuery(TraceId: "trace-abc", StatusCode: 500, From: now.AddMinutes(-10), Limit: 50),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.Items.Select(log => log.Id), Is.EquivalentTo(new[] { expected.Id }));
     }
 
     private static DiscoveryDbContext CreateDbContext()

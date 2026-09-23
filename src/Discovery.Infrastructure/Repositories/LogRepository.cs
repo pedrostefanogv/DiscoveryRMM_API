@@ -166,6 +166,24 @@ public class LogRepository : ILogRepository
             .ExecuteDeleteAsync();
     }
 
+    private static string JsonPairDocument(string key, string value) =>
+        "{\"" + key + "\":" + System.Text.Json.JsonSerializer.Serialize(value) + "}";
+
+    /// <summary>
+    /// Match exato de chave-valor (com e sem espaço após ':') para providers sem
+    /// jsonb — evita falso positivo de substring em valores parciais.
+    /// </summary>
+    private static bool MatchesJsonString(string? dataJson, string key, string value)
+    {
+        if (string.IsNullOrEmpty(dataJson))
+            return false;
+
+        var lower = dataJson.ToLowerInvariant();
+        var lowerValue = value.ToLowerInvariant();
+        return lower.Contains("\"" + key + "\":\"" + lowerValue + "\"") ||
+               lower.Contains("\"" + key + "\": \"" + lowerValue + "\"");
+    }
+
     private IQueryable<LogEntry> BuildFilteredQuery(LogQuery query)
     {
         IQueryable<LogEntry> logQuery = _db.Logs.AsNoTracking();
@@ -215,39 +233,78 @@ public class LogRepository : ILogRepository
                 log.Message.ToLower().Contains(search) ||
                 (log.DataJson != null && log.DataJson.ToLower().Contains(search)));
         }
+        // Filtros sobre data_json: no Postgres usamos contenção jsonb (@>), que
+        // compara chave/valor exatos — evita o falso positivo do match por
+        // substring. Providers sem jsonb (ex.: InMemory nos testes) usam match
+        // exato de chave-valor no texto.
+        var useJsonb = _db.Database.IsNpgsql();
+
         if (!string.IsNullOrWhiteSpace(query.TraceId))
         {
-            var traceId = query.TraceId.Trim().ToLowerInvariant();
-            logQuery = logQuery.Where(log =>
-                log.DataJson != null &&
-                log.DataJson.ToLower().Contains("\"traceid\"") &&
-                log.DataJson.ToLower().Contains(traceId));
+            var traceId = query.TraceId.Trim();
+            if (useJsonb)
+            {
+                var document = JsonPairDocument("traceId", traceId);
+                logQuery = logQuery.Where(log => log.DataJson != null && EF.Functions.JsonContains(log.DataJson, document));
+            }
+            else
+            {
+                logQuery = logQuery.Where(log => MatchesJsonString(log.DataJson, "traceid", traceId));
+            }
         }
         if (!string.IsNullOrWhiteSpace(query.CorrelationId))
         {
-            var correlationId = query.CorrelationId.Trim().ToLowerInvariant();
-            logQuery = logQuery.Where(log =>
-                log.DataJson != null &&
-                log.DataJson.ToLower().Contains("\"correlationid\"") &&
-                log.DataJson.ToLower().Contains(correlationId));
+            var correlationId = query.CorrelationId.Trim();
+            if (useJsonb)
+            {
+                var document = JsonPairDocument("correlationId", correlationId);
+                logQuery = logQuery.Where(log => log.DataJson != null && EF.Functions.JsonContains(log.DataJson, document));
+            }
+            else
+            {
+                logQuery = logQuery.Where(log => MatchesJsonString(log.DataJson, "correlationid", correlationId));
+            }
         }
         if (!string.IsNullOrWhiteSpace(query.RequestPath))
         {
-            var requestPath = query.RequestPath.Trim().ToLowerInvariant();
-            logQuery = logQuery.Where(log =>
-                log.Message.ToLower().Contains(requestPath) ||
-                (log.DataJson != null &&
-                 ((log.DataJson.ToLower().Contains("\"path\"") || log.DataJson.ToLower().Contains("\"requestpath\"")) &&
-                  log.DataJson.ToLower().Contains(requestPath))));
+            var requestPath = query.RequestPath.Trim();
+            var lowerPath = requestPath.ToLowerInvariant();
+            if (useJsonb)
+            {
+                var pathDocument = JsonPairDocument("path", requestPath);
+                var requestPathDocument = JsonPairDocument("requestPath", requestPath);
+                logQuery = logQuery.Where(log =>
+                    log.Message.ToLower().Contains(lowerPath) ||
+                    (log.DataJson != null &&
+                     (EF.Functions.JsonContains(log.DataJson, pathDocument) ||
+                      EF.Functions.JsonContains(log.DataJson, requestPathDocument))));
+            }
+            else
+            {
+                logQuery = logQuery.Where(log =>
+                    log.Message.ToLower().Contains(lowerPath) ||
+                    (log.DataJson != null &&
+                     (MatchesJsonString(log.DataJson, "path", requestPath) ||
+                      MatchesJsonString(log.DataJson, "requestpath", requestPath))));
+            }
         }
         if (query.StatusCode.HasValue)
         {
-            var statusCodeNeedle = $"\"statuscode\":{query.StatusCode.Value}";
-            var statusCodeNeedleWithSpace = $"\"statuscode\": {query.StatusCode.Value}";
-            logQuery = logQuery.Where(log =>
-                log.DataJson != null &&
-                (log.DataJson.ToLower().Contains(statusCodeNeedle) ||
-                 log.DataJson.ToLower().Contains(statusCodeNeedleWithSpace)));
+            var statusCode = query.StatusCode.Value;
+            if (useJsonb)
+            {
+                var document = "{\"statusCode\":" + statusCode + "}";
+                logQuery = logQuery.Where(log => log.DataJson != null && EF.Functions.JsonContains(log.DataJson, document));
+            }
+            else
+            {
+                var statusCodeNeedle = "\"statuscode\":" + statusCode;
+                var statusCodeNeedleWithSpace = "\"statuscode\": " + statusCode;
+                logQuery = logQuery.Where(log =>
+                    log.DataJson != null &&
+                    (log.DataJson.ToLower().Contains(statusCodeNeedle) ||
+                     log.DataJson.ToLower().Contains(statusCodeNeedleWithSpace)));
+            }
         }
         if (query.From.HasValue)
             logQuery = logQuery.Where(log => log.CreatedAt >= query.From.Value);

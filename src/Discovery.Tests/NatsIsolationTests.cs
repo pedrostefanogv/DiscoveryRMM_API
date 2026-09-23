@@ -556,6 +556,8 @@ public class NatsIsolationTests
 
         public Task<IEnumerable<Site>> GetByClientIdsAsync(IEnumerable<Guid> clientIds, bool includeInactive = false) => throw new NotImplementedException();
 
+        public Task<IEnumerable<Site>> GetAllAsync(bool includeInactive = false) => throw new NotImplementedException();
+
         public Task<Site> CreateAsync(Site s) => throw new NotImplementedException();
         public Task UpdateAsync(Site s) => throw new NotImplementedException();
         public Task DeleteAsync(Guid id) => throw new NotImplementedException();

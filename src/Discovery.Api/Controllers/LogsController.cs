@@ -42,10 +42,17 @@ public class LogsController(IMediator mediator) : ControllerBase
         [FromQuery] int? type = null,
         [FromQuery] int? source = null,
         [FromQuery] string? period = null,
-        [FromQuery] string? search = null)
+        [FromQuery] string? search = null,
+        [FromQuery] string? traceId = null,
+        [FromQuery] string? correlationId = null,
+        [FromQuery] string? requestPath = null,
+        [FromQuery] int? statusCode = null,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null)
     {
         var result = await mediator.Send(new ListLogsQuery(
-            agentId, siteId, clientId, cursor, limit, level, type, source, period, search));
+            agentId, siteId, clientId, cursor, limit, level, type, source, period, search,
+            traceId, correlationId, requestPath, statusCode, from, to));
         return result.ToActionResult();
     }
 
@@ -62,10 +69,17 @@ public class LogsController(IMediator mediator) : ControllerBase
         [FromQuery] int? source = null,
         [FromQuery] string? period = null,
         [FromQuery] string? search = null,
-        [FromQuery] int limit = 50)
+        [FromQuery] int limit = 50,
+        [FromQuery] string? traceId = null,
+        [FromQuery] string? correlationId = null,
+        [FromQuery] string? requestPath = null,
+        [FromQuery] int? statusCode = null,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null)
     {
         var result = await mediator.Send(new GetLogsSummaryQuery(
-            agentId, siteId, clientId, level, type, source, period, search, limit));
+            agentId, siteId, clientId, level, type, source, period, search, limit,
+            traceId, correlationId, requestPath, statusCode, from, to));
         return result.ToActionResult();
     }
 

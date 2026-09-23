@@ -30,6 +30,12 @@ public sealed class ListLogsQueryHandler(
             Source = q.Source.HasValue ? (LogSource)q.Source.Value : null,
             PeriodPreset = q.Period,
             SearchText = q.Search,
+            TraceId = q.TraceId,
+            CorrelationId = q.CorrelationId,
+            RequestPath = q.RequestPath,
+            StatusCode = q.StatusCode,
+            From = ToUtc(q.From),
+            To = ToUtc(q.To),
             HasGlobalAccess = scope.HasGlobalAccess,
             AllowedClientIds = scope.AllowedClientIds,
             AllowedSiteIds = scope.AllowedSiteIds
@@ -83,11 +89,19 @@ public sealed class ListLogsQueryHandler(
             q.Limit));
     }
 
+    // datetime-local chega sem timezone; o client envia ISO UTC, mas normalizamos
+    // Unspecified para UTC por segurança (timestamptz exige UTC no Npgsql).
+    private static DateTime? ToUtc(DateTime? value) =>
+        value.HasValue ? DateTime.SpecifyKind(value.Value, DateTimeKind.Utc) : null;
+
     private static void ApplyPeriodPreset(LogQuery query, string period)
     {
         var now = DateTime.UtcNow;
         switch (period.ToLowerInvariant())
         {
+            case "15m":
+                query.From = now.AddMinutes(-15);
+                break;
             case "1h":
                 query.From = now.AddHours(-1);
                 break;
@@ -112,6 +126,9 @@ public sealed class GetLogsSummaryQueryHandler(
     IScopeContext scopeContext
 ) : IRequestHandler<GetLogsSummaryQuery, Result<LogSummaryDto>>
 {
+    private static DateTime? ToUtc(DateTime? value) =>
+        value.HasValue ? DateTime.SpecifyKind(value.Value, DateTimeKind.Utc) : null;
+
     public async Task<Result<LogSummaryDto>> Handle(GetLogsSummaryQuery q, CancellationToken ct)
     {
         var scope = await scopeContext.GetAccessAsync(ResourceType.Logs, ActionType.View);
@@ -127,6 +144,12 @@ public sealed class GetLogsSummaryQueryHandler(
             Source = q.Source.HasValue ? (LogSource)q.Source.Value : null,
             PeriodPreset = q.Period,
             SearchText = q.Search,
+            TraceId = q.TraceId,
+            CorrelationId = q.CorrelationId,
+            RequestPath = q.RequestPath,
+            StatusCode = q.StatusCode,
+            From = ToUtc(q.From),
+            To = ToUtc(q.To),
             HasGlobalAccess = scope.HasGlobalAccess,
             AllowedClientIds = scope.AllowedClientIds,
             AllowedSiteIds = scope.AllowedSiteIds
@@ -137,6 +160,7 @@ public sealed class GetLogsSummaryQueryHandler(
             var now = DateTime.UtcNow;
             switch (q.Period.ToLowerInvariant())
             {
+                case "15m": query.From = now.AddMinutes(-15); break;
                 case "1h": query.From = now.AddHours(-1); break;
                 case "6h": query.From = now.AddHours(-6); break;
                 case "24h": query.From = now.AddHours(-24); break;

@@ -51,6 +51,18 @@ public class SiteRepository : ISiteRepository
             .ToListAsync();
     }
 
+    public async Task<IEnumerable<Site>> GetAllAsync(bool includeInactive = false)
+    {
+        IQueryable<Site> query = _db.Sites.AsNoTracking();
+
+        if (!includeInactive)
+            query = query.Where(site => site.IsActive);
+
+        return await query
+            .OrderBy(site => site.Name)
+            .ToListAsync();
+    }
+
     public async Task<Site> CreateAsync(Site site)
     {
         site.Id = IdGenerator.NewId();

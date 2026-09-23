@@ -3,7 +3,9 @@ using Discovery.Core.Cqrs.Sites.Commands;
 using Discovery.Core.Cqrs.Sites.Queries;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Sites;
@@ -15,6 +17,33 @@ public sealed class GetSitesByClientQueryHandler(
     public async Task<Result<IReadOnlyList<Site>>> Handle(GetSitesByClientQuery q, CancellationToken ct)
     {
         var sites = await repo.GetByClientIdAsync(q.ClientId, q.IncludeInactive);
+        return Result<IReadOnlyList<Site>>.Success(sites.ToList());
+    }
+}
+
+public sealed class GetAllSitesQueryHandler(
+    ISiteRepository repo,
+    IScopeContext scopeContext
+) : IRequestHandler<GetAllSitesQuery, Result<IReadOnlyList<Site>>>
+{
+    public async Task<Result<IReadOnlyList<Site>>> Handle(GetAllSitesQuery q, CancellationToken ct)
+    {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.Sites, ActionType.View);
+
+        IEnumerable<Site> sites;
+        if (scope.HasGlobalAccess)
+        {
+            sites = await repo.GetAllAsync(q.IncludeInactive);
+        }
+        else if (scope.AllowedClientIds.Count > 0)
+        {
+            sites = await repo.GetByClientIdsAsync(scope.AllowedClientIds, q.IncludeInactive);
+        }
+        else
+        {
+            sites = [];
+        }
+
         return Result<IReadOnlyList<Site>>.Success(sites.ToList());
     }
 }

@@ -37,6 +37,18 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
         return result.ToActionResult();
     }
 
+    /// <summary>
+    /// Lista global de sites (escopada pelas permissões do usuário) usada pela
+    /// tela /sites — evita o N+1 de buscar sites cliente a cliente.
+    /// </summary>
+    [HttpGet("/api/v{version:apiVersion}/sites")]
+    [RequirePermission(ResourceType.Sites, ActionType.View)]
+    public async Task<IActionResult> GetAll([FromQuery] bool includeInactive = false)
+    {
+        var result = await mediator.Send(new GetAllSitesQuery(includeInactive));
+        return result.ToActionResult();
+    }
+
     [HttpGet("{id:guid}")]
     [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetById(Guid clientId, Guid id)

@@ -17,7 +17,13 @@ public sealed record ListLogsQuery(
     int? Type = null,
     int? Source = null,
     string? Period = null,
-    string? Search = null
+    string? Search = null,
+    string? TraceId = null,
+    string? CorrelationId = null,
+    string? RequestPath = null,
+    int? StatusCode = null,
+    DateTime? From = null,
+    DateTime? To = null
 ) : IQuery<Result<CursorPageDto<LogDto>>>;
 
 public sealed record LogDto(
@@ -45,7 +51,13 @@ public sealed record GetLogsSummaryQuery(
     int? Source = null,
     string? Period = null,
     string? Search = null,
-    int Limit = 50
+    int Limit = 50,
+    string? TraceId = null,
+    string? CorrelationId = null,
+    string? RequestPath = null,
+    int? StatusCode = null,
+    DateTime? From = null,
+    DateTime? To = null
 ) : IQuery<Result<LogSummaryDto>>;
 
 /// <summary>

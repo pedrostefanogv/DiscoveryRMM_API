@@ -20,6 +20,7 @@ public class SitePowerCommandHandlersTests
             Task.FromResult(id == _site.Id ? (Site?)_site : null);
         public Task<IEnumerable<Site>> GetByClientIdAsync(Guid clientId, bool includeInactive = false) => Task.FromResult<IEnumerable<Site>>([_site]);
         public Task<IEnumerable<Site>> GetByClientIdsAsync(IEnumerable<Guid> clientIds, bool includeInactive = false) => Task.FromResult<IEnumerable<Site>>([_site]);
+        public Task<IEnumerable<Site>> GetAllAsync(bool includeInactive = false) => Task.FromResult<IEnumerable<Site>>([_site]);
         public Task<Site> CreateAsync(Site s) => Task.FromResult(s);
         public Task UpdateAsync(Site s) => Task.CompletedTask;
         public Task DeleteAsync(Guid id) => Task.CompletedTask;

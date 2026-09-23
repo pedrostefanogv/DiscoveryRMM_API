@@ -172,6 +172,8 @@ public class AgentTransferServiceTests
             => Task.FromResult<IEnumerable<Site>>([]);
         public Task<IEnumerable<Site>> GetByClientIdsAsync(IEnumerable<Guid> clientIds, bool includeInactive = false)
             => Task.FromResult<IEnumerable<Site>>([]);
+        public Task<IEnumerable<Site>> GetAllAsync(bool includeInactive = false)
+            => Task.FromResult<IEnumerable<Site>>(Sites.Values);
         public Task<Site> CreateAsync(Site site) => Task.FromResult(site);
         public Task UpdateAsync(Site site) => Task.CompletedTask;
         public Task DeleteAsync(Guid id) => Task.CompletedTask;
