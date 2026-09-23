@@ -4,7 +4,9 @@ using Discovery.Core.Cqrs.Tickets.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Tickets.QueryHandlers;
@@ -24,11 +26,40 @@ public sealed class GetTicketKnowledgeLinksQueryHandler(ITicketKnowledgeLinkRepo
 public sealed class GetTicketAuditTimelineQueryHandler(ITicketActivityLogRepository repo) : IRequestHandler<GetTicketAuditTimelineQuery, Result<List<TicketActivityLog>>>
 { public async Task<Result<List<TicketActivityLog>>> Handle(GetTicketAuditTimelineQuery q, CancellationToken ct) => Result<List<TicketActivityLog>>.Success(await repo.GetByTicketAsync(q.TicketId)); }
 
-public sealed class GetTicketKpiQueryHandler(ITicketKpiCacheService kpiCache, ITicketRepository ticketRepo) : IRequestHandler<GetTicketKpiQuery, Result<TicketKpiResult>>
+public sealed class GetTicketKpiQueryHandler(
+    ITicketKpiCacheService kpiCache,
+    ITicketRepository ticketRepo,
+    IScopeContext scopeContext) : IRequestHandler<GetTicketKpiQuery, Result<TicketKpiResult>>
 {
     public async Task<Result<TicketKpiResult>> Handle(GetTicketKpiQuery q, CancellationToken ct)
     {
-        var result = await kpiCache.GetOrComputeAsync(q.ClientId, q.DepartmentId, q.Since, () => ticketRepo.GetKpiAsync(q.ClientId, q.DepartmentId, q.Since), ct);
+        // Row-level security: injeta o ACL do usuário no filtro.
+        var access = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
+        var filter = q.Filter with
+        {
+            HasGlobalAccess = access.HasGlobalAccess,
+            AllowedClientIds = access.AllowedClientIds,
+            AllowedSiteIds = access.AllowedSiteIds
+        };
+
+        // Cache só é seguro para o recorte simples (sem filtros avançados e com acesso global).
+        var isSimple = access.HasGlobalAccess
+            && filter.SiteId is null
+            && filter.AgentId is null
+            && filter.WorkflowProfileId is null
+            && filter.WorkflowStateId is null
+            && filter.AssignedToUserId is null
+            && filter.Priority is null
+            && filter.SlaBreached is null
+            && filter.IsClosed is null
+            && string.IsNullOrWhiteSpace(filter.Text);
+
+        var result = isSimple
+            ? await kpiCache.GetOrComputeAsync(
+                filter.ClientId, filter.DepartmentId, filter.Since,
+                () => ticketRepo.GetKpiAsync(filter), ct)
+            : await ticketRepo.GetKpiAsync(filter);
+
         return Result<TicketKpiResult>.Success(result);
     }
 }

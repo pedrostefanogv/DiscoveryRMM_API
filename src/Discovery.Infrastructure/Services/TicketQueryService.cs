@@ -32,19 +32,50 @@ public sealed class TicketQueryService : ITicketQueryService
         if (f.AgentId.HasValue) query = query.Where(t => t.AgentId == f.AgentId.Value);
         if (f.DepartmentId.HasValue) query = query.Where(t => t.DepartmentId == f.DepartmentId.Value);
         if (f.WorkflowStateId.HasValue) query = query.Where(t => t.WorkflowStateId == f.WorkflowStateId.Value);
+        if (f.WorkflowProfileId.HasValue) query = query.Where(t => t.WorkflowProfileId == f.WorkflowProfileId.Value);
         if (f.AssignedToUserId.HasValue) query = query.Where(t => t.AssignedToUserId == f.AssignedToUserId.Value);
         if (f.Priority.HasValue) query = query.Where(t => t.Priority == f.Priority.Value);
         if (f.SlaBreached.HasValue) query = query.Where(t => t.SlaBreached == f.SlaBreached.Value);
+        if (f.IsClosed.HasValue)
+            query = f.IsClosed.Value
+                ? query.Where(t => t.ClosedAt != null)
+                : query.Where(t => t.ClosedAt == null);
+
+        // Row-level security (mesmo padrão de TicketRepository.GetAllPageAsync/LogRepository).
+        if (!f.HasGlobalAccess)
+        {
+            var allowedClientIds = (f.AllowedClientIds ?? []).Distinct().ToArray();
+            var allowedSiteIds = (f.AllowedSiteIds ?? []).Distinct().ToArray();
+            if (allowedClientIds.Length == 0 && allowedSiteIds.Length == 0)
+            {
+                var emptyLimit = Math.Clamp(f.Limit, 1, 200);
+                return new CursorPageDto<TicketListItemDto>(Array.Empty<TicketListItemDto>(), 0, f.Cursor, null, false, emptyLimit);
+            }
+
+            query = query.Where(t =>
+                allowedClientIds.Contains(t.ClientId) ||
+                (t.SiteId.HasValue && allowedSiteIds.Contains(t.SiteId.Value)));
+        }
+
         if (!string.IsNullOrWhiteSpace(f.Text))
         {
-            var s = f.Text.ToLower();
-            query = query.Where(t => t.Title.ToLower().Contains(s) || t.Description.ToLower().Contains(s));
+            // Escapa curingas do LIKE para "50%" não virar qualquer-coisa.
+            var term = f.Text.Trim()
+                .Replace("\\", "\\\\")
+                .Replace("%", "\\%")
+                .Replace("_", "\\_");
+            var pattern = $"%{term}%";
+            query = query.Where(t =>
+                EF.Functions.ILike(t.Title, pattern) || EF.Functions.ILike(t.Description, pattern));
         }
-        if (!string.IsNullOrWhiteSpace(f.Cursor) && Guid.TryParse(f.Cursor, out var cid))
-            query = query.Where(t => t.CreatedAt < _db.Tickets.AsNoTracking().Where(x => x.Id == cid).Select(x => x.CreatedAt).FirstOrDefault());
+        // O cursor é Base64 "ticks|guidN" (EncodeCreatedAtCursor). O código antigo
+        // tentava Guid.TryParse direto no Base64 e sempre falhava → paginação
+        // regressava para a primeira página.
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(f.Cursor, out var cursorCreatedAt, out var cursorId))
+            query = CursorPaginationHelper.ApplyCreatedAtCursor(query, cursorCreatedAt, cursorId, t => t.CreatedAt, t => t.Id);
 
         var limit = Math.Clamp(f.Limit, 1, 200);
-        var items = await query.OrderByDescending(t => t.CreatedAt).Take(limit + 1)
+        var items = await query.OrderByDescending(t => t.CreatedAt).ThenByDescending(t => t.Id).Take(limit + 1)
             .Select(t => new TicketListItemDto(t.Id, t.ClientId, t.SiteId, t.Title, t.Priority,
                 t.WorkflowStateId, t.AssignedToUserId, t.SlaBreached, t.CreatedAt, t.ClosedAt))
             .ToListAsync(ct);
@@ -70,13 +101,16 @@ public sealed class TicketQueryService : ITicketQueryService
     }
 
     public async Task<CursorPageDto<TicketCommentDto>> GetCommentsAsync(
-        Guid ticketId, string? cursor, int limit, CancellationToken ct = default)
+        Guid ticketId, string? cursor, int limit, bool includeInternal = false, CancellationToken ct = default)
     {
         var exists = await _db.Tickets.AsNoTracking().AnyAsync(t => t.Id == ticketId, ct);
         if (!exists)
             return new CursorPageDto<TicketCommentDto>(Array.Empty<TicketCommentDto>(), 0, cursor, null, false, limit);
 
         var cq = _db.TicketComments.AsNoTracking().Where(c => c.TicketId == ticketId);
+        // Notas internas: visíveis somente para quem pode editar o chamado.
+        if (!includeInternal)
+            cq = cq.Where(c => !c.IsInternal);
         if (!string.IsNullOrWhiteSpace(cursor)
             && CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var ca, out var ci))
             cq = cq.Where(c => c.CreatedAt < ca || (c.CreatedAt == ca && c.Id.CompareTo(ci) < 0));

@@ -43,13 +43,19 @@ public sealed class UpdateTicketCommandHandler(
 }
 
 public sealed class TransitionTicketStateCommandHandler(
-    ITicketWorkflowService workflow
+    ITicketWorkflowService workflow,
+    ITicketRepository ticketRepo
 ) : IRequestHandler<TransitionTicketStateCommand, Result<TransitionTicketStateResult>>
 {
     public async Task<Result<TransitionTicketStateResult>> Handle(TransitionTicketStateCommand cmd, CancellationToken ct)
     {
+        // Captura o estado anterior ANTES da transição: o handler devolvia o
+        // novo estado nas duas posições (Previous == New).
+        var before = await ticketRepo.GetByIdAsync(cmd.TicketId);
+        var previousStateId = before?.WorkflowStateId ?? Guid.Empty;
+
         var updated = await workflow.TransitionAsync(cmd.TicketId, cmd.TargetStateId, cmd.ChangedByUserId, ct);
-        return Result<TransitionTicketStateResult>.Success(new TransitionTicketStateResult(updated.Id, updated.WorkflowStateId, updated.WorkflowStateId, updated.ClosedAt));
+        return Result<TransitionTicketStateResult>.Success(new TransitionTicketStateResult(updated.Id, previousStateId, updated.WorkflowStateId, updated.ClosedAt));
     }
 }
 

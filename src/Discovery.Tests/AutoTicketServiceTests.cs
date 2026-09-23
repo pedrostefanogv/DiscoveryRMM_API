@@ -249,6 +249,7 @@ public class AutoTicketServiceTests
             workflowRepository,
             alertRepository,
             activityLogService,
+            new FakeSlaService(),
             NullLogger<AlertToTicketService>.Instance);
 
         var alert = new AgentAlertDefinition
@@ -291,6 +292,7 @@ public class AutoTicketServiceTests
             workflowRepository,
             alertRepository,
             activityLogService,
+            new FakeSlaService(),
             NullLogger<AlertToTicketService>.Instance);
 
         var result = await service.CreateTicketFromMonitoringEventAsync(new AutoTicketCreateTicketRequest
@@ -393,6 +395,25 @@ public class AutoTicketServiceTests
         };
     }
 
+    private sealed class FakeSlaService : ISlaService
+    {
+        public Task<DateTime> CalculateSlaExpiryAsync(Guid workflowProfileId, DateTime createdAt)
+            => Task.FromResult(createdAt.AddHours(24));
+
+        public Task<DateTime> CalculateFirstResponseExpiryAsync(Guid workflowProfileId, DateTime createdAt)
+            => Task.FromResult(createdAt.AddHours(4));
+
+        public Task<(int HoursRemaining, double PercentUsed, bool Breached)> GetSlaStatusAsync(Guid ticketId)
+            => Task.FromResult((24, 0d, false));
+
+        public Task<(int HoursRemaining, double PercentUsed, bool Breached, bool Achieved)> GetFrtStatusAsync(Guid ticketId)
+            => Task.FromResult((4, 0d, false, false));
+
+        public DateTime? GetEffectiveSlaExpiry(Ticket ticket) => ticket.SlaExpiresAt;
+
+        public Task<bool> CheckAndLogSlaBreachAsync(Guid ticketId) => Task.FromResult(false);
+    }
+
     private sealed class FakeTicketRepository : ITicketRepository
     {
         private readonly Dictionary<Guid, Ticket> _tickets = new();
@@ -464,6 +485,23 @@ public class AutoTicketServiceTests
 
         public Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds)
             => Task.CompletedTask;
+
+        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds)
+        {
+            if (_tickets.TryGetValue(id, out var ticket))
+            {
+                ticket.WorkflowStateId = workflowStateId;
+                ticket.ClosedAt = closedAt;
+                ticket.SlaHoldStartedAt = slaHoldStartedAt;
+                ticket.SlaPausedSeconds = slaPausedSeconds;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<TicketKpiResult> GetKpiAsync(TicketFilterQuery filter)
+            => Task.FromResult(new TicketKpiResult(0, 0, 0, 0, 0, 0, 0, 0,
+                Array.Empty<TicketKpiByAssignee>(), Array.Empty<TicketKpiByDepartment>()));
 
         public Task UpdateFirstRespondedAtAsync(Guid id, DateTime firstRespondedAt)
         {

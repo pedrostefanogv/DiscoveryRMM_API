@@ -48,6 +48,7 @@ public class Ticket
     
     // Avaliação/Rating (0-5 estrelas)
     public int? Rating { get; set; } // Null = não avaliado, 0-5 = avaliação
+    public string? RatingFeedback { get; set; } // Comentário/feedback da avaliação (CSAT)
     public DateTime? RatedAt { get; set; }
     public string? RatedBy { get; set; } // Nome/identificador de quem avaliou
     

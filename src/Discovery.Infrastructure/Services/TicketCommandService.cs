@@ -16,17 +16,23 @@ public sealed class TicketCommandService : ITicketCommandService
     private readonly ITicketRepository _repo;
     private readonly IActivityLogService _activityLog;
     private readonly INotificationService _notification;
+    private readonly IWorkflowRepository _workflowRepo;
+    private readonly ISlaService _slaService;
     private readonly IMediator _mediator;
 
     public TicketCommandService(
         ITicketRepository repo,
         IActivityLogService activityLog,
         INotificationService notification,
+        IWorkflowRepository workflowRepo,
+        ISlaService slaService,
         IMediator mediator)
     {
         _repo = repo;
         _activityLog = activityLog;
         _notification = notification;
+        _workflowRepo = workflowRepo;
+        _slaService = slaService;
         _mediator = mediator;
     }
 
@@ -36,6 +42,12 @@ public sealed class TicketCommandService : ITicketCommandService
         Guid? workflowProfileId, Guid? assignedToUserId, string? category,
         CancellationToken ct = default)
     {
+        var now = DateTime.UtcNow;
+
+        // Estado inicial do workflow do cliente (sem ele o ticket fica "órfão"
+        // de estado e as transições não funcionam).
+        var initialState = await _workflowRepo.GetInitialStateAsync(clientId);
+
         var ticket = new Ticket
         {
             Id = Guid.NewGuid(),
@@ -49,9 +61,24 @@ public sealed class TicketCommandService : ITicketCommandService
             WorkflowProfileId = workflowProfileId,
             AssignedToUserId = assignedToUserId,
             Category = category,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
+            WorkflowStateId = initialState?.Id ?? Guid.Empty,
+            CreatedAt = now,
+            UpdatedAt = now
         };
+
+        // SLA/FRT: calculados a partir do perfil de workflow (quando houver).
+        if (workflowProfileId.HasValue)
+        {
+            try
+            {
+                ticket.SlaExpiresAt = await _slaService.CalculateSlaExpiryAsync(workflowProfileId.Value, now);
+                ticket.SlaFirstResponseExpiresAt = await _slaService.CalculateFirstResponseExpiryAsync(workflowProfileId.Value, now);
+            }
+            catch (InvalidOperationException)
+            {
+                // Perfil inexistente/inválido: não bloqueia a criação do chamado.
+            }
+        }
 
         await _repo.CreateAsync(ticket);
         await _activityLog.LogActivityAsync(ticket.Id, TicketActivityType.Created,
@@ -96,9 +123,28 @@ public sealed class TicketCommandService : ITicketCommandService
             }
         }
 
+        var oldDepartmentId = ticket.DepartmentId;
+        var oldWorkflowProfileId = ticket.WorkflowProfileId;
+
+        if (departmentId.HasValue && departmentId.Value != ticket.DepartmentId)
+            ticket.DepartmentId = departmentId.Value;
+
+        if (workflowProfileId.HasValue && workflowProfileId.Value != ticket.WorkflowProfileId)
+            ticket.WorkflowProfileId = workflowProfileId.Value;
+
         ticket.Category = category ?? ticket.Category;
         ticket.UpdatedAt = DateTime.UtcNow;
         await _repo.UpdateAsync(ticket);
+
+        // Logs DEPOIS do update: um log gravado antes da escrita vira órfão se o
+        // update falhar.
+        if (departmentId.HasValue && departmentId.Value != oldDepartmentId)
+            await _activityLog.LogDepartmentChangeAsync(ticketId, null,
+                oldDepartmentId?.ToString() ?? "none", departmentId.Value.ToString());
+
+        if (workflowProfileId.HasValue && workflowProfileId.Value != oldWorkflowProfileId)
+            await _activityLog.LogActivityAsync(ticketId, TicketActivityType.StateChanged, null,
+                oldWorkflowProfileId?.ToString(), workflowProfileId.Value.ToString(), "Workflow profile changed");
 
         return ticket;
     }
@@ -122,6 +168,14 @@ public sealed class TicketCommandService : ITicketCommandService
         };
 
         await _repo.AddCommentAsync(comment);
+
+        // Primeira resposta pública marca o FRT (chamados internos não contam).
+        if (!isInternal && !ticket.FirstRespondedAt.HasValue)
+        {
+            ticket.FirstRespondedAt = comment.CreatedAt;
+            await _repo.UpdateAsync(ticket);
+        }
+
         await _activityLog.LogActivityAsync(ticketId, TicketActivityType.Commented,
             null, null, null, $"Comment by {comment.Author}");
 

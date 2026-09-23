@@ -9,7 +9,9 @@ namespace Discovery.Core.Cqrs.Tickets.Queries;
 public sealed record GetTicketCommentsQuery(
     Guid TicketId,
     string? Cursor,
-    int Limit
+    int Limit,
+    /// <summary>false = notas internas são ocultadas (usuário sem permissão de edição).</summary>
+    bool IncludeInternal = false
 ) : IQuery<Result<CursorPageDto<TicketCommentDto>>>;
 
 /// <summary>

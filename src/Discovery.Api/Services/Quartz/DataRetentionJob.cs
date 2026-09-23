@@ -52,6 +52,14 @@ public sealed class DataRetentionJob : IJob
             logger.LogInformation("DataRetention: deleted {Count} expired user sessions.", sessionsDeleted);
         results["sessions"] = sessionsDeleted;
 
+        // 1b. Idempotency records expirados
+        var idempotencyDeleted = await db.IdempotencyRecords
+            .Where(r => r.ExpiresAt < now)
+            .ExecuteDeleteAsync(ct);
+        if (idempotencyDeleted > 0)
+            logger.LogInformation("DataRetention: deleted {Count} expired idempotency records.", idempotencyDeleted);
+        results["idempotency"] = idempotencyDeleted;
+
         // 2. Expired API tokens (past expiry + grace period, or inactive for long)
         var tokenCutoff = now.AddDays(-(settings.TokenExpiredGraceDays));
         var tokensDeleted = await db.ApiTokens

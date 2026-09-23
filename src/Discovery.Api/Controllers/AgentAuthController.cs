@@ -16,6 +16,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using MediatR;
+using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -28,19 +29,40 @@ public class AgentAuthController : ControllerBase
 {
     private readonly IMediator _mediator;
     private readonly IAgentRepository _agentRepo;
+    private readonly ISiteRepository _siteRepo;
+    private readonly IWorkflowRepository _workflowRepo;
     private readonly IAiChatService _aiChat;
     private readonly ILogger<AgentAuthController> _logger;
 
-    public AgentAuthController(IMediator mediator, IAgentRepository agentRepo, IAiChatService aiChat, ILogger<AgentAuthController> logger)
+    public AgentAuthController(
+        IMediator mediator,
+        IAgentRepository agentRepo,
+        ISiteRepository siteRepo,
+        IWorkflowRepository workflowRepo,
+        IAiChatService aiChat,
+        ILogger<AgentAuthController> logger)
     {
         _mediator = mediator;
         _agentRepo = agentRepo;
+        _siteRepo = siteRepo;
+        _workflowRepo = workflowRepo;
         _aiChat = aiChat;
         _logger = logger;
     }
 
     /// <summary>B5: limite de toolResults aceitos por request (anti-abuso).</summary>
     private const int MaxToolResultsPerRequest = 20;
+
+    /// <summary>
+    /// Payload de fechamento/avaliação. Aceita "feedback" (portal), "comment"
+    /// (support do agente) e "notes" (versões antigas do agente Go).
+    /// </summary>
+    public record CloseAndRateTicketRequest(
+        int? Rating,
+        string? Feedback = null,
+        string? Comment = null,
+        string? Notes = null,
+        Guid? WorkflowStateId = null);
 
     // ── Auth Helpers ──────────────────────────────────────────────────────
 
@@ -215,6 +237,7 @@ public class AgentAuthController : ControllerBase
     }
 
     [HttpPost("me/tickets")]
+    [IdempotencyFilter]
     public async Task<IActionResult> CreateMyTicket([FromBody] CreateMyTicketCommand cmd)
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
@@ -224,6 +247,7 @@ public class AgentAuthController : ControllerBase
     }
 
     [HttpPost("me/tickets/{ticketId:guid}/comments")]
+    [IdempotencyFilter]
     public async Task<IActionResult> AddMyTicketComment(Guid ticketId, [FromBody] AddMyTicketCommentCommand cmd)
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
@@ -250,13 +274,47 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(cmd with { AgentId = id, TicketId = ticketId }), Ok);
     }
 
+    /// <summary>
+    /// Lista os estados de workflow disponíveis para os tickets do agente.
+    /// O seletor de estado final da UI de suporte do agente chama este endpoint.
+    /// </summary>
+    [HttpGet("me/tickets/workflow-states")]
+    public async Task<IActionResult> GetMyTicketWorkflowStates()
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (agent, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        Guid? clientId = null;
+        if (agent!.SiteId != Guid.Empty)
+        {
+            var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+            clientId = site?.ClientId;
+        }
+
+        var states = await _workflowRepo.GetStatesAsync(clientId);
+        return Ok(states.Select(s => new
+        {
+            s.Id,
+            s.Name,
+            s.Color,
+            s.IsInitial,
+            s.IsFinal,
+            s.SortOrder
+        }));
+    }
+
     [HttpPost("me/tickets/{ticketId:guid}/close")]
-    public async Task<IActionResult> CloseAndRateTicket(Guid ticketId, [FromBody] CloseAndRateMyTicketCommand cmd)
+    [IdempotencyFilter]
+    public async Task<IActionResult> CloseAndRateTicket(Guid ticketId, [FromBody] CloseAndRateTicketRequest req)
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { AgentId = id, TicketId = ticketId }), Ok);
+
+        var feedback = req.Feedback ?? req.Comment ?? req.Notes;
+        var cmd = new CloseAndRateMyTicketCommand(id, ticketId, req.Rating, feedback, req.WorkflowStateId);
+        return MapResult(await _mediator.Send(cmd), Ok);
     }
 
     // ── P2P ───────────────────────────────────────────────────────────────

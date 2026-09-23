@@ -30,9 +30,21 @@ public interface ITicketRepository
     /// <summary>Atualiza campos de SLA hold (pausa/retomada) no ticket.</summary>
     Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds);
 
+    /// <summary>
+    /// Persiste a transição de estado e o ajuste de SLA-hold ATOMICAMENTE
+    /// (um único ExecuteUpdate), eliminando a corrida com close/reabertura.
+    /// </summary>
+    Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds);
+
     /// <summary>Registra o momento da primeira resposta do atribuído.</summary>
     Task UpdateFirstRespondedAtAsync(Guid id, DateTime firstRespondedAt);
 
     /// <summary>KPI: contagens e métricas agrupadas para o dashboard de chamados.</summary>
     Task<TicketKpiResult> GetKpiAsync(Guid? clientId, Guid? departmentId, DateTime? since);
+
+    /// <summary>
+    /// KPI com os mesmos filtros da listagem e ACL. OBRIGATÓRIO implementar:
+    /// uma implementação que ignore filtros/ACL fura a row-level security.
+    /// </summary>
+    Task<TicketKpiResult> GetKpiAsync(TicketFilterQuery filter);
 }

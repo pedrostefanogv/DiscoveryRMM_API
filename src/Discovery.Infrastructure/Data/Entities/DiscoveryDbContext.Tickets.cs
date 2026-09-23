@@ -34,6 +34,7 @@ public partial class DiscoveryDbContext
             entity.Property(ticket => ticket.SlaPausedSeconds).HasColumnName("sla_paused_seconds").HasDefaultValue(0);
             entity.Property(ticket => ticket.SlaHoldStartedAt).HasColumnName("sla_hold_started_at").HasColumnType("timestamptz");
             entity.Property(ticket => ticket.Rating).HasColumnName("rating");
+            entity.Property(ticket => ticket.RatingFeedback).HasColumnName("rating_feedback").HasMaxLength(2000);
             entity.Property(ticket => ticket.RatedAt).HasColumnName("rated_at").HasColumnType("timestamptz");
             entity.Property(ticket => ticket.RatedBy).HasColumnName("rated_by").HasMaxLength(255);
             entity.Property(ticket => ticket.Category).HasColumnName("category").HasMaxLength(100);
@@ -41,6 +42,9 @@ public partial class DiscoveryDbContext
             entity.Property(ticket => ticket.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             entity.Property(ticket => ticket.ClosedAt).HasColumnName("closed_at").HasColumnType("timestamptz");
             entity.Property(ticket => ticket.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+
+            // Concorrência otimista: xmin é a versão de linha do Postgres.
+            entity.Property<uint>("xmin").HasColumnName("xmin").HasColumnType("xid").IsRowVersion();
 
             entity.HasOne<Client>().WithMany().HasForeignKey(ticket => ticket.ClientId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<Site>().WithMany().HasForeignKey(ticket => ticket.SiteId).OnDelete(DeleteBehavior.Restrict);

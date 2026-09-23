@@ -28,5 +28,6 @@ public enum TicketActivityType
     TicketRelationAdded = 20,
     TicketRelationRemoved = 21,
     KnowledgeLinked = 22,
-    KnowledgeUnlinked = 23
+    KnowledgeUnlinked = 23,
+    Rated = 24
 }

@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Tickets;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.Extensions.Logging;
@@ -25,7 +26,9 @@ public sealed class GetMyTicketHandler(
     public async Task<Result<object>> Handle(GetMyTicketQuery q, CancellationToken ct)
     {
         var ticket = await ticketRepo.GetByIdAsync(q.TicketId);
-        if (ticket is null)
+        // Isolamento por agente: sem isso, qualquer agente autenticado leria
+        // qualquer ticket por GUID (IDOR). Não revela existência de terceiros.
+        if (ticket is null || ticket.AgentId != q.AgentId)
             return Result<object>.Failure(Error.NotFound("Ticket not found."));
 
         return Result<object>.Success(ticket);
@@ -33,9 +36,9 @@ public sealed class GetMyTicketHandler(
 }
 
 public sealed class CreateMyTicketHandler(
-    ITicketRepository ticketRepo,
     IAgentRepository agentRepo,
-    ISiteRepository siteRepo
+    ISiteRepository siteRepo,
+    ITicketCommandService ticketCommandService
 ) : IRequestHandler<CreateMyTicketCommand, Result<object>>
 {
     public async Task<Result<object>> Handle(CreateMyTicketCommand cmd, CancellationToken ct)
@@ -57,36 +60,49 @@ public sealed class CreateMyTicketHandler(
         if (cmd.Description is { Length: > 8000 })
             return Result<object>.Failure(Error.Validation("Description", "Description excede 8000 caracteres."));
 
-        var ticket = new Ticket
-        {
-            Title = cmd.Title,
-            Description = cmd.Description ?? string.Empty,
-            ClientId = site.ClientId,
-            AgentId = cmd.AgentId,
-            SiteId = agent.SiteId,
-            DepartmentId = cmd.DepartmentId,
-            WorkflowProfileId = cmd.WorkflowProfileId,
-            Category = cmd.Category,
-            Priority = Enum.TryParse<Core.Enums.TicketPriority>(cmd.Priority, ignoreCase: true, out var prio) ? prio : Core.Enums.TicketPriority.Medium
-        };
+        var priority = Enum.TryParse<Core.Enums.TicketPriority>(cmd.Priority, ignoreCase: true, out var prio)
+            ? prio
+            : Core.Enums.TicketPriority.Medium;
 
-        var created = await ticketRepo.CreateAsync(ticket);
+        // Reutiliza o fluxo canônico: estado inicial do workflow, SLA/FRT,
+        // activity log e evento de criação (antes o create do agente nascia
+        // sem estado e sem SLA).
+        var created = await ticketCommandService.CreateTicketAsync(
+            cmd.Title.Trim(),
+            cmd.Description ?? string.Empty,
+            priority,
+            site.ClientId,
+            agent.SiteId,
+            cmd.AgentId,
+            cmd.DepartmentId,
+            cmd.WorkflowProfileId,
+            assignedToUserId: null,
+            category: cmd.Category,
+            ct);
+
         return Result<object>.Success(created);
     }
 }
 
 public sealed class AddMyTicketCommentHandler(
     ITicketCommandService ticketCommandService,
+    ITicketRepository ticketRepo,
     ILogger<AddMyTicketCommentHandler> logger
 ) : IRequestHandler<AddMyTicketCommentCommand, Result<object>>
 {
     public async Task<Result<object>> Handle(AddMyTicketCommentCommand cmd, CancellationToken ct)
     {
+        var owned = await ticketRepo.GetByIdAsync(cmd.TicketId);
+        if (owned is null || owned.AgentId != cmd.AgentId)
+            return Result<object>.Failure(Error.NotFound("Ticket not found."));
+
         try
         {
-            // Usa ITicketCommandService para consistência com o fluxo web UI (activity logging incluso)
+            // Usa ITicketCommandService para consistência com o fluxo web UI (activity logging incluso).
+            // Opção de produto (a): o agente NUNCA cria nota interna — é ferramenta
+            // do técnico no portal. O parâmetro fica no command apenas por contrato.
             var comment = await ticketCommandService.AddCommentAsync(
-                cmd.TicketId, cmd.Content, cmd.IsInternal ?? false,
+                cmd.TicketId, cmd.Content, false,
                 userId: null, userName: "Agent", ct);
 
             return Result<object>.Success(comment);
@@ -109,8 +125,15 @@ public sealed class GetMyTicketCommentsHandler(
 {
     public async Task<Result<object>> Handle(GetMyTicketCommentsQuery q, CancellationToken ct)
     {
+        var ticket = await ticketRepo.GetByIdAsync(q.TicketId);
+        if (ticket is null || ticket.AgentId != q.AgentId)
+            return Result<object>.Failure(Error.NotFound("Ticket not found."));
+
         var comments = await ticketRepo.GetCommentsAsync(q.TicketId);
-        return Result<object>.Success(comments);
+        // Opção de produto (a): notas internas não vazam para o agente.
+        var visible = (comments ?? Enumerable.Empty<Discovery.Core.Entities.TicketComment>())
+            .Where(comment => !comment.IsInternal);
+        return Result<object>.Success(visible);
     }
 }
 
@@ -121,7 +144,7 @@ public sealed class UpdateMyTicketWorkflowStateHandler(
     public async Task<Result<object>> Handle(UpdateMyTicketWorkflowStateCommand cmd, CancellationToken ct)
     {
         var ticket = await ticketRepo.GetByIdAsync(cmd.TicketId);
-        if (ticket is null)
+        if (ticket is null || ticket.AgentId != cmd.AgentId)
             return Result<object>.Failure(Error.NotFound("Ticket not found."));
 
         await ticketRepo.UpdateWorkflowStateAsync(cmd.TicketId, cmd.WorkflowStateId);
@@ -130,19 +153,63 @@ public sealed class UpdateMyTicketWorkflowStateHandler(
 }
 
 public sealed class CloseAndRateMyTicketHandler(
-    ITicketRepository ticketRepo
+    ITicketRepository ticketRepo,
+    IWorkflowRepository workflowRepo,
+    IActivityLogService activityLog
 ) : IRequestHandler<CloseAndRateMyTicketCommand, Result<object>>
 {
     public async Task<Result<object>> Handle(CloseAndRateMyTicketCommand cmd, CancellationToken ct)
     {
         var ticket = await ticketRepo.GetByIdAsync(cmd.TicketId);
-        if (ticket is null)
+        if (ticket is null || ticket.AgentId != cmd.AgentId)
             return Result<object>.Failure(Error.NotFound("Ticket not found."));
 
-        ticket.Rating = cmd.Rating;
+        // Validação da nota (CSAT): 1..5 quando informada.
+        if (cmd.Rating.HasValue && (cmd.Rating.Value < 1 || cmd.Rating.Value > 5))
+            return Result<object>.Failure(Error.Validation("Rating", "A nota deve estar entre 1 e 5."));
+
+        var oldStateId = ticket.WorkflowStateId;
+
+        // Estado final: usa o informado (se válido para o cliente) ou o primeiro
+        // estado marcado como final no workflow do cliente.
+        var states = (await workflowRepo.GetStatesAsync(ticket.ClientId)).ToList();
+        Guid? targetStateId = null;
+        // Só aceita um estado FINAL informado; caso contrário usa o final do fluxo.
+        if (cmd.WorkflowStateId.HasValue && states.Any(s => s.Id == cmd.WorkflowStateId.Value && s.IsFinal))
+            targetStateId = cmd.WorkflowStateId.Value;
+        else
+            targetStateId = states.FirstOrDefault(s => s.IsFinal)?.Id;
+
+        if (cmd.Rating.HasValue)
+        {
+            ticket.Rating = cmd.Rating;
+            ticket.RatedAt = DateTime.UtcNow;
+            ticket.RatedBy = cmd.AgentId.ToString();
+        }
+        if (!string.IsNullOrWhiteSpace(cmd.Feedback))
+            ticket.RatingFeedback = cmd.Feedback.Trim();
+
+        if (targetStateId.HasValue)
+            ticket.WorkflowStateId = targetStateId.Value;
+
         ticket.ClosedAt = DateTime.UtcNow;
+        ticket.UpdatedAt = DateTime.UtcNow;
         await ticketRepo.UpdateAsync(ticket);
 
-        return Result<object>.Success(new { ticketId = cmd.TicketId, closed = true });
+        if (targetStateId.HasValue && targetStateId.Value != oldStateId)
+            await activityLog.LogStateChangeAsync(ticket.Id, null, oldStateId, targetStateId.Value);
+
+        if (cmd.Rating.HasValue)
+            await activityLog.LogActivityAsync(
+                ticket.Id, TicketActivityType.Rated, null, null,
+                cmd.Rating.Value.ToString(), cmd.Feedback);
+
+        return Result<object>.Success(new
+        {
+            ticketId = ticket.Id,
+            closed = true,
+            workflowStateId = ticket.WorkflowStateId,
+            rating = ticket.Rating
+        });
     }
 }

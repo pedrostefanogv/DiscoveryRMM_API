@@ -70,18 +70,24 @@ public class TicketWorkflowService : ITicketWorkflowService
         var wasOnHold = oldState?.PausesSla == true;
         var willBeOnHold = newState?.PausesSla == true;
 
+        // Transição + SLA-hold em UM único ExecuteUpdate (elimina a corrida entre
+        // transição e close/reabertura — lost update).
         if (!wasOnHold && willBeOnHold)
         {
-            await _ticketRepo.UpdateSlaHoldAsync(ticketId, DateTime.UtcNow, ticket.SlaPausedSeconds);
+            await _ticketRepo.UpdateWorkflowStateWithSlaHoldAsync(
+                ticketId, targetStateId, closedAt, DateTime.UtcNow, ticket.SlaPausedSeconds);
         }
         else if (wasOnHold && !willBeOnHold && ticket.SlaHoldStartedAt.HasValue)
         {
             var addedSeconds = (int)(DateTime.UtcNow - ticket.SlaHoldStartedAt.Value).TotalSeconds;
-            await _ticketRepo.UpdateSlaHoldAsync(ticketId, null, ticket.SlaPausedSeconds + addedSeconds);
+            await _ticketRepo.UpdateWorkflowStateWithSlaHoldAsync(
+                ticketId, targetStateId, closedAt, null, ticket.SlaPausedSeconds + addedSeconds);
         }
-
-        // Persistir transição com ExecuteUpdate
-        await _ticketRepo.UpdateWorkflowStateAsync(ticketId, targetStateId, closedAt);
+        else
+        {
+            await _ticketRepo.UpdateWorkflowStateWithSlaHoldAsync(
+                ticketId, targetStateId, closedAt, ticket.SlaHoldStartedAt, ticket.SlaPausedSeconds);
+        }
 
         // Log da mudança
         await _activityLogService.LogStateChangeAsync(ticketId, changedByUserId, ticket.WorkflowStateId, targetStateId);

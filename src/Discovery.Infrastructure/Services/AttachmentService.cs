@@ -150,7 +150,19 @@ public class AttachmentService : IAttachmentService
 
         var existingAttachment = await _attachmentRepository.GetByIdAsync(attachmentId, cancellationToken);
         if (existingAttachment is not null)
+        {
+            // Sem esta validação, um "complete" com attachmentId de OUTRO ticket
+            // devolve metadados alheios (IDOR).
+            if (existingAttachment.IsDeleted
+                || !string.Equals(existingAttachment.EntityType, entityType, StringComparison.OrdinalIgnoreCase)
+                || existingAttachment.EntityId != entityId
+                || existingAttachment.ClientId != clientId)
+            {
+                throw new InvalidOperationException("Attachment não pertence a esta entidade.");
+            }
+
             return existingAttachment;
+        }
 
         var storageService = await GetStorageServiceAsync(cancellationToken);
         var exists = await storageService.ExistsAsync(objectKey, cancellationToken);

@@ -15,6 +15,8 @@ public sealed class SlaMonitoringJob : IJob
     public static readonly JobKey Key = new("sla-monitoring", "alerts");
 
     private const int WarningCooldownMinutes = 30;
+    // Cooldown por (ticket, regra) para não reescalonar a cada execução (5 min).
+    private const int EscalationCooldownMinutes = 360;
     private const int MaxConcurrentChecks = 8;
     private const string LockKey = "locks:sla-monitoring";
     private const int LockTtlSeconds = 240; // 4 min (job roda a cada 5 min)
@@ -132,7 +134,7 @@ public sealed class SlaMonitoringJob : IJob
             {
                 await ProcessEscalationBatchAsync(
                     ticketsNeedingEscalation, slaService, escalationRuleRepo,
-                    notificationService, ticketRepo, logger, ct);
+                    notificationService, ticketRepo, redis, logger, ct);
             }
         }
         finally
@@ -155,11 +157,14 @@ public sealed class SlaMonitoringJob : IJob
         ITicketEscalationRuleRepository escalationRuleRepo,
         INotificationService notificationService,
         ITicketRepository ticketRepo,
+        IRedisService redis,
         ILogger logger,
         CancellationToken ct)
     {
         // Coletar tickets que precisam de bump de prioridade
         var ticketsToBump = new List<(Guid ticketId, Discovery.Core.Enums.TicketPriority newPriority)>();
+        // No máximo 1 bump por ticket por execução (evita saltar vários níveis).
+        var bumpedTickets = new HashSet<Guid>();
 
         foreach (var (ticket, percentUsed) in items)
         {
@@ -184,8 +189,20 @@ public sealed class SlaMonitoringJob : IJob
 
                 if (!shouldFire) continue;
 
-                // Bump priority
-                if (rule.BumpPriority && ticket.Priority < Discovery.Core.Enums.TicketPriority.Critical)
+                // Dedup: cada regra dispara no máximo 1x por janela de cooldown.
+                var cooldownKey = $"sla:escalation:{ticket.Id:N}:{rule.Id:N}";
+                var canFire = await redis.SetIfNotExistsAsync(
+                    cooldownKey, DateTime.UtcNow.Ticks.ToString(), EscalationCooldownMinutes * 60);
+                if (!canFire)
+                    continue;
+
+                logger.LogInformation(
+                    "Escalation rule {RuleId} fired for ticket {TicketId} at {Percent}%",
+                    rule.Id, ticket.Id, percentUsed);
+
+                // Bump priority (no máximo um nível por ticket por execução)
+                if (rule.BumpPriority && ticket.Priority < Discovery.Core.Enums.TicketPriority.Critical
+                    && bumpedTickets.Add(ticket.Id))
                 {
                     var newPriority = (Discovery.Core.Enums.TicketPriority)((int)ticket.Priority + 1);
                     ticketsToBump.Add((ticket.Id, newPriority));

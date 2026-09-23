@@ -170,29 +170,71 @@ public class TicketRepository : ITicketRepository
         return ticket;
     }
 
+    /// <summary>
+    /// Transição de estado + ajuste de SLA-hold em UM único ExecuteUpdate:
+    /// elimina a corrida entre transição e close/reabertura.
+    /// </summary>
+    public async Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds)
+    {
+        await _db.Tickets
+            .Where(t => t.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(t => t.WorkflowStateId, workflowStateId)
+                .SetProperty(t => t.ClosedAt, closedAt)
+                .SetProperty(t => t.SlaHoldStartedAt, slaHoldStartedAt)
+                .SetProperty(t => t.SlaPausedSeconds, slaPausedSeconds)
+                .SetProperty(t => t.UpdatedAt, DateTime.UtcNow));
+    }
+
     public async Task UpdateAsync(Ticket ticket)
     {
         var existingTicket = await _db.Tickets.SingleOrDefaultAsync(existing => existing.Id == ticket.Id);
         if (existingTicket is null)
             return;
 
-        existingTicket.ClientId = ticket.ClientId;
-        existingTicket.SiteId = ticket.SiteId;
-        existingTicket.AgentId = ticket.AgentId;
-        existingTicket.Title = ticket.Title;
-        existingTicket.Description = ticket.Description;
-        existingTicket.WorkflowStateId = ticket.WorkflowStateId;
-        existingTicket.Priority = ticket.Priority;
-        existingTicket.AssignedToUserId = ticket.AssignedToUserId;
-        existingTicket.DepartmentId = ticket.DepartmentId;
-        existingTicket.WorkflowProfileId = ticket.WorkflowProfileId;
-        existingTicket.SlaExpiresAt = ticket.SlaExpiresAt;
-        existingTicket.SlaBreached = ticket.SlaBreached;
-        existingTicket.Category = ticket.Category;
-        existingTicket.UpdatedAt = DateTime.UtcNow;
-        existingTicket.ClosedAt = ticket.ClosedAt;
+        void Apply(Ticket source)
+        {
+            existingTicket.ClientId = source.ClientId;
+            existingTicket.SiteId = source.SiteId;
+            existingTicket.AgentId = source.AgentId;
+            existingTicket.Title = source.Title;
+            existingTicket.Description = source.Description;
+            existingTicket.WorkflowStateId = source.WorkflowStateId;
+            existingTicket.Priority = source.Priority;
+            existingTicket.AssignedToUserId = source.AssignedToUserId;
+            existingTicket.DepartmentId = source.DepartmentId;
+            existingTicket.WorkflowProfileId = source.WorkflowProfileId;
+            existingTicket.SlaExpiresAt = source.SlaExpiresAt;
+            existingTicket.SlaFirstResponseExpiresAt = source.SlaFirstResponseExpiresAt;
+            existingTicket.FirstRespondedAt = source.FirstRespondedAt;
+            existingTicket.SlaPausedSeconds = source.SlaPausedSeconds;
+            existingTicket.SlaHoldStartedAt = source.SlaHoldStartedAt;
+            existingTicket.SlaBreached = source.SlaBreached;
+            existingTicket.Rating = source.Rating;
+            existingTicket.RatingFeedback = source.RatingFeedback;
+            existingTicket.RatedAt = source.RatedAt;
+            existingTicket.RatedBy = source.RatedBy;
+            existingTicket.Category = source.Category;
+            existingTicket.UpdatedAt = DateTime.UtcNow;
+            existingTicket.ClosedAt = source.ClosedAt;
+        }
 
-        await _db.SaveChangesAsync();
+        Apply(ticket);
+
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Concorrência otimista (xmin): outro processo alterou o ticket entre a
+            // leitura e a escrita. Recarrega e reaplica uma vez — a disputa passa a
+            // ser DETECTADA em vez de virar lost update silencioso.
+            await _db.Entry(existingTicket).ReloadAsync();
+            Apply(ticket);
+            await _db.SaveChangesAsync();
+        }
+
         await PublishDashboardEventAsync("TicketUpdated", existingTicket);
     }
 
@@ -324,17 +366,12 @@ public class TicketRepository : ITicketRepository
                 .SetProperty(t => t.UpdatedAt, _ => DateTime.UtcNow));
     }
 
-    public async Task<TicketKpiResult> GetKpiAsync(Guid? clientId, Guid? departmentId, DateTime? since)
-    {
-        var baseQuery = _db.Tickets.AsNoTracking()
-            .Where(t => t.DeletedAt == null);
+    public Task<TicketKpiResult> GetKpiAsync(Guid? clientId, Guid? departmentId, DateTime? since)
+        => GetKpiAsync(new TicketFilterQuery(ClientId: clientId, DepartmentId: departmentId, Since: since));
 
-        if (clientId.HasValue)
-            baseQuery = baseQuery.Where(t => t.ClientId == clientId.Value);
-        if (departmentId.HasValue)
-            baseQuery = baseQuery.Where(t => t.DepartmentId == departmentId.Value);
-        if (since.HasValue)
-            baseQuery = baseQuery.Where(t => t.CreatedAt >= since.Value);
+    public async Task<TicketKpiResult> GetKpiAsync(TicketFilterQuery filter)
+    {
+        var baseQuery = BuildKpiBaseQuery(filter);
 
         var now = DateTime.UtcNow;
 
@@ -342,26 +379,23 @@ public class TicketRepository : ITicketRepository
         var openQuery = baseQuery.Where(t => !t.ClosedAt.HasValue);
         var closedQuery = baseQuery.Where(t => t.ClosedAt.HasValue);
 
-        // Executar contagens em paralelo (LOTE 1: apenas CountAsync)
-        var totalOpenTask = openQuery.CountAsync();
-        var totalClosedTask = closedQuery.CountAsync();
-        var slaBreachedTask = openQuery.CountAsync(t => t.SlaBreached);
-        var onHoldTask = openQuery.CountAsync(t => t.SlaHoldStartedAt.HasValue);
-
         // SLA warning: open, não breached, expires dentro de 2h
         var slaWarningThreshold = now.AddHours(2);
-        var slaWarningTask = openQuery.CountAsync(t =>
-            !t.SlaBreached && t.SlaExpiresAt.HasValue && t.SlaExpiresAt.Value <= slaWarningThreshold);
 
         // FRT achievements
         var frtQuery = baseQuery.Where(t => t.FirstRespondedAt.HasValue && t.SlaFirstResponseExpiresAt.HasValue);
-        var frtAchievedCountTask = frtQuery.CountAsync(t => t.FirstRespondedAt!.Value <= t.SlaFirstResponseExpiresAt!.Value);
-        var frtTotalCountTask = frtQuery.CountAsync();
 
-        // Aguarda TODAS as CountAsync antes de iniciar qualquer ToListAsync
-        await Task.WhenAll(
-            totalOpenTask, totalClosedTask, slaBreachedTask, slaWarningTask, onHoldTask,
-            frtAchievedCountTask, frtTotalCountTask);
+        // DbContext NÃO é thread-safe: as contagens são executadas sequencialmente.
+        // Fazer Task.WhenAll de várias queries no mesmo contexto dispara
+        // "A second operation was started on this context instance before a previous operation completed".
+        var totalOpen = await openQuery.CountAsync();
+        var totalClosed = await closedQuery.CountAsync();
+        var slaBreached = await openQuery.CountAsync(t => t.SlaBreached);
+        var onHold = await openQuery.CountAsync(t => t.SlaHoldStartedAt.HasValue);
+        var slaWarning = await openQuery.CountAsync(t =>
+            !t.SlaBreached && t.SlaExpiresAt.HasValue && t.SlaExpiresAt.Value <= slaWarningThreshold);
+        var frtAchievedCount = await frtQuery.CountAsync(t => t.FirstRespondedAt!.Value <= t.SlaFirstResponseExpiresAt!.Value);
+        var frtTotalCount = await frtQuery.CountAsync();
 
         // LOTE 2: ToListAsync — sequencial para evitar concorrência no DbContext
         // (DbContext não é thread-safe; serializamos após o WhenAll acima)
@@ -380,36 +414,22 @@ public class TicketRepository : ITicketRepository
             ? openDurations.Average(t => (now - t).TotalHours)
             : 0.0;
 
-        // LOTE 3: GroupBy assíncronos em paralelo
-        var byAssigneeTask = openQuery
+        // GroupBy sequenciais (mesmo motivo do bloco acima)
+        var byAssignee = (await openQuery
             .GroupBy(t => t.AssignedToUserId)
             .Select(g => new { AssignedToUserId = g.Key, Open = g.Count(), Breached = g.Count(t => t.SlaBreached) })
-            .ToListAsync();
-
-        var byDepartmentTask = openQuery
-            .GroupBy(t => t.DepartmentId)
-            .Select(g => new { DepartmentId = g.Key, Open = g.Count(), Breached = g.Count(t => t.SlaBreached) })
-            .ToListAsync();
-
-        await Task.WhenAll(byAssigneeTask, byDepartmentTask);
-
-        var totalOpen = totalOpenTask.Result;
-        var totalClosed = totalClosedTask.Result;
-        var slaBreached = slaBreachedTask.Result;
-        var slaWarning = slaWarningTask.Result;
-        var onHold = onHoldTask.Result;
-
-        var frtAchievedCount = frtAchievedCountTask.Result;
-        var frtTotalCount = frtTotalCountTask.Result;
-        var frtAchievementRate = frtTotalCount > 0 ? (frtAchievedCount / (double)frtTotalCount) * 100.0 : 0.0;
-
-        var byAssignee = byAssigneeTask.Result
+            .ToListAsync())
             .Select(g => new TicketKpiByAssignee(g.AssignedToUserId, g.Open, g.Breached))
             .ToList();
 
-        var byDepartment = byDepartmentTask.Result
+        var byDepartment = (await openQuery
+            .GroupBy(t => t.DepartmentId)
+            .Select(g => new { DepartmentId = g.Key, Open = g.Count(), Breached = g.Count(t => t.SlaBreached) })
+            .ToListAsync())
             .Select(g => new TicketKpiByDepartment(g.DepartmentId, g.Open, g.Breached))
             .ToList();
+
+        var frtAchievementRate = frtTotalCount > 0 ? (frtAchievedCount / (double)frtTotalCount) * 100.0 : 0.0;
 
         return new TicketKpiResult(
             TotalOpen: totalOpen,
@@ -423,6 +443,54 @@ public class TicketRepository : ITicketRepository
             ByAssignee: byAssignee,
             ByDepartment: byDepartment
         );
+    }
+
+    /// <summary>
+    /// Query base do KPI com os mesmos filtros da listagem + ACL (row-level security).
+    /// </summary>
+    private IQueryable<Ticket> BuildKpiBaseQuery(TicketFilterQuery filter)
+    {
+        var query = _db.Tickets.AsNoTracking().Where(t => t.DeletedAt == null);
+
+        if (filter.ClientId.HasValue) query = query.Where(t => t.ClientId == filter.ClientId.Value);
+        if (filter.SiteId.HasValue) query = query.Where(t => t.SiteId == filter.SiteId.Value);
+        if (filter.AgentId.HasValue) query = query.Where(t => t.AgentId == filter.AgentId.Value);
+        if (filter.DepartmentId.HasValue) query = query.Where(t => t.DepartmentId == filter.DepartmentId.Value);
+        if (filter.WorkflowProfileId.HasValue) query = query.Where(t => t.WorkflowProfileId == filter.WorkflowProfileId.Value);
+        if (filter.WorkflowStateId.HasValue) query = query.Where(t => t.WorkflowStateId == filter.WorkflowStateId.Value);
+        if (filter.AssignedToUserId.HasValue) query = query.Where(t => t.AssignedToUserId == filter.AssignedToUserId.Value);
+        if (filter.Priority.HasValue) query = query.Where(t => t.Priority == filter.Priority.Value);
+        if (filter.SlaBreached.HasValue) query = query.Where(t => t.SlaBreached == filter.SlaBreached.Value);
+
+        if (filter.IsClosed.HasValue)
+            query = filter.IsClosed.Value
+                ? query.Where(t => t.ClosedAt != null)
+                : query.Where(t => t.ClosedAt == null);
+
+        if (filter.Since.HasValue)
+            query = query.Where(t => t.CreatedAt >= filter.Since.Value);
+
+        if (!string.IsNullOrWhiteSpace(filter.Text))
+        {
+            var pattern = $"%{filter.Text.Trim()}%";
+            query = query.Where(t =>
+                EF.Functions.ILike(t.Title, pattern) || EF.Functions.ILike(t.Description, pattern));
+        }
+
+        if (!filter.HasGlobalAccess)
+        {
+            var allowedClientIds = (filter.AllowedClientIds ?? []).Distinct().ToArray();
+            var allowedSiteIds = (filter.AllowedSiteIds ?? []).Distinct().ToArray();
+
+            if (allowedClientIds.Length == 0 && allowedSiteIds.Length == 0)
+                return query.Where(_ => false);
+
+            query = query.Where(t =>
+                allowedClientIds.Contains(t.ClientId) ||
+                (t.SiteId.HasValue && allowedSiteIds.Contains(t.SiteId.Value)));
+        }
+
+        return query;
     }
 
     private async Task PublishDashboardEventAsync(string eventType, Ticket ticket)

@@ -10,4 +10,4 @@ public sealed record CreateMyTicketCommand(
 public sealed record AddMyTicketCommentCommand(Guid AgentId, Guid TicketId, string Content, bool? IsInternal) : ICommand<Result<object>>;
 public sealed record GetMyTicketCommentsQuery(Guid AgentId, Guid TicketId) : IQuery<Result<object>>;
 public sealed record UpdateMyTicketWorkflowStateCommand(Guid AgentId, Guid TicketId, Guid WorkflowStateId) : ICommand<Result<object>>;
-public sealed record CloseAndRateMyTicketCommand(Guid AgentId, Guid TicketId, int? Rating, string? Feedback) : ICommand<Result<object>>;
+public sealed record CloseAndRateMyTicketCommand(Guid AgentId, Guid TicketId, int? Rating, string? Feedback, Guid? WorkflowStateId = null) : ICommand<Result<object>>;

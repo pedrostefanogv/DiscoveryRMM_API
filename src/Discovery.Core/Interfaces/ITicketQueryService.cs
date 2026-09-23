@@ -21,5 +21,5 @@ public interface ITicketQueryService
 
     /// <summary>Lista comentários de um ticket com cursor pagination.</summary>
     Task<CursorPageDto<TicketCommentDto>> GetCommentsAsync(
-        Guid ticketId, string? cursor, int limit, CancellationToken ct = default);
+        Guid ticketId, string? cursor, int limit, bool includeInternal = false, CancellationToken ct = default);
 }

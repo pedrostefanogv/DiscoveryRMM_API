@@ -1,9 +1,11 @@
 using Discovery.Core.Cqrs.Tickets.Commands;
 using Discovery.Core.Cqrs.Tickets.Queries;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 using Discovery.Api;
+using Discovery.Api.Filters;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class TicketAlertRulesController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAll()
     {
         var result = await mediator.Send(new ListTicketAlertRulesQuery());
@@ -19,6 +22,7 @@ public class TicketAlertRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetTicketAlertRuleByIdQuery(id));
@@ -26,6 +30,7 @@ public class TicketAlertRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("by-workflow-state/{workflowStateId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetByWorkflowState(Guid workflowStateId)
     {
         var result = await mediator.Send(new GetTicketAlertRulesByWorkflowStateQuery(workflowStateId));
@@ -33,6 +38,7 @@ public class TicketAlertRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Create([FromBody] CreateTicketAlertRuleRequest req)
     {
         var result = await mediator.Send(new CreateTicketAlertRuleCommand(req.WorkflowStateId, req.Title, req.Message, req.AlertType, req.TimeoutSeconds, req.ActionsJson, req.DefaultAction, req.Icon, req.ScopePreference, req.IsEnabled));
@@ -40,6 +46,7 @@ public class TicketAlertRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketAlertRuleRequest req)
     {
         var result = await mediator.Send(new UpdateTicketAlertRuleCommand(id, req.WorkflowStateId, req.Title, req.Message, req.AlertType, req.TimeoutSeconds, req.ActionsJson, req.DefaultAction, req.Icon, req.ScopePreference, req.IsEnabled));
@@ -47,6 +54,7 @@ public class TicketAlertRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPatch("{id:guid}/toggle")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Toggle(Guid id)
     {
         var result = await mediator.Send(new ToggleTicketAlertRuleCommand(id));
@@ -54,6 +62,7 @@ public class TicketAlertRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> Delete(Guid id) { await mediator.Send(new DeleteTicketAlertRuleCommand(id)); return NoContent(); }
 
     private IActionResult BadRequest(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) });

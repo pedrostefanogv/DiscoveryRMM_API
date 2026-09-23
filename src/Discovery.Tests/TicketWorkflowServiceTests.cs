@@ -193,6 +193,17 @@ public class TicketWorkflowServiceTests
             return Task.CompletedTask;
         }
 
+        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds)
+        {
+            UpdateWorkflowStateAsync(id, workflowStateId, closedAt);
+            UpdateSlaHoldAsync(id, slaHoldStartedAt, slaPausedSeconds);
+            return Task.CompletedTask;
+        }
+
+        public Task<TicketKpiResult> GetKpiAsync(TicketFilterQuery filter)
+            => Task.FromResult(new TicketKpiResult(0, 0, 0, 0, 0, 0, 0, 0,
+                Array.Empty<TicketKpiByAssignee>(), Array.Empty<TicketKpiByDepartment>()));
+
         public Task UpdateFirstRespondedAtAsync(Guid id, DateTime firstRespondedAt) => Task.CompletedTask;
 
         public Task<TicketKpiResult> GetKpiAsync(Guid? clientId, Guid? departmentId, DateTime? since) =>

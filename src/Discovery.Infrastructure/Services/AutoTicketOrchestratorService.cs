@@ -81,7 +81,7 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             if (handled) return earlyResult!;
 
             // Step 2: Check if enabled and in scope
-            var (disabled, disabledResult) = HandleConfigAndScopeCheck(monitoringEvent, decision);
+            var (disabled, disabledResult) = await HandleConfigAndScopeCheckAsync(monitoringEvent, decision);
             if (disabled) return disabledResult!;
 
             // Step 3: Dedup + Reopen + Rate limit + Create
@@ -129,22 +129,22 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         return (false, null);
     }
 
-    private (bool Disabled, AutoTicketRuleExecution? Result) HandleConfigAndScopeCheck(
+    private async Task<(bool Disabled, AutoTicketRuleExecution? Result)> HandleConfigAndScopeCheckAsync(
         AgentMonitoringEvent monitoringEvent,
         AutoTicketRuleDecision decision)
     {
         if (!_options.Enabled)
         {
-            var ex = CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
-                "AutoTicket is disabled by configuration.", null, null, false).Result;
+            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
+                "AutoTicket is disabled by configuration.", null, null, false);
             return (true, ex);
         }
 
         if (!CanCreateTicketsFor(monitoringEvent.ClientId, monitoringEvent.SiteId))
         {
-            var ex = CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
+            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
                 _options.ShadowMode ? "AutoTicket shadow mode is active." : "Monitoring event is outside of the configured canary scope.",
-                null, null, false).Result;
+                null, null, false);
             return (true, ex);
         }
 
@@ -266,7 +266,19 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             return (false, null);
 
         var previousClosedAt = reopenableTicket.ClosedAt.Value;
-        await _ticketRepository.UpdateWorkflowStateAsync(reopenableTicket.Id, initialState.Id, closedAt: null);
+
+        // Reabertura deve limpar os marcadores de SLA (senão o ticket reaberto
+        // continua aparecendo como "SLA violado").
+        reopenableTicket.WorkflowStateId = initialState.Id;
+        reopenableTicket.ClosedAt = null;
+        reopenableTicket.SlaBreached = false;
+        reopenableTicket.SlaPausedSeconds = 0;
+        reopenableTicket.SlaHoldStartedAt = null;
+        // Zera expirações antigas: sem isso o SlaMonitoringJob volta a marcar
+        // o ticket reaberto como violado a cada 5 minutos.
+        reopenableTicket.SlaExpiresAt = null;
+        reopenableTicket.SlaFirstResponseExpiresAt = null;
+        await _ticketRepository.UpdateAsync(reopenableTicket);
         await _activityLogService.LogActivityAsync(
             reopenableTicket.Id, TicketActivityType.Reopened, null,
             previousClosedAt.ToString("O"), null,

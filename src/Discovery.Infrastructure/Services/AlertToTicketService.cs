@@ -16,6 +16,7 @@ public class AlertToTicketService : IAlertToTicketService
     private readonly IWorkflowRepository _workflowRepo;
     private readonly IAgentAlertRepository _alertRepo;
     private readonly IActivityLogService _activityLogService;
+    private readonly ISlaService _slaService;
     private readonly ILogger<AlertToTicketService> _logger;
 
     public AlertToTicketService(
@@ -23,12 +24,14 @@ public class AlertToTicketService : IAlertToTicketService
         IWorkflowRepository workflowRepo,
         IAgentAlertRepository alertRepo,
         IActivityLogService activityLogService,
+        ISlaService slaService,
         ILogger<AlertToTicketService> logger)
     {
         _ticketRepo = ticketRepo;
         _workflowRepo = workflowRepo;
         _alertRepo = alertRepo;
         _activityLogService = activityLogService;
+        _slaService = slaService;
         _logger = logger;
     }
 
@@ -90,6 +93,22 @@ public class AlertToTicketService : IAlertToTicketService
             throw new InvalidOperationException($"Estado inicial de workflow não encontrado para o cliente {request.ClientId}.");
         }
 
+        var now = DateTime.UtcNow;
+        DateTime? slaExpiresAt = null;
+        DateTime? frtExpiresAt = null;
+        if (request.WorkflowProfileId.HasValue)
+        {
+            try
+            {
+                slaExpiresAt = await _slaService.CalculateSlaExpiryAsync(request.WorkflowProfileId.Value, now);
+                frtExpiresAt = await _slaService.CalculateFirstResponseExpiryAsync(request.WorkflowProfileId.Value, now);
+            }
+            catch (InvalidOperationException)
+            {
+                // Perfil inexistente/inválido: segue sem SLA.
+            }
+        }
+
         var ticket = await _ticketRepo.CreateAsync(new Ticket
         {
             Id = Guid.NewGuid(),
@@ -103,8 +122,10 @@ public class AlertToTicketService : IAlertToTicketService
             Category = request.Category ?? "Alert",
             WorkflowStateId = initialState.Id,
             Priority = request.Priority,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
+            SlaExpiresAt = slaExpiresAt,
+            SlaFirstResponseExpiresAt = frtExpiresAt,
+            CreatedAt = now,
+            UpdatedAt = now
         });
 
         await _activityLogService.LogActivityAsync(

@@ -25,6 +25,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<SiteConfiguration> SiteConfigurations => Set<SiteConfiguration>();
     public DbSet<Ticket> Tickets => Set<Ticket>();
     public DbSet<TicketComment> TicketComments => Set<TicketComment>();
+    public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
     public DbSet<WorkflowState> WorkflowStates => Set<WorkflowState>();
     public DbSet<WorkflowTransition> WorkflowTransitions => Set<WorkflowTransition>();
     public DbSet<SoftwareCatalog> SoftwareCatalogs => Set<SoftwareCatalog>();
@@ -143,6 +144,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         ConfigureCoreEntities(modelBuilder);
         ConfigureInventory(modelBuilder);
         ConfigureTickets(modelBuilder);
+        ConfigureIdempotency(modelBuilder);
         ConfigureKnowledge(modelBuilder);
         ConfigureConfigurations(modelBuilder);
         ConfigureReports(modelBuilder);
@@ -171,6 +173,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureCoreEntities(ModelBuilder modelBuilder);
     static partial void ConfigureInventory(ModelBuilder modelBuilder);
     static partial void ConfigureTickets(ModelBuilder modelBuilder);
+    static partial void ConfigureIdempotency(ModelBuilder modelBuilder);
     static partial void ConfigureKnowledge(ModelBuilder modelBuilder);
     static partial void ConfigureConfigurations(ModelBuilder modelBuilder);
     static partial void ConfigureReports(ModelBuilder modelBuilder);

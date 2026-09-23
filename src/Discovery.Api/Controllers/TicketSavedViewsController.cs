@@ -1,9 +1,11 @@
 using Discovery.Core.Cqrs.Tickets.Commands;
 using Discovery.Core.Cqrs.Tickets.Queries;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 using Discovery.Api;
+using Discovery.Api.Filters;
 
 namespace Discovery.Api.Controllers;
 
@@ -12,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class TicketSavedViewsController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> List()
     {
         var userId = HttpContext.Items["UserId"] as Guid?;
@@ -19,12 +22,14 @@ public class TicketSavedViewsController(IMediator mediator) : ControllerBase
         return result.ToActionResult();
     }
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetTicketSavedViewByIdQuery(id));
         return result.ToActionResult();
     }
     [HttpPost]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> Create([FromBody] CreateTicketSavedViewRequest req)
     {
         var userId = HttpContext.Items["UserId"] as Guid?;
@@ -32,12 +37,14 @@ public class TicketSavedViewsController(IMediator mediator) : ControllerBase
         return result.Match<IActionResult>(success: v => CreatedAtAction(nameof(GetById), new { id = v.Id }, v), failure: BadRequest);
     }
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketSavedViewRequest req)
     {
         var result = await mediator.Send(new UpdateTicketSavedViewCommand(id, req.Name, req.FilterJson, req.IsShared));
         return result.ToActionResult();
     }
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> Delete(Guid id) { await mediator.Send(new DeleteTicketSavedViewCommand(id)); return NoContent(); }
     private IActionResult BadRequest(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) });
     private IActionResult NotFound(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => errors[0].Code == "NotFound" ? NotFound() : BadRequest(errors);

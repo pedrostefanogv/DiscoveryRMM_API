@@ -30,4 +30,5 @@ public sealed record SuggestTicketKnowledgeQuery(
 public sealed record GetTicketAuditTimelineQuery(Guid TicketId) : IQuery<Result<List<TicketActivityLog>>>;
 
 // ── KPI ──────────────────────────────────────────────────────────────────
-public sealed record GetTicketKpiQuery(Guid? ClientId, Guid? DepartmentId, DateTime? Since) : IQuery<Result<TicketKpiResult>>;
+// Reutiliza TicketFilterQuery para aceitar os mesmos filtros da listagem (+ ACL).
+public sealed record GetTicketKpiQuery(TicketFilterQuery Filter) : IQuery<Result<TicketKpiResult>>;

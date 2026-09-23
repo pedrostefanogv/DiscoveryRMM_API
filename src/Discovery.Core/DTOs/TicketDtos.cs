@@ -20,7 +20,9 @@ public record TicketFilterQuery(
     int Offset = 0,
     bool HasGlobalAccess = true,
     IReadOnlyList<Guid>? AllowedClientIds = null,
-    IReadOnlyList<Guid>? AllowedSiteIds = null
+    IReadOnlyList<Guid>? AllowedSiteIds = null,
+    // Usado pelo KPI (recorte temporal). Ignorado pela listagem.
+    DateTime? Since = null
 );
 
 public record CreateTicketSavedViewRequest(
