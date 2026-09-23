@@ -158,6 +158,47 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
     }
 
+    /// <summary>
+    /// Paginação por cursor (ponteiro) das portas em escuta do snapshot de
+    /// componentes do agente — o browser carrega uma página por vez em vez da
+    /// lista inteira.
+    /// </summary>
+    [HttpGet("{id:guid}/hardware/network/ports")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetListeningPortsPage(
+        Guid id,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        [FromQuery] string? search = null)
+    {
+        var result = await _mediator.Send(new GetAgentListeningPortsPageQuery(id, cursor, limit, search));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound()
+                : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>
+    /// Paginação por cursor (ponteiro) das conexões abertas do snapshot de
+    /// componentes do agente, incluindo o estado TCP de cada conexão.
+    /// </summary>
+    [HttpGet("{id:guid}/hardware/network/sockets")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetOpenSocketsPage(
+        Guid id,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50,
+        [FromQuery] string? search = null)
+    {
+        var result = await _mediator.Send(new GetAgentOpenSocketsPageQuery(id, cursor, limit, search));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound()
+                : BadRequest(new { error = errors[0].Message }));
+    }
+
     [HttpGet("{id:guid}/software")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetSoftware(Guid id, [FromQuery] string? cursor = null, [FromQuery] int limit = 100, [FromQuery] string? search = null, [FromQuery] string order = "asc")

@@ -4,6 +4,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
@@ -98,12 +99,12 @@ public sealed class GetAgentHardwareReportQueryHandler(
             )).ToList(),
             ListeningPorts: components.ListeningPorts.Select(lp => new AgentHardwareListeningPortDto(
                 lp.ProcessName, lp.ProcessId, lp.ProcessPath,
-                lp.Protocol, lp.Address, lp.Port, lp.State
+                lp.Protocol, lp.Address, lp.Port, lp.State, lp.CollectedAt
             )).ToList(),
             OpenSockets: components.OpenSockets.Select(os => new AgentHardwareOpenSocketDto(
                 os.ProcessName, os.ProcessId, os.ProcessPath,
                 os.LocalAddress, os.LocalPort, os.RemoteAddress, os.RemotePort,
-                os.Protocol, os.Family
+                os.Protocol, os.Family, os.State, os.CollectedAt
             )).ToList(),
             Disks: components.Disks.Select(d => new AgentHardwareDiskDto(
                 d.DriveLetter, d.Label, d.FileSystem,
@@ -246,12 +247,12 @@ public sealed class GetAgentHardwareComponentsQueryHandler(
             )).ToList(),
             components.ListeningPorts.Select(lp => new AgentHardwareListeningPortDto(
                 lp.ProcessName, lp.ProcessId, lp.ProcessPath, lp.Protocol,
-                lp.Address, lp.Port, lp.State
+                lp.Address, lp.Port, lp.State, lp.CollectedAt
             )).ToList(),
             components.OpenSockets.Select(os => new AgentHardwareOpenSocketDto(
                 os.ProcessName, os.ProcessId, os.ProcessPath,
                 os.LocalAddress, os.LocalPort, os.RemoteAddress, os.RemotePort,
-                os.Protocol, os.Family
+                os.Protocol, os.Family, os.State, os.CollectedAt
             )).ToList(),
             components.Disks.Select(d => new AgentHardwareDiskDto(
                 d.DriveLetter, d.Label, d.FileSystem,
@@ -278,5 +279,157 @@ public sealed class GetAgentHardwareComponentsQueryHandler(
             )).ToList(),
             hardware?.CollectedAt
         ));
+    }
+}
+
+/// <summary>
+/// Filtro de busca compartilhado das abas de rede do detalhe do agente — espelha
+/// o filtro que antes era client-side (processo, PID, protocolo, endereços,
+/// portas e, para sockets, estado).
+/// </summary>
+internal static class AgentNetworkPageFilter
+{
+    public static bool MatchesListeningPort(ListeningPortInfo p, string search)
+        => (p.ProcessName ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase)
+           || p.ProcessId.ToString().Contains(search, StringComparison.Ordinal)
+           || (p.Protocol ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase)
+           || (p.Address ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase)
+           || p.Port.ToString().Contains(search, StringComparison.Ordinal)
+           || (p.ProcessPath ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase);
+
+    public static bool MatchesOpenSocket(OpenSocketInfo s, string search)
+        => (s.ProcessName ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase)
+           || s.ProcessId.ToString().Contains(search, StringComparison.Ordinal)
+           || (s.Protocol ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase)
+           || (s.LocalAddress ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase)
+           || (s.RemoteAddress ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase)
+           || s.LocalPort.ToString().Contains(search, StringComparison.Ordinal)
+           || s.RemotePort.ToString().Contains(search, StringComparison.Ordinal)
+           || (s.State ?? string.Empty).Contains(search, StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// Paginação por cursor (ponteiro) das portas em escuta do snapshot de
+/// componentes do agente. O cursor é o índice do próximo item dentro da lista
+/// filtrada/ordenada — evita devolver a lista inteira no browser.
+/// </summary>
+public sealed class GetAgentListeningPortsPageQueryHandler(
+    IAgentRepository agentRepo,
+    IAgentHardwareRepository hardwareRepo
+) : IRequestHandler<GetAgentListeningPortsPageQuery, Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>>
+{
+    public async Task<Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>> Handle(
+        GetAgentListeningPortsPageQuery q, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>.Failure(Error.NotFound("Agent not found."));
+
+        var components = await hardwareRepo.GetComponentsAsync(q.AgentId);
+
+        var search = (q.Search ?? string.Empty).Trim();
+        IEnumerable<ListeningPortInfo> filtered = components.ListeningPorts;
+        if (search.Length > 0)
+            filtered = filtered.Where(p => AgentNetworkPageFilter.MatchesListeningPort(p, search));
+
+        // Ordenação determinística: garante cursor estável entre requests sobre
+        // o mesmo snapshot (o índice aponta para a posição na lista ordenada).
+        var list = filtered
+            .OrderBy(p => p.Port)
+            .ThenBy(p => p.Protocol, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(p => p.Address, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(p => p.ProcessId)
+            .ToList();
+
+        var limit = Math.Clamp(q.Limit, 1, HardwareInventoryParser.MaxListeningPorts);
+
+        var cursorIndex = 0;
+        if (!string.IsNullOrWhiteSpace(q.Cursor)
+            && !CursorPaginationHelper.TryDecodeIndexCursor(q.Cursor, out cursorIndex))
+        {
+            // NÃO repetir a 1ª página em cursor inválido (regressão conhecida do
+            // software por cursor): falhar a request para o cliente reiniciar.
+            return Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>.Failure(
+                Error.Validation("cursor", "Cursor inválido para paginação de portas em escuta."));
+        }
+        var startIndex = cursorIndex;
+
+        var pageItems = list.Skip(startIndex).Take(limit)
+            .Select(p => new AgentHardwareListeningPortDto(
+                p.ProcessName, p.ProcessId, p.ProcessPath,
+                p.Protocol, p.Address, p.Port, p.State, p.CollectedAt))
+            .ToList();
+        var hasMore = startIndex + pageItems.Count < list.Count;
+        string? nextCursor = hasMore && pageItems.Count > 0
+            ? CursorPaginationHelper.EncodeIndexCursor(startIndex + pageItems.Count)
+            : null;
+
+        return Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>.Success(
+            new AgentNetworkPageDto<AgentHardwareListeningPortDto>(
+                pageItems, list.Count, q.Cursor, nextCursor, hasMore, q.Limit));
+    }
+}
+
+/// <summary>
+/// Paginação por cursor (ponteiro) das conexões abertas do snapshot de
+/// componentes do agente, com estado TCP (ESTABLISHED, TIME_WAIT...).
+/// </summary>
+public sealed class GetAgentOpenSocketsPageQueryHandler(
+    IAgentRepository agentRepo,
+    IAgentHardwareRepository hardwareRepo
+) : IRequestHandler<GetAgentOpenSocketsPageQuery, Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>>
+{
+    public async Task<Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>> Handle(
+        GetAgentOpenSocketsPageQuery q, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>.Failure(Error.NotFound("Agent not found."));
+
+        var components = await hardwareRepo.GetComponentsAsync(q.AgentId);
+
+        var search = (q.Search ?? string.Empty).Trim();
+        IEnumerable<OpenSocketInfo> filtered = components.OpenSockets;
+        if (search.Length > 0)
+            filtered = filtered.Where(s => AgentNetworkPageFilter.MatchesOpenSocket(s, search));
+
+        // Ordenação determinística: garante cursor estável entre requests sobre
+        // o mesmo snapshot (o índice aponta para a posição na lista ordenada).
+        var list = filtered
+            .OrderBy(s => s.LocalAddress, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.LocalPort)
+            .ThenBy(s => s.RemoteAddress, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.RemotePort)
+            .ThenBy(s => s.Protocol, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.ProcessId)
+            .ToList();
+
+        var limit = Math.Clamp(q.Limit, 1, HardwareInventoryParser.MaxOpenSockets);
+
+        var cursorIndex = 0;
+        if (!string.IsNullOrWhiteSpace(q.Cursor)
+            && !CursorPaginationHelper.TryDecodeIndexCursor(q.Cursor, out cursorIndex))
+        {
+            // NÃO repetir a 1ª página em cursor inválido (regressão conhecida do
+            // software por cursor): falhar a request para o cliente reiniciar.
+            return Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>.Failure(
+                Error.Validation("cursor", "Cursor inválido para paginação de conexões abertas."));
+        }
+        var startIndex = cursorIndex;
+
+        var pageItems = list.Skip(startIndex).Take(limit)
+            .Select(s => new AgentHardwareOpenSocketDto(
+                s.ProcessName, s.ProcessId, s.ProcessPath,
+                s.LocalAddress, s.LocalPort, s.RemoteAddress, s.RemotePort,
+                s.Protocol, s.Family, s.State, s.CollectedAt))
+            .ToList();
+        var hasMore = startIndex + pageItems.Count < list.Count;
+        string? nextCursor = hasMore && pageItems.Count > 0
+            ? CursorPaginationHelper.EncodeIndexCursor(startIndex + pageItems.Count)
+            : null;
+
+        return Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>.Success(
+            new AgentNetworkPageDto<AgentHardwareOpenSocketDto>(
+                pageItems, list.Count, q.Cursor, nextCursor, hasMore, q.Limit));
     }
 }

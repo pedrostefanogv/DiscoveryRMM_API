@@ -6,6 +6,33 @@ namespace Discovery.Core.Cqrs.Agents.Inventory.Queries;
 public sealed record GetAgentHardwareQuery(Guid AgentId) : IQuery<Result<AgentHardwareDto>>;
 public sealed record GetAgentHardwareReportQuery(Guid AgentId) : IQuery<Result<AgentHardwareReportDto>>;
 public sealed record GetAgentHardwareComponentsQuery(Guid AgentId) : IQuery<Result<AgentHardwareComponentsDto>>;
+
+/// <summary>
+/// Página por cursor (ponteiro) sobre listas derivadas do snapshot de
+/// componentes do agente (portas em escuta / conexões abertas). O cursor é o
+/// índice do próximo item na lista já filtrada e ordenada do snapshot corrente
+/// — o snapshot é imutável entre coletas, então o ponteiro é estável dentro da
+/// coleta. TotalCount reflete o filtro ativo, para o rodapé da tabela.
+/// </summary>
+public sealed record AgentNetworkPageDto<T>(
+    IReadOnlyList<T> Items,
+    int TotalCount,
+    string? Cursor,
+    string? NextCursor,
+    bool HasMore,
+    int Limit);
+
+public sealed record GetAgentListeningPortsPageQuery(
+    Guid AgentId,
+    string? Cursor = null,
+    int Limit = 50,
+    string? Search = null) : IQuery<Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>>;
+
+public sealed record GetAgentOpenSocketsPageQuery(
+    Guid AgentId,
+    string? Cursor = null,
+    int Limit = 50,
+    string? Search = null) : IQuery<Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>>;
 public sealed record GetAgentSoftwareQuery(Guid AgentId, string? Cursor = null, int Limit = 100, string? Search = null, bool Descending = false) : IQuery<Result<CursorPageDto<AgentSoftwareItemDto>>>;
 public sealed record GetAgentSoftwareSnapshotQuery(Guid AgentId) : IQuery<Result<AgentSoftwareSnapshotDto>>;
 
@@ -139,7 +166,8 @@ public sealed record AgentHardwareListeningPortDto(
     string? Protocol,
     string? Address,
     int Port,
-    string? State
+    string? State,
+    DateTime CollectedAt
 );
 
 public sealed record AgentHardwareOpenSocketDto(
@@ -151,7 +179,9 @@ public sealed record AgentHardwareOpenSocketDto(
     string? RemoteAddress,
     int RemotePort,
     string? Protocol,
-    string? Family
+    string? Family,
+    string? State,
+    DateTime CollectedAt
 );
 
 public sealed record AgentHardwareDiskDto(

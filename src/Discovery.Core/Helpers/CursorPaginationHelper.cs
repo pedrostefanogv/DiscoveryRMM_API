@@ -79,6 +79,41 @@ public static class CursorPaginationHelper
         return Guid.TryParse(cursor, out id);
     }
 
+    // ── Type E: índice (int) dentro de uma lista em memória ─────────────────
+
+    /// <summary>
+    /// Codifica cursor Type E (índice do próximo item). Use para listas derivadas
+    /// de um snapshot em memória (ex.: portas/sockets dentro do JSON de
+    /// componentes do agente), onde não há tabela/ordenação de banco para keyset.
+    /// </summary>
+    public static string EncodeIndexCursor(int index)
+        => Convert.ToBase64String(Encoding.UTF8.GetBytes(
+            index.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+    /// <summary>Decodifica cursor Type E.</summary>
+    /// <remarks>Aceita Base64 canônico e, por compatibilidade, cursor cru
+    /// ("123") já em circulação. Índices negativos são inválidos.</remarks>
+    public static bool TryDecodeIndexCursor(string? cursor, out int index)
+    {
+        index = 0;
+        if (string.IsNullOrWhiteSpace(cursor)) return false;
+
+        try
+        {
+            var raw = Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            if (int.TryParse(raw, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out index)
+                && index >= 0)
+                return true;
+        }
+        catch
+        {
+            // Não é Base64 — cai no fallback do formato cru abaixo.
+        }
+
+        return int.TryParse(cursor, out index) && index >= 0;
+    }
+
     // ── Type C: Name (string) + Id (Guid) — para Winget/AppPackage ──────────
 
     /// <summary>Codifica cursor Type C (Name asc + PackageId asc).</summary>

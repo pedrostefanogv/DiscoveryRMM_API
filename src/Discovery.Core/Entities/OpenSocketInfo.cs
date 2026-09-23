@@ -13,5 +13,8 @@ public class OpenSocketInfo
     public int RemotePort { get; set; }
     public string? Protocol { get; set; }
     public string? Family { get; set; }
+
+    /// <summary>Estado TCP (MIB_TCP_STATE) no momento da coleta: ESTABLISHED, TIME_WAIT, CLOSE_WAIT...</summary>
+    public string? State { get; set; }
     public DateTime CollectedAt { get; set; }
 }

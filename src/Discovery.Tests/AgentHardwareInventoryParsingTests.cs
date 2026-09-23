@@ -63,7 +63,7 @@ public class AgentHardwareInventoryParsingTests
             })
             .ToArray();
 
-        var openSockets = Enumerable.Range(1, 600)
+        var openSockets = Enumerable.Range(1, 6000)
             .Select(i => new
             {
                 processName = "svc.exe",
@@ -87,8 +87,8 @@ public class AgentHardwareInventoryParsingTests
         var components = InvokeTryBuildComponents(JsonSerializer.Serialize(payload), agentId, collectedAt);
 
         Assert.That(components, Is.Not.Null);
-        Assert.That(components!.ListeningPorts.Count, Is.EqualTo(200));
-        Assert.That(components.OpenSockets.Count, Is.EqualTo(500));
+        Assert.That(components!.ListeningPorts.Count, Is.EqualTo(HardwareInventoryParser.MaxListeningPorts));
+        Assert.That(components.OpenSockets.Count, Is.EqualTo(HardwareInventoryParser.MaxOpenSockets));
     }
 
     private static AgentHardwareComponents? InvokeTryBuildComponents(string inventoryRaw, Guid agentId, DateTime collectedAt)

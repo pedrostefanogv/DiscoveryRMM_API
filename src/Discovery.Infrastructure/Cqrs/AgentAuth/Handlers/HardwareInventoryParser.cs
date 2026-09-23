@@ -8,6 +8,12 @@ namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 /// </summary>
 internal static class HardwareInventoryParser
 {
+    // Limites de itens persistidos por coleta. Devem ser espelhados no frontend
+    // (DiscoveryRMM_Site/src/pages/agents/AgentDetail.tsx) para o aviso de lista
+    // truncada e a detecção de "Todos".
+    internal const int MaxListeningPorts = 200;
+    internal const int MaxOpenSockets = 5000;
+
     public static AgentHardwareComponents? TryBuildFromInventoryRaw(string? inventoryRaw, Guid agentId, DateTime collectedAt)
     {
         if (string.IsNullOrWhiteSpace(inventoryRaw))
@@ -233,7 +239,7 @@ internal static class HardwareInventoryParser
                 CollectedAt = collectedAt
             });
 
-            if (result.Count >= 200)
+            if (result.Count >= MaxListeningPorts)
                 break;
         }
 
@@ -257,6 +263,7 @@ internal static class HardwareInventoryParser
 
             var protocol = ParseJson.GetString(item, "protocol") ?? string.Empty;
             var family = ParseJson.GetString(item, "family") ?? string.Empty;
+            var state = ParseJson.GetString(item, "state");
             var localAddress = ParseJson.GetString(item, "localAddress", "local_address") ?? string.Empty;
             var remoteAddress = ParseJson.GetString(item, "remoteAddress", "remote_address") ?? string.Empty;
             var processId = ParseJson.GetInt(item, "processId", "pid");
@@ -286,10 +293,11 @@ internal static class HardwareInventoryParser
                 RemotePort = remotePort,
                 Protocol = protocol,
                 Family = family,
+                State = state,
                 CollectedAt = collectedAt
             });
 
-            if (result.Count >= 500)
+            if (result.Count >= MaxOpenSockets)
                 break;
         }
 
@@ -453,7 +461,8 @@ internal static class HardwareInventoryParser
             return array;
 
         // Serializa { "prop": [ ... ] } para string e reparseia — o volume por
-        // lista é pequeno (<=500/1000 itens) e esse caminho é raro (apenas merge).
+        // lista é limitado (MaxOpenSockets/MaxListeningPorts) e esse caminho é
+        // raro (apenas merge).
         var json = JsonSerializer.Serialize(new Dictionary<string, JsonElement>
         {
             [propertyName] = array.Clone()

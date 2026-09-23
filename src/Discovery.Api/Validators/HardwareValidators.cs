@@ -112,6 +112,7 @@ public class OpenSocketInfoValidator : AbstractValidator<OpenSocketInfo>
         RuleFor(x => x.ProcessPath).MaximumLength(1024).When(x => x.ProcessPath is not null);
         RuleFor(x => x.Protocol).MaximumLength(16).When(x => x.Protocol is not null);
         RuleFor(x => x.Family).MaximumLength(16).When(x => x.Family is not null);
+        RuleFor(x => x.State).MaximumLength(32).When(x => x.State is not null);
         RuleFor(x => x.LocalAddress).MaximumLength(128).When(x => x.LocalAddress is not null);
         RuleFor(x => x.RemoteAddress).MaximumLength(128).When(x => x.RemoteAddress is not null);
         RuleFor(x => x.LocalPort).InclusiveBetween(0, 65535);
