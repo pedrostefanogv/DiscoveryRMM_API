@@ -240,6 +240,9 @@ public class AgentSoftwarePaginationHandlerTests
         public Task<IEnumerable<AgentInstalledSoftware>> GetCurrentByAgentIdAsync(Guid agentId)
             => Task.FromResult(inventory.AsEnumerable());
 
+        public Task<AgentInstalledSoftware?> GetByInventoryIdAsync(Guid inventoryId)
+            => Task.FromResult(inventory.FirstOrDefault(x => x.InventoryId == inventoryId));
+
         public Task<IReadOnlyList<AgentInstalledSoftware>> GetCurrentByAgentIdPagedAsync(
             Guid agentId, string? cursor, int limit, string? search, bool descending)
         {

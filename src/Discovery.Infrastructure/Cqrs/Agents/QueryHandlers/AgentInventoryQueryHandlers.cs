@@ -178,7 +178,11 @@ public static class AgentSoftwareItemMappers
         s.InstallId,
         s.Serial,
         s.InstallDate,
-        s.CollectedAt);
+        s.CollectedAt,
+        s.AvailableVersion,
+        s.UpdateAvailable,
+        s.UpdateSource,
+        s.UpdatePackageId);
 }
 
 public sealed class GetAgentSoftwarePageQueryHandler(

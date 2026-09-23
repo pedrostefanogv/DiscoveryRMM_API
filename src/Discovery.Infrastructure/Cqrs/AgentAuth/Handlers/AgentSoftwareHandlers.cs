@@ -96,7 +96,24 @@ public sealed class ReportAgentSoftwareHandler(
             Serial       = GetString(item, "serial"),
             Source       = GetString(item, "source"),
             InstallDate  = ParseInstallDate(GetString(item, "installDate")),
-            InstallSource = GetString(item, "installSource")
+            InstallSource = GetString(item, "installSource"),
+            AvailableVersion = GetString(item, "availableVersion"),
+            UpdateAvailable = GetBool(item, "updateAvailable"),
+            UpdateSource = GetString(item, "updateSource"),
+            UpdatePackageId = GetString(item, "updatePackageId")
+        };
+    }
+
+    private static bool GetBool(JsonElement item, string propertyName)
+    {
+        if (!item.TryGetProperty(propertyName, out var prop))
+            return false;
+        return prop.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String => bool.TryParse(prop.GetString(), out var parsed) && parsed,
+            _ => false
         };
     }
 

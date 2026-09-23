@@ -34,10 +34,43 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 Source = catalog.Source,
                 InstallDate = inv.InstallDate,
                 InstallSource = inv.InstallSource,
+                AvailableVersion = inv.AvailableVersion,
+                UpdateAvailable = inv.UpdateAvailable,
+                UpdateSource = inv.UpdateSource,
+                UpdatePackageId = inv.UpdatePackageId,
                 CollectedAt = inv.CollectedAt,
                 FirstSeenAt = inv.FirstSeenAt,
                 LastSeenAt = inv.LastSeenAt
             }).ToListAsync();
+    }
+
+    public async Task<AgentInstalledSoftware?> GetByInventoryIdAsync(Guid inventoryId)
+    {
+        return await (
+            from inv in _db.AgentSoftwareInventories.AsNoTracking()
+            join catalog in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals catalog.Id
+            where inv.Id == inventoryId
+            select new AgentInstalledSoftware
+            {
+                InventoryId = inv.Id,
+                AgentId = inv.AgentId,
+                SoftwareId = inv.SoftwareId,
+                Name = catalog.Name,
+                Version = inv.Version,
+                Publisher = catalog.Publisher,
+                InstallId = catalog.InstallId,
+                Serial = catalog.Serial,
+                Source = catalog.Source,
+                InstallDate = inv.InstallDate,
+                InstallSource = inv.InstallSource,
+                AvailableVersion = inv.AvailableVersion,
+                UpdateAvailable = inv.UpdateAvailable,
+                UpdateSource = inv.UpdateSource,
+                UpdatePackageId = inv.UpdatePackageId,
+                CollectedAt = inv.CollectedAt,
+                FirstSeenAt = inv.FirstSeenAt,
+                LastSeenAt = inv.LastSeenAt
+            }).FirstOrDefaultAsync();
     }
 
     public async Task<IReadOnlyList<AgentInstalledSoftware>> GetCurrentByAgentIdPagedAsync(
@@ -97,6 +130,10 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 Source = x.catalog.Source,
                 InstallDate = x.inv.InstallDate,
                 InstallSource = x.inv.InstallSource,
+                AvailableVersion = x.inv.AvailableVersion,
+                UpdateAvailable = x.inv.UpdateAvailable,
+                UpdateSource = x.inv.UpdateSource,
+                UpdatePackageId = x.inv.UpdatePackageId,
                 CollectedAt = x.inv.CollectedAt,
                 FirstSeenAt = x.inv.FirstSeenAt,
                 LastSeenAt = x.inv.LastSeenAt
@@ -161,6 +198,10 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 Source = x.catalog.Source,
                 InstallDate = x.inv.InstallDate,
                 InstallSource = x.inv.InstallSource,
+                AvailableVersion = x.inv.AvailableVersion,
+                UpdateAvailable = x.inv.UpdateAvailable,
+                UpdateSource = x.inv.UpdateSource,
+                UpdatePackageId = x.inv.UpdatePackageId,
                 CollectedAt = x.inv.CollectedAt,
                 FirstSeenAt = x.inv.FirstSeenAt,
                 LastSeenAt = x.inv.LastSeenAt
@@ -332,7 +373,11 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 Serial = TrimOrNull(entry.Serial),
                 Source = TrimOrNull(entry.Source),
                 InstallDate = NormalizeInstallDate(entry.InstallDate),
-                InstallSource = TrimOrNull(entry.InstallSource)
+                InstallSource = TrimOrNull(entry.InstallSource),
+                AvailableVersion = TrimOrNull(entry.AvailableVersion),
+                UpdateAvailable = entry.UpdateAvailable,
+                UpdateSource = TrimOrNull(entry.UpdateSource),
+                UpdatePackageId = TrimOrNull(entry.UpdatePackageId)
             })
             .ToList();
 
@@ -430,6 +475,10 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                     Version = row.Item.Version,
                     InstallDate = row.Item.InstallDate,
                     InstallSource = row.Item.InstallSource,
+                    AvailableVersion = row.Item.AvailableVersion,
+                    UpdateAvailable = row.Item.UpdateAvailable,
+                    UpdateSource = row.Item.UpdateSource,
+                    UpdatePackageId = row.Item.UpdatePackageId,
                     IsPresent = true,
                     CreatedAt = now,
                     UpdatedAt = now
@@ -443,6 +492,10 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             inventory.Version = row.Item.Version;
             inventory.InstallDate = row.Item.InstallDate;
             inventory.InstallSource = row.Item.InstallSource;
+            inventory.AvailableVersion = row.Item.AvailableVersion;
+            inventory.UpdateAvailable = row.Item.UpdateAvailable;
+            inventory.UpdateSource = row.Item.UpdateSource;
+            inventory.UpdatePackageId = row.Item.UpdatePackageId;
             inventory.IsPresent = true;
             inventory.UpdatedAt = now;
         }

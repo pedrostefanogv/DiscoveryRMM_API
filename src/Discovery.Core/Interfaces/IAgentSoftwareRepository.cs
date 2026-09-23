@@ -5,6 +5,7 @@ namespace Discovery.Core.Interfaces;
 public interface IAgentSoftwareRepository
 {
     Task<IEnumerable<AgentInstalledSoftware>> GetCurrentByAgentIdAsync(Guid agentId);
+    Task<AgentInstalledSoftware?> GetByInventoryIdAsync(Guid inventoryId);
     Task<IReadOnlyList<AgentInstalledSoftware>> GetCurrentByAgentIdPagedAsync(
         Guid agentId,
         string? cursor,

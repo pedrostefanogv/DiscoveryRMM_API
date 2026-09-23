@@ -11,6 +11,7 @@ using Discovery.Core.Cqrs.Agents.Maintenance.Commands;
 using Discovery.Core.Cqrs.Agents.PowerManagement.Commands;
 using Discovery.Core.Cqrs.Agents.RemoteDebug.Commands;
 using Discovery.Core.Cqrs.Agents.RemoteDebug.Queries;
+using Discovery.Core.Cqrs.Agents.Software.Commands;
 using Discovery.Core.Cqrs.Agents.StartupTasks.Commands;
 using Discovery.Core.Cqrs.Agents.Transfer.Commands;
 using Discovery.Core.Cqrs.Notes.Commands;
@@ -347,6 +348,23 @@ public class AgentsController : ControllerBase
         return result.Match<IActionResult>(
             success: _ => Accepted(new { success = true, dispatched = true }),
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    /// <summary>
+    /// Dispara a atualização de um aplicativo instalado no agent, resolvendo o
+    /// item no inventário de software (installId/origem reportados pelo agent) e
+    /// enviando winget upgrade / choco upgrade via dispatcher.
+    /// </summary>
+    [HttpPost("{id:guid}/software/{inventoryId:guid}/update")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> UpdateSoftware(Guid id, Guid inventoryId, CancellationToken ct = default)
+    {
+        var result = await _mediator.Send(new UpdateAgentSoftwareCommand(id, inventoryId), ct);
+        return result.Match<IActionResult>(
+            success: _ => Accepted(new { success = true, dispatched = true }),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { error = errors[0].Message })
+                : BadRequest(new { error = errors[0].Message }));
     }
 
     [HttpGet("{id:guid}/automation/executions")]

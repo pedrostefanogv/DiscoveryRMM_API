@@ -86,6 +86,17 @@ public partial class DiscoveryDbContext
             entity.Property(inventory => inventory.InstallSource)
                 .HasColumnName("install_source")
                 .HasMaxLength(2000);
+            entity.Property(inventory => inventory.AvailableVersion)
+                .HasColumnName("available_version")
+                .HasMaxLength(120);
+            entity.Property(inventory => inventory.UpdateAvailable)
+                .HasColumnName("update_available");
+            entity.Property(inventory => inventory.UpdateSource)
+                .HasColumnName("update_source")
+                .HasMaxLength(40);
+            entity.Property(inventory => inventory.UpdatePackageId)
+                .HasColumnName("update_package_id")
+                .HasMaxLength(1000);
             entity.Property(inventory => inventory.IsPresent)
                 .HasColumnName("is_present");
             entity.Property(inventory => inventory.CreatedAt)

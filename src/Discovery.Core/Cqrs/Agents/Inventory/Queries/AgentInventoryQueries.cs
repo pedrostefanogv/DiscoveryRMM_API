@@ -105,7 +105,11 @@ public sealed record AgentSoftwareItemDto(
     string? InstallId,
     string? Serial,
     DateTime? InstallDate,
-    DateTime? CollectedAt
+    DateTime? CollectedAt,
+    string? AvailableVersion = null,
+    bool UpdateAvailable = false,
+    string? UpdateSource = null,
+    string? UpdatePackageId = null
 );
 public sealed record AgentSoftwareSnapshotDto(Guid AgentId, int TotalInstalled, DateTime? LastCollectedAt);
 

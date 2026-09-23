@@ -13,6 +13,7 @@ internal static class SoftwareInventoryParser
     private const int MaxSerial = 1000;
     private const int MaxSource = 120;
     private const int MaxInstallSource = 2000;
+    private const int MaxUpdateSource = 40;
 
     public static SoftwareInventoryEntry ToEntry(SoftwareInventoryItemRequest item)
     {
@@ -25,7 +26,11 @@ internal static class SoftwareInventoryParser
             Serial = Truncate(item.Serial, MaxSerial),
             Source = Truncate(item.Source, MaxSource),
             InstallDate = ParseInstallDate(item.InstallDate),
-            InstallSource = Truncate(item.InstallSource, MaxInstallSource)
+            InstallSource = Truncate(item.InstallSource, MaxInstallSource),
+            AvailableVersion = Truncate(item.AvailableVersion, MaxVersion),
+            UpdateAvailable = item.UpdateAvailable,
+            UpdateSource = Truncate(item.UpdateSource, MaxUpdateSource),
+            UpdatePackageId = Truncate(item.UpdatePackageId, MaxInstallId)
         };
     }
 
