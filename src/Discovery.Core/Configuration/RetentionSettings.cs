@@ -34,6 +34,12 @@ public class RetentionSettings
     /// <summary>Days to keep automation execution reports. Default: 30.</summary>
     public int AutomationReportRetentionDays { get; set; } = 30;
 
+    /// <summary>
+    /// Days to keep the agent label change history (auditoria de labels).
+    /// Default: 90. A tabela cresce junto com o volume de mudancas de labels.
+    /// </summary>
+    public int AgentLabelChangeLogRetentionDays { get; set; } = 90;
+
     // ── AI Chat (kept in sync with AiChatRetentionJob) ──
 
     /// <summary>Days before soft-deleting AI chat sessions. Default: 180.</summary>

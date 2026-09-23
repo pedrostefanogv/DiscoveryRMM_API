@@ -17,8 +17,8 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     {
         PropertyNameCaseInsensitive = true
     };
-    private const string EnabledRulesCacheKey = "label-rules:enabled";
-    private const int EnabledRulesCacheTtlSeconds = 300;
+    private const string EnabledRulesCacheKey = AgentLabelingCacheKeys.EnabledRules;
+    private const int EnabledRulesCacheTtlSeconds = AgentLabelingCacheKeys.EnabledRulesTtlSeconds;
 
     private readonly DiscoveryDbContext _db;
     private readonly IAgentRepository _agentRepository;
@@ -36,6 +36,13 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         AgentLabelRuleExpressionNodeDto Expression);
 
     private readonly record struct CustomFieldEntry(string ValueJson, CustomFieldDataType DataType);
+
+    /// <summary>Mudanca de label detectada durante a avaliacao (usada para auditoria).</summary>
+    private readonly record struct AgentLabelChange(
+        Guid AgentId,
+        string Label,
+        AgentLabelSourceType SourceType,
+        string Action);
 
     public AgentAutoLabelingService(
         DiscoveryDbContext db,
@@ -75,33 +82,49 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
 
     public async Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, CancellationToken cancellationToken = default)
     {
+        await ReprocessAllAgentsAsync(reason, batchSize, progress: null, cancellationToken);
+    }
+
+    public async Task ReprocessAllAgentsAsync(
+        string reason,
+        int batchSize,
+        IProgress<AgentLabelReprocessProgress>? progress,
+        CancellationToken cancellationToken = default)
+    {
         var safeBatchSize = Math.Clamp(batchSize, 25, 1000);
         var rules = await PrepareEnabledRulesAsync(cancellationToken);
-        if (rules.Count == 0)
-            return;
 
+        var totalAgents = await _db.Agents.AsNoTracking().CountAsync(cancellationToken);
+        if (rules.Count == 0)
+        {
+            progress?.Report(new AgentLabelReprocessProgress(0, totalAgents, true, "Nenhuma regra habilitada."));
+            return;
+        }
+
+        var processed = 0;
         Guid? cursor = null;
         while (!cancellationToken.IsCancellationRequested)
         {
+            // Traz as entidades do lote em uma unica query (antes: 1 GetByIdAsync por agente).
             var currentBatch = await _db.Agents
                 .AsNoTracking()
                 .Where(agent => !cursor.HasValue || agent.Id.CompareTo(cursor.Value) > 0)
                 .OrderBy(agent => agent.Id)
-                .Select(agent => agent.Id)
                 .Take(safeBatchSize)
                 .ToListAsync(cancellationToken);
 
             if (currentBatch.Count == 0)
                 break;
 
-            foreach (var agentId in currentBatch)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await EvaluateAgentWithRulesAsync(agentId, reason, rules, cancellationToken);
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            await EvaluateAgentsBatchAsync(currentBatch, reason, rules, cancellationToken);
 
-            cursor = currentBatch[^1];
+            processed += currentBatch.Count;
+            cursor = currentBatch[^1].Id;
+            progress?.Report(new AgentLabelReprocessProgress(processed, totalAgents, false, null));
         }
+
+        progress?.Report(new AgentLabelReprocessProgress(processed, totalAgents, true, null));
     }
 
     public async Task<AgentLabelRuleDryRunResponse> DryRunAsync(AgentLabelRuleDryRunRequest request, CancellationToken cancellationToken = default)
@@ -110,8 +133,15 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         if (agent is null)
             throw new InvalidOperationException("Agent not found.");
 
-        var hardware = await _hardwareRepository.GetByAgentIdAsync(request.AgentId);
-        var software = (await _softwareRepository.GetCurrentByAgentIdAsync(request.AgentId)).ToList();
+        // Carrega hardware/software apenas quando a expressao realmente os usa, como no
+        // caminho em lote. Antes o dry-run pagava o custo do inventario de software
+        // completo mesmo para uma regra que so olha o hostname.
+        var hardware = HasHardwareConditions(request.Expression)
+            ? await _hardwareRepository.GetByAgentIdAsync(request.AgentId)
+            : null;
+        var software = HasSoftwareConditions(request.Expression)
+            ? (await _softwareRepository.GetCurrentByAgentIdAsync(request.AgentId)).ToList()
+            : [];
 
         var customFieldValues = HasCustomFieldConditions(request.Expression)
             ? await LoadCustomFieldValuesForAgentAsync(request.AgentId, agent.SiteId, cancellationToken)
@@ -148,6 +178,135 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         };
     }
 
+    /// <summary>
+    /// Avalia uma expressao contra uma amostra da frota e extrapola o impacto.
+    /// Permite responder "quantos agentes esta regra afetaria?" antes de salvar,
+    /// em vez de exigir a escolha de cliente+site e limitar a 25-100 agentes.
+    /// </summary>
+    public async Task<AgentLabelRuleImpactResponse> EvaluateImpactAsync(
+        AgentLabelRuleImpactRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var sampleSize = Math.Clamp(request.SampleSize, 10, 500);
+
+        var query = _db.Agents.AsNoTracking();
+        if (request.SiteId.HasValue)
+        {
+            query = query.Where(agent => agent.SiteId == request.SiteId.Value);
+        }
+        else if (request.ClientId.HasValue)
+        {
+            var siteIds = await _db.Sites
+                .AsNoTracking()
+                .Where(site => site.ClientId == request.ClientId.Value)
+                .Select(site => site.Id)
+                .ToListAsync(cancellationToken);
+            query = query.Where(agent => siteIds.Contains(agent.SiteId));
+        }
+
+        var totalAgents = await query.CountAsync(cancellationToken);
+
+        // Amostra deterministica por Id: estavel entre execucoes e barata (sem TABLESAMPLE).
+        var agents = await query
+            .OrderBy(agent => agent.Id)
+            .Take(sampleSize)
+            .ToListAsync(cancellationToken);
+
+        if (agents.Count == 0)
+        {
+            return new AgentLabelRuleImpactResponse { EstimatedTotalAgents = totalAgents };
+        }
+
+        var agentIds = agents.Select(agent => agent.Id).ToList();
+        var needsCustomFields = HasCustomFieldConditions(request.Expression);
+        var needsDisks = HasDiskConditions(request.Expression);
+        var needsHardware = HasHardwareConditions(request.Expression);
+        var needsSoftware = HasSoftwareConditions(request.Expression);
+
+        var hardwareByAgent = needsHardware
+            ? await _hardwareRepository.GetByAgentIdsAsync(agentIds, cancellationToken)
+            : new Dictionary<Guid, AgentHardwareInfo>();
+        var softwareByAgent = needsSoftware
+            ? await _softwareRepository.GetCurrentByAgentIdsAsync(agentIds, cancellationToken)
+            : new Dictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>();
+        var disksByAgent = needsDisks
+            ? await _hardwareRepository.GetDisksByAgentIdsAsync(agentIds, cancellationToken)
+            : new Dictionary<Guid, IReadOnlyList<DiskInfo>>();
+        var customFieldsByAgent = needsCustomFields
+            ? await LoadCustomFieldValuesForAgentsAsync(agents, cancellationToken)
+            : new Dictionary<Guid, IReadOnlyDictionary<Guid, CustomFieldEntry>>();
+
+        var automaticLabelsByAgent = (await _db.AgentLabels
+                .AsNoTracking()
+                .Where(label => agentIds.Contains(label.AgentId) && label.SourceType == AgentLabelSourceType.Automatic)
+                .Select(label => new { label.AgentId, label.Label })
+                .ToListAsync(cancellationToken))
+            .GroupBy(item => item.AgentId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<string>)group.Select(item => item.Label).ToList());
+
+        var normalizedLabel = string.IsNullOrWhiteSpace(request.Label) ? null : request.Label.Trim();
+        var samples = new List<AgentLabelRuleImpactSample>(agents.Count);
+        var matched = 0;
+        var wouldAdd = 0;
+        var wouldRemove = 0;
+
+        foreach (var agent in agents)
+        {
+            hardwareByAgent.TryGetValue(agent.Id, out var hardware);
+            softwareByAgent.TryGetValue(agent.Id, out var software);
+            disksByAgent.TryGetValue(agent.Id, out var disks);
+            customFieldsByAgent.TryGetValue(agent.Id, out var customFieldValues);
+
+            var isMatch = EvaluateNode(
+                request.Expression, agent, hardware, software ?? [], customFieldValues, disks);
+
+            var currentLabels = automaticLabelsByAgent.TryGetValue(agent.Id, out var labels) ? labels : [];
+            var hasLabel = normalizedLabel is not null
+                && currentLabels.Contains(normalizedLabel, StringComparer.OrdinalIgnoreCase);
+
+            var add = isMatch && normalizedLabel is not null && !hasLabel;
+            var remove = !isMatch
+                && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
+                && normalizedLabel is not null
+                && hasLabel;
+
+            if (isMatch) matched++;
+            if (add) wouldAdd++;
+            if (remove) wouldRemove++;
+
+            samples.Add(new AgentLabelRuleImpactSample
+            {
+                AgentId = agent.Id,
+                Hostname = agent.Hostname,
+                DisplayName = agent.DisplayName,
+                Matched = isMatch,
+                WouldAddLabel = add,
+                WouldRemoveLabel = remove,
+                CurrentAutomaticLabels = currentLabels
+            });
+        }
+
+        // Extrapola a taxa da amostra para a frota (estimativa, nao contagem exata).
+        var ratio = agents.Count == 0 ? 0d : (double)matched / agents.Count;
+
+        return new AgentLabelRuleImpactResponse
+        {
+            Sampled = agents.Count,
+            Matched = matched,
+            WouldAddLabel = wouldAdd,
+            WouldRemoveLabel = wouldRemove,
+            EstimatedTotalAgents = totalAgents,
+            EstimatedMatched = (int)Math.Round(ratio * totalAgents),
+            Truncated = totalAgents > agents.Count,
+            Samples = samples
+        };
+    }
+
+    /// <summary>Avalia um unico agente (caminho de evento isolado — custom fields, etc.).</summary>
     private async Task EvaluateAgentWithRulesAsync(
         Guid agentId,
         string reason,
@@ -158,80 +317,215 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         if (agent is null)
             return;
 
-        var hardware = await _hardwareRepository.GetByAgentIdAsync(agentId);
-        var software = (await _softwareRepository.GetCurrentByAgentIdAsync(agentId)).ToList();
+        await EvaluateAgentsBatchAsync([agent], reason, rules, cancellationToken);
+    }
+
+    /// <summary>
+    /// Avalia um lote de agentes carregando todos os dados necessarios em um numero
+    /// constante de queries (antes eram ~7 queries + ate 2 SaveChanges POR AGENTE).
+    /// Regras cujas expressoes nao usam hardware/software/discos nao pagam o custo
+    /// desses carregamentos.
+    /// </summary>
+    private async Task EvaluateAgentsBatchAsync(
+        IReadOnlyList<Agent> agents,
+        string reason,
+        IReadOnlyList<PreparedRule> rules,
+        CancellationToken cancellationToken)
+    {
+        if (agents.Count == 0 || rules.Count == 0)
+            return;
+
+        var agentIds = agents.Select(agent => agent.Id).ToList();
+        var ruleIds = rules.Select(rule => rule.RuleId).ToList();
 
         var needsCustomFields = rules.Any(rule => HasCustomFieldConditions(rule.Expression));
-        var customFieldValues = needsCustomFields
-            ? await LoadCustomFieldValuesForAgentAsync(agentId, agent.SiteId, cancellationToken)
-            : null;
-
         var needsDisks = rules.Any(rule => HasDiskConditions(rule.Expression));
-        var disks = needsDisks
-            ? (await _hardwareRepository.GetComponentsAsync(agentId)).Disks
-            : null;
+        var needsHardware = rules.Any(rule => HasHardwareConditions(rule.Expression));
+        var needsSoftware = rules.Any(rule => HasSoftwareConditions(rule.Expression));
 
-        var ruleIds = rules.Select(rule => rule.RuleId).ToList();
-        var existingMatches = await _db.AgentLabelRuleMatches
-            .Where(match => match.AgentId == agentId && ruleIds.Contains(match.RuleId))
-            .ToDictionaryAsync(match => match.RuleId, cancellationToken);
+        // Carregamentos em lote — 1 query cada, somente quando alguma regra precisa.
+        var hardwareByAgent = needsHardware
+            ? await _hardwareRepository.GetByAgentIdsAsync(agentIds, cancellationToken)
+            : new Dictionary<Guid, AgentHardwareInfo>();
+        var softwareByAgent = needsSoftware
+            ? await _softwareRepository.GetCurrentByAgentIdsAsync(agentIds, cancellationToken)
+            : new Dictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>();
+        var disksByAgent = needsDisks
+            ? await _hardwareRepository.GetDisksByAgentIdsAsync(agentIds, cancellationToken)
+            : new Dictionary<Guid, IReadOnlyList<DiskInfo>>();
+        var customFieldsByAgent = needsCustomFields
+            ? await LoadCustomFieldValuesForAgentsAsync(agents, cancellationToken)
+            : new Dictionary<Guid, IReadOnlyDictionary<Guid, CustomFieldEntry>>();
+
+        // 1 query para todos os matches do lote.
+        var existingMatchesByAgent = (await _db.AgentLabelRuleMatches
+                .Where(match => agentIds.Contains(match.AgentId) && ruleIds.Contains(match.RuleId))
+                .ToListAsync(cancellationToken))
+            .GroupBy(match => match.AgentId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.ToDictionary(match => match.RuleId));
+
+        // Estado atual das labels automaticas do lote — 1 query (antes: 1 por agente).
+        var automaticLabelsByAgent = (await _db.AgentLabels
+                .Where(label => agentIds.Contains(label.AgentId) && label.SourceType == AgentLabelSourceType.Automatic)
+                .ToListAsync(cancellationToken))
+            .GroupBy(label => label.AgentId)
+            .ToDictionary(group => group.Key, group => group.ToList());
+
+        // Regras habilitadas, restrito aos ids que estamos avaliando. Antes a consulta
+        // varria a tabela inteira de regras a cada lote; agora e indexada pelos ids do
+        // lote, e reflete desabilitacoes ocorridas entre a preparacao e a gravacao.
+        var enabledRuleIds = (await _db.AgentLabelRules
+                .AsNoTracking()
+                .Where(rule => ruleIds.Contains(rule.Id) && rule.IsEnabled)
+                .Select(rule => rule.Id)
+                .ToListAsync(cancellationToken))
+            .ToHashSet();
 
         var now = DateTime.UtcNow;
-        var matchStateChanged = false;
+        var changes = new List<AgentLabelChange>();
 
-        foreach (var rule in rules)
+        foreach (var agent in agents)
         {
-            var matched = EvaluateNode(rule.Expression, agent, hardware, software, customFieldValues, disks);
-            var hasExistingMatch = existingMatches.TryGetValue(rule.RuleId, out var existing);
+            cancellationToken.ThrowIfCancellationRequested();
 
-            if (matched)
+            var agentId = agent.Id;
+            hardwareByAgent.TryGetValue(agentId, out var hardware);
+            softwareByAgent.TryGetValue(agentId, out var software);
+            disksByAgent.TryGetValue(agentId, out var disks);
+            customFieldsByAgent.TryGetValue(agentId, out var customFieldValues);
+
+            var softwareList = software ?? [];
+            var existingMatches = existingMatchesByAgent.TryGetValue(agentId, out var agentMatches)
+                ? agentMatches
+                : new Dictionary<Guid, AgentLabelRuleMatch>();
+
+            // Mapa ruleId -> label dos matches EFETIVOS apos esta avaliacao.
+            // Precisa ser construido aqui porque:
+            //  - matches novos vao para _db, mas nao aparecem no dicionario carregado do banco;
+            //  - matches removidos continuam no dicionario (Remove nao o altera), logo usa-lo
+            //    diretamente faria a label sobreviver a esta execucao.
+            var effectiveLabelsByRule = new Dictionary<Guid, string>();
+
+            foreach (var rule in rules)
             {
-                if (!hasExistingMatch)
+                var matched = EvaluateNode(rule.Expression, agent, hardware, softwareList, customFieldValues, disks);
+                var hasExistingMatch = existingMatches.TryGetValue(rule.RuleId, out var existing);
+
+                if (matched)
                 {
-                    _db.AgentLabelRuleMatches.Add(new AgentLabelRuleMatch
+                    if (!hasExistingMatch)
                     {
-                        Id = IdGenerator.NewId(),
-                        RuleId = rule.RuleId,
-                        AgentId = agentId,
-                        Label = rule.Label,
-                        MatchedAt = now,
-                        LastEvaluatedAt = now
-                    });
-                    matchStateChanged = true;
+                        _db.AgentLabelRuleMatches.Add(new AgentLabelRuleMatch
+                        {
+                            Id = IdGenerator.NewId(),
+                            RuleId = rule.RuleId,
+                            AgentId = agentId,
+                            Label = rule.Label,
+                            MatchedAt = now,
+                            LastEvaluatedAt = now
+                        });
+                    }
+                    else
+                    {
+                        // LastEvaluatedAt deve refletir a ultima avaliacao bem-sucedida,
+                        // nao apenas a ultima vez que a label mudou (bug de dado na UI).
+                        existing!.LastEvaluatedAt = now;
+                        if (!string.Equals(existing.Label, rule.Label, StringComparison.OrdinalIgnoreCase))
+                            existing.Label = rule.Label;
+                    }
+
+                    effectiveLabelsByRule[rule.RuleId] = rule.Label;
                     continue;
                 }
 
-                if (!string.Equals(existing!.Label, rule.Label, StringComparison.OrdinalIgnoreCase))
+                if (!hasExistingMatch)
+                    continue;
+
+                if (rule.ApplyMode == AgentLabelApplyMode.ApplyAndRemove)
                 {
-                    existing.Label = rule.Label;
-                    existing.LastEvaluatedAt = now;
-                    matchStateChanged = true;
+                    // Nao entra no mapa: a label deve sair nesta execucao.
+                    _db.AgentLabelRuleMatches.Remove(existing!);
                 }
-
-                continue;
+                else
+                {
+                    // ApplyOnly preserva o match antigo (semantica de "nao remover").
+                    effectiveLabelsByRule[rule.RuleId] = existing!.Label;
+                }
             }
 
-            if (!hasExistingMatch)
-                continue;
-
-            if (rule.ApplyMode == AgentLabelApplyMode.ApplyAndRemove)
-            {
-                _db.AgentLabelRuleMatches.Remove(existing!);
-                matchStateChanged = true;
-            }
+            // Deriva as labels efetivas em memoria (sem queries por agente).
+            SyncEffectiveLabelsForAgent(
+                agentId,
+                enabledRuleIds,
+                effectiveLabelsByRule,
+                automaticLabelsByAgent.TryGetValue(agentId, out var currentLabels) ? currentLabels : [],
+                now,
+                changes);
         }
 
-        if (matchStateChanged)
-            await _db.SaveChangesAsync(cancellationToken);
+        // Um unico SaveChanges por lote (antes: ate 2 por agente).
+        await _db.SaveChangesAsync(cancellationToken);
 
-        var labelsChanged = await SyncEffectiveLabelsAsync(agentId, now, cancellationToken);
-        if (labelsChanged)
-            await _db.SaveChangesAsync(cancellationToken);
+        if (changes.Count > 0)
+            await RecordLabelChangesAsync(changes, reason, cancellationToken);
 
         _logger.LogInformation(
-            "Agent auto-labeling evaluated for {AgentId}. Reason: {Reason}",
-            agentId,
+            "Agent auto-labeling evaluated for {AgentCount} agent(s). Reason: {Reason}",
+            agents.Count,
             reason);
+    }
+
+    /// <summary>
+    /// Deriva as labels automaticas efetivas de um agente a partir dos matches em memoria.
+    /// Substitui o SyncEffectiveLabelsAsync que fazia 2 queries por agente.
+    /// </summary>
+    private void SyncEffectiveLabelsForAgent(
+        Guid agentId,
+        IReadOnlySet<Guid> enabledRuleIds,
+        IReadOnlyDictionary<Guid, string> effectiveLabelsByRule,
+        IReadOnlyList<AgentLabel> existingAutomaticLabels,
+        DateTime now,
+        List<AgentLabelChange> changes)
+    {
+        // Considera apenas regras habilitadas, replicando o join da versao por agente
+        // (uma regra desabilitada nao deve manter sua label).
+        var shouldKeep = effectiveLabelsByRule
+            .Where(entry => enabledRuleIds.Contains(entry.Key))
+            .Select(entry => entry.Value)
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var existingSet = existingAutomaticLabels
+            .Select(label => label.Label)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var label in shouldKeep)
+        {
+            if (existingSet.Contains(label))
+                continue;
+
+            _db.AgentLabels.Add(new AgentLabel
+            {
+                Id = IdGenerator.NewId(),
+                AgentId = agentId,
+                Label = label,
+                SourceType = AgentLabelSourceType.Automatic,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+            changes.Add(new AgentLabelChange(agentId, label, AgentLabelSourceType.Automatic, "Added"));
+        }
+
+        foreach (var label in existingAutomaticLabels)
+        {
+            if (shouldKeep.Contains(label.Label))
+                continue;
+
+            _db.AgentLabels.Remove(label);
+            changes.Add(new AgentLabelChange(agentId, label.Label, AgentLabelSourceType.Automatic, "Removed"));
+        }
     }
 
     private async Task<IReadOnlyList<PreparedRule>> PrepareEnabledRulesAsync(CancellationToken cancellationToken)
@@ -264,29 +558,83 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
 
     private async Task<IReadOnlyList<AgentLabelRule>> GetCachedEnabledRulesAsync()
     {
-        var cached = await _redisService.GetAsync(EnabledRulesCacheKey);
-        if (!string.IsNullOrWhiteSpace(cached))
+        // O cache e uma otimizacao: qualquer falha de Redis degrada para o banco,
+        // nunca derruba a avaliacao.
+        try
         {
-            try
+            var cached = await _redisService.GetAsync(EnabledRulesCacheKey);
+            if (!string.IsNullOrWhiteSpace(cached))
             {
-                var deserialized = JsonSerializer.Deserialize<List<AgentLabelRule>>(cached, JsonOptions);
+                var deserialized = JsonSerializer.Deserialize<List<EnabledRuleCacheEntry>>(cached, JsonOptions);
                 if (deserialized is not null)
-                    return deserialized;
+                    return deserialized.Select(entry => entry.ToEntity()).ToList();
             }
-            catch (JsonException)
-            {
-                await _redisService.DeleteAsync(EnabledRulesCacheKey);
-            }
+        }
+        catch (JsonException)
+        {
+            // Payload invalido/contrato antigo: descarta e recarrega do banco.
+            try { await _redisService.DeleteAsync(EnabledRulesCacheKey); } catch { /* cache e best-effort */ }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao ler o cache de regras de label; consultando o banco.");
         }
 
         var rules = await _ruleRepository.GetEnabledAsync();
-        if (rules.Count > 0)
+
+        // Cacheia tambem a lista vazia: antes, uma lista vazia nao era gravada e o
+        // valor antigo (stale) continuava sendo servido ate o TTL expirar.
+        try
         {
-            var payload = JsonSerializer.Serialize(rules, JsonOptions);
+            var payload = JsonSerializer.Serialize(
+                rules.Select(EnabledRuleCacheEntry.From).ToList(),
+                JsonOptions);
             await _redisService.SetAsync(EnabledRulesCacheKey, payload, EnabledRulesCacheTtlSeconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao gravar o cache de regras de label.");
         }
 
         return rules;
+    }
+
+    /// <summary>
+    /// Projecao enxuta da regra para o cache. Serializar a entidade EF inteira acoplava
+    /// o cache ao schema do banco (uma mudanca de coluna invalidava silenciosamente).
+    /// </summary>
+    private sealed record EnabledRuleCacheEntry(
+        Guid Id,
+        string Name,
+        string Label,
+        string? Description,
+        bool IsEnabled,
+        int ApplyMode,
+        string ExpressionJson,
+        string? CreatedBy,
+        string? UpdatedBy,
+        DateTime CreatedAt,
+        DateTime UpdatedAt)
+    {
+        public static EnabledRuleCacheEntry From(AgentLabelRule rule) => new(
+            rule.Id, rule.Name, rule.Label, rule.Description, rule.IsEnabled,
+            (int)rule.ApplyMode, rule.ExpressionJson, rule.CreatedBy, rule.UpdatedBy,
+            rule.CreatedAt, rule.UpdatedAt);
+
+        public AgentLabelRule ToEntity() => new()
+        {
+            Id = Id,
+            Name = Name,
+            Label = Label,
+            Description = Description,
+            IsEnabled = IsEnabled,
+            ApplyMode = (AgentLabelApplyMode)ApplyMode,
+            ExpressionJson = ExpressionJson,
+            CreatedBy = CreatedBy,
+            UpdatedBy = UpdatedBy,
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt
+        };
     }
 
     private static AgentLabelRuleExpressionNodeDto? TryDeserializeExpression(string json)
@@ -304,59 +652,167 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         }
     }
 
-    private async Task<bool> SyncEffectiveLabelsAsync(Guid agentId, DateTime now, CancellationToken cancellationToken)
+    /// <summary>
+    /// Carrega os custom fields de varios agentes em 2 queries (valores + definicoes),
+    /// agrupando por agente e resolvendo o escopo (Agent/Site/Client) em memoria.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<Guid, IReadOnlyDictionary<Guid, CustomFieldEntry>>> LoadCustomFieldValuesForAgentsAsync(
+        IReadOnlyList<Agent> agents,
+        CancellationToken cancellationToken)
     {
-        var automaticLabelsFromMatches = await _db.AgentLabelRuleMatches
+        var result = new Dictionary<Guid, IReadOnlyDictionary<Guid, CustomFieldEntry>>();
+        if (agents.Count == 0)
+            return result;
+
+        var siteIds = agents.Select(agent => agent.SiteId).Distinct().ToList();
+        var sites = await _db.Sites
             .AsNoTracking()
-            .Join(
-                _db.AgentLabelRules.AsNoTracking().Where(rule => rule.IsEnabled),
-                match => match.RuleId,
-                rule => rule.Id,
-                (match, _) => match)
-            .Where(item => item.AgentId == agentId)
-            .Select(item => item.Label)
-            .Distinct()
-            .ToListAsync(cancellationToken);
+            .Where(site => siteIds.Contains(site.Id))
+            .Select(site => new { site.Id, site.ClientId })
+            .ToDictionaryAsync(site => site.Id, site => site.ClientId, cancellationToken);
 
-        var existingAutomaticLabels = await _db.AgentLabels
-            .Where(label => label.AgentId == agentId && label.SourceType == AgentLabelSourceType.Automatic)
-            .ToListAsync(cancellationToken);
-
-        var existingSet = existingAutomaticLabels
-            .Select(item => item.Label)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var changed = false;
-
-        foreach (var label in automaticLabelsFromMatches)
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var agent in agents)
         {
-            if (existingSet.Contains(label))
+            keys.Add(agent.Id.ToString("D"));
+            keys.Add(agent.SiteId.ToString("D"));
+            if (sites.TryGetValue(agent.SiteId, out var clientId) && clientId != Guid.Empty)
+                keys.Add(clientId.ToString("D"));
+        }
+
+        var applicableKeys = keys.ToList();
+        var rawValues = await _db.CustomFieldValues
+            .AsNoTracking()
+            .Where(value => applicableKeys.Contains(value.EntityKey))
+            .ToListAsync(cancellationToken);
+
+        if (rawValues.Count == 0)
+            return result;
+
+        var definitionIds = rawValues.Select(value => value.DefinitionId).Distinct().ToList();
+        var definitions = await _db.CustomFieldDefinitions
+            .AsNoTracking()
+            .Where(definition => definitionIds.Contains(definition.Id) && definition.IsActive
+                && (definition.ScopeType == CustomFieldScopeType.Agent
+                    || definition.ScopeType == CustomFieldScopeType.Site
+                    || definition.ScopeType == CustomFieldScopeType.Client))
+            .ToDictionaryAsync(definition => definition.Id, cancellationToken);
+
+        var valuesByKey = rawValues
+            .GroupBy(value => value.EntityKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var agent in agents)
+        {
+            var entries = new Dictionary<Guid, CustomFieldEntry>();
+            var agentKey = agent.Id.ToString("D");
+            var siteKey = agent.SiteId.ToString("D");
+            var clientKey = sites.TryGetValue(agent.SiteId, out var clientId) && clientId != Guid.Empty
+                ? clientId.ToString("D")
+                : null;
+
+            AddCustomFieldsFor(entries, definitions, valuesByKey, agentKey, CustomFieldScopeType.Agent);
+            AddCustomFieldsFor(entries, definitions, valuesByKey, siteKey, CustomFieldScopeType.Site);
+            if (clientKey is not null)
+                AddCustomFieldsFor(entries, definitions, valuesByKey, clientKey, CustomFieldScopeType.Client);
+
+            result[agent.Id] = entries;
+        }
+
+        return result;
+    }
+
+    private static void AddCustomFieldsFor(
+        Dictionary<Guid, CustomFieldEntry> target,
+        IReadOnlyDictionary<Guid, CustomFieldDefinition> definitions,
+        IReadOnlyDictionary<string, List<CustomFieldValue>> valuesByKey,
+        string entityKey,
+        CustomFieldScopeType expectedScope)
+    {
+        if (!valuesByKey.TryGetValue(entityKey, out var values))
+            return;
+
+        foreach (var value in values)
+        {
+            if (!definitions.TryGetValue(value.DefinitionId, out var definition))
                 continue;
 
-            _db.AgentLabels.Add(new AgentLabel
+            // Garante que o valor pertence ao escopo correto da entidade consultada.
+            if (definition.ScopeType != expectedScope)
+                continue;
+
+            target[value.DefinitionId] = new CustomFieldEntry(value.ValueJson, definition.DataType);
+        }
+    }
+
+    /// <summary>
+    /// Persiste o historico de mudancas de labels automaticas (auditoria).
+    /// Nunca derruba a avaliacao — falha apenas e registrada em log.
+    /// </summary>
+    private async Task RecordLabelChangesAsync(
+        IReadOnlyList<AgentLabelChange> changes,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        foreach (var change in changes)
+        {
+            _logger.LogInformation(
+                "Agent label {Action}: agent {AgentId} label {Label} (source={Source}, reason={Reason})",
+                change.Action,
+                change.AgentId,
+                change.Label,
+                change.SourceType,
+                reason);
+        }
+
+        try
+        {
+            _db.AgentLabelChangeLogs.AddRange(changes.Select(change => new AgentLabelChangeLog
             {
                 Id = IdGenerator.NewId(),
-                AgentId = agentId,
-                Label = label,
-                SourceType = AgentLabelSourceType.Automatic,
-                CreatedAt = now,
-                UpdatedAt = now
-            });
-            changed = true;
+                AgentId = change.AgentId,
+                Label = change.Label,
+                SourceType = change.SourceType,
+                Action = change.Action,
+                Reason = reason,
+                OccurredAt = DateTime.UtcNow
+            }));
+
+            await _db.SaveChangesAsync(cancellationToken);
         }
-
-        var shouldKeep = automaticLabelsFromMatches
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var label in existingAutomaticLabels)
+        catch (Exception ex)
         {
-            if (shouldKeep.Contains(label.Label))
-                continue;
+            _logger.LogWarning(ex, "Falha ao registrar o historico de mudancas de labels de agentes.");
+        }
+    }
 
-            _db.AgentLabels.Remove(label);
-            changed = true;
+    private static bool HasHardwareConditions(AgentLabelRuleExpressionNodeDto node)
+    {
+        if (node.NodeType == AgentLabelNodeType.Condition)
+        {
+            return node.Field is AgentLabelField.Processor
+                or AgentLabelField.TotalMemoryBytes
+                or AgentLabelField.ProcessorCores
+                or AgentLabelField.ProcessorThreads
+                or AgentLabelField.GpuModel
+                or AgentLabelField.GpuMemoryBytes
+                or AgentLabelField.MachineScore;
         }
 
-        return changed;
+        return node.Children.Any(HasHardwareConditions);
+    }
+
+    private static bool HasSoftwareConditions(AgentLabelRuleExpressionNodeDto node)
+    {
+        if (node.NodeType == AgentLabelNodeType.Condition)
+        {
+            return node.Field is AgentLabelField.SoftwareName
+                or AgentLabelField.SoftwarePublisher
+                or AgentLabelField.SoftwareVersion
+                or AgentLabelField.SoftwareCount;
+        }
+
+        return node.Children.Any(HasSoftwareConditions);
     }
 
     private static bool EvaluateNode(

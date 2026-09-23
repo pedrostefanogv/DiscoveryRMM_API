@@ -183,5 +183,30 @@ public partial class DiscoveryDbContext
                 .HasForeignKey(match => match.AgentId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+
+        modelBuilder.Entity<AgentLabelChangeLog>(entity =>
+        {
+            entity.ToTable("agent_label_change_logs");
+            entity.HasKey(log => log.Id);
+            entity.HasIndex(log => new { log.AgentId, log.OccurredAt })
+                .HasDatabaseName("ix_agent_label_change_logs_agent_occurred");
+            entity.HasIndex(log => log.OccurredAt)
+                .HasDatabaseName("ix_agent_label_change_logs_occurred");
+
+            entity.Property(log => log.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(log => log.AgentId).HasColumnName("agent_id");
+            entity.Property(log => log.Label).HasColumnName("label").HasMaxLength(120);
+            entity.Property(log => log.SourceType).HasColumnName("source_type").HasConversion<int>();
+            entity.Property(log => log.Action).HasColumnName("action").HasMaxLength(20);
+            entity.Property(log => log.Reason).HasColumnName("reason").HasMaxLength(256);
+            entity.Property(log => log.Actor).HasColumnName("actor").HasMaxLength(256);
+            entity.Property(log => log.OccurredAt).HasColumnName("occurred_at").HasColumnType("timestamptz");
+
+            // Excluir o agente remove seu historico (evita orfaos ao reprovisionar).
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(log => log.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
     }
 }

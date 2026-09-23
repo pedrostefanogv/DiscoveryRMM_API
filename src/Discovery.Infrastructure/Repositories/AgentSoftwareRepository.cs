@@ -44,6 +44,47 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             }).ToListAsync();
     }
 
+    public async Task<IReadOnlyDictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>> GetCurrentByAgentIdsAsync(
+        IReadOnlyCollection<Guid> agentIds,
+        CancellationToken ct = default)
+    {
+        var result = new Dictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>();
+        if (agentIds.Count == 0)
+            return result;
+
+        var rows = await (
+            from inv in _db.AgentSoftwareInventories.AsNoTracking()
+            join catalog in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals catalog.Id
+            where agentIds.Contains(inv.AgentId) && inv.IsPresent
+            orderby catalog.Name
+            select new AgentInstalledSoftware
+            {
+                InventoryId = inv.Id,
+                AgentId = inv.AgentId,
+                SoftwareId = inv.SoftwareId,
+                Name = catalog.Name,
+                Version = inv.Version,
+                Publisher = catalog.Publisher,
+                InstallId = catalog.InstallId,
+                Serial = catalog.Serial,
+                Source = catalog.Source,
+                InstallDate = inv.InstallDate,
+                InstallSource = inv.InstallSource,
+                AvailableVersion = inv.AvailableVersion,
+                UpdateAvailable = inv.UpdateAvailable,
+                UpdateSource = inv.UpdateSource,
+                UpdatePackageId = inv.UpdatePackageId,
+                CollectedAt = inv.CollectedAt,
+                FirstSeenAt = inv.FirstSeenAt,
+                LastSeenAt = inv.LastSeenAt
+            }).ToListAsync(ct);
+
+        foreach (var group in rows.GroupBy(row => row.AgentId))
+            result[group.Key] = group.ToList();
+
+        return result;
+    }
+
     public async Task<AgentInstalledSoftware?> GetByInventoryIdAsync(Guid inventoryId)
     {
         return await (

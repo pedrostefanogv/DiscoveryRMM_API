@@ -216,6 +216,9 @@ public class AgentSoftwarePaginationHandlerTests
     {
         public Task<Agent?> GetByIdAsync(Guid id) => Task.FromResult(agent);
 
+        public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Agent>>(agent is not null && ids.Contains(agent.Id) ? [agent] : []);
+
         public Task<IEnumerable<Agent>> GetAllAsync() => Task.FromResult(Enumerable.Empty<Agent>());
         public Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId) => Task.FromResult(Enumerable.Empty<Agent>());
         public Task<IEnumerable<Agent>> GetByClientIdAsync(Guid clientId) => Task.FromResult(Enumerable.Empty<Agent>());
@@ -239,6 +242,16 @@ public class AgentSoftwarePaginationHandlerTests
     {
         public Task<IEnumerable<AgentInstalledSoftware>> GetCurrentByAgentIdAsync(Guid agentId)
             => Task.FromResult(inventory.AsEnumerable());
+
+        public Task<IReadOnlyDictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>> GetCurrentByAgentIdsAsync(
+            IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyDictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>>(
+                inventory
+                    .Where(item => agentIds.Contains(item.AgentId))
+                    .GroupBy(item => item.AgentId)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => (IReadOnlyList<AgentInstalledSoftware>)group.ToList()));
 
         public Task<AgentInstalledSoftware?> GetByInventoryIdAsync(Guid inventoryId)
             => Task.FromResult(inventory.FirstOrDefault(x => x.InventoryId == inventoryId));

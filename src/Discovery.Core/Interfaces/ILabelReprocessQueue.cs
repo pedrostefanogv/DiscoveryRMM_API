@@ -1,3 +1,5 @@
+using Discovery.Core.DTOs;
+
 namespace Discovery.Core.Interfaces;
 
 /// <summary>
@@ -7,5 +9,9 @@ namespace Discovery.Core.Interfaces;
 /// </summary>
 public interface ILabelReprocessQueue
 {
-    ValueTask EnqueueAsync(CancellationToken cancellationToken = default);
+    /// <summary>Enfileira o reprocessamento e devolve o id do job para acompanhamento.</summary>
+    ValueTask<string> EnqueueAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Consulta o progresso de um job. Retorna null quando o id e desconhecido.</summary>
+    Task<AgentLabelReprocessStatusResponse?> GetStatusAsync(string jobId, CancellationToken cancellationToken = default);
 }

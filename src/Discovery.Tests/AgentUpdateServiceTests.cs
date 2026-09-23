@@ -443,6 +443,9 @@ public class AgentUpdateServiceTests
         public Task<Agent?> GetByIdAsync(Guid id)
             => Task.FromResult(id == _agent.Id ? _agent : null);
 
+        public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Agent>>(ids.Contains(_agent.Id) ? [_agent] : []);
+
         public Task<IEnumerable<Agent>> GetAllAsync() => throw new NotSupportedException();
         public Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId) => throw new NotSupportedException();
         public Task<IEnumerable<Agent>> GetByClientIdAsync(Guid clientId) => throw new NotSupportedException();

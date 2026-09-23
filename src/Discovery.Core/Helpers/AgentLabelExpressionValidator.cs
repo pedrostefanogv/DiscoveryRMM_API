@@ -83,13 +83,24 @@ public static class AgentLabelExpressionValidator
         AgentLabelComparisonOperator.NotEquals
     ];
 
+    /// <summary>Campos que so fazem sentido dentro de um DiskGroup (o avaliador usa currentDisk).</summary>
+    private static readonly HashSet<AgentLabelField> DiskFields =
+    [
+        AgentLabelField.DiskDriveLetter,
+        AgentLabelField.DiskFreeSpaceBytes,
+        AgentLabelField.DiskTotalSpaceBytes,
+        AgentLabelField.DiskFreeSpacePercent,
+        AgentLabelField.DiskFileSystem,
+        AgentLabelField.DiskMediaType
+    ];
+
     public static IReadOnlyList<string> Validate(
         AgentLabelRuleExpressionNodeDto expression,
         IReadOnlyDictionary<Guid, CustomFieldDataType>? customFieldTypes = null)
     {
         var errors = new List<string>();
         var nodeCount = 0;
-        ValidateNode(expression, 1, ref nodeCount, errors, "root", customFieldTypes);
+        ValidateNode(expression, 1, ref nodeCount, errors, "root", customFieldTypes, insideDiskGroup: false);
         return errors;
     }
 
@@ -99,7 +110,8 @@ public static class AgentLabelExpressionValidator
         ref int nodeCount,
         List<string> errors,
         string path,
-        IReadOnlyDictionary<Guid, CustomFieldDataType>? customFieldTypes)
+        IReadOnlyDictionary<Guid, CustomFieldDataType>? customFieldTypes,
+        bool insideDiskGroup)
     {
         nodeCount++;
 
@@ -123,9 +135,13 @@ public static class AgentLabelExpressionValidator
             if (node.Children.Count > MaxChildrenPerGroup)
                 errors.Add($"{path}: {node.NodeType} node exceeds maximum of {MaxChildrenPerGroup} children.");
 
+            // Campos de disco so valem dentro de um DiskGroup: fora dele o avaliador
+            // usa currentDisk == null e a condicao silenciosamente nunca da match.
+            var childInsideDiskGroup = node.NodeType == AgentLabelNodeType.DiskGroup;
+
             for (var i = 0; i < node.Children.Count; i++)
             {
-                ValidateNode(node.Children[i], depth + 1, ref nodeCount, errors, $"{path}.children[{i}]", customFieldTypes);
+                ValidateNode(node.Children[i], depth + 1, ref nodeCount, errors, $"{path}.children[{i}]", customFieldTypes, childInsideDiskGroup || insideDiskGroup);
             }
 
             return;
@@ -154,6 +170,12 @@ public static class AgentLabelExpressionValidator
 
         if (!node.Field.HasValue || !node.Operator.HasValue || node.Value is null)
             return;
+
+        if (DiskFields.Contains(node.Field.Value) && !insideDiskGroup)
+        {
+            errors.Add($"{path}: disk field '{node.Field}' can only be used inside a DiskGroup node.");
+            return;
+        }
 
         ValidateCondition(node.Field.Value, node.CustomFieldDefinitionId, node.Operator.Value, node.Value, errors, path, customFieldTypes);
     }

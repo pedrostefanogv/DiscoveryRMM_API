@@ -96,6 +96,9 @@ public class SoftwareCommandHandlerTests
     {
         public Task<Agent?> GetByIdAsync(Guid id)
             => Task.FromResult<Agent?>(new Agent { Id = id, SiteId = Guid.NewGuid(), Hostname = "host" });
+        public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Agent>>(
+                ids.Select(id => new Agent { Id = id, SiteId = Guid.NewGuid(), Hostname = "host" }).ToList());
         public Task<IEnumerable<Agent>> GetAllAsync() => throw new NotSupportedException();
         public Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId) => throw new NotSupportedException();
         public Task<IEnumerable<Agent>> GetByClientIdAsync(Guid clientId) => throw new NotSupportedException();
@@ -128,6 +131,7 @@ public class SoftwareCommandHandlerTests
         public Task<AgentInstalledSoftware?> GetByInventoryIdAsync(Guid inventoryId)
             => Task.FromResult<AgentInstalledSoftware?>(installed.InventoryId == inventoryId ? installed : null);
         public Task<IEnumerable<AgentInstalledSoftware>> GetCurrentByAgentIdAsync(Guid agentId) => throw new NotSupportedException();
+        public Task<IReadOnlyDictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>> GetCurrentByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<AgentInstalledSoftware>> GetCurrentByAgentIdPagedAsync(Guid agentId, string? cursor, int limit, string? search, bool descending) => throw new NotSupportedException();
         public Task<AgentSoftwarePageResult> GetCurrentByAgentIdOffsetAsync(Guid agentId, int page, int pageSize, string? search, bool descending, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<AgentSoftwareSnapshot> GetSnapshotByAgentIdAsync(Guid agentId) => throw new NotSupportedException();

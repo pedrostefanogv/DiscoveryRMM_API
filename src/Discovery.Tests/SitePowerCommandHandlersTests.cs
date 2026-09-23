@@ -32,6 +32,8 @@ public class SitePowerCommandHandlersTests
         private readonly List<Agent> _agents;
         public FakeAgentRepository(IEnumerable<Agent> agents) => _agents = agents.ToList();
         public Task<Agent?> GetByIdAsync(Guid id) => Task.FromResult(_agents.FirstOrDefault(a => a.Id == id));
+        public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Agent>>(_agents.Where(a => ids.Contains(a.Id)).ToList());
         public Task<IEnumerable<Agent>> GetAllAsync() => Task.FromResult<IEnumerable<Agent>>(_agents);
         public Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId) => Task.FromResult<IEnumerable<Agent>>(_agents.Where(a => a.SiteId == siteId));
         public Task<IEnumerable<Agent>> GetByClientIdAsync(Guid clientId) => Task.FromResult<IEnumerable<Agent>>(_agents);
@@ -53,6 +55,16 @@ public class SitePowerCommandHandlersTests
         public Task<AgentHardwareInfo?> GetByAgentIdAsync(Guid agentId) => Task.FromResult<AgentHardwareInfo?>(null);
         public Task<AgentHardwareComponents> GetComponentsAsync(Guid agentId) =>
             Task.FromResult(_components.TryGetValue(agentId, out var c) ? c : new AgentHardwareComponents());
+        public Task<IReadOnlyDictionary<Guid, AgentHardwareInfo>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyDictionary<Guid, AgentHardwareInfo>>(
+                new Dictionary<Guid, AgentHardwareInfo>());
+        public Task<IReadOnlyDictionary<Guid, IReadOnlyList<DiskInfo>>> GetDisksByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyDictionary<Guid, IReadOnlyList<DiskInfo>>>(
+                _components
+                    .Where(pair => agentIds.Contains(pair.Key))
+                    .ToDictionary(
+                        pair => pair.Key,
+                        pair => (IReadOnlyList<DiskInfo>)pair.Value.Disks));
         public Task UpsertAsync(AgentHardwareInfo hardware, AgentHardwareComponents? components = null) => Task.CompletedTask;
     }
 

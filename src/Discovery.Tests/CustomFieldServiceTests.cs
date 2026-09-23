@@ -453,6 +453,14 @@ public class CustomFieldServiceTests
         public Task<Agent?> GetByIdAsync(Guid id)
             => db.Agents.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id);
 
+        public async Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+        {
+            var idList = ids.ToList();
+            return await db.Agents.AsNoTracking()
+                .Where(item => idList.Contains(item.Id))
+                .ToListAsync(ct);
+        }
+
         public async Task<IEnumerable<Agent>> GetAllAsync()
             => await db.Agents.AsNoTracking().ToListAsync();
 
@@ -532,7 +540,9 @@ public class CustomFieldServiceTests
         public Task EvaluateAgentAsync(Guid agentId, string reason, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<bool> HasEnabledRulesAsync(CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ReprocessAllAgentsAsync(string reason, int batchSize, IProgress<AgentLabelReprocessProgress>? progress, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<AgentLabelRuleDryRunResponse> DryRunAsync(AgentLabelRuleDryRunRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<AgentLabelRuleImpactResponse> EvaluateImpactAsync(AgentLabelRuleImpactRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class TestLogRepository : ILogRepository

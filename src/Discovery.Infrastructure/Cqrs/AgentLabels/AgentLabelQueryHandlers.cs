@@ -24,6 +24,34 @@ public sealed class ListAgentLabelsQueryHandler(ILabelService svc)
     }
 }
 
+/// <summary>
+/// Labels de varios agentes em uma unica consulta. A UI da lista de agentes precisava
+/// disso para filtrar por label sem disparar uma requisicao por agente.
+/// </summary>
+public sealed class ListAgentLabelsBatchQueryHandler(ILabelService svc)
+    : IRequestHandler<ListAgentLabelsBatchQuery, Result<IReadOnlyList<AgentLabelDto>>>
+{
+    private const int MaxAgentsPerRequest = 500;
+
+    public async Task<Result<IReadOnlyList<AgentLabelDto>>> Handle(ListAgentLabelsBatchQuery q, CancellationToken ct)
+    {
+        if (q.AgentIds.Count == 0)
+            return Result<IReadOnlyList<AgentLabelDto>>.Success([]);
+
+        if (q.AgentIds.Count > MaxAgentsPerRequest)
+            return Result<IReadOnlyList<AgentLabelDto>>.Failure(
+                Error.Validation("agentIds", $"No máximo {MaxAgentsPerRequest} agentes por consulta."));
+
+        var labels = await svc.GetByAgentIdsAsync(q.AgentIds, ct);
+        var dtos = labels
+            .Select(l => new AgentLabelDto(l.Id, l.AgentId, l.Label, l.SourceType.ToString(), l.CreatedAt))
+            .ToList()
+            .AsReadOnly();
+
+        return Result<IReadOnlyList<AgentLabelDto>>.Success(dtos);
+    }
+}
+
 public sealed class GetDistinctLabelsQueryHandler(ILabelService svc)
     : IRequestHandler<GetDistinctLabelsQuery, Result<IReadOnlyList<string>>>
 {
@@ -39,8 +67,12 @@ public sealed class RemoveAgentLabelCommandHandler(ILabelService svc)
 {
     public async Task<Result<VoidResult>> Handle(RemoveAgentLabelCommand cmd, CancellationToken ct)
     {
-        await svc.DeleteAsync(cmd.LabelId, ct);
-        return Result<VoidResult>.Success(VoidResult.Value);
+        // Antes o handler devolvia Success mesmo quando a label nao existia
+        // (DELETE de id inexistente respondia 204 em vez de 404).
+        var deleted = await svc.DeleteAsync(cmd.LabelId, ct);
+        return deleted
+            ? Result<VoidResult>.Success(VoidResult.Value)
+            : Result<VoidResult>.Failure(Error.NotFound($"Label {cmd.LabelId} not found"));
     }
 }
 
@@ -75,16 +107,57 @@ public sealed class GetLabelRuleByIdQueryHandler(ILabelService svc)
     }
 }
 
+/// <summary>
+/// Lista custom fields usaveis em regras nos escopos Agent, Site e Client.
+/// Antes retornava apenas escopo Agent e no formato errado (fieldType/texto em vez
+/// de dataType/numerico), o que quebrava a selecao de operadores na UI.
+/// </summary>
 public sealed class GetAvailableCustomFieldsQueryHandler(ICustomFieldService svc)
     : IRequestHandler<GetAvailableCustomFieldsQuery, Result<IReadOnlyList<AvailableCustomFieldDto>>>
 {
     public async Task<Result<IReadOnlyList<AvailableCustomFieldDto>>> Handle(GetAvailableCustomFieldsQuery q, CancellationToken ct)
     {
-        var definitions = await svc.GetDefinitionsAsync(CustomFieldScopeType.Agent, includeInactive: false, ct);
-        var dtos = definitions.Select(d => new AvailableCustomFieldDto(
-            d.Id, d.Name, d.DataType.ToString(), d.Description
-        )).ToList().AsReadOnly();
+        var definitions = await svc.GetDefinitionsAsync(scopeType: null, includeInactive: false, ct);
+
+        var dtos = definitions
+            .Where(d => d.ScopeType is CustomFieldScopeType.Agent or CustomFieldScopeType.Site or CustomFieldScopeType.Client)
+            .OrderBy(d => d.ScopeType)
+            .ThenBy(d => d.Label)
+            .Select(d => new AvailableCustomFieldDto(
+                d.Id,
+                d.Name,
+                string.IsNullOrWhiteSpace(d.Label) ? d.Name : d.Label,
+                d.Description,
+                (int)d.ScopeType,
+                (int)d.DataType,
+                ParseOptions(d.OptionsJson)))
+            .ToList()
+            .AsReadOnly();
+
         return Result<IReadOnlyList<AvailableCustomFieldDto>>.Success(dtos);
+    }
+
+    /// <summary>As opcoes vem como JSON (array de strings) ou CSV legado.</summary>
+    private static IReadOnlyList<string> ParseOptions(string? optionsJson)
+    {
+        if (string.IsNullOrWhiteSpace(optionsJson))
+            return [];
+
+        var trimmed = optionsJson.Trim();
+        if (trimmed.StartsWith('['))
+        {
+            try
+            {
+                var parsed = System.Text.Json.JsonSerializer.Deserialize<List<string>>(trimmed);
+                return parsed?.Where(option => !string.IsNullOrWhiteSpace(option)).ToList() ?? [];
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return [];
+            }
+        }
+
+        return trimmed.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 }
 
@@ -97,16 +170,42 @@ public sealed class ListAgentsByRuleQueryHandler(ILabelService svc)
         if (rule is null)
             return Result<AgentLabelRuleAgentsResponse>.Failure(Error.NotFound($"Label rule {q.RuleId} not found"));
 
-        var agents = await svc.GetAgentsByRuleIdAsync(q.RuleId, ct);
+        var safePage = q.Page < 1 ? 1 : q.Page;
+        var safePageSize = Math.Clamp(q.PageSize, 1, 500);
+
+        var (total, agents) = await svc.GetAgentsByRuleIdPagedAsync(q.RuleId, safePage, safePageSize, ct);
+
         return Result<AgentLabelRuleAgentsResponse>.Success(new AgentLabelRuleAgentsResponse
         {
             RuleId = rule.Id,
             RuleName = rule.Name,
             Label = rule.Label,
             Description = rule.Description,
-            TotalAgents = agents.Count,
+            TotalAgents = total,
+            Page = safePage,
+            PageSize = safePageSize,
             Agents = agents
         });
+    }
+}
+
+public sealed class EvaluateLabelRuleImpactQueryHandler(IAgentAutoLabelingService svc)
+    : IRequestHandler<EvaluateLabelRuleImpactQuery, Result<AgentLabelRuleImpactResponse>>
+{
+    public async Task<Result<AgentLabelRuleImpactResponse>> Handle(EvaluateLabelRuleImpactQuery q, CancellationToken ct)
+    {
+        if (q.Request.Expression is null)
+            return Result<AgentLabelRuleImpactResponse>.Failure(Error.Validation("expression", "Expression is required."));
+
+        try
+        {
+            var response = await svc.EvaluateImpactAsync(q.Request, ct);
+            return Result<AgentLabelRuleImpactResponse>.Success(response);
+        }
+        catch (Exception ex)
+        {
+            return Result<AgentLabelRuleImpactResponse>.Failure(Error.Internal($"Falha ao estimar o impacto da regra: {ex.Message}"));
+        }
     }
 }
 

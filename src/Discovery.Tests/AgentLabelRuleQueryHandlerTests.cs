@@ -125,6 +125,9 @@ public class AgentLabelRuleQueryHandlerTests
         public Task<IReadOnlyList<AgentLabel>> GetByAgentIdAsync(Guid agentId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabel>>([]);
 
+        public Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabel>>([]);
+
         public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<string>>([]);
 
@@ -134,8 +137,8 @@ public class AgentLabelRuleQueryHandlerTests
         public Task<AgentLabel> AddAsync(AgentLabel label, CancellationToken ct = default)
             => Task.FromResult(label);
 
-        public Task DeleteAsync(Guid id, CancellationToken ct = default)
-            => Task.CompletedTask;
+        public Task<bool> DeleteAsync(Guid id, CancellationToken ct = default)
+            => Task.FromResult(true);
 
         public Task<IReadOnlyList<AgentLabelRule>> GetRulesAsync(bool includeDisabled = true, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelRule>>([]);
@@ -154,6 +157,20 @@ public class AgentLabelRuleQueryHandlerTests
 
         public Task<IReadOnlyList<AgentLabelRuleAgentResponse>> GetAgentsByRuleIdAsync(Guid ruleId, CancellationToken ct = default)
             => Task.FromResult(_agentsByRule);
+
+        public Task<(int Total, IReadOnlyList<AgentLabelRuleAgentResponse> Agents)> GetAgentsByRuleIdPagedAsync(
+            Guid ruleId, int page, int pageSize, CancellationToken ct = default)
+        {
+            var safePage = page < 1 ? 1 : page;
+            var safePageSize = pageSize < 1 ? 1 : pageSize;
+            var slice = _agentsByRule
+                .Skip((safePage - 1) * safePageSize)
+                .Take(safePageSize)
+                .ToList();
+
+            return Task.FromResult<(int, IReadOnlyList<AgentLabelRuleAgentResponse>)>(
+                (_agentsByRule.Count, slice));
+        }
     }
 
     private sealed class FakeAutoLabelingService : IAgentAutoLabelingService
@@ -174,6 +191,9 @@ public class AgentLabelRuleQueryHandlerTests
         public Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
+        public Task ReprocessAllAgentsAsync(string reason, int batchSize, IProgress<AgentLabelReprocessProgress>? progress, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
         public Task<AgentLabelRuleDryRunResponse> DryRunAsync(AgentLabelRuleDryRunRequest request, CancellationToken cancellationToken = default)
         {
             if (_throwAgentNotFound)
@@ -189,5 +209,8 @@ public class AgentLabelRuleQueryHandlerTests
                 CurrentAutomaticLabels = []
             });
         }
+
+        public Task<AgentLabelRuleImpactResponse> EvaluateImpactAsync(AgentLabelRuleImpactRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new AgentLabelRuleImpactResponse());
     }
 }

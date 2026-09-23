@@ -21,6 +21,17 @@ public class AgentRepository : IAgentRepository
             .SingleOrDefaultAsync(agent => agent.Id == id);
     }
 
+    public async Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+    {
+        if (ids.Count == 0)
+            return [];
+
+        return await _db.Agents
+            .AsNoTracking()
+            .Where(agent => ids.Contains(agent.Id))
+            .ToListAsync(ct);
+    }
+
     public async Task<IEnumerable<Agent>> GetAllAsync()
     {
         return await _db.Agents

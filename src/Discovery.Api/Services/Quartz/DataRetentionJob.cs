@@ -19,6 +19,7 @@ namespace Discovery.Api.Services.Quartz;
 /// - Stale sync ping deliveries
 /// - Old P2P telemetry
 /// - Old automation execution reports
+/// - Old agent label change history
 ///
 /// Schedule: daily at 3:30 AM (0 30 3 * * ?)
 /// </summary>
@@ -114,6 +115,15 @@ public sealed class DataRetentionJob : IJob
         if (autoReportsDeleted > 0)
             logger.LogInformation("DataRetention: deleted {Count} automation execution reports.", autoReportsDeleted);
         results["automationReports"] = autoReportsDeleted;
+
+        // 8. Historico de mudancas de labels de agentes (auditoria).
+        var labelChangeCutoff = now.AddDays(-settings.AgentLabelChangeLogRetentionDays);
+        var labelChangesDeleted = await db.AgentLabelChangeLogs
+            .Where(log => log.OccurredAt < labelChangeCutoff)
+            .ExecuteDeleteAsync(ct);
+        if (labelChangesDeleted > 0)
+            logger.LogInformation("DataRetention: deleted {Count} agent label change log records.", labelChangesDeleted);
+        results["agentLabelChanges"] = labelChangesDeleted;
 
         var totalDeleted = results.Values.Sum();
         logger.LogInformation("DataRetention completed. Total purged: {Total} records across {Tables} tables.",

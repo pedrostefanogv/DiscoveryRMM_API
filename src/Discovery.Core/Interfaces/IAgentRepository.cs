@@ -5,6 +5,9 @@ namespace Discovery.Core.Interfaces;
 public interface IAgentRepository
 {
     Task<Agent?> GetByIdAsync(Guid id);
+
+    /// <summary>Busca varios agentes em uma unica query (evita N+1 no reprocessamento de labels).</summary>
+    Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default);
     Task<IEnumerable<Agent>> GetAllAsync();
     Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId);
     Task<IEnumerable<Agent>> GetByClientIdAsync(Guid clientId);

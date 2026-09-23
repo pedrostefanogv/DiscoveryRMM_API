@@ -5,6 +5,9 @@ namespace Discovery.Core.Interfaces;
 public interface IAgentSoftwareRepository
 {
     Task<IEnumerable<AgentInstalledSoftware>> GetCurrentByAgentIdAsync(Guid agentId);
+
+    /// <summary>Busca o software atual de varios agentes em uma unica query (evita N+1 no auto-labeling).</summary>
+    Task<IReadOnlyDictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>> GetCurrentByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default);
     Task<AgentInstalledSoftware?> GetByInventoryIdAsync(Guid inventoryId);
     Task<IReadOnlyList<AgentInstalledSoftware>> GetCurrentByAgentIdPagedAsync(
         Guid agentId,

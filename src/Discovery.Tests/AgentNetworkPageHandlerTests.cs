@@ -23,6 +23,8 @@ public class AgentNetworkPageHandlerTests
     private sealed class FakeAgentRepository(Agent agent) : IAgentRepository
     {
         public Task<Agent?> GetByIdAsync(Guid id) => Task.FromResult<Agent?>(agent);
+        public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Agent>>(ids.Contains(agent.Id) ? [agent] : []);
         public Task<IEnumerable<Agent>> GetAllAsync() => Task.FromResult<IEnumerable<Agent>>([agent]);
         public Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId) => Task.FromResult<IEnumerable<Agent>>([agent]);
         public Task<IEnumerable<Agent>> GetByClientIdAsync(Guid clientId) => Task.FromResult<IEnumerable<Agent>>([agent]);
@@ -41,6 +43,12 @@ public class AgentNetworkPageHandlerTests
     {
         public Task<AgentHardwareInfo?> GetByAgentIdAsync(Guid agentId) => Task.FromResult<AgentHardwareInfo?>(null);
         public Task<AgentHardwareComponents> GetComponentsAsync(Guid agentId) => Task.FromResult(components);
+        public Task<IReadOnlyDictionary<Guid, AgentHardwareInfo>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyDictionary<Guid, AgentHardwareInfo>>(
+                new Dictionary<Guid, AgentHardwareInfo>());
+        public Task<IReadOnlyDictionary<Guid, IReadOnlyList<DiskInfo>>> GetDisksByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyDictionary<Guid, IReadOnlyList<DiskInfo>>>(
+                new Dictionary<Guid, IReadOnlyList<DiskInfo>>());
         public Task UpsertAsync(AgentHardwareInfo hardware, AgentHardwareComponents? components = null) => Task.CompletedTask;
     }
 

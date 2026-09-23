@@ -54,6 +54,45 @@ public class AgentLabelRuleDryRunRequest
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
 }
 
+/// <summary>
+/// Previa de impacto de uma regra em toda a frota (amostragem), para responder
+/// "quantos agentes esta regra afetaria?" antes de salvar.
+/// </summary>
+public class AgentLabelRuleImpactRequest
+{
+    public string? Label { get; set; }
+    public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
+    public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
+    public Guid? ClientId { get; set; }
+    public Guid? SiteId { get; set; }
+    /// <summary>Quantos agentes avaliar na amostra (clamp 10..500).</summary>
+    public int SampleSize { get; set; } = 100;
+}
+
+public class AgentLabelRuleImpactResponse
+{
+    public int Sampled { get; set; }
+    public int Matched { get; set; }
+    public int WouldAddLabel { get; set; }
+    public int WouldRemoveLabel { get; set; }
+    /// <summary>Estimativa para a frota inteira, extrapolada da amostra.</summary>
+    public int EstimatedTotalAgents { get; set; }
+    public int EstimatedMatched { get; set; }
+    public IReadOnlyList<AgentLabelRuleImpactSample> Samples { get; set; } = [];
+    public bool Truncated { get; set; }
+}
+
+public class AgentLabelRuleImpactSample
+{
+    public Guid AgentId { get; set; }
+    public string Hostname { get; set; } = string.Empty;
+    public string? DisplayName { get; set; }
+    public bool Matched { get; set; }
+    public bool WouldAddLabel { get; set; }
+    public bool WouldRemoveLabel { get; set; }
+    public IReadOnlyList<string> CurrentAutomaticLabels { get; set; } = [];
+}
+
 public class AgentLabelRuleDryRunResponse
 {
     public Guid AgentId { get; set; }
@@ -81,8 +120,17 @@ public class AgentLabelRuleAgentsResponse
     public string RuleName { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
     public string? Description { get; set; }
+    /// <summary>Total de agentes que casam com a regra (contado no banco, nao pela lista materializada).</summary>
     public int TotalAgents { get; set; }
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 100;
     public IReadOnlyList<AgentLabelRuleAgentResponse> Agents { get; set; } = [];
+}
+
+/// <summary>Requisicao de consulta de labels em lote.</summary>
+public class ListAgentLabelsBatchRequest
+{
+    public IReadOnlyCollection<Guid> AgentIds { get; set; } = [];
 }
 
 public class AddManualLabelRequest

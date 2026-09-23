@@ -50,6 +50,8 @@ public class NatsSessionDeduplicationTests
     {
         private readonly Agent _agent = agent ?? new Agent { Id = Guid.NewGuid(), SiteId = Guid.NewGuid() };
         public Task<Agent?> GetByIdAsync(Guid id) => Task.FromResult(id == _agent.Id ? _agent : null)!;
+        public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Agent>>(ids.Contains(_agent.Id) ? [_agent] : []);
 
         // Stubs for unused members
         public Task<IEnumerable<Agent>> GetAllAsync() => throw new NotImplementedException();

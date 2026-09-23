@@ -35,22 +35,38 @@ public class AgentLabelRepository : IAgentLabelRepository
             .ToListAsync();
     }
 
-    public async Task<IReadOnlyList<AgentLabelRuleAgentResponse>> GetAgentsByRuleIdAsync(Guid ruleId)
+    public async Task<(int Total, IReadOnlyList<AgentLabelRuleAgentResponse> Agents)> GetAgentsByRuleIdPagedAsync(
+        Guid ruleId,
+        int page,
+        int pageSize,
+        CancellationToken ct = default)
     {
-        return await (from match in _db.AgentLabelRuleMatches.AsNoTracking()
-                      join agent in _db.Agents.AsNoTracking() on match.AgentId equals agent.Id
-                      where match.RuleId == ruleId
-                      orderby agent.Hostname
-                      select new AgentLabelRuleAgentResponse
-                      {
-                          AgentId = agent.Id,
-                          Hostname = agent.Hostname,
-                          DisplayName = agent.DisplayName,
-                          Status = agent.Status,
-                          MatchedAt = match.MatchedAt,
-                          LastEvaluatedAt = match.LastEvaluatedAt
-                      })
-            .ToListAsync();
+        var safePage = page < 1 ? 1 : page;
+        var safePageSize = Math.Clamp(pageSize, 1, 500);
+
+        // Contagem no banco — antes era feita materializando a lista completa.
+        var total = await _db.AgentLabelRuleMatches
+            .AsNoTracking()
+            .CountAsync(match => match.RuleId == ruleId, ct);
+
+        var agents = await (from match in _db.AgentLabelRuleMatches.AsNoTracking()
+                            join agent in _db.Agents.AsNoTracking() on match.AgentId equals agent.Id
+                            where match.RuleId == ruleId
+                            orderby agent.Hostname
+                            select new AgentLabelRuleAgentResponse
+                            {
+                                AgentId = agent.Id,
+                                Hostname = agent.Hostname,
+                                DisplayName = agent.DisplayName,
+                                Status = agent.Status,
+                                MatchedAt = match.MatchedAt,
+                                LastEvaluatedAt = match.LastEvaluatedAt
+                            })
+            .Skip((safePage - 1) * safePageSize)
+            .Take(safePageSize)
+            .ToListAsync(ct);
+
+        return (total, agents);
     }
 
     public async Task<IReadOnlyList<string>> GetDistinctLabelsAsync()

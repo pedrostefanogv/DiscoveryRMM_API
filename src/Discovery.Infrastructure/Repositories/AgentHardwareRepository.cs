@@ -35,6 +35,49 @@ public class AgentHardwareRepository : IAgentHardwareRepository
         return DeserializeComponents(json) ?? new AgentHardwareComponents();
     }
 
+    public async Task<IReadOnlyDictionary<Guid, AgentHardwareInfo>> GetByAgentIdsAsync(
+        IReadOnlyCollection<Guid> agentIds,
+        CancellationToken ct = default)
+    {
+        if (agentIds.Count == 0)
+            return new Dictionary<Guid, AgentHardwareInfo>();
+
+        var rows = await _db.AgentHardwareInfos
+            .AsNoTracking()
+            .Where(info => agentIds.Contains(info.AgentId))
+            .ToListAsync(ct);
+
+        return rows.ToDictionary(info => info.AgentId);
+    }
+
+    /// <summary>
+    /// Carrega os discos de varios agentes em uma unica query, desserializando o
+    /// HardwareComponentsJson em memoria. Usado pelo auto-labeling para avaliar
+    /// regras de disco sem N+1.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<Guid, IReadOnlyList<DiskInfo>>> GetDisksByAgentIdsAsync(
+        IReadOnlyCollection<Guid> agentIds,
+        CancellationToken ct = default)
+    {
+        var result = new Dictionary<Guid, IReadOnlyList<DiskInfo>>();
+        if (agentIds.Count == 0)
+            return result;
+
+        var rows = await _db.AgentHardwareInfos
+            .AsNoTracking()
+            .Where(info => agentIds.Contains(info.AgentId))
+            .Select(info => new { info.AgentId, info.HardwareComponentsJson })
+            .ToListAsync(ct);
+
+        foreach (var row in rows)
+        {
+            var components = DeserializeComponents(row.HardwareComponentsJson);
+            result[row.AgentId] = components?.Disks ?? [];
+        }
+
+        return result;
+    }
+
     public async Task UpsertAsync(AgentHardwareInfo hardware, AgentHardwareComponents? components = null)
     {
         var now = DateTime.UtcNow;

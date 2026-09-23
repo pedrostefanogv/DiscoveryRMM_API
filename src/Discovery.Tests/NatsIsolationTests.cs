@@ -533,6 +533,9 @@ public class NatsIsolationTests
         public Task<Agent?> GetByIdAsync(Guid id) =>
             Task.FromResult(id == agent.Id ? (Agent?)agent : null);
 
+        public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Agent>>(ids.Contains(agent.Id) ? [agent] : []);
+
         public Task<IEnumerable<Agent>> GetAllAsync() => throw new NotImplementedException();
         public Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId) => throw new NotImplementedException();
         public Task<IEnumerable<Agent>> GetByClientIdAsync(Guid clientId) => throw new NotImplementedException();

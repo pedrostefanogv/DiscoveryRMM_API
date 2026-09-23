@@ -143,6 +143,9 @@ public class AgentTransferServiceTests
 
         public Task<Agent?> GetByIdAsync(Guid id)
             => Task.FromResult(Agent is not null && Agent.Id == id ? Agent : null);
+        public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Agent>>(
+                Agent is not null && ids.Contains(Agent.Id) ? [Agent] : []);
         public Task<IEnumerable<Agent>> GetAllAsync()
             => Task.FromResult<IEnumerable<Agent>>(Agent is null ? [] : [Agent]);
         public Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId) => Task.FromResult<IEnumerable<Agent>>([]);
