@@ -4,12 +4,12 @@ namespace Discovery.Core.Cqrs.Departments.Commands;
 
 public sealed record CreateDepartmentCommand(
     string Name, string? Description, Guid? ClientId,
-    Guid? InheritFromGlobalId, int SortOrder
+    Guid? InheritFromGlobalId, int SortOrder, int AssignmentStrategy = 0
 ) : ICommand<Result<DepartmentDto>>;
 
 public sealed record UpdateDepartmentCommand(
     Guid Id, string? Name, string? Description,
-    Guid? InheritFromGlobalId, int? SortOrder, bool? IsActive
+    Guid? InheritFromGlobalId, int? SortOrder, bool? IsActive, int? AssignmentStrategy = null
 ) : ICommand<Result<DepartmentDto>>;
 
 public sealed record DeleteDepartmentCommand(Guid Id) : ICommand<Result<VoidResult>>;
@@ -17,5 +17,5 @@ public sealed record DeleteDepartmentCommand(Guid Id) : ICommand<Result<VoidResu
 public sealed record DepartmentDto(
     Guid Id, Guid? ClientId, string Name, string? Description,
     Guid? InheritFromGlobalId, int SortOrder, bool IsActive,
-    DateTime CreatedAt, DateTime UpdatedAt
+    DateTime CreatedAt, DateTime UpdatedAt, int AssignmentStrategy = 0
 );

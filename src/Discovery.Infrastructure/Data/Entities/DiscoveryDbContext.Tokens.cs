@@ -112,5 +112,21 @@ public partial class DiscoveryDbContext
             entity.Property(n => n.ReadAt).HasColumnName("read_at").HasColumnType("timestamptz");
             entity.Property(n => n.CreatedBy).HasColumnName("created_by").HasMaxLength(256);
         });
+
+        modelBuilder.Entity<NotificationChannel>(entity =>
+        {
+            entity.ToTable("notification_channels");
+            entity.HasKey(c => c.Id);
+            entity.HasIndex(c => c.IsActive).HasDatabaseName("ix_notification_channels_active");
+            entity.Property(c => c.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(c => c.Name).HasColumnName("name").HasMaxLength(200);
+            entity.Property(c => c.Type).HasColumnName("type").HasConversion<string>().HasMaxLength(30);
+            entity.Property(c => c.IsActive).HasColumnName("is_active");
+            entity.Property(c => c.EventsJson).HasColumnName("events_json").HasColumnType("jsonb");
+            entity.Property(c => c.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb");
+            entity.Property(c => c.CreatedBy).HasColumnName("created_by").HasMaxLength(255);
+            entity.Property(c => c.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(c => c.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        });
     }
 }

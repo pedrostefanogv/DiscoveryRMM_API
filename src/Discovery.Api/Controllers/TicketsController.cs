@@ -2,6 +2,7 @@ using System.Text.Json;
 using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Configurations.Queries;
 using Discovery.Core.Cqrs.Tickets.Commands;
+using Discovery.Core.Cqrs.Support.Csat;
 using Discovery.Core.Cqrs.Tickets.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
@@ -25,6 +26,7 @@ public class TicketsController(
     ITicketQueryService queryService,
     IAttachmentService attachmentService,
     IAttachmentRepository attachmentRepository,
+    ITicketRepository ticketRepository,
     IScopeContext scopeContext) : ControllerBase
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
@@ -118,11 +120,11 @@ public class TicketsController(
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
             return NotFound();
 
-        // Notas internas: só quem pode editar o chamado vê.
-        var editAccess = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
-        var includeInternal = editAccess.HasGlobalAccess
-            || editAccess.AllowedClientIds.Count > 0
-            || editAccess.AllowedSiteIds.Count > 0;
+        // Notas internas: só quem pode editar ESTE chamado vê. O cálculo anterior
+        // usava o conjunto global de acesso de edição — um usuário com Edit no
+        // cliente A enxergava notas internas de chamados do cliente B (onde só
+        // tinha View).
+        var includeInternal = await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted);
 
         var result = await mediator.Send(new GetTicketCommentsQuery(id, cursor, Math.Clamp(limit, 1, 200), includeInternal), HttpContext.RequestAborted);
         return result.ToActionResult();
@@ -155,7 +157,9 @@ public class TicketsController(
                     return NotFound();
             }
         }
-        var result = await mediator.Send(command with { TargetTicketId = id }, HttpContext.RequestAborted);
+        var result = await mediator.Send(
+            command with { TargetTicketId = id, ChangedByUserId = CurrentUserId },
+            HttpContext.RequestAborted);
         return result.ToActionResult();
     }
 
@@ -338,6 +342,69 @@ public class TicketsController(
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
+    // ── Relations ────────────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/relations")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> GetRelations(Guid id)
+    {
+        if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
+            return NotFound();
+        var result = await mediator.Send(new GetTicketRelationsQuery(id), HttpContext.RequestAborted);
+        return result.ToActionResult();
+    }
+
+    [HttpPost("{id:guid}/relations")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> CreateRelation(Guid id, [FromBody] CreateRelationRequest request)
+    {
+        if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
+            return NotFound();
+        if (!await CanAccessTicketAsync(request.TargetTicketId, HttpContext.RequestAborted))
+            return NotFound();
+
+        var result = await mediator.Send(
+            new CreateTicketRelationCommand(id, request.TargetTicketId, request.RelationType, CurrentUserId, Username),
+            HttpContext.RequestAborted);
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+    }
+
+    [HttpDelete("{id:guid}/relations/{relationId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> DeleteRelation(Guid id, Guid relationId)
+    {
+        if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
+            return NotFound();
+        var result = await mediator.Send(
+            new DeleteTicketRelationCommand(id, relationId, CurrentUserId), HttpContext.RequestAborted);
+        return result.ToActionResult();
+    }
+
+    // ── Lifecycle: reopen / rating (CSAT) ───────────────────────────────
+
+    [HttpPost("{id:guid}/reopen")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> Reopen(Guid id, [FromBody] ReopenTicketRequest request)
+    {
+        if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
+            return NotFound();
+        var result = await mediator.Send(
+            new ReopenTicketCommand(id, request.Reason, CurrentUserId), HttpContext.RequestAborted);
+        return result.ToActionResult();
+    }
+
+    [HttpPost("{id:guid}/rating")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> Rate(Guid id, [FromBody] RateTicketRequest request)
+    {
+        if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
+            return NotFound();
+        var result = await mediator.Send(
+            new RateTicketCommand(id, request.Rating, request.Feedback, CurrentUserId, Username),
+            HttpContext.RequestAborted);
+        return result.ToActionResult();
+    }
+
     // ── Attachments ─────────────────────────────────────────────────────
 
     /// <summary>
@@ -387,6 +454,14 @@ public class TicketsController(
                 : attachment.ContentType;
             return File(stream, contentType, attachment.FileName);
         }
+        catch (FileNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
         catch (Exception)
         {
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Não foi possível baixar o arquivo." });
@@ -398,7 +473,7 @@ public class TicketsController(
     /// configuração global de anexos de tickets (habilitação, tipos e tamanho).
     /// </summary>
     [HttpPost("{id:guid}/attachments/presigned-upload")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> PrepareAttachmentUpload(Guid id, [FromBody] PresignedUploadRequestDto req)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -509,7 +584,41 @@ public class TicketsController(
             return NotFound();
         var (slaHours, slaPercent, slaBreached) = await slaService.GetSlaStatusAsync(id);
         var (frtHours, frtPercent, frtBreached, frtAchieved) = await slaService.GetFrtStatusAsync(id);
-        return Ok(new { resolution = new { hoursRemaining = slaHours, percentUsed = slaPercent, breached = slaBreached }, firstResponse = new { hoursRemaining = frtHours, percentUsed = frtPercent, breached = frtBreached, achieved = frtAchieved } });
+
+        var ticket = await ticketRepository.GetByIdAsync(id);
+        var onHold = ticket?.SlaHoldStartedAt.HasValue == true;
+        var warningLevel = slaPercent >= 90 ? "critical" : slaPercent >= 75 ? "high" : slaPercent >= 50 ? "medium" : "low";
+
+        // Contrato plano consumido pelo console (tipo SlaDetails): antes o endpoint
+        // devolvia só { resolution, firstResponse }, então o painel de SLA do
+        // detalhe do chamado nunca exibia percentual/expiração (campos undefined).
+        return Ok(new
+        {
+            ticketId = id,
+            slaExpiresAt = ticket?.SlaExpiresAt,
+            effectiveSlaExpiresAt = ticket is null ? null : slaService.GetEffectiveSlaExpiry(ticket),
+            hoursRemaining = (double)slaHours,
+            percentUsed = slaPercent,
+            breached = slaBreached,
+            status = slaBreached ? "SLA violado" : onHold ? "SLA em pausa" : "SLA ativo",
+            message = ticket?.SlaExpiresAt is null ? "SLA não configurado para este chamado." : null,
+            onHold,
+            slaHoldStartedAt = ticket?.SlaHoldStartedAt,
+            slaPausedSeconds = ticket?.SlaPausedSeconds ?? 0,
+            warningLevel,
+            firstResponseSla = new
+            {
+                slaFirstResponseExpiresAt = ticket?.SlaFirstResponseExpiresAt,
+                firstRespondedAt = ticket?.FirstRespondedAt,
+                hoursRemaining = (double)frtHours,
+                percentUsed = frtPercent,
+                breached = frtBreached,
+                achieved = frtAchieved,
+            },
+            // Compatibilidade com consumidores do formato antigo.
+            resolution = new { hoursRemaining = slaHours, percentUsed = slaPercent, breached = slaBreached },
+            firstResponse = new { hoursRemaining = frtHours, percentUsed = frtPercent, breached = frtBreached, achieved = frtAchieved },
+        });
     }
 
     // ── Custom Fields ────────────────────────────────────────────────────
@@ -539,6 +648,18 @@ public class TicketsController(
         return Ok(result);
     }
 
+    // ── CSAT ─────────────────────────────────────────────────────────────
+
+    /// <summary>Resumo de satisfação (CSAT) por período, cliente e departamento.</summary>
+    [HttpGet("csat/summary")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetCsatSummary(
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? departmentId = null)
+        => (await mediator.Send(new GetTicketCsatSummaryQuery(from, to, clientId, departmentId), HttpContext.RequestAborted)).ToActionResult();
+
     // ── KPI ──────────────────────────────────────────────────────────────
 
     [HttpGet("kpi")]
@@ -554,6 +675,12 @@ public class TicketsController(
 }
 
 public record AddWatcherRequest(Guid UserId);
+
+public record CreateRelationRequest(Guid TargetTicketId, TicketRelationType RelationType);
+
+public record ReopenTicketRequest(string? Reason);
+
+public record RateTicketRequest(int Rating, string? Feedback);
 
 public record PresignedUploadRequestDto(string FileName, string ContentType, long SizeBytes);
 

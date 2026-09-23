@@ -93,6 +93,10 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<TicketKnowledgeLink> TicketKnowledgeLinks => Set<TicketKnowledgeLink>();
     public DbSet<TicketMergeRecord> TicketMergeRecords => Set<TicketMergeRecord>();
     public DbSet<TicketRelation> TicketRelations => Set<TicketRelation>();
+    public DbSet<TicketMacro> TicketMacros => Set<TicketMacro>();
+    public DbSet<TicketTemplate> TicketTemplates => Set<TicketTemplate>();
+    public DbSet<DepartmentMember> DepartmentMembers => Set<DepartmentMember>();
+    public DbSet<NotificationChannel> NotificationChannels => Set<NotificationChannel>();
     public DbSet<KnowledgeEmbeddingQueueItem> KnowledgeEmbeddingQueueItems => Set<KnowledgeEmbeddingQueueItem>();
 
     // Hardware inventory (reports)

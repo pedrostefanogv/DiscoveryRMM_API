@@ -20,7 +20,9 @@ public interface ITicketCommandService
     /// <summary>Atualiza campos de um ticket existente.</summary>
     Task<Ticket> UpdateTicketAsync(Guid ticketId, string? title, string? description,
         Enums.TicketPriority? priority, Guid? departmentId, Guid? workflowProfileId,
-        Guid? assignedToUserId, string? category, CancellationToken ct = default);
+        Guid? assignedToUserId, string? category,
+        bool clearDepartment = false, bool clearWorkflowProfile = false,
+        CancellationToken ct = default);
 
     /// <summary>Adiciona um comentário a um ticket.</summary>
     Task<TicketComment> AddCommentAsync(Guid ticketId, string content, bool isInternal,

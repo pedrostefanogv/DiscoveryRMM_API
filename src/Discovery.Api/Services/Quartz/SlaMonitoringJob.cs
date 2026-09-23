@@ -17,7 +17,6 @@ public sealed class SlaMonitoringJob : IJob
     private const int WarningCooldownMinutes = 30;
     // Cooldown por (ticket, regra) para não reescalonar a cada execução (5 min).
     private const int EscalationCooldownMinutes = 360;
-    private const int MaxConcurrentChecks = 8;
     private const string LockKey = "locks:sla-monitoring";
     private const int LockTtlSeconds = 240; // 4 min (job roda a cada 5 min)
 
@@ -54,17 +53,14 @@ public sealed class SlaMonitoringJob : IJob
 
             logger.LogInformation("Checking SLA for {Count} open tickets", openTickets.Count);
 
-            // Processamento paralelo com grau limitado
-            var parallelOptions = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = MaxConcurrentChecks,
-                CancellationToken = ct
-            };
-
             var ticketsNeedingEscalation = new List<(Discovery.Core.Entities.Ticket ticket, double percentUsed)>();
 
-            await Parallel.ForEachAsync(openTickets, parallelOptions, async (ticket, innerCt) =>
+            // Processamento SEQUENCIAL: o DbContext é scoped e NÃO é thread-safe.
+            // Parallel.ForEachAsync com serviços compartilhados do mesmo scope
+            // dispara "A second operation was started on this context instance".
+            foreach (var ticket in openTickets)
             {
+                ct.ThrowIfCancellationRequested();
                 var breached = await slaService.CheckAndLogSlaBreachAsync(ticket.Id);
                 if (breached)
                 {
@@ -80,14 +76,18 @@ public sealed class SlaMonitoringJob : IJob
                             Severity: NotificationSeverity.Critical,
                             Payload: new { ticketId = ticket.Id },
                             RecipientUserId: ticket.AssignedToUserId
-                        ), innerCt);
+                        ), ct);
                     }
                 }
                 else
                 {
                     var (_, percentUsed, _) = await slaService.GetSlaStatusAsync(ticket.Id);
 
-                    if (percentUsed >= 80 && percentUsed < 85)
+                    // A janela era >= 80 && < 85: um chamado podia saltar de 79%
+                    // para 86% entre duas execuções (job roda a cada 5 min) e nunca
+                    // gerar o aviso. O cooldown Redis já evita repetição; a janela
+                    // correta é apenas >= 80.
+                    if (percentUsed >= 80)
                     {
                         if (await ShouldLogWarningAsync(redis, ticket.Id))
                         {
@@ -105,7 +105,7 @@ public sealed class SlaMonitoringJob : IJob
                                     Severity: NotificationSeverity.Warning,
                                     Payload: new { ticketId = ticket.Id, percentUsed },
                                     RecipientUserId: ticket.AssignedToUserId
-                                ), innerCt);
+                                ), ct);
                             }
 
                             logger.LogWarning("SLA Warning: Ticket {TicketId} - {Percent}% used",
@@ -127,7 +127,7 @@ public sealed class SlaMonitoringJob : IJob
                         }
                     }
                 }
-            });
+            }
 
             // Processar escalonamentos
             if (ticketsNeedingEscalation.Count > 0)

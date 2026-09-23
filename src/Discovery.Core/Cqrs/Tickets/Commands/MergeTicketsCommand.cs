@@ -6,7 +6,8 @@ namespace Discovery.Core.Cqrs.Tickets.Commands;
 public sealed record MergeTicketsCommand(
     Guid TargetTicketId,
     IReadOnlyList<Guid> SourceTicketIds,
-    Guid? ChangedByUserId
+    Guid? ChangedByUserId,
+    string? Reason = null
 ) : ICommand<Result<MergeTicketsResult>>;
 
 /// <summary>

@@ -40,13 +40,27 @@ public sealed class GetTicketByIdQueryHandler(ITicketQueryService queryService)
     }
 }
 
-public sealed class GetTicketSlaStatusQueryHandler(ISlaService slaService)
+public sealed class GetTicketSlaStatusQueryHandler(ISlaService slaService, ITicketRepository ticketRepo)
     : IRequestHandler<GetTicketSlaStatusQuery, Result<TicketSlaStatusDto>>
 {
     public async Task<Result<TicketSlaStatusDto>> Handle(GetTicketSlaStatusQuery q, CancellationToken ct)
     {
-        var (hoursRemaining, percentUsed, breached) = await slaService.GetSlaStatusAsync(q.TicketId);
-        return Result<TicketSlaStatusDto>.Success(new TicketSlaStatusDto(q.TicketId, null, breached, null, null, false, 0));
+        // Antes o handler descartava horas/percentual e devolvia o DTO com
+        // expiração/pausa nulas — o endpoint /sla/status vinha vazio.
+        var ticket = await ticketRepo.GetByIdAsync(q.TicketId);
+        if (ticket is null)
+            return Result<TicketSlaStatusDto>.Failure(Error.NotFound($"Ticket {q.TicketId} not found"));
+
+        var (_, _, computedBreached) = await slaService.GetSlaStatusAsync(q.TicketId);
+
+        return Result<TicketSlaStatusDto>.Success(new TicketSlaStatusDto(
+            q.TicketId,
+            ticket.SlaExpiresAt,
+            ticket.SlaBreached || computedBreached,
+            ticket.SlaFirstResponseExpiresAt,
+            ticket.FirstRespondedAt,
+            ticket.SlaHoldStartedAt.HasValue,
+            ticket.SlaPausedSeconds));
     }
 }
 

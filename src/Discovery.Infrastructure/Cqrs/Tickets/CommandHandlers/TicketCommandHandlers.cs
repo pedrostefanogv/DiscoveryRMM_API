@@ -13,11 +13,19 @@ public sealed class CreateTicketCommandHandler(
 {
     public async Task<Result<TicketDetailDto>> Handle(CreateTicketCommand cmd, CancellationToken ct)
     {
-        var ticket = await ticketCommandService.CreateTicketAsync(
-            cmd.Title, cmd.Description, cmd.Priority,
-            cmd.ClientId, cmd.SiteId, cmd.AgentId, cmd.DepartmentId,
-            cmd.WorkflowProfileId, cmd.AssignedToUserId, cmd.Category, ct);
-        return Result<TicketDetailDto>.Success(TicketCommandService.ToDto(ticket));
+        try
+        {
+            var ticket = await ticketCommandService.CreateTicketAsync(
+                cmd.Title, cmd.Description, cmd.Priority,
+                cmd.ClientId, cmd.SiteId, cmd.AgentId, cmd.DepartmentId,
+                cmd.WorkflowProfileId, cmd.AssignedToUserId, cmd.Category, ct);
+            return Result<TicketDetailDto>.Success(TicketCommandService.ToDto(ticket));
+        }
+        catch (InvalidOperationException ex)
+        {
+            // B7: workflow sem estado inicial vira 400 com mensagem, não 500 nem ticket órfão.
+            return Result<TicketDetailDto>.Failure(Error.Validation("WorkflowState", ex.Message));
+        }
     }
 }
 
@@ -32,7 +40,7 @@ public sealed class UpdateTicketCommandHandler(
             var ticket = await ticketCommandService.UpdateTicketAsync(
                 cmd.Id, cmd.Title, cmd.Description, cmd.Priority,
                 cmd.DepartmentId, cmd.WorkflowProfileId, cmd.AssignedToUserId,
-                cmd.Category, ct);
+                cmd.Category, cmd.ClearDepartment, cmd.ClearWorkflowProfile, ct);
             return Result<TicketDetailDto>.Success(TicketCommandService.ToDto(ticket));
         }
         catch (KeyNotFoundException)

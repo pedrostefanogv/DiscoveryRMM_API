@@ -24,6 +24,13 @@ public class Department
     
     public int SortOrder { get; set; } = 0;
     public bool IsActive { get; set; } = true;
+
+    /// <summary>Estratégia de auto-atribuição (0=None, 1=RoundRobin, 2=LeastOpenTickets).</summary>
+    public int AssignmentStrategy { get; set; } = 0;
+
+    /// <summary>Último usuário atribuído (cursor do round-robin).</summary>
+    public Guid? RoundRobinLastUserId { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

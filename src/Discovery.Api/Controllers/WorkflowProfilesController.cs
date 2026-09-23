@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.WorkflowProfiles.Commands;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Cqrs.WorkflowProfiles.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -26,6 +28,7 @@ public class WorkflowProfilesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Workflow, ActionType.Edit)]
     public async Task<IActionResult> Create([FromBody] CreateWorkflowProfileCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -33,6 +36,7 @@ public class WorkflowProfilesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Workflow, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateWorkflowProfileCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -40,6 +44,7 @@ public class WorkflowProfilesController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Workflow, ActionType.Edit)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var result = await mediator.Send(new DeleteWorkflowProfileCommand(id));

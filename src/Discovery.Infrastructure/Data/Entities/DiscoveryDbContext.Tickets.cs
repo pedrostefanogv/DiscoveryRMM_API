@@ -121,6 +121,8 @@ public partial class DiscoveryDbContext
             entity.Property(dept => dept.InheritFromGlobalId).HasColumnName("inherit_from_global_id");
             entity.Property(dept => dept.SortOrder).HasColumnName("sort_order");
             entity.Property(dept => dept.IsActive).HasColumnName("is_active");
+            entity.Property(dept => dept.AssignmentStrategy).HasColumnName("assignment_strategy");
+            entity.Property(dept => dept.RoundRobinLastUserId).HasColumnName("round_robin_last_user_id");
             entity.Property(dept => dept.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(dept => dept.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 
@@ -185,6 +187,100 @@ public partial class DiscoveryDbContext
             entity.Property(v => v.IsShared).HasColumnName("is_shared");
             entity.Property(v => v.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(v => v.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        });
+
+        modelBuilder.Entity<TicketRelation>(entity =>
+        {
+            entity.ToTable("ticket_relations");
+            entity.HasKey(relation => relation.Id);
+            entity.HasIndex(relation => relation.SourceTicketId).HasDatabaseName("ix_ticket_relations_source");
+            entity.HasIndex(relation => relation.TargetTicketId).HasDatabaseName("ix_ticket_relations_target");
+
+            entity.Property(relation => relation.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(relation => relation.SourceTicketId).HasColumnName("source_ticket_id");
+            entity.Property(relation => relation.TargetTicketId).HasColumnName("target_ticket_id");
+            entity.Property(relation => relation.RelationTypeValue).HasColumnName("relation_type");
+            entity.Property(relation => relation.CreatedBy).HasColumnName("created_by").HasMaxLength(255);
+            entity.Property(relation => relation.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+
+            // FKs para tickets: cascade garante que deletar um chamado limpe as relações.
+            entity.HasOne(relation => relation.SourceTicket).WithMany()
+                .HasForeignKey(relation => relation.SourceTicketId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(relation => relation.TargetTicket).WithMany()
+                .HasForeignKey(relation => relation.TargetTicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TicketMergeRecord>(entity =>
+        {
+            entity.ToTable("ticket_merge_records");
+            entity.HasKey(record => record.Id);
+            entity.HasIndex(record => record.SourceTicketId).HasDatabaseName("ix_ticket_merge_records_source");
+            entity.HasIndex(record => record.TargetTicketId).HasDatabaseName("ix_ticket_merge_records_target");
+
+            entity.Property(record => record.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(record => record.SourceTicketId).HasColumnName("source_ticket_id");
+            entity.Property(record => record.TargetTicketId).HasColumnName("target_ticket_id");
+            entity.Property(record => record.MergedBy).HasColumnName("merged_by").HasMaxLength(255);
+            entity.Property(record => record.Reason).HasColumnName("reason").HasMaxLength(1000);
+            entity.Property(record => record.MergedAt).HasColumnName("merged_at").HasColumnType("timestamptz");
+
+            entity.HasOne(record => record.SourceTicket).WithMany()
+                .HasForeignKey(record => record.SourceTicketId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(record => record.TargetTicket).WithMany()
+                .HasForeignKey(record => record.TargetTicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TicketMacro>(entity =>
+        {
+            entity.ToTable("ticket_macros");
+            entity.HasKey(m => m.Id);
+            entity.HasIndex(m => m.ClientId).HasDatabaseName("ix_ticket_macros_client");
+            entity.HasIndex(m => m.DepartmentId).HasDatabaseName("ix_ticket_macros_department");
+            entity.Property(m => m.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(m => m.ClientId).HasColumnName("client_id");
+            entity.Property(m => m.DepartmentId).HasColumnName("department_id");
+            entity.Property(m => m.Name).HasColumnName("name").HasMaxLength(200);
+            entity.Property(m => m.Description).HasColumnName("description").HasMaxLength(1000);
+            entity.Property(m => m.Content).HasColumnName("content");
+            entity.Property(m => m.IsActive).HasColumnName("is_active");
+            entity.Property(m => m.CreatedBy).HasColumnName("created_by").HasMaxLength(255);
+            entity.Property(m => m.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(m => m.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        });
+
+        modelBuilder.Entity<TicketTemplate>(entity =>
+        {
+            entity.ToTable("ticket_templates");
+            entity.HasKey(t => t.Id);
+            entity.HasIndex(t => t.ClientId).HasDatabaseName("ix_ticket_templates_client");
+            entity.HasIndex(t => t.DepartmentId).HasDatabaseName("ix_ticket_templates_department");
+            entity.Property(t => t.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(t => t.ClientId).HasColumnName("client_id");
+            entity.Property(t => t.DepartmentId).HasColumnName("department_id");
+            entity.Property(t => t.Name).HasColumnName("name").HasMaxLength(200);
+            entity.Property(t => t.Title).HasColumnName("title").HasMaxLength(500);
+            entity.Property(t => t.Description).HasColumnName("description");
+            entity.Property(t => t.Priority).HasColumnName("priority").HasConversion<string>().HasMaxLength(50);
+            entity.Property(t => t.Category).HasColumnName("category").HasMaxLength(100);
+            entity.Property(t => t.CustomFieldDefaultsJson).HasColumnName("custom_field_defaults_json").HasColumnType("jsonb");
+            entity.Property(t => t.IsActive).HasColumnName("is_active");
+            entity.Property(t => t.CreatedBy).HasColumnName("created_by").HasMaxLength(255);
+            entity.Property(t => t.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(t => t.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+        });
+
+        modelBuilder.Entity<DepartmentMember>(entity =>
+        {
+            entity.ToTable("department_members");
+            entity.HasKey(m => m.Id);
+            entity.HasIndex(m => m.DepartmentId).HasDatabaseName("ix_department_members_department");
+            entity.HasIndex(m => new { m.DepartmentId, m.UserId }).IsUnique().HasDatabaseName("ux_department_members_dept_user");
+            entity.Property(m => m.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(m => m.DepartmentId).HasColumnName("department_id");
+            entity.Property(m => m.UserId).HasColumnName("user_id");
+            entity.Property(m => m.IsActive).HasColumnName("is_active");
+            entity.Property(m => m.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.HasOne<Department>().WithMany().HasForeignKey(m => m.DepartmentId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

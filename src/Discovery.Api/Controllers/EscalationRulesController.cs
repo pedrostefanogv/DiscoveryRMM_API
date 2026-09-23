@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.EscalationRules.Commands;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Cqrs.EscalationRules.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -12,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class EscalationRulesController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Sla, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] Guid? workflowProfileId = null)
     {
         var result = await mediator.Send(new ListEscalationRulesQuery(workflowProfileId));
@@ -23,6 +26,7 @@ public class EscalationRulesController(IMediator mediator) : ControllerBase
     /// Rota semântica alternativa ao query parameter ?workflowProfileId=.
     /// </summary>
     [HttpGet("by-profile/{profileId:guid}")]
+    [RequirePermission(ResourceType.Sla, ActionType.View)]
     public async Task<IActionResult> GetByProfile(Guid profileId)
     {
         var result = await mediator.Send(new ListEscalationRulesQuery(profileId));
@@ -30,6 +34,7 @@ public class EscalationRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Sla, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetEscalationRuleByIdQuery(id));
@@ -37,6 +42,7 @@ public class EscalationRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
     public async Task<IActionResult> Create([FromBody] CreateEscalationRuleCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -44,6 +50,7 @@ public class EscalationRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateEscalationRuleCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -51,6 +58,7 @@ public class EscalationRulesController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var result = await mediator.Send(new DeleteEscalationRuleCommand(id));

@@ -17,7 +17,9 @@ public sealed class TicketCommandService : ITicketCommandService
     private readonly IActivityLogService _activityLog;
     private readonly INotificationService _notification;
     private readonly IWorkflowRepository _workflowRepo;
+    private readonly IWorkflowProfileRepository _workflowProfileRepo;
     private readonly ISlaService _slaService;
+    private readonly ITicketAssignmentService _assignmentService;
     private readonly IMediator _mediator;
 
     public TicketCommandService(
@@ -25,14 +27,18 @@ public sealed class TicketCommandService : ITicketCommandService
         IActivityLogService activityLog,
         INotificationService notification,
         IWorkflowRepository workflowRepo,
+        IWorkflowProfileRepository workflowProfileRepo,
         ISlaService slaService,
+        ITicketAssignmentService assignmentService,
         IMediator mediator)
     {
         _repo = repo;
         _activityLog = activityLog;
         _notification = notification;
         _workflowRepo = workflowRepo;
+        _workflowProfileRepo = workflowProfileRepo;
         _slaService = slaService;
+        _assignmentService = assignmentService;
         _mediator = mediator;
     }
 
@@ -48,6 +54,41 @@ public sealed class TicketCommandService : ITicketCommandService
         // de estado e as transições não funcionam).
         var initialState = await _workflowRepo.GetInitialStateAsync(clientId);
 
+        // B7: sem estado inicial o ticket nasceria com WorkflowStateId = Guid.Empty e
+        // todas as transições falhariam. Falha explícita (400) em vez de dado órfão.
+        if (initialState is null)
+            throw new InvalidOperationException(
+                $"Nenhum estado inicial de workflow configurado para o cliente {clientId}. Configure em Workflow.");
+
+        // O console oferece a opção "Padrao do departamento" (envia
+        // workflowProfileId nulo). Sem resolver o perfil aqui, o chamado ficava
+        // sem SLA mesmo existindo perfil ativo no departamento. Preferência:
+        // perfil do próprio cliente > perfil global > primeiro ativo.
+        var resolvedProfileId = workflowProfileId;
+        if (!resolvedProfileId.HasValue && departmentId.HasValue)
+        {
+            var candidates = await _workflowProfileRepo.GetByDepartmentAsync(departmentId.Value);
+            var preferred = candidates.FirstOrDefault(p => p.ClientId == clientId)
+                ?? candidates.FirstOrDefault(p => p.ClientId == null)
+                ?? candidates.FirstOrDefault();
+            resolvedProfileId = preferred?.Id;
+        }
+
+        // Auto-atribuição por estratégia do departamento (round-robin/least-open)
+        // quando nenhum responsável foi informado.
+        if (!assignedToUserId.HasValue && departmentId.HasValue)
+        {
+            try
+            {
+                assignedToUserId = await _assignmentService.ResolveAssigneeAsync(departmentId.Value, ct);
+            }
+            catch
+            {
+                // Falha de auto-atribuição não pode impedir a criação do chamado.
+                assignedToUserId = null;
+            }
+        }
+
         var ticket = new Ticket
         {
             Id = Guid.NewGuid(),
@@ -58,21 +99,21 @@ public sealed class TicketCommandService : ITicketCommandService
             SiteId = siteId,
             AgentId = agentId,
             DepartmentId = departmentId,
-            WorkflowProfileId = workflowProfileId,
+            WorkflowProfileId = resolvedProfileId,
             AssignedToUserId = assignedToUserId,
             Category = category,
-            WorkflowStateId = initialState?.Id ?? Guid.Empty,
+            WorkflowStateId = initialState.Id,
             CreatedAt = now,
             UpdatedAt = now
         };
 
         // SLA/FRT: calculados a partir do perfil de workflow (quando houver).
-        if (workflowProfileId.HasValue)
+        if (resolvedProfileId.HasValue)
         {
             try
             {
-                ticket.SlaExpiresAt = await _slaService.CalculateSlaExpiryAsync(workflowProfileId.Value, now);
-                ticket.SlaFirstResponseExpiresAt = await _slaService.CalculateFirstResponseExpiryAsync(workflowProfileId.Value, now);
+                ticket.SlaExpiresAt = await _slaService.CalculateSlaExpiryAsync(resolvedProfileId.Value, now);
+                ticket.SlaFirstResponseExpiresAt = await _slaService.CalculateFirstResponseExpiryAsync(resolvedProfileId.Value, now);
             }
             catch (InvalidOperationException)
             {
@@ -92,11 +133,16 @@ public sealed class TicketCommandService : ITicketCommandService
     public async Task<Ticket> UpdateTicketAsync(
         Guid ticketId, string? title, string? description,
         TicketPriority? priority, Guid? departmentId, Guid? workflowProfileId,
-        Guid? assignedToUserId, string? category, CancellationToken ct = default)
+        Guid? assignedToUserId, string? category,
+        bool clearDepartment = false, bool clearWorkflowProfile = false,
+        CancellationToken ct = default)
     {
         var ticket = await _repo.GetByIdAsync(ticketId);
         if (ticket is null)
             throw new KeyNotFoundException($"Ticket {ticketId} not found");
+
+        var oldDescription = ticket.Description;
+        var oldCategory = ticket.Category;
 
         if (title is not null) ticket.Title = title;
         if (description is not null) ticket.Description = description;
@@ -126,11 +172,23 @@ public sealed class TicketCommandService : ITicketCommandService
         var oldDepartmentId = ticket.DepartmentId;
         var oldWorkflowProfileId = ticket.WorkflowProfileId;
 
-        if (departmentId.HasValue && departmentId.Value != ticket.DepartmentId)
-            ticket.DepartmentId = departmentId.Value;
+        // B9: permite limpar departamento/perfil explicitamente (antes, null era
+        // indistinguível de "não enviado" e nunca removia o vínculo).
+        var newDepartmentId = clearDepartment
+            ? null
+            : (departmentId.HasValue ? departmentId.Value : ticket.DepartmentId);
+        ticket.DepartmentId = newDepartmentId;
 
-        if (workflowProfileId.HasValue && workflowProfileId.Value != ticket.WorkflowProfileId)
-            ticket.WorkflowProfileId = workflowProfileId.Value;
+        var newWorkflowProfileId = clearWorkflowProfile
+            ? null
+            : (workflowProfileId.HasValue ? workflowProfileId.Value : ticket.WorkflowProfileId);
+        ticket.WorkflowProfileId = newWorkflowProfileId;
+        if (clearWorkflowProfile)
+        {
+            // SLA era derivado do perfil; sem perfil não há prazo.
+            ticket.SlaExpiresAt = null;
+            ticket.SlaFirstResponseExpiresAt = null;
+        }
 
         ticket.Category = category ?? ticket.Category;
         ticket.UpdatedAt = DateTime.UtcNow;
@@ -138,15 +196,30 @@ public sealed class TicketCommandService : ITicketCommandService
 
         // Logs DEPOIS do update: um log gravado antes da escrita vira órfão se o
         // update falhar.
-        if (departmentId.HasValue && departmentId.Value != oldDepartmentId)
+        if (newDepartmentId != oldDepartmentId)
             await _activityLog.LogDepartmentChangeAsync(ticketId, null,
-                oldDepartmentId?.ToString() ?? "none", departmentId.Value.ToString());
+                oldDepartmentId?.ToString() ?? "none", newDepartmentId?.ToString() ?? "none");
 
-        if (workflowProfileId.HasValue && workflowProfileId.Value != oldWorkflowProfileId)
+        if (newWorkflowProfileId != oldWorkflowProfileId)
             await _activityLog.LogActivityAsync(ticketId, TicketActivityType.StateChanged, null,
-                oldWorkflowProfileId?.ToString(), workflowProfileId.Value.ToString(), "Workflow profile changed");
+                oldWorkflowProfileId?.ToString(), newWorkflowProfileId?.ToString(), "Workflow profile changed");
+
+        // B8: categoria e descrição passam a ser auditadas.
+        if (ticket.Category != oldCategory)
+            await _activityLog.LogActivityAsync(ticketId, TicketActivityType.CategoryChanged, null,
+                Truncate(oldCategory), Truncate(ticket.Category), "Categoria alterada");
+
+        if (ticket.Description != oldDescription)
+            await _activityLog.LogActivityAsync(ticketId, TicketActivityType.DescriptionUpdated, null,
+                Truncate(oldDescription), Truncate(ticket.Description), "Descrição atualizada");
 
         return ticket;
+    }
+
+    private static string? Truncate(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return value;
+        return value.Length <= 1000 ? value : value[..1000];
     }
 
     public async Task<TicketComment> AddCommentAsync(
@@ -206,5 +279,5 @@ public sealed class TicketCommandService : ITicketCommandService
         t.Id, t.ClientId, t.SiteId, t.AgentId, t.Title, t.Description,
         t.Category, t.Priority, t.WorkflowStateId, t.AssignedToUserId,
         t.SlaExpiresAt, t.SlaBreached, t.CreatedAt, t.UpdatedAt,
-        t.ClosedAt, t.DaysOpen);
+        t.ClosedAt, t.DaysOpen, t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy);
 }

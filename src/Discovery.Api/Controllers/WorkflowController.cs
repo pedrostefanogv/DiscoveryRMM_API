@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.WorkflowState.Commands;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Cqrs.WorkflowState.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -26,6 +28,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("states")]
+    [RequirePermission(ResourceType.Workflow, ActionType.Edit)]
     public async Task<IActionResult> CreateState([FromBody] CreateWorkflowStateCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -33,6 +36,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("states/{id:guid}")]
+    [RequirePermission(ResourceType.Workflow, ActionType.Edit)]
     public async Task<IActionResult> UpdateState(Guid id, [FromBody] UpdateWorkflowStateCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -40,6 +44,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("states/{id:guid}")]
+    [RequirePermission(ResourceType.Workflow, ActionType.Edit)]
     public async Task<IActionResult> DeleteState(Guid id)
     {
         var result = await mediator.Send(new DeleteWorkflowStateCommand(id));
@@ -54,6 +59,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("transitions")]
+    [RequirePermission(ResourceType.Workflow, ActionType.Edit)]
     public async Task<IActionResult> CreateTransition([FromBody] CreateWorkflowTransitionCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -61,6 +67,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("transitions/{id:guid}")]
+    [RequirePermission(ResourceType.Workflow, ActionType.Edit)]
     public async Task<IActionResult> DeleteTransition(Guid id)
     {
         var result = await mediator.Send(new DeleteWorkflowTransitionCommand(id));

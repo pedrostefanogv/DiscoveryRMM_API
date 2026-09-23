@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.SlaCalendars.Commands;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Cqrs.SlaCalendars.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -12,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class SlaCalendarsController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Sla, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new ListSlaCalendarsQuery(clientId));
@@ -19,6 +22,7 @@ public class SlaCalendarsController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Sla, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetSlaCalendarByIdQuery(id));
@@ -26,6 +30,7 @@ public class SlaCalendarsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
     public async Task<IActionResult> Create([FromBody] CreateSlaCalendarCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -33,6 +38,7 @@ public class SlaCalendarsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSlaCalendarCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -40,6 +46,7 @@ public class SlaCalendarsController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var result = await mediator.Send(new DeleteSlaCalendarCommand(id));

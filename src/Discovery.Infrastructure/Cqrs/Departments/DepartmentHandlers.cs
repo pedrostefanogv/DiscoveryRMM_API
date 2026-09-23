@@ -20,7 +20,8 @@ public sealed class CreateDepartmentCommandHandler(
             ClientId = cmd.ClientId,
             InheritFromGlobalId = cmd.InheritFromGlobalId,
             SortOrder = cmd.SortOrder,
-            IsActive = true
+            IsActive = true,
+            AssignmentStrategy = cmd.AssignmentStrategy
         };
         var created = await service.CreateAsync(dept, ct);
         return Result<DepartmentDto>.Success(Map(created));
@@ -28,7 +29,7 @@ public sealed class CreateDepartmentCommandHandler(
 
     internal static DepartmentDto Map(Department d) => new(
         d.Id, d.ClientId, d.Name, d.Description, d.InheritFromGlobalId,
-        d.SortOrder, d.IsActive, d.CreatedAt, d.UpdatedAt);
+        d.SortOrder, d.IsActive, d.CreatedAt, d.UpdatedAt, d.AssignmentStrategy);
 }
 
 public sealed class UpdateDepartmentCommandHandler(
@@ -46,6 +47,7 @@ public sealed class UpdateDepartmentCommandHandler(
         if (cmd.InheritFromGlobalId is not null) dept.InheritFromGlobalId = cmd.InheritFromGlobalId;
         if (cmd.SortOrder.HasValue) dept.SortOrder = cmd.SortOrder.Value;
         if (cmd.IsActive.HasValue) dept.IsActive = cmd.IsActive.Value;
+        if (cmd.AssignmentStrategy.HasValue) dept.AssignmentStrategy = cmd.AssignmentStrategy.Value;
 
         var updated = await service.UpdateAsync(dept, ct);
         return Result<DepartmentDto>.Success(CreateDepartmentCommandHandler.Map(updated));

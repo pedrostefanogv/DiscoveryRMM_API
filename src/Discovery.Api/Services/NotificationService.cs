@@ -10,6 +10,7 @@ public class NotificationService : INotificationService
     private readonly INotificationRepository _repository;
     private readonly IAgentCommandDispatcher _commandDispatcher;
     private readonly IRedisService _redis;
+    private readonly INotificationChannelDispatcher _channelDispatcher;
     private readonly ILogger<NotificationService> _logger;
 
     private const string BroadcastChannel = "notifications:broadcast";
@@ -22,11 +23,13 @@ public class NotificationService : INotificationService
         INotificationRepository repository,
         IAgentCommandDispatcher commandDispatcher,
         IRedisService redis,
+        INotificationChannelDispatcher channelDispatcher,
         ILogger<NotificationService> logger)
     {
         _repository = repository;
         _commandDispatcher = commandDispatcher;
         _redis = redis;
+        _channelDispatcher = channelDispatcher;
         _logger = logger;
     }
 
@@ -72,6 +75,9 @@ public class NotificationService : INotificationService
 
         // Broadcast via Redis Pub/Sub for multi-instance consumers.
         await BroadcastViaRedisAsync(dto);
+
+        // Multicanal (webhook/e-mail) — best-effort, nunca quebra o fluxo principal.
+        await _channelDispatcher.DispatchAsync(request, cancellationToken);
 
         return created;
     }

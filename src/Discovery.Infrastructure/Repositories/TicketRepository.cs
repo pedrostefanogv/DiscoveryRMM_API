@@ -472,7 +472,12 @@ public class TicketRepository : ITicketRepository
 
         if (!string.IsNullOrWhiteSpace(filter.Text))
         {
-            var pattern = $"%{filter.Text.Trim()}%";
+            // Escapa curingas do LIKE (consistente com a listagem).
+            var term = filter.Text.Trim()
+                .Replace("\\", "\\\\")
+                .Replace("%", "\\%")
+                .Replace("_", "\\_");
+            var pattern = $"%{term}%";
             query = query.Where(t =>
                 EF.Functions.ILike(t.Title, pattern) || EF.Functions.ILike(t.Description, pattern));
         }

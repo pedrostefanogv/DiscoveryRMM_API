@@ -21,7 +21,12 @@ public sealed record TicketDetailDto(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     DateTime? ClosedAt,
-    int? DaysOpen
+    int? DaysOpen,
+    // Avaliação CSAT (0..5) + feedback textual.
+    int? Rating = null,
+    string? RatingFeedback = null,
+    DateTime? RatedAt = null,
+    string? RatedBy = null
 );
 
 /// <summary>

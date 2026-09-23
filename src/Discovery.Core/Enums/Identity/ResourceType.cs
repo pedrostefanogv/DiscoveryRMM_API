@@ -18,5 +18,10 @@ public enum ResourceType
     AppStore,
     Logs,
     Dashboard,
-    RemoteDebug
+    RemoteDebug,
+    // Recursos de configuração de suporte (criados para permitir RBAC real nos
+    // controllers de workflow/SLA/departamentos, que antes só exigiam login).
+    Workflow,
+    Sla,
+    Departments
 }

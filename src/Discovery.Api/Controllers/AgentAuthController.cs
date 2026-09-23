@@ -32,6 +32,8 @@ public class AgentAuthController : ControllerBase
     private readonly ISiteRepository _siteRepo;
     private readonly IWorkflowRepository _workflowRepo;
     private readonly IAiChatService _aiChat;
+    private readonly IDepartmentRepository _departmentRepo;
+    private readonly IWorkflowProfileRepository _workflowProfileRepo;
     private readonly ILogger<AgentAuthController> _logger;
 
     public AgentAuthController(
@@ -40,6 +42,8 @@ public class AgentAuthController : ControllerBase
         ISiteRepository siteRepo,
         IWorkflowRepository workflowRepo,
         IAiChatService aiChat,
+        IDepartmentRepository departmentRepo,
+        IWorkflowProfileRepository workflowProfileRepo,
         ILogger<AgentAuthController> logger)
     {
         _mediator = mediator;
@@ -47,6 +51,8 @@ public class AgentAuthController : ControllerBase
         _siteRepo = siteRepo;
         _workflowRepo = workflowRepo;
         _aiChat = aiChat;
+        _departmentRepo = departmentRepo;
+        _workflowProfileRepo = workflowProfileRepo;
         _logger = logger;
     }
 
@@ -302,6 +308,40 @@ public class AgentAuthController : ControllerBase
             s.IsFinal,
             s.SortOrder
         }));
+    }
+
+    /// <summary>
+    /// Opções para o formulário de abertura de chamado do agente (departamento e
+    /// perfil de workflow), filtradas pelo cliente do site do agente. Alimenta o
+    /// picker da UI de suporte; sem departamento o servidor não calcula SLA.
+    /// </summary>
+    [HttpGet("me/tickets/options")]
+    public async Task<IActionResult> GetMyTicketOptions()
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (agent, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        Guid? clientId = null;
+        if (agent!.SiteId != Guid.Empty)
+        {
+            var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+            clientId = site?.ClientId;
+        }
+
+        var departments = clientId.HasValue
+            ? await _departmentRepo.GetByClientAsync(clientId.Value, includeGlobal: true, activeOnly: true)
+            : new List<Discovery.Core.Entities.Department>();
+        var profiles = await _workflowProfileRepo.GetByClientAsync(clientId, includeGlobal: true);
+
+        return Ok(new
+        {
+            departments = departments.Select(d => new { d.Id, d.Name }).ToList(),
+            workflowProfiles = profiles
+                .Where(p => p.IsActive)
+                .Select(p => new { p.Id, p.Name, p.DepartmentId })
+                .ToList()
+        });
     }
 
     [HttpPost("me/tickets/{ticketId:guid}/close")]
