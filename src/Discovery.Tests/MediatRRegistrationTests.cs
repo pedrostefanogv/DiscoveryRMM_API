@@ -41,6 +41,16 @@ public class MediatRHandlerRegistrationTests
     }
 
     [Test]
+    public void SendScopeNotificationCommand_Handler_ShouldBeRegistered()
+    {
+        var registrations = BuildCqrsServices()
+            .Where(sd => sd.ServiceType == typeof(IRequestHandler<SendScopeNotificationCommand, Result<SendScopeNotificationResult>>))
+            .ToList();
+
+        Assert.That(registrations, Has.Count.EqualTo(1));
+    }
+
+    [Test]
     public void StartupItemActionCommand_Handler_ShouldBeRegistered()
     {
         var registrations = BuildCqrsServices()

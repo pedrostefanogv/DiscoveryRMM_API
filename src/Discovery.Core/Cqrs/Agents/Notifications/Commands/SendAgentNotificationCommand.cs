@@ -1,8 +1,7 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using MediatR;
 
@@ -29,22 +28,6 @@ public sealed class SendAgentNotificationCommandHandler(
     IAgentCommandDispatcher dispatcher
 ) : IRequestHandler<SendAgentNotificationCommand, Result<Guid>>
 {
-    private const int MaxTitleLength = 120;
-    private const int MaxMessageLength = 2000;
-
-    // Show-ADTDialogBox rejeita -Timeout maior que UI.DefaultTimeout do
-    // config.psd1 do PSADT (padrão 3300s) e, nesse caso, nenhum diálogo é
-    // exibido. O agent ainda faz clamp/retry, mas limitar aqui mantém o
-    // contrato da API coerente com o que o endpoint realmente consegue exibir.
-    private const int MaxTimeoutSeconds = 3300;
-
-    // Omite campos nulos (timeoutSeconds quando waitForUser, defaultAction sem
-    // ação) para deixar o payload enxuto — o validator também os aceita nulos.
-    private static readonly JsonSerializerOptions PayloadJsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
-
     public async Task<Result<Guid>> Handle(SendAgentNotificationCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
@@ -58,48 +41,20 @@ public sealed class SendAgentNotificationCommandHandler(
             return Result<Guid>.Failure(Error.Validation("title", "o título é obrigatório."));
         if (message.Length == 0)
             return Result<Guid>.Failure(Error.Validation("message", "a mensagem é obrigatória."));
-        if (title.Length > MaxTitleLength)
-            return Result<Guid>.Failure(Error.Validation("title", $"o título deve ter no máximo {MaxTitleLength} caracteres."));
-        if (message.Length > MaxMessageLength)
-            return Result<Guid>.Failure(Error.Validation("message", $"a mensagem deve ter no máximo {MaxMessageLength} caracteres."));
-
-        // UpdateProgress é reservado ao self-update; avisos avulsos são modal/toast.
-        var type = cmd.AlertType == PsadtAlertType.Toast ? "toast" : "modal";
-
-        var requestedTimeout = cmd.TimeoutSeconds.GetValueOrDefault();
-        int? timeoutSeconds;
-        bool waitForUser;
-
-        if (type == "toast")
-        {
-            // Toast sempre auto-fecha; default curto quando não informado.
-            timeoutSeconds = requestedTimeout > 0 ? Math.Min(requestedTimeout, MaxTimeoutSeconds) : 15;
-            waitForUser = false;
-        }
-        else if (requestedTimeout > 0)
-        {
-            timeoutSeconds = Math.Min(requestedTimeout, MaxTimeoutSeconds);
-            waitForUser = false;
-        }
-        else
-        {
-            // Modal sem timeout informado: permanece aberto até o usuário clicar em OK.
-            timeoutSeconds = null;
-            waitForUser = true;
-        }
+        if (title.Length > PsadtAlertPayloadFactory.MaxTitleLength)
+            return Result<Guid>.Failure(Error.Validation("title", $"o título deve ter no máximo {PsadtAlertPayloadFactory.MaxTitleLength} caracteres."));
+        if (message.Length > PsadtAlertPayloadFactory.MaxMessageLength)
+            return Result<Guid>.Failure(Error.Validation("message", $"a mensagem deve ter no máximo {PsadtAlertPayloadFactory.MaxMessageLength} caracteres."));
 
         var alertId = Guid.NewGuid();
-        var payload = JsonSerializer.Serialize(new
-        {
-            alertId = alertId.ToString(),
-            type,
+        var payload = PsadtAlertPayloadFactory.Build(
+            alertId,
             title,
             message,
-            timeoutSeconds,
-            waitForUser,
-            icon = NormalizeIcon(cmd.Icon),
-            defaultAction = string.IsNullOrWhiteSpace(cmd.DefaultAction) ? null : cmd.DefaultAction.Trim()
-        }, PayloadJsonOptions);
+            cmd.AlertType,
+            cmd.TimeoutSeconds,
+            cmd.Icon,
+            cmd.DefaultAction);
 
         var command = new AgentCommand
         {
@@ -110,19 +65,5 @@ public sealed class SendAgentNotificationCommandHandler(
 
         await dispatcher.DispatchAsync(command, ct);
         return Result<Guid>.Success(alertId);
-    }
-
-    private static string NormalizeIcon(string? icon)
-    {
-        if (string.IsNullOrWhiteSpace(icon))
-            return "info";
-
-        return icon.Trim().ToLowerInvariant() switch
-        {
-            "warning" or "warn" => "warning",
-            "error" => "error",
-            "question" => "question",
-            _ => "info"
-        };
     }
 }
