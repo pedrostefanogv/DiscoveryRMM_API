@@ -175,4 +175,80 @@ public class SpecialCommandPayloadValidatorTests
         Assert.That(ok, Is.False);
         Assert.That(error, Does.Contain("packageId"));
     }
+
+    [Test]
+    public void PsadtAlert_ModalWithWaitForUser_ShouldOmitTimeout()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "alertId": "alert-1",
+              "type": "modal",
+              "title": "Aviso",
+              "message": "Mensagem",
+              "waitForUser": true,
+              "icon": "warning"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.ShowPsadtAlert, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.RootElement.GetProperty("waitForUser").GetBoolean(), Is.True);
+            Assert.That(json.RootElement.TryGetProperty("timeoutSeconds", out _), Is.False);
+            Assert.That(json.RootElement.GetProperty("icon").GetString(), Is.EqualTo("warning"));
+        });
+    }
+
+    [Test]
+    public void PsadtAlert_ModalWithoutWaitForUser_ShouldDefaultTimeout()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "alertId": "alert-2",
+              "type": "modal",
+              "title": "Aviso",
+              "message": "Mensagem"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.ShowPsadtAlert, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.RootElement.GetProperty("waitForUser").GetBoolean(), Is.False);
+            Assert.That(json.RootElement.GetProperty("timeoutSeconds").GetInt32(), Is.EqualTo(120));
+        });
+    }
+
+    [Test]
+    public void PsadtAlert_WaitForUser_ShouldRejectNonBoolean()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "alertId": "alert-3",
+              "type": "modal",
+              "title": "Aviso",
+              "message": "Mensagem",
+              "waitForUser": "sim"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.ShowPsadtAlert, payload, out _, out var error);
+
+        Assert.That(ok, Is.False);
+        Assert.That(error, Does.Contain("waitForUser"));
+    }
 }

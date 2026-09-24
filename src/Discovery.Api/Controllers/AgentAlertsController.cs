@@ -1,5 +1,9 @@
+using Discovery.Api.Filters;
+using Discovery.Core.Cqrs.Agents.Notifications.Commands;
 using Discovery.Core.Cqrs.Alerts.Commands;
 using Discovery.Core.Cqrs.Alerts.Queries;
+using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -55,4 +59,47 @@ public class AgentAlertsController(IMediator mediator) : ControllerBase
         var r = await mediator.Send(new CancelAlertCommand(id));
         return r.Match<IActionResult>(_ => NoContent(), e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
+
+    /// <summary>
+    /// Envia uma notificação avulsa (prompt modal PSADT ou toast) para a sessão
+    /// interativa do usuário de um agent. Usada pelo menu de contexto do agent
+    /// e pela página de detalhes ("Enviar notificação").
+    /// </summary>
+    [HttpPost("notify")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> Notify([FromBody] SendAgentNotificationRequest request, CancellationToken ct = default)
+    {
+        if (request is null)
+            return BadRequest(new { error = "corpo da requisição é obrigatório." });
+
+        var cmd = new SendAgentNotificationCommand(
+            request.AgentId,
+            request.Title ?? string.Empty,
+            request.Message ?? string.Empty,
+            request.AlertType,
+            request.TimeoutSeconds,
+            request.Icon,
+            request.DefaultAction);
+
+        var r = await mediator.Send(cmd, ct);
+        return r.Match<IActionResult>(
+            alertId => Ok(new { success = true, dispatched = true, alertId, agentId = request.AgentId }),
+            errors =>
+            {
+                var error = errors[0];
+                return error.Code == "NotFound"
+                    ? NotFound(new { error = error.Message })
+                    : BadRequest(new { error = error.Message });
+            });
+    }
 }
+
+/// <summary>Payload de envio de notificação avulsa para um agent.</summary>
+public sealed record SendAgentNotificationRequest(
+    Guid AgentId,
+    string? Title,
+    string? Message,
+    PsadtAlertType AlertType = PsadtAlertType.Modal,
+    int? TimeoutSeconds = null,
+    string? Icon = null,
+    string? DefaultAction = null);

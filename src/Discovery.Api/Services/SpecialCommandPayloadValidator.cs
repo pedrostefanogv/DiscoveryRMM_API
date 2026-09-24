@@ -360,13 +360,33 @@ public sealed class SpecialCommandPayloadValidator
         if (!TryGetRequiredString(payload, "message", out var message, out validationError))
             return false;
 
-        var timeoutSeconds = 120;
-        if (payload.TryGetProperty("timeoutSeconds", out var timeoutElement) && timeoutElement.ValueKind != JsonValueKind.Null)
+        // waitForUser: modal que permanece aberto até o usuário clicar em OK.
+        // Quando true, o timeout é ignorado (Show-ADTDialogBox sem -Timeout).
+        var waitForUser = false;
+        if (payload.TryGetProperty("waitForUser", out var waitForUserElement) && waitForUserElement.ValueKind != JsonValueKind.Null)
         {
-            if (!TryReadPositiveInt(timeoutElement, out timeoutSeconds))
+            if (waitForUserElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
             {
-                validationError = "field 'timeoutSeconds' must be a positive integer.";
+                validationError = "field 'waitForUser' must be a boolean.";
                 return false;
+            }
+
+            waitForUser = waitForUserElement.GetBoolean();
+        }
+
+        int? timeoutSeconds = null;
+        if (!waitForUser)
+        {
+            timeoutSeconds = 120;
+            if (payload.TryGetProperty("timeoutSeconds", out var timeoutElement) && timeoutElement.ValueKind != JsonValueKind.Null)
+            {
+                if (!TryReadPositiveInt(timeoutElement, out var parsedTimeout))
+                {
+                    validationError = "field 'timeoutSeconds' must be a positive integer.";
+                    return false;
+                }
+
+                timeoutSeconds = parsedTimeout;
             }
         }
 
@@ -437,11 +457,18 @@ public sealed class SpecialCommandPayloadValidator
             ["type"] = type,
             ["title"] = title,
             ["message"] = message,
-            ["timeoutSeconds"] = timeoutSeconds,
+            ["waitForUser"] = waitForUser,
             ["icon"] = icon,
             ["actions"] = actions,
             ["defaultAction"] = defaultAction
         };
+
+        // Modal com waitForUser não leva timeout: omite a chave para que o
+        // Show-ADTDialogBox seja executado sem -Timeout (aguarda o clique).
+        if (timeoutSeconds.HasValue)
+        {
+            normalized["timeoutSeconds"] = timeoutSeconds.Value;
+        }
 
         normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
         return true;
