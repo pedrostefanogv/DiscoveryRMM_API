@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -37,7 +38,12 @@ public sealed class SendAgentNotificationCommandHandler(
     // contrato da API coerente com o que o endpoint realmente consegue exibir.
     private const int MaxTimeoutSeconds = 3300;
 
-    private static readonly JsonSerializerOptions PayloadJsonOptions = new(JsonSerializerDefaults.Web);
+    // Omite campos nulos (timeoutSeconds quando waitForUser, defaultAction sem
+    // ação) para deixar o payload enxuto — o validator também os aceita nulos.
+    private static readonly JsonSerializerOptions PayloadJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     public async Task<Result<Guid>> Handle(SendAgentNotificationCommand cmd, CancellationToken ct)
     {
