@@ -785,6 +785,21 @@ public sealed class SpecialCommandPayloadValidator
             }
         }
 
+        // notifyUser: exibe no agent o aviso Fluent com contador antes de agir.
+        var notifyUser = true;
+        if (payload.TryGetProperty("notifyUser", out var notifyElement) && notifyElement.ValueKind != JsonValueKind.Null)
+        {
+            if (notifyElement.ValueKind == JsonValueKind.True || notifyElement.ValueKind == JsonValueKind.False)
+            {
+                notifyUser = notifyElement.GetBoolean();
+            }
+            else
+            {
+                validationError = "field 'notifyUser' must be a boolean.";
+                return false;
+            }
+        }
+
         string? message = null;
         if (payload.TryGetProperty("message", out var msgElement) && msgElement.ValueKind != JsonValueKind.Null)
         {
@@ -806,6 +821,7 @@ public sealed class SpecialCommandPayloadValidator
         {
             ["delaySeconds"] = delaySeconds,
             ["force"] = force,
+            ["notifyUser"] = notifyUser,
             ["message"] = message
         };
 
@@ -845,6 +861,21 @@ public sealed class SpecialCommandPayloadValidator
             }
         }
 
+        // notifyUser: exibe no agent o aviso Fluent com contador antes de agir.
+        var notifyUser = true;
+        if (payload.TryGetProperty("notifyUser", out var notifyElement) && notifyElement.ValueKind != JsonValueKind.Null)
+        {
+            if (notifyElement.ValueKind == JsonValueKind.True || notifyElement.ValueKind == JsonValueKind.False)
+            {
+                notifyUser = notifyElement.GetBoolean();
+            }
+            else
+            {
+                validationError = "field 'notifyUser' must be a boolean.";
+                return false;
+            }
+        }
+
         string? message = null;
         if (payload.TryGetProperty("message", out var msgElement) && msgElement.ValueKind != JsonValueKind.Null)
         {
@@ -866,6 +897,7 @@ public sealed class SpecialCommandPayloadValidator
         {
             ["delaySeconds"] = delaySeconds,
             ["force"] = force,
+            ["notifyUser"] = notifyUser,
             ["message"] = message
         };
 

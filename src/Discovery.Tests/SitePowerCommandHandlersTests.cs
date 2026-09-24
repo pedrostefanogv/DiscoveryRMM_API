@@ -114,7 +114,7 @@ public class SitePowerCommandHandlersTests
         var msg = new FakeAgentMessaging();
         var handler = new SiteRestartCommandHandler(msg, new FakeSiteRepository(NewSite()), new FakeAgentRepository([online, offline]));
 
-        var result = await handler.Handle(new SiteRestartCommand(_siteId, 15, false, "msg"), CancellationToken.None);
+        var result = await handler.Handle(new SiteRestartCommand(_siteId, 15, false, NotifyUser: true, Message: "msg"), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
         Assert.That(msg.SiteFanoutCalls, Is.EqualTo(1));
@@ -129,7 +129,7 @@ public class SitePowerCommandHandlersTests
         var msg = new FakeAgentMessaging();
         var handler = new SiteRestartCommandHandler(msg, new FakeSiteRepository(NewSite()), new FakeAgentRepository([offline]));
 
-        var result = await handler.Handle(new SiteRestartCommand(_siteId, 15, false, null), CancellationToken.None);
+        var result = await handler.Handle(new SiteRestartCommand(_siteId, 15, false, NotifyUser: false, Message: null), CancellationToken.None);
 
         Assert.That(result.IsFailure, Is.True);
         Assert.That(result.Errors[0].Code, Is.EqualTo("Validation"));
@@ -145,7 +145,7 @@ public class SitePowerCommandHandlersTests
         var msg = new FakeAgentMessaging();
         var handler = new SiteShutdownCommandHandler(msg, new FakeSiteRepository(NewSite()), new FakeAgentRepository([online]));
 
-        var result = await handler.Handle(new SiteShutdownCommand(_siteId, 30, false, null), CancellationToken.None);
+        var result = await handler.Handle(new SiteShutdownCommand(_siteId, 30, false, NotifyUser: true, Message: null), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
         Assert.That(msg.PublishedCommandTypes[0], Is.EqualTo("shutdown"));

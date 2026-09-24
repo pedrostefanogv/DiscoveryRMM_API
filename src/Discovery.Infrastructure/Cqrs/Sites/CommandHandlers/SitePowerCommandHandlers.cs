@@ -40,7 +40,7 @@ public sealed class SiteRestartCommandHandler(
             return Result<SiteFanoutResponseDto>.Failure(Error.Validation("SiteId", "No online agents available in this site."));
 
         var delay = Math.Clamp(cmd.DelaySeconds, 1, 3600);
-        var payload = JsonSerializer.Serialize(new { delaySeconds = delay, force = cmd.Force, message = cmd.Message });
+        var payload = JsonSerializer.Serialize(new { delaySeconds = delay, force = cmd.Force, notifyUser = cmd.NotifyUser, message = cmd.Message });
 
         var (dispatchId, envelope) = BuildEnvelope(
             CommandType.Restart,
@@ -107,7 +107,7 @@ public sealed class SiteShutdownCommandHandler(
             return Result<SiteFanoutResponseDto>.Failure(Error.Validation("SiteId", "No online agents available in this site."));
 
         var delay = Math.Clamp(cmd.DelaySeconds, 1, 3600);
-        var payload = JsonSerializer.Serialize(new { delaySeconds = delay, force = cmd.Force, message = cmd.Message });
+        var payload = JsonSerializer.Serialize(new { delaySeconds = delay, force = cmd.Force, notifyUser = cmd.NotifyUser, message = cmd.Message });
 
         var (dispatchId, envelope) = SiteRestartCommandHandler.BuildEnvelope(
             CommandType.Shutdown,

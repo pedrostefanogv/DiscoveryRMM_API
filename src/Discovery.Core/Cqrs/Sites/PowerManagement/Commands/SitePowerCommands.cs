@@ -9,6 +9,8 @@ public sealed record SiteRestartCommand(
     int DelaySeconds = 15,
     [property: System.Text.Json.Serialization.JsonPropertyName("force")]
     bool Force = false,
+    [property: System.Text.Json.Serialization.JsonPropertyName("notifyUser")]
+    bool NotifyUser = true,
     [property: System.Text.Json.Serialization.JsonPropertyName("message")]
     string? Message = null) : ICommand<Result<SiteFanoutResponseDto>>;
 
@@ -19,6 +21,8 @@ public sealed record SiteShutdownCommand(
     int DelaySeconds = 30,
     [property: System.Text.Json.Serialization.JsonPropertyName("force")]
     bool Force = false,
+    [property: System.Text.Json.Serialization.JsonPropertyName("notifyUser")]
+    bool NotifyUser = true,
     [property: System.Text.Json.Serialization.JsonPropertyName("message")]
     string? Message = null) : ICommand<Result<SiteFanoutResponseDto>>;
 

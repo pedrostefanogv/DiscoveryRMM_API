@@ -181,7 +181,7 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> RestartSite(Guid clientId, Guid id, [FromBody] SiteRestartRequest request, CancellationToken ct = default)
     {
-        var cmd = new SiteRestartCommand(id, request.DelaySeconds, request.Force, request.Message);
+        var cmd = new SiteRestartCommand(id, request.DelaySeconds, request.Force, request.NotifyUser, request.Message);
         var result = await mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
             success: dto => Accepted(dto),
@@ -192,7 +192,7 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> ShutdownSite(Guid clientId, Guid id, [FromBody] SiteShutdownRequest request, CancellationToken ct = default)
     {
-        var cmd = new SiteShutdownCommand(id, request.DelaySeconds, request.Force, request.Message);
+        var cmd = new SiteShutdownCommand(id, request.DelaySeconds, request.Force, request.NotifyUser, request.Message);
         var result = await mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
             success: dto => Accepted(dto),

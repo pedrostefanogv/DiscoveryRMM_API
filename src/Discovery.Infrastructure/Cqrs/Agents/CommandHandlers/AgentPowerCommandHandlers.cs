@@ -20,7 +20,13 @@ public sealed class RestartAgentCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
 
-        var payload = JsonSerializer.Serialize(new { delaySeconds = 15, force = false, message = cmd.Reason });
+        var payload = JsonSerializer.Serialize(new
+        {
+            delaySeconds = cmd.DelaySeconds,
+            force = cmd.Force,
+            notifyUser = cmd.NotifyUser,
+            message = cmd.Reason
+        });
         var command = new AgentCommand { AgentId = cmd.AgentId, CommandType = CommandType.Restart, Payload = payload };
         await dispatcher.DispatchAsync(command, ct);
         return Result<VoidResult>.Success(VoidResult.Value);
@@ -37,7 +43,13 @@ public sealed class ShutdownAgentCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
 
-        var payload = JsonSerializer.Serialize(new { delaySeconds = 30, force = false, message = cmd.Reason });
+        var payload = JsonSerializer.Serialize(new
+        {
+            delaySeconds = cmd.DelaySeconds,
+            force = cmd.Force,
+            notifyUser = cmd.NotifyUser,
+            message = cmd.Reason
+        });
         var command = new AgentCommand { AgentId = cmd.AgentId, CommandType = CommandType.Shutdown, Payload = payload };
         await dispatcher.DispatchAsync(command, ct);
         return Result<VoidResult>.Success(VoidResult.Value);
