@@ -8,7 +8,7 @@ namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 internal static class ParseJson
 {
     public static string? GetString(JsonElement obj, string propertyName)
-        => obj.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+        => TryGetProperty(obj, propertyName, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
 
@@ -16,7 +16,7 @@ internal static class ParseJson
     {
         foreach (var propertyName in propertyNames)
         {
-            if (!obj.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String)
+            if (!TryGetProperty(obj, propertyName, out var value) || value.ValueKind != JsonValueKind.String)
                 continue;
 
             return value.GetString();
@@ -27,7 +27,7 @@ internal static class ParseJson
 
     public static long GetLong(JsonElement obj, string propertyName)
     {
-        if (!obj.TryGetProperty(propertyName, out var value))
+        if (!TryGetProperty(obj, propertyName, out var value))
             return 0;
 
         return value.ValueKind switch
@@ -42,7 +42,7 @@ internal static class ParseJson
     {
         foreach (var propertyName in propertyNames)
         {
-            if (!obj.TryGetProperty(propertyName, out var value))
+            if (!TryGetProperty(obj, propertyName, out var value))
                 continue;
 
             switch (value.ValueKind)
@@ -61,7 +61,7 @@ internal static class ParseJson
     {
         foreach (var propertyName in propertyNames)
         {
-            if (!obj.TryGetProperty(propertyName, out var value))
+            if (!TryGetProperty(obj, propertyName, out var value))
                 continue;
 
             switch (value.ValueKind)
@@ -78,7 +78,7 @@ internal static class ParseJson
 
     public static int? GetNullableInt(JsonElement obj, string propertyName)
     {
-        if (!obj.TryGetProperty(propertyName, out var value))
+        if (!TryGetProperty(obj, propertyName, out var value))
             return null;
 
         return value.ValueKind switch
@@ -91,7 +91,7 @@ internal static class ParseJson
 
     public static bool GetBool(JsonElement obj, string propertyName)
     {
-        if (!obj.TryGetProperty(propertyName, out var value))
+        if (!TryGetProperty(obj, propertyName, out var value))
             return false;
 
         return value.ValueKind switch
@@ -105,7 +105,7 @@ internal static class ParseJson
 
     public static string? GetStringProperty(JsonElement obj, string propertyName)
     {
-        if (!obj.TryGetProperty(propertyName, out var value))
+        if (!TryGetProperty(obj, propertyName, out var value))
             return null;
 
         return value.ValueKind switch
@@ -120,7 +120,7 @@ internal static class ParseJson
 
     public static decimal? GetNullableDecimal(JsonElement obj, string propertyName)
     {
-        if (!obj.TryGetProperty(propertyName, out var value))
+        if (!TryGetProperty(obj, propertyName, out var value))
             return null;
 
         return value.ValueKind switch
@@ -133,7 +133,7 @@ internal static class ParseJson
 
     public static DateTime? GetNullableDateTime(JsonElement obj, string propertyName)
     {
-        if (!obj.TryGetProperty(propertyName, out var value))
+        if (!TryGetProperty(obj, propertyName, out var value))
             return null;
 
         return value.ValueKind switch
@@ -147,7 +147,7 @@ internal static class ParseJson
     {
         foreach (var name in names)
         {
-            if (obj.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array)
+            if (TryGetProperty(obj, name, out var value) && value.ValueKind == JsonValueKind.Array)
             {
                 array = value;
                 return true;
@@ -156,5 +156,24 @@ internal static class ParseJson
 
         array = default;
         return false;
+    }
+
+    /// <summary>
+    /// Acesso seguro a propriedade. <c>JsonElement.TryGetProperty</c> NÃO é
+    /// tolerante a tipos: em um elemento que não é objeto (array, string,
+    /// número...) ele lança InvalidOperationException
+    /// ("requires an element of type 'Object'"). Como estes helpers são
+    /// chamados com JSON vindo do agent, qualquer payload inesperado viraria
+    /// HTTP 400/500. Aqui um não-objeto simplesmente não tem a propriedade.
+    /// </summary>
+    private static bool TryGetProperty(JsonElement obj, string propertyName, out JsonElement value)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+        {
+            value = default;
+            return false;
+        }
+
+        return obj.TryGetProperty(propertyName, out value);
     }
 }

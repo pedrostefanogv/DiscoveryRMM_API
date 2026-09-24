@@ -106,7 +106,7 @@ public sealed class ReportAgentHardwareCommandHandler(
 
         // Fingerprint de hardware (Recuperação de Dispositivos): TPM EK + SMBIOS UUID.
         // Persistido no agent para permitir recuperação futura. Só atualiza se mudou.
-        if (cmd.Hardware is JsonElement hwFp)
+        if (cmd.Hardware is JsonElement { ValueKind: JsonValueKind.Object } hwFp)
         {
             string? tpmEk = null;
             string? smbiosUuid = null;
@@ -137,7 +137,7 @@ public sealed class ReportAgentHardwareCommandHandler(
         };
 
         // Parse hardware object (JSON-like from Agent)
-        if (cmd.Hardware is JsonElement hw)
+        if (cmd.Hardware is JsonElement { ValueKind: JsonValueKind.Object } hw)
         {
             if (hw.TryGetProperty("manufacturer", out var m)) hardwareInfo.Manufacturer = m.GetString();
             if (hw.TryGetProperty("model", out var mod)) hardwareInfo.Model = mod.GetString();
@@ -172,7 +172,7 @@ public sealed class ReportAgentHardwareCommandHandler(
         if (cmd.MachineScore.HasValue)
             hardwareInfo.MachineScore = cmd.MachineScore.Value;
 
-        if (cmd.Hardware is JsonElement hw2)
+        if (cmd.Hardware is JsonElement { ValueKind: JsonValueKind.Object } hw2)
         {
             if (hw2.TryGetProperty("machineScore", out var ms2) && ms2.TryGetInt32(out var ms2v))
                 hardwareInfo.MachineScore ??= ms2v;

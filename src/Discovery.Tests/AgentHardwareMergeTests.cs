@@ -210,4 +210,73 @@ public class AgentHardwareMergeTests
             Assert.That(components.ScheduledTasks, Has.Count.EqualTo(1));
         });
     }
+
+    /// <summary>
+    /// Payload hostil: "hardware" vem como ARRAY (não objeto). Antes o handler
+    /// chamava TryGetProperty no array e estourava a mesma InvalidOperationException
+    /// ("requires an element of type 'Object'"). Deve ser ignorado sem quebrar o merge.
+    /// </summary>
+    [Test]
+    public async Task HardwareAsArray_DoesNotThrow_AndStillMergesComponents()
+    {
+        var hardwareRepo = new CapturingHardwareRepository(new AgentHardwareComponents());
+        var payload = new
+        {
+            agentId = AgentId,
+            hostname = "HOST",
+            status = "Online",
+            hardware = new object[] { new { manufacturer = "ACME" } },
+            inventoryCollectedAt = "2026-09-22T19:15:00Z",
+            components = new
+            {
+                startupItems = new object[]
+                {
+                    new { name = "Item", type = "registry", source = "HKLM Run", status = "enabled" },
+                },
+            },
+        };
+        var cmd = BuildCommand(payload);
+
+        Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
+        Assert.That(hardwareRepo.LastComponents!.StartupItems, Has.Count.EqualTo(1));
+    }
+
+    /// <summary>
+    /// Payload hostil: "components" vem como ARRAY em vez de objeto.
+    /// </summary>
+    [Test]
+    public async Task ComponentsAsArray_DoesNotThrow()
+    {
+        var hardwareRepo = new CapturingHardwareRepository(new AgentHardwareComponents());
+        var payload = new
+        {
+            agentId = AgentId,
+            hostname = "HOST",
+            status = "Online",
+            components = Array.Empty<object>(),
+        };
+        var cmd = BuildCommand(payload);
+
+        Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
+    }
+
+    /// <summary>
+    /// inventoryRaw como ARRAY (JSON inválido para o contrato): deve ser ignorado,
+    /// não lançar "requires an element of type 'Object'".
+    /// </summary>
+    [Test]
+    public async Task InventoryRawAsArray_DoesNotThrow()
+    {
+        var hardwareRepo = new CapturingHardwareRepository(new AgentHardwareComponents());
+        var payload = new
+        {
+            agentId = AgentId,
+            hostname = "HOST",
+            status = "Online",
+            inventoryRaw = new object[] { new { name = "x" } },
+        };
+        var cmd = BuildCommand(payload);
+
+        Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
+    }
 }
