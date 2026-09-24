@@ -105,8 +105,12 @@ public class AgentPackageService : IAgentPackageService
 
     /// <summary>
     /// Builds the discovery-service.exe Windows service binary (cmd/discovery-service).
-    /// Pure-Go cross-compilation: no Wails/desktop tags, no CGO, no syso — so it
-    /// builds on Linux (GOOS=windows) and Windows alike.
+    /// Pure-Go cross-compilation: no Wails/desktop tags and no CGO — so it builds
+    /// on Linux (GOOS=windows) and Windows alike.
+    /// The application icon is embedded through a temporary
+    /// <c>cmd/discovery-service/resource_windows_amd64.syso</c> (same IDI_APP_ICON
+    /// used by the agent UI and the uninstaller); without it the service binary
+    /// ships with the generic Go icon. The .syso is deleted right after the link.
     /// </summary>
     private async Task BuildServiceBinaryAsync(string projectPath, CancellationToken cancellationToken)
     {
@@ -182,20 +186,37 @@ public class AgentPackageService : IAgentPackageService
             agentVersion,
             moduleRoot);
 
-        await RunProcessAsync(
-            fileName: "go",
-            workingDirectory: moduleRoot,
-            arguments:
-            [
-                "build",
-                "-trimpath",
-                "-buildvcs=false",
-                "-ldflags", ldflags,
-                "-o", serviceBinaryPath,
-                "./cmd/discovery-service"
-            ],
-            extraEnvironment: extraEnv,
-            cancellationToken: cancellationToken);
+        // Embute o icone da aplicacao (mesmo do agent/desinstalador) no binario do
+        // servico. O .syso vale apenas para o pacote em cujo DIRETORIO esta, entao
+        // precisa ser gerado em cmd/discovery-service/ — o do agente (src/) nao e
+        // herdado. Sem isso o discovery-service.exe sai com o icone generico do Go.
+        var serviceSysoPath = Path.Combine(serviceCmdDir, "resource_windows_amd64.syso");
+        try
+        {
+            await GenerateServiceIconResourceAsync(projectPath, serviceSysoPath, cancellationToken);
+
+            await RunProcessAsync(
+                fileName: "go",
+                workingDirectory: moduleRoot,
+                arguments:
+                [
+                    "build",
+                    "-trimpath",
+                    "-buildvcs=false",
+                    "-ldflags", ldflags,
+                    "-o", serviceBinaryPath,
+                    "./cmd/discovery-service"
+                ],
+                extraEnvironment: extraEnv,
+                cancellationToken: cancellationToken);
+        }
+        finally
+        {
+            // O .syso e regenerado a cada build (temporario/gitignored): remove para
+            // nao deixar recurso defasado no source tree — mesmo comportamento do
+            // generate:syso:service do build/windows/Taskfile.yml.
+            TryDeleteFile(serviceSysoPath);
+        }
 
         if (!File.Exists(serviceBinaryPath))
             throw new FileNotFoundException("Service build finished but discovery-service.exe was not found.", serviceBinaryPath);
@@ -793,6 +814,142 @@ public class AgentPackageService : IAgentPackageService
 
         // Fallback: resolução via PATH do sistema (funciona em Windows e Linux).
         return configured ?? "makensis";
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // Best effort — o .syso e temporario e sera regenerado no proximo build.
+        }
+    }
+
+    /// <summary>
+    /// Gera o <c>cmd/discovery-service/resource_windows_amd64.syso</c> com o icone
+    /// padrao da aplicacao (build/windows/icon.ico) para que o discovery-service.exe
+    /// compile com o mesmo icone do agent e do desinstalador.
+    ///
+    /// Estrategia:
+    ///  1. <c>wails3 generate syso</c> (mesmo comando do
+    ///     build/windows/Taskfile.yml — task generate:syso:service); o toolchain
+    ///     wails3 e instalado no servidor Linux junto com o build do agent.
+    ///  2. fallback <c>windres</c> (x86_64-w64-mingw32-windres no Linux; windres no
+    ///     Windows) — mesmo utilitario usado por build-agent-server-linux.sh.
+    ///
+    /// Se nenhuma ferramenta/icone estiver disponivel o build continua apenas sem
+    /// icone (comportamento historico) e registra o aviso no log.
+    /// </summary>
+    private async Task GenerateServiceIconResourceAsync(
+        string projectPath,
+        string serviceSysoPath,
+        CancellationToken cancellationToken)
+    {
+        var iconPath = Path.Combine(projectPath, "src", "build", "windows", "icon.ico");
+        if (!File.Exists(iconPath))
+            iconPath = Path.Combine(projectPath, "build", "windows", "icon.ico");
+
+        if (!File.Exists(iconPath))
+        {
+            _logger.LogWarning(
+                "Icone nao encontrado (src/build/windows/icon.ico); discovery-service.exe sera compilado SEM icone.");
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(serviceSysoPath)!);
+
+        // 1) wails3 generate syso — identico ao windows:generate:syso:service.
+        var buildDir = Path.Combine(projectPath, "src", "build");
+        var manifestPath = Path.Combine(buildDir, "windows", "service.exe.manifest");
+        if (Directory.Exists(buildDir) && File.Exists(manifestPath))
+        {
+            try
+            {
+                var relativeSyso = Path.GetRelativePath(buildDir, serviceSysoPath).Replace('\\', '/');
+                await RunProcessAsync(
+                    fileName: "wails3",
+                    workingDirectory: buildDir,
+                    arguments:
+                    [
+                        "generate", "syso",
+                        "-arch", "amd64",
+                        "-icon", "windows/icon.ico",
+                        "-manifest", "windows/service.exe.manifest",
+                        "-out", relativeSyso
+                    ],
+                    cancellationToken: cancellationToken);
+
+                if (File.Exists(serviceSysoPath))
+                {
+                    _logger.LogInformation(
+                        "Recurso de icone gerado para discovery-service.exe via wails3: {Syso}",
+                        serviceSysoPath);
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex,
+                    "wails3 generate syso falhou; tentando windres para o icone do discovery-service.exe.");
+            }
+        }
+
+        // 2) Fallback windres (mesmo caminho do build-agent-server-linux.sh).
+        var windresPath = ResolveWindresPath();
+        var rcPath = Path.Combine(Path.GetTempPath(), $"discovery-service-icon-{Guid.NewGuid():N}.rc");
+        try
+        {
+            await File.WriteAllTextAsync(
+                rcPath,
+                $"IDI_APP_ICON ICON \"{iconPath.Replace('\\', '/')}\"\n",
+                cancellationToken);
+
+            await RunProcessAsync(
+                fileName: windresPath,
+                workingDirectory: projectPath,
+                arguments: ["--target=pe-x86-64", "-i", rcPath, "-o", serviceSysoPath],
+                cancellationToken: cancellationToken);
+
+            if (File.Exists(serviceSysoPath))
+            {
+                _logger.LogInformation(
+                    "Recurso de icone gerado para discovery-service.exe via windres: {Syso}",
+                    serviceSysoPath);
+                return;
+            }
+
+            _logger.LogWarning(
+                "windres nao gerou o recurso de icone; discovery-service.exe sera compilado SEM icone.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "Falha ao gerar o recurso de icone do discovery-service.exe; binario sera compilado SEM icone.");
+        }
+        finally
+        {
+            TryDeleteFile(rcPath);
+        }
+    }
+
+    private static string ResolveWindresPath()
+    {
+        if (!OperatingSystem.IsWindows())
+            return "x86_64-w64-mingw32-windres";
+
+        var commonPaths = new[]
+        {
+            @"C:\ProgramData\Chocolatey\lib\mingw\tools\install\mingw64\bin\windres.exe",
+            @"C:\ProgramData\mingw64\mingw64\bin\windres.exe",
+            @"C:\msys64\mingw64\bin\windres.exe",
+            @"C:\msys64\usr\bin\windres.exe",
+        };
+
+        return commonPaths.FirstOrDefault(File.Exists) ?? "windres";
     }
 
     private string GetActiveProfileName()
