@@ -21,6 +21,7 @@ public interface IAgentSoftwareRepository
         int pageSize,
         string? search,
         bool descending,
+        bool onlyUpdates = false,
         CancellationToken ct = default);
     Task<AgentSoftwareSnapshot> GetSnapshotByAgentIdAsync(Guid agentId);
     Task<int> GetUpdateAvailableCountByAgentIdAsync(Guid agentId);

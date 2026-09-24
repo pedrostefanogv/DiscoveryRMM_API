@@ -193,6 +193,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         int pageSize,
         string? search,
         bool descending,
+        bool onlyUpdates = false,
         CancellationToken ct = default)
     {
         var pattern = BuildSearchPattern(search);
@@ -204,6 +205,11 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             join catalog in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals catalog.Id
             where inv.AgentId == agentId && inv.IsPresent
             select new { inv, catalog };
+
+        // Filtro "somente com atualização pendente": aplicado no banco para o
+        // totalCount/paginação refletirem o subconjunto (não só a página atual).
+        if (onlyUpdates)
+            query = query.Where(x => x.inv.UpdateAvailable);
 
         if (pattern is not null)
         {

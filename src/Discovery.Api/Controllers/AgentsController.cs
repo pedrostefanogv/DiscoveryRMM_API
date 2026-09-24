@@ -236,13 +236,15 @@ public class AgentsController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
         [FromQuery] string? search = null,
-        [FromQuery] string order = "asc")
+        [FromQuery] string order = "asc",
+        [FromQuery] bool onlyUpdates = false)
     {
         var normalizedOrder = order.Trim().ToLowerInvariant();
         if (normalizedOrder is not ("asc" or "desc"))
             return BadRequest(new { error = "Invalid order. Use 'asc' or 'desc'." });
 
-        var result = await _mediator.Send(new GetAgentSoftwarePageQuery(id, page, pageSize, search, normalizedOrder == "desc"));
+        var result = await _mediator.Send(new GetAgentSoftwarePageQuery(
+            id, page, pageSize, search, normalizedOrder == "desc", onlyUpdates));
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());

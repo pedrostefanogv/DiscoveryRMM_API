@@ -196,6 +196,28 @@ public class AgentSoftwarePaginationHandlerTests
     }
 
     [Test]
+    public async Task GetSoftwarePage_OnlyUpdatesFiltersTotalCount()
+    {
+        var inventory = BuildInventory(120);
+        // 22 itens com update pendente, espalhados pelas páginas.
+        for (var i = 0; i < 22; i++) inventory[i * 5].UpdateAvailable = true;
+
+        var handler = new GetAgentSoftwarePageQueryHandler(
+            new FakeAgentRepository(agent: new Agent { Id = AgentId }),
+            new FakeAgentSoftwareRepository(inventory));
+
+        var result = await handler.Handle(
+            new GetAgentSoftwarePageQuery(AgentId, Page: 1, PageSize: 50, OnlyUpdates: true),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.TotalCount, Is.EqualTo(22), "total deve refletir só os com update");
+        Assert.That(result.Value.TotalPages, Is.EqualTo(1));
+        Assert.That(result.Value.Items, Has.Count.EqualTo(22));
+        Assert.That(result.Value.Items.All(x => x.UpdateAvailable), Is.True);
+    }
+
+    [Test]
     public async Task GetSoftwarePage_AgentMissing_ReturnsNotFound()
     {
         var handler = new GetAgentSoftwarePageQueryHandler(
@@ -282,9 +304,14 @@ public class AgentSoftwarePaginationHandlerTests
         }
 
         public Task<AgentSoftwarePageResult> GetCurrentByAgentIdOffsetAsync(
-            Guid agentId, int page, int pageSize, string? search, bool descending, CancellationToken ct = default)
+            Guid agentId, int page, int pageSize, string? search, bool descending, bool onlyUpdates = false, CancellationToken ct = default)
         {
             IEnumerable<AgentInstalledSoftware> query = inventory;
+            if (onlyUpdates)
+            {
+                query = query.Where(x => x.UpdateAvailable);
+            }
+
             if (!string.IsNullOrWhiteSpace(search))
             {
                 query = query.Where(x => x.Name.Contains(search, StringComparison.OrdinalIgnoreCase));

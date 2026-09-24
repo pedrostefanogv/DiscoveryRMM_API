@@ -133,7 +133,7 @@ public class SoftwareCommandHandlerTests
         public Task<IEnumerable<AgentInstalledSoftware>> GetCurrentByAgentIdAsync(Guid agentId) => throw new NotSupportedException();
         public Task<IReadOnlyDictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>> GetCurrentByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<AgentInstalledSoftware>> GetCurrentByAgentIdPagedAsync(Guid agentId, string? cursor, int limit, string? search, bool descending) => throw new NotSupportedException();
-        public Task<AgentSoftwarePageResult> GetCurrentByAgentIdOffsetAsync(Guid agentId, int page, int pageSize, string? search, bool descending, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<AgentSoftwarePageResult> GetCurrentByAgentIdOffsetAsync(Guid agentId, int page, int pageSize, string? search, bool descending, bool onlyUpdates = false, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<AgentSoftwareSnapshot> GetSnapshotByAgentIdAsync(Guid agentId) => throw new NotSupportedException();
         public Task<int> GetUpdateAvailableCountByAgentIdAsync(Guid agentId) => throw new NotSupportedException();
         public Task<IReadOnlyList<SoftwareInventoryListItem>> GetInventoryGlobalPagedAsync(string? cursor, int limit, string? search, bool descending) => throw new NotSupportedException();

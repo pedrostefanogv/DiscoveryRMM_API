@@ -58,7 +58,9 @@ public sealed record GetAgentSoftwarePageQuery(
     int Page = 1,
     int PageSize = 50,
     string? Search = null,
-    bool Descending = false) : IQuery<Result<AgentSoftwarePageDto>>;
+    bool Descending = false,
+    /// <summary>Quando true, retorna apenas apps com atualização pendente.</summary>
+    bool OnlyUpdates = false) : IQuery<Result<AgentSoftwarePageDto>>;
 
 public sealed record AgentHardwareDto(
     string Manufacturer,

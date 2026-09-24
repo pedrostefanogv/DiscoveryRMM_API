@@ -251,7 +251,7 @@ public sealed class GetAgentSoftwarePageQueryHandler(
         var safePageSize = Math.Clamp(q.PageSize, 1, 2000);
 
         var result = await softwareRepo.GetCurrentByAgentIdOffsetAsync(
-            q.AgentId, safePage, safePageSize, q.Search, q.Descending, ct);
+            q.AgentId, safePage, safePageSize, q.Search, q.Descending, q.OnlyUpdates, ct);
 
         var totalPages = Math.Max(1, (int)Math.Ceiling(result.TotalCount / (double)safePageSize));
 
