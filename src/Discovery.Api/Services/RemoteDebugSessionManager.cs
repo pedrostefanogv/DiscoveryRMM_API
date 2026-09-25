@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Discovery.Core.Configuration;
 using Discovery.Core.Helpers;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Discovery.Api.Services;
@@ -8,12 +9,23 @@ namespace Discovery.Api.Services;
 public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
 {
     private readonly RemoteDebugOptions _options;
+    private readonly ILogger<RemoteDebugSessionManager> _logger;
     private readonly ConcurrentDictionary<Guid, RemoteDebugSessionState> _sessions = new();
 
-    public RemoteDebugSessionManager(IOptions<RemoteDebugOptions> options)
+    public RemoteDebugSessionManager(
+        IOptions<RemoteDebugOptions> options,
+        ILogger<RemoteDebugSessionManager> logger)
     {
         _options = options.Value;
+        _logger = logger;
     }
+
+    // O teto do debug remoto PRECISA ser positivo: o agente recebe o teto como
+    // maxExpiresAtUtc e, sem valor, nao estende a sessao. "0 = ilimitado" aqui
+    // criaria uma sessao que o servidor renovaria para sempre e o agente
+    // encerraria no deadline inicial. 0 cai no padrao de 1h (instalador).
+    private int ResolvedMaxDurationMinutes
+        => _options.MaxSessionDurationMinutes > 0 ? _options.MaxSessionDurationMinutes : 60;
 
     public RemoteDebugSessionState StartSession(
         Guid agentId,
@@ -52,7 +64,7 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
             LastActivityAtUtc = now,
             LastKeepAliveAtUtc = now,
             ExpiresAtUtc = now.Add(ttl),
-            MaxExpiresAtUtc = SessionLivenessPolicy.ResolveMaxExpiresAt(now, _options.MaxSessionDurationMinutes)
+            MaxExpiresAtUtc = SessionLivenessPolicy.ResolveMaxExpiresAt(now, ResolvedMaxDurationMinutes)
                              ?? DateTime.MaxValue,
             PreferredTransport = normalizedTransport,
             NatsSubject = NatsSubjectBuilder.RemoteDebugLogSubject(clientId, siteId, agentId),
@@ -128,8 +140,18 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
     public bool TryRenewSession(Guid sessionId, Guid userId, out RemoteDebugSessionState? session)
     {
         session = null;
-        if (!_sessions.TryGetValue(sessionId, out var found) || found.IsClosed)
+        if (!_sessions.TryGetValue(sessionId, out var found))
             return false;
+
+        // Sessao ja encerrada: devolve o estado (sem vazar de outro usuario) para
+        // o caller responder 200 com SessionActive=false — assim o viewer
+        // encerra de imediato em vez de renovar em loop silencioso.
+        if (found.IsClosed)
+        {
+            if (found.OwnerUserId == userId)
+                session = found;
+            return false;
+        }
 
         if (found.OwnerUserId != userId)
             return false;
@@ -139,11 +161,12 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
                 now,
                 found.StartedAtUtc,
                 _options.DefaultTtlMinutes,
-                _options.MaxSessionDurationMinutes,
+                ResolvedMaxDurationMinutes,
                 out var nextExpiry))
         {
-            // Teto total atingido: encerra e sinaliza.
+            // Teto total atingido: encerra e devolve o estado final.
             CloseSession(sessionId, "max-duration", userId);
+            session = found;
             return false;
         }
 
@@ -151,6 +174,9 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
         found.LastActivityAtUtc = now;
         found.LastKeepAliveAtUtc = now;
         session = found;
+        _logger.LogInformation(
+            "[remote-debug] sessao renovada: sessionId={SessionId} expiresAtUtc={ExpiresAtUtc} maxExpiresAtUtc={MaxExpiresAtUtc}",
+            found.SessionId, found.ExpiresAtUtc, found.MaxExpiresAtUtc);
         return true;
     }
 
@@ -177,6 +203,9 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
         found.EndedAtUtc = DateTime.UtcNow;
         found.EndReason = reason;
         found.ClosedByUserId = closedByUserId;
+        _logger.LogInformation(
+            "[remote-debug] sessao encerrada: sessionId={SessionId} reason={Reason}",
+            found.SessionId, reason);
         return true;
     }
 

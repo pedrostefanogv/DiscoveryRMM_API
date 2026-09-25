@@ -31,7 +31,8 @@ public sealed record RemoteDebugRenewalDto(
     Guid SessionId,
     DateTime ExpiresAtUtc,
     DateTime? MaxExpiresAtUtc,
-    bool SessionActive);
+    bool SessionActive,
+    string? EndReason = null);
 
 public sealed record RemoteDebugLevelDto(
     Guid SessionId,

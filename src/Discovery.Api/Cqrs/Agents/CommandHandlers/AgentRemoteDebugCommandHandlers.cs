@@ -148,9 +148,12 @@ public sealed class RenewRemoteDebugCommandHandler(
 {
     public Task<Result<RemoteDebugRenewalDto>> Handle(RenewRemoteDebugCommand cmd, CancellationToken ct)
     {
-        if (!sessionManager.TryRenewSession(cmd.SessionId, cmd.UserId, out var session) || session is null)
+        var renewed = sessionManager.TryRenewSession(cmd.SessionId, cmd.UserId, out var session);
+
+        // Sessao desconhecida (ou de outro usuario): nao vaza existencia.
+        if (session is null)
             return Task.FromResult(Result<RemoteDebugRenewalDto>.Failure(
-                Error.Validation("SessionId", "Remote debug session is not active or reached its maximum duration.")));
+                Error.NotFound("Remote debug session not found.")));
 
         if (session.AgentId != cmd.AgentId)
             return Task.FromResult(Result<RemoteDebugRenewalDto>.Failure(
@@ -158,11 +161,16 @@ public sealed class RenewRemoteDebugCommandHandler(
 
         var maxExpiresAtUtc = session.MaxExpiresAtUtc == DateTime.MaxValue ? (DateTime?)null : session.MaxExpiresAtUtc;
 
+        // Sessao existe mas nao e mais renovavel (teto/keepalive): responde 200
+        // com SessionActive=false para o viewer encerrar de imediato. Devolver
+        // erro HTTP fazia o keepalive falhar em loop silencioso e o console
+        // nunca marcava EXPIRADO.
         return Task.FromResult(Result<RemoteDebugRenewalDto>.Success(new RemoteDebugRenewalDto(
             session.SessionId,
             session.ExpiresAtUtc,
             maxExpiresAtUtc,
-            SessionActive: !session.IsClosed)));
+            SessionActive: renewed && !session.IsClosed,
+            EndReason: session.EndReason)));
     }
 }
 

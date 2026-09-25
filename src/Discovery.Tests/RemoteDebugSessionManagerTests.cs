@@ -1,5 +1,6 @@
 using Discovery.Api.Services;
 using Discovery.Core.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Discovery.Tests;
@@ -7,7 +8,8 @@ namespace Discovery.Tests;
 public class RemoteDebugSessionManagerTests
 {
     private static RemoteDebugSessionManager CreateManager(RemoteDebugOptions? options = null)
-        => new(Options.Create(options ?? new RemoteDebugOptions()));
+        => new(Options.Create(options ?? new RemoteDebugOptions()),
+               NullLogger<RemoteDebugSessionManager>.Instance);
 
     [Test]
     public void StartSession_ShouldAllowOwnerAndAgentAccess()
@@ -138,11 +140,27 @@ public class RemoteDebugSessionManagerTests
         session.StartedAtUtc = DateTime.UtcNow.AddMinutes(-120);
         session.MaxExpiresAtUtc = DateTime.UtcNow.AddMinutes(-1);
 
-        var renewed = manager.TryRenewSession(session.SessionId, userId, out _);
+        var renewed = manager.TryRenewSession(session.SessionId, userId, out var finalState);
 
         Assert.That(renewed, Is.False);
         Assert.That(manager.TryGetSession(session.SessionId, out _), Is.False);
         Assert.That(session.EndReason, Is.EqualTo("max-duration"));
+        // O estado final PRECISA voltar no out param: e assim que o handler
+        // responde 200 com SessionActive=false e o viewer marca EXPIRADO.
+        Assert.That(finalState, Is.Not.Null);
+        Assert.That(finalState!.IsClosed, Is.True);
+        Assert.That(finalState.EndReason, Is.EqualTo("max-duration"));
+    }
+
+    [Test]
+    public void TryRenewSession_WithUnknownSession_ShouldNotExposeAnyState()
+    {
+        var manager = CreateManager();
+
+        var renewed = manager.TryRenewSession(Guid.NewGuid(), Guid.NewGuid(), out var session);
+
+        Assert.That(renewed, Is.False);
+        Assert.That(session, Is.Null, "sessao desconhecida nao deve ser exposta (evita enumeracao)");
     }
 
     [Test]

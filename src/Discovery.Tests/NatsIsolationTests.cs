@@ -382,7 +382,7 @@ public class NatsIsolationTests
     [Test]
     public void RemoteDebugSession_WrongAgent_IsRejected()
     {
-        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()));
+        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()), global::Microsoft.Extensions.Logging.Abstractions.NullLogger<RemoteDebugSessionManager>.Instance);
         var correctAgent = Guid.NewGuid();
         var otherAgent = Guid.NewGuid();
         var userId = Guid.NewGuid();
@@ -396,7 +396,7 @@ public class NatsIsolationTests
     [Test]
     public void RemoteDebugSession_WrongUser_IsRejected()
     {
-        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()));
+        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()), global::Microsoft.Extensions.Logging.Abstractions.NullLogger<RemoteDebugSessionManager>.Instance);
         var agentId = Guid.NewGuid();
         var correctUser = Guid.NewGuid();
         var otherUser = Guid.NewGuid();
@@ -410,7 +410,7 @@ public class NatsIsolationTests
     [Test]
     public void RemoteDebugSession_NatsSubject_IsTenantScoped()
     {
-        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()));
+        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()), global::Microsoft.Extensions.Logging.Abstractions.NullLogger<RemoteDebugSessionManager>.Instance);
         var clientId = Guid.NewGuid();
         var siteId = Guid.NewGuid();
         var agentId = Guid.NewGuid();
@@ -427,7 +427,7 @@ public class NatsIsolationTests
     [Test]
     public void RemoteDebugSession_TwoAgents_SubjectsAreDistinct()
     {
-        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()));
+        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()), global::Microsoft.Extensions.Logging.Abstractions.NullLogger<RemoteDebugSessionManager>.Instance);
         var sessionA = manager.StartSession(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "debug", 10);
         var sessionB = manager.StartSession(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "debug", 10);
 
