@@ -267,8 +267,20 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             return await BuildSuccessResponseAsync(request, jwt.Jwt, jwt.ExpiresAtUtc, configurationService, ct);
         }
 
-        // Aceita JWT NATS pré-emitido pela API (agent, user, ou sessão remota).
-        // Valida assinatura (account key), issuer e validade temporal.
+        // Aceita JWT NATS pré-emitido pela API (agent, user ou sessão remota), que
+        // chega no CONNECT como auth_token. O NATS em modo config (auth_callout
+        // sem operator mode) DESCARTA o campo "jwt" do CONNECT antes de chamar o
+        // callout (nats-server client.go: "when not in operator mode, discard the
+        // jwt"), então a credencial escopada emitida por /nats-credentials só
+        // sobrevive se for enviada como auth_token — senão o callout recebe
+        // connect_opts vazio e responde "Missing auth token.".
+        //
+        // Valida issuer/validade e REEMITE um JWT com sub = request.Nats.UserNkey:
+        // o user_nkey do auth request é uma chave EFÊMERA gerada pelo NATS a cada
+        // conexão (nats-server auth_callout.go) e o server só aceita o JWT
+        // devolvido se o subject dele for exatamente essa chave. Comparar com o sub
+        // do JWT pré-emitido (a chave do cliente) nunca casa — era a segunda causa
+        // do Authorization Violation mesmo quando o JWT chegava ao callout.
         if (TryValidatePreIssuedNatsJwt(token, out var preIssuedExpiresAtUtc, out var isSessionToken, out var jwtSubject, out var pubPerms, out var subPerms))
         {
             _logger.LogInformation(
@@ -277,40 +289,27 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                 isSessionToken, jwtSubject, request.Nats.UserNkey,
                 pubPerms.Length, subPerms.Length, preIssuedExpiresAtUtc);
 
-            // Para JWTs de sessão remota, o userNkey do WebSocket não corresponde ao sub do JWT.
-            // Reemitimos um novo JWT com sub = request.Nats.UserNkey e as mesmas permissões,
-            // mesmo padrão usado para agents via IssueUserJwtForAgentAsync.
-            if (isSessionToken)
-            {
-                _logger.LogInformation(
-                    "Auth callout: reissuing session JWT for userNkey={UserNkey}. " +
-                    "Original subject={Subject}, Name={Name}, Pub=[{PubPerms}], Sub=[{SubPerms}]",
-                    request.Nats.UserNkey, jwtSubject, $"session:{jwtSubject}",
-                    string.Join(",", pubPerms), string.Join(",", subPerms));
+            // Mantém a conexão autorizada até a expiração da credencial original:
+            // o NATS encerra o cliente quando o JWT reemitido expira.
+            var remainingMinutes = (int)Math.Ceiling((preIssuedExpiresAtUtc - DateTime.UtcNow).TotalMinutes);
+            var ttlMinutes = Math.Clamp(remainingMinutes, 1, 60);
 
-                var sessionJwt = await credentialsService.IssueSessionJwtForPublicKeyAsync(
-                    request.Nats.UserNkey,
-                    pubPerms,
-                    subPerms,
-                    ttlMinutes: 5, // curto, só para autorizar a conexão
-                    $"session:{jwtSubject}",
-                    ct);
+            var reissuedJwt = await credentialsService.IssueSessionJwtForPublicKeyAsync(
+                request.Nats.UserNkey,
+                pubPerms,
+                subPerms,
+                ttlMinutes,
+                isSessionToken ? $"session:{jwtSubject}" : $"preissued:{jwtSubject}",
+                ct);
 
-                _logger.LogInformation(
-                    "Auth callout: session JWT reissued successfully. NewExp={NewExpUtc}",
-                    sessionJwt.ExpiresAtUtc);
+            _logger.LogInformation(
+                "Auth callout: pre-issued JWT reissued for userNkey={UserNkey}. OriginalSubject={Subject}, " +
+                "Pub=[{PubPerms}], Sub=[{SubPerms}], NewExp={NewExpUtc}",
+                request.Nats.UserNkey, jwtSubject,
+                string.Join(",", pubPerms), string.Join(",", subPerms),
+                reissuedJwt.ExpiresAtUtc);
 
-                return await BuildSuccessResponseAsync(request, sessionJwt.Jwt, sessionJwt.ExpiresAtUtc, configurationService, ct);
-            }
-
-            // Para JWTs de agent/user, valida userNkey normalmente
-            if (TryValidatePreIssuedNatsUserJwt(token, request.Nats.UserNkey, out preIssuedExpiresAtUtc))
-            {
-                _logger.LogInformation(
-                    "Auth callout: pre-issued user/agent JWT valid. UserNkey={UserNkey}, Exp={ExpUtc}",
-                    request.Nats.UserNkey, preIssuedExpiresAtUtc);
-                return await BuildSuccessResponseAsync(request, token, preIssuedExpiresAtUtc, configurationService, ct);
-            }
+            return await BuildSuccessResponseAsync(request, reissuedJwt.Jwt, reissuedJwt.ExpiresAtUtc, configurationService, ct);
         }
 
         var principal = jwtService.ValidateToken(token);
@@ -350,15 +349,21 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
     }
 
     /// <summary>
-    /// Valida um JWT NATS pré-emitido (agent, user ou sessão) sem exigir userNkey correspondente.
-    /// Para JWTs de sessão remota (Name = "session:*"), extrai também as permissões pub/sub
-    /// para reemitir um JWT com sub = request.Nats.UserNkey no auth callout.
+    /// Valida um JWT NATS pré-emitido (agent, user ou sessão) emitido por
+    /// NatsCredentialsService: confere issuer (account public key), exp/nbf e extrai
+    /// as permissões pub/sub do claim "nats". O subject NÃO é comparado com o
+    /// user_nkey do auth request: esse user_nkey é uma chave efêmera gerada pelo NATS
+    /// por conexão, então o handler sempre reemite o JWT com sub = user_nkey (mesmo
+    /// padrão do caminho agent via IssueUserJwtForAgentAsync).
+    ///
+    /// isSessionToken identifica apenas o rótulo de auditoria (Name = "session:*").
     ///
     /// NOTA: Usa decodificação JWT manual (System.IdentityModel.Tokens.Jwt) em vez de
     /// NatsJwt.DecodeUserClaims porque a versão 1.0.1 da lib NATS.Jwt contém um bug
-    /// que causa NatsJwtException em JWTs válidos gerados por NatsJwt.EncodeUserClaims.
+    /// que causa NatsJwtException em JWTs válidos gerados por NatsJwt.EncodeUserClaims
+    /// (o claim "nats" com pub.allow faz o DecodeUserClaims falhar).
     /// </summary>
-    private bool TryValidatePreIssuedNatsJwt(string token, out DateTime expiresAtUtc, out bool isSessionToken, out string jwtSubject, out string[] pubPerms, out string[] subPerms)
+    internal bool TryValidatePreIssuedNatsJwt(string token, out DateTime expiresAtUtc, out bool isSessionToken, out string jwtSubject, out string[] pubPerms, out string[] subPerms)
     {
         expiresAtUtc = default;
         isSessionToken = false;
@@ -502,83 +507,6 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         }
 
         return [];
-    }
-
-    internal bool TryValidatePreIssuedNatsUserJwt(string token, string expectedUserNkey, out DateTime expiresAtUtc)
-    {
-        expiresAtUtc = default;
-
-        // DECODIFICAÇÃO MANUAL (mesma razão de TryValidatePreIssuedNatsJwt): a
-        // lib NATS.Jwt 1.0.1 lança NatsJwtException em JWTs válidos gerados por
-        // NatsJwt.EncodeUserClaims quando o claim nats contém "pub.allow" — caso
-        // do console de remote debug (o viewer precisa PUBLICAR o ping). Com o
-        // DecodeUserClaims, TODO JWT de usuário pré-emitido era rejeitado aqui,
-        // caía no "Invalid user token." abaixo e o NATS respondia
-        // "Authorization Violation" no CONNECT do console.
-        System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwtToken;
-        try
-        {
-            jwtToken = new JwtSecurityTokenHandler().ReadJwtToken(token);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Rejected pre-issued NATS JWT: failed to decode JWT manually.");
-            return false;
-        }
-
-        var subject = jwtToken.Subject ?? jwtToken.Payload.Sub
-            ?? jwtToken.Claims.FirstOrDefault(c => c.Type == "sub")?.Value;
-        if (string.IsNullOrWhiteSpace(subject)
-            || !string.Equals(subject, expectedUserNkey, StringComparison.Ordinal))
-        {
-            _logger.LogWarning(
-                "Rejected pre-issued NATS JWT due to subject mismatch. Expected={Expected}, Actual={Actual}",
-                expectedUserNkey, subject);
-            return false;
-        }
-
-        var accountSeed = _configuration["Nats:AccountSeed"];
-        if (string.IsNullOrWhiteSpace(accountSeed))
-            return false;
-
-        var expectedIssuer = KeyPair.FromSeed(accountSeed).GetPublicKey();
-        var issuer = jwtToken.Issuer ?? jwtToken.Payload.Iss
-            ?? jwtToken.Claims.FirstOrDefault(c => c.Type == "iss")?.Value;
-        if (string.IsNullOrWhiteSpace(issuer)
-            || !string.Equals(issuer, expectedIssuer, StringComparison.Ordinal))
-        {
-            _logger.LogWarning(
-                "Rejected pre-issued NATS JWT due to issuer mismatch. Expected={Expected}, Actual={Actual}",
-                expectedIssuer, issuer);
-            return false;
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        var nbfUnix = jwtToken.Payload.NotBefore
-            ?? (long.TryParse(jwtToken.Claims.FirstOrDefault(c => c.Type == "nbf")?.Value, out var nbfValue) ? nbfValue : null);
-        if (nbfUnix.HasValue && DateTimeOffset.FromUnixTimeSeconds(nbfUnix.Value) > now.Add(JwtClockSkew))
-        {
-            _logger.LogWarning("Rejected pre-issued NATS JWT due to not-before in the future. Nbf={NbfUtc}", nbfUnix);
-            return false;
-        }
-
-        var expUnix = jwtToken.Payload.Expiration
-            ?? (long.TryParse(jwtToken.Claims.FirstOrDefault(c => c.Type == "exp")?.Value, out var expValue) ? expValue : null);
-        if (!expUnix.HasValue)
-        {
-            _logger.LogWarning("Rejected pre-issued NATS JWT without expiration.");
-            return false;
-        }
-
-        var exp = DateTimeOffset.FromUnixTimeSeconds(expUnix.Value);
-        if (exp <= now.Subtract(JwtClockSkew))
-        {
-            _logger.LogWarning("Rejected pre-issued NATS JWT due to expiration. Exp={ExpUtc}", exp);
-            return false;
-        }
-
-        expiresAtUtc = exp.UtcDateTime;
-        return true;
     }
 
     private static AuthorizationRequest? ParseAuthRequest(string jwt)
