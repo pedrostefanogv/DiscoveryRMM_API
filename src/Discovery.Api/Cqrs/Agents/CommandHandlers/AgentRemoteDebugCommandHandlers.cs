@@ -9,6 +9,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using MediatR;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Discovery.Api.Cqrs.Agents.CommandHandlers;
@@ -143,7 +144,8 @@ public sealed class StopRemoteDebugCommandHandler(
 /// keepalive-timeout e a sessao nao fica presa quando o navegador morre.
 /// </summary>
 public sealed class RenewRemoteDebugCommandHandler(
-    IRemoteDebugSessionManager sessionManager
+    IRemoteDebugSessionManager sessionManager,
+    ILogger<RenewRemoteDebugCommandHandler> logger
 ) : IRequestHandler<RenewRemoteDebugCommand, Result<RemoteDebugRenewalDto>>
 {
     public Task<Result<RemoteDebugRenewalDto>> Handle(RenewRemoteDebugCommand cmd, CancellationToken ct)
@@ -151,9 +153,17 @@ public sealed class RenewRemoteDebugCommandHandler(
         var renewed = sessionManager.TryRenewSession(cmd.SessionId, cmd.UserId, out var session);
 
         // Sessao desconhecida (ou de outro usuario): nao vaza existencia.
+        // O log e essencial para diagnosticar o 404 do keepalive: as sessoes
+        // ficam em memoria (ConcurrentDictionary), entao um restart/redeploy da
+        // API ou um load-balance entre replicas faz o renew "sumir" a sessao.
         if (session is null)
+        {
+            logger.LogWarning(
+                "[remote-debug] renew de sessao desconhecida: sessionId={SessionId} agentId={AgentId} userId={UserId} — estado em memoria (API reiniciada ou outra replica?)",
+                cmd.SessionId, cmd.AgentId, cmd.UserId);
             return Task.FromResult(Result<RemoteDebugRenewalDto>.Failure(
                 Error.NotFound("Remote debug session not found.")));
+        }
 
         if (session.AgentId != cmd.AgentId)
             return Task.FromResult(Result<RemoteDebugRenewalDto>.Failure(
