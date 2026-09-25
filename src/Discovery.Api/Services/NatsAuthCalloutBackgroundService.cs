@@ -504,31 +504,36 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         return [];
     }
 
-    private bool TryValidatePreIssuedNatsUserJwt(string token, string expectedUserNkey, out DateTime expiresAtUtc)
+    internal bool TryValidatePreIssuedNatsUserJwt(string token, string expectedUserNkey, out DateTime expiresAtUtc)
     {
         expiresAtUtc = default;
 
-        NatsUserClaims claims;
+        // DECODIFICAÇÃO MANUAL (mesma razão de TryValidatePreIssuedNatsJwt): a
+        // lib NATS.Jwt 1.0.1 lança NatsJwtException em JWTs válidos gerados por
+        // NatsJwt.EncodeUserClaims quando o claim nats contém "pub.allow" — caso
+        // do console de remote debug (o viewer precisa PUBLICAR o ping). Com o
+        // DecodeUserClaims, TODO JWT de usuário pré-emitido era rejeitado aqui,
+        // caía no "Invalid user token." abaixo e o NATS respondia
+        // "Authorization Violation" no CONNECT do console.
+        System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwtToken;
         try
         {
-            claims = NatsJwt.DecodeUserClaims(token);
+            jwtToken = new JwtSecurityTokenHandler().ReadJwtToken(token);
         }
-        catch (NatsJwtException)
+        catch (Exception ex)
         {
-            return false;
-        }
-        catch
-        {
+            _logger.LogWarning(ex, "Rejected pre-issued NATS JWT: failed to decode JWT manually.");
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(claims.Subject)
-            || !string.Equals(claims.Subject, expectedUserNkey, StringComparison.Ordinal))
+        var subject = jwtToken.Subject ?? jwtToken.Payload.Sub
+            ?? jwtToken.Claims.FirstOrDefault(c => c.Type == "sub")?.Value;
+        if (string.IsNullOrWhiteSpace(subject)
+            || !string.Equals(subject, expectedUserNkey, StringComparison.Ordinal))
         {
             _logger.LogWarning(
                 "Rejected pre-issued NATS JWT due to subject mismatch. Expected={Expected}, Actual={Actual}",
-                expectedUserNkey,
-                claims.Subject);
+                expectedUserNkey, subject);
             return false;
         }
 
@@ -537,36 +542,42 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             return false;
 
         var expectedIssuer = KeyPair.FromSeed(accountSeed).GetPublicKey();
-        if (string.IsNullOrWhiteSpace(claims.Issuer)
-            || !string.Equals(claims.Issuer, expectedIssuer, StringComparison.Ordinal))
+        var issuer = jwtToken.Issuer ?? jwtToken.Payload.Iss
+            ?? jwtToken.Claims.FirstOrDefault(c => c.Type == "iss")?.Value;
+        if (string.IsNullOrWhiteSpace(issuer)
+            || !string.Equals(issuer, expectedIssuer, StringComparison.Ordinal))
         {
             _logger.LogWarning(
                 "Rejected pre-issued NATS JWT due to issuer mismatch. Expected={Expected}, Actual={Actual}",
-                expectedIssuer,
-                claims.Issuer);
+                expectedIssuer, issuer);
             return false;
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (claims.NotBefore.HasValue && claims.NotBefore.Value > now.Add(JwtClockSkew))
+        var nbfUnix = jwtToken.Payload.NotBefore
+            ?? (long.TryParse(jwtToken.Claims.FirstOrDefault(c => c.Type == "nbf")?.Value, out var nbfValue) ? nbfValue : null);
+        if (nbfUnix.HasValue && DateTimeOffset.FromUnixTimeSeconds(nbfUnix.Value) > now.Add(JwtClockSkew))
         {
-            _logger.LogWarning("Rejected pre-issued NATS JWT due to not-before in the future. Nbf={NbfUtc}", claims.NotBefore);
+            _logger.LogWarning("Rejected pre-issued NATS JWT due to not-before in the future. Nbf={NbfUtc}", nbfUnix);
             return false;
         }
 
-        if (!claims.Expires.HasValue)
+        var expUnix = jwtToken.Payload.Expiration
+            ?? (long.TryParse(jwtToken.Claims.FirstOrDefault(c => c.Type == "exp")?.Value, out var expValue) ? expValue : null);
+        if (!expUnix.HasValue)
         {
             _logger.LogWarning("Rejected pre-issued NATS JWT without expiration.");
             return false;
         }
 
-        if (claims.Expires.Value <= now.Subtract(JwtClockSkew))
+        var exp = DateTimeOffset.FromUnixTimeSeconds(expUnix.Value);
+        if (exp <= now.Subtract(JwtClockSkew))
         {
-            _logger.LogWarning("Rejected pre-issued NATS JWT due to expiration. Exp={ExpUtc}", claims.Expires);
+            _logger.LogWarning("Rejected pre-issued NATS JWT due to expiration. Exp={ExpUtc}", exp);
             return false;
         }
 
-        expiresAtUtc = claims.Expires.Value.UtcDateTime;
+        expiresAtUtc = exp.UtcDateTime;
         return true;
     }
 
