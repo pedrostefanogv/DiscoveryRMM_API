@@ -454,7 +454,7 @@ EOF
     fi
     auth_block=$(cat <<EOF
 authorization {
-  timeout: 3
+  timeout: 30
   users = [
     { user: "$NATS_AUTH_USER", password: "$NATS_AUTH_PASSWORD", permissions: { publish: [">"], subscribe: [">"] } }
   ]
@@ -472,7 +472,7 @@ EOF
   else
     auth_block=$(cat <<EOF
 authorization {
-  timeout: 3
+  timeout: 30
   users = [
     { user: "$NATS_AUTH_USER", password: "$NATS_AUTH_PASSWORD" }
   ]
