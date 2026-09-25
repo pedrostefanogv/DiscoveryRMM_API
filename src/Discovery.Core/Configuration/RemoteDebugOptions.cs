@@ -42,6 +42,12 @@ public class RemoteDebugOptions
     /// <summary>
     /// Servidor encerra a sessao apos este tempo sem keepalive (segundos).
     /// Resolve sessao presa quando o navegador morre sem avisar.
+    ///
+    /// 300s (e nao 90s): navegadores estrangulam timers de aba em segundo
+    /// plano (Chrome chega a 1 execucao por minuto em "intensive throttling") e
+    /// suspendem tudo quando a maquina hiberna. Em 90s o popup de debug morria
+    /// por keepalive-timeout so por o operador ter mudado de aba. A deteccao de
+    /// peer realmente morto continua no ping-pong (15s) e no teto de duracao.
     /// </summary>
-    public int KeepAliveTimeoutSeconds { get; set; } = 90;
+    public int KeepAliveTimeoutSeconds { get; set; } = 300;
 }

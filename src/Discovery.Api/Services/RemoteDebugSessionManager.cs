@@ -120,7 +120,7 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
         // Viewer parou de renovar: a sessao nao pode ficar presa.
         var keepAliveTimeout = _options.KeepAliveTimeoutSeconds > 0
             ? TimeSpan.FromSeconds(_options.KeepAliveTimeoutSeconds)
-            : TimeSpan.FromSeconds(90);
+            : TimeSpan.FromSeconds(300);
         if (now - found.LastKeepAliveAtUtc > keepAliveTimeout)
         {
             CloseSession(sessionId, "keepalive-timeout");
@@ -247,7 +247,7 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
         var cleaned = 0;
         var keepAliveTimeout = _options.KeepAliveTimeoutSeconds > 0
             ? TimeSpan.FromSeconds(_options.KeepAliveTimeoutSeconds)
-            : TimeSpan.FromSeconds(90);
+            : TimeSpan.FromSeconds(300);
 
         foreach (var pair in _sessions)
         {

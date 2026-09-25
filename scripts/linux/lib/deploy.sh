@@ -337,7 +337,7 @@ RemoteDebug__PingIntervalSeconds=${REMOTE_DEBUG_PING_INTERVAL_SECONDS:-5}
 RemoteDebug__MissedPingsBeforeClose=${REMOTE_DEBUG_MISSED_PINGS_BEFORE_CLOSE:-3}
 RemoteDebug__InitialGraceSeconds=${REMOTE_DEBUG_INITIAL_GRACE_SECONDS:-60}
 RemoteDebug__KeepAliveSeconds=${REMOTE_DEBUG_KEEP_ALIVE_SECONDS:-60}
-RemoteDebug__KeepAliveTimeoutSeconds=${REMOTE_DEBUG_KEEP_ALIVE_TIMEOUT_SECONDS:-90}
+RemoteDebug__KeepAliveTimeoutSeconds=${REMOTE_DEBUG_KEEP_ALIVE_TIMEOUT_SECONDS:-300}
 EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
@@ -776,7 +776,7 @@ RemoteDebug__PingIntervalSeconds=${REMOTE_DEBUG_PING_INTERVAL_SECONDS:-5}
 RemoteDebug__MissedPingsBeforeClose=${REMOTE_DEBUG_MISSED_PINGS_BEFORE_CLOSE:-3}
 RemoteDebug__InitialGraceSeconds=${REMOTE_DEBUG_INITIAL_GRACE_SECONDS:-60}
 RemoteDebug__KeepAliveSeconds=${REMOTE_DEBUG_KEEP_ALIVE_SECONDS:-60}
-RemoteDebug__KeepAliveTimeoutSeconds=${REMOTE_DEBUG_KEEP_ALIVE_TIMEOUT_SECONDS:-90}
+RemoteDebug__KeepAliveTimeoutSeconds=${REMOTE_DEBUG_KEEP_ALIVE_TIMEOUT_SECONDS:-300}
 EOF
 
   sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
