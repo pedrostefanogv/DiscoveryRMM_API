@@ -54,6 +54,9 @@ public class RemoteSession
     public DateTime ExpiresAt { get; set; }
     public DateTime? ClosedAt { get; set; }
 
+    /// <summary>Ultimo renovamento confirmado (viewer vivo). Observabilidade/auditoria.</summary>
+    public DateTime? LastActivityAt { get; set; }
+
     /// <summary>Duração total em segundos (preenchido ao encerrar).</summary>
     public int? DurationSeconds { get; set; }
 

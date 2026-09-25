@@ -36,6 +36,7 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.StartedAt).HasColumnName("started_at").HasColumnType("timestamptz");
             entity.Property(s => s.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
             entity.Property(s => s.ClosedAt).HasColumnName("closed_at").HasColumnType("timestamptz");
+            entity.Property(s => s.LastActivityAt).HasColumnName("last_activity_at").HasColumnType("timestamptz");
             entity.Property(s => s.DurationSeconds).HasColumnName("duration_seconds");
             entity.Property(s => s.FramesSent).HasColumnName("frames_sent");
             entity.Property(s => s.BytesSent).HasColumnName("bytes_sent");

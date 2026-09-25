@@ -5,6 +5,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.RemoteSessions.Commands;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services.Remote;
 using MediatR;
@@ -101,6 +102,14 @@ public sealed class StartRemoteSessionCommandHandler(
 
         var (defaultFps, _, defaultJpegQ, _) = QualityProfileMapping.GetParameters(cmd.Quality);
 
+        // Teto absoluto da sessao (startedAt + duracao maxima). Vai no payload de
+        // start e na resposta para o viewer limitar as renovacoes.
+        var maxExpiresAt = SessionLivenessPolicy.ResolveMaxExpiresAt(session.StartedAt, options.Value.MaxSessionDurationMinutes);
+        var livenessDto = new LivenessDto(
+            options.Value.Liveness.PingIntervalSeconds,
+            options.Value.Liveness.MissedPingsBeforeClose,
+            options.Value.Liveness.InitialGraceSeconds);
+
         var payload = JsonSerializer.Serialize(new
         {
             action = "start",
@@ -113,6 +122,15 @@ public sealed class StartRemoteSessionCommandHandler(
             maxFps = defaultFps,
             durationMinutes = cmd.DurationMinutes,
             expiresAtUtc = session.ExpiresAt,
+            // Contrato de liveness: cadencia do ping e teto absoluto. O agent
+            // assina o .control e renova/aciona o viewer-timeout com esses dados.
+            maxExpiresAtUtc = maxExpiresAt,
+            liveness = new
+            {
+                pingIntervalSeconds = livenessDto.PingIntervalSeconds,
+                missedPingsBeforeClose = livenessDto.MissedPingsBeforeClose,
+                initialGraceSeconds = livenessDto.InitialGraceSeconds
+            },
             natsSubject,
             shell = cmd.Shell ?? "powershell",
             termCols = cmd.TermCols ?? 120,
@@ -161,7 +179,10 @@ public sealed class StartRemoteSessionCommandHandler(
             session.Status,
             session.ExpiresAt,
             session.StartedAt,
-            natsWsUrl));
+            natsWsUrl,
+            MaxExpiresAtUtc: maxExpiresAt,
+            Liveness: livenessDto,
+            SessionActive: true));
     }
 
     /// <summary>
@@ -243,7 +264,8 @@ public sealed class StopRemoteSessionCommandHandler(
 }
 
 public sealed class RenewRemoteSessionCommandHandler(
-    IRemoteSessionManager sessionManager
+    IRemoteSessionManager sessionManager,
+    IOptions<RemoteAccessOptions> options
 ) : IRequestHandler<RenewRemoteSessionCommand, Result<RemoteSessionResponseDto>>
 {
     public async Task<Result<RemoteSessionResponseDto>> Handle(RenewRemoteSessionCommand cmd, CancellationToken ct)
@@ -251,6 +273,11 @@ public sealed class RenewRemoteSessionCommandHandler(
         try
         {
             var session = await sessionManager.RenewSessionAsync(cmd.SessionId, cmd.UserId, ct);
+
+            // Sessao ja encerrada (closed/expired) NAO e erro: devolvemos o
+            // estado para o viewer exibir o placeholder em vez de insistir.
+            var isActive = string.Equals(session.Status, "active", StringComparison.OrdinalIgnoreCase);
+            var maxExpiresAt = SessionLivenessPolicy.ResolveMaxExpiresAt(session.StartedAt, options.Value.MaxSessionDurationMinutes);
 
             return Result<RemoteSessionResponseDto>.Success(new RemoteSessionResponseDto(
                 session.Id,
@@ -262,7 +289,14 @@ public sealed class RenewRemoteSessionCommandHandler(
                 session.Codec.ToString(),
                 session.Status,
                 session.ExpiresAt,
-                session.StartedAt));
+                session.StartedAt,
+                MaxExpiresAtUtc: maxExpiresAt,
+                Liveness: new LivenessDto(
+                    options.Value.Liveness.PingIntervalSeconds,
+                    options.Value.Liveness.MissedPingsBeforeClose,
+                    options.Value.Liveness.InitialGraceSeconds),
+                SessionActive: isActive,
+                EndReason: isActive ? null : session.Status));
         }
         catch (InvalidOperationException ex)
         {

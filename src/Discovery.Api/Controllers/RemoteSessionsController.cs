@@ -83,19 +83,6 @@ public class RemoteSessionsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
     }
 
-    /// <summary>Obtém credenciais TURN para WebRTC.</summary>
-    [HttpPost("{agentId:guid}/{sessionId:guid}/turn-credentials")]
-    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
-    public async Task<IActionResult> GetTurnCredentials(Guid agentId, Guid sessionId, CancellationToken ct = default)
-    {
-        var userId = GetUserId();
-        var result = await _mediator.Send(new GetTurnCredentialsQuery(agentId, sessionId, userId), ct);
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
-    }
-
     /// <summary>Obtém credenciais NATS (JWT + NKey) para o viewer se conectar ao stream.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/nats-credentials")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]

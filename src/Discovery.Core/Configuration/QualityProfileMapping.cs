@@ -46,12 +46,12 @@ public static class QualityProfileMapping
     };
 
     /// <summary>
-    /// Valida se codec é compatível com o transporte.
-    /// H264 só funciona com WebRTC.
+    /// Valida se codec é compatível com o transporte. O transporte WebRTC foi
+    /// removido, então H264 (que só era suportado por ele) nunca é válido.
     /// </summary>
     public static bool IsCodecValidForTransport(RemoteCodec codec, RemoteTransport transport) => codec switch
     {
-        RemoteCodec.H264 => transport == RemoteTransport.Webrtc,
-        _ => true // JPEG e WebP funcionam em qualquer transporte
+        RemoteCodec.H264 => false,
+        _ => true // JPEG e WebP funcionam no transporte NATS
     };
 }

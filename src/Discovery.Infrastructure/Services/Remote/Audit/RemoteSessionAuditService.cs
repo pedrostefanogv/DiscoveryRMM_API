@@ -13,13 +13,16 @@ namespace Discovery.Infrastructure.Services.Remote.Audit;
 public class RemoteSessionAuditService
 {
     private readonly IRemoteSessionRepository _sessionRepo;
+    private readonly IRemoteSessionAuditRepository _auditRepo;
     private readonly ILogger<RemoteSessionAuditService> _logger;
 
     public RemoteSessionAuditService(
         IRemoteSessionRepository sessionRepo,
+        IRemoteSessionAuditRepository auditRepo,
         ILogger<RemoteSessionAuditService> logger)
     {
         _sessionRepo = sessionRepo;
+        _auditRepo = auditRepo;
         _logger = logger;
     }
 
@@ -47,8 +50,9 @@ public class RemoteSessionAuditService
             "[RemoteAudit] Session={SessionId} Event={EventType} Actor={Actor} IP={IP}",
             sessionId, eventType, actorUserId ?? "system", ipAddress ?? "—");
 
-        // Audit é inserido diretamente via DbContext no Repository
-        // (simplificado — em produção seria via Unit of Work)
+        // Persiste o evento: antes o método era apenas log e a auditoria de
+        // expiração do sweeper era perdida (nada gravado em remote_session_audits).
+        await _auditRepo.AddAsync(audit, ct);
     }
 
     /// <summary>Registra fechamento de sessão expirada.</summary>

@@ -7,8 +7,6 @@ public sealed record GetActiveSessionsQuery(Guid AgentId, Guid UserId) : IQuery<
 
 public sealed record GetSessionCredentialsQuery(Guid AgentId, Guid SessionId, Guid UserId) : IQuery<Result<SessionCredentialsDto>>;
 
-public sealed record GetTurnCredentialsQuery(Guid AgentId, Guid SessionId, Guid UserId) : IQuery<Result<TurnCredentialsDto>>;
-
 public sealed record GetRecordingDownloadQuery(Guid AgentId, Guid SessionId, Guid UserId) : IQuery<Result<RecordingDownloadDto>>;
 
 // ── DTOs ──

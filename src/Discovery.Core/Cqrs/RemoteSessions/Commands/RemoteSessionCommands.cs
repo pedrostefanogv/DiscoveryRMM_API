@@ -100,14 +100,19 @@ public sealed record RemoteSessionResponseDto(
     DateTime ExpiresAtUtc,
     DateTime StartedAtUtc,
     string? NatsWssUrl = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TurnCredentialsDto? TurnCredentials = null
+    // Contrato de liveness: o viewer usa para cadência de ping e para saber o
+    // teto absoluto; no /renew, SessionActive=false + EndReason sinalizam que a
+    // sessão acabou (o viewer mostra o placeholder em vez de reconectar).
+    DateTime? MaxExpiresAtUtc = null,
+    LivenessDto? Liveness = null,
+    bool? SessionActive = null,
+    string? EndReason = null
 );
 
-public sealed record TurnCredentialsDto(
-    string[] Urls,
-    string Username,
-    string Credential,
-    int TtlSeconds
+public sealed record LivenessDto(
+    int PingIntervalSeconds,
+    int MissedPingsBeforeClose,
+    int InitialGraceSeconds
 );
 
 public sealed record TerminalTabResponseDto(

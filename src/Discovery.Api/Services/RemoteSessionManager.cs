@@ -1,6 +1,7 @@
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -78,7 +79,8 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
             Status = "active",
             NatsSubject = natsSubject,
             StartedAt = now,
-            ExpiresAt = now.AddMinutes(_options.DefaultTtlMinutes)
+            ExpiresAt = now.AddMinutes(_options.DefaultTtlMinutes),
+            LastActivityAt = now
         };
 
         var created = await _repo.CreateAsync(session, ct);
@@ -96,21 +98,45 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         var session = await _repo.GetByIdAsync(sessionId, ct)
             ?? throw new InvalidOperationException($"Session {sessionId} not found.");
 
-        if (session.Status != "active")
-            throw new InvalidOperationException($"Session {sessionId} is not active (status: {session.Status}).");
-
         if (session.UserId != userId)
             throw new UnauthorizedAccessException($"User {userId} is not the owner of session {sessionId}.");
 
-        // M2: cap de duração máxima total
-        if (_options.MaxSessionDurationMinutes > 0)
+        // Sessao ja encerrada: idempotente. Devolve o estado para o handler
+        // traduzir em sessionActive=false/endReason (placeholder no viewer).
+        if (session.Status != "active")
+            return session;
+
+        var now = DateTime.UtcNow;
+
+        // M2 + liveness: o novo prazo e agora + TTL, limitado pelo teto absoluto
+        // (startedAt + MaxSessionDurationMinutes). Quando o teto ja foi atingido a
+        // sessao e encerrada e devolvida com Status != "active": o handler traduz
+        // isso em sessionActive=false/endReason e o viewer exibe o placeholder em
+        // vez de tentar renovar para sempre.
+        if (!SessionLivenessPolicy.TryClampRenewal(
+                now,
+                session.StartedAt,
+                _options.DefaultTtlMinutes,
+                _options.MaxSessionDurationMinutes,
+                out var clampedExpiresAt))
         {
-            var maxExpiry = session.StartedAt.AddMinutes(_options.MaxSessionDurationMinutes);
-            if (DateTime.UtcNow >= maxExpiry)
-                throw new InvalidOperationException($"Session {sessionId} has reached maximum duration of {_options.MaxSessionDurationMinutes} minutes.");
+            session.Status = "expired";
+            session.ExpiresAt = clampedExpiresAt;
+            session.ClosedAt = now;
+            session.DurationSeconds = (int)(now - session.StartedAt).TotalSeconds;
+
+            var expired = await _repo.UpdateAsync(session, ct);
+            await AuditAsync(sessionId, "expired", null, userId.ToString(), null, ct);
+
+            _logger.LogInformation(
+                "Remote session {SessionId} reached maximum duration of {MaxMinutes} minutes and was expired on renew",
+                sessionId, _options.MaxSessionDurationMinutes);
+
+            return expired;
         }
 
-        session.ExpiresAt = DateTime.UtcNow.AddMinutes(_options.DefaultTtlMinutes);
+        session.ExpiresAt = clampedExpiresAt;
+        session.LastActivityAt = now;
         var updated = await _repo.UpdateAsync(session, ct);
 
         await AuditAsync(sessionId, "renewed", $"{{\"newExpiresAt\":\"{updated.ExpiresAt:O}\"}}", userId.ToString(), null, ct);

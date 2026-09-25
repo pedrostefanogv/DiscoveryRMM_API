@@ -25,42 +25,6 @@ public sealed class GetActiveSessionsQueryHandler(
     }
 }
 
-public sealed class GetTurnCredentialsQueryHandler(
-    IRemoteSessionManager sessionManager,
-    IOptions<RemoteAccessOptions> options
-) : IRequestHandler<GetTurnCredentialsQuery, Result<TurnCredentialsDto>>
-{
-    public async Task<Result<TurnCredentialsDto>> Handle(GetTurnCredentialsQuery query, CancellationToken ct)
-    {
-        var session = await sessionManager.GetActiveForUserAsync(query.SessionId, query.UserId, ct);
-        if (session is null)
-            return Result<TurnCredentialsDto>.Failure(Error.NotFound("Remote session not found or not active."));
-
-        var webRtc = options.Value.WebRtc;
-
-        // Se WebRTC está desabilitado ou sem TURN configurado, retorna sucesso vazio
-        // (o frontend usa NATS como transporte primário e TURN é opcional)
-        if (!webRtc.Enabled || webRtc.TurnUrls.Length == 0)
-            return Result<TurnCredentialsDto>.Success(new TurnCredentialsDto(
-                Array.Empty<string>(),
-                string.Empty,
-                string.Empty,
-                0));
-
-        // Generate HMAC-based credentials for coturn (long-term credential mechanism)
-        var ttl = TimeSpan.FromMinutes(webRtc.TurnCredentialTtlMinutes);
-        var expiresAt = DateTimeOffset.UtcNow.Add(ttl).ToUnixTimeSeconds();
-        var username = $"{expiresAt}:{query.SessionId:N}";
-        var credential = Convert.ToBase64String(Guid.NewGuid().ToByteArray()); // simple random credential; replace with HMAC in production
-
-        return Result<TurnCredentialsDto>.Success(new TurnCredentialsDto(
-            webRtc.TurnUrls,
-            username,
-            credential,
-            (int)ttl.TotalSeconds));
-    }
-}
-
 public sealed class GetSessionCredentialsQueryHandler(
     IRemoteSessionManager sessionManager,
     IConfigurationService configurationService,
@@ -95,7 +59,6 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.files.req",
             $"{natsSubject}.proxy.req",
             $"{natsSubject}.proc.req",
-            $"{natsSubject}.signal",
             $"{natsSubject}.clipboard.req",
             // Controle do viewer (keyframe ao voltar para a aba). Alinhado com
             // RemoteSessionJwtIssuer.BuildDefaultPermissions — sem isso o NATS
@@ -119,7 +82,10 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.proxy.resp",
             $"{natsSubject}.proc.resp",
             $"{natsSubject}.proc.ready",
-            $"{natsSubject}.signal",
+            // Liveness: o viewer precisa SUBSCREVER o .control para receber
+            // ping/pong/closed do agent. Sem isto o SUB e recusado pelo NATS e
+            // o viewer nunca ve o pong (sessao morre por viewer-timeout).
+            $"{natsSubject}.control",
         };
 
         // FIX (terminal/acesso remoto — item 1 do plano): TTL da credencial do
