@@ -14,6 +14,19 @@ public static class NatsSubjectBuilder
         => $"{AgentBase(clientId, siteId, agentId)}.{messageType}";
 
     /// <summary>
+    /// Subject do stream de logs do debug remoto (agent -> viewer).
+    /// </summary>
+    public static string RemoteDebugLogSubject(Guid clientId, Guid siteId, Guid agentId)
+        => AgentSubject(clientId, siteId, agentId, "remote-debug.log");
+
+    /// <summary>
+    /// Subject UNICO de controle do debug remoto. O MESMO subject carrega
+    /// ping/pong (liveness) e setLevel; o agente publica E assina nele.
+    /// </summary>
+    public static string RemoteDebugControlSubject(Guid clientId, Guid siteId, Guid agentId)
+        => AgentSubject(clientId, siteId, agentId, "remote-debug.control");
+
+    /// <summary>
     /// Subject de eventos para o dashboard.
     /// Com clientId+siteId: tenant.{c}.site.{s}.dashboard.events
     /// Com clientId apenas: tenant.{c}.dashboard.events

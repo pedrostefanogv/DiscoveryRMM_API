@@ -1,15 +1,19 @@
 using System.Collections.Concurrent;
+using Discovery.Core.Configuration;
 using Discovery.Core.Helpers;
+using Microsoft.Extensions.Options;
 
 namespace Discovery.Api.Services;
 
 public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
 {
-    private static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(20);
-    private static readonly TimeSpan MinTtl = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan MaxTtl = TimeSpan.FromHours(2);
-
+    private readonly RemoteDebugOptions _options;
     private readonly ConcurrentDictionary<Guid, RemoteDebugSessionState> _sessions = new();
+
+    public RemoteDebugSessionManager(IOptions<RemoteDebugOptions> options)
+    {
+        _options = options.Value;
+    }
 
     public RemoteDebugSessionState StartSession(
         Guid agentId,
@@ -46,9 +50,13 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
             LogLevel = normalizedLevel,
             StartedAtUtc = now,
             LastActivityAtUtc = now,
+            LastKeepAliveAtUtc = now,
             ExpiresAtUtc = now.Add(ttl),
+            MaxExpiresAtUtc = SessionLivenessPolicy.ResolveMaxExpiresAt(now, _options.MaxSessionDurationMinutes)
+                             ?? DateTime.MaxValue,
             PreferredTransport = normalizedTransport,
-            NatsSubject = NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "remote-debug.log")
+            NatsSubject = NatsSubjectBuilder.RemoteDebugLogSubject(clientId, siteId, agentId),
+            NatsControlSubject = NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId)
         };
 
         _sessions[sessionId] = state;
@@ -87,15 +95,73 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
         if (!_sessions.TryGetValue(sessionId, out var found))
             return false;
 
+        var now = DateTime.UtcNow;
         if (found.IsClosed)
             return false;
 
-        if (found.ExpiresAtUtc <= DateTime.UtcNow)
+        if (found.ExpiresAtUtc <= now)
         {
             CloseSession(sessionId, "timeout");
             return false;
         }
 
+        // Viewer parou de renovar: a sessao nao pode ficar presa.
+        var keepAliveTimeout = _options.KeepAliveTimeoutSeconds > 0
+            ? TimeSpan.FromSeconds(_options.KeepAliveTimeoutSeconds)
+            : TimeSpan.FromSeconds(90);
+        if (now - found.LastKeepAliveAtUtc > keepAliveTimeout)
+        {
+            CloseSession(sessionId, "keepalive-timeout");
+            return false;
+        }
+
+        if (found.MaxExpiresAtUtc != DateTime.MaxValue && now >= found.MaxExpiresAtUtc)
+        {
+            CloseSession(sessionId, "max-duration");
+            return false;
+        }
+
+        session = found;
+        return true;
+    }
+
+    public bool TryRenewSession(Guid sessionId, Guid userId, out RemoteDebugSessionState? session)
+    {
+        session = null;
+        if (!_sessions.TryGetValue(sessionId, out var found) || found.IsClosed)
+            return false;
+
+        if (found.OwnerUserId != userId)
+            return false;
+
+        var now = DateTime.UtcNow;
+        if (!SessionLivenessPolicy.TryClampRenewal(
+                now,
+                found.StartedAtUtc,
+                _options.DefaultTtlMinutes,
+                _options.MaxSessionDurationMinutes,
+                out var nextExpiry))
+        {
+            // Teto total atingido: encerra e sinaliza.
+            CloseSession(sessionId, "max-duration", userId);
+            return false;
+        }
+
+        found.ExpiresAtUtc = nextExpiry;
+        found.LastActivityAtUtc = now;
+        found.LastKeepAliveAtUtc = now;
+        session = found;
+        return true;
+    }
+
+    public bool TrySetLogLevel(Guid sessionId, Guid userId, string? logLevel, out RemoteDebugSessionState? session)
+    {
+        session = null;
+        if (!TryGetSessionForUser(sessionId, userId, out var found) || found is null)
+            return false;
+
+        found.LogLevel = NormalizeLogLevel(logLevel);
+        found.LastActivityAtUtc = DateTime.UtcNow;
         session = found;
         return true;
     }
@@ -119,10 +185,23 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
         if (!_sessions.TryGetValue(sessionId, out var found) || found.IsClosed)
             return;
 
-        var now = DateTime.UtcNow;
-        found.LastActivityAtUtc = now;
-        if (found.ExpiresAtUtc < now.AddMinutes(2))
-            found.ExpiresAtUtc = now.AddMinutes(2);
+        found.LastActivityAtUtc = DateTime.UtcNow;
+        found.LastKeepAliveAtUtc = DateTime.UtcNow;
+
+        // Mantem o comportamento antigo de estender quando perto de expirar,
+        // agora respeitando o teto total.
+        if (found.ExpiresAtUtc < DateTime.UtcNow.AddMinutes(_options.MinTtlMinutes))
+        {
+            if (SessionLivenessPolicy.TryClampRenewal(
+                    DateTime.UtcNow,
+                    found.StartedAtUtc,
+                    _options.DefaultTtlMinutes,
+                    _options.MaxSessionDurationMinutes,
+                    out var nextExpiry))
+            {
+                found.ExpiresAtUtc = nextExpiry;
+            }
+        }
     }
 
     public long NextSequence(Guid sessionId)
@@ -137,6 +216,9 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
     {
         var now = DateTime.UtcNow;
         var cleaned = 0;
+        var keepAliveTimeout = _options.KeepAliveTimeoutSeconds > 0
+            ? TimeSpan.FromSeconds(_options.KeepAliveTimeoutSeconds)
+            : TimeSpan.FromSeconds(90);
 
         foreach (var pair in _sessions)
         {
@@ -156,24 +238,37 @@ public sealed class RemoteDebugSessionManager : IRemoteDebugSessionManager
             {
                 CloseSession(pair.Key, "timeout");
                 cleaned++;
+                continue;
+            }
+
+            if (now - session.LastKeepAliveAtUtc > keepAliveTimeout)
+            {
+                CloseSession(pair.Key, "keepalive-timeout");
+                cleaned++;
+                continue;
+            }
+
+            if (session.MaxExpiresAtUtc != DateTime.MaxValue && now >= session.MaxExpiresAtUtc)
+            {
+                CloseSession(pair.Key, "max-duration");
+                cleaned++;
             }
         }
 
         return cleaned;
     }
 
-    private static TimeSpan ResolveTtl(int? ttlMinutes)
+    private TimeSpan ResolveTtl(int? ttlMinutes)
     {
-        if (!ttlMinutes.HasValue)
-            return DefaultTtl;
+        var minutes = ttlMinutes ?? _options.DefaultTtlMinutes;
 
-        var ttl = TimeSpan.FromMinutes(ttlMinutes.Value);
-        if (ttl < MinTtl)
-            return MinTtl;
-        if (ttl > MaxTtl)
-            return MaxTtl;
+        var min = _options.MinTtlMinutes > 0 ? _options.MinTtlMinutes : 2;
+        var max = _options.MaxTtlMinutes > 0 ? _options.MaxTtlMinutes : 120;
 
-        return ttl;
+        if (minutes < min) minutes = min;
+        if (minutes > max) minutes = max;
+
+        return TimeSpan.FromMinutes(minutes);
     }
 
     private static string NormalizeLogLevel(string? logLevel)

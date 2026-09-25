@@ -312,10 +312,69 @@ public sealed class SpecialCommandPayloadValidator
             expiresAtUtc = optionalExpiresAt.ToString("O");
         }
 
+        // Teto absoluto da sessao (duracao maxima configurada na instalacao).
+        string? maxExpiresAtUtc = null;
+        if (payload.TryGetProperty("maxExpiresAtUtc", out var maxExpiresElement) && maxExpiresElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(maxExpiresElement, out var maxRaw) || !TryParseIsoUtc(maxRaw, out var maxExpiresAt))
+            {
+                validationError = "field 'maxExpiresAtUtc' must be an ISO-8601 UTC datetime string.";
+                return false;
+            }
+
+            if (expiresAtUtc is not null && TryParseIsoUtc(expiresAtUtc, out var initialExpires) && maxExpiresAt < initialExpires)
+            {
+                validationError = "field 'maxExpiresAtUtc' must be greater than or equal to 'expiresAtUtc'.";
+                return false;
+            }
+
+            maxExpiresAtUtc = maxExpiresAt.ToString("O");
+        }
+
+        // Bloco de liveness do canal de controle (opcional: defaults do agente).
+        Dictionary<string, object?>? liveness = null;
+        if (payload.TryGetProperty("liveness", out var livenessElement) && livenessElement.ValueKind == JsonValueKind.Object)
+        {
+            liveness = new Dictionary<string, object?>();
+            foreach (var field in new[] { "pingIntervalSeconds", "missedPingsBeforeClose", "initialGraceSeconds", "keepAliveSeconds" })
+            {
+                if (!livenessElement.TryGetProperty(field, out var fieldElement) || fieldElement.ValueKind == JsonValueKind.Null)
+                    continue;
+
+                if (fieldElement.ValueKind != JsonValueKind.Number || !fieldElement.TryGetInt32(out var fieldValue) || fieldValue <= 0)
+                {
+                    validationError = $"field 'liveness.{field}' must be a positive integer.";
+                    return false;
+                }
+
+                liveness[field] = fieldValue;
+            }
+        }
+
         var streamPayload = new Dictionary<string, object?>
         {
             ["natsSubject"] = natsSubject
         };
+
+        // Subject UNICO de controle (ping/pong/setLevel). Opcional no payload:
+        // quando ausente o agente deriva do natsSubject. Quando presente o
+        // sufixo precisa ser exatamente o canonico.
+        if (stream.TryGetProperty("natsControlSubject", out var controlElement) && controlElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(controlElement, out var controlSubject))
+            {
+                validationError = "field 'stream.natsControlSubject' must be a string.";
+                return false;
+            }
+
+            if (!controlSubject.EndsWith(".remote-debug.control", StringComparison.Ordinal))
+            {
+                validationError = "field 'stream.natsControlSubject' must match the tenant-scoped remote-debug.control subject.";
+                return false;
+            }
+
+            streamPayload["natsControlSubject"] = controlSubject;
+        }
 
         var normalized = new Dictionary<string, object?>
         {
@@ -323,8 +382,12 @@ public sealed class SpecialCommandPayloadValidator
             ["sessionId"] = sessionId,
             ["logLevel"] = logLevel,
             ["expiresAtUtc"] = expiresAtUtc,
+            ["maxExpiresAtUtc"] = maxExpiresAtUtc,
             ["stream"] = streamPayload
         };
+
+        if (liveness is not null)
+            normalized["liveness"] = liveness;
 
         normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
         return true;

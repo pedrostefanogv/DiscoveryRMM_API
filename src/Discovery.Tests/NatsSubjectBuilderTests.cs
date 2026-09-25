@@ -82,4 +82,18 @@ public class NatsSubjectBuilderTests
 
         Assert.That(subject, Is.EqualTo("tenant.global.pong"));
     }
+
+    [Test]
+    public void RemoteDebugControlSubject_ShouldUseCanonicalAgentFormat()
+    {
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        var subject = NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId);
+
+        Assert.That(
+            subject,
+            Is.EqualTo($"tenant.{clientId}.site.{siteId}.agent.{agentId}.remote-debug.control"));
+    }
 }

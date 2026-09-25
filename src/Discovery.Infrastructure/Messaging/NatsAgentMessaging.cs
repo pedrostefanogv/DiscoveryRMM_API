@@ -249,6 +249,19 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     }
 
     /// <inheritdoc />
+    public async Task PublishRemoteDebugControlAsync(Guid clientId, Guid siteId, Guid agentId, string payload, CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return;
+
+        var subject = NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId);
+        await _connection.PublishAsync(subject, payload, cancellationToken: cancellationToken);
+        _logger.LogInformation(
+            "Remote debug control published to agent {AgentId} on subject {Subject}",
+            agentId, subject);
+    }
+
+    /// <inheritdoc />
     public async Task SendCommandToSubjectAsync(Guid clientId, Guid siteId, Guid agentId, Guid commandId, string commandType, string payload)
     {
         var subject = NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "command");

@@ -1,6 +1,7 @@
 using Discovery.Api.Services;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.RemoteDebug.Queries;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using MediatR;
@@ -35,13 +36,22 @@ public sealed class GetRemoteDebugCredentialsQueryHandler(
                 HasGlobalAccess = true // dashboard users need to subscribe to agent remote-debug logs
             };
 
+            // Canal unico de controle (ping/pong/setLevel): o viewer precisa
+            // PUBLICAR (ping) e ASSINAR (pong/closed/levelChanged) no MESMO
+            // subject, escopado ao agente desta sessao.
+            var controlSubject = string.IsNullOrWhiteSpace(session.NatsControlSubject)
+                ? NatsSubjectBuilder.RemoteDebugControlSubject(session.ClientId, session.SiteId, session.AgentId)
+                : session.NatsControlSubject;
+
             var creds = await credentialsService.IssueForUserAsync(
                 query.UserId,
                 scopeAccess,
                 session.ClientId,
                 session.SiteId,
                 ct,
-                remoteDebugScopeAccess);
+                remoteDebugScopeAccess,
+                remoteDebugPublishSubjects: [controlSubject],
+                remoteDebugSubscribeSubjects: [controlSubject]);
 
             var serverConfig = await configurationService.GetServerConfigAsync();
             // Normaliza garantindo barra final no path: navegadores NAO seguem

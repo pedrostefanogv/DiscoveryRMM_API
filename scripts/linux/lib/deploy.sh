@@ -127,8 +127,35 @@ publish_site() {
 
 # ── Environment file ───────────────────────────────────────────────────────
 
+# Resolve a duracao maxima de uma sessao remota em minutos, na ordem:
+# 1) REMOTE_SESSION_MAX_DURATION_MINUTES explicito;
+# 2) REMOTE_SESSION_MAX_DURATION_HOURS (prompt do instalador);
+# 3) valor existente no discovery.env (update preserva o que ja foi definido);
+# 4) padrao 1 hora.
+resolve_remote_session_max_minutes() {
+  if [[ -n "${REMOTE_SESSION_MAX_DURATION_MINUTES:-}" ]]; then
+    printf '%s' "$REMOTE_SESSION_MAX_DURATION_MINUTES"; return
+  fi
+  if [[ -n "${REMOTE_SESSION_MAX_DURATION_HOURS:-}" ]]; then
+    printf '%s' "$(( REMOTE_SESSION_MAX_DURATION_HOURS * 60 ))"; return
+  fi
+
+  local env_file="/etc/discovery-api/discovery.env"
+  local existing=""
+  if sudo test -f "$env_file" 2>/dev/null; then
+    existing="$(sudo awk -F= '/^RemoteDebug__MaxSessionDurationMinutes=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+  fi
+  if [[ "$existing" =~ ^[0-9]+$ ]] && (( existing > 0 )); then
+    printf '%s' "$existing"; return
+  fi
+  printf '%s' "$(( ${REMOTE_SESSION_MAX_DURATION_HOURS:-1} * 60 ))"
+}
+
 write_environment_file() {
   log "Escrevendo arquivo de ambiente da API"
+
+  local remote_session_max_minutes
+  remote_session_max_minutes="$(resolve_remote_session_max_minutes)"
 
   # Preserva a configuracao TLS existente (provider, credenciais ZeroSSL/Let's Encrypt)
   # para que o deploy nao resete o certificado para self-signed.
@@ -279,7 +306,7 @@ LETSENCRYPT_DNS_AUTOMATION_HOOK=${LETSENCRYPT_DNS_AUTOMATION_HOOK:-}
 # ── Acesso Remoto Nativo (RemoteAccess) ────────────────────────────────────
 RemoteAccess__Enabled=$( [[ "${REMOTE_ACCESS_ENABLED:-1}" == "1" ]] && echo true || echo false )
 RemoteAccess__DefaultTtlMinutes=${REMOTE_ACCESS_DEFAULT_TTL_MINUTES:-30}
-RemoteAccess__MaxSessionDurationMinutes=${REMOTE_ACCESS_MAX_SESSION_DURATION_MINUTES:-120}
+RemoteAccess__MaxSessionDurationMinutes=${REMOTE_ACCESS_MAX_SESSION_DURATION_MINUTES:-$remote_session_max_minutes}
 RemoteAccess__MaxConcurrentSessionsPerAgent=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_AGENT:-1}
 RemoteAccess__MaxConcurrentSessionsPerUser=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_USER:-5}
 RemoteAccess__Nats__JwtSigningKey=${REMOTE_ACCESS_NATS_JWT_SIGNING_KEY}
@@ -300,6 +327,17 @@ RemoteAccess__Recording__DefaultOn=${REMOTE_ACCESS_RECORDING_DEFAULT_ON:-false}
 RemoteAccess__Recording__StorageProvider=${REMOTE_ACCESS_RECORDING_STORAGE_PROVIDER:-Local}
 RemoteAccess__Recording__Local__BasePath=${REMOTE_ACCESS_RECORDING_LOCAL_BASE_PATH:-/var/discovery/recordings}
 RemoteAccess__Recording__Local__MaxDiskUsageGb=${REMOTE_ACCESS_RECORDING_LOCAL_MAX_DISK_USAGE_GB:-50}
+# ── Debug Remoto (canal de controle unico + renovacao continua) ────────────
+# O teto vem de REMOTE_SESSION_MAX_DURATION_HOURS (prompt do instalador).
+RemoteDebug__DefaultTtlMinutes=${REMOTE_DEBUG_DEFAULT_TTL_MINUTES:-20}
+RemoteDebug__MinTtlMinutes=${REMOTE_DEBUG_MIN_TTL_MINUTES:-2}
+RemoteDebug__MaxTtlMinutes=${REMOTE_DEBUG_MAX_TTL_MINUTES:-120}
+RemoteDebug__MaxSessionDurationMinutes=$remote_session_max_minutes
+RemoteDebug__PingIntervalSeconds=${REMOTE_DEBUG_PING_INTERVAL_SECONDS:-5}
+RemoteDebug__MissedPingsBeforeClose=${REMOTE_DEBUG_MISSED_PINGS_BEFORE_CLOSE:-3}
+RemoteDebug__InitialGraceSeconds=${REMOTE_DEBUG_INITIAL_GRACE_SECONDS:-60}
+RemoteDebug__KeepAliveSeconds=${REMOTE_DEBUG_KEEP_ALIVE_SECONDS:-60}
+RemoteDebug__KeepAliveTimeoutSeconds=${REMOTE_DEBUG_KEEP_ALIVE_TIMEOUT_SECONDS:-90}
 EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
@@ -692,6 +730,10 @@ update_remote_access_environment_file() {
   fi
 
   log "Atualizando variaveis RemoteAccess no $env_file"
+
+  local remote_session_max_minutes
+  remote_session_max_minutes="$(resolve_remote_session_max_minutes)"
+
   local tmp_file; tmp_file="$(mktemp)"
 
   # Copia todas as linhas que NAO comecam com RemoteAccess__
@@ -703,7 +745,7 @@ update_remote_access_environment_file() {
   cat >> "$tmp_file" <<EOF
 RemoteAccess__Enabled=$( [[ "${REMOTE_ACCESS_ENABLED:-1}" == "1" ]] && echo true || echo false )
 RemoteAccess__DefaultTtlMinutes=${REMOTE_ACCESS_DEFAULT_TTL_MINUTES:-30}
-RemoteAccess__MaxSessionDurationMinutes=${REMOTE_ACCESS_MAX_SESSION_DURATION_MINUTES:-120}
+RemoteAccess__MaxSessionDurationMinutes=${REMOTE_ACCESS_MAX_SESSION_DURATION_MINUTES:-$remote_session_max_minutes}
 RemoteAccess__MaxConcurrentSessionsPerAgent=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_AGENT:-1}
 RemoteAccess__MaxConcurrentSessionsPerUser=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_USER:-5}
 RemoteAccess__Nats__JwtSigningKey=${jwt_key}
@@ -724,6 +766,17 @@ RemoteAccess__Recording__DefaultOn=${REMOTE_ACCESS_RECORDING_DEFAULT_ON:-false}
 RemoteAccess__Recording__StorageProvider=${REMOTE_ACCESS_RECORDING_STORAGE_PROVIDER:-Local}
 RemoteAccess__Recording__Local__BasePath=${REMOTE_ACCESS_RECORDING_LOCAL_BASE_PATH:-/var/discovery/recordings}
 RemoteAccess__Recording__Local__MaxDiskUsageGb=${REMOTE_ACCESS_RECORDING_LOCAL_MAX_DISK_USAGE_GB:-50}
+# ── Debug Remoto (canal de controle unico + renovacao continua) ────────────
+# O teto vem de REMOTE_SESSION_MAX_DURATION_HOURS (prompt do instalador).
+RemoteDebug__DefaultTtlMinutes=${REMOTE_DEBUG_DEFAULT_TTL_MINUTES:-20}
+RemoteDebug__MinTtlMinutes=${REMOTE_DEBUG_MIN_TTL_MINUTES:-2}
+RemoteDebug__MaxTtlMinutes=${REMOTE_DEBUG_MAX_TTL_MINUTES:-120}
+RemoteDebug__MaxSessionDurationMinutes=$remote_session_max_minutes
+RemoteDebug__PingIntervalSeconds=${REMOTE_DEBUG_PING_INTERVAL_SECONDS:-5}
+RemoteDebug__MissedPingsBeforeClose=${REMOTE_DEBUG_MISSED_PINGS_BEFORE_CLOSE:-3}
+RemoteDebug__InitialGraceSeconds=${REMOTE_DEBUG_INITIAL_GRACE_SECONDS:-60}
+RemoteDebug__KeepAliveSeconds=${REMOTE_DEBUG_KEEP_ALIVE_SECONDS:-60}
+RemoteDebug__KeepAliveTimeoutSeconds=${REMOTE_DEBUG_KEEP_ALIVE_TIMEOUT_SECONDS:-90}
 EOF
 
   sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"

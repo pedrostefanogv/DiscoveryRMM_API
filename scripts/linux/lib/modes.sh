@@ -290,6 +290,7 @@ apply_nats_reconfiguration_only() {
   DISCOVERY_OPS_DIR="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"
 
   prompt_nats_configuration
+  prompt_remote_session_duration
   validate_security_inputs
   normalize_nats_settings
   normalize_site_realtime_settings

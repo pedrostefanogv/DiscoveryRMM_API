@@ -208,6 +208,51 @@ prompt_nats_configuration() {
   prompt_if_empty NATS_AUTH_CALLOUT_SUBJECT "Subject do auth callout" 0 "\$SYS.REQ.USER.AUTH"
 }
 
+# ── Remote session duration wizard ─────────────────────────────────────────
+
+# Carrega o valor existente do discovery.env no modo update (se a variavel
+# nao foi informada), preservando a duracao configurada anteriormente.
+load_existing_remote_session_defaults() {
+  if [[ -n "${REMOTE_SESSION_MAX_DURATION_HOURS:-}" ]]; then
+    return
+  fi
+  local env_file="/etc/discovery-api/discovery.env"
+  sudo test -f "$env_file" 2>/dev/null || return
+  local minutes
+  minutes="$(sudo awk -F= '/^RemoteDebug__MaxSessionDurationMinutes=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+  if [[ "$minutes" =~ ^[0-9]+$ ]] && (( minutes > 0 )); then
+    REMOTE_SESSION_MAX_DURATION_HOURS=$(( (minutes + 59) / 60 ))
+  fi
+}
+
+# Pergunta a duracao maxima de uma sessao remota (em horas). Enquanto o
+# ping-pong estiver saudavel a sessao se renova; ao atingir o teto ela e
+# encerrada. Padrao: 1 hora.
+prompt_remote_session_duration() {
+  load_existing_remote_session_defaults
+  wizard_header "Sessões remotas" "$(wizard_step_label "10/10" "9/9")"
+  echo "Duração máxima de uma sessão remota sem precisar reconectar."
+  echo "Enquanto o navegador estiver saudável a sessão se renova sozinha;"
+  echo "ao atingir este teto ela é encerrada. Padrão: 1 hora."
+  echo "----------------------------------------"
+
+  local current="${REMOTE_SESSION_MAX_DURATION_HOURS:-1}"
+  local answer=""
+  while true; do
+    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+      REMOTE_SESSION_MAX_DURATION_HOURS="$current"
+      return
+    fi
+    read -r -p "Duração máxima da sessão remota (horas, 1-24) [$current]: " answer
+    answer="${answer:-$current}"
+    if [[ "$answer" =~ ^[0-9]+$ ]] && (( answer >= 1 && answer <= 24 )); then
+      REMOTE_SESSION_MAX_DURATION_HOURS="$answer"
+      return
+    fi
+    echo "Informe um número inteiro entre 1 e 24."
+  done
+}
+
 # ── Update policy wizard ───────────────────────────────────────────────────
 
 prompt_selfupdate_settings() {

@@ -104,6 +104,88 @@ public class SpecialCommandPayloadValidatorTests
     }
 
     [Test]
+    public void RemoteDebugStart_ShouldAcceptControlSubjectAndLivenessBlocks()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "action": "start",
+              "sessionId": "26d6bd85-39f5-4ac6-bb11-c3cba9cfc6f6",
+              "expiresAtUtc": "2026-05-05T10:00:00Z",
+              "maxExpiresAtUtc": "2026-05-05T11:00:00Z",
+              "liveness": {
+                "pingIntervalSeconds": 5,
+                "missedPingsBeforeClose": 3,
+                "initialGraceSeconds": 60,
+                "keepAliveSeconds": 60
+              },
+              "stream": {
+                "natsSubject": "tenant.c.site.s.agent.a.remote-debug.log",
+                "natsControlSubject": "tenant.c.site.s.agent.a.remote-debug.control"
+              }
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.RemoteDebug, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.That(json.RootElement.GetProperty("maxExpiresAtUtc").GetString(), Is.Not.Null);
+        Assert.That(json.RootElement.GetProperty("liveness").GetProperty("missedPingsBeforeClose").GetInt32(), Is.EqualTo(3));
+        Assert.That(
+            json.RootElement.GetProperty("stream").GetProperty("natsControlSubject").GetString(),
+            Is.EqualTo("tenant.c.site.s.agent.a.remote-debug.control"));
+    }
+
+    [Test]
+    public void RemoteDebugStart_ShouldRejectNonCanonicalControlSubject()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "action": "start",
+              "sessionId": "26d6bd85-39f5-4ac6-bb11-c3cba9cfc6f6",
+              "expiresAtUtc": "2026-05-05T10:00:00Z",
+              "stream": {
+                "natsSubject": "tenant.c.site.s.agent.a.remote-debug.log",
+                "natsControlSubject": "tenant.c.site.s.agent.a.remote-debug.nope"
+              }
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.RemoteDebug, payload, out _, out var error);
+
+        Assert.That(ok, Is.False);
+        Assert.That(error, Does.Contain("remote-debug.control"));
+    }
+
+    [Test]
+    public void RemoteDebugStart_ShouldRejectMaxExpiresBeforeExpires()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "action": "start",
+              "sessionId": "26d6bd85-39f5-4ac6-bb11-c3cba9cfc6f6",
+              "expiresAtUtc": "2026-05-05T11:00:00Z",
+              "maxExpiresAtUtc": "2026-05-05T10:00:00Z",
+              "stream": {
+                "natsSubject": "tenant.c.site.s.agent.a.remote-debug.log"
+              }
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.RemoteDebug, payload, out _, out var error);
+
+        Assert.That(ok, Is.False);
+        Assert.That(error, Does.Contain("maxExpiresAtUtc"));
+    }
+
+    [Test]
     public void SoftwareUpdate_ShouldRequirePackageIdAndNormalizeType()
     {
         var validator = new SpecialCommandPayloadValidator();

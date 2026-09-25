@@ -45,6 +45,13 @@ public interface IAgentMessaging
     /// </summary>
     Task SendCommandToSubjectAsync(Guid clientId, Guid siteId, Guid agentId, Guid commandId, string commandType, string payload);
 
+    /// <summary>
+    /// Publica um frame no canal UNICO de controle do debug remoto
+    /// (server -> agent). Usado pelo setLevel; o agente responde com pong/
+    /// levelChanged no mesmo subject.
+    /// </summary>
+    Task PublishRemoteDebugControlAsync(Guid clientId, Guid siteId, Guid agentId, string payload, CancellationToken cancellationToken = default);
+
     /// <summary>Registra handler para mensagens de agents (heartbeat, command result, hardware report).</summary>
     Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken);
 

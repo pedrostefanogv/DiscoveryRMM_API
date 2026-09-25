@@ -72,14 +72,14 @@ public class NatsIsolationTests
     }
 
     [Test]
-    public void AgentSubjects_ContainInfraSubjects_NinePublishTenSubscribe()
+    public void AgentSubjects_ContainInfraSubjects_TenPublishElevenSubscribe()
     {
         var (pub, sub) = BuildAgentSubjectLists(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
-        Assert.That(pub, Has.Count.EqualTo(9),
-            "Agente deve publicar em 9 subjects: 4 telemetrias canônicas + remote.session + 4 lookup JetStream.");
-        Assert.That(sub, Has.Count.EqualTo(10),
-            "Agente deve assinar em 10 subjects: comandos + p2p + remote.session + inbox.");
+        Assert.That(pub, Has.Count.EqualTo(10),
+            "Agente deve publicar em 10 subjects: 4 telemetrias canônicas + remote-debug.control + remote.session + 4 lookup JetStream.");
+        Assert.That(sub, Has.Count.EqualTo(11),
+            "Agente deve assinar em 11 subjects: comandos + p2p + remote-debug.control + remote.session + inbox.");
     }
 
     [Test]
@@ -100,6 +100,7 @@ public class NatsIsolationTests
                 expectedPrefix + "result",
                 expectedPrefix + "hardware",
                 expectedPrefix + "remote-debug.log",
+                expectedPrefix + "remote-debug.control",
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "$JS.API.STREAM.NAMES",
                 "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
@@ -118,6 +119,7 @@ public class NatsIsolationTests
                 "tenant.global.agents.command",
                 "tenant.global.pong",
                 expectedPrefix + "sync.ping",
+                expectedPrefix + "remote-debug.control",
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
 #pragma warning disable CS0618 // Subject legado do P2P discovery: segue na lista canônica durante a transição com agents antigos (ver NatsCredentialsService).
                 NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
@@ -380,7 +382,7 @@ public class NatsIsolationTests
     [Test]
     public void RemoteDebugSession_WrongAgent_IsRejected()
     {
-        var manager = new RemoteDebugSessionManager();
+        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()));
         var correctAgent = Guid.NewGuid();
         var otherAgent = Guid.NewGuid();
         var userId = Guid.NewGuid();
@@ -394,7 +396,7 @@ public class NatsIsolationTests
     [Test]
     public void RemoteDebugSession_WrongUser_IsRejected()
     {
-        var manager = new RemoteDebugSessionManager();
+        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()));
         var agentId = Guid.NewGuid();
         var correctUser = Guid.NewGuid();
         var otherUser = Guid.NewGuid();
@@ -408,7 +410,7 @@ public class NatsIsolationTests
     [Test]
     public void RemoteDebugSession_NatsSubject_IsTenantScoped()
     {
-        var manager = new RemoteDebugSessionManager();
+        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()));
         var clientId = Guid.NewGuid();
         var siteId = Guid.NewGuid();
         var agentId = Guid.NewGuid();
@@ -425,7 +427,7 @@ public class NatsIsolationTests
     [Test]
     public void RemoteDebugSession_TwoAgents_SubjectsAreDistinct()
     {
-        var manager = new RemoteDebugSessionManager();
+        var manager = new RemoteDebugSessionManager(global::Microsoft.Extensions.Options.Options.Create(new global::Discovery.Core.Configuration.RemoteDebugOptions()));
         var sessionA = manager.StartSession(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "debug", 10);
         var sessionB = manager.StartSession(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "debug", 10);
 
@@ -454,6 +456,7 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "result"),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "hardware"),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "remote-debug.log"),
+                NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId),
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 "$JS.API.STREAM.NAMES",
                 "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
@@ -468,6 +471,7 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.GlobalAgentsCommandSubject(),
                 NatsSubjectBuilder.ServerPongSubject(),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
+                NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId),
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
 #pragma warning disable CS0618 // Subject legado do P2P discovery: segue na lista canônica durante a transição com agents antigos (ver NatsCredentialsService).
                 NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),

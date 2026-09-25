@@ -267,6 +267,9 @@ public class AgentTransferServiceTests
         public Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
+        public Task PublishRemoteDebugControlAsync(Guid clientId, Guid siteId, Guid agentId, string payload, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
         public Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, Guid overrideClientId, Guid overrideSiteId, CancellationToken cancellationToken = default)
         {
             if (ThrowOnPublish) throw new InvalidOperationException("NATS unavailable.");

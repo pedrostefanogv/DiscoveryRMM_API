@@ -112,6 +112,10 @@ builder.Services.AddHostedService<RecordingAssemblerService>();
 builder.Services.AddSingleton<Discovery.Infrastructure.Services.Remote.SessionMetricsStore>();
 builder.Services.AddHostedService<Discovery.Infrastructure.Services.Remote.AdaptiveQualityService>();
 builder.Services.Configure<RemoteAccessOptions>(builder.Configuration.GetSection("RemoteAccess"));
+// Debug remoto: canal de controle unico + renovacao continua. O teto de
+// duracao vem da variavel de sistema REMOTE_SESSION_MAX_DURATION_HOURS
+// definida no instalador (padrao 1h).
+builder.Services.Configure<RemoteDebugOptions>(builder.Configuration.GetSection(RemoteDebugOptions.SectionName));
 
 // Scoped scope context (cache de escopo intra-request para queries filtradas)
 builder.Services.AddScoped<Discovery.Core.Interfaces.Auth.IScopeContext, Discovery.Infrastructure.Services.ScopeContext>();

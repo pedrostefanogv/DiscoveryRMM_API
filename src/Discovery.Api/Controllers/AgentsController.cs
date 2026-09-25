@@ -580,6 +580,34 @@ public class AgentsController : ControllerBase
         return result.ToActionResult();
     }
 
+    /// <summary>
+    /// Renova o TTL da sessao de debug remoto (keepalive do viewer). Sem
+    /// renovacao o servidor encerra por keepalive-timeout, evitando sessao presa.
+    /// </summary>
+    [HttpPost("{id:guid}/remote-debug/{sessionId:guid}/renew")]
+    public async Task<IActionResult> RenewRemoteDebug(Guid id, Guid sessionId)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var result = await _mediator.Send(new RenewRemoteDebugCommand(id, sessionId, userId));
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Troca o nivel de log da sessao viva, sem reiniciar. O servidor segue dono
+    /// do estado/auditoria e entrega o comando ao agente pelo canal de controle.
+    /// </summary>
+    [HttpPut("{id:guid}/remote-debug/{sessionId:guid}/level")]
+    public async Task<IActionResult> SetRemoteDebugLogLevel(Guid id, Guid sessionId, [FromBody] SetRemoteDebugLevelRequest request)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var result = await _mediator.Send(new SetRemoteDebugLogLevelCommand(id, sessionId, userId, request?.LogLevel));
+        return result.ToActionResult();
+    }
+
     // ── Transfer ──────────────────────────────────────────────────────────
 
     [HttpPost("{agentId:guid}/transfer")]

@@ -140,6 +140,7 @@ main() {
   prompt_postgres_password
 
   prompt_nats_configuration
+  prompt_remote_session_duration
   prompt_selfupdate_settings
 
   validate_security_inputs

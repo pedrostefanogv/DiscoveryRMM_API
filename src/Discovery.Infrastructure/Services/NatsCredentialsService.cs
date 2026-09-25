@@ -104,7 +104,9 @@ public class NatsCredentialsService : INatsCredentialsService
         Guid? clientId,
         Guid? siteId,
         CancellationToken ct = default,
-        UserScopeAccess? remoteDebugScopeAccess = null)
+        UserScopeAccess? remoteDebugScopeAccess = null,
+        IReadOnlyList<string>? remoteDebugPublishSubjects = null,
+        IReadOnlyList<string>? remoteDebugSubscribeSubjects = null)
     {
         var config = await _configurationService.GetServerConfigAsync();
         EnsureEnabled(config);
@@ -139,13 +141,30 @@ public class NatsCredentialsService : INatsCredentialsService
             // BuildDashboardSubjectsAsync iterates all AllowedClientIds/AllowedSiteIds.
         }
 
-        var publishSubjects = Array.Empty<string>();
+        // Publish: por padrao o usuario do dashboard NAO publica. A unica
+        // excecao e o canal de controle do debug remoto, escopado ao agente da
+        // sessao (subject literal informado pelo handler de credenciais).
+        var publishSubjects = new List<string>();
+        if (remoteDebugPublishSubjects is not null)
+        {
+            publishSubjects.AddRange(remoteDebugPublishSubjects
+                .Where(subject => !string.IsNullOrWhiteSpace(subject))
+                .Select(subject => subject.Trim()));
+        }
+
         var subscribeSubjects = await BuildDashboardSubjectsAsync(scopeAccess, resolvedClientId, resolvedSiteId, remoteDebugScopeAccess, ct);
+        if (remoteDebugSubscribeSubjects is not null)
+        {
+            subscribeSubjects = subscribeSubjects
+                .Concat(remoteDebugSubscribeSubjects.Where(subject => !string.IsNullOrWhiteSpace(subject)).Select(subject => subject.Trim()))
+                .ToList();
+        }
+
         var ttlMinutes = Math.Max(1, config.NatsUserJwtTtlMinutes);
 
         return IssueCredentials(
             ttlMinutes: ttlMinutes,
-            publishSubjects: publishSubjects,
+            publishSubjects: publishSubjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             subscribeSubjects: subscribeSubjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             traceLabel: $"user:{userId}");
     }
@@ -235,6 +254,9 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishResult));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishHardware));
         publishSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, PublishRemoteDebugLog));
+        // Canal UNICO de controle do debug remoto: o agente PUBLICA pong/closed
+        // e ASSINA ping/setLevel no mesmo subject.
+        publishSubjects.Add(NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId));
         // Remote-session subjects use the canonical UUID format without hyphens,
         // matching RemoteSessionCommandHandlers and the agent NATS stream.
         publishSubjects.Add(
@@ -250,6 +272,7 @@ public class NatsCredentialsService : INatsCredentialsService
         subscribeSubjects.Add(NatsSubjectBuilder.GlobalAgentsCommandSubject());
         subscribeSubjects.Add(NatsSubjectBuilder.ServerPongSubject());
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeSyncPing));
+        subscribeSubjects.Add(NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId));
         subscribeSubjects.Add(NatsSubjectBuilder.P2pClientEventsSubject(clientId));
 #pragma warning disable CS0618 // P2pSiteDiscoverySubject é obsoleto mas necessário para compatibilidade com agents antigos
         subscribeSubjects.Add(NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId));
