@@ -281,7 +281,12 @@ public class AiChatToolOrchestrator
             sb.AppendLine(" `list_ticket_templates`: use ANTES de abrir um chamado para conhecer os modelos disponíveis. Se houver modelos, apresente as opções (A2UI ou ask_user) e use o escolhido em `create_ticket` via `templateId`; preencha `customFields` com os valores informados.");
 
         if (hasCreateTicket)
+        {
             sb.AppendLine(" `create_ticket`: use APENAS quando esgotou as tentativas de solução OU o usuário pediu explicitamente. Preencha title, description, category e priority baseado no que foi discutido. Só execute APÓS confirmação do usuário. Quando um template foi escolhido, envie `templateId` e `customFields`.");
+            // Departamento é obrigatório na API: sem ele o chamado nasce sem
+            // responsável/perfil (SLA), então a IA precisa escolher ou perguntar.
+            sb.AppendLine(" `create_ticket` EXIGE `departmentId` (obrigatório). Antes de abrir, chame `list_departments` e escolha o departamento que melhor se enquadra no relato; se não conseguir decidir, use `ask_user` mostrando os departamentos e só abra após a resposta.");
+        }
 
         sb.AppendLine();
         sb.AppendLine("Use estas ferramentas quando o usuário solicitar ações relacionadas. Sempre preencha todos os parâmetros obrigatórios com os valores fornecidos pelo usuário.");

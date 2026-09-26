@@ -6,6 +6,7 @@ using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Discovery.Tests;
 
@@ -19,7 +20,7 @@ public class TicketAnswerTests
     public async Task SaveTemplateAnswersAsync_ShouldPersistRows()
     {
         await using var db = CreateDb();
-        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService());
+        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService(), NullLogger<TicketSubmissionService>.Instance);
         var ticketId = Guid.NewGuid();
         var templateId = Guid.NewGuid();
 
@@ -68,7 +69,7 @@ public class TicketAnswerTests
     public async Task GetAnswersAsync_ShouldPreserveTemplateOrder()
     {
         await using var db = CreateDb();
-        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService());
+        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService(), NullLogger<TicketSubmissionService>.Instance);
         var ticketId = Guid.NewGuid();
 
         // Ordem do template (não alfabética): todas as respostas compartilham o
@@ -89,7 +90,7 @@ public class TicketAnswerTests
     public async Task SaveTemplateAnswersAsync_ShouldReplacePreviousAnswers()
     {
         await using var db = CreateDb();
-        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService());
+        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService(), NullLogger<TicketSubmissionService>.Instance);
         var ticketId = Guid.NewGuid();
 
         await service.SaveTemplateAnswersAsync(ticketId, null, new[]
@@ -116,7 +117,7 @@ public class TicketAnswerTests
     public async Task SaveTemplateAnswersAsync_ShouldDoNothingWhenEmpty()
     {
         await using var db = CreateDb();
-        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService());
+        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService(), NullLogger<TicketSubmissionService>.Instance);
         await service.SaveTemplateAnswersAsync(Guid.NewGuid(), null, Array.Empty<TicketAnswerDraft>());
         Assert.That(await db.TicketAnswers.CountAsync(), Is.Zero);
     }

@@ -6,13 +6,15 @@ using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
 
 /// <inheritdoc />
 public class TicketSubmissionService(
     DiscoveryDbContext db,
-    IDepartmentCustomFieldService departmentCustomFieldService) : ITicketSubmissionService
+    IDepartmentCustomFieldService departmentCustomFieldService,
+    ILogger<TicketSubmissionService> logger) : ITicketSubmissionService
 {
     public async Task<TicketSubmissionResult> PrepareAsync(
         TicketSubmissionRequest request,
@@ -54,6 +56,65 @@ public class TicketSubmissionService(
         var departmentId = request.DepartmentId ?? template?.DepartmentId;
         var errors = new List<DepartmentFieldValidationError>();
 
+        // ── Escopo do template ────────────────────────────────────────────────
+        // Existir não basta: o template precisa ser aplicável a este cliente e
+        // a este departamento (a UI filtra, a API confere).
+        if (template is not null)
+        {
+            if (template.ClientId.HasValue && template.ClientId.Value != request.ClientId)
+            {
+                errors.Add(new DepartmentFieldValidationError(
+                    template.Id, "TemplateId", "Template não pertence a este cliente."));
+            }
+
+            if (template.DepartmentId.HasValue && request.DepartmentId.HasValue
+                && template.DepartmentId.Value != request.DepartmentId.Value)
+            {
+                errors.Add(new DepartmentFieldValidationError(
+                    template.Id, "TemplateId", "Template não pertence a este departamento."));
+            }
+        }
+
+        // ── Departamento obrigatório ──────────────────────────────────────────
+        // O departamento define responsável (auto-atribuição) e perfil/SLA.
+        if (departmentId is null)
+        {
+            errors.Add(new DepartmentFieldValidationError(
+                Guid.Empty, "DepartmentId", "Selecione um departamento para abrir o chamado."));
+        }
+        else
+        {
+            // Escopo: departamento do próprio cliente ou global. Um id de outro
+            // cliente (uso indevido da API) não pode receber o chamado. Quando a
+            // linha não existe, a validação é da FK na gravação.
+            var department = await db.Departments
+                .AsNoTracking()
+                .Where(d => d.Id == departmentId.Value)
+                .Select(d => new { d.ClientId, d.IsActive })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (department is null)
+            {
+                logger.LogWarning(
+                    "Departamento {DepartmentId} não encontrado ao preparar o chamado do cliente {ClientId}.",
+                    departmentId.Value, request.ClientId);
+            }
+            else
+            {
+                if (department.ClientId.HasValue && department.ClientId.Value != request.ClientId)
+                {
+                    errors.Add(new DepartmentFieldValidationError(
+                        departmentId.Value, "DepartmentId", "Departamento não pertence a este cliente."));
+                }
+
+                if (!department.IsActive)
+                {
+                    errors.Add(new DepartmentFieldValidationError(
+                        departmentId.Value, "DepartmentId", "Departamento inativo."));
+                }
+            }
+        }
+
         // ── Mini questionário do template (não são campos do chamado) ────────
         var questions = TicketTemplateQuestions.Parse(template?.QuestionsJson);
         if (request.TemplateAnswers is { Count: > 0 } && template is null)
@@ -70,18 +131,23 @@ public class TicketSubmissionService(
         // departamento, independentes do template (obrigatório ou não conforme
         // a configuração de cada campo). ─────────────────────────────────────
         var merged = new Dictionary<Guid, JsonElement>();
+        // Ids vindos do default do template: um default órfão (campo removido do
+        // departamento) é ignorado, enquanto um valor enviado pelo cliente para
+        // definição inexistente continua sendo erro.
+        var templateDefaultIds = new HashSet<Guid>();
         foreach (var (definitionId, value) in ParseTemplateDefaults(template?.CustomFieldDefaultsJson))
+        {
             merged[definitionId] = value;
+            templateDefaultIds.Add(definitionId);
+        }
         if (request.CustomFieldValues is not null)
             foreach (var (definitionId, value) in request.CustomFieldValues)
                 merged[definitionId] = value;
 
-        var explicitFieldValues = request.CustomFieldValues is { Count: > 0 };
         if (departmentId is null)
         {
-            if (explicitFieldValues)
-                errors.Add(new DepartmentFieldValidationError(
-                    Guid.Empty, "DepartmentId", "Selecione um departamento para usar campos personalizados."));
+            // O erro de departamento obrigatório já foi registrado acima; aqui só
+            // garantimos que nenhum valor seja aplicado sem departamento.
             merged.Clear();
         }
 
@@ -99,6 +165,17 @@ public class TicketSubmissionService(
             {
                 if (!definitions.ContainsKey(definitionId))
                 {
+                    var fromRequest = request.CustomFieldValues?.ContainsKey(definitionId) == true;
+                    if (!fromRequest && templateDefaultIds.Contains(definitionId))
+                    {
+                        // Default antigo de campo que não existe mais no departamento:
+                        // não pode impedir a abertura do chamado.
+                        logger.LogWarning(
+                            "Template default ignorado: definição {DefinitionId} não pertence ao departamento {DepartmentId}.",
+                            definitionId, departmentId.Value);
+                        continue;
+                    }
+
                     errors.Add(new DepartmentFieldValidationError(
                         definitionId, definitionId.ToString("D"),
                         "O campo personalizado informado não pertence ao departamento."));
