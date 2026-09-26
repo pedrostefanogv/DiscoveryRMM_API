@@ -271,6 +271,15 @@ public class CustomFieldService : ICustomFieldService
             }
         }
 
+        if (scopeType == CustomFieldScopeType.Department && entityId.HasValue)
+        {
+            // Escopo de departamento: apenas as definições DAQUELE departamento.
+            // Sem isso o filtro retornava campos de todos os departamentos.
+            return query.Where(definition =>
+                definition.ScopeType == CustomFieldScopeType.Department
+                && definition.DepartmentId == entityId.Value);
+        }
+
         return query.Where(definition => definition.ScopeType == scopeType);
     }
 

@@ -122,6 +122,13 @@ public class DepartmentsController(
     public async Task<IActionResult> GetCustomFields(Guid id)
         => Ok(await departmentCustomFieldService.GetDefinitionsByDepartmentAsync(id, HttpContext.RequestAborted));
 
+    // Compatibilidade: preserva o acesso aos VALORES do departamento (o contrato
+    // antigo de GET /custom-fields agora devolve definições).
+    [HttpGet("{id:guid}/custom-fields/values")]
+    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = false)
+        => Ok(await customFieldService.GetValuesAsync(CustomFieldScopeType.Department, id, includeSecrets, HttpContext.RequestAborted));
+
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
     [RequirePermission(ResourceType.Departments, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomField(Guid id, Guid definitionId, [FromBody] JsonElement body)
@@ -185,10 +192,18 @@ public class DepartmentsController(
         }
     }
 
+    /// <summary>
+    /// Schema público (formulário de abertura) por padrão. Com includeInternal=true
+    /// devolve também os campos internos: usado pela tela de detalhe do chamado,
+    /// onde o atendente precisa preencher campos marcados como "só de atendente".
+    /// O formulário de abertura continua recebendo apenas os públicos.
+    /// </summary>
     [HttpGet("{id:guid}/ticket-schema")]
     [RequirePermission(ResourceType.Departments, ActionType.View)]
-    public async Task<IActionResult> GetTicketSchema(Guid id)
-        => Ok(await departmentCustomFieldService.GetPublicSchemaForDepartmentAsync(id, HttpContext.RequestAborted));
+    public async Task<IActionResult> GetTicketSchema(Guid id, [FromQuery] bool includeInternal = false)
+        => Ok(includeInternal
+            ? await departmentCustomFieldService.GetFullSchemaForDepartmentAsync(id, null, HttpContext.RequestAborted)
+            : await departmentCustomFieldService.GetPublicSchemaForDepartmentAsync(id, HttpContext.RequestAborted));
 
     private static CreateDepartmentCustomFieldInput ToCreateInput(DepartmentCustomFieldRequest r) => new(
         r.Name, r.Label, r.Description, r.DataType,
