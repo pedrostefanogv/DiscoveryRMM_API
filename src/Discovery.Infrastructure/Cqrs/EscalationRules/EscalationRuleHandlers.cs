@@ -1,4 +1,4 @@
-﻿using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.EscalationRules.Commands;
 using Discovery.Core.Cqrs.EscalationRules.Queries;
 using Discovery.Core.Entities;
@@ -48,8 +48,13 @@ public sealed class UpdateEscalationRuleCommandHandler(IEscalationRuleService sv
         if (cmd.Name is not null) r.Name = cmd.Name;
         if (cmd.TriggerAtSlaPercent.HasValue) r.TriggerAtSlaPercent = cmd.TriggerAtSlaPercent.Value;
         if (cmd.TriggerAtHoursBefore.HasValue) r.TriggerAtHoursBefore = cmd.TriggerAtHoursBefore.Value;
-        if (cmd.ReassignToUserId is not null) r.ReassignToUserId = cmd.ReassignToUserId;
-        if (cmd.ReassignToDepartmentId is not null) r.ReassignToDepartmentId = cmd.ReassignToDepartmentId;
+        // "Clear*" distingue "não enviado" de "limpar o campo": sem isso não era
+        // possível remover uma reatribuição já configurada.
+        if (cmd.ClearReassignToUser == true) r.ReassignToUserId = null;
+        else if (cmd.ReassignToUserId is not null) r.ReassignToUserId = cmd.ReassignToUserId;
+
+        if (cmd.ClearReassignToDepartment == true) r.ReassignToDepartmentId = null;
+        else if (cmd.ReassignToDepartmentId is not null) r.ReassignToDepartmentId = cmd.ReassignToDepartmentId;
         if (cmd.BumpPriority.HasValue) r.BumpPriority = cmd.BumpPriority.Value;
         if (cmd.NotifyAssignee.HasValue) r.NotifyAssignee = cmd.NotifyAssignee.Value;
         if (cmd.IsActive.HasValue) r.IsActive = cmd.IsActive.Value;

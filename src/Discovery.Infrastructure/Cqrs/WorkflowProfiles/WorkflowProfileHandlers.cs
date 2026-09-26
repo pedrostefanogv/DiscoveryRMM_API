@@ -49,7 +49,9 @@ public sealed class UpdateWorkflowProfileCommandHandler(IWorkflowProfileService 
         if (cmd.Name is not null) p.Name = cmd.Name;
         if (cmd.Description is not null) p.Description = cmd.Description;
         if (cmd.SlaHours.HasValue) p.SlaHours = cmd.SlaHours.Value;
-        if (cmd.SlaCalendarId is not null) p.SlaCalendarId = cmd.SlaCalendarId;
+        // "ClearSlaCalendar" distingue "não enviado" de "voltar para 24x7".
+        if (cmd.ClearSlaCalendar == true) p.SlaCalendarId = null;
+        else if (cmd.SlaCalendarId is not null) p.SlaCalendarId = cmd.SlaCalendarId;
         if (cmd.FirstResponseSlaHours.HasValue) p.FirstResponseSlaHours = cmd.FirstResponseSlaHours.Value;
         if (cmd.DefaultPriority is not null && Enum.TryParse(cmd.DefaultPriority, true, out TicketPriority tp)) p.DefaultPriority = tp;
         if (cmd.IsActive.HasValue) p.IsActive = cmd.IsActive.Value;

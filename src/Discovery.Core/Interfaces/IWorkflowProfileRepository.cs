@@ -43,4 +43,10 @@ public interface IWorkflowProfileRepository
     /// Deleta um perfil de workflow (soft-delete recomendado).
     /// </summary>
     Task<bool> DeleteAsync(Guid id);
+
+    /// <summary>
+    /// Conta quantos perfis referenciam um calendário de SLA. Usado para impedir
+    /// a exclusão de um calendário em uso.
+    /// </summary>
+    Task<int> CountBySlaCalendarIdAsync(Guid slaCalendarId);
 }

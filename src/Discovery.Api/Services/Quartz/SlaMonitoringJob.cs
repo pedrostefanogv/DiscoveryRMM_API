@@ -15,6 +15,8 @@ public sealed class SlaMonitoringJob : IJob
     public static readonly JobKey Key = new("sla-monitoring", "alerts");
 
     private const int WarningCooldownMinutes = 30;
+    // Limiar de aviso preventivo. Acima dele o responsável recebe "Aviso de SLA".
+    private const int SlaWarningThresholdPercent = 80;
     // Cooldown por (ticket, regra) para não reescalonar a cada execução (5 min).
     private const int EscalationCooldownMinutes = 360;
     private const string LockKey = "locks:sla-monitoring";
@@ -83,17 +85,16 @@ public sealed class SlaMonitoringJob : IJob
                 {
                     var (_, percentUsed, _) = await slaService.GetSlaStatusAsync(ticket.Id);
 
-                    // A janela era >= 80 && < 85: um chamado podia saltar de 79%
-                    // para 86% entre duas execuções (job roda a cada 5 min) e nunca
-                    // gerar o aviso. O cooldown Redis já evita repetição; a janela
-                    // correta é apenas >= 80.
-                    if (percentUsed >= 80)
+                    // O cooldown Redis já evita repetição; o gatilho é apenas o
+                    // limiar de percentual.
+                    if (percentUsed >= SlaWarningThresholdPercent)
                     {
                         if (await ShouldLogWarningAsync(redis, ticket.Id))
                         {
                             await activityLogService.LogActivityAsync(
                                 ticket.Id, TicketActivityType.SlaWarning, null,
-                                percentUsed.ToString("F2"), "80", "SLA warning: 20% time remaining");
+                                percentUsed.ToString("F2"), SlaWarningThresholdPercent.ToString(),
+                                "SLA warning: 20% time remaining");
 
                             if (ticket.AssignedToUserId.HasValue)
                             {
@@ -118,13 +119,13 @@ public sealed class SlaMonitoringJob : IJob
                         await redis.DeleteAsync($"sla:warning:{ticket.Id:N}");
                     }
 
-                    // Coletar tickets para escalonamento (processado em batch depois)
-                    if (percentUsed >= 80)
+                    // Coletar TODOS os tickets do perfil para escalonamento: quem decide
+                    // o disparo é cada regra (percentual próprio ou horas antes do
+                    // vencimento). Filtrar aqui por 80% fixos impedia que regras com
+                    // gatilho abaixo de 80% e regras puramente por antecedência disparassem.
+                    if (ticket.WorkflowProfileId.HasValue)
                     {
-                        lock (ticketsNeedingEscalation)
-                        {
-                            ticketsNeedingEscalation.Add((ticket, percentUsed));
-                        }
+                        ticketsNeedingEscalation.Add((ticket, percentUsed));
                     }
                 }
             }
@@ -134,7 +135,7 @@ public sealed class SlaMonitoringJob : IJob
             {
                 await ProcessEscalationBatchAsync(
                     ticketsNeedingEscalation, slaService, escalationRuleRepo,
-                    notificationService, ticketRepo, redis, logger, ct);
+                    notificationService, ticketRepo, activityLogService, redis, logger, ct);
             }
         }
         finally
@@ -157,20 +158,32 @@ public sealed class SlaMonitoringJob : IJob
         ITicketEscalationRuleRepository escalationRuleRepo,
         INotificationService notificationService,
         ITicketRepository ticketRepo,
+        IActivityLogService activityLogService,
         IRedisService redis,
         ILogger logger,
         CancellationToken ct)
     {
         // Coletar tickets que precisam de bump de prioridade
         var ticketsToBump = new List<(Guid ticketId, Discovery.Core.Enums.TicketPriority newPriority)>();
-        // No máximo 1 bump por ticket por execução (evita saltar vários níveis).
+        // No máximo 1 bump e 1 reatribuição por ticket por execução.
         var bumpedTickets = new HashSet<Guid>();
+        var reassignedTickets = new HashSet<Guid>();
+
+        // Cache de regras por perfil: evita repetir a consulta para cada ticket do
+        // mesmo workflow profile dentro da execução.
+        var rulesCache = new Dictionary<Guid, IReadOnlyList<Discovery.Core.Entities.TicketEscalationRule>>();
 
         foreach (var (ticket, percentUsed) in items)
         {
             if (!ticket.WorkflowProfileId.HasValue) continue;
 
-            var rules = await escalationRuleRepo.GetByWorkflowProfileIdAsync(ticket.WorkflowProfileId.Value);
+            var profileId = ticket.WorkflowProfileId.Value;
+            if (!rulesCache.TryGetValue(profileId, out var rules))
+            {
+                rules = (await escalationRuleRepo.GetByWorkflowProfileIdAsync(profileId)).ToList();
+                rulesCache[profileId] = rules;
+            }
+
             var now = DateTime.UtcNow;
 
             foreach (var rule in rules.Where(r => r.IsActive))
@@ -200,6 +213,50 @@ public sealed class SlaMonitoringJob : IJob
                     "Escalation rule {RuleId} fired for ticket {TicketId} at {Percent}%",
                     rule.Id, ticket.Id, percentUsed);
 
+                // Reatribuição: antes a regra apenas armazenava os campos; nada era
+                // aplicado ao chamado. No máximo uma por ticket por execução.
+                if ((rule.ReassignToUserId.HasValue || rule.ReassignToDepartmentId.HasValue)
+                    && reassignedTickets.Add(ticket.Id))
+                {
+                    var tracked = await ticketRepo.GetByIdAsync(ticket.Id);
+                    if (tracked is null)
+                    {
+                        reassignedTickets.Remove(ticket.Id);
+                    }
+                    else
+                    {
+                        var oldAssignee = tracked.AssignedToUserId;
+                        var oldDepartment = tracked.DepartmentId;
+
+                        if (rule.ReassignToUserId.HasValue)
+                            tracked.AssignedToUserId = rule.ReassignToUserId.Value;
+                        if (rule.ReassignToDepartmentId.HasValue)
+                            tracked.DepartmentId = rule.ReassignToDepartmentId.Value;
+
+                        await ticketRepo.UpdateAsync(tracked);
+
+                        // Mantém o snapshot em memória coerente para as próximas regras
+                        // e para a notificação abaixo.
+                        ticket.AssignedToUserId = tracked.AssignedToUserId;
+
+                        if (oldAssignee != tracked.AssignedToUserId)
+                            await activityLogService.LogActivityAsync(
+                                ticket.Id, TicketActivityType.Assigned, null,
+                                oldAssignee?.ToString(), tracked.AssignedToUserId?.ToString(),
+                                $"Escalonamento reatribuiu o chamado pela regra '{rule.Name}'");
+
+                        if (oldDepartment != tracked.DepartmentId)
+                            await activityLogService.LogActivityAsync(
+                                ticket.Id, TicketActivityType.DepartmentChanged, null,
+                                oldDepartment?.ToString(), tracked.DepartmentId?.ToString(),
+                                $"Escalonamento alterou o departamento pela regra '{rule.Name}'");
+
+                        logger.LogInformation(
+                            "Escalation: ticket {TicketId} reassigned by rule {RuleId}",
+                            ticket.Id, rule.Id);
+                    }
+                }
+
                 // Bump priority (no máximo um nível por ticket por execução)
                 if (rule.BumpPriority && ticket.Priority < Discovery.Core.Enums.TicketPriority.Critical
                     && bumpedTickets.Add(ticket.Id))
@@ -209,7 +266,7 @@ public sealed class SlaMonitoringJob : IJob
                     logger.LogInformation("Escalation: queued priority bump for ticket {TicketId} to {Priority}", ticket.Id, newPriority);
                 }
 
-                // Notify
+                // Notify (responsável atual, já considerando eventual reatribuição)
                 if (rule.NotifyAssignee && ticket.AssignedToUserId.HasValue)
                 {
                     await notificationService.PublishAsync(new NotificationPublishRequest(

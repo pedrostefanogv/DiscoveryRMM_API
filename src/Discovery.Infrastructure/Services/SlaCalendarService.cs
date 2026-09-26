@@ -1,4 +1,4 @@
-﻿using Discovery.Core.Entities;
+using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Infrastructure.Services;
@@ -13,4 +13,8 @@ public sealed class SlaCalendarService : ISlaCalendarService
     public Task<SlaCalendar> CreateAsync(SlaCalendar calendar, CancellationToken ct = default) => _repo.CreateAsync(calendar, ct);
     public Task UpdateAsync(SlaCalendar calendar, CancellationToken ct = default) => _repo.UpdateAsync(calendar, ct);
     public Task DeleteAsync(Guid id, CancellationToken ct = default) => _repo.DeleteAsync(id, ct);
+
+    public Task<SlaCalendarHoliday> AddHolidayAsync(SlaCalendarHoliday holiday, CancellationToken ct = default) => _repo.AddHolidayAsync(holiday, ct);
+    public Task UpdateHolidayAsync(SlaCalendarHoliday holiday, CancellationToken ct = default) => _repo.UpdateHolidayAsync(holiday, ct);
+    public Task DeleteHolidayAsync(Guid holidayId, CancellationToken ct = default) => _repo.DeleteHolidayAsync(holidayId, ct);
 }

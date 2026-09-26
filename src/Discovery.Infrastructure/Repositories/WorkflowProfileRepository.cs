@@ -78,6 +78,12 @@ public class WorkflowProfileRepository : IWorkflowProfileRepository
         return profile;
     }
 
+    public async Task<int> CountBySlaCalendarIdAsync(Guid slaCalendarId)
+    {
+        return await _db.Set<WorkflowProfile>()
+            .CountAsync(p => p.SlaCalendarId == slaCalendarId);
+    }
+
     public async Task<WorkflowProfile> UpdateAsync(WorkflowProfile profile)
     {
         profile.UpdatedAt = DateTime.UtcNow;
