@@ -31,5 +31,7 @@ public enum TicketActivityType
     KnowledgeUnlinked = 23,
     Rated = 24,
     /// <summary>Solicitante (quem abriu) definido/alterado/removido.</summary>
-    RequesterChanged = 25
+    RequesterChanged = 25,
+    /// <summary>Agent (máquina) vinculado/alterado/removido do chamado.</summary>
+    AgentChanged = 26
 }

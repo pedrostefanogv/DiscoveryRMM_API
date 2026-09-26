@@ -20,5 +20,9 @@ public sealed record UpdateTicketCommand(
     /// <summary>Solicitante do chamado (quem abriu).</summary>
     Guid? RequesterUserId = null,
     /// <summary>Quando true, remove o solicitante mesmo sem enviar um novo Id.</summary>
-    bool ClearRequester = false
+    bool ClearRequester = false,
+    /// <summary>Agent (máquina) vinculado ao chamado.</summary>
+    Guid? AgentId = null,
+    /// <summary>Quando true, remove o agent mesmo sem enviar um novo Id.</summary>
+    bool ClearAgent = false
 ) : ICommand<Result<TicketDetailDto>>;

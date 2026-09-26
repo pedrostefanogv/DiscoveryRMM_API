@@ -148,7 +148,8 @@ public sealed class TicketCommandService : ITicketCommandService
         Guid? assignedToUserId, string? category,
         bool clearDepartment = false, bool clearWorkflowProfile = false,
         CancellationToken ct = default,
-        Guid? requesterUserId = null, bool clearRequester = false)
+        Guid? requesterUserId = null, bool clearRequester = false,
+        Guid? agentId = null, bool clearAgent = false)
     {
         var ticket = await _repo.GetByIdAsync(ticketId);
         if (ticket is null)
@@ -208,6 +209,23 @@ public sealed class TicketCommandService : ITicketCommandService
                 oldRequester?.ToString(),
                 newRequesterId?.ToString(),
                 "Solicitante atualizado");
+        }
+
+        // Agent (máquina) vinculado ao chamado.
+        var newAgentId = clearAgent
+            ? null
+            : (agentId.HasValue ? agentId.Value : ticket.AgentId);
+        if (newAgentId != ticket.AgentId)
+        {
+            var oldAgentId = ticket.AgentId;
+            ticket.AgentId = newAgentId;
+            await _activityLog.LogActivityAsync(
+                ticketId,
+                TicketActivityType.AgentChanged,
+                null,
+                oldAgentId?.ToString(),
+                newAgentId?.ToString(),
+                "Agent do chamado atualizado");
         }
 
         var oldDepartmentId = ticket.DepartmentId;
