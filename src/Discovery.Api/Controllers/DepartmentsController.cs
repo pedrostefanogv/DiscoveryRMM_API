@@ -113,9 +113,14 @@ public class DepartmentsController(
 
     // ── Custom Fields ────────────────────────────────────────────────────
 
+    // Lista as DEFINIÇÕES de campos do departamento (não os valores). A tela de
+    // configuração do departamento espera id/dataType/isInternal/optionsJson para
+    // editar/excluir; devolver valores deixava o id vazio e o PUT ia para
+    // ".../custom-fields//definition" (404).
     [HttpGet("{id:guid}/custom-fields")]
-    public async Task<IActionResult> GetCustomFields(Guid id, [FromQuery] bool includeSecrets = false)
-        => Ok(await customFieldService.GetValuesAsync(CustomFieldScopeType.Department, id, includeSecrets, HttpContext.RequestAborted));
+    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    public async Task<IActionResult> GetCustomFields(Guid id)
+        => Ok(await departmentCustomFieldService.GetDefinitionsByDepartmentAsync(id, HttpContext.RequestAborted));
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
     [RequirePermission(ResourceType.Departments, ActionType.Edit)]
