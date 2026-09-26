@@ -64,11 +64,35 @@ public class M168_AddEmbeddingsToTicketAnswers : Migration
                 WHERE embedding IS NULL AND embedding_generated_at IS NULL");
 
         // HNSW para cosine distance (criado com a tabela vazia).
+        //
+        // O pgvector 0.6 (instalado) limita o índice HNSW a 2000 dimensões.
+        // Com dimensões maiores (ex.: 4096), o CREATE INDEX falha com
+        // "column cannot have more than 2000 dimensions for hnsw index", o que
+        // derruba a migração e o processo inteiro no startup. Nesses casos o
+        // índice é omitido de forma intencional: a busca semântica continua
+        // correta usando varredura exata (operador cosine `<=>`), apenas sem o
+        // ganho de performance da busca aproximada.
         Execute.Sql(@"
-            CREATE INDEX IF NOT EXISTS ix_ticket_answers_embedding_hnsw
-                ON ticket_answers
-                USING hnsw (embedding vector_cosine_ops)
-                WITH (m = 16, ef_construction = 64);");
+            DO $$
+            DECLARE dim int;
+            BEGIN
+                SELECT COALESCE(current_embedding_dimensions, 1536)
+                  INTO dim
+                  FROM server_configurations
+                 LIMIT 1;
+
+                IF dim IS NULL OR dim <= 0 THEN
+                    dim := 1536;
+                END IF;
+
+                IF dim <= 2000 THEN
+                    EXECUTE 'CREATE INDEX IF NOT EXISTS ix_ticket_answers_embedding_hnsw
+                                 ON ticket_answers
+                                 USING hnsw (embedding vector_cosine_ops)
+                                 WITH (m = 16, ef_construction = 64)';
+                END IF;
+            END
+            $$;");
     }
 
     public override void Down()
