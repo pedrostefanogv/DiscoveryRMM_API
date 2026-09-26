@@ -227,6 +227,8 @@ public class AiChatToolOrchestrator
 
             "ask_user" => "Faz uma pergunta ao usuário quando você precisar de mais informações para prosseguir. Use APENAS como último recurso, quando a informação necessária NÃO estiver disponível no histórico da conversa. NÃO use para perguntar o que o usuário já disse ou para iniciar conversa. O parâmetro 'question' é OBRIGATÓRIO e deve ser uma pergunta clara e contextualizada (ex: 'Qual versão do Office você precisa: 2019, 2021 ou Microsoft 365?'). NUNCA envie question vazia.",
 
+            "list_ticket_templates" => "Lista os templates (modelos) de abertura de chamado disponíveis para esta máquina/cliente, incluindo os campos personalizados de cada um (tipo, obrigatório, opções, máscara). Use SEMPRE antes de abrir um chamado: se houver templates, apresente as opções ao usuário (preferencialmente renderizando um formulário A2UI); se não houver, siga o fluxo normal de create_ticket.",
+
             "create_ticket" => "Abre um chamado de suporte técnico para a equipe de TI. Use APENAS quando: (a) você não conseguiu resolver o problema com as ferramentas disponíveis, ou (b) o usuário solicitou explicitamente abrir um chamado. NÃO abra chamado sem antes tentar resolver o problema ou sem confirmar os dados com o usuário. Parâmetros obrigatórios: title (título resumido, ex: 'Instalação do Foxit Reader no DESKTOP-ABC'), description (detalhamento completo do problema, ações já tentadas e contexto), category (Software, Hardware, Rede, Impressora, Acesso/Senha, Outro) e priority (Baixa, Média, Alta — avalie pelo impacto e urgência). NUNCA envie parâmetros vazios — extraia do histórico da conversa.",
 
             _ => null
@@ -246,6 +248,7 @@ public class AiChatToolOrchestrator
         var hasSearchPackages = false;
         var hasInstallPackage = false;
         var hasAskUser = false;
+        var hasTicketTemplates = false;
 
         foreach (var tool in tools)
         {
@@ -258,6 +261,7 @@ public class AiChatToolOrchestrator
             if (tool.Name == "search_packages") hasSearchPackages = true;
             if (tool.Name == "install_package") hasInstallPackage = true;
             if (tool.Name == "ask_user") hasAskUser = true;
+            if (tool.Name == "list_ticket_templates") hasTicketTemplates = true;
         }
         sb.AppendLine();
 
@@ -273,8 +277,11 @@ public class AiChatToolOrchestrator
         if (hasAskUser)
             sb.AppendLine(" `ask_user`: use APENAS como último recurso, quando a informação NÃO está no histórico. O parâmetro `question` é OBRIGATÓRIO — SEMPRE preencha com uma pergunta clara e contextualizada.");
 
+        if (hasTicketTemplates)
+            sb.AppendLine(" `list_ticket_templates`: use ANTES de abrir um chamado para conhecer os modelos disponíveis. Se houver modelos, apresente as opções (A2UI ou ask_user) e use o escolhido em `create_ticket` via `templateId`; preencha `customFields` com os valores informados.");
+
         if (hasCreateTicket)
-            sb.AppendLine(" `create_ticket`: use APENAS quando esgotou as tentativas de solução OU o usuário pediu explicitamente. Preencha title, description, category e priority baseado no que foi discutido. Só execute APÓS confirmação do usuário.");
+            sb.AppendLine(" `create_ticket`: use APENAS quando esgotou as tentativas de solução OU o usuário pediu explicitamente. Preencha title, description, category e priority baseado no que foi discutido. Só execute APÓS confirmação do usuário. Quando um template foi escolhido, envie `templateId` e `customFields`.");
 
         sb.AppendLine();
         sb.AppendLine("Use estas ferramentas quando o usuário solicitar ações relacionadas. Sempre preencha todos os parâmetros obrigatórios com os valores fornecidos pelo usuário.");
@@ -396,6 +403,10 @@ public class AiChatToolOrchestrator
 
     public static (bool IsValid, string? ErrorJson) ValidateAgentToolArguments(string toolName, string argumentsJson)
     {
+        // Ferramenta sem parâmetros: nada a validar.
+        if (toolName == "list_ticket_templates")
+            return (true, null);
+
         if (string.IsNullOrWhiteSpace(argumentsJson) || argumentsJson == "{}" || argumentsJson == "null")
         {
             var errorMsg = toolName switch

@@ -15,6 +15,10 @@ public class CustomFieldDefinition
     public bool IsSecret { get; set; }
     public string? OptionsJson { get; set; }
     public string? ValidationRegex { get; set; }
+
+    /// <summary>Máscara de entrada (9=dígito, A=letra, *=alfanumérico, literais fixos).</summary>
+    public string? InputMask { get; set; }
+
     public int? MinLength { get; set; }
     public int? MaxLength { get; set; }
     public decimal? MinValue { get; set; }

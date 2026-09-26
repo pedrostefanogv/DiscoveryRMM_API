@@ -98,7 +98,7 @@ public sealed class TicketQueryService : ITicketQueryService
         return new TicketDetailDto(t.Id, t.ClientId, t.SiteId, t.AgentId, t.Title,
             t.Description, t.Category, t.Priority, t.WorkflowStateId, t.AssignedToUserId,
             t.SlaExpiresAt, t.SlaBreached, t.CreatedAt, t.UpdatedAt, t.ClosedAt, t.DaysOpen,
-            t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy);
+            t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy, t.SubmissionSnapshotMarkdown);
     }
 
     public async Task<CursorPageDto<TicketCommentDto>> GetCommentsAsync(

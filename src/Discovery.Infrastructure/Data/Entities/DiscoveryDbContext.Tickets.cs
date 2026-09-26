@@ -22,6 +22,7 @@ public partial class DiscoveryDbContext
             entity.Property(ticket => ticket.AgentId).HasColumnName("agent_id");
             entity.Property(ticket => ticket.Title).HasColumnName("title").HasMaxLength(500);
             entity.Property(ticket => ticket.Description).HasColumnName("description");
+            entity.Property(ticket => ticket.SubmissionSnapshotMarkdown).HasColumnName("submission_snapshot_md");
             entity.Property(ticket => ticket.WorkflowStateId).HasColumnName("workflow_state_id");
             entity.Property(ticket => ticket.Priority).HasColumnName("priority").HasConversion<int>();
             entity.Property(ticket => ticket.DepartmentId).HasColumnName("department_id");

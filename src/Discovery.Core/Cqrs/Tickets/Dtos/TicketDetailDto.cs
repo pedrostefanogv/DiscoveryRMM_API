@@ -26,7 +26,9 @@ public sealed record TicketDetailDto(
     int? Rating = null,
     string? RatingFeedback = null,
     DateTime? RatedAt = null,
-    string? RatedBy = null
+    string? RatedBy = null,
+    // Snapshot markdown (somente leitura) do formulário/template enviado na abertura.
+    string? SubmissionSnapshotMarkdown = null
 );
 
 /// <summary>

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Discovery.Core.Cqrs.Tickets.Dtos;
 
 namespace Discovery.Core.Cqrs.Tickets.Commands;
@@ -15,5 +16,9 @@ public sealed record CreateTicketCommand(
     Guid? DepartmentId,
     Guid? WorkflowProfileId,
     Guid? AssignedToUserId,
-    string? Category
+    string? Category,
+    /// <summary>Template que pré-preenche o chamado (opcional).</summary>
+    Guid? TemplateId = null,
+    /// <summary>Valores dos campos personalizados (definitionId → JSON), opcional.</summary>
+    IReadOnlyDictionary<Guid, JsonElement>? CustomFieldValues = null
 ) : ICommand<Result<TicketDetailDto>>;

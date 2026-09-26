@@ -3,7 +3,9 @@ using Discovery.Core.Cqrs.AgentAuth.Tickets;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Data;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
@@ -38,7 +40,9 @@ public sealed class GetMyTicketHandler(
 public sealed class CreateMyTicketHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
-    ITicketCommandService ticketCommandService
+    ITicketCommandService ticketCommandService,
+    ITicketSubmissionService ticketSubmissionService,
+    IDepartmentCustomFieldService departmentCustomFieldService
 ) : IRequestHandler<CreateMyTicketCommand, Result<object>>
 {
     public async Task<Result<object>> Handle(CreateMyTicketCommand cmd, CancellationToken ct)
@@ -51,16 +55,32 @@ public sealed class CreateMyTicketHandler(
         if (site is null)
             return Result<object>.Failure(Error.NotFound("Site not found for agent."));
 
+        // Template (opcional) + validação dos campos personalizados + snapshot.
+        var submission = await ticketSubmissionService.PrepareAsync(
+            new TicketSubmissionRequest(
+                site.ClientId, cmd.DepartmentId, cmd.TemplateId,
+                cmd.Title, cmd.Description, cmd.Category, cmd.Priority,
+                cmd.CustomFieldValues),
+            ct);
+
+        if (!submission.IsValid)
+        {
+            return Result<object>.Failure(
+                submission.Errors
+                    .Select(e => Error.Validation(e.FieldName, e.ErrorMessage))
+                    .ToList());
+        }
+
         // Defesa em profundidade: o agent Go já valida, mas o endpoint é
         // autenticado por agent e pode receber payloads arbitrários.
-        if (string.IsNullOrWhiteSpace(cmd.Title))
+        if (string.IsNullOrWhiteSpace(submission.Title))
             return Result<object>.Failure(Error.Validation("Title", "Title é obrigatório."));
-        if (cmd.Title.Length > 200)
+        if (submission.Title.Length > 200)
             return Result<object>.Failure(Error.Validation("Title", "Title excede 200 caracteres."));
-        if (cmd.Description is { Length: > 8000 })
+        if (submission.Description.Length > 8000)
             return Result<object>.Failure(Error.Validation("Description", "Description excede 8000 caracteres."));
 
-        var priority = Enum.TryParse<Core.Enums.TicketPriority>(cmd.Priority, ignoreCase: true, out var prio)
+        var priority = Enum.TryParse<Core.Enums.TicketPriority>(submission.Priority, ignoreCase: true, out var prio)
             ? prio
             : Core.Enums.TicketPriority.Medium;
 
@@ -68,19 +88,88 @@ public sealed class CreateMyTicketHandler(
         // activity log e evento de criação (antes o create do agente nascia
         // sem estado e sem SLA).
         var created = await ticketCommandService.CreateTicketAsync(
-            cmd.Title.Trim(),
-            cmd.Description ?? string.Empty,
+            submission.Title,
+            submission.Description,
             priority,
             site.ClientId,
             agent.SiteId,
             cmd.AgentId,
-            cmd.DepartmentId,
+            submission.DepartmentId,
             cmd.WorkflowProfileId,
             assignedToUserId: null,
-            category: cmd.Category,
-            ct);
+            category: submission.Category,
+            ct,
+            submission.SnapshotMarkdown);
+
+        if (submission.CustomFieldValues.Count > 0 && submission.DepartmentId.HasValue)
+        {
+            await departmentCustomFieldService.SaveTicketFieldValuesAsync(
+                created.Id, submission.DepartmentId.Value,
+                submission.CustomFieldValues, updatedBy: "agent", ct);
+        }
 
         return Result<object>.Success(created);
+    }
+}
+
+/// <summary>
+/// Lista os templates de chamado aplicáveis ao agente (global + cliente) já com
+/// o schema público do departamento, para o agent de chat renderizar o formulário.
+/// </summary>
+public sealed class GetMyTicketTemplatesHandler(
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IDepartmentCustomFieldService departmentCustomFieldService,
+    DiscoveryDbContext db
+) : IRequestHandler<GetMyTicketTemplatesQuery, Result<object>>
+{
+    public async Task<Result<object>> Handle(GetMyTicketTemplatesQuery q, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<object>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null)
+            return Result<object>.Failure(Error.NotFound("Site not found for agent."));
+
+        var templates = await db.TicketTemplates
+            .AsNoTracking()
+            .Where(t => t.IsActive && (t.ClientId == site.ClientId || t.ClientId == null))
+            .OrderBy(t => t.Name)
+            .ToListAsync(ct);
+
+        var result = new List<object>(templates.Count);
+        foreach (var template in templates)
+        {
+            IReadOnlyList<DepartmentFieldSchemaItemDto> fields = template.DepartmentId.HasValue
+                ? await departmentCustomFieldService.GetPublicSchemaForDepartmentAsync(template.DepartmentId.Value, ct)
+                : Array.Empty<DepartmentFieldSchemaItemDto>();
+
+            result.Add(new
+            {
+                template.Id,
+                template.Name,
+                template.Title,
+                template.Description,
+                Priority = template.Priority?.ToString(),
+                template.Category,
+                template.DepartmentId,
+                Fields = fields.Select(f => new
+                {
+                    DefinitionId = f.DefinitionId,
+                    f.Name,
+                    f.Label,
+                    DataType = f.DataType.ToString(),
+                    f.IsRequired,
+                    f.Options,
+                    f.ValidationRegex,
+                    f.InputMask,
+                }).ToList(),
+            });
+        }
+
+        return Result<object>.Success(result);
     }
 }
 

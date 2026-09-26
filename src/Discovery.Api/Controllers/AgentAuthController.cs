@@ -242,6 +242,15 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetMyTicketQuery(id, ticketId)), Ok);
     }
 
+    [HttpGet("me/ticket-templates")]
+    public async Task<IActionResult> GetMyTicketTemplates()
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(new GetMyTicketTemplatesQuery(id)), Ok);
+    }
+
     [HttpPost("me/tickets")]
     [IdempotencyFilter]
     public async Task<IActionResult> CreateMyTicket([FromBody] CreateMyTicketCommand cmd)

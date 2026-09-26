@@ -80,6 +80,7 @@ public class DepartmentCustomFieldService : IDepartmentCustomFieldService
             DepartmentId = departmentId,
             OptionsJson = SerializeOptions(input.Options),
             ValidationRegex = string.IsNullOrWhiteSpace(input.ValidationRegex) ? null : input.ValidationRegex.Trim(),
+            InputMask = string.IsNullOrWhiteSpace(input.InputMask) ? null : input.InputMask.Trim(),
             MinLength = input.MinLength,
             MaxLength = input.MaxLength,
             MinValue = input.MinValue,
@@ -137,6 +138,7 @@ public class DepartmentCustomFieldService : IDepartmentCustomFieldService
         definition.IsInternal = input.IsInternal;
         definition.OptionsJson = SerializeOptions(input.Options);
         definition.ValidationRegex = string.IsNullOrWhiteSpace(input.ValidationRegex) ? null : input.ValidationRegex.Trim();
+        definition.InputMask = string.IsNullOrWhiteSpace(input.InputMask) ? null : input.InputMask.Trim();
         definition.MinLength = input.MinLength;
         definition.MaxLength = input.MaxLength;
         definition.MinValue = input.MinValue;
@@ -394,7 +396,7 @@ public class DepartmentCustomFieldService : IDepartmentCustomFieldService
         ValidateInput(new CreateDepartmentCustomFieldInput(
             input.Name, input.Label, input.Description, input.DataType,
             input.IsRequired, input.IsInternal, input.IsActive,
-            input.Options, input.ValidationRegex,
+            input.Options, input.ValidationRegex, input.InputMask,
             input.MinLength, input.MaxLength, input.MinValue, input.MaxValue));
 
     private static string NormalizeFieldName(string name)
@@ -441,6 +443,7 @@ public class DepartmentCustomFieldService : IDepartmentCustomFieldService
             d.IsActive,
             ParseOptions(d.OptionsJson).ToList(),
             d.ValidationRegex,
+            d.InputMask,
             d.MinLength,
             d.MaxLength,
             d.MinValue,

@@ -70,6 +70,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<CustomFieldDefinition> CustomFieldDefinitions => Set<CustomFieldDefinition>();
     public DbSet<CustomFieldValue> CustomFieldValues => Set<CustomFieldValue>();
     public DbSet<CustomFieldExecutionAccess> CustomFieldExecutionAccesses => Set<CustomFieldExecutionAccess>();
+    public DbSet<CustomFieldTemplate> CustomFieldTemplates => Set<CustomFieldTemplate>();
 
     // Auto Ticket
     public DbSet<AutoTicketRule> AutoTicketRules => Set<AutoTicketRule>();

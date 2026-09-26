@@ -22,7 +22,13 @@ public class Ticket
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string? Category { get; set; }
-    
+
+    /// <summary>
+    /// Snapshot markdown (somente leitura) do formulário/template enviado na
+    /// abertura do chamado. Gravado apenas na criação e nunca atualizado.
+    /// </summary>
+    public string? SubmissionSnapshotMarkdown { get; set; }
+
     // Workflow & Prioridade
     public Guid WorkflowStateId { get; set; }
     public Enums.TicketPriority Priority { get; set; } = Enums.TicketPriority.Medium;

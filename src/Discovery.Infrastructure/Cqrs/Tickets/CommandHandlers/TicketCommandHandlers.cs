@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Tickets.Commands;
 using Discovery.Core.Cqrs.Tickets.Dtos;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using MediatR;
 using TicketCommandService = Discovery.Infrastructure.Services.TicketCommandService;
@@ -8,17 +9,48 @@ using TicketCommandService = Discovery.Infrastructure.Services.TicketCommandServ
 namespace Discovery.Infrastructure.Cqrs.Tickets.CommandHandlers;
 
 public sealed class CreateTicketCommandHandler(
-    ITicketCommandService ticketCommandService
+    ITicketCommandService ticketCommandService,
+    ITicketSubmissionService ticketSubmissionService,
+    IDepartmentCustomFieldService departmentCustomFieldService
 ) : IRequestHandler<CreateTicketCommand, Result<TicketDetailDto>>
 {
     public async Task<Result<TicketDetailDto>> Handle(CreateTicketCommand cmd, CancellationToken ct)
     {
+        // Template (opcional) + validação dos campos personalizados + snapshot.
+        var submission = await ticketSubmissionService.PrepareAsync(
+            new TicketSubmissionRequest(
+                cmd.ClientId, cmd.DepartmentId, cmd.TemplateId,
+                cmd.Title, cmd.Description, cmd.Category, cmd.Priority.ToString(),
+                cmd.CustomFieldValues),
+            ct);
+
+        if (!submission.IsValid)
+        {
+            return Result<TicketDetailDto>.Failure(
+                submission.Errors
+                    .Select(e => Error.Validation(e.FieldName, e.ErrorMessage))
+                    .ToList());
+        }
+
+        var priority = Enum.TryParse<TicketPriority>(submission.Priority, ignoreCase: true, out var parsed)
+            ? parsed
+            : cmd.Priority;
+
         try
         {
             var ticket = await ticketCommandService.CreateTicketAsync(
-                cmd.Title, cmd.Description, cmd.Priority,
-                cmd.ClientId, cmd.SiteId, cmd.AgentId, cmd.DepartmentId,
-                cmd.WorkflowProfileId, cmd.AssignedToUserId, cmd.Category, ct);
+                submission.Title, submission.Description, priority,
+                cmd.ClientId, cmd.SiteId, cmd.AgentId, submission.DepartmentId,
+                cmd.WorkflowProfileId, cmd.AssignedToUserId, submission.Category, ct,
+                submission.SnapshotMarkdown);
+
+            if (submission.CustomFieldValues.Count > 0 && submission.DepartmentId.HasValue)
+            {
+                await departmentCustomFieldService.SaveTicketFieldValuesAsync(
+                    ticket.Id, submission.DepartmentId.Value,
+                    submission.CustomFieldValues, updatedBy: null, ct);
+            }
+
             return Result<TicketDetailDto>.Success(TicketCommandService.ToDto(ticket));
         }
         catch (InvalidOperationException ex)

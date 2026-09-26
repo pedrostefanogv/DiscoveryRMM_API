@@ -16,11 +16,28 @@ namespace Discovery.Api.Controllers;
 
 public record AddDepartmentMemberRequest(Guid UserId);
 
+public record DepartmentCustomFieldRequest(
+    string Name,
+    string Label,
+    string? Description,
+    CustomFieldDataType DataType,
+    bool? IsRequired,
+    bool? IsInternal,
+    bool? IsActive,
+    IReadOnlyList<string>? Options,
+    string? ValidationRegex,
+    string? InputMask,
+    int? MinLength,
+    int? MaxLength,
+    decimal? MinValue,
+    decimal? MaxValue);
+
 [ApiController]
 [Route("api/v{version:apiVersion}/departments")]
 public class DepartmentsController(
     IMediator mediator,
-    ICustomFieldService customFieldService) : ControllerBase
+    ICustomFieldService customFieldService,
+    IDepartmentCustomFieldService departmentCustomFieldService) : ControllerBase
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
     [HttpGet]
@@ -110,4 +127,73 @@ public class DepartmentsController(
             HttpContext.RequestAborted);
         return Ok(result);
     }
+
+    // ── Custom Field Definitions (formulário de abertura) ────────────────
+
+    [HttpPost("{id:guid}/custom-fields")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> CreateCustomFieldDefinition(Guid id, [FromBody] DepartmentCustomFieldRequest request)
+    {
+        try
+        {
+            var created = await departmentCustomFieldService.CreateDepartmentFieldAsync(
+                id, ToCreateInput(request), Username, HttpContext.RequestAborted);
+            return CreatedAtAction(nameof(GetTicketSchema), new { id }, created);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = ex.Message } } });
+        }
+    }
+
+    [HttpPut("{id:guid}/custom-fields/{fieldId:guid}/definition")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> UpdateCustomFieldDefinition(Guid id, Guid fieldId, [FromBody] DepartmentCustomFieldRequest request)
+    {
+        try
+        {
+            var updated = await departmentCustomFieldService.UpdateDepartmentFieldAsync(
+                fieldId, id, ToUpdateInput(request), Username, HttpContext.RequestAborted);
+            if (updated is null)
+                return NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Campo não encontrado." } } });
+            return Ok(updated);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = ex.Message } } });
+        }
+    }
+
+    [HttpDelete("{id:guid}/custom-fields/{fieldId:guid}")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> DeleteCustomFieldDefinition(Guid id, Guid fieldId)
+    {
+        try
+        {
+            var removed = await departmentCustomFieldService.DeleteDepartmentFieldAsync(
+                fieldId, id, HttpContext.RequestAborted);
+            return removed ? NoContent() : NotFound();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = ex.Message } } });
+        }
+    }
+
+    [HttpGet("{id:guid}/ticket-schema")]
+    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    public async Task<IActionResult> GetTicketSchema(Guid id)
+        => Ok(await departmentCustomFieldService.GetPublicSchemaForDepartmentAsync(id, HttpContext.RequestAborted));
+
+    private static CreateDepartmentCustomFieldInput ToCreateInput(DepartmentCustomFieldRequest r) => new(
+        r.Name, r.Label, r.Description, r.DataType,
+        r.IsRequired ?? false, r.IsInternal ?? false, r.IsActive ?? true,
+        r.Options, r.ValidationRegex, r.InputMask,
+        r.MinLength, r.MaxLength, r.MinValue, r.MaxValue);
+
+    private static UpdateDepartmentCustomFieldInput ToUpdateInput(DepartmentCustomFieldRequest r) => new(
+        r.Name, r.Label, r.Description, r.DataType,
+        r.IsRequired ?? false, r.IsInternal ?? false, r.IsActive ?? true,
+        r.Options, r.ValidationRegex, r.InputMask,
+        r.MinLength, r.MaxLength, r.MinValue, r.MaxValue);
 }

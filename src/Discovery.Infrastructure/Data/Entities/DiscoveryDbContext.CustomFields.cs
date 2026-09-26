@@ -36,6 +36,7 @@ public partial class DiscoveryDbContext
             entity.Property(d => d.IsSecret).HasColumnName("is_secret");
             entity.Property(d => d.OptionsJson).HasColumnName("options_json").HasColumnType("jsonb");
             entity.Property(d => d.ValidationRegex).HasColumnName("validation_regex").HasMaxLength(500);
+            entity.Property(d => d.InputMask).HasColumnName("input_mask").HasMaxLength(100);
             entity.Property(d => d.MinLength).HasColumnName("min_length");
             entity.Property(d => d.MaxLength).HasColumnName("max_length");
             entity.Property(d => d.MinValue).HasColumnName("min_value").HasColumnType("numeric(18,6)");
@@ -55,6 +56,39 @@ public partial class DiscoveryDbContext
             entity.Ignore(d => d.ClientId);
             entity.Ignore(d => d.EntityName);
             entity.Ignore(d => d.ValueType);
+        });
+
+        modelBuilder.Entity<CustomFieldTemplate>(entity =>
+        {
+            entity.ToTable("custom_field_templates");
+            entity.HasKey(t => t.Id);
+            entity.HasIndex(t => new { t.ClientId, t.DepartmentId, t.Name })
+                .IsUnique()
+                .HasDatabaseName("ux_custom_field_templates_scope_name");
+            entity.HasIndex(t => new { t.IsActive, t.SortOrder }).HasDatabaseName("ix_custom_field_templates_active_order");
+            entity.HasIndex(t => t.DepartmentId).HasDatabaseName("ix_custom_field_templates_department");
+
+            entity.Property(t => t.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(t => t.ClientId).HasColumnName("client_id");
+            entity.Property(t => t.DepartmentId).HasColumnName("department_id");
+            entity.Property(t => t.Name).HasColumnName("name").HasMaxLength(200);
+            entity.Property(t => t.Label).HasColumnName("label").HasMaxLength(200);
+            entity.Property(t => t.Description).HasColumnName("description").HasMaxLength(1000);
+            entity.Property(t => t.DataType).HasColumnName("data_type").HasConversion<int>();
+            entity.Property(t => t.OptionsJson).HasColumnName("options_json").HasColumnType("jsonb");
+            entity.Property(t => t.ValidationRegex).HasColumnName("validation_regex").HasMaxLength(500);
+            entity.Property(t => t.InputMask).HasColumnName("input_mask").HasMaxLength(100);
+            entity.Property(t => t.MinLength).HasColumnName("min_length");
+            entity.Property(t => t.MaxLength).HasColumnName("max_length");
+            entity.Property(t => t.MinValue).HasColumnName("min_value").HasColumnType("numeric(18,6)");
+            entity.Property(t => t.MaxValue).HasColumnName("max_value").HasColumnType("numeric(18,6)");
+            entity.Property(t => t.DefaultIsRequired).HasColumnName("default_is_required");
+            entity.Property(t => t.IsBuiltIn).HasColumnName("is_built_in");
+            entity.Property(t => t.IsActive).HasColumnName("is_active");
+            entity.Property(t => t.SortOrder).HasColumnName("sort_order");
+            entity.Property(t => t.CreatedBy).HasColumnName("created_by").HasMaxLength(255);
+            entity.Property(t => t.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(t => t.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });
 
         modelBuilder.Entity<CustomFieldValue>(entity =>
