@@ -60,6 +60,13 @@ public class AIIntegrationSettings
     /// <summary>Habilita embeddings da base de artigos</summary>
     public bool EmbeddingArticlesEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Habilita embeddings das respostas do questionário (busca semântica em chamados).
+    /// Opt-in: envia respostas para o provedor de embeddings, então nasce desligado.
+    /// Perguntas marcadas como sensíveis nunca são indexadas.
+    /// </summary>
+    public bool EmbeddingTicketAnswersEnabled { get; set; } = false;
+
     /// <summary>Máximo de mensagens de histórico enviadas ao LLM</summary>
     public int MaxHistoryMessages { get; set; } = 10;
 

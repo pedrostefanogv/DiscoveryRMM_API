@@ -54,6 +54,27 @@ public class KnowledgeEmbeddingResetService(
             WITH (m = 16, ef_construction = 64)",
             ct);
 
+        // 4b. Mesmo tratamento para as respostas do questionário (busca semântica
+        // de chamados): invalida, ajusta a dimensão e recria o HNSW.
+        await db.Database.ExecuteSqlRawAsync(
+            "UPDATE ticket_answers SET embedding = NULL, embedding_generated_at = NULL WHERE embedding IS NOT NULL",
+            ct);
+
+        await db.Database.ExecuteSqlRawAsync(
+            "DROP INDEX IF EXISTS ix_ticket_answers_embedding_hnsw",
+            ct);
+
+        await db.Database.ExecuteSqlRawAsync(
+            FormattableString.Invariant($"ALTER TABLE ticket_answers ALTER COLUMN embedding TYPE vector({newDimensions}) USING NULL::vector({newDimensions})"),
+            ct);
+
+        await db.Database.ExecuteSqlRawAsync(@"
+            CREATE INDEX ix_ticket_answers_embedding_hnsw
+            ON ticket_answers
+            USING hnsw (embedding vector_cosine_ops)
+            WITH (m = 16, ef_construction = 64)",
+            ct);
+
         // 5. Atualiza o rastreador de dimensão na configuração do servidor
         var server = await serverRepo.GetOrCreateDefaultAsync();
         server.CurrentEmbeddingDimensions = newDimensions;

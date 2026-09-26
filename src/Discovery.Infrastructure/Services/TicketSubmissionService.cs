@@ -171,6 +171,7 @@ public class TicketSubmissionService(
                 QuestionLabel = answer.QuestionLabel,
                 ValueText = answer.ValueText,
                 ValueJson = answer.ValueJson,
+                IsSensitive = answer.IsSensitive,
                 SortOrder = index,
                 CreatedAt = now,
             });
@@ -195,7 +196,7 @@ public class TicketSubmissionService(
             var text = TicketTemplateQuestions.FormatAnswer(question, value);
             if (string.IsNullOrWhiteSpace(text)) continue;
 
-            drafts.Add(new TicketAnswerDraft(question.Key, question.Label, text, value.GetRawText()));
+            drafts.Add(new TicketAnswerDraft(question.Key, question.Label, text, value.GetRawText(), question.IsSensitive));
         }
 
         return drafts;

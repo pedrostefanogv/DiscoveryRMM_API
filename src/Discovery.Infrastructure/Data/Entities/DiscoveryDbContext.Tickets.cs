@@ -270,6 +270,9 @@ public partial class DiscoveryDbContext
             entity.Property(a => a.ValueText).HasColumnName("value_text");
             entity.Property(a => a.ValueJson).HasColumnName("value_json").HasColumnType("jsonb");
             entity.Property(a => a.SortOrder).HasColumnName("sort_order");
+            entity.Property(a => a.Embedding).HasColumnName("embedding").HasColumnType("vector(1536)");
+            entity.Property(a => a.EmbeddingGeneratedAt).HasColumnName("embedding_generated_at").HasColumnType("timestamptz");
+            entity.Property(a => a.IsSensitive).HasColumnName("is_sensitive");
             entity.Property(a => a.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
 
             entity.HasOne<Ticket>().WithMany().HasForeignKey(a => a.TicketId).OnDelete(DeleteBehavior.Cascade);

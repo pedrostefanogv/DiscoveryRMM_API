@@ -102,32 +102,48 @@ public sealed class KnowledgeEmbeddingJob : IJob
         // Reseta flag de ciclo
         _resetPerformedThisCycle = false;
 
-        // ── Verifica embedding habilitado ANTES de qualquer chamada ───
-        var enabled = aiSettings.EmbeddingEnabled && aiSettings.EmbeddingArticlesEnabled;
-        if (!enabled)
+        // ── Quais consumidores de embedding estão habilitados? ───────────
+        // O AutoSync de dimensão precisa rodar quando QUALQUER consumidor está
+        // ativo: com artigos desligados e respostas ligadas, a dimensão da coluna
+        // de respostas nunca seria realinhada ao modelo da API.
+        var articlesEnabled = aiSettings.EmbeddingEnabled && aiSettings.EmbeddingArticlesEnabled;
+        var ticketAnswersEnabled = aiSettings.EmbeddingEnabled && aiSettings.EmbeddingTicketAnswersEnabled;
+
+        if (!articlesEnabled && !ticketAnswersEnabled)
         {
-            logger.LogDebug("Knowledge embedding desativado para este ciclo.");
+            logger.LogDebug("Embeddings desativados para este ciclo.");
             return;
         }
 
         // ── Passo 0: Auto-detectar e corrigir dimensão de embedding ────────
         await AutoSyncEmbeddingDimensionsAsync(scope, aiSettings, embeddingProvider, serverRepo, resetService, logger);
 
-        // ── Passo 1: Processar fila LISTEN/NOTIFY ────────────────────────
-        var queueProcessed = await ProcessQueueBatchAsync(
-            scope, queueRepository, articleRepository, chunkRepository,
-            chunkingService, embeddingProvider, aiSettings, logger);
+        var queueProcessed = false;
+        var articlesChunked = 0;
+        var chunksEmbedded = 0;
 
-        // ── Passo 2: Re-chunking ──────────────────────────────────────────
-        var batchSize = 20;
-        var articlesChunked = await ReChunkArticlesAsync(
-            articleRepository, chunkRepository, chunkingService, batchSize, logger);
+        if (articlesEnabled)
+        {
+            // ── Passo 1: Processar fila LISTEN/NOTIFY ────────────────────
+            queueProcessed = await ProcessQueueBatchAsync(
+                scope, queueRepository, articleRepository, chunkRepository,
+                chunkingService, embeddingProvider, aiSettings, logger);
 
-        // ── Passo 3: Geração de Embeddings ────────────────────────────────
-        var chunksEmbedded = await GenerateEmbeddingsBatchAsync(
-            scope, articleRepository, chunkRepository, embeddingProvider,
-            aiSettings, batchSize, logger);
+            // ── Passo 2: Re-chunking ──────────────────────────────────────
+            var batchSize = 20;
+            articlesChunked = await ReChunkArticlesAsync(
+                articleRepository, chunkRepository, chunkingService, batchSize, logger);
 
+            // ── Passo 3: Geração de Embeddings ────────────────────────────
+            chunksEmbedded = await GenerateEmbeddingsBatchAsync(
+                scope, articleRepository, chunkRepository, embeddingProvider,
+                aiSettings, batchSize, logger);
+        }
+
+        // As respostas do questionário são processadas pelo job DEDICADO
+        // (TicketAnswerEmbeddingJob), que segue o padrão de periodicidade
+        // configurável do catálogo Winget. Aqui fica apenas o AutoSync de
+        // dimensão, dono único do reset (evita dois jobs competindo).
         if (queueProcessed || articlesChunked > 0 || chunksEmbedded > 0)
         {
             logger.LogInformation(

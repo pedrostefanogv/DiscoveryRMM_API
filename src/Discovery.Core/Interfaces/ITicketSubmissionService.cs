@@ -37,7 +37,8 @@ public sealed record TicketAnswerDraft(
     string QuestionKey,
     string QuestionLabel,
     string? ValueText,
-    string ValueJson);
+    string ValueJson,
+    bool IsSensitive = false);
 
 public sealed record TicketSubmissionResult(
     Guid? DepartmentId,

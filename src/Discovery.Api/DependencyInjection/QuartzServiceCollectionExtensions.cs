@@ -49,6 +49,23 @@ public static class QuartzServiceCollectionExtensions
                 .WithSimpleSchedule(s => s.WithIntervalInSeconds(30).RepeatForever())
                 .WithDescription("Re-chunk articles, generate embeddings in batch, process LISTEN/NOTIFY queue"));
 
+            // ── Embeddings das respostas do questionário (busca semântica): a cada N segundos ──
+            var answerEmbeddingEnabled = configuration.GetValue<bool?>("BackgroundJobs:TicketAnswerEmbedding:Enabled") ?? true;
+            if (answerEmbeddingEnabled)
+            {
+                // Piso de 15s: o processador tem teto por ciclo (50 respostas) e o
+                // custo ocioso é uma consulta indexada (índice parcial).
+                var answerEmbeddingIntervalSeconds = Math.Max(15, configuration.GetValue<int?>("BackgroundJobs:TicketAnswerEmbedding:IntervalSeconds") ?? 60);
+                // Catch-up pós restart/deploy: primeira execução logo após o startup.
+                var answerEmbeddingStartupDelaySeconds = Math.Max(0, configuration.GetValue<int?>("BackgroundJobs:TicketAnswerEmbedding:StartupDelaySeconds") ?? 20);
+
+                q.ScheduleJob<TicketAnswerEmbeddingJob>(trigger => trigger
+                    .WithIdentity($"{TicketAnswerEmbeddingJob.Key.Name}-trigger", TicketAnswerEmbeddingJob.Key.Group)
+                    .StartAt(DateTimeOffset.UtcNow.AddSeconds(answerEmbeddingStartupDelaySeconds))
+                    .WithSimpleSchedule(s => s.WithIntervalInSeconds(answerEmbeddingIntervalSeconds).RepeatForever())
+                    .WithDescription($"Generate ticket answer embeddings {answerEmbeddingStartupDelaySeconds}s after startup, then every {answerEmbeddingIntervalSeconds}s"));
+            }
+
             // ── Winget Catalog Sync (feed legado): every N days at midnight ───────────
             var wingetEnabled = configuration.GetValue<bool?>("BackgroundJobs:WingetCatalogSync:Enabled") ?? false;
             var wingetIntervalDays = Math.Max(1, configuration.GetValue<int?>("BackgroundJobs:WingetCatalogSync:IntervalDays") ?? 5);

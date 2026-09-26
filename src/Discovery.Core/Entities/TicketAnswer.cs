@@ -1,3 +1,5 @@
+using Pgvector;
+
 namespace Discovery.Core.Entities;
 
 /// <summary>
@@ -28,6 +30,24 @@ public class TicketAnswer
 
     /// <summary>Ordem da pergunta no questionário (preserva a ordem de exibição).</summary>
     public int SortOrder { get; set; }
+
+    /// <summary>
+    /// Embedding pgvector da resposta ("{pergunta}: {valor}") para busca semântica.
+    /// Null = ainda não indexada (o ciclo do job processa em lote).
+    /// </summary>
+    public Vector? Embedding { get; set; }
+
+    /// <summary>
+    /// Preenchido quando a resposta foi processada (embedada) OU deliberadamente
+    /// pulada. Null + embedding null = pendente de processamento.
+    /// </summary>
+    public DateTime? EmbeddingGeneratedAt { get; set; }
+
+    /// <summary>
+    /// Pergunta marcada como sensível no template: nunca é enviada ao provedor de
+    /// embeddings nem retornada na busca semântica (segue em filtros exato/contém).
+    /// </summary>
+    public bool IsSensitive { get; set; }
 
     public DateTime CreatedAt { get; set; }
 }

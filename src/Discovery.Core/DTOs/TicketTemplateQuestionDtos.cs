@@ -20,7 +20,9 @@ public sealed record TicketTemplateQuestion(
     int? MaxLength,
     decimal? MinValue,
     decimal? MaxValue,
-    string? HelpText);
+    string? HelpText,
+    /// <summary>Pergunta sensível: não é enviada ao provedor de embeddings nem aparece na busca semântica.</summary>
+    bool IsSensitive = false);
 
 public sealed record TicketTemplateAnswerError(string Key, string Message);
 

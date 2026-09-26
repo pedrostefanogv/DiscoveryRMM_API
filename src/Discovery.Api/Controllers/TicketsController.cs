@@ -27,7 +27,8 @@ public class TicketsController(
     IAttachmentService attachmentService,
     IAttachmentRepository attachmentRepository,
     ITicketRepository ticketRepository,
-    IScopeContext scopeContext) : ControllerBase
+    IScopeContext scopeContext,
+    ITicketAnswerSearchService ticketAnswerSearchService) : ControllerBase
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
     private Guid? CurrentUserId => HttpContext.Items["UserId"] as Guid?;
@@ -645,6 +646,31 @@ public class TicketsController(
             ? prop.GetRawText()
             : body.GetRawText();
         var result = await customFieldService.UpsertValueAsync(new UpsertCustomFieldValueInput(definitionId, CustomFieldScopeType.Ticket, id, valueJson, Username), HttpContext.RequestAborted);
+        return Ok(result);
+    }
+
+    // ── Busca por resposta do questionário ───────────────────────────────
+
+    /// <summary>
+    /// Busca chamados pela resposta do questionário. Usa embeddings (pgvector)
+    /// quando habilitado e degrada para correspondência por texto.
+    /// O modo usado vem em "mode": semantic | keyword | disabled.
+    /// </summary>
+    [HttpGet("search/answers")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> SearchAnswers(
+        [FromQuery] string q,
+        [FromQuery] int limit = 10,
+        [FromQuery] Guid? templateId = null,
+        [FromQuery] string? questionKey = null,
+        [FromQuery] double? minSimilarity = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 3)
+            return Ok(new TicketAnswerSearchResult("keyword", Array.Empty<TicketAnswerSearchHit>(), 0));
+
+        var result = await ticketAnswerSearchService.SearchAsync(
+            new TicketAnswerSearchRequest(q, limit, templateId, questionKey, minSimilarity), ct);
         return Ok(result);
     }
 

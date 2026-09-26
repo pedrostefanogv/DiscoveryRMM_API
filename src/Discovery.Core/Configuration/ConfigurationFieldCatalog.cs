@@ -43,6 +43,7 @@ public static class ConfigurationFieldCatalog
         "EmbeddingModel",
         "EmbeddingEnabled",
         "EmbeddingArticlesEnabled",
+        "EmbeddingTicketAnswersEnabled",
         "MSPServers",
         "TimeoutMs",
         "RateLimitPerMinute",

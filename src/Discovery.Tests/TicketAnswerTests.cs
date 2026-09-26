@@ -203,7 +203,13 @@ public class TicketAnswerTests
             }
 
             modelBuilder.Entity<Ticket>(entity => entity.HasKey(item => item.Id));
-            modelBuilder.Entity<TicketAnswer>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<TicketAnswer>(entity =>
+            {
+                entity.HasKey(item => item.Id);
+                // pgvector só existe no Postgres: o provider InMemory não mapeia
+                // 'Vector' como escalar (o backend de produção mapeia via Npgsql).
+                entity.Ignore(item => item.Embedding);
+            });
         }
     }
 
