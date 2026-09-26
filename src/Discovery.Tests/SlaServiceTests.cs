@@ -178,6 +178,232 @@ public class SlaServiceTests
         Assert.That(effectiveExpiry!.Value, Is.GreaterThanOrEqualTo(originalExpiry.AddMinutes(29)));
     }
 
+    // ── Robustez de configuração (fuso/dias úteis inválidos) ─────────────
+
+    [Test]
+    public void AddWorkingHours_InvalidTimezone_FallsBackToUtcWithoutThrowing()
+    {
+        var calendar = BuildCalendar("Fuso/Inexistente");
+        var from = new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc); // segunda 09:00
+
+        var result = SlaService.AddWorkingHours(from, 8, calendar);
+
+        Assert.That(result, Is.EqualTo(new DateTime(2026, 6, 1, 17, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public void AddWorkingHours_EmptyWorkDaysJson_FallsBackToWeekdays()
+    {
+        var calendar = BuildCalendar("UTC");
+        calendar.WorkDaysJson = "[]"; // antes causava laço infinito em NextWorkDayStart
+
+        var from = new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc);
+
+        var result = SlaService.AddWorkingHours(from, 8, calendar);
+
+        Assert.That(result, Is.EqualTo(new DateTime(2026, 6, 1, 17, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public void AddWorkingHours_MalformedWorkDaysJson_FallsBackToWeekdays()
+    {
+        var calendar = BuildCalendar("UTC");
+        calendar.WorkDaysJson = "not-json";
+
+        var from = new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc);
+
+        var result = SlaService.AddWorkingHours(from, 8, calendar);
+
+        Assert.That(result, Is.EqualTo(new DateTime(2026, 6, 1, 17, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public void AddWorkingHours_CustomWorkDays_IncludesSaturday()
+    {
+        var calendar = BuildCalendar("UTC");
+        calendar.WorkDaysJson = "[1,2,3,4,5,6]"; // inclui sábado
+        var saturday = new DateTime(2026, 6, 6, 9, 0, 0, DateTimeKind.Utc);
+
+        var result = SlaService.AddWorkingHours(saturday, 8, calendar);
+
+        Assert.That(result, Is.EqualTo(new DateTime(2026, 6, 6, 17, 0, 0, DateTimeKind.Utc)));
+    }
+
+    // ── Turnos que viram o dia e horário de verão ────────────────────────
+
+    [Test]
+    public void AddWorkingHours_OvernightShift_CrossesMidnight()
+    {
+        var calendar = BuildCalendar("UTC");
+        calendar.WorkDayStartHour = 22; // 22:00 → 06:00 do dia seguinte
+        calendar.WorkDayEndHour = 6;
+
+        var from = new DateTime(2026, 6, 1, 23, 0, 0, DateTimeKind.Utc); // segunda 23:00
+
+        var result = SlaService.AddWorkingHours(from, 4, calendar);
+
+        Assert.That(result, Is.EqualTo(new DateTime(2026, 6, 2, 3, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public void AddWorkingHours_OvernightShift_JumpsToNextShiftDay()
+    {
+        var calendar = BuildCalendar("UTC");
+        calendar.WorkDayStartHour = 22;
+        calendar.WorkDayEndHour = 6;
+
+        // Terça 05:00 está no turno iniciado na segunda (termina 06:00 terça):
+        // consome 1h até 06:00 e depois 1h no turno de terça 22:00 → 23:00.
+        var from = new DateTime(2026, 6, 2, 5, 0, 0, DateTimeKind.Utc);
+
+        var result = SlaService.AddWorkingHours(from, 2, calendar);
+
+        Assert.That(result, Is.EqualTo(new DateTime(2026, 6, 2, 23, 0, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
+    public void CountWorkingHours_OvernightShift()
+    {
+        var calendar = BuildCalendar("UTC");
+        calendar.WorkDayStartHour = 22;
+        calendar.WorkDayEndHour = 6;
+
+        var hours = SlaService.CountWorkingHours(
+            new DateTime(2026, 6, 1, 23, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 6, 2, 3, 0, 0, DateTimeKind.Utc),
+            calendar);
+
+        Assert.That(hours, Is.EqualTo(4.0).Within(0.01));
+    }
+
+    [Test]
+    public void CountWorkingHours_DaylightSavingSpringForward_UsesRealDuration()
+    {
+        TimeZoneInfo tz;
+        try { tz = TimeZoneInfo.FindSystemTimeZoneById("America/New_York"); }
+        catch (TimeZoneNotFoundException) { Assert.Ignore("tzdata indisponível neste ambiente."); return; }
+        catch (InvalidTimeZoneException) { Assert.Ignore("tzdata inválida neste ambiente."); return; }
+
+        if (!tz.SupportsDaylightSavingTime)
+        {
+            Assert.Ignore("Fuso sem horário de verão neste ambiente.");
+            return;
+        }
+
+        var calendar = BuildCalendar("America/New_York");
+        calendar.WorkDayStartHour = 0;   // jornada contínua de 24h
+        calendar.WorkDayEndHour = 24;
+        calendar.WorkDaysJson = "[0,1,2,3,4,5,6]";
+
+        // 08/03/2026 (domingo) é o início do horário de verão nos EUA: o relógio
+        // pula 02:00→03:00, então o dia tem 23 horas reais.
+        // 00:00 EST = 05:00 UTC; 00:00 EDT do dia seguinte = 04:00 UTC.
+        var hours = SlaService.CountWorkingHours(
+            new DateTime(2026, 3, 8, 5, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 3, 9, 4, 0, 0, DateTimeKind.Utc),
+            calendar);
+
+        Assert.That(hours, Is.EqualTo(23.0).Within(0.01));
+    }
+
+    // ── Contagem de horas úteis (base do percentual de SLA) ───────────────
+
+    [Test]
+    public void CountWorkingHours_WithinSameWorkday()
+    {
+        var calendar = BuildCalendar("UTC");
+
+        var hours = SlaService.CountWorkingHours(
+            new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc),
+            calendar);
+
+        Assert.That(hours, Is.EqualTo(3.0).Within(0.01));
+    }
+
+    [Test]
+    public void CountWorkingHours_AcrossWeekend_IgnoresNonWorkingDays()
+    {
+        var calendar = BuildCalendar("UTC"); // seg-sex 08-18
+
+        // Sexta 17:00 → segunda 09:30 = 1h (sexta) + 1,5h (segunda)
+        var hours = SlaService.CountWorkingHours(
+            new DateTime(2026, 6, 5, 17, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 6, 8, 9, 30, 0, DateTimeKind.Utc),
+            calendar);
+
+        Assert.That(hours, Is.EqualTo(2.5).Within(0.01));
+    }
+
+    [Test]
+    public void CountWorkingHours_SkipsHoliday()
+    {
+        var calendar = BuildCalendar("UTC");
+        calendar.Holidays.Add(new SlaCalendarHoliday
+        {
+            Id = Guid.NewGuid(),
+            CalendarId = calendar.Id,
+            Name = "Feriado",
+            Date = new DateTime(2026, 6, 1),
+            HolidayTypeValue = (int)HolidayType.Fixed
+        });
+
+        // 01/06 (segunda) é feriado; de segunda 09:00 a terça 12:00 sobram 4h
+        // (terça 08:00-12:00).
+        var hours = SlaService.CountWorkingHours(
+            new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 6, 2, 12, 0, 0, DateTimeKind.Utc),
+            calendar);
+
+        Assert.That(hours, Is.EqualTo(4.0).Within(0.01));
+    }
+
+    [Test]
+    public async Task GetSlaStatusAsync_WithCalendar_MeasuresInBusinessHours()
+    {
+        var calendar = BuildCalendar("UTC");
+        await using var fixture = await CreateFixtureAsync(slaHours: 8, calendar: calendar);
+
+        var now = DateTime.UtcNow;
+        var ticket = fixture.Ticket;
+        ticket.CreatedAt = now;
+        ticket.SlaExpiresAt = SlaService.AddWorkingHours(now, 8, calendar);
+        fixture.Db.Tickets.Update(ticket);
+        await fixture.Db.SaveChangesAsync();
+
+        var (hoursRemaining, percentUsed, breached) = await fixture.SlaService.GetSlaStatusAsync(ticket.Id);
+
+        // O total de 8h úteis equivale exatamente ao vencimento, independentemente
+        // do horário em que o teste roda (medida em horas úteis, não em relógio).
+        Assert.That(breached, Is.False);
+        Assert.That(percentUsed, Is.LessThan(1.0));
+        Assert.That(hoursRemaining, Is.InRange(7, 8));
+    }
+
+    [Test]
+    public async Task GetSlaContextForTicketAsync_UsesProfileWarningThreshold()
+    {
+        var calendar = BuildCalendar("UTC");
+        await using var fixture = await CreateFixtureAsync(calendar: calendar, warningPercent: 50);
+
+        var context = await fixture.SlaService.GetSlaContextForTicketAsync(fixture.Ticket);
+
+        Assert.That(context.WarningThresholdPercent, Is.EqualTo(50));
+        Assert.That(context.Calendar, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task GetSlaContextForTicketAsync_WithoutProfile_UsesDefaultThreshold()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        fixture.Ticket.WorkflowProfileId = null;
+
+        var context = await fixture.SlaService.GetSlaContextForTicketAsync(fixture.Ticket);
+
+        Assert.That(context.WarningThresholdPercent, Is.EqualTo(ISlaService.DefaultWarningThresholdPercent));
+        Assert.That(context.Calendar, Is.Null);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private static SlaCalendar BuildCalendar(string tz) => new()
@@ -193,7 +419,7 @@ public class SlaServiceTests
         UpdatedAt = DateTime.UtcNow
     };
 
-    private static async Task<SlaTestFixture> CreateFixtureAsync(int slaHours = 8, int frtHours = 4)
+    private static async Task<SlaTestFixture> CreateFixtureAsync(int slaHours = 8, int frtHours = 4, SlaCalendar? calendar = null, int? warningPercent = null)
     {
         var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
             .UseInMemoryDatabase($"sla-tests-{Guid.NewGuid():N}")
@@ -215,12 +441,17 @@ public class SlaServiceTests
             DepartmentId = dept.Id,
             Name = "Default",
             SlaHours = slaHours,
+            SlaCalendarId = calendar?.Id,
+            SlaWarningPercent = warningPercent,
             FirstResponseSlaHours = frtHours,
             IsActive = true,
             CreatedAt = now,
             UpdatedAt = now
         };
         db.WorkflowProfiles.Add(profile);
+
+        if (calendar is not null)
+            db.SlaCalendars.Add(calendar);
 
         var state = new WorkflowState
         {

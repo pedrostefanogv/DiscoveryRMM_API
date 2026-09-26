@@ -35,6 +35,12 @@ public class WorkflowProfile
     /// SLA de primeira resposta em horas. Ex: 1 (emergência), 4 (padrão).
     /// </summary>
     public int FirstResponseSlaHours { get; set; } = 4;
+
+    /// <summary>
+    /// Percentual de SLA a partir do qual o monitor gera aviso preventivo.
+    /// Nulo = padrão (80%). Antes o limiar era fixo no job de monitoramento.
+    /// </summary>
+    public int? SlaWarningPercent { get; set; }
     
     /// <summary>
     /// Prioridade padrão para tickets deste perfil.

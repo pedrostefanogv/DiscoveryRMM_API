@@ -409,9 +409,17 @@ public class AutoTicketServiceTests
         public Task<(int HoursRemaining, double PercentUsed, bool Breached, bool Achieved)> GetFrtStatusAsync(Guid ticketId)
             => Task.FromResult((4, 0d, false, false));
 
+        public (int HoursRemaining, double PercentUsed, bool Breached) GetSlaStatus(Ticket ticket, SlaCalendar? calendar)
+            => (24, 0d, false);
+
+        public Task<TicketSlaContext> GetSlaContextForTicketAsync(Ticket ticket)
+            => Task.FromResult(new TicketSlaContext(null, ISlaService.DefaultWarningThresholdPercent));
+
         public DateTime? GetEffectiveSlaExpiry(Ticket ticket) => ticket.SlaExpiresAt;
 
         public Task<bool> CheckAndLogSlaBreachAsync(Guid ticketId) => Task.FromResult(false);
+
+        public Task<bool> CheckAndLogSlaBreachAsync(Ticket ticket) => Task.FromResult(false);
     }
 
     private sealed class FakeTicketRepository : ITicketRepository
@@ -480,7 +488,7 @@ public class AutoTicketServiceTests
         public Task<TicketComment> AddCommentAsync(TicketComment comment)
             => Task.FromResult(comment);
 
-        public Task<List<Ticket>> GetOpenTicketsWithSlaAsync()
+        public Task<List<Ticket>> GetOpenTicketsWithSlaAsync(int limit = 2000)
             => Task.FromResult(_tickets.Values.Where(ticket => ticket.ClosedAt is null).ToList());
 
         public Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds)

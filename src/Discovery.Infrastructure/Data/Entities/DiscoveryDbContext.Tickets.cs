@@ -35,6 +35,7 @@ public partial class DiscoveryDbContext
             entity.Property(ticket => ticket.SlaBreached).HasColumnName("sla_breached");
             entity.Property(ticket => ticket.SlaFirstResponseExpiresAt).HasColumnName("sla_first_response_expires_at").HasColumnType("timestamptz");
             entity.Property(ticket => ticket.FirstRespondedAt).HasColumnName("first_responded_at").HasColumnType("timestamptz");
+            entity.Property(ticket => ticket.FirstResponseSlaStartedAt).HasColumnName("first_response_sla_started_at").HasColumnType("timestamptz");
             entity.Property(ticket => ticket.SlaPausedSeconds).HasColumnName("sla_paused_seconds").HasDefaultValue(0);
             entity.Property(ticket => ticket.SlaHoldStartedAt).HasColumnName("sla_hold_started_at").HasColumnType("timestamptz");
             entity.Property(ticket => ticket.Rating).HasColumnName("rating");
@@ -150,6 +151,7 @@ public partial class DiscoveryDbContext
             entity.Property(profile => profile.DefaultPriority).HasColumnName("default_priority").HasConversion<string>().HasMaxLength(50);
             entity.Property(profile => profile.IsActive).HasColumnName("is_active");
             entity.Property(profile => profile.SlaCalendarId).HasColumnName("sla_calendar_id");
+            entity.Property(profile => profile.SlaWarningPercent).HasColumnName("sla_warning_percent");
             entity.Property(profile => profile.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(profile => profile.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 

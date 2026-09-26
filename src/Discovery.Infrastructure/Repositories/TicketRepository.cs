@@ -338,12 +338,16 @@ public class TicketRepository : ITicketRepository
         return comment;
     }
 
-    public async Task<List<Ticket>> GetOpenTicketsWithSlaAsync()
+    public async Task<List<Ticket>> GetOpenTicketsWithSlaAsync(int limit = 2000)
     {
+        // Limitado: o job roda a cada 5 min e não deve carregar a tabela inteira.
+        var effectiveLimit = Math.Clamp(limit, 1, 10_000);
+
         return await _db.Tickets
             .AsNoTracking()
             .Where(ticket => !ticket.ClosedAt.HasValue && ticket.SlaExpiresAt.HasValue)
             .OrderBy(ticket => ticket.SlaExpiresAt)
+            .Take(effectiveLimit)
             .ToListAsync();
     }
 

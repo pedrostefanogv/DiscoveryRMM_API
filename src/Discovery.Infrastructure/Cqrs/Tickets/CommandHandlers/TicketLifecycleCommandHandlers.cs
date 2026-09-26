@@ -56,6 +56,10 @@ public sealed class ReopenTicketCommandHandler(
             {
                 ticket.SlaExpiresAt = await slaService.CalculateSlaExpiryAsync(ticket.WorkflowProfileId.Value, reopenedAt);
                 ticket.SlaFirstResponseExpiresAt = await slaService.CalculateFirstResponseExpiryAsync(ticket.WorkflowProfileId.Value, reopenedAt);
+                // Reabrir reinicia o FRT: sem limpar FirstRespondedAt o chamado
+                // apareceria como "já respondido" e o FRT nunca contaria de novo.
+                ticket.FirstRespondedAt = null;
+                ticket.FirstResponseSlaStartedAt = reopenedAt;
             }
             catch (InvalidOperationException ex)
             {

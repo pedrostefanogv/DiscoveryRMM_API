@@ -61,6 +61,12 @@ public class Ticket
     /// <summary>Quando o atribuído efetivamente respondeu pela primeira vez.</summary>
     public DateTime? FirstRespondedAt { get; set; }
 
+    /// <summary>
+    /// Início da contagem do SLA de primeira resposta. Reinicia ao reabrir o
+    /// chamado; sem ele o percentual de FRT era medido desde a criação original.
+    /// </summary>
+    public DateTime? FirstResponseSlaStartedAt { get; set; }
+
     /// <summary>Segundos acumulados em que o SLA estava pausado (estados PausesSla=true).</summary>
     public int SlaPausedSeconds { get; set; } = 0;
 

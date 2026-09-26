@@ -258,6 +258,7 @@ public partial class DiscoveryDbContext
             entity.Property(r => r.BumpPriority).HasColumnName("bump_priority").HasDefaultValue(false);
             entity.Property(r => r.NotifyAssignee).HasColumnName("notify_assignee").HasDefaultValue(true);
             entity.Property(r => r.IsActive).HasColumnName("is_active").HasDefaultValue(true);
+            entity.Property(r => r.EscalationCooldownMinutes).HasColumnName("escalation_cooldown_minutes").HasDefaultValue(360);
             entity.Property(r => r.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(r => r.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             entity.HasIndex(r => r.WorkflowProfileId).HasDatabaseName("ix_ticket_escalation_rules_profile_id");
@@ -326,6 +327,7 @@ public partial class DiscoveryDbContext
             entity.Property(c => c.WorkDayStartHour).HasColumnName("work_day_start_hour");
             entity.Property(c => c.WorkDayEndHour).HasColumnName("work_day_end_hour");
             entity.Property(c => c.WorkDaysJson).HasColumnName("work_days_json").HasMaxLength(50);
+            entity.Property(c => c.IsDefault).HasColumnName("is_default").HasDefaultValue(false);
             entity.Property(c => c.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(c => c.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             entity.HasMany(c => c.Holidays).WithOne(h => h.Calendar).HasForeignKey(h => h.CalendarId).OnDelete(DeleteBehavior.Cascade);

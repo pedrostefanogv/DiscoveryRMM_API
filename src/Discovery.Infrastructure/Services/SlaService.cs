@@ -14,6 +14,9 @@ public class SlaService : ISlaService
     private readonly ISlaCalendarRepository _calendarRepo;
     private readonly ILogger<SlaService> _logger;
 
+    /// <summary>Limiar de aviso usado quando o perfil não define um.</summary>
+    public const int DefaultSlaWarningThresholdPercent = 80;
+
     public SlaService(
         IWorkflowProfileRepository workflowProfileRepo,
         ITicketRepository ticketRepo,
@@ -60,87 +63,252 @@ public class SlaService : ISlaService
         return DateTime.SpecifyKind(createdAt.AddHours(profile.FirstResponseSlaHours), DateTimeKind.Utc);
     }
 
+    private async Task<SlaCalendar?> ResolveCalendarAsync(Ticket ticket)
+    {
+        if (!ticket.WorkflowProfileId.HasValue) return null;
+
+        var profile = await _workflowProfileRepo.GetByIdAsync(ticket.WorkflowProfileId.Value);
+        if (profile?.SlaCalendarId is null) return null;
+
+        return await _calendarRepo.GetByIdAsync(profile.SlaCalendarId.Value);
+    }
+
+    /// <summary>
+    /// Resolve, em uma única leitura do perfil, o calendário e o limiar de aviso.
+    /// O job de monitoramento chama isto uma vez por perfil e reaproveita o
+    /// resultado para todos os tickets daquele perfil.
+    /// </summary>
+    public async Task<TicketSlaContext> GetSlaContextForTicketAsync(Ticket ticket)
+    {
+        if (!ticket.WorkflowProfileId.HasValue)
+            return new TicketSlaContext(null, DefaultSlaWarningThresholdPercent);
+
+        var profile = await _workflowProfileRepo.GetByIdAsync(ticket.WorkflowProfileId.Value);
+        if (profile is null)
+            return new TicketSlaContext(null, DefaultSlaWarningThresholdPercent);
+
+        var threshold = profile.SlaWarningPercent is > 0 and <= 100
+            ? profile.SlaWarningPercent.Value
+            : DefaultSlaWarningThresholdPercent;
+
+        if (profile.SlaCalendarId is null)
+            return new TicketSlaContext(null, threshold);
+
+        var calendar = await _calendarRepo.GetByIdAsync(profile.SlaCalendarId.Value);
+        return new TicketSlaContext(calendar, threshold);
+    }
+
+    // ── Resolução defensiva de configuração ──────────────────────────────
+    // Um calendário mal configurado (fuso inexistente ou lista de dias vazia)
+    // não pode derrubar a criação de chamados nem travar o job de SLA.
+
+    /// <summary>Resolve o fuso; usa UTC quando o identificador é inválido.</summary>
+    internal static TimeZoneInfo ResolveTimeZone(string? timezone)
+    {
+        if (string.IsNullOrWhiteSpace(timezone)) return TimeZoneInfo.Utc;
+
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(timezone);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.Utc;
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return TimeZoneInfo.Utc;
+        }
+    }
+
+    /// <summary>
+    /// Lê os dias úteis do JSON; normaliza valores inválidos e cai para Seg-Sex
+    /// quando a lista é vazia/inválida (evita laço infinito no avanço de dias).
+    /// </summary>
+    internal static int[] ResolveWorkDays(string? workDaysJson)
+    {
+        if (!string.IsNullOrWhiteSpace(workDaysJson))
+        {
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<int[]>(workDaysJson);
+                var valid = parsed?
+                    .Where(day => day >= 0 && day <= 6)
+                    .Distinct()
+                    .OrderBy(day => day)
+                    .ToArray();
+
+                if (valid is { Length: > 0 }) return valid;
+            }
+            catch (JsonException)
+            {
+                // JSON inválido: usa o padrão abaixo.
+            }
+        }
+
+        return [1, 2, 3, 4, 5];
+    }
+
+    /// <summary>
+    /// Converte um horário local para UTC. Horários inexistentes (salto do horário
+    /// de verão) não devem quebrar o cálculo: cai para o offset do instante.
+    /// </summary>
+    private static DateTime LocalToUtcSafe(DateTime local, TimeZoneInfo tz)
+    {
+        var unspecified = DateTime.SpecifyKind(local, DateTimeKind.Unspecified);
+
+        try
+        {
+            return TimeZoneInfo.ConvertTimeToUtc(unspecified, tz);
+        }
+        catch (ArgumentException)
+        {
+            var offset = tz.GetUtcOffset(unspecified);
+            return DateTime.SpecifyKind(unspecified - offset, DateTimeKind.Utc);
+        }
+    }
+
+    /// <summary>
+    /// Janela de um turno que COMEÇA no dia local <paramref name="shiftDay"/>.
+    /// Quando o fim é menor que o início (ex.: 22h→6h), o turno vira o dia.
+    /// </summary>
+    private static (DateTime Start, DateTime End) ShiftWindow(DateTime shiftDay, SlaCalendar calendar)
+    {
+        var start = shiftDay.Date.AddHours(calendar.WorkDayStartHour);
+        var end = shiftDay.Date.AddHours(calendar.WorkDayEndHour);
+
+        if (calendar.WorkDayEndHour < calendar.WorkDayStartHour)
+            end = end.AddDays(1); // turno noturno
+
+        return (start, end);
+    }
+
+    /// <summary>Um dia é "dia de turno" quando é dia útil e não é feriado.</summary>
+    private static bool IsShiftDay(DateTime shiftDay, int[] workDays, HashSet<DateTime> holidays)
+        => workDays.Contains((int)shiftDay.DayOfWeek) && !holidays.Contains(shiftDay.Date);
+
     /// <summary>
     /// Adiciona <paramref name="hours"/> horas úteis (conforme calendário) a <paramref name="from"/>.
-    /// Pula fins de semana, feriados e horas fora do expediente.
+    /// Pula fins de semana, feriados e horas fora do expediente. Suporta turnos
+    /// que viram o dia (fim menor que início) e durações reais em transições de
+    /// horário de verão.
     /// </summary>
     public static DateTime AddWorkingHours(DateTime from, int hours, SlaCalendar calendar)
     {
-        if (hours <= 0) return from;
+        var fromUtc = from.Kind == DateTimeKind.Utc ? from : DateTime.SpecifyKind(from, DateTimeKind.Utc);
 
-        var tz = TimeZoneInfo.FindSystemTimeZoneById(calendar.Timezone);
-        var workDays = JsonSerializer.Deserialize<int[]>(calendar.WorkDaysJson) ?? [1, 2, 3, 4, 5];
-        var holidayDates = GetEffectiveHolidayDates(calendar, from, maxDaysForward: hours * 3 + 30);
+        if (hours <= 0) return fromUtc;
 
-        var current = TimeZoneInfo.ConvertTimeFromUtc(from.Kind == DateTimeKind.Utc ? from : DateTime.SpecifyKind(from, DateTimeKind.Utc), tz);
+        var tz = ResolveTimeZone(calendar.Timezone);
+        var workDays = ResolveWorkDays(calendar.WorkDaysJson);
+
+        // A janela de feriados precisa cobrir todo o avanço do laço.
+        var maxDaysForward = Math.Clamp(hours * 8 + 90, 366, 3660);
+        var holidayDates = GetEffectiveHolidayDates(calendar, fromUtc, maxDaysForward);
+
+        var current = TimeZoneInfo.ConvertTimeFromUtc(fromUtc, tz);
         var remaining = TimeSpan.FromHours(hours);
 
-        while (remaining > TimeSpan.Zero)
+        // Começa um dia antes para capturar um turno noturno iniciado ontem.
+        var shiftDay = current.Date.AddDays(-1);
+
+        // Limite defensivo (~10 anos de turnos) contra dado corrompido.
+        for (var guard = 0; remaining > TimeSpan.Zero && guard < 4000; guard++)
         {
-            // Se não é dia útil, avança para o início do próximo dia útil
-            if (!IsWorkDay(current, workDays, holidayDates))
+            if (!IsShiftDay(shiftDay, workDays, holidayDates))
             {
-                current = NextWorkDayStart(current, calendar, workDays, holidayDates);
+                shiftDay = shiftDay.AddDays(1);
                 continue;
             }
 
-            // Se antes do horário de expediente, avança para o início
-            var dayStart = current.Date.AddHours(calendar.WorkDayStartHour);
-            if (current < dayStart)
+            var (start, end) = ShiftWindow(shiftDay, calendar);
+
+            if (current >= end)
             {
-                current = dayStart;
+                shiftDay = shiftDay.AddDays(1);
                 continue;
             }
 
-            // Se depois do horário de expediente, avança para o início do próximo dia útil
-            var dayEnd = current.Date.AddHours(calendar.WorkDayEndHour);
-            if (current >= dayEnd)
-            {
-                current = NextWorkDayStart(current, calendar, workDays, holidayDates);
-                continue;
-            }
+            if (current < start)
+                current = start;
 
-            // Quantas horas restam hoje
-            var todayRemaining = dayEnd - current;
-            if (remaining <= todayRemaining)
+            // Duração real do que sobra no turno, considerando horário de verão.
+            var currentUtc = LocalToUtcSafe(current, tz);
+            var endUtc = LocalToUtcSafe(end, tz);
+            var available = endUtc - currentUtc;
+
+            if (remaining <= available)
             {
-                current = current.Add(remaining);
+                current = TimeZoneInfo.ConvertTimeFromUtc(currentUtc + remaining, tz);
                 remaining = TimeSpan.Zero;
             }
             else
             {
-                remaining -= todayRemaining;
-                current = NextWorkDayStart(current, calendar, workDays, holidayDates);
+                remaining -= available;
+                current = end;
+                shiftDay = shiftDay.AddDays(1);
             }
         }
 
-        // Converter de volta para UTC
-        return TimeZoneInfo.ConvertTimeToUtc(current, tz);
+        return LocalToUtcSafe(current, tz);
     }
 
-    private static bool IsWorkDay(DateTime dt, int[] workDays, HashSet<DateTime> holidays)
-        => workDays.Contains((int)dt.DayOfWeek) && !holidays.Contains(dt.Date);
-
-    private static DateTime NextWorkDayStart(DateTime dt, SlaCalendar calendar, int[] workDays, HashSet<DateTime> holidays)
+    /// <summary>
+    /// Conta as horas úteis entre dois instantes UTC conforme o calendário.
+    /// Usa os mesmos turnos de <see cref="AddWorkingHours"/> (inclusive noturnos)
+    /// e mede a duração real em UTC, correta em transições de horário de verão.
+    /// </summary>
+    public static double CountWorkingHours(DateTime from, DateTime to, SlaCalendar calendar)
     {
-        var next = dt.Date.AddDays(1).AddHours(calendar.WorkDayStartHour);
-        while (!IsWorkDay(next, workDays, holidays))
-            next = next.Date.AddDays(1).AddHours(calendar.WorkDayStartHour);
-        return next;
+        var fromUtc = from.Kind == DateTimeKind.Utc ? from : DateTime.SpecifyKind(from, DateTimeKind.Utc);
+        var toUtc = to.Kind == DateTimeKind.Utc ? to : DateTime.SpecifyKind(to, DateTimeKind.Utc);
+        if (toUtc <= fromUtc) return 0;
+
+        var tz = ResolveTimeZone(calendar.Timezone);
+        var workDays = ResolveWorkDays(calendar.WorkDaysJson);
+        var startLocal = TimeZoneInfo.ConvertTimeFromUtc(fromUtc, tz);
+        var endLocal = TimeZoneInfo.ConvertTimeFromUtc(toUtc, tz);
+
+        var spanDays = (int)Math.Ceiling((endLocal.Date - startLocal.Date).TotalDays) + 2;
+        var holidays = GetEffectiveHolidayDates(calendar, fromUtc, Math.Clamp(spanDays, 1, 3660));
+
+        double total = 0;
+
+        // Um dia antes para capturar turno noturno iniciado antes da janela.
+        for (var shiftDay = startLocal.Date.AddDays(-1); shiftDay <= endLocal.Date; shiftDay = shiftDay.AddDays(1))
+        {
+            if (!IsShiftDay(shiftDay, workDays, holidays)) continue;
+
+            var (start, end) = ShiftWindow(shiftDay, calendar);
+            var windowStartUtc = LocalToUtcSafe(start, tz);
+            var windowEndUtc = LocalToUtcSafe(end, tz);
+
+            var overlapStart = windowStartUtc > fromUtc ? windowStartUtc : fromUtc;
+            var overlapEnd = windowEndUtc < toUtc ? windowEndUtc : toUtc;
+
+            if (overlapEnd > overlapStart)
+                total += (overlapEnd - overlapStart).TotalHours;
+        }
+
+        return total;
     }
 
     /// <summary>
     /// Calcula todas as datas de feriado efetivas para o período, expandindo
     /// feriados Yearly (recorrentes) e Relative (calculados por regra).
+    /// Primeiro resolve fixos/anuais e depois os relativos, para que o cálculo
+    /// de "enésimo dia útil" já considere os feriados fixos/anuais.
     /// </summary>
     public static HashSet<DateTime> GetEffectiveHolidayDates(SlaCalendar calendar, DateTime fromUtc, int maxDaysForward)
     {
         var result = new HashSet<DateTime>();
         var fromTz = fromUtc.Kind == DateTimeKind.Utc ? fromUtc : DateTime.SpecifyKind(fromUtc, DateTimeKind.Utc);
-        var tz = TimeZoneInfo.FindSystemTimeZoneById(calendar.Timezone);
+        var tz = ResolveTimeZone(calendar.Timezone);
         var start = TimeZoneInfo.ConvertTimeFromUtc(fromTz, tz).Date;
-        var end = start.AddDays(maxDaysForward);
+        var end = start.AddDays(Math.Max(0, maxDaysForward));
+        var workDays = ResolveWorkDays(calendar.WorkDaysJson);
 
+        // Passo 1: feriados de data fixa e recorrentes anuais.
         foreach (var holiday in calendar.Holidays)
         {
             var type = (HolidayType)holiday.HolidayTypeValue;
@@ -148,18 +316,17 @@ public class SlaService : ISlaService
             switch (type)
             {
                 case HolidayType.Fixed:
-                    // Data exata
-                    if (holiday.Date.Date >= start && holiday.Date.Date <= end)
-                        result.Add(holiday.Date.Date);
+                    if (holiday.Date is { } fixedDate && fixedDate.Date >= start && fixedDate.Date <= end)
+                        result.Add(fixedDate.Date);
                     break;
 
                 case HolidayType.Yearly:
-                    // Recorrente anual: projeta mês/dia para cada ano no período
+                    if (holiday.Date is not { } yearlySource) break;
                     for (var y = start.Year; y <= end.Year; y++)
                     {
                         try
                         {
-                            var yearlyDate = new DateTime(y, holiday.Date.Month, holiday.Date.Day);
+                            var yearlyDate = new DateTime(y, yearlySource.Month, yearlySource.Day);
                             if (yearlyDate >= start && yearlyDate <= end)
                                 result.Add(yearlyDate);
                         }
@@ -169,13 +336,17 @@ public class SlaService : ISlaService
                         }
                     }
                     break;
-
-                case HolidayType.Relative:
-                    var relativeDates = CalculateRelativeHolidayDates(holiday, start, end);
-                    foreach (var d in relativeDates)
-                        result.Add(d);
-                    break;
             }
+        }
+
+        // Passo 2: feriados relativos, usando os dias úteis do calendário e os
+        // feriados já resolvidos no passo 1.
+        foreach (var holiday in calendar.Holidays)
+        {
+            if ((HolidayType)holiday.HolidayTypeValue != HolidayType.Relative) continue;
+
+            foreach (var date in CalculateRelativeHolidayDates(holiday, start, end, workDays, result))
+                result.Add(date);
         }
 
         return result;
@@ -184,13 +355,16 @@ public class SlaService : ISlaService
     /// <summary>
     /// Calcula as datas de um feriado relativo dentro do intervalo [start, end].
     /// </summary>
-    public static List<DateTime> CalculateRelativeHolidayDates(SlaCalendarHoliday holiday, DateTime start, DateTime end)
+    public static List<DateTime> CalculateRelativeHolidayDates(
+        SlaCalendarHoliday holiday, DateTime start, DateTime end,
+        int[]? workDays = null, HashSet<DateTime>? knownHolidays = null)
     {
         var dates = new List<DateTime>();
         var method = holiday.RelativeMethod ?? RelativeHolidayMethod.DayOfWeekOccurrence;
         var month = holiday.RelativeMonth ?? 1;
         var occurrence = holiday.RelativeOccurrence ?? 1;
-        var workDaysDefault = new[] { 1, 2, 3, 4, 5 };
+        var effectiveWorkDays = workDays is { Length: > 0 } ? workDays : [1, 2, 3, 4, 5];
+        var holidayDates = knownHolidays ?? [];
 
         for (var y = start.Year; y <= end.Year; y++)
         {
@@ -198,8 +372,8 @@ public class SlaService : ISlaService
 
             if (method == RelativeHolidayMethod.NthBusinessDay)
             {
-                // Enésimo dia útil do mês
-                calculated = GetNthBusinessDayOfMonth(y, month, occurrence, workDaysDefault, holiday.Calendar?.Holidays ?? []);
+                // Enésimo dia útil do mês, considerando dias úteis e feriados do calendário.
+                calculated = GetNthBusinessDayOfMonth(y, month, occurrence, effectiveWorkDays, holidayDates);
             }
             else
             {
@@ -238,11 +412,10 @@ public class SlaService : ISlaService
         }
     }
 
-    private static DateTime GetNthBusinessDayOfMonth(int year, int month, int occurrence, int[] workDays, ICollection<SlaCalendarHoliday> holidays)
+    private static DateTime GetNthBusinessDayOfMonth(int year, int month, int occurrence, int[] workDays, HashSet<DateTime> holidayDates)
     {
         var businessDays = 0;
         var daysInMonth = DateTime.DaysInMonth(year, month);
-        var holidayDates = holidays.Select(h => h.Date.Date).ToHashSet();
 
         for (var day = 1; day <= daysInMonth; day++)
         {
@@ -276,7 +449,10 @@ public class SlaService : ISlaService
 
         // Se ainda está em pausa agora, somar o tempo corrente
         if (ticket.SlaHoldStartedAt.HasValue)
-            totalPausedSeconds += (int)(DateTime.UtcNow - ticket.SlaHoldStartedAt.Value).TotalSeconds;
+        {
+            var heldFor = (DateTime.UtcNow - ticket.SlaHoldStartedAt.Value).TotalSeconds;
+            if (heldFor > 0) totalPausedSeconds += (int)heldFor;
+        }
 
         // Garante que o retorno seja UTC (o banco agora armazena timestamptz)
         var expiry = ticket.SlaExpiresAt.Value.AddSeconds(totalPausedSeconds);
@@ -289,23 +465,41 @@ public class SlaService : ISlaService
         if (ticket is null)
             throw new InvalidOperationException($"Ticket {ticketId} not found");
 
+        var calendar = await ResolveCalendarAsync(ticket);
+        return GetSlaStatus(ticket, calendar);
+    }
+
+    /// <summary>
+    /// Status do SLA de resolução sem I/O, para quando o ticket já foi carregado.
+    /// </summary>
+    public (int HoursRemaining, double PercentUsed, bool Breached) GetSlaStatus(Ticket ticket, SlaCalendar? calendar)
+    {
         if (!ticket.SlaExpiresAt.HasValue)
             return (0, 0, false);
 
         var effectiveExpiry = GetEffectiveSlaExpiry(ticket)!.Value;
         var now = DateTime.UtcNow;
-        var totalSlaTime = (effectiveExpiry - ticket.CreatedAt).TotalHours;
-        var elapsed = (now - ticket.CreatedAt).TotalHours;
-        var remaining = (effectiveExpiry - now).TotalHours;
+
+        double totalSlaTime, elapsed, remainingHours;
+        if (calendar is not null)
+        {
+            // SLA em horas úteis: medir tudo em horas úteis (antes o gasto era
+            // relógio de parede e estourava o percentual fora do expediente).
+            totalSlaTime = CountWorkingHours(ticket.CreatedAt, effectiveExpiry, calendar);
+            elapsed = CountWorkingHours(ticket.CreatedAt, now, calendar);
+            remainingHours = CountWorkingHours(now, effectiveExpiry, calendar);
+        }
+        else
+        {
+            totalSlaTime = (effectiveExpiry - ticket.CreatedAt).TotalHours;
+            elapsed = (now - ticket.CreatedAt).TotalHours;
+            remainingHours = (effectiveExpiry - now).TotalHours;
+        }
 
         var percentUsed = totalSlaTime > 0 ? Math.Min(100, (elapsed / totalSlaTime) * 100) : 0;
         var breached = now > effectiveExpiry;
 
-        return (
-            Math.Max(0, (int)Math.Ceiling(remaining)),
-            percentUsed,
-            breached
-        );
+        return (Math.Max(0, (int)Math.Ceiling(remainingHours)), percentUsed, breached);
     }
 
     public async Task<(int HoursRemaining, double PercentUsed, bool Breached, bool Achieved)> GetFrtStatusAsync(Guid ticketId)
@@ -326,15 +520,30 @@ public class SlaService : ISlaService
 
         var expiry = ticket.SlaFirstResponseExpiresAt.Value;
         var now = DateTime.UtcNow;
-        var totalFrtTime = (expiry - ticket.CreatedAt).TotalHours;
-        var elapsed = (now - ticket.CreatedAt).TotalHours;
-        var remaining = (expiry - now).TotalHours;
+        var calendar = await ResolveCalendarAsync(ticket);
+
+        // Base do FRT: início explícito (reiniciado na reabertura) ou a criação.
+        var frtBase = ticket.FirstResponseSlaStartedAt ?? ticket.CreatedAt;
+
+        double totalFrtTime, elapsed, remainingHours;
+        if (calendar is not null)
+        {
+            totalFrtTime = CountWorkingHours(frtBase, expiry, calendar);
+            elapsed = CountWorkingHours(frtBase, now, calendar);
+            remainingHours = CountWorkingHours(now, expiry, calendar);
+        }
+        else
+        {
+            totalFrtTime = (expiry - frtBase).TotalHours;
+            elapsed = (now - frtBase).TotalHours;
+            remainingHours = (expiry - now).TotalHours;
+        }
 
         var percentUsed = totalFrtTime > 0 ? Math.Min(100, (elapsed / totalFrtTime) * 100) : 0;
         var breached = now > expiry;
 
         return (
-            Math.Max(0, (int)Math.Ceiling(remaining)),
+            Math.Max(0, (int)Math.Ceiling(remainingHours)),
             percentUsed,
             breached,
             false
@@ -350,6 +559,15 @@ public class SlaService : ISlaService
             return false;
         }
 
+        return await CheckAndLogSlaBreachAsync(ticket);
+    }
+
+    /// <summary>
+    /// Verifica e registra violação reaproveitando o ticket já carregado
+    /// (evita recarregar no job de monitoramento).
+    /// </summary>
+    public async Task<bool> CheckAndLogSlaBreachAsync(Ticket ticket)
+    {
         if (ticket.SlaBreached)
             return false; // Já foi marcado como violado
 
@@ -365,7 +583,7 @@ public class SlaService : ISlaService
             await _ticketRepo.UpdateAsync(ticket);
 
             await _activityLogService.LogActivityAsync(
-                ticketId,
+                ticket.Id,
                 TicketActivityType.SlaBreached,
                 null,
                 effectiveExpiry.ToString("o"),
@@ -374,7 +592,7 @@ public class SlaService : ISlaService
             );
 
             _logger.LogWarning("SLA Breached for ticket {TicketId} (effective expiry {ExpiresAt})",
-                ticketId, effectiveExpiry);
+                ticket.Id, effectiveExpiry);
 
             return true;
         }
@@ -382,4 +600,3 @@ public class SlaService : ISlaService
         return false;
     }
 }
-

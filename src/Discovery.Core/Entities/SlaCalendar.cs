@@ -14,6 +14,12 @@ public class SlaCalendar
     public int WorkDayStartHour { get; set; } = 8;
     public int WorkDayEndHour { get; set; } = 18;
     public string WorkDaysJson { get; set; } = "[1,2,3,4,5]"; // Seg-Sex por padrão
+
+    /// <summary>
+    /// Calendário padrão do escopo (global ou de um cliente). Usado para
+    /// pré-selecionar o calendário ao criar um perfil de workflow.
+    /// </summary>
+    public bool IsDefault { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

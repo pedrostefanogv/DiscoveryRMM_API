@@ -96,12 +96,14 @@ public class AlertToTicketService : IAlertToTicketService
         var now = DateTime.UtcNow;
         DateTime? slaExpiresAt = null;
         DateTime? frtExpiresAt = null;
+        DateTime? frtStartedAt = null;
         if (request.WorkflowProfileId.HasValue)
         {
             try
             {
                 slaExpiresAt = await _slaService.CalculateSlaExpiryAsync(request.WorkflowProfileId.Value, now);
                 frtExpiresAt = await _slaService.CalculateFirstResponseExpiryAsync(request.WorkflowProfileId.Value, now);
+                frtStartedAt = now;
             }
             catch (InvalidOperationException)
             {
@@ -124,6 +126,7 @@ public class AlertToTicketService : IAlertToTicketService
             Priority = request.Priority,
             SlaExpiresAt = slaExpiresAt,
             SlaFirstResponseExpiresAt = frtExpiresAt,
+            FirstResponseSlaStartedAt = frtStartedAt,
             CreatedAt = now,
             UpdatedAt = now
         });

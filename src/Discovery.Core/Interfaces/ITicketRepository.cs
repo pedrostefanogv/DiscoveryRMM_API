@@ -25,7 +25,7 @@ public interface ITicketRepository
     /// Obtém todos os tickets abertos (não fechados) que possuem SLA configurado.
     /// Usado pelo SLA Monitoring Background Service.
     /// </summary>
-    Task<List<Ticket>> GetOpenTicketsWithSlaAsync();
+    Task<List<Ticket>> GetOpenTicketsWithSlaAsync(int limit = 2000);
 
     /// <summary>Atualiza campos de SLA hold (pausa/retomada) no ticket.</summary>
     Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds);

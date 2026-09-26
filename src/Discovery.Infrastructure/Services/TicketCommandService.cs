@@ -126,6 +126,7 @@ public sealed class TicketCommandService : ITicketCommandService
             {
                 ticket.SlaExpiresAt = await _slaService.CalculateSlaExpiryAsync(resolvedProfileId.Value, now);
                 ticket.SlaFirstResponseExpiresAt = await _slaService.CalculateFirstResponseExpiryAsync(resolvedProfileId.Value, now);
+                ticket.FirstResponseSlaStartedAt = now;
             }
             catch (InvalidOperationException)
             {

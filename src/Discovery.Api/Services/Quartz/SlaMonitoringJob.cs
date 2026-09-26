@@ -1,3 +1,4 @@
+using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Quartz;
@@ -15,12 +16,12 @@ public sealed class SlaMonitoringJob : IJob
     public static readonly JobKey Key = new("sla-monitoring", "alerts");
 
     private const int WarningCooldownMinutes = 30;
-    // Limiar de aviso preventivo. Acima dele o responsável recebe "Aviso de SLA".
-    private const int SlaWarningThresholdPercent = 80;
     // Cooldown por (ticket, regra) para não reescalonar a cada execução (5 min).
     private const int EscalationCooldownMinutes = 360;
     private const string LockKey = "locks:sla-monitoring";
     private const int LockTtlSeconds = 240; // 4 min (job roda a cada 5 min)
+    // Teto de tickets por execução: evita carregar a tabela inteira a cada 5 min.
+    private const int MaxTicketsPerRun = 2000;
 
     public async Task Execute(IJobExecutionContext context)
     {
@@ -36,8 +37,11 @@ public sealed class SlaMonitoringJob : IJob
         var escalationRuleRepo = scope.ServiceProvider.GetRequiredService<ITicketEscalationRuleRepository>();
         var redis = scope.ServiceProvider.GetRequiredService<IRedisService>();
 
-        // Lock distribuído para evitar execução simultânea em multi-instância
-        var acquired = await redis.SetIfNotExistsAsync(LockKey, Environment.MachineName, LockTtlSeconds);
+        // Lock distribuído para evitar execução simultânea em multi-instância.
+        // O token identifica esta execução: se o TTL expirar e outra instância
+        // assumir o lock, o finally abaixo não apaga o lock da outra.
+        var lockToken = $"{Environment.MachineName}:{Guid.NewGuid():N}";
+        var acquired = await redis.SetIfNotExistsAsync(LockKey, lockToken, LockTtlSeconds);
         if (!acquired)
         {
             logger.LogDebug("SLA monitoring lock not acquired (another instance is running)");
@@ -46,7 +50,7 @@ public sealed class SlaMonitoringJob : IJob
 
         try
         {
-            var openTickets = await ticketRepo.GetOpenTicketsWithSlaAsync();
+            var openTickets = await ticketRepo.GetOpenTicketsWithSlaAsync(MaxTicketsPerRun);
             if (openTickets == null || !openTickets.Any())
             {
                 logger.LogDebug("No open tickets with SLA to check");
@@ -57,57 +61,61 @@ public sealed class SlaMonitoringJob : IJob
 
             var ticketsNeedingEscalation = new List<(Discovery.Core.Entities.Ticket ticket, double percentUsed)>();
 
+            // Cache por perfil: calendário + limiar de aviso resolvidos uma vez e
+            // reaproveitados por todos os tickets daquele perfil.
+            var contextCache = new Dictionary<Guid, TicketSlaContext>();
+
             // Processamento SEQUENCIAL: o DbContext é scoped e NÃO é thread-safe.
             // Parallel.ForEachAsync com serviços compartilhados do mesmo scope
             // dispara "A second operation was started on this context instance".
             foreach (var ticket in openTickets)
             {
                 ct.ThrowIfCancellationRequested();
-                var breached = await slaService.CheckAndLogSlaBreachAsync(ticket.Id);
+
+                // Calendário + limiar de aviso resolvidos uma vez por perfil.
+                var slaContext = await ResolveContextAsync(ticket, slaService, contextCache);
+
+                // Reaproveita o ticket já carregado (antes recarregava 2x por ticket).
+                var breached = await slaService.CheckAndLogSlaBreachAsync(ticket);
                 if (breached)
                 {
                     logger.LogWarning("SLA Breached: Ticket {TicketId} - {Title}", ticket.Id, ticket.Title);
 
-                    if (ticket.AssignedToUserId.HasValue)
-                    {
-                        await notificationService.PublishAsync(new NotificationPublishRequest(
-                            EventType: "ticket.sla_breached",
-                            Topic: "tickets",
-                            Title: "SLA violado",
-                            Message: $"O SLA do ticket '{ticket.Title}' foi violado.",
-                            Severity: NotificationSeverity.Critical,
-                            Payload: new { ticketId = ticket.Id },
-                            RecipientUserId: ticket.AssignedToUserId
-                        ), ct);
-                    }
+                    // Sem responsável, RecipientUserId nulo publica no tópico (fila):
+                    // a violação deixa de passar em silêncio.
+                    await notificationService.PublishAsync(new NotificationPublishRequest(
+                        EventType: "ticket.sla_breached",
+                        Topic: "tickets",
+                        Title: "SLA violado",
+                        Message: $"O SLA do ticket '{ticket.Title}' foi violado.",
+                        Severity: NotificationSeverity.Critical,
+                        Payload: new { ticketId = ticket.Id },
+                        RecipientUserId: ticket.AssignedToUserId
+                    ), ct);
                 }
                 else
                 {
-                    var (_, percentUsed, _) = await slaService.GetSlaStatusAsync(ticket.Id);
+                    var (_, percentUsed, _) = slaService.GetSlaStatus(ticket, slaContext.Calendar);
 
-                    // O cooldown Redis já evita repetição; o gatilho é apenas o
-                    // limiar de percentual.
-                    if (percentUsed >= SlaWarningThresholdPercent)
+                    // O cooldown Redis já evita repetição; o gatilho é o limiar do perfil.
+                    if (percentUsed >= slaContext.WarningThresholdPercent)
                     {
                         if (await ShouldLogWarningAsync(redis, ticket.Id))
                         {
                             await activityLogService.LogActivityAsync(
                                 ticket.Id, TicketActivityType.SlaWarning, null,
-                                percentUsed.ToString("F2"), SlaWarningThresholdPercent.ToString(),
-                                "SLA warning: 20% time remaining");
+                                percentUsed.ToString("F2"), slaContext.WarningThresholdPercent.ToString(),
+                                $"SLA warning: limiar de {slaContext.WarningThresholdPercent}% atingido");
 
-                            if (ticket.AssignedToUserId.HasValue)
-                            {
-                                await notificationService.PublishAsync(new NotificationPublishRequest(
-                                    EventType: "ticket.sla_warning",
-                                    Topic: "tickets",
-                                    Title: "Aviso de SLA",
-                                    Message: $"O ticket '{ticket.Title}' utilizou {percentUsed:F0}% do tempo de SLA.",
-                                    Severity: NotificationSeverity.Warning,
-                                    Payload: new { ticketId = ticket.Id, percentUsed },
-                                    RecipientUserId: ticket.AssignedToUserId
-                                ), ct);
-                            }
+                            await notificationService.PublishAsync(new NotificationPublishRequest(
+                                EventType: "ticket.sla_warning",
+                                Topic: "tickets",
+                                Title: "Aviso de SLA",
+                                Message: $"O ticket '{ticket.Title}' utilizou {percentUsed:F0}% do tempo de SLA.",
+                                Severity: NotificationSeverity.Warning,
+                                Payload: new { ticketId = ticket.Id, percentUsed },
+                                RecipientUserId: ticket.AssignedToUserId
+                            ), ct);
 
                             logger.LogWarning("SLA Warning: Ticket {TicketId} - {Percent}% used",
                                 ticket.Id, percentUsed.ToString("F2"));
@@ -140,9 +148,29 @@ public sealed class SlaMonitoringJob : IJob
         }
         finally
         {
-            // Liberar lock
-            await redis.DeleteAsync(LockKey);
+            // Liberar o lock apenas se ainda formos o dono.
+            var currentOwner = await redis.GetAsync(LockKey);
+            if (currentOwner == lockToken)
+                await redis.DeleteAsync(LockKey);
         }
+    }
+
+    private static async Task<TicketSlaContext> ResolveContextAsync(
+        Ticket ticket,
+        ISlaService slaService,
+        Dictionary<Guid, TicketSlaContext> cache)
+    {
+        if (!ticket.WorkflowProfileId.HasValue)
+            return new TicketSlaContext(null, ISlaService.DefaultWarningThresholdPercent);
+
+        var profileId = ticket.WorkflowProfileId.Value;
+        if (!cache.TryGetValue(profileId, out var context))
+        {
+            context = await slaService.GetSlaContextForTicketAsync(ticket);
+            cache[profileId] = context;
+        }
+
+        return context;
     }
 
     private static async Task<bool> ShouldLogWarningAsync(IRedisService redis, Guid ticketId)
@@ -203,9 +231,13 @@ public sealed class SlaMonitoringJob : IJob
                 if (!shouldFire) continue;
 
                 // Dedup: cada regra dispara no máximo 1x por janela de cooldown.
+                // Cooldown por regra; a constante é só o fallback.
+                var cooldownMinutes = rule.EscalationCooldownMinutes > 0
+                    ? rule.EscalationCooldownMinutes
+                    : EscalationCooldownMinutes;
                 var cooldownKey = $"sla:escalation:{ticket.Id:N}:{rule.Id:N}";
                 var canFire = await redis.SetIfNotExistsAsync(
-                    cooldownKey, DateTime.UtcNow.Ticks.ToString(), EscalationCooldownMinutes * 60);
+                    cooldownKey, DateTime.UtcNow.Ticks.ToString(), cooldownMinutes * 60);
                 if (!canFire)
                     continue;
 

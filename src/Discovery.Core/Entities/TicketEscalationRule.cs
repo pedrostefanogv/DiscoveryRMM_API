@@ -39,6 +39,12 @@ public class TicketEscalationRule
 
     public bool IsActive { get; set; } = true;
 
+    /// <summary>
+    /// Cooldown, em minutos, para esta regra voltar a disparar no mesmo chamado.
+    /// Antes era fixo em 360 min no job de monitoramento.
+    /// </summary>
+    public int EscalationCooldownMinutes { get; set; } = 360;
+
     // ── Report fields ───────────────────────────────────────────────────
     public Guid? ClientId => null;
     public int EscalationLevel => TriggerAtSlaPercent > 0 ? TriggerAtSlaPercent / 20 + 1 : 1;

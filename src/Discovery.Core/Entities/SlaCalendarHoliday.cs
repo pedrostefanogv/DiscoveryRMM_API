@@ -38,9 +38,9 @@ public class SlaCalendarHoliday
     /// Data de referência.
     /// Para Fixed: data exata do feriado.
     /// Para Yearly: data de exemplo (ignora o ano no cálculo, usa apenas mês/dia).
-    /// Para Relative: não usada diretamente no cálculo.
+    /// Para Relative: nula (o dia é calculado pela regra).
     /// </summary>
-    public DateTime Date { get; set; }
+    public DateTime? Date { get; set; }
 
     /// <summary>Tipo do feriado. Default = Fixed (comportamento legado).</summary>
     public int HolidayTypeValue { get; set; } = (int)HolidayType.Fixed;

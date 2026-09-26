@@ -80,8 +80,10 @@ public class WorkflowProfileRepository : IWorkflowProfileRepository
 
     public async Task<int> CountBySlaCalendarIdAsync(Guid slaCalendarId)
     {
+        // Só perfis ativos bloqueiam a exclusão; inativos não devem travar a
+        // limpeza de um calendário que já não é usado.
         return await _db.Set<WorkflowProfile>()
-            .CountAsync(p => p.SlaCalendarId == slaCalendarId);
+            .CountAsync(p => p.SlaCalendarId == slaCalendarId && p.IsActive);
     }
 
     public async Task<WorkflowProfile> UpdateAsync(WorkflowProfile profile)

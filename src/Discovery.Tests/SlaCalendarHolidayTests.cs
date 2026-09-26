@@ -17,7 +17,7 @@ public class SlaCalendarHolidayTests
     public async Task AddHoliday_PersistsAndReturnsMappedDto()
     {
         var calendar = BuildCalendar();
-        var handler = new AddSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar));
+        var handler = new AddSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar), new FakeConfigurationAuditService());
 
         var result = await handler.Handle(
             new AddSlaCalendarHolidayCommand(calendar.Id, "Natal", new DateTime(2026, 12, 25), (int)HolidayType.Yearly, null, null, null, null),
@@ -33,7 +33,7 @@ public class SlaCalendarHolidayTests
     public async Task AddHoliday_WithoutName_ReturnsValidationError()
     {
         var calendar = BuildCalendar();
-        var handler = new AddSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar));
+        var handler = new AddSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar), new FakeConfigurationAuditService());
 
         var result = await handler.Handle(
             new AddSlaCalendarHolidayCommand(calendar.Id, "  ", new DateTime(2026, 12, 25), (int)HolidayType.Fixed, null, null, null, null),
@@ -49,7 +49,7 @@ public class SlaCalendarHolidayTests
     public async Task AddHoliday_RelativeWithoutMonthAndOccurrence_ReturnsValidationErrors()
     {
         var calendar = BuildCalendar();
-        var handler = new AddSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar));
+        var handler = new AddSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar), new FakeConfigurationAuditService());
 
         // Relative válido precisa de mês/ocorrência e, no método dds, do dia da semana.
         var result = await handler.Handle(
@@ -68,7 +68,7 @@ public class SlaCalendarHolidayTests
     {
         var calendar = BuildCalendar();
         var svc = new FakeSlaCalendarService(calendar);
-        var handler = new AddSlaCalendarHolidayCommandHandler(svc);
+        var handler = new AddSlaCalendarHolidayCommandHandler(svc, new FakeConfigurationAuditService());
         var command = new AddSlaCalendarHolidayCommand(calendar.Id, "Natal", new DateTime(2026, 12, 25), (int)HolidayType.Yearly, null, null, null, null);
 
         var first = await handler.Handle(command, CancellationToken.None);
@@ -84,7 +84,7 @@ public class SlaCalendarHolidayTests
     public async Task AddHoliday_UnknownCalendar_ReturnsNotFound()
     {
         var calendar = BuildCalendar();
-        var handler = new AddSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar));
+        var handler = new AddSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar), new FakeConfigurationAuditService());
 
         var result = await handler.Handle(
             new AddSlaCalendarHolidayCommand(Guid.NewGuid(), "Natal", new DateTime(2026, 12, 25), (int)HolidayType.Fixed, null, null, null, null),
@@ -98,7 +98,7 @@ public class SlaCalendarHolidayTests
     public async Task DeleteHoliday_Missing_ReturnsNotFound()
     {
         var calendar = BuildCalendar();
-        var handler = new DeleteSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar));
+        var handler = new DeleteSlaCalendarHolidayCommandHandler(new FakeSlaCalendarService(calendar), new FakeConfigurationAuditService());
 
         var result = await handler.Handle(
             new DeleteSlaCalendarHolidayCommand(calendar.Id, Guid.NewGuid()),
@@ -113,12 +113,12 @@ public class SlaCalendarHolidayTests
     {
         var calendar = BuildCalendar();
         var svc = new FakeSlaCalendarService(calendar);
-        var addHandler = new AddSlaCalendarHolidayCommandHandler(svc);
+        var addHandler = new AddSlaCalendarHolidayCommandHandler(svc, new FakeConfigurationAuditService());
         var created = await addHandler.Handle(
             new AddSlaCalendarHolidayCommand(calendar.Id, "Natal", new DateTime(2026, 12, 25), (int)HolidayType.Yearly, null, null, null, null),
             CancellationToken.None);
 
-        var handler = new DeleteSlaCalendarHolidayCommandHandler(svc);
+        var handler = new DeleteSlaCalendarHolidayCommandHandler(svc, new FakeConfigurationAuditService());
         var result = await handler.Handle(new DeleteSlaCalendarHolidayCommand(calendar.Id, created.Value!.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -158,7 +158,7 @@ public class SlaCalendarHolidayTests
     public async Task DeleteCalendar_InUseByWorkflowProfile_ReturnsConflict()
     {
         var calendar = BuildCalendar();
-        var handler = new DeleteSlaCalendarCommandHandler(new FakeSlaCalendarService(calendar), new FakeWorkflowProfileRepository(inUseCount: 2));
+        var handler = new DeleteSlaCalendarCommandHandler(new FakeSlaCalendarService(calendar), new FakeWorkflowProfileRepository(inUseCount: 2), new FakeConfigurationAuditService());
 
         var result = await handler.Handle(new DeleteSlaCalendarCommand(calendar.Id), CancellationToken.None);
 
@@ -170,7 +170,7 @@ public class SlaCalendarHolidayTests
     public async Task DeleteCalendar_NotInUse_Succeeds()
     {
         var calendar = BuildCalendar();
-        var handler = new DeleteSlaCalendarCommandHandler(new FakeSlaCalendarService(calendar), new FakeWorkflowProfileRepository(inUseCount: 0));
+        var handler = new DeleteSlaCalendarCommandHandler(new FakeSlaCalendarService(calendar), new FakeWorkflowProfileRepository(inUseCount: 0), new FakeConfigurationAuditService());
 
         var result = await handler.Handle(new DeleteSlaCalendarCommand(calendar.Id), CancellationToken.None);
 
@@ -200,9 +200,15 @@ public class SlaCalendarHolidayTests
         public Task<IReadOnlyList<SlaCalendar>> GetAllAsync(Guid? clientId = null, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<SlaCalendar>>(new[] { calendar });
 
+        public Task<IReadOnlyDictionary<Guid, int>> GetHolidayCountsAsync(Guid? clientId = null, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyDictionary<Guid, int>>(
+                new Dictionary<Guid, int> { [calendar.Id] = calendar.Holidays.Count });
+
         public Task<SlaCalendar> CreateAsync(SlaCalendar item, CancellationToken ct = default) => Task.FromResult(item);
         public Task UpdateAsync(SlaCalendar item, CancellationToken ct = default) => Task.CompletedTask;
         public Task DeleteAsync(Guid id, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task ClearDefaultFlagAsync(Guid? clientId, Guid exceptId, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<SlaCalendarHoliday> AddHolidayAsync(SlaCalendarHoliday holiday, CancellationToken ct = default)
         {
@@ -219,6 +225,29 @@ public class SlaCalendarHolidayTests
             if (existing is not null) calendar.Holidays.Remove(existing);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class FakeConfigurationAuditService : IConfigurationAuditService
+    {
+        public List<(string EntityType, Guid EntityId, string FieldName, string? NewValue)> Changes { get; } = [];
+
+        public Task LogChangeAsync(string entityType, Guid entityId, string fieldName,
+            string? oldValue, string? newValue, string? reason = null, string? changedBy = null, string? ipAddress = null)
+        {
+            Changes.Add((entityType, entityId, fieldName, newValue));
+            return Task.CompletedTask;
+        }
+
+        public Task<IEnumerable<ConfigurationAudit>> GetEntityHistoryAsync(string entityType, Guid entityId, int limit = 100)
+            => Task.FromResult(Enumerable.Empty<ConfigurationAudit>());
+        public Task<IEnumerable<ConfigurationAudit>> GetRecentChangesAsync(int days = 90, int limit = 1000)
+            => Task.FromResult(Enumerable.Empty<ConfigurationAudit>());
+        public Task<IEnumerable<ConfigurationAudit>> GetChangesByUserAsync(string username, int limit = 100)
+            => Task.FromResult(Enumerable.Empty<ConfigurationAudit>());
+        public Task<IEnumerable<ConfigurationAudit>> GetFieldHistoryAsync(string entityType, Guid entityId, string fieldName)
+            => Task.FromResult(Enumerable.Empty<ConfigurationAudit>());
+        public Task<IEnumerable<ConfigurationAudit>> GetAuditReportAsync(DateTime startDate, DateTime endDate)
+            => Task.FromResult(Enumerable.Empty<ConfigurationAudit>());
     }
 
     private sealed class FakeWorkflowProfileRepository(int inUseCount) : IWorkflowProfileRepository
