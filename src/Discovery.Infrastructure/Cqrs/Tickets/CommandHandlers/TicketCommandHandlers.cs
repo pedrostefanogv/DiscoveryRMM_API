@@ -42,7 +42,8 @@ public sealed class CreateTicketCommandHandler(
                 submission.Title, submission.Description, priority,
                 cmd.ClientId, cmd.SiteId, cmd.AgentId, submission.DepartmentId,
                 cmd.WorkflowProfileId, cmd.AssignedToUserId, submission.Category, ct,
-                submission.SnapshotMarkdown, submission.TemplateId, submission.TemplateName);
+                submission.SnapshotMarkdown, submission.TemplateId, submission.TemplateName,
+                requesterUserId: cmd.RequesterUserId);
 
             if (submission.CustomFieldValues.Count > 0 && submission.DepartmentId.HasValue)
             {
@@ -78,12 +79,16 @@ public sealed class UpdateTicketCommandHandler(
             var ticket = await ticketCommandService.UpdateTicketAsync(
                 cmd.Id, cmd.Title, cmd.Description, cmd.Priority,
                 cmd.DepartmentId, cmd.WorkflowProfileId, cmd.AssignedToUserId,
-                cmd.Category, cmd.ClearDepartment, cmd.ClearWorkflowProfile, ct);
+                cmd.Category, cmd.ClearDepartment, cmd.ClearWorkflowProfile, ct,
+                requesterUserId: cmd.RequesterUserId, clearRequester: cmd.ClearRequester);
             return Result<TicketDetailDto>.Success(TicketCommandService.ToDto(ticket));
         }
-        catch (KeyNotFoundException)
+        catch (KeyNotFoundException ex)
         {
-            return Result<TicketDetailDto>.Failure(Error.NotFound($"Ticket {cmd.Id} not found"));
+            // A mensagem distingue "chamado não encontrado" de "solicitante
+            // inexistente" (validado no serviço).
+            return Result<TicketDetailDto>.Failure(
+                Error.NotFound(ex.Message.Length > 0 ? ex.Message : $"Ticket {cmd.Id} not found"));
         }
     }
 }

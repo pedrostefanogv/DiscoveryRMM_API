@@ -315,6 +315,117 @@ public class CustomFieldServiceTests
     }
 
     [Test]
+    public async Task UpsertValue_ShouldAllowTicketWritingItsOwnDepartmentField()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var db = fixture.Db;
+        var now = DateTime.UtcNow;
+
+        var department = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = fixture.Client.Id,
+            Name = "TI",
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var otherDepartment = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = fixture.Client.Id,
+            Name = "Compras",
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var ticket = new Ticket
+        {
+            Id = Guid.NewGuid(),
+            ClientId = fixture.Client.Id,
+            DepartmentId = department.Id,
+            Title = "Chamado",
+            Description = "d",
+            WorkflowStateId = Guid.NewGuid(),
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var definition = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "ramal",
+            Label = "Ramal",
+            ScopeType = CustomFieldScopeType.Department,
+            DepartmentId = department.Id,
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var otherDefinition = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "centro_custo",
+            Label = "Centro de custo",
+            ScopeType = CustomFieldScopeType.Department,
+            DepartmentId = otherDepartment.Id,
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        db.AddRange(department, otherDepartment, ticket, definition, otherDefinition);
+        await db.SaveChangesAsync();
+
+        // Campo do departamento DO chamado: aceito (gravado com escopo Ticket).
+        var saved = await fixture.Service.UpsertValueAsync(new UpsertCustomFieldValueInput(
+            definition.Id, CustomFieldScopeType.Ticket, ticket.Id, "\"1024\"", null));
+
+        var stored = await db.CustomFieldValues.AsNoTracking()
+            .SingleAsync(value => value.DefinitionId == definition.Id);
+        Assert.Multiple(() =>
+        {
+            Assert.That(saved.ValueJson, Is.EqualTo("\"1024\""));
+            Assert.That(stored.ScopeType, Is.EqualTo(CustomFieldScopeType.Ticket));
+            Assert.That(stored.ValueJson, Is.EqualTo("\"1024\""));
+        });
+
+        // Campo de OUTRO departamento: segue recusado.
+        Assert.That(
+            async () => await fixture.Service.UpsertValueAsync(new UpsertCustomFieldValueInput(
+                otherDefinition.Id, CustomFieldScopeType.Ticket, ticket.Id, "\"x\"", null)),
+            Throws.TypeOf<InvalidOperationException>()
+                .With.Message.EqualTo("Custom field scope does not match the definition scope."));
+    }
+
+    [Test]
+    public async Task UpsertValue_ShouldRejectClearingRequiredDepartmentField()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var db = fixture.Db;
+        var now = DateTime.UtcNow;
+
+        var department = new Department { Id = Guid.NewGuid(), ClientId = fixture.Client.Id, Name = "TI", IsActive = true, CreatedAt = now, UpdatedAt = now };
+        var ticket = new Ticket { Id = Guid.NewGuid(), ClientId = fixture.Client.Id, DepartmentId = department.Id, Title = "Chamado", Description = "d", WorkflowStateId = Guid.NewGuid(), CreatedAt = now, UpdatedAt = now };
+        var requiredDefinition = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(), Name = "ramal", Label = "Ramal",
+            ScopeType = CustomFieldScopeType.Department, DepartmentId = department.Id,
+            DataType = CustomFieldDataType.Text, IsRequired = true, IsActive = true,
+            CreatedAt = now, UpdatedAt = now
+        };
+        db.AddRange(department, ticket, requiredDefinition);
+        await db.SaveChangesAsync();
+
+        Assert.That(
+            async () => await fixture.Service.UpsertValueAsync(new UpsertCustomFieldValueInput(
+                requiredDefinition.Id, CustomFieldScopeType.Ticket, ticket.Id, "null", null)),
+            Throws.TypeOf<InvalidOperationException>()
+                .With.Message.EqualTo("Custom field value is required."));
+    }
+
+    [Test]
     public async Task GetValuesAsync_ShouldIncludeTicketDepartmentFields()
     {
         await using var fixture = await CreateFixtureAsync();

@@ -29,5 +29,7 @@ public enum TicketActivityType
     TicketRelationRemoved = 21,
     KnowledgeLinked = 22,
     KnowledgeUnlinked = 23,
-    Rated = 24
+    Rated = 24,
+    /// <summary>Solicitante (quem abriu) definido/alterado/removido.</summary>
+    RequesterChanged = 25
 }

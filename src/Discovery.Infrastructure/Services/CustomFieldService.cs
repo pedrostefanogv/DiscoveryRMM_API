@@ -450,8 +450,33 @@ public class CustomFieldService : ICustomFieldService
         if (!definition.IsActive)
             throw new InvalidOperationException("Custom field definition is not active.");
 
+        // Escopo do valor tem de casar com o da definição — com uma exceção: os
+        // campos do DEPARTAMENTO são gravados no chamado com escopo Ticket
+        // (é assim que a abertura faz), desde que o chamado seja daquele
+        // departamento.
         if (definition.ScopeType != input.ScopeType)
-            throw new InvalidOperationException("Custom field scope does not match the definition scope.");
+        {
+            var isTicketWritingDepartmentField =
+                input.ScopeType == CustomFieldScopeType.Ticket
+                && definition.ScopeType == CustomFieldScopeType.Department;
+
+            var ticketMatchesDepartment = false;
+            if (isTicketWritingDepartmentField && input.EntityId.HasValue)
+            {
+                var ticketDepartmentId = await _db.Tickets
+                    .AsNoTracking()
+                    .Where(ticket => ticket.Id == input.EntityId.Value)
+                    .Select(ticket => ticket.DepartmentId)
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                ticketMatchesDepartment =
+                    definition.DepartmentId != Guid.Empty
+                    && ticketDepartmentId == definition.DepartmentId;
+            }
+
+            if (!ticketMatchesDepartment)
+                throw new InvalidOperationException("Custom field scope does not match the definition scope.");
+        }
 
         var valueJson = NormalizeJson(input.ValueJson);
         ValidateFieldValue(definition, valueJson);

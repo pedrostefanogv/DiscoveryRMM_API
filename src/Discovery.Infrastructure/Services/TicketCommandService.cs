@@ -3,6 +3,7 @@ using Discovery.Core.Cqrs.Tickets.Events;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Identity;
 using MediatR;
 
 namespace Discovery.Infrastructure.Services;
@@ -21,6 +22,7 @@ public sealed class TicketCommandService : ITicketCommandService
     private readonly ISlaService _slaService;
     private readonly ITicketAssignmentService _assignmentService;
     private readonly IMediator _mediator;
+    private readonly IUserRepository _userRepository;
 
     public TicketCommandService(
         ITicketRepository repo,
@@ -30,7 +32,8 @@ public sealed class TicketCommandService : ITicketCommandService
         IWorkflowProfileRepository workflowProfileRepo,
         ISlaService slaService,
         ITicketAssignmentService assignmentService,
-        IMediator mediator)
+        IMediator mediator,
+        IUserRepository userRepository)
     {
         _repo = repo;
         _activityLog = activityLog;
@@ -40,6 +43,7 @@ public sealed class TicketCommandService : ITicketCommandService
         _slaService = slaService;
         _assignmentService = assignmentService;
         _mediator = mediator;
+        _userRepository = userRepository;
     }
 
     public async Task<Ticket> CreateTicketAsync(
@@ -49,7 +53,8 @@ public sealed class TicketCommandService : ITicketCommandService
         CancellationToken ct = default,
         string? submissionSnapshotMarkdown = null,
         Guid? templateId = null,
-        string? templateName = null)
+        string? templateName = null,
+        Guid? requesterUserId = null)
     {
         var now = DateTime.UtcNow;
 
@@ -104,6 +109,7 @@ public sealed class TicketCommandService : ITicketCommandService
             DepartmentId = departmentId,
             WorkflowProfileId = resolvedProfileId,
             AssignedToUserId = assignedToUserId,
+            RequesterUserId = requesterUserId,
             Category = category,
             WorkflowStateId = initialState.Id,
             TemplateId = templateId,
@@ -141,7 +147,8 @@ public sealed class TicketCommandService : ITicketCommandService
         TicketPriority? priority, Guid? departmentId, Guid? workflowProfileId,
         Guid? assignedToUserId, string? category,
         bool clearDepartment = false, bool clearWorkflowProfile = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Guid? requesterUserId = null, bool clearRequester = false)
     {
         var ticket = await _repo.GetByIdAsync(ticketId);
         if (ticket is null)
@@ -173,6 +180,34 @@ public sealed class TicketCommandService : ITicketCommandService
                     $"Ticket #{ticketId}", NotificationSeverity.Informational,
                     new { ticketId }, assignedToUserId), ct);
             }
+        }
+
+        // Solicitante (quem abriu): permite definir/trocar/limpar. Um solicitante
+        // inexistente travaria a avaliação (só o solicitante pode avaliar), então
+        // o usuário é validado.
+        if (requesterUserId.HasValue && !clearRequester)
+        {
+            var requester = await _userRepository.GetByIdAsync(requesterUserId.Value);
+            if (requester is null)
+                throw new KeyNotFoundException($"Requester {requesterUserId.Value} not found");
+        }
+
+        var newRequesterId = clearRequester
+            ? null
+            : (requesterUserId.HasValue ? requesterUserId.Value : ticket.RequesterUserId);
+        if (newRequesterId != ticket.RequesterUserId)
+        {
+            // Auditoria própria do solicitante (antes registrava uma atribuição
+            // vazia, poluindo a timeline).
+            var oldRequester = ticket.RequesterUserId;
+            ticket.RequesterUserId = newRequesterId;
+            await _activityLog.LogActivityAsync(
+                ticketId,
+                TicketActivityType.RequesterChanged,
+                null,
+                oldRequester?.ToString(),
+                newRequesterId?.ToString(),
+                "Solicitante atualizado");
         }
 
         var oldDepartmentId = ticket.DepartmentId;
@@ -286,5 +321,5 @@ public sealed class TicketCommandService : ITicketCommandService
         t.Category, t.Priority, t.WorkflowStateId, t.AssignedToUserId,
         t.SlaExpiresAt, t.SlaBreached, t.CreatedAt, t.UpdatedAt,
         t.ClosedAt, t.DaysOpen, t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy,
-        t.SubmissionSnapshotMarkdown, t.TemplateId, t.TemplateName);
+        t.SubmissionSnapshotMarkdown, t.TemplateId, t.TemplateName, t.RequesterUserId);
 }

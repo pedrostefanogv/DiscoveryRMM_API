@@ -16,5 +16,9 @@ public sealed record UpdateTicketCommand(
     string? Category,
     // B9: quando true, remove o vínculo mesmo sem enviar um novo Id.
     bool ClearDepartment = false,
-    bool ClearWorkflowProfile = false
+    bool ClearWorkflowProfile = false,
+    /// <summary>Solicitante do chamado (quem abriu).</summary>
+    Guid? RequesterUserId = null,
+    /// <summary>Quando true, remove o solicitante mesmo sem enviar um novo Id.</summary>
+    bool ClearRequester = false
 ) : ICommand<Result<TicketDetailDto>>;

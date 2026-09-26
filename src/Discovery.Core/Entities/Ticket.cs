@@ -44,6 +44,12 @@ public class Ticket
     
     // Atribuição (novo: Guid em vez de string)
     public Guid? AssignedToUserId { get; set; }
+
+    /// <summary>
+    /// Quem abriu o chamado (solicitante). Nulo em chamados antigos e nos
+    /// abertos pelo chat/agent (que registram a máquina em AgentId).
+    /// </summary>
+    public Guid? RequesterUserId { get; set; }
     
     // SLA Tracking
     public DateTime? SlaExpiresAt { get; set; }

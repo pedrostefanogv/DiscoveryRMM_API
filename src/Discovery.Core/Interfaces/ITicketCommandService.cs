@@ -18,14 +18,16 @@ public interface ITicketCommandService
         CancellationToken ct = default,
         string? submissionSnapshotMarkdown = null,
         Guid? templateId = null,
-        string? templateName = null);
+        string? templateName = null,
+        Guid? requesterUserId = null);
 
     /// <summary>Atualiza campos de um ticket existente.</summary>
     Task<Ticket> UpdateTicketAsync(Guid ticketId, string? title, string? description,
         Enums.TicketPriority? priority, Guid? departmentId, Guid? workflowProfileId,
         Guid? assignedToUserId, string? category,
         bool clearDepartment = false, bool clearWorkflowProfile = false,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        Guid? requesterUserId = null, bool clearRequester = false);
 
     /// <summary>Adiciona um comentário a um ticket.</summary>
     Task<TicketComment> AddCommentAsync(Guid ticketId, string content, bool isInternal,

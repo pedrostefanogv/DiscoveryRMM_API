@@ -32,7 +32,9 @@ public sealed record TicketDetailDto(
     // Template usado na abertura (null = abertura normal).
     Guid? TemplateId = null,
     // Snapshot do nome do template (preserva o histórico após exclusão).
-    string? TemplateName = null
+    string? TemplateName = null,
+    /// <summary>Solicitante (quem abriu). Nulo = legado ou aberto pelo chat/agent.</summary>
+    Guid? RequesterUserId = null
 );
 
 /// <summary>

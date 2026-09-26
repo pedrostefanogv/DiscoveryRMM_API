@@ -90,7 +90,11 @@ public class TicketsController(
             return NotFound();
         }
 
-        var result = await mediator.Send(command, HttpContext.RequestAborted);
+        // Solicitante = quem está abrindo pela console (o chat/agent não tem
+        // usuário; nesse caminho fica nulo e a máquina vai em AgentId).
+        var result = await mediator.Send(
+            command with { RequesterUserId = CurrentUserId },
+            HttpContext.RequestAborted);
         return result.ToCreatedAtActionResult(nameof(GetById), new { id = result.Value!.Id }, this);
     }
 

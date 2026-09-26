@@ -95,7 +95,8 @@ public sealed class TicketQueryService : ITicketQueryService
         return new TicketDetailDto(t.Id, t.ClientId, t.SiteId, t.AgentId, t.Title,
             t.Description, t.Category, t.Priority, t.WorkflowStateId, t.AssignedToUserId,
             t.SlaExpiresAt, t.SlaBreached, t.CreatedAt, t.UpdatedAt, t.ClosedAt, t.DaysOpen,
-            t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy, t.SubmissionSnapshotMarkdown, t.TemplateId, t.TemplateName);
+            t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy, t.SubmissionSnapshotMarkdown, t.TemplateId, t.TemplateName,
+            t.RequesterUserId);
     }
 
     public async Task<IReadOnlyList<TicketAnswerDto>> GetAnswersAsync(Guid ticketId, CancellationToken ct = default)
