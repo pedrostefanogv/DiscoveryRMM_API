@@ -314,6 +314,83 @@ public class CustomFieldServiceTests
                 .With.Message.EqualTo("Agent is not allowed to write this custom field in the current execution context."));
     }
 
+    [Test]
+    public async Task GetValuesAsync_ShouldIncludeTicketDepartmentFields()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var db = fixture.Db;
+        var now = DateTime.UtcNow;
+
+        var department = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = fixture.Client.Id,
+            Name = "TI",
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var ticket = new Ticket
+        {
+            Id = Guid.NewGuid(),
+            ClientId = fixture.Client.Id,
+            DepartmentId = department.Id,
+            Title = "Chamado",
+            Description = "d",
+            WorkflowStateId = Guid.NewGuid(),
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var departmentDefinition = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "ramal",
+            Label = "Ramal",
+            ScopeType = CustomFieldScopeType.Department,
+            DepartmentId = department.Id,
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var ticketDefinition = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "observacao",
+            Label = "Observação",
+            ScopeType = CustomFieldScopeType.Ticket,
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        db.AddRange(department, ticket, departmentDefinition, ticketDefinition);
+        db.CustomFieldValues.Add(new CustomFieldValue
+        {
+            Id = Guid.NewGuid(),
+            DefinitionId = departmentDefinition.Id,
+            ScopeType = CustomFieldScopeType.Ticket,
+            EntityId = ticket.Id,
+            EntityKey = ticket.Id.ToString("D"),
+            ValueJson = "\"1024\"",
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        await db.SaveChangesAsync();
+
+        var values = await fixture.Service.GetValuesAsync(CustomFieldScopeType.Ticket, ticket.Id);
+
+        var departmentValue = values.SingleOrDefault(item => item.DefinitionId == departmentDefinition.Id);
+        Assert.Multiple(() =>
+        {
+            Assert.That(departmentValue, Is.Not.Null, "campo do departamento deve aparecer no chamado");
+            Assert.That(departmentValue!.ScopeType, Is.EqualTo(CustomFieldScopeType.Department));
+            Assert.That(departmentValue.ValueJson, Is.EqualTo("\"1024\""));
+            Assert.That(values.Select(item => item.DefinitionId), Contains.Item(ticketDefinition.Id));
+        });
+    }
+
     private static async Task<CustomFieldFixture> CreateFixtureAsync()
     {
         var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
@@ -399,7 +476,11 @@ public class CustomFieldServiceTests
                 typeof(Agent),
                 typeof(CustomFieldDefinition),
                 typeof(CustomFieldValue),
-                typeof(CustomFieldExecutionAccess)
+                typeof(CustomFieldExecutionAccess),
+                // GetValuesAsync(Ticket) consulta o departamento do chamado para
+                // incluir os campos do departamento.
+                typeof(Ticket),
+                typeof(Department)
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -445,6 +526,9 @@ public class CustomFieldServiceTests
             {
                 entity.HasKey(item => item.Id);
             });
+
+            modelBuilder.Entity<Ticket>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<Department>(entity => entity.HasKey(item => item.Id));
         }
     }
 

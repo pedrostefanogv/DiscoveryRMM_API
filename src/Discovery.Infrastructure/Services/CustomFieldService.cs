@@ -198,9 +198,7 @@ public class CustomFieldService : ICustomFieldService
         ValidateScopeEntity(scopeType, entityId);
 
         var entityKey = BuildEntityKey(scopeType, entityId);
-        var definitions = await _db.CustomFieldDefinitions
-            .AsNoTracking()
-            .Where(definition => definition.ScopeType == scopeType && definition.IsActive)
+        var definitions = await (await BuildDefinitionsQueryAsync(scopeType, entityId, cancellationToken))
             .OrderBy(definition => definition.Name)
             .ToListAsync(cancellationToken);
 
@@ -219,7 +217,7 @@ public class CustomFieldService : ICustomFieldService
                     definition.Id,
                     definition.Name,
                     definition.Label,
-                    scopeType,
+                    definition.ScopeType,
                     entityId,
                     "null",
                     definition.UpdatedAt,
@@ -232,7 +230,7 @@ public class CustomFieldService : ICustomFieldService
                 definition.Id,
                 definition.Name,
                 definition.Label,
-                scopeType,
+                definition.ScopeType,
                 entityId,
                 outputJson,
                 value.UpdatedAt,
@@ -240,6 +238,40 @@ public class CustomFieldService : ICustomFieldService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Definições ativas aplicáveis ao escopo consultado. Para o escopo Ticket,
+    /// inclui também os campos do DEPARTAMENTO do chamado: eles são cobrados na
+    /// abertura e gravados com escopo Ticket, então precisam aparecer no detalhe.
+    /// </summary>
+    private async Task<IQueryable<CustomFieldDefinition>> BuildDefinitionsQueryAsync(
+        CustomFieldScopeType scopeType,
+        Guid? entityId,
+        CancellationToken cancellationToken)
+    {
+        var query = _db.CustomFieldDefinitions
+            .AsNoTracking()
+            .Where(definition => definition.IsActive);
+
+        if (scopeType == CustomFieldScopeType.Ticket && entityId.HasValue)
+        {
+            var departmentId = await _db.Tickets
+                .AsNoTracking()
+                .Where(ticket => ticket.Id == entityId.Value)
+                .Select(ticket => ticket.DepartmentId)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (departmentId.HasValue)
+            {
+                return query.Where(definition =>
+                    definition.ScopeType == scopeType ||
+                    (definition.ScopeType == CustomFieldScopeType.Department
+                     && definition.DepartmentId == departmentId.Value));
+            }
+        }
+
+        return query.Where(definition => definition.ScopeType == scopeType);
     }
 
     public async Task<CursorPageDto<CustomFieldResolvedValueDto>> GetValuesPageAsync(
@@ -256,9 +288,7 @@ public class CustomFieldService : ICustomFieldService
         var entityKey = BuildEntityKey(scopeType, entityId);
 
         // Query definitions with cursor-based pagination on UpdatedAt + Id
-        var definitionsQuery = _db.CustomFieldDefinitions
-            .AsNoTracking()
-            .Where(d => d.ScopeType == scopeType && d.IsActive);
+        var definitionsQuery = await BuildDefinitionsQueryAsync(scopeType, entityId, cancellationToken);
 
         if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorUpdatedAtUtc, out var cursorId))
         {

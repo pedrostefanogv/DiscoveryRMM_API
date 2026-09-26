@@ -1,4 +1,6 @@
 using Discovery.Core.Cqrs.Tickets.Commands;
+using Discovery.Core.Cqrs.Tickets.Queries;
+using Discovery.Infrastructure.Cqrs.Tickets.QueryHandlers;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -185,6 +187,44 @@ public class TicketSupportEnhancementsTests
 
         var logs = await db.TicketActivityLogs.Where(l => l.TicketId == ticket.Id).ToListAsync();
         Assert.That(logs.Any(l => l.Type == TicketActivityType.Reopened), Is.True);
+    }
+
+    [Test]
+    public async Task ListRelations_ShouldResolveOtherTicketTitleAndStatus()
+    {
+        await using var db = CreateDb();
+        var client = new Client { Id = Guid.NewGuid(), Name = "Cliente", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        var state = new WorkflowState { Id = Guid.NewGuid(), Name = "Open", IsInitial = true, SortOrder = 1 };
+        var ticketA = NewTicket(client.Id, state.Id);
+        var ticketB = NewTicket(client.Id, state.Id);
+        ticketB.Title = "Chamado vinculado";
+        ticketB.ClosedAt = DateTime.UtcNow;
+        db.AddRange(client, state, ticketA, ticketB);
+        await db.SaveChangesAsync();
+
+        db.TicketRelations.Add(new TicketRelation
+        {
+            Id = Guid.NewGuid(),
+            SourceTicketId = ticketA.Id,
+            TargetTicketId = ticketB.Id,
+            RelationTypeValue = (int)TicketRelationType.RelatesTo,
+            CreatedBy = "tester",
+            CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var handler = new GetTicketRelationsQueryHandler(new TicketRelationRepository(db), db);
+        var result = await handler.Handle(new GetTicketRelationsQuery(ticketA.Id), default);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(result.Value!, Has.Count.EqualTo(1));
+            // O console mostra o outro chamado, não o GUID.
+            Assert.That(result.Value![0].OtherTicketId, Is.EqualTo(ticketB.Id));
+            Assert.That(result.Value[0].OtherTicketTitle, Is.EqualTo("Chamado vinculado"));
+            Assert.That(result.Value[0].OtherTicketIsClosed, Is.True);
+        });
     }
 
     [Test]

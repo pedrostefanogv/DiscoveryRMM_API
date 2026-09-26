@@ -11,5 +11,10 @@ public sealed record TicketRelationDto(
     string RelationType,
     string? CreatedBy,
     DateTime CreatedAt,
-    string? Direction = null
+    string? Direction = null,
+    // Dados do OUTRO chamado (aditivo) para o console exibir título/status em
+    // vez do GUID. Nulo quando o chamado vinculado não pôde ser resolvido.
+    Guid? OtherTicketId = null,
+    string? OtherTicketTitle = null,
+    bool? OtherTicketIsClosed = null
 );
