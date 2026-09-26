@@ -18,19 +18,32 @@ public class KnowledgeChunkingService : IKnowledgeChunkingService
     private static readonly Regex HeaderRegex =
         new(@"^#{1,3}\s+(.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
 
-    public List<KnowledgeArticleChunk> ChunkArticle(KnowledgeArticle article)
-        => ChunkArticleWithStrategy(article, "semantic", DefaultChunkSizeTokens, DefaultOverlapTokens);
+    public List<KnowledgeArticleChunk> ChunkArticle(
+        KnowledgeArticle article,
+        IReadOnlyList<KnowledgeArticlePage>? pages = null)
+        => ChunkArticleWithStrategy(article, "semantic", DefaultChunkSizeTokens, DefaultOverlapTokens, pages);
 
     public List<KnowledgeArticleChunk> ChunkArticleWithStrategy(
         KnowledgeArticle article,
         string strategy,
         int chunkSizeTokens,
         int overlapTokens)
+        => ChunkArticleWithStrategy(article, strategy, chunkSizeTokens, overlapTokens, pages: null);
+
+    private List<KnowledgeArticleChunk> ChunkArticleWithStrategy(
+        KnowledgeArticle article,
+        string strategy,
+        int chunkSizeTokens,
+        int overlapTokens,
+        IReadOnlyList<KnowledgeArticlePage>? pages)
     {
         var maxChunk = chunkSizeTokens > 0 ? chunkSizeTokens : DefaultChunkSizeTokens;
         var overlap = Math.Clamp(overlapTokens, 0, maxChunk / 2);
 
-        var fullText = StripMarkdown(article.Content);
+        // Fonte = artigo + sub-páginas (título da página vira header → SectionTitle).
+        var source = ComposeSourceMarkdown(article, pages);
+
+        var fullText = StripMarkdown(source);
         var estimatedTotal = EstimateTokens(fullText);
 
         if (estimatedTotal <= SmallArticleTokenThreshold)
@@ -40,13 +53,54 @@ public class KnowledgeChunkingService : IKnowledgeChunkingService
         {
             "paragraph" => SplitByParagraph(fullText, null, 0, maxChunk, overlap),
             "fixed" => SplitFixedSize(fullText, null, maxChunk, overlap),
-            _ => SplitByHeadersStrategy(article.Content, maxChunk, overlap),
+            _ => SplitByHeadersStrategy(source, maxChunk, overlap),
         };
 
         for (var i = 0; i < chunks.Count; i++)
             chunks[i].ChunkIndex = i;
 
         return chunks;
+    }
+
+    /// <summary>
+    /// Compõe o markdown indexável: conteúdo do artigo + sub-páginas em ordem de
+    /// árvore, com o título da página como header (## / ###). Sem pages, é o
+    /// próprio conteúdo do artigo (comportamento anterior preservado).
+    /// </summary>
+    private static string ComposeSourceMarkdown(
+        KnowledgeArticle article,
+        IReadOnlyList<KnowledgeArticlePage>? pages)
+    {
+        var content = article.Content ?? string.Empty;
+        if (pages is not { Count: > 0 })
+            return content;
+
+        var byParent = pages
+            .GroupBy(p => p.ParentPageId ?? Guid.Empty)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderBy(p => p.SortOrder)
+                      .ThenBy(p => p.Title, StringComparer.OrdinalIgnoreCase)
+                      .ToList());
+
+        var sb = new System.Text.StringBuilder(content);
+
+        void Append(Guid parentId, int depth)
+        {
+            if (!byParent.TryGetValue(parentId, out var children)) return;
+            foreach (var page in children)
+            {
+                // Depth 0 → "##", 1 → "###", 2+ → "###" (HeaderRegex só aceita 1-3 #).
+                var level = Math.Clamp(depth + 2, 2, 3);
+                sb.Append("\n\n")
+                  .Append(new string('#', level)).Append(' ').Append(page.Title)
+                  .Append("\n\n").Append(page.Content);
+                Append(page.Id, depth + 1);
+            }
+        }
+
+        Append(Guid.Empty, 0);
+        return sb.ToString();
     }
 
     private List<KnowledgeArticleChunk> SplitByHeadersStrategy(string markdown, int maxTokens, int overlapTokens)

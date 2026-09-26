@@ -143,7 +143,8 @@ public sealed class GetMyTicketTemplatesHandler(
 
         var templates = await db.TicketTemplates
             .AsNoTracking()
-            .Where(t => t.IsActive && (t.ClientId == site.ClientId || t.ClientId == null))
+            // Excluídos (lixeira) não podem ser ofertados ao agent/chat.
+            .Where(t => t.DeletedAt == null && t.IsActive && (t.ClientId == site.ClientId || t.ClientId == null))
             .OrderBy(t => t.Name)
             .ToListAsync(ct);
 

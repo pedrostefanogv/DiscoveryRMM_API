@@ -25,6 +25,7 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         double minSimilarity = 0.0,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
+        bool publishedOnly = false,
         CancellationToken ct = default)
     {
         var chunksQuery = db.KnowledgeArticleChunks
@@ -34,6 +35,11 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
                 c.Article.DeletedAt == null &&
                 (c.Article.Status == ArticleStatus.Published.ToString() ||
                  c.Article.Status == ArticleStatus.Internal.ToString()));
+
+        // Chat do agent: apenas artigos publicados (Internal é orientação interna
+        // do departamento e não deve chegar ao usuário final).
+        if (publishedOnly)
+            chunksQuery = chunksQuery.Where(c => c.Article.Status == ArticleStatus.Published.ToString());
 
         // Filtro de herança de escopo via artigo pai
         chunksQuery = (clientId, siteId) switch
@@ -146,7 +152,7 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
             .Where(c => c.Embedding != null
                 && c.EmbeddingGeneratedAt != null
                 && c.Article != null && c.Article.DeletedAt == null
-                && (c.Article.Status == "Published" || c.Article.Status == "Internal"));
+                && c.Article.Status == "Published");
 
         // Herança de escopo
         query = (clientId, siteId) switch
@@ -187,6 +193,7 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         double minSimilarity = 0.0,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
+        bool publishedOnly = false,
         CancellationToken ct = default)
     {
         var chunksQuery = db.KnowledgeArticleChunks
@@ -200,8 +207,14 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         // Filtro multi-escopo
         chunksQuery = ApplyMultiScopeFilter(chunksQuery, hasGlobalAccess, allowedClientIds, allowedSiteIds);
 
-        // Filtro de departamento (com acesso global, Internal fica visível)
-        if (departmentId.HasValue)
+        // Chat do agent: apenas publicados, mesmo com acesso global. Sem esse
+        // flag, mantém a regra da listagem (Internal visível por departamento/ACL).
+        if (publishedOnly)
+        {
+            chunksQuery = chunksQuery.Where(c =>
+                c.Article.Status == ArticleStatus.Published.ToString());
+        }
+        else if (departmentId.HasValue)
         {
             chunksQuery = chunksQuery.Where(c =>
                 c.Article.Status != ArticleStatus.Internal.ToString() ||

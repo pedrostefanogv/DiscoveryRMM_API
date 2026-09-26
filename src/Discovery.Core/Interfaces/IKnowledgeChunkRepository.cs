@@ -10,6 +10,8 @@ public interface IKnowledgeChunkRepository
     /// Inclui artigos do site + client + global.
     /// Filtra artigos Internal pelo departamento do usuário.
     /// </summary>
+    /// <param name="publishedOnly">Quando true, retorna apenas artigos Published
+    /// (usado pelo chat do agent; artigos Internal ficam restritos ao departamento).</param>
     Task<List<KnowledgeChunkSearchResult>> SearchSemanticAsync(
         Vector queryEmbedding,
         Guid? clientId,
@@ -18,6 +20,7 @@ public interface IKnowledgeChunkRepository
         double minSimilarity = 0.0,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
+        bool publishedOnly = false,
         CancellationToken ct = default);
 
     /// <summary>
@@ -32,6 +35,7 @@ public interface IKnowledgeChunkRepository
         double minSimilarity = 0.0,
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
+        bool publishedOnly = false,
         CancellationToken ct = default);
 
     /// <summary>
@@ -47,8 +51,8 @@ public interface IKnowledgeChunkRepository
     Task UpdateEmbeddingAsync(Guid chunkId, Vector embedding, CancellationToken ct = default);
 
     /// <summary>
-    /// Verifica rapidamente se existem chunks com embedding no escopo.
-    /// Usado como guard clause para evitar chamadas de embedding quando a KB está vazia.
+    /// Verifica rapidamente se existem chunks com embedding de artigos PUBLICADOS no escopo.
+    /// Usado como guard clause para evitar chamadas de embedding quando a KB visível ao chat está vazia.
     /// </summary>
     Task<bool> HasAnyChunkAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default);
 }

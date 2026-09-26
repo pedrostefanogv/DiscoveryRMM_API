@@ -59,8 +59,8 @@ public class KnowledgeSearchService(
         // ── Keyword (ou fallback do hybrid) ──
         var articles = request.UseUserScope
             ? await articleRepository.SearchKeywordByUserScopeAsync(
-                query, hasGlobal, allowedClients, allowedSites, request.DepartmentId, ct)
-            : await articleRepository.SearchKeywordAsync(query, request.ClientId, request.SiteId, request.DepartmentId, ct);
+                query, hasGlobal, allowedClients, allowedSites, request.DepartmentId, publishedOnly: false, ct)
+            : await articleRepository.SearchKeywordAsync(query, request.ClientId, request.SiteId, request.DepartmentId, publishedOnly: false, ct);
 
         return articles.Take(max)
             .Select(a => new KnowledgeSearchHit(a, null, null, "keyword"))
@@ -101,10 +101,10 @@ public class KnowledgeSearchService(
             var chunks = request.UseUserScope
                 ? await chunkRepository.SearchSemanticByUserScopeAsync(
                     vector, hasGlobal, allowedClients, allowedSites,
-                    max, settings.MinSimilarityScore, excludeArticleIds: null, request.DepartmentId, ct)
+                    max, settings.MinSimilarityScore, excludeArticleIds: null, request.DepartmentId, publishedOnly: false, ct)
                 : await chunkRepository.SearchSemanticAsync(
                     vector, request.ClientId, request.SiteId,
-                    max, settings.MinSimilarityScore, excludeArticleIds: null, request.DepartmentId, ct);
+                    max, settings.MinSimilarityScore, excludeArticleIds: null, request.DepartmentId, publishedOnly: false, ct);
 
             if (chunks.Count == 0) return [];
 

@@ -144,7 +144,7 @@ public sealed class CreateTicketTemplateCommandHandler(DiscoveryDbContext db)
     internal static TicketTemplateDto MapTemplate(TicketTemplate t) => new(
         t.Id, t.ClientId, t.DepartmentId, t.Name, t.Title, t.Description,
         t.Priority?.ToString(), t.Category, t.CustomFieldDefaultsJson, t.QuestionsJson, t.IsActive,
-        t.CreatedBy, t.CreatedAt, t.UpdatedAt);
+        t.CreatedBy, t.CreatedAt, t.UpdatedAt, t.DeletedAt, t.DeletedBy);
 }
 
 public sealed class UpdateTicketTemplateCommandHandler(DiscoveryDbContext db)
@@ -179,14 +179,37 @@ public sealed class UpdateTicketTemplateCommandHandler(DiscoveryDbContext db)
 public sealed class DeleteTicketTemplateCommandHandler(DiscoveryDbContext db)
     : IRequestHandler<DeleteTicketTemplateCommand, Result<VoidResult>>
 {
+    // Soft delete: sai da listagem, mas permanece na lixeira para restauração.
+    // O histórico dos chamados não depende desta linha (snapshot template_name).
     public async Task<Result<VoidResult>> Handle(DeleteTicketTemplateCommand cmd, CancellationToken ct)
     {
         var template = await db.TicketTemplates.FirstOrDefaultAsync(t => t.Id == cmd.Id, ct);
         if (template is null)
             return Result<VoidResult>.Failure(Error.NotFound("Template não encontrado."));
 
-        // Proteção: template já usado exige confirmação explícita. A FK
-        // ON DELETE SET NULL preserva o histórico (tickets.template_name).
+        if (template.DeletedAt is null)
+        {
+            template.DeletedAt = DateTime.UtcNow;
+            template.DeletedBy = cmd.DeletedBy;
+            template.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+        }
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
+public sealed class PurgeTicketTemplateCommandHandler(DiscoveryDbContext db)
+    : IRequestHandler<PurgeTicketTemplateCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(PurgeTicketTemplateCommand cmd, CancellationToken ct)
+    {
+        var template = await db.TicketTemplates.FirstOrDefaultAsync(t => t.Id == cmd.Id, ct);
+        if (template is null)
+            return Result<VoidResult>.Failure(Error.NotFound("Template não encontrado."));
+
+        // Proteção da exclusão física: template já usado exige confirmação
+        // explícita. A FK ON DELETE SET NULL preserva o histórico
+        // (tickets.template_name).
         if (!cmd.Force)
         {
             var inUse = await db.Tickets.CountAsync(t => t.TemplateId == cmd.Id, ct);
@@ -201,17 +224,48 @@ public sealed class DeleteTicketTemplateCommandHandler(DiscoveryDbContext db)
     }
 }
 
+public sealed class RestoreTicketTemplateCommandHandler(DiscoveryDbContext db)
+    : IRequestHandler<RestoreTicketTemplateCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(RestoreTicketTemplateCommand cmd, CancellationToken ct)
+    {
+        var template = await db.TicketTemplates.FirstOrDefaultAsync(t => t.Id == cmd.Id, ct);
+        if (template is null)
+            return Result<VoidResult>.Failure(Error.NotFound("Template não encontrado."));
+
+        // Idempotente: template fora da lixeira já está restaurado.
+        if (template.DeletedAt is not null)
+        {
+            template.DeletedAt = null;
+            template.DeletedBy = null;
+            template.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+        }
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
 public sealed class ListTicketTemplatesQueryHandler(DiscoveryDbContext db)
     : IRequestHandler<ListTicketTemplatesQuery, Result<IReadOnlyList<TicketTemplateDto>>>
 {
     public async Task<Result<IReadOnlyList<TicketTemplateDto>>> Handle(ListTicketTemplatesQuery q, CancellationToken ct)
     {
-        var query = db.TicketTemplates.AsNoTracking().Where(t => t.IsActive);
+        // Padrão: ativos e não excluídos. A lixeira entra por includeDeleted;
+        // inativos entram por includeInactive (página de administração).
+        var query = db.TicketTemplates.AsNoTracking();
+        if (!q.IncludeDeleted)
+            query = query.Where(t => t.DeletedAt == null);
+        if (!q.IncludeInactive)
+            query = query.Where(t => t.IsActive);
+
         if (q.ClientId.HasValue)
             query = q.IncludeGlobal
                 ? query.Where(t => t.ClientId == q.ClientId || t.ClientId == null)
                 : query.Where(t => t.ClientId == q.ClientId);
-        else
+        else if (!q.AllClients)
+            // Sem cliente informado: apenas globais. A página de administração
+            // usa allClients=true para gerenciar também templates por cliente
+            // (antes eles eram invisíveis na listagem).
             query = query.Where(t => t.ClientId == null);
         if (q.DepartmentId.HasValue)
             query = query.Where(t => t.DepartmentId == q.DepartmentId || t.DepartmentId == null);

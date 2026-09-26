@@ -29,4 +29,12 @@ public class TicketTemplate
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    /// <summary>
+    /// Soft delete: preenchido quando o template foi excluído da listagem.
+    /// O histórico dos chamados (template_name) não depende do template,
+    /// mas a linha permanece para permitir restauração.
+    /// </summary>
+    public DateTime? DeletedAt { get; set; }
+    public string? DeletedBy { get; set; }
 }

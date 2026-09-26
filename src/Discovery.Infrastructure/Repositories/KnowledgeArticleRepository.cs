@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Text.Json;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
@@ -50,18 +51,18 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         Guid? clientId,
         Guid? siteId,
         Guid? departmentId = null,
+        bool publishedOnly = false,
         CancellationToken ct = default)
     {
-        var sanitized = queryText.Replace("%", "").Replace("_", "").Trim();
-        var pattern = $"%{sanitized}%";
+        var terms = KnowledgeKeywordQuery.BuildTerms(queryText);
+        if (terms.Count == 0)
+            return [];
 
         var query = db.KnowledgeArticles
             .Where(a => a.DeletedAt == null
-                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()))
-            .Where(a =>
-                EF.Functions.ILike(a.Title, pattern) ||
-                EF.Functions.ILike(a.Content, pattern) ||
-                (a.Category != null && EF.Functions.ILike(a.Category, pattern)));
+                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()));
+
+        query = ApplyKeywordTerms(query, terms);
 
         // Filtro de escopo
         query = (clientId, siteId) switch
@@ -78,13 +79,7 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             _ => query.Where(a => a.ClientId == null && a.SiteId == null)
         };
 
-        // Filtro de departamento para artigos Internal
-        if (departmentId.HasValue)
-        {
-            query = query.Where(a =>
-                a.Status != ArticleStatus.Internal.ToString() ||
-                a.DepartmentId == departmentId.Value);
-        }
+        query = ApplyStatusVisibility(query, departmentId, publishedOnly);
 
         return await query.OrderBy(a => a.Title).Take(20).ToListAsync(ct);
     }
@@ -102,10 +97,16 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
 
     public async Task<bool> HasPublishedArticlesAsync(
         Guid? clientId, Guid? siteId, CancellationToken ct = default)
+        => await CountPublishedAsync(clientId, siteId, ct) > 0;
+
+    public async Task<int> CountPublishedAsync(
+        Guid? clientId, Guid? siteId, CancellationToken ct = default)
     {
+        // Somente artigos PUBLICADOS: é o que o chat pode expor ao usuário.
+        // Artigos Internal orientam o departamento e não entram aqui.
         var query = db.KnowledgeArticles
             .Where(a => a.DeletedAt == null
-                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()));
+                && a.Status == ArticleStatus.Published.ToString());
 
         // Herança de escopo: site → client → global
         query = (clientId, siteId) switch
@@ -122,7 +123,7 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             _ => query.Where(a => a.ClientId == null && a.SiteId == null)
         };
 
-        return await query.AnyAsync(ct);
+        return await query.CountAsync(ct);
     }
 
     // ─── Versionamento ──────────────────────────────────────────────
@@ -429,23 +430,28 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         IReadOnlySet<Guid> allowedClientIds,
         IReadOnlySet<Guid> allowedSiteIds,
         Guid? departmentId = null,
+        bool publishedOnly = false,
         CancellationToken ct = default)
     {
-        var sanitized = queryText.Replace("%", "").Replace("_", "").Trim();
-        var pattern = $"%{sanitized}%";
+        var terms = KnowledgeKeywordQuery.BuildTerms(queryText);
+        if (terms.Count == 0)
+            return [];
 
         var query = db.KnowledgeArticles
             .Where(a => a.DeletedAt == null
-                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()))
-            .Where(a =>
-                EF.Functions.ILike(a.Title, pattern) ||
-                EF.Functions.ILike(a.Content, pattern) ||
-                (a.Category != null && EF.Functions.ILike(a.Category, pattern)));
+                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()));
 
+        query = ApplyKeywordTerms(query, terms);
         query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
 
-        // Mesma regra da listagem: com acesso global, Internal fica visível.
-        if (departmentId.HasValue)
+        // "Published only" (chat do agent) tem precedência sobre a visibilidade de
+        // Internal. Sem ele, mantém a regra da listagem: com acesso global Internal
+        // fica visível; sem acesso global, só quando o departamento confere.
+        if (publishedOnly)
+        {
+            query = query.Where(a => a.Status == ArticleStatus.Published.ToString());
+        }
+        else if (departmentId.HasValue)
         {
             query = query.Where(a =>
                 a.Status != ArticleStatus.Internal.ToString() ||
@@ -457,6 +463,72 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         }
 
         return await query.OrderBy(a => a.Title).Take(20).ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Monta o OR de ILIKE para cada termo da busca, casando title + content +
+    /// category + tags. Antes a query inteira era um único ILIKE e a coluna de
+    /// tags (prometida no contrato da interface) era ignorada.
+    /// </summary>
+    private static IQueryable<KnowledgeArticle> ApplyKeywordTerms(
+        IQueryable<KnowledgeArticle> query,
+        IReadOnlyList<string> terms)
+    {
+        Expression<Func<KnowledgeArticle, bool>>? predicate = null;
+
+        foreach (var term in terms)
+        {
+            var pattern = $"%{term}%";
+            Expression<Func<KnowledgeArticle, bool>> termPredicate = a =>
+                EF.Functions.ILike(a.Title, pattern) ||
+                EF.Functions.ILike(a.Content, pattern) ||
+                (a.Category != null && EF.Functions.ILike(a.Category, pattern)) ||
+                (a.TagsJson != null && EF.Functions.ILike(a.TagsJson, pattern));
+
+            predicate = predicate is null ? termPredicate : OrElse(predicate, termPredicate);
+        }
+
+        return query.Where(predicate!);
+    }
+
+    /// <summary>
+    /// Visibilidade de status para o caminho legado (clientId/siteId).
+    /// Com <paramref name="publishedOnly"/> retorna só Published; sem departamento
+    /// informado exclui Internal (alinhado à busca semântica e ao contrato da interface).
+    /// </summary>
+    private static IQueryable<KnowledgeArticle> ApplyStatusVisibility(
+        IQueryable<KnowledgeArticle> query,
+        Guid? departmentId,
+        bool publishedOnly)
+    {
+        if (publishedOnly)
+            return query.Where(a => a.Status == ArticleStatus.Published.ToString());
+
+        if (departmentId.HasValue)
+            return query.Where(a =>
+                a.Status != ArticleStatus.Internal.ToString() ||
+                a.DepartmentId == departmentId.Value);
+
+        return query.Where(a => a.Status != ArticleStatus.Internal.ToString());
+    }
+
+    private static Expression<Func<T, bool>> OrElse<T>(
+        Expression<Func<T, bool>> left,
+        Expression<Func<T, bool>> right)
+    {
+        var parameter = Expression.Parameter(typeof(T), "a");
+        var body = Expression.OrElse(
+            new ParameterReplaceVisitor(left.Parameters[0], parameter).Visit(left.Body)!,
+            new ParameterReplaceVisitor(right.Parameters[0], parameter).Visit(right.Body)!);
+        return Expression.Lambda<Func<T, bool>>(body, parameter);
+    }
+
+    /// <summary>Rebaseia referências ao parâmetro original para o parâmetro unificado do OR.</summary>
+    private sealed class ParameterReplaceVisitor(ParameterExpression from, ParameterExpression to)
+        : ExpressionVisitor
+    {
+        protected override Expression VisitParameter(ParameterExpression node)
+            => node == from ? to : base.VisitParameter(node);
     }
 
 }

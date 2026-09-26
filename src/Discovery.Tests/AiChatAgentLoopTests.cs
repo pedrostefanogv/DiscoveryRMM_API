@@ -74,9 +74,15 @@ public class AiChatAgentLoopTests
     }
 
     [Test]
-    public void KbExhaustedNote_ForbidsFurtherKbSearches()
+    public void KbExhaustedNote_ForbidsRepeatingContentSearches()
     {
-        Assert.That(AiChatHelpers.KbExhaustedNote, Does.Contain("NÃO faça novas buscas"));
+        Assert.That(AiChatHelpers.KbExhaustedNote, Does.Contain("NÃO repita buscas de conteúdo"));
+    }
+
+    [Test]
+    public void KbExhaustedNote_PointsToKnowledgeListForCatalog()
+    {
+        Assert.That(AiChatHelpers.KbExhaustedNote, Does.Contain("knowledge_list"));
     }
 
     [Test]

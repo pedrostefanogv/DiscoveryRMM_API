@@ -91,6 +91,7 @@ public sealed class KnowledgeEmbeddingJob : IJob
         var articleRepository = scope.ServiceProvider.GetRequiredService<IKnowledgeArticleRepository>();
         var chunkRepository = scope.ServiceProvider.GetRequiredService<IKnowledgeChunkRepository>();
         var chunkingService = scope.ServiceProvider.GetRequiredService<IKnowledgeChunkingService>();
+        var pageRepository = scope.ServiceProvider.GetRequiredService<IKnowledgeArticlePageRepository>();
         var embeddingProvider = scope.ServiceProvider.GetRequiredService<IEmbeddingProvider>();
         var resolver = scope.ServiceProvider.GetRequiredService<IConfigurationResolver>();
         var queueRepository = scope.ServiceProvider.GetRequiredService<IKnowledgeEmbeddingQueueRepository>();
@@ -127,12 +128,12 @@ public sealed class KnowledgeEmbeddingJob : IJob
             // ── Passo 1: Processar fila LISTEN/NOTIFY ────────────────────
             queueProcessed = await ProcessQueueBatchAsync(
                 scope, queueRepository, articleRepository, chunkRepository,
-                chunkingService, embeddingProvider, aiSettings, logger);
+                chunkingService, pageRepository, embeddingProvider, aiSettings, logger);
 
             // ── Passo 2: Re-chunking ──────────────────────────────────────
             var batchSize = 20;
             articlesChunked = await ReChunkArticlesAsync(
-                articleRepository, chunkRepository, chunkingService, batchSize, logger);
+                articleRepository, chunkRepository, chunkingService, pageRepository, batchSize, logger);
 
             // ── Passo 3: Geração de Embeddings ────────────────────────────
             chunksEmbedded = await GenerateEmbeddingsBatchAsync(
@@ -158,6 +159,7 @@ public sealed class KnowledgeEmbeddingJob : IJob
         IKnowledgeArticleRepository articleRepository,
         IKnowledgeChunkRepository chunkRepository,
         IKnowledgeChunkingService chunkingService,
+        IKnowledgeArticlePageRepository pageRepository,
         IEmbeddingProvider embeddingProvider,
         Discovery.Core.ValueObjects.AIIntegrationSettings aiSettings,
         ILogger logger)
@@ -178,7 +180,8 @@ public sealed class KnowledgeEmbeddingJob : IJob
                     continue;
                 }
 
-                var chunks = chunkingService.ChunkArticle(article);
+                var pages = await pageRepository.ListByArticleAsync(article.Id);
+                var chunks = chunkingService.ChunkArticle(article, pages);
                 var inputs = chunks.Select(c =>
                     string.IsNullOrEmpty(c.SectionTitle)
                         ? c.Content
@@ -244,6 +247,7 @@ public sealed class KnowledgeEmbeddingJob : IJob
         IKnowledgeArticleRepository articleRepository,
         IKnowledgeChunkRepository chunkRepository,
         IKnowledgeChunkingService chunkingService,
+        IKnowledgeArticlePageRepository pageRepository,
         int batchSize,
         ILogger logger)
     {
@@ -257,7 +261,8 @@ public sealed class KnowledgeEmbeddingJob : IJob
         {
             try
             {
-                var chunks = chunkingService.ChunkArticle(article);
+                var pages = await pageRepository.ListByArticleAsync(article.Id);
+                var chunks = chunkingService.ChunkArticle(article, pages);
                 await chunkRepository.ReplaceAllForArticleAsync(article.Id, chunks);
 
                 article.LastChunkedAt = DateTime.UtcNow;

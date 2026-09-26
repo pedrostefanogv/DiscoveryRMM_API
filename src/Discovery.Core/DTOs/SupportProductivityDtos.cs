@@ -7,7 +7,8 @@ public sealed record TicketMacroDto(
 public sealed record TicketTemplateDto(
     Guid Id, Guid? ClientId, Guid? DepartmentId, string Name, string Title, string Description,
     string? Priority, string? Category, string CustomFieldDefaultsJson, string QuestionsJson,
-    bool IsActive, string? CreatedBy, DateTime CreatedAt, DateTime UpdatedAt);
+    bool IsActive, string? CreatedBy, DateTime CreatedAt, DateTime UpdatedAt,
+    DateTime? DeletedAt = null, string? DeletedBy = null);
 
 public sealed record NotificationChannelDto(
     Guid Id, string Name, string Type, bool IsActive, string EventsJson, string ConfigJson,

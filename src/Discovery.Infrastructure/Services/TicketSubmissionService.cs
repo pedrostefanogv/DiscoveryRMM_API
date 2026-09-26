@@ -23,7 +23,8 @@ public class TicketSubmissionService(
         {
             template = await db.TicketTemplates
                 .AsNoTracking()
-                .FirstOrDefaultAsync(t => t.Id == request.TemplateId.Value && t.IsActive, cancellationToken);
+                // Template excluído (lixeira) não pode pré-preencher chamados.
+                .FirstOrDefaultAsync(t => t.Id == request.TemplateId.Value && t.DeletedAt == null && t.IsActive, cancellationToken);
 
             // TemplateId informado e inexistente/inativo NÃO é silencioso.
             if (template is null)

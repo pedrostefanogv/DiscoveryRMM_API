@@ -14,7 +14,22 @@ public sealed record UpdateTicketTemplateCommand(
     bool IsActive) : ICommand<Result<TicketTemplateDto>>;
 
 /// <summary>
-/// Exclui um template. Sem <paramref name="Force"/>, recusa quando o template já
-/// foi usado por chamados (devolve Conflict com a contagem).
+/// Soft delete: marca <see cref="Discovery.Core.Entities.TicketTemplate.DeletedAt"/>.
+/// O template sai da listagem, mas a linha permanece para permitir restauração —
+/// o histórico dos chamados (template_name) não é afetado.
 /// </summary>
-public sealed record DeleteTicketTemplateCommand(Guid Id, bool Force = false) : ICommand<Result<VoidResult>>;
+public sealed record DeleteTicketTemplateCommand(Guid Id, string? DeletedBy = null) : ICommand<Result<VoidResult>>;
+
+/// <summary>
+/// Exclusão física (purge) da lixeira. Sem <paramref name="Force"/>, recusa
+/// quando o template já foi usado por chamados (devolve Conflict com a
+/// contagem); com Force, a FK ON DELETE SET NULL preserva o histórico
+/// (tickets.template_name).
+/// </summary>
+public sealed record PurgeTicketTemplateCommand(Guid Id, bool Force = false) : ICommand<Result<VoidResult>>;
+
+/// <summary>
+/// Tira o template da lixeira (limpa DeletedAt/DeletedBy). Não altera IsActive:
+/// quem estava inativo volta inativo — ativar é ação própria.
+/// </summary>
+public sealed record RestoreTicketTemplateCommand(Guid Id) : ICommand<Result<VoidResult>>;

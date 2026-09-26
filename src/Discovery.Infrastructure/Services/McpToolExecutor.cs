@@ -62,6 +62,7 @@ public class McpToolExecutor : IMcpToolExecutor
 {
     private readonly IMcpToolPolicyRepository _policyRepo;
     private readonly IKnowledgeMcpTool _knowledgeMcpTool;
+    private readonly IKnowledgeListMcpTool _knowledgeListMcpTool;
     private readonly IAiChatMessageRepository _messageRepo;
     private readonly ILogger<McpToolExecutor> _logger;
     private readonly ConcurrentDictionary<string, Func<McpToolCallContext, Task<string>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
@@ -70,16 +71,19 @@ public class McpToolExecutor : IMcpToolExecutor
     public McpToolExecutor(
         IMcpToolPolicyRepository policyRepo,
         IKnowledgeMcpTool knowledgeMcpTool,
+        IKnowledgeListMcpTool knowledgeListMcpTool,
         IAiChatMessageRepository messageRepo,
         ILogger<McpToolExecutor> logger)
     {
         _policyRepo = policyRepo;
         _knowledgeMcpTool = knowledgeMcpTool;
+        _knowledgeListMcpTool = knowledgeListMcpTool;
         _messageRepo = messageRepo;
         _logger = logger;
 
-        // Handler padrão: knowledge_search (backward compat)
+        // Handlers padrão da KB: busca por assunto + catálogo.
         RegisterHandler("knowledge_search", HandleKnowledgeSearchAsync);
+        RegisterHandler("knowledge_list", HandleKnowledgeListAsync);
         RegisterHandler("time.current", ctx => HandleTimeCurrentAsync(ctx));
         RegisterHandler("sequential_thinking", ctx => HandleSequentialThinkingAsync(ctx));
         RegisterHandler("memory.search", HandleMemorySearchAsync);
@@ -205,7 +209,9 @@ public class McpToolExecutor : IMcpToolExecutor
 
     private static string GetToolDescription(string toolName) => toolName switch
     {
-        "knowledge_search" => "Pesquisa artigos e procedimentos na base de conhecimento corporativa. Use quando o usuário perguntar sobre políticas, SOPs, sistemas internos, procedimentos de TI ou qualquer assunto documentado da empresa. O parâmetro 'query' é OBRIGATÓRIO e deve conter os termos de busca (ex: 'configurar VPN', 'política de senhas', 'instalar impressora HP'). NÃO use para perguntas genéricas de informática que não envolvam sistemas/procedimentos internos da empresa — para essas, responda com seu próprio conhecimento.",
+        "knowledge_search" => "Pesquisa artigos e procedimentos na base de conhecimento corporativa. Use quando o usuário perguntar sobre políticas, SOPs, sistemas internos, procedimentos de TI ou qualquer assunto documentado da empresa. O parâmetro 'query' é OBRIGATÓRIO e deve conter os termos de busca (ex: 'configurar VPN', 'política de senhas', 'instalar impressora HP'). NÃO use para perguntas genéricas de informática que não envolvam sistemas/procedimentos internos da empresa — para essas, responda com seu próprio conhecimento. Cada resultado traz 'internal_url' (discovery://knowledge/article/<id>) para abrir o artigo direto no app.",
+
+        "knowledge_list" => "Lista os artigos PUBLICADOS da base de conhecimento acessíveis a esta máquina (id, título, categoria, escopo, tags, resumo e internal_url). Use SEMPRE que o usuário perguntar quais artigos/procedimentos existem, o que a base contém, ou quando precisar confirmar se há conteúdo sobre um assunto antes de dizer que não encontrou. NÃO exige parâmetros; opcionalmente filtre por 'category'. Para procurar o conteúdo de um assunto específico use knowledge_search. Cada item traz 'internal_url' (discovery://knowledge/article/<id>) para abrir o artigo direto no app.",
 
         "filesystem.read_file" => "Lê o conteúdo de um arquivo do sistema de arquivos do computador do usuário. O parâmetro 'path' é OBRIGATÓRIO e deve ser o caminho absoluto do arquivo (ex: 'C:\\Users\\usuario\\Documents\\config.ini'). NÃO use para listar diretórios, escrever ou modificar arquivos — apenas leitura. Use com cautela e apenas sob demanda explícita do usuário.",
 
@@ -240,6 +246,22 @@ public class McpToolExecutor : IMcpToolExecutor
             maxResults: maxRes,
             departmentId: ctx.DepartmentId,
             ct: ctx.CancellationToken);
+    }
+
+    private async Task<string> HandleKnowledgeListAsync(McpToolCallContext ctx)
+    {
+        var root = ctx.Arguments.RootElement;
+
+        var category = root.TryGetProperty("category", out var cProp) && cProp.ValueKind == JsonValueKind.String
+            ? cProp.GetString()
+            : null;
+
+        var limit = root.TryGetProperty("limit", out var lProp) && lProp.ValueKind == JsonValueKind.Number
+            ? lProp.GetInt32()
+            : 50;
+
+        return await _knowledgeListMcpTool.ExecuteAsync(
+            ctx.ClientId, ctx.SiteId, category, limit, ctx.CancellationToken);
     }
 
     private static Task<string> HandleTimeCurrentAsync(McpToolCallContext ctx)

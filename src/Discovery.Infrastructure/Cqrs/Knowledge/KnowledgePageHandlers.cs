@@ -136,6 +136,11 @@ public sealed class CreateArticlePageCommandHandler(
         };
 
         var created = await repo.CreateAsync(page, ct);
+
+        // Nova sub-página entra no chunking: invalida o cache de chunks do artigo
+        // (o KnowledgeEmbeddingJob re-chunka no próximo ciclo, incluindo a página).
+        await KnowledgePageChunkInvalidation.InvalidateAsync(articleRepo, cmd.ArticleId, ct);
+
         return Result<ArticlePageResponse>.Success(MapToResponse(created));
     }
 
@@ -152,7 +157,9 @@ public sealed class CreateArticlePageCommandHandler(
         UpdatedAt: p.UpdatedAt);
 }
 
-public sealed class UpdateArticlePageCommandHandler(IKnowledgeArticlePageRepository repo)
+public sealed class UpdateArticlePageCommandHandler(
+    IKnowledgeArticlePageRepository repo,
+    IKnowledgeArticleRepository articleRepo)
     : IRequestHandler<UpdateArticlePageCommand, Result<ArticlePageResponse>>
 {
     public async Task<Result<ArticlePageResponse>> Handle(UpdateArticlePageCommand cmd, CancellationToken ct)
@@ -192,6 +199,10 @@ public sealed class UpdateArticlePageCommandHandler(IKnowledgeArticlePageReposit
         page.SortOrder = cmd.SortOrder;
 
         var updated = await repo.UpdateAsync(page, ct);
+
+        // Conteúdo da sub-página mudou: re-chunk do artigo no próximo ciclo.
+        await KnowledgePageChunkInvalidation.InvalidateAsync(articleRepo, cmd.ArticleId, ct);
+
         return Result<ArticlePageResponse>.Success(MapToResponse(updated));
     }
 
@@ -208,7 +219,9 @@ public sealed class UpdateArticlePageCommandHandler(IKnowledgeArticlePageReposit
         UpdatedAt: p.UpdatedAt);
 }
 
-public sealed class DeleteArticlePageCommandHandler(IKnowledgeArticlePageRepository repo)
+public sealed class DeleteArticlePageCommandHandler(
+    IKnowledgeArticlePageRepository repo,
+    IKnowledgeArticleRepository articleRepo)
     : IRequestHandler<DeleteArticlePageCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteArticlePageCommand cmd, CancellationToken ct)
@@ -217,6 +230,27 @@ public sealed class DeleteArticlePageCommandHandler(IKnowledgeArticlePageReposit
         if (page is null) return Result<VoidResult>.Failure(Error.NotFound($"Page {cmd.PageId} not found in article {cmd.ArticleId}"));
 
         await repo.DeleteAsync(cmd.ArticleId, cmd.PageId, ct);
+
+        // Sub-página removida: re-chunk do artigo para não indexar conteúdo excluído.
+        await KnowledgePageChunkInvalidation.InvalidateAsync(articleRepo, cmd.ArticleId, ct);
+
         return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
+/// <summary>
+/// Invalida os chunks de um artigo quando suas sub-páginas mudam. Marca
+/// LastChunkedAt = null para o KnowledgeEmbeddingJob re-chunkar (incluindo o
+/// conteúdo atualizado das páginas) no próximo ciclo.
+/// </summary>
+internal static class KnowledgePageChunkInvalidation
+{
+    internal static async Task InvalidateAsync(
+        IKnowledgeArticleRepository articleRepo, Guid articleId, CancellationToken ct)
+    {
+        var article = await articleRepo.GetByIdAsync(articleId, ct);
+        if (article is null) return;
+        article.LastChunkedAt = null;
+        await articleRepo.UpdateAsync(article, ct);
     }
 }

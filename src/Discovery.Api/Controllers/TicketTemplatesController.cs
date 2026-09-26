@@ -15,8 +15,15 @@ public class TicketTemplatesController(IMediator mediator) : ControllerBase
     [HttpGet]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetAll(
-        [FromQuery] Guid? clientId = null, [FromQuery] Guid? departmentId = null, [FromQuery] bool includeGlobal = true)
-        => (await mediator.Send(new ListTicketTemplatesQuery(clientId, departmentId, includeGlobal), HttpContext.RequestAborted)).ToActionResult();
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? departmentId = null,
+        [FromQuery] bool includeGlobal = true,
+        [FromQuery] bool includeInactive = false,
+        [FromQuery] bool includeDeleted = false,
+        [FromQuery] bool allClients = false)
+        => (await mediator.Send(
+            new ListTicketTemplatesQuery(clientId, departmentId, includeGlobal, includeInactive, includeDeleted, allClients),
+            HttpContext.RequestAborted)).ToActionResult();
 
     [HttpPost]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
@@ -28,8 +35,24 @@ public class TicketTemplatesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketTemplateCommand cmd)
         => (await mediator.Send(cmd with { Id = id }, HttpContext.RequestAborted)).ToActionResult();
 
+    /// <summary>
+    /// Sem permanent: soft delete (vai para a lixeira, restaurável).
+    /// Com permanent=true: exclusão física; sem force=true recusa quando o
+    /// template já foi usado por chamados (409 com a contagem).
+    /// </summary>
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> Delete(Guid id, [FromQuery] bool force = false)
-        => (await mediator.Send(new DeleteTicketTemplateCommand(id, force), HttpContext.RequestAborted)).ToActionResult();
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] bool force = false, [FromQuery] bool permanent = false)
+    {
+        var result = permanent
+            ? await mediator.Send(new PurgeTicketTemplateCommand(id, force), HttpContext.RequestAborted)
+            : await mediator.Send(new DeleteTicketTemplateCommand(id, Username), HttpContext.RequestAborted);
+        return result.ToActionResult();
+    }
+
+    /// <summary>Tira o template da lixeira (volta a aparecer na listagem conforme IsActive).</summary>
+    [HttpPost("{id:guid}/restore")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> Restore(Guid id)
+        => (await mediator.Send(new RestoreTicketTemplateCommand(id), HttpContext.RequestAborted)).ToActionResult();
 }

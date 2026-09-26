@@ -33,17 +33,23 @@ public interface IKnowledgeArticleRepository
         CancellationToken ct = default);
 
     /// <summary>
-    /// Busca por palavra-chave em title + content + tags (ILIKE)
+    /// Busca por palavra-chave em title + content + category + tags (ILIKE).
+    /// A query é tokenizada em termos e cada termo é procurado com OR (frases de
+    /// linguagem natural como "como configurar a VPN" não casavam como frase única).
     /// </summary>
+    /// <param name="publishedOnly">Quando true, retorna apenas artigos Published
+    /// (usado pelo chat do agent; artigos Internal ficam restritos ao departamento).</param>
     Task<List<KnowledgeArticle>> SearchKeywordAsync(
         string query,
         Guid? clientId,
         Guid? siteId,
         Guid? departmentId = null,
+        bool publishedOnly = false,
         CancellationToken ct = default);
 
     /// <summary>
     /// Busca por palavra-chave em múltiplos escopos (ACL do usuário).
+    /// Mesma tokenização por termos de <see cref="SearchKeywordAsync"/>.
     /// </summary>
     Task<List<KnowledgeArticle>> SearchKeywordByUserScopeAsync(
         string query,
@@ -51,6 +57,7 @@ public interface IKnowledgeArticleRepository
         IReadOnlySet<Guid> allowedClientIds,
         IReadOnlySet<Guid> allowedSiteIds,
         Guid? departmentId = null,
+        bool publishedOnly = false,
         CancellationToken ct = default);
 
     /// <summary>
@@ -64,10 +71,18 @@ public interface IKnowledgeArticleRepository
     Task<List<KnowledgeArticle>> GetByTicketAsync(Guid ticketId, CancellationToken ct = default);
 
     /// <summary>
-    /// Verifica rapidamente se existem artigos publicados/internos no escopo.
-    /// Usado como guard clause para evitar chamadas de embedding quando a KB está vazia.
+    /// Verifica rapidamente se existem artigos PUBLICADOS no escopo.
+    /// Usado como guard clause para evitar chamadas de embedding quando a KB está vazia
+    /// e para distinguir "base sem artigos" de "busca sem resultado" no chat.
     /// </summary>
     Task<bool> HasPublishedArticlesAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Conta os artigos PUBLICADOS acessíveis no escopo (site → client → global).
+    /// Usado pelo catálogo do chat (knowledge_list) para informar o total real,
+    /// mesmo quando a página retornada é limitada.
+    /// </summary>
+    Task<int> CountPublishedAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default);
 
     // ─── Versionamento ──────────────────────────────────────────
 

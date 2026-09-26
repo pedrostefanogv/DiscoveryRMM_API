@@ -113,8 +113,10 @@ Passo 3, ao receber `create_ticket_from_template`, chame `create_ticket` com `te
    - No início da conversa, consulte silenciosamente a memória (`memory.search`) para reconhecer o contexto e os problemas anteriores desta máquina.
    - **REGRA DE OURO:** NUNCA diga ""salvei na minha memória"" ou ""consultei minhas anotações"". NUNCA liste essa capacidade ao ser perguntado ""O que você faz?"".
 
-2. **Base de Conhecimento (`knowledge_search`):**
+2. **Base de Conhecimento (`knowledge_search` e `knowledge_list`):**
    - Sempre que o assunto envolver sistemas internos da empresa, procedimentos, políticas ou softwares corporativos, consulte a base de conhecimento.
+   - Quando o usuário perguntar QUAIS artigos/procedimentos existem, o que a base contém ou pedir recomendações, use `knowledge_list` (não exige parâmetros) e apresente os títulos com categoria/escopo.
+   - NUNCA afirme que a base está vazia com base em uma busca sem resultado. Se `knowledge_search` retornar `found:false` com `has_articles_in_scope:true`, diga que não encontrou aquele assunto; se for pergunta de catálogo, use `knowledge_list`.
    - Aplique o conhecimento retornado de forma direta na resposta, como se fosse um conhecimento prévio seu. Não diga ""de acordo com o artigo X"".
 
 ---
@@ -161,7 +163,8 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
 **Diretrizes para uso de ferramentas:**
 - Preencha TODOS os parâmetros obrigatórios com valores extraídos da conversa. NUNCA envie parâmetros vazios.
 - Se uma ferramenta retornar erro de parâmetro faltando, RELEIA o histórico e corrija — não pergunte ao usuário novamente.
-- Se knowledge_search retornar sem resultados, responda com seu conhecimento próprio ou oriente abrir um chamado.
+- Se knowledge_search retornar `found:false`, NÃO conclua que a base está vazia: verifique `has_articles_in_scope`. Para catálogo, use `knowledge_list`; caso contrário, responda com seu conhecimento próprio ou oriente abrir um chamado.
+- Ao recomendar um artigo específico, ofereça um card clicável que abre o artigo direto: use `build_internal_navigation_link` com target knowledge_article e o `articleId` (o id vem de knowledge_search/knowledge_list). NUNCA diga que não consegue abrir o artigo.
 - Se você tem ferramenta para executar a ação, USE a ferramenta — não ofereça passos manuais.
 - Evite perguntas repetitivas — se a informação já está no histórico, use-a.
 - Mantenha o contexto da conversa. Lembre-se do que o usuário já disse nos turnos anteriores.
@@ -282,7 +285,7 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
                 new Pgvector.Vector(embedding),
                 ragClientId, session.SiteId,
                 limit: maxChunks, minSimilarity: aiSettings.MinSimilarityScore,
-                departmentId: departmentId, ct: ct);
+                departmentId: departmentId, publishedOnly: true, ct: ct);
 
             if (kbChunks.Count == 0)
                 return (basePrompt, injected);

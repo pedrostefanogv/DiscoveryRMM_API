@@ -90,6 +90,7 @@ public class KnowledgeMcpTool(
                 minSimilarity: settings.MinSimilarityScore,
                 excludeArticleIds: excludeArticleIds,
                 departmentId: departmentId,
+                publishedOnly: true,
                 ct: ct);
         }
         catch (Exception ex)
@@ -110,9 +111,10 @@ public class KnowledgeMcpTool(
         // ── Fallback: busca keyword ──
         try
         {
-            var keywordResults = await articleRepository.SearchKeywordAsync(query, clientId, siteId, departmentId: departmentId, ct);
+            var keywordResults = await articleRepository.SearchKeywordAsync(
+                query, clientId, siteId, departmentId: departmentId, publishedOnly: true, ct);
             if (keywordResults.Count == 0)
-                return JsonSerializer.Serialize(new { found = false, message = "Nenhum artigo encontrado na base de conhecimento." });
+                return await BuildEmptyResultAsync(clientId, siteId, ct);
 
             var kwItems = keywordResults.Take(maxResults).Select(a => BuildKeywordCitation(a, settings));
             return JsonSerializer.Serialize(new { found = true, results = kwItems });
@@ -122,6 +124,34 @@ public class KnowledgeMcpTool(
             logger.LogError(ex, "Erro ao executar KnowledgeMcpTool (busca keyword) para query={Query}", LogSanitizer.Sanitize(query));
             return JsonSerializer.Serialize(new { found = false, error = "Erro ao consultar base de conhecimento." });
         }
+    }
+
+    /// <summary>
+    /// Resultado de busca sem match. Distingue "base sem artigos publicados" de
+    /// "nenhum artigo corresponde à busca" para o LLM não afirmar que a base
+    /// está vazia quando na verdade faltou correspondência.
+    /// </summary>
+    private async Task<string> BuildEmptyResultAsync(Guid? clientId, Guid? siteId, CancellationToken ct)
+    {
+        bool hasArticles;
+        try
+        {
+            hasArticles = await articleRepository.HasPublishedArticlesAsync(clientId, siteId, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao verificar artigos publicados da base de conhecimento");
+            hasArticles = false;
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            found = false,
+            has_articles_in_scope = hasArticles,
+            message = hasArticles
+                ? "Nenhum artigo corresponde à busca. Se a pergunta for sobre o catálogo de artigos, use knowledge_list."
+                : "A base de conhecimento não possui artigos publicados para este escopo."
+        });
     }
 
     private static object BuildCitationResult(KnowledgeChunkSearchResult r, string? keywordScore, AIIntegrationSettings settings)
@@ -134,7 +164,8 @@ public class KnowledgeMcpTool(
             content = r.ChunkContent.Length > 600 ? r.ChunkContent[..600] + "..." : r.ChunkContent,
             score = keywordScore ?? Math.Round(1.0 - r.Distance, 4).ToString("F4"),
             scope = GetScope(r.ArticleClientId, r.ArticleSiteId),
-            source_line = keywordScore is not null ? "keyword" : "semantic"
+            source_line = keywordScore is not null ? "keyword" : "semantic",
+            internal_url = BuildArticleUrl(r.ArticleId)
         };
 
         if (!settings.CitationsEnabled)
@@ -150,6 +181,7 @@ public class KnowledgeMcpTool(
             baseFields.score,
             baseFields.scope,
             baseFields.source_line,
+            baseFields.internal_url,
             citation = FormattableString.Invariant($"[Fonte: {r.ArticleTitle}]")
         };
     }
@@ -166,7 +198,8 @@ public class KnowledgeMcpTool(
                 content = a.Content.Length > 600 ? a.Content[..600] + "..." : a.Content,
                 score = (string?)null,
                 scope = GetScope(a.ClientId, a.SiteId),
-                source_line = "keyword"
+                source_line = "keyword",
+                internal_url = BuildArticleUrl(a.Id)
             };
         }
 
@@ -179,9 +212,13 @@ public class KnowledgeMcpTool(
             score = (string?)null,
             scope = GetScope(a.ClientId, a.SiteId),
             source_line = "keyword",
+            internal_url = BuildArticleUrl(a.Id),
             citation = FormattableString.Invariant($"[Fonte: {a.Title}]")
         };
     }
+
+    /// <summary>Deep link interno que abre o artigo direto no app (card do chat).</summary>
+    private static string BuildArticleUrl(Guid articleId) => $"discovery://knowledge/article/{articleId}";
 
     private static string GetScope(Guid? clientId, Guid? siteId) =>
         (clientId, siteId) switch

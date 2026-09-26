@@ -37,7 +37,8 @@ internal static class AiChatHelpers
     /// <summary>Injetada quando a base de conhecimento não retorna resultados repetidamente.</summary>
     public const string KbExhaustedNote =
         "[SISTEMA] A base de conhecimento não retornou resultados para as buscas realizadas. " +
-        "Responda com seu conhecimento próprio. NÃO faça novas buscas na base de conhecimento.";
+        "Responda com seu conhecimento próprio. NÃO repita buscas de conteúdo; " +
+        "se o usuário precisar do catálogo de artigos, use knowledge_list.";
 
     /// <summary>Injetada quando a execução de tool no agent expira (round pendente).</summary>
     public const string AgentRoundExpiredNote =
