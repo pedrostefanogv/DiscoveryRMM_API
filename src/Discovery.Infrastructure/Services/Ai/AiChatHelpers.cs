@@ -71,8 +71,11 @@ internal static class AiChatHelpers
     public static int ClampAiTimeoutMs(AIIntegrationSettings settings)
     {
         var ms = settings.TimeoutMs;
-        // B9: piso de 60s também quando não configurado (o comentário já dizia isso).
-        if (ms <= 0) return 60_000;
-        return Math.Max(ms, 60_000);
+        // B9/B16: piso de 120s — modelos de raciocínio roteados pelo OpenRouter
+        // (ex.: openrouter/auto → DeepSeek) frequentemente levam mais de 60s até o
+        // primeiro token visível. O cap de 60s cortava a geração e o cliente
+        // recebia um stream vazio.
+        if (ms <= 0) return 120_000;
+        return Math.Max(ms, 120_000);
     }
 }

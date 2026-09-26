@@ -34,6 +34,21 @@ public class OpenAiProvider : ILlmProvider
         return _httpClientFactory.CreateClient("AiChat");
     }
 
+    /// <summary>Trunca um texto para log sem depender de helpers externos.</summary>
+    private static string Shorten(string? value, int max)
+        => string.IsNullOrEmpty(value) ? string.Empty : (value.Length <= max ? value : value[..max] + "...");
+
+    /// <summary>
+    /// Cria um CTS com timeout por request, encadeado ao token do chamador.
+    /// Substitui o cap fixo de 60s do HttpClient "AiChat" por LlmOptions.TimeoutMs.
+    /// </summary>
+    private static CancellationTokenSource CreateTimeoutCts(CancellationToken ct, int timeoutMs)
+    {
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeoutMs > 0 ? timeoutMs : 180_000);
+        return cts;
+    }
+
     /// <summary>
     /// Resolve a BaseUrl padrão ou da opção. Suporta Ollama como provider explícito.
     /// </summary>
@@ -142,6 +157,23 @@ public class OpenAiProvider : ILlmProvider
             payloadDict["session_id"] = options.SessionId;
     }
 
+    /// <summary>
+    /// B16: envia o controle de reasoning ao OpenRouter (config que era morta em
+    /// AIIntegrationSettings). Só para OpenRouter para não causar 400 nos demais.
+    /// </summary>
+    private static void AddReasoningToPayload(Dictionary<string, object?> payloadDict, LlmOptions options)
+    {
+        var (provider, baseUrl) = AutoCorrectProviderAndBaseUrl(options.Provider, options.BaseUrl, options.Model ?? string.Empty);
+        var isOpenRouter = string.Equals(provider, AIIntegrationSettings.ProviderOpenRouter, StringComparison.OrdinalIgnoreCase)
+            || (!string.IsNullOrWhiteSpace(baseUrl) && baseUrl.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase));
+        if (!isOpenRouter) return;
+
+        if (options.ReasoningEnabled)
+            payloadDict["reasoning"] = new { effort = string.IsNullOrWhiteSpace(options.ReasoningEffort) ? "medium" : options.ReasoningEffort };
+        else
+            payloadDict["reasoning"] = new { enabled = false };
+    }
+
     public async Task<LlmResponse> CompleteAsync(
         string systemPrompt,
         List<LlmMessage> messages,
@@ -243,6 +275,7 @@ public class OpenAiProvider : ILlmProvider
             }
 
             AddSessionIdToPayload(payloadDict, options);
+        AddReasoningToPayload(payloadDict, options);
 
             var content = new StringContent(
                 JsonSerializer.Serialize(payloadDict, SJsonOpts),
@@ -317,6 +350,9 @@ public class OpenAiProvider : ILlmProvider
         LlmOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        using var timeoutCts = CreateTimeoutCts(cancellationToken, options.TimeoutMs);
+        var requestToken = timeoutCts.Token;
+
         var model = options.Model;
         if (string.IsNullOrWhiteSpace(model))
             throw new InvalidOperationException("Modelo de IA não definido no banco para o escopo atual.");
@@ -354,6 +390,7 @@ public class OpenAiProvider : ILlmProvider
         };
 
         AddSessionIdToPayload(payloadDict, options);
+        AddReasoningToPayload(payloadDict, options);
 
         var requestBody = new StringContent(
             JsonSerializer.Serialize(payloadDict, SJsonOpts),
@@ -374,22 +411,22 @@ public class OpenAiProvider : ILlmProvider
         using var response = await httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
+            requestToken);
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            var errorBody = await response.Content.ReadAsStringAsync(requestToken);
             _logger.LogError("OpenAI stream error: {StatusCode} - {Error}", response.StatusCode, errorBody);
             throw new HttpRequestException(BuildProviderErrorMessage(response.StatusCode, errorBody));
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await using var stream = await response.Content.ReadAsStreamAsync(requestToken);
         using var reader = new System.IO.StreamReader(stream, Encoding.UTF8);
 
         string? line;
-        while ((line = await reader.ReadLineAsync(cancellationToken)) != null)
+        while ((line = await reader.ReadLineAsync(requestToken)) != null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            requestToken.ThrowIfCancellationRequested();
 
             if (string.IsNullOrEmpty(line))
                 continue;
@@ -409,14 +446,22 @@ public class OpenAiProvider : ILlmProvider
             try
             {
                 using var doc = JsonDocument.Parse(data);
-                var choices = doc.RootElement.GetProperty("choices");
-                if (choices.GetArrayLength() == 0) continue;
-
-                var delta = choices[0].GetProperty("delta");
-                if (delta.TryGetProperty("content", out var contentProp) &&
-                    contentProp.ValueKind == JsonValueKind.String)
+                var root = doc.RootElement;
+                if (root.TryGetProperty("error", out var errProp))
                 {
-                    token = contentProp.GetString();
+                    var msg = errProp.ValueKind == JsonValueKind.String
+                        ? errProp.GetString()
+                        : errProp.TryGetProperty("message", out var m) ? m.GetString() : errProp.GetRawText();
+                    throw new InvalidOperationException($"Provider stream error: {Shorten(msg, 400)}");
+                }
+                if (root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0)
+                {
+                    var choice = choices[0];
+                    if (choice.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object
+                        && delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
+                    {
+                        token = contentProp.GetString();
+                    }
                 }
             }
             catch (JsonException)
@@ -440,6 +485,9 @@ public class OpenAiProvider : ILlmProvider
         LlmOptions options,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        using var timeoutCts = CreateTimeoutCts(cancellationToken, options.TimeoutMs);
+        var requestToken = timeoutCts.Token;
+
         var model = options.Model;
         if (string.IsNullOrWhiteSpace(model))
             throw new InvalidOperationException("Modelo de IA não definido no banco para o escopo atual.");
@@ -508,6 +556,7 @@ public class OpenAiProvider : ILlmProvider
         }
 
         AddSessionIdToPayload(payloadDict, options);
+        AddReasoningToPayload(payloadDict, options);
 
         var requestBody = new StringContent(
             JsonSerializer.Serialize(payloadDict, SJsonOpts),
@@ -522,25 +571,25 @@ public class OpenAiProvider : ILlmProvider
         ApplyOpenRouterHeaders(request, openRouterOpts, baseUrl);
 
         var httpClient = BuildHttpClient(options);
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestToken);
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            var errorBody = await response.Content.ReadAsStringAsync(requestToken);
             _logger.LogError("OpenAI stream error: {StatusCode} - {Error}", response.StatusCode, errorBody);
             throw new HttpRequestException(BuildProviderErrorMessage(response.StatusCode, errorBody));
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await using var stream = await response.Content.ReadAsStreamAsync(requestToken);
         using var reader = new StreamReader(stream, Encoding.UTF8);
 
         // Acumuladores de tool calls (delta.tool_calls chega em chunks incrementais)
         var pendingToolCalls = new Dictionary<int, (string Id, string Name, StringBuilder Args)>();
 
         string? line;
-        while ((line = await reader.ReadLineAsync(cancellationToken)) != null)
+        while ((line = await reader.ReadLineAsync(requestToken)) != null)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            requestToken.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(line)) continue;
             if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
 
@@ -568,8 +617,10 @@ public class OpenAiProvider : ILlmProvider
             {
                 parsed = ParseStreamChunk(data, pendingToolCalls);
             }
-            catch (JsonException)
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
             {
+                if (ex is InvalidOperationException) throw;
+                _logger.LogWarning("Chunk SSE invalido do provider (ignorado): {Data}", Shorten(data, 300));
                 continue;
             }
 
@@ -586,20 +637,40 @@ public class OpenAiProvider : ILlmProvider
     /// Parse um chunk SSE e retorna o LlmStreamEvent correspondente.
     /// Extraído para método separado para evitar yield dentro de try-catch.
     /// </summary>
-    private static LlmStreamEvent? ParseStreamChunk(string data, Dictionary<int, (string Id, string Name, StringBuilder Args)> pendingToolCalls)
+    internal static LlmStreamEvent? ParseStreamChunk(string data, Dictionary<int, (string Id, string Name, StringBuilder Args)> pendingToolCalls)
     {
         using var doc = JsonDocument.Parse(data);
-        var choices = doc.RootElement.GetProperty("choices");
-        if (choices.GetArrayLength() == 0) return null;
+        var root = doc.RootElement;
+
+        // OpenRouter (e outros gateways) podem enviar um objeto de erro no meio
+        // do stream, sem "choices". Antes isso lançava KeyNotFoundException e o
+        // enumerador morria em silêncio (200 sem tokens). Agora é erro explícito.
+        if (root.TryGetProperty("error", out var errProp))
+        {
+            var msg = errProp.ValueKind == JsonValueKind.String
+                ? errProp.GetString()
+                : errProp.TryGetProperty("message", out var m) ? m.GetString() : errProp.GetRawText();
+            throw new InvalidOperationException($"Provider stream error: {Shorten(msg, 400)}");
+        }
+
+        if (!root.TryGetProperty("choices", out var choices)
+            || choices.ValueKind != JsonValueKind.Array
+            || choices.GetArrayLength() == 0)
+            return null;
 
         var choice = choices[0];
-        var delta = choice.GetProperty("delta");
+        var hasDelta = choice.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object;
+
         string? finishReason = null;
         if (choice.TryGetProperty("finish_reason", out var frProp) && frProp.ValueKind == JsonValueKind.String)
             finishReason = frProp.GetString();
+        // OpenRouter: native_finish_reason reflete o motivo real do upstream.
+        if (string.IsNullOrEmpty(finishReason)
+            && choice.TryGetProperty("native_finish_reason", out var nfr) && nfr.ValueKind == JsonValueKind.String)
+            finishReason = nfr.GetString();
 
-        // 1. Delta content (texto)
-        if (delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
+        // 1. Delta content (texto). reasoning/reasoning_content NÃO é exibido.
+        if (hasDelta && delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
         {
             var token = contentProp.GetString();
             if (!string.IsNullOrEmpty(token))
@@ -607,68 +678,61 @@ public class OpenAiProvider : ILlmProvider
         }
 
         // 2. Delta tool_calls (incremental)
-        if (delta.TryGetProperty("tool_calls", out var tcProp) && tcProp.ValueKind == JsonValueKind.Array)
+        if (hasDelta && delta.TryGetProperty("tool_calls", out var tcProp) && tcProp.ValueKind == JsonValueKind.Array)
         {
             foreach (var tc in tcProp.EnumerateArray())
             {
-                var index = tc.GetProperty("index").GetInt32();
+                if (tc.ValueKind != JsonValueKind.Object) continue;
+                if (!tc.TryGetProperty("index", out var idxProp) || idxProp.ValueKind != JsonValueKind.Number) continue;
+                var index = idxProp.GetInt32();
 
                 if (!pendingToolCalls.ContainsKey(index))
                 {
                     var id = tc.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String
                         ? idProp.GetString()! : string.Empty;
-                    var fn = tc.GetProperty("function");
-                    var name = fn.TryGetProperty("name", out var nProp) && nProp.ValueKind == JsonValueKind.String
-                        ? nProp.GetString()! : string.Empty;
+                    var name = tc.TryGetProperty("function", out var fn0)
+                        && fn0.ValueKind == JsonValueKind.Object
+                        && fn0.TryGetProperty("name", out var n0) && n0.ValueKind == JsonValueKind.String
+                        ? n0.GetString()! : string.Empty;
                     pendingToolCalls[index] = (id, name, new StringBuilder());
                 }
 
                 var existing = pendingToolCalls[index];
                 // A1: alguns providers (OpenRouter/Anthropic/Gemini) enviam id/name
-                // em chunks SUBSEQUENTES ao de criação — sem merge aqui, a tool
-                // call perdia id/nome e era rejeitada.
+                // em chunks SUBSEQUENTES ao de criação — merge abaixo.
                 if (tc.TryGetProperty("id", out var idDelta) && idDelta.ValueKind == JsonValueKind.String)
                 {
                     var idVal = idDelta.GetString();
                     if (!string.IsNullOrEmpty(idVal)) existing.Id = idVal;
                 }
-                var fnDelta = tc.GetProperty("function");
-                if (fnDelta.TryGetProperty("name", out var nameDelta) && nameDelta.ValueKind == JsonValueKind.String)
+                if (tc.TryGetProperty("function", out var fnDelta) && fnDelta.ValueKind == JsonValueKind.Object)
                 {
-                    var nameVal = nameDelta.GetString();
-                    if (!string.IsNullOrEmpty(nameVal)) existing.Name = nameVal;
+                    if (fnDelta.TryGetProperty("name", out var nameDelta) && nameDelta.ValueKind == JsonValueKind.String)
+                    {
+                        var nameVal = nameDelta.GetString();
+                        if (!string.IsNullOrEmpty(nameVal)) existing.Name = nameVal;
+                    }
+                    if (fnDelta.TryGetProperty("arguments", out var argsProp) && argsProp.ValueKind == JsonValueKind.String)
+                        existing.Args.Append(argsProp.GetString());
                 }
-                if (fnDelta.TryGetProperty("arguments", out var argsProp) && argsProp.ValueKind == JsonValueKind.String)
-                    existing.Args.Append(argsProp.GetString());
             }
         }
 
-        // 3. Finish reason = tool_calls → emitir tool calls acumuladas
-        if (string.Equals(finishReason, "tool_calls", StringComparison.OrdinalIgnoreCase) && pendingToolCalls.Count > 0)
+        int? tokensUsed = null;
+        if (root.TryGetProperty("usage", out var usageProp) && usageProp.ValueKind == JsonValueKind.Object
+            && usageProp.TryGetProperty("total_tokens", out var ttProp) && ttProp.ValueKind == JsonValueKind.Number)
+            tokensUsed = ttProp.GetInt32();
+
+        // 3. Qualquer finish_reason terminal encerra o round. tool_calls emite as
+        // tool calls acumuladas; stop/length/content_filter/... emitem done.
+        if (!string.IsNullOrEmpty(finishReason))
         {
-            var parsedToolCalls = pendingToolCalls.Values.Select(tc => new LlmToolCall(
-                tc.Id, tc.Name, tc.Args.ToString())).ToList();
-
-            int? tokensUsed = null;
-            if (doc.RootElement.TryGetProperty("usage", out var usageProp))
+            if (string.Equals(finishReason, "tool_calls", StringComparison.OrdinalIgnoreCase) && pendingToolCalls.Count > 0)
             {
-                if (usageProp.TryGetProperty("total_tokens", out var ttProp))
-                    tokensUsed = ttProp.GetInt32();
+                var parsedToolCalls = pendingToolCalls.Values.Select(tc => new LlmToolCall(
+                    tc.Id, tc.Name, tc.Args.ToString())).ToList();
+                return new LlmStreamEvent(Type: "tool_calls", ToolCalls: parsedToolCalls, TokensUsed: tokensUsed);
             }
-
-            return new LlmStreamEvent(Type: "tool_calls", ToolCalls: parsedToolCalls, TokensUsed: tokensUsed);
-        }
-
-        // 4. Finish reason = stop
-        if (string.Equals(finishReason, "stop", StringComparison.OrdinalIgnoreCase))
-        {
-            int? tokensUsed = null;
-            if (doc.RootElement.TryGetProperty("usage", out var usageProp))
-            {
-                if (usageProp.TryGetProperty("total_tokens", out var ttProp))
-                    tokensUsed = ttProp.GetInt32();
-            }
-
             return new LlmStreamEvent(Type: "done", TokensUsed: tokensUsed);
         }
 

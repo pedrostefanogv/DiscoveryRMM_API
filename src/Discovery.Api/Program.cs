@@ -138,7 +138,10 @@ builder.Services.AddSingleton<AppCatalogBackgroundSyncService>();
 
 builder.Services.AddHttpClient("AiChat", client =>
 {
-    client.Timeout = TimeSpan.FromSeconds(60);
+    // B16: antes 60s, que cobria o corpo do stream e matava modelos de
+    // raciocinio. O timeout efetivo por request agora vem de LlmOptions.TimeoutMs
+    // (piso de 120s); este valor e apenas o teto de seguranca do HttpClient.
+    client.Timeout = TimeSpan.FromSeconds(300);
     client.DefaultRequestHeaders.Add("Accept", "application/json");
 });
 

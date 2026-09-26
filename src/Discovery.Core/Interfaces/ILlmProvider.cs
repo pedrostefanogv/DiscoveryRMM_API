@@ -64,7 +64,10 @@ public record LlmOptions(
     double? FrequencyPenalty = null,
     double? PresencePenalty = null,
     int? Seed = null,
-    string? ResponseFormat = null);
+    string? ResponseFormat = null,
+    // B16: reasoning (OpenRouter) era config morta em AIIntegrationSettings.
+    bool ReasoningEnabled = false,
+    string? ReasoningEffort = null);
 
 public record LlmTool(
     string Name,

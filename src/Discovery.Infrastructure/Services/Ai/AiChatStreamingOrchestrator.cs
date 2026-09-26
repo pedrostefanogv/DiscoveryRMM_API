@@ -67,6 +67,16 @@ public class AiChatStreamingOrchestrator
     public static bool IsTextToken(LlmStreamEvent evt)
         => evt.Type == "token" && !string.IsNullOrEmpty(evt.Content);
 
+    /// <summary>
+    /// B16: número de rejeições consecutivas de argumentos de uma tool do agent
+    /// antes de encerrar o loop de tools e sintetizar uma resposta sem tools.
+    /// </summary>
+    private const int MaxConsecutiveAgentToolArgErrors = 3;
+
+    /// <summary>Trunca um texto para log sem depender de helpers externos.</summary>
+    private static string Shorten(string? value, int max)
+        => string.IsNullOrEmpty(value) ? string.Empty : (value.Length <= max ? value : value[..max] + "...");
+
     public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(
         Guid agentId, string message, Guid? sessionId,
         Func<Guid, CancellationToken, Task<AIIntegrationSettings>> resolveAiSettings,
@@ -178,6 +188,12 @@ public class AiChatStreamingOrchestrator
         var consecutiveEmptyKbSearches = 0;
         bool hasToolCalls = false;
         var consecutiveToolErrors = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // B16: rastreia se algum token visível já foi transmitido ao cliente.
+        // Garante que NENHUM turno 200 termine com conteúdo persistido e zero
+        // tokens (bug de produção: fallback injetado no contentBuilder não era
+        // emitido, o agent exibia a mensagem genérica e o servidor persistia
+        // uma resposta que o usuário nunca viu).
+        bool anyTokenYielded = false;
 
         var availableTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, ct) : [];
@@ -190,6 +206,10 @@ public class AiChatStreamingOrchestrator
         }
 
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
+        // B17: schema registrado por tool (validação de argumentos agnóstica de modelo).
+        // GroupBy evita exceção de chave duplicada se o agent registrar nomes repetidos.
+        var agentToolSchemas = agentTools?.GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Schema, StringComparer.OrdinalIgnoreCase);
         bool hasAgentToolCallPending = false;
         var agentToolCallsPending = new List<LlmAssistantToolCall>();
         bool kbExhausted = false;
@@ -224,7 +244,8 @@ public class AiChatStreamingOrchestrator
                 // A7: amostragem configurável
                 TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
                 PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
-                ResponseFormat: aiSettings.ResponseFormat);
+                ResponseFormat: aiSettings.ResponseFormat,
+                ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
 
             hasToolCalls = false;
             hasAgentToolCallPending = false;
@@ -237,6 +258,7 @@ public class AiChatStreamingOrchestrator
                     {
                         contentBuilder.Append(evt.Content);
                         yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
+                        anyTokenYielded = true;
                     }
                     else if (evt.Type == "tool_calls" && evt.ToolCalls is { Count: > 0 })
                     {
@@ -252,15 +274,22 @@ public class AiChatStreamingOrchestrator
                         {
                             if (agentToolCallNames.Contains(toolCall.Name))
                             {
-                                var (isValid, errorJson) = AiChatToolOrchestrator.ValidateAgentToolArguments(toolCall.Name, toolCall.ArgumentsJson);
+                                var (isValid, errorJson) = AiChatToolOrchestrator.ValidateAgentToolArguments(toolCall.Name, toolCall.ArgumentsJson, agentToolSchemas?.GetValueOrDefault(toolCall.Name));
                                 if (!isValid)
                                 {
                                     var errCount = consecutiveToolErrors.GetValueOrDefault(toolCall.Name, 0) + 1;
                                     consecutiveToolErrors[toolCall.Name] = errCount;
-                                    if (errCount >= 2)
+                                    _logger.LogWarning("[{TraceId}] Argumentos rejeitados para tool do agent {ToolName} (tentativa {Count}): {Error} Args={Args}",
+                                        traceId, toolCall.Name, errCount, errorJson, Shorten(toolCall.ArgumentsJson, 300));
+                                    if (errCount >= MaxConsecutiveAgentToolArgErrors)
                                     {
+                                        // B16: NÃO injetar fallback direto no contentBuilder (nunca
+                                        // era transmitido ao cliente). Limpa o buffer e encerra o loop
+                                        // de tools; a síntese forçada em streamDone tenta uma resposta
+                                        // real e, se falhar, o fallback é emitido como token.
+                                        _logger.LogWarning("[{TraceId}] Tool do agent {ToolName} rejeitada {Count}x por argumentos inválidos. Args={Args}. Encerrando loop de tools e sintetizando resposta.",
+                                            traceId, toolCall.Name, errCount, Shorten(toolCall.ArgumentsJson, 300));
                                         contentBuilder.Clear();
-                                        contentBuilder.Append("Não foi possível processar sua solicitação automaticamente. Tente reformular sua pergunta ou contate o suporte pelo menu de chamados.");
                                         hasToolCalls = false;
                                         goto streamDone;
                                     }
@@ -346,6 +375,7 @@ public class AiChatStreamingOrchestrator
                 {
                     contentBuilder.Append(token);
                     yield return new AiChatStreamChunk(Type: "token", Content: token);
+                    anyTokenYielded = true;
                 }
             }
 
@@ -417,11 +447,13 @@ public class AiChatStreamingOrchestrator
                 // A7: amostragem configurável
                 TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
                 PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
-                ResponseFormat: aiSettings.ResponseFormat);
+                ResponseFormat: aiSettings.ResponseFormat,
+                ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
                 await foreach (var token in _llmProvider.StreamAsync(systemPrompt!, llmMessages, synthesisOptions, ct))
                 {
                     contentBuilder.Append(token);
                     yield return new AiChatStreamChunk(Type: "token", Content: token);
+                    anyTokenYielded = true;
                 }
                 fullContent = contentBuilder.ToString();
                 if (!string.IsNullOrWhiteSpace(fullContent)) break;
@@ -431,6 +463,7 @@ public class AiChatStreamingOrchestrator
             {
                 fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta ou entre em contato com o suporte.";
                 yield return new AiChatStreamChunk(Type: "token", Content: fullContent);
+                anyTokenYielded = true;
             }
         }
 
@@ -446,6 +479,14 @@ public class AiChatStreamingOrchestrator
             _logger.LogInformation("[{TraceId}] StreamAsync concluído: AgentId={AgentId}, ContentLen={Len}, Latency={LatencyMs}ms", traceId, agentId, fullContent.Length, stopwatch.ElapsedMilliseconds);
         }
         catch (Exception ex) { _logger.LogError(ex, "[{TraceId}] Falha ao persistir mensagens do stream", traceId); }
+
+        // B16: rede de segurança — nunca encerrar um turno 200 sem ter transmitido
+        // o conteúdo que foi (ou será) persistido.
+        if (!anyTokenYielded && !string.IsNullOrWhiteSpace(fullContent))
+        {
+            _logger.LogWarning("[{TraceId}] StreamAsync terminou sem nenhum token transmitido; emitindo conteúdo persistido ({Len} chars) como token final.", traceId, fullContent.Length);
+            yield return new AiChatStreamChunk(Type: "token", Content: fullContent);
+        }
 
         yield return new AiChatStreamChunk(Type: "done", SessionId: session.Id, LatencyMs: (int)stopwatch.ElapsedMilliseconds);
     }
@@ -591,7 +632,13 @@ public class AiChatStreamingOrchestrator
         var executedKbQueries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var consecutiveEmptyKbSearches = 0;
         bool hasToolCalls = false;
+        // B16: rastreia se algum token visível já foi transmitido ao cliente.
+        bool anyTokenYielded = false;
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
+        // B17: schema registrado por tool (validação de argumentos agnóstica de modelo).
+        // GroupBy evita exceção de chave duplicada se o agent registrar nomes repetidos.
+        var agentToolSchemas = agentTools?.GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Schema, StringComparer.OrdinalIgnoreCase);
         var consecutiveToolErrors = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         bool kbExhausted = false;
 
@@ -617,7 +664,8 @@ public class AiChatStreamingOrchestrator
                 // A7: amostragem configurável
                 TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
                 PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
-                ResponseFormat: aiSettings.ResponseFormat);
+                ResponseFormat: aiSettings.ResponseFormat,
+                ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
 
             hasToolCalls = false;
             bool hasAgentToolCall = false;
@@ -630,6 +678,7 @@ public class AiChatStreamingOrchestrator
                     {
                         contentBuilder.Append(evt.Content);
                         yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
+                        anyTokenYielded = true;
                     }
                     else if (evt.Type == "tool_calls" && evt.ToolCalls is { Count: > 0 })
                     {
@@ -644,12 +693,24 @@ public class AiChatStreamingOrchestrator
                         {
                             if (agentToolCallNames.Contains(tc.Name))
                             {
-                                var (isValid, errorJson) = AiChatToolOrchestrator.ValidateAgentToolArguments(tc.Name, tc.ArgumentsJson);
+                                var (isValid, errorJson) = AiChatToolOrchestrator.ValidateAgentToolArguments(tc.Name, tc.ArgumentsJson, agentToolSchemas?.GetValueOrDefault(tc.Name));
                                 if (!isValid)
                                 {
                                     var errCount = consecutiveToolErrors.GetValueOrDefault(tc.Name, 0) + 1;
                                     consecutiveToolErrors[tc.Name] = errCount;
-                                    if (errCount >= 2) { contentBuilder.Append("Não foi possível processar sua solicitação automaticamente. Tente reformular sua pergunta ou contate o suporte pelo menu de chamados."); hasToolCalls = false; goto streamMultiRoundDone; }
+                                    _logger.LogWarning("[{TraceId}] Argumentos rejeitados para tool do agent {ToolName} (tentativa {Count}): {Error} Args={Args}",
+                                        traceId, tc.Name, errCount, errorJson, Shorten(tc.ArgumentsJson, 300));
+                                    if (errCount >= MaxConsecutiveAgentToolArgErrors)
+                                    {
+                                        // B16: encerra o loop de tools sem injetar fallback no
+                                        // buffer (que nunca era transmitido). A síntese forçada
+                                        // abaixo tenta uma resposta real.
+                                        _logger.LogWarning("[{TraceId}] Tool do agent {ToolName} rejeitada {Count}x por argumentos inválidos. Args={Args}. Encerrando loop de tools e sintetizando resposta.",
+                                            traceId, tc.Name, errCount, Shorten(tc.ArgumentsJson, 300));
+                                        contentBuilder.Clear();
+                                        hasToolCalls = false;
+                                        goto streamMultiRoundDone;
+                                    }
                                     llmMessages.Add(new LlmMessage("tool", errorJson!, tc.Id, tc.Name));
                                     continue;
                                 }
@@ -759,17 +820,25 @@ public class AiChatStreamingOrchestrator
                 // A7: amostragem configurável
                 TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
                 PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
-                ResponseFormat: aiSettings.ResponseFormat);
+                ResponseFormat: aiSettings.ResponseFormat,
+                ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
                 await foreach (var token in _llmProvider.StreamAsync(systemPrompt, llmMessages, synthesisOptions, ct))
                 {
                     contentBuilder.Append(token);
                     yield return new AiChatStreamChunk(Type: "token", Content: token);
+                    anyTokenYielded = true;
                 }
                 fullContent = contentBuilder.ToString();
             }
         }
 
-        if (string.IsNullOrWhiteSpace(fullContent)) fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta.";
+        if (string.IsNullOrWhiteSpace(fullContent))
+        {
+            fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta.";
+            // B16: o fallback precisa ser transmitido (antes só era persistido).
+            yield return new AiChatStreamChunk(Type: "token", Content: fullContent);
+            anyTokenYielded = true;
+        }
 
         try
         {
@@ -788,6 +857,13 @@ public class AiChatStreamingOrchestrator
             }, ct);
         }
         catch (Exception ex) { _logger.LogError(ex, "[{TraceId}] Erro ao persistir multi-round", traceId); }
+
+        // B16: rede de segurança — nunca encerrar um turno 200 sem conteúdo visível.
+        if (!anyTokenYielded && !string.IsNullOrWhiteSpace(fullContent))
+        {
+            _logger.LogWarning("[{TraceId}] Multi-round terminou sem nenhum token transmitido; emitindo conteúdo persistido ({Len} chars) como token final.", traceId, fullContent.Length);
+            yield return new AiChatStreamChunk(Type: "token", Content: fullContent);
+        }
 
         yield return new AiChatStreamChunk(Type: "done", SessionId: session.Id,
             TokensUsed: totalTokens, LatencyMs: (int)stopwatch.ElapsedMilliseconds);

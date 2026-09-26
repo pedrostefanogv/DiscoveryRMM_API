@@ -401,73 +401,146 @@ public class AiChatToolOrchestrator
 
     // ── Argument Validation ──────────────────────────────────────────────────
 
-    public static (bool IsValid, string? ErrorJson) ValidateAgentToolArguments(string toolName, string argumentsJson)
+    /// <summary>
+    /// HeurÃ­stica de parÃ¢metros obrigatÃ³rios por nome de tool, usada somente
+    /// quando o schema registrado da tool nÃ£o estÃ¡ disponÃ­vel no servidor.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> CriticalToolProps = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Ferramenta sem parâmetros: nada a validar.
-        if (toolName == "list_ticket_templates")
-            return (true, null);
+        ["search_packages"] = ["query"],
+        ["ask_user"] = ["question"],
+        ["create_ticket"] = ["title", "description"],
+        ["install_package"] = ["id"],
+    };
 
-        if (string.IsNullOrWhiteSpace(argumentsJson) || argumentsJson == "{}" || argumentsJson == "null")
+    public static (bool IsValid, string? ErrorJson) ValidateAgentToolArguments(string toolName, string argumentsJson)
+        => ValidateAgentToolArguments(toolName, argumentsJson, schema: null);
+
+    /// <summary>
+    /// B17: validaÃ§Ã£o agnÃ³stica de modelo. A regra antiga rejeitava "{}" para
+    /// TODA tool (exceto list_ticket_templates), o que reprovava tools sem
+    /// parÃ¢metros (get_pending_updates, get_package_actions, ...) e fazia o
+    /// modelo repetir a chamada atÃ© o orquestrador cair no fallback seco.
+    /// Agora usa o schema registrado (required) quando disponÃ­vel; sem schema,
+    /// exige apenas os parÃ¢metros das tools conhecidamente obrigatÃ³rias.
+    /// </summary>
+    public static (bool IsValid, string? ErrorJson) ValidateAgentToolArguments(string toolName, string argumentsJson, object? schema)
+    {
+        var normalized = NormalizeToolArguments(argumentsJson);
+        if (normalized is null)
         {
-            var errorMsg = toolName switch
+            return (false, JsonSerializer.Serialize(new
             {
-                "search_packages" => "query nao pode ser vazia",
-                "create_ticket" => "title nao pode ser vazio",
-                "ask_user" => "question nao pode ser vazia",
-                "install_package" => "id nao pode ser vazio",
-                _ => "parametros obrigatorios nao preenchidos"
-            };
-
-            var hint = GetEmptyArgHint(toolName);
-
-            return (false, JsonSerializer.Serialize(new { error = errorMsg, tool = toolName, hint }));
+                error = "JSON invalido nos argumentos",
+                tool = toolName,
+                hint = "Corrija a formataÃ§Ã£o JSON dos argumentos."
+            }));
         }
 
-        try
+        var required = ExtractRequiredParams(schema);
+        if (required is null && CriticalToolProps.TryGetValue(toolName, out var hardcoded))
+            required = hardcoded;
+        required ??= [];
+
+        foreach (var propName in required)
         {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return (false, JsonSerializer.Serialize(new { error = "argumentos devem ser um objeto JSON", tool = toolName, hint = "Forneça argumentos como um objeto JSON com os campos obrigatórios." }));
-
-            var hasNonNull = root.EnumerateObject().Any(prop => prop.Value.ValueKind != JsonValueKind.Null);
-            if (!hasNonNull)
-                return (false, JsonSerializer.Serialize(new { error = "todos os parametros estao nulos", tool = toolName, hint = "Preencha os parâmetros obrigatórios com valores reais extraídos do histórico da conversa." }));
-
-            var criticalProps = toolName switch
+            if (!normalized.TryGetValue(propName, out var value) || value is null
+                || (value is string s && string.IsNullOrWhiteSpace(s)))
             {
-                "search_packages" => new[] { "query" },
-                "ask_user" => new[] { "question" },
-                "create_ticket" => new[] { "title", "description" },
-                "install_package" => new[] { "id" },
-                _ => Array.Empty<string>()
-            };
-
-            foreach (var propName in criticalProps)
-            {
-                if (root.TryGetProperty(propName, out var prop) && prop.ValueKind == JsonValueKind.String && string.IsNullOrWhiteSpace(prop.GetString()))
+                var errorMsg = propName switch
                 {
-                    var errorMsg = propName switch
-                    {
-                        "query" => "query nao pode ser vazia — extraia o nome do programa da mensagem do usuario",
-                        "question" => "question nao pode ser vazia — formule uma pergunta baseada no contexto",
-                        "title" => "title nao pode ser vazio — extraia do historico da conversa",
-                        "description" => "description nao pode ser vazio — extraia do historico da conversa",
-                        _ => $"{propName} nao pode ser vazio"
-                    };
-
-                    var hint = GetEmptyArgHintAscii(toolName);
-
-                    return (false, JsonSerializer.Serialize(new { error = errorMsg, tool = toolName, hint }));
-                }
+                    "query" => "query nao pode ser vazia â€” extraia o nome do programa da mensagem do usuario",
+                    "question" => "question nao pode ser vazia â€” formule uma pergunta baseada no contexto",
+                    "title" => "title nao pode ser vazio â€” extraia do historico da conversa",
+                    "description" => "description nao pode ser vazio â€” extraia do historico da conversa",
+                    "id" => "id nao pode ser vazio",
+                    _ => $"parametro obrigatorio '{propName}' nao preenchido"
+                };
+                return (false, JsonSerializer.Serialize(new { error = errorMsg, tool = toolName, hint = GetEmptyArgHintAscii(toolName) }));
             }
-        }
-        catch (JsonException)
-        {
-            return (false, JsonSerializer.Serialize(new { error = "JSON invalido nos argumentos", tool = toolName, hint = "Corrija a formatação JSON dos argumentos." }));
         }
 
         return (true, null);
+    }
+
+    /// <summary>
+    /// Normaliza argumentos de tool para um dicionÃ¡rio plano. Tolera as
+    /// variaÃ§Ãµes comuns entre modelos/providers: null/vazio, "{}", wrapper de
+    /// chave vazia {"": {...}} (visto em produÃ§Ã£o), JSON duplamente codificado
+    /// como string e vÃ­rgula final. Retorna null se nÃ£o for objeto JSON vÃ¡lido.
+    /// </summary>
+    private static Dictionary<string, object?>? NormalizeToolArguments(string? argumentsJson)
+    {
+        var text = argumentsJson?.Trim();
+        if (string.IsNullOrEmpty(text) || text == "null")
+            return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        // JSON duplamente codificado ("{\"query\":\"x\"}").
+        if (text[0] == '"')
+        {
+            try { text = JsonSerializer.Deserialize<string>(text)?.Trim(); } catch { /* segue */ }
+            if (string.IsNullOrEmpty(text))
+                return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        // VÃ­rgula final antes de } / ] (comum em modelos pequenos).
+        text = System.Text.RegularExpressions.Regex.Replace(text, @",\s*}", "}");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @",\s*]", "]");
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            // Alguns clientes embrulham os args em {"": { ... }}.
+            if (root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("", out var inner) && inner.ValueKind == JsonValueKind.Object)
+                root = inner;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+
+            var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in root.EnumerateObject())
+            {
+                result[prop.Name] = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString(),
+                    JsonValueKind.Null or JsonValueKind.Undefined => null,
+                    _ => prop.Value.GetRawText()
+                };
+            }
+            return result;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>
+    /// Extrai a lista de parÃ¢metros obrigatÃ³rios do schema registrado da tool.
+    /// Retorna null quando o schema nÃ£o Ã© reconhecido (cai no fallback heurÃ­stico).
+    /// </summary>
+    private static string[]? ExtractRequiredParams(object? schema)
+    {
+        try
+        {
+            if (schema is JsonElement el) return RequiredFromJson(el);
+            if (schema is System.Text.Json.Nodes.JsonNode node)
+                return RequiredFromJson(JsonSerializer.SerializeToElement(node));
+            if (schema is IDictionary<string, object> dict)
+            {
+                if (!dict.TryGetValue("required", out var req) || req is null) return [];
+                if (req is IEnumerable<string> names) return names.ToArray();
+                if (req is System.Collections.IEnumerable en)
+                    return en.Cast<object?>().Select(x => x?.ToString() ?? "").Where(x => x.Length > 0).ToArray();
+                return [];
+            }
+        }
+        catch { return null; }
+        return null;
+    }
+
+    private static string[] RequiredFromJson(JsonElement el)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return [];
+        if (!el.TryGetProperty("required", out var req) || req.ValueKind != JsonValueKind.Array) return [];
+        return req.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToArray();
     }
 
     // ── XML Tool Call Fallback ───────────────────────────────────────────────
