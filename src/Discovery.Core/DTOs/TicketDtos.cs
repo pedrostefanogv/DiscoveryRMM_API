@@ -2,6 +2,14 @@ using Discovery.Core.Enums;
 
 namespace Discovery.Core.DTOs;
 
+/// <summary>Resposta do mini questionário do template exposta no detalhe do chamado.</summary>
+public sealed record TicketAnswerDto(
+    string QuestionKey,
+    string QuestionLabel,
+    string? ValueText,
+    string ValueJson,
+    DateTime CreatedAt);
+
 public record TicketFilterQuery(
     Guid? ClientId = null,
     Guid? SiteId = null,
@@ -22,7 +30,12 @@ public record TicketFilterQuery(
     IReadOnlyList<Guid>? AllowedClientIds = null,
     IReadOnlyList<Guid>? AllowedSiteIds = null,
     // Usado pelo KPI (recorte temporal). Ignorado pela listagem.
-    DateTime? Since = null
+    DateTime? Since = null,
+    // Filtros do mini questionário do template.
+    Guid? TemplateId = null,
+    string? AnswerKey = null,
+    string? AnswerValue = null,
+    TicketAnswerMatch AnswerMatch = TicketAnswerMatch.Exact
 );
 
 public record CreateTicketSavedViewRequest(

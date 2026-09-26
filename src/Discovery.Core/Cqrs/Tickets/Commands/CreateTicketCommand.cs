@@ -19,6 +19,8 @@ public sealed record CreateTicketCommand(
     string? Category,
     /// <summary>Template que pré-preenche o chamado (opcional).</summary>
     Guid? TemplateId = null,
-    /// <summary>Valores dos campos personalizados (definitionId → JSON), opcional.</summary>
-    IReadOnlyDictionary<Guid, JsonElement>? CustomFieldValues = null
+    /// <summary>Valores dos campos personalizados do departamento (definitionId → JSON), opcional.</summary>
+    IReadOnlyDictionary<Guid, JsonElement>? CustomFieldValues = null,
+    /// <summary>Respostas do mini questionário do template (chave da pergunta → JSON), opcional.</summary>
+    IReadOnlyDictionary<string, JsonElement>? TemplateAnswers = null
 ) : ICommand<Result<TicketDetailDto>>;

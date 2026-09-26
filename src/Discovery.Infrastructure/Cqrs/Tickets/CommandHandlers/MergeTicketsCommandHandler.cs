@@ -166,6 +166,20 @@ public sealed class MergeTicketsCommandHandler(
             .ToListAsync(ct))
             value.EntityId = targetId;
 
+        // Respostas do questionário: move para o alvo. Em conflito de pergunta,
+        // mantém a resposta do chamado de destino e descarta a da origem.
+        var targetQuestionKeys = await db.TicketAnswers
+            .Where(a => a.TicketId == targetId)
+            .Select(a => a.QuestionKey)
+            .ToListAsync(ct);
+        foreach (var answer in await db.TicketAnswers.Where(a => a.TicketId == sourceId).ToListAsync(ct))
+        {
+            if (targetQuestionKeys.Contains(answer.QuestionKey, StringComparer.OrdinalIgnoreCase))
+                db.TicketAnswers.Remove(answer);
+            else
+                answer.TicketId = targetId;
+        }
+
         // Sessões remotas, automações e vínculos de KB
         foreach (var session in await db.TicketRemoteSessions.Where(s => s.TicketId == sourceId).ToListAsync(ct))
             session.TicketId = targetId;

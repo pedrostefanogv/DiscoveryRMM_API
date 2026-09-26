@@ -12,7 +12,8 @@ public class ReportDatasetCatalogProviderTests
         var catalog = _provider.GetAll();
 
         Assert.That(catalog, Is.Not.Null);
-        Assert.That(catalog.Count, Is.EqualTo(23));
+        // 23 datasets originais + ticketAnswers (respostas do questionário).
+        Assert.That(catalog.Count, Is.EqualTo(24));
     }
 
     [Test]

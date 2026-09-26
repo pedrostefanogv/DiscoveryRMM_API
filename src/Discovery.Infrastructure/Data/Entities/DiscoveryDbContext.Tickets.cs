@@ -23,6 +23,9 @@ public partial class DiscoveryDbContext
             entity.Property(ticket => ticket.Title).HasColumnName("title").HasMaxLength(500);
             entity.Property(ticket => ticket.Description).HasColumnName("description");
             entity.Property(ticket => ticket.SubmissionSnapshotMarkdown).HasColumnName("submission_snapshot_md");
+            entity.Property(ticket => ticket.TemplateId).HasColumnName("template_id");
+            entity.Property(ticket => ticket.TemplateName).HasColumnName("template_name").HasMaxLength(200);
+            entity.HasIndex(ticket => ticket.TemplateId).HasDatabaseName("ix_tickets_template_id");
             entity.Property(ticket => ticket.WorkflowStateId).HasColumnName("workflow_state_id");
             entity.Property(ticket => ticket.Priority).HasColumnName("priority").HasConversion<int>();
             entity.Property(ticket => ticket.DepartmentId).HasColumnName("department_id");
@@ -249,6 +252,29 @@ public partial class DiscoveryDbContext
             entity.Property(m => m.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });
 
+        modelBuilder.Entity<TicketAnswer>(entity =>
+        {
+            entity.ToTable("ticket_answers");
+            entity.HasKey(a => a.Id);
+            entity.HasIndex(a => new { a.TicketId, a.QuestionKey })
+                .IsUnique()
+                .HasDatabaseName("ux_ticket_answers_ticket_question");
+            entity.HasIndex(a => new { a.QuestionKey, a.ValueText }).HasDatabaseName("ix_ticket_answers_key_value");
+            entity.HasIndex(a => a.TemplateId).HasDatabaseName("ix_ticket_answers_template");
+
+            entity.Property(a => a.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(a => a.TicketId).HasColumnName("ticket_id");
+            entity.Property(a => a.TemplateId).HasColumnName("template_id");
+            entity.Property(a => a.QuestionKey).HasColumnName("question_key").HasMaxLength(100);
+            entity.Property(a => a.QuestionLabel).HasColumnName("question_label").HasMaxLength(200);
+            entity.Property(a => a.ValueText).HasColumnName("value_text");
+            entity.Property(a => a.ValueJson).HasColumnName("value_json").HasColumnType("jsonb");
+            entity.Property(a => a.SortOrder).HasColumnName("sort_order");
+            entity.Property(a => a.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+
+            entity.HasOne<Ticket>().WithMany().HasForeignKey(a => a.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<TicketTemplate>(entity =>
         {
             entity.ToTable("ticket_templates");
@@ -264,6 +290,7 @@ public partial class DiscoveryDbContext
             entity.Property(t => t.Priority).HasColumnName("priority").HasConversion<string>().HasMaxLength(50);
             entity.Property(t => t.Category).HasColumnName("category").HasMaxLength(100);
             entity.Property(t => t.CustomFieldDefaultsJson).HasColumnName("custom_field_defaults_json").HasColumnType("jsonb");
+            entity.Property(t => t.QuestionsJson).HasColumnName("questions_json").HasColumnType("jsonb");
             entity.Property(t => t.IsActive).HasColumnName("is_active");
             entity.Property(t => t.CreatedBy).HasColumnName("created_by").HasMaxLength(255);
             entity.Property(t => t.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");

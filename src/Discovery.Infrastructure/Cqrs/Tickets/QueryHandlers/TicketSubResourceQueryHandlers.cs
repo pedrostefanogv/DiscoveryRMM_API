@@ -52,6 +52,10 @@ public sealed class GetTicketKpiQueryHandler(
             && filter.Priority is null
             && filter.SlaBreached is null
             && filter.IsClosed is null
+            && filter.TemplateId is null
+            && string.IsNullOrWhiteSpace(filter.AnswerKey)
+            && string.IsNullOrWhiteSpace(filter.AnswerValue)
+            && filter.AnswerMatch == TicketAnswerMatch.Exact
             && string.IsNullOrWhiteSpace(filter.Text);
 
         var result = isSimple

@@ -63,6 +63,93 @@ public class CustomFieldTemplateTests
     }
 
     [Test]
+    public async Task PrepareAsync_ShouldReturnTemplateNameAndStructuredAnswers()
+    {
+        await using var db = CreateDb();
+        var templateId = Guid.NewGuid();
+        db.TicketTemplates.Add(new TicketTemplate
+        {
+            Id = templateId,
+            Name = "Criação de usuário",
+            Title = "Novo usuário",
+            Description = "Abertura de acesso",
+            QuestionsJson = TicketTemplateQuestions.Serialize(new[]
+            {
+                new TicketTemplateQuestion("nome", "Nome", CustomFieldDataType.Text, true,
+                    Array.Empty<string>(), null, null, 2, null, null, null, null),
+                new TicketTemplateQuestion("email", "E-mail", CustomFieldDataType.Text, false,
+                    Array.Empty<string>(), null, null, null, null, null, null, null),
+            }),
+            CustomFieldDefaultsJson = "{}",
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService());
+        var result = await service.PrepareAsync(new TicketSubmissionRequest(
+            Guid.NewGuid(), DepartmentId: null, TemplateId: templateId,
+            Title: null, Description: null, Category: null, Priority: null,
+            CustomFieldValues: null,
+            TemplateAnswers: new Dictionary<string, JsonElement>
+            {
+                ["nome"] = JsonSerializer.SerializeToElement("Ana"),
+                ["email"] = JsonSerializer.SerializeToElement("ana@empresa.com"),
+            }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.TemplateId, Is.EqualTo(templateId));
+            Assert.That(result.TemplateName, Is.EqualTo("Criação de usuário"));
+            Assert.That(result.Answers, Is.Not.Null);
+            Assert.That(result.Answers!.Select(a => a.QuestionKey), Is.EquivalentTo(new[] { "nome", "email" }));
+            Assert.That(result.Answers!.Single(a => a.QuestionKey == "nome").QuestionLabel, Is.EqualTo("Nome"));
+            Assert.That(result.Answers!.Single(a => a.QuestionKey == "nome").ValueText, Is.EqualTo("Ana"));
+            Assert.That(result.SnapshotMarkdown, Does.Contain("Criação de usuário"));
+            Assert.That(result.SnapshotMarkdown, Does.Contain("Questionário do modelo"));
+        });
+    }
+
+    [Test]
+    public async Task PrepareAsync_ShouldEnforceRequiredTemplateQuestions()
+    {
+        await using var db = CreateDb();
+        var templateId = Guid.NewGuid();
+        db.TicketTemplates.Add(new TicketTemplate
+        {
+            Id = templateId,
+            Name = "Modelo com obrigatória",
+            Title = "T",
+            Description = "D",
+            QuestionsJson = TicketTemplateQuestions.Serialize(new[]
+            {
+                new TicketTemplateQuestion("nome", "Nome", CustomFieldDataType.Text, true,
+                    Array.Empty<string>(), null, null, null, null, null, null, null),
+            }),
+            CustomFieldDefaultsJson = "{}",
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService());
+        var result = await service.PrepareAsync(new TicketSubmissionRequest(
+            Guid.NewGuid(), DepartmentId: null, TemplateId: templateId,
+            Title: null, Description: null, Category: null, Priority: null,
+            CustomFieldValues: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Errors.Select(e => e.FieldName), Contains.Item("nome"));
+            Assert.That(result.SnapshotMarkdown, Is.Null);
+        });
+    }
+
+    [Test]
     public async Task PrepareAsync_ShouldRequireDepartmentWhenFieldsProvided()
     {
         await using var db = CreateDb();

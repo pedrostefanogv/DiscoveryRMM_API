@@ -19,6 +19,9 @@ public interface ITicketQueryService
     /// <summary>Obtém detalhes de um ticket por ID.</summary>
     Task<TicketDetailDto?> GetTicketByIdAsync(Guid id, CancellationToken ct = default);
 
+    /// <summary>Lista as respostas do mini questionário do template para um ticket.</summary>
+    Task<IReadOnlyList<TicketAnswerDto>> GetAnswersAsync(Guid ticketId, CancellationToken ct = default);
+
     /// <summary>Lista comentários de um ticket com cursor pagination.</summary>
     Task<CursorPageDto<TicketCommentDto>> GetCommentsAsync(
         Guid ticketId, string? cursor, int limit, bool includeInternal = false, CancellationToken ct = default);

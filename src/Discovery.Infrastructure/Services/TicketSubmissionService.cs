@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Discovery.Core.DTOs;
@@ -26,8 +25,7 @@ public class TicketSubmissionService(
                 .AsNoTracking()
                 .FirstOrDefaultAsync(t => t.Id == request.TemplateId.Value && t.IsActive, cancellationToken);
 
-            // TemplateId informado e inexistente/inativo NÃO é silencioso: sem
-            // isso o agent/portais acham que o template foi aplicado.
+            // TemplateId informado e inexistente/inativo NÃO é silencioso.
             if (template is null)
             {
                 return new TicketSubmissionResult(
@@ -53,8 +51,23 @@ public class TicketSubmissionService(
             : request.Priority!.Trim();
 
         var departmentId = request.DepartmentId ?? template?.DepartmentId;
+        var errors = new List<DepartmentFieldValidationError>();
 
-        // Mescla valores: template primeiro, valor informado vence.
+        // ── Mini questionário do template (não são campos do chamado) ────────
+        var questions = TicketTemplateQuestions.Parse(template?.QuestionsJson);
+        if (request.TemplateAnswers is { Count: > 0 } && template is null)
+        {
+            errors.Add(new DepartmentFieldValidationError(
+                Guid.Empty, "TemplateAnswers", "Respostas de questionário exigem um template selecionado."));
+        }
+        foreach (var answerError in TicketTemplateQuestions.ValidateAnswers(questions, request.TemplateAnswers))
+        {
+            errors.Add(new DepartmentFieldValidationError(Guid.Empty, answerError.Key, answerError.Message));
+        }
+
+        // ── Campos do departamento: SEMPRE valem para todo chamado do
+        // departamento, independentes do template (obrigatório ou não conforme
+        // a configuração de cada campo). ─────────────────────────────────────
         var merged = new Dictionary<Guid, JsonElement>();
         foreach (var (definitionId, value) in ParseTemplateDefaults(template?.CustomFieldDefaultsJson))
             merged[definitionId] = value;
@@ -62,25 +75,17 @@ public class TicketSubmissionService(
             foreach (var (definitionId, value) in request.CustomFieldValues)
                 merged[definitionId] = value;
 
-        if (merged.Count == 0 && template is null)
+        var explicitFieldValues = request.CustomFieldValues is { Count: > 0 };
+        if (departmentId is null)
         {
-            return new TicketSubmissionResult(
-                departmentId, title, description, category, priority,
-                new Dictionary<Guid, string>(), Array.Empty<DepartmentFieldValidationError>(), null);
-        }
-
-        if (merged.Count > 0 && departmentId is null)
-        {
-            return new TicketSubmissionResult(
-                departmentId, title, description, category, priority,
-                new Dictionary<Guid, string>(),
-                new[] { new DepartmentFieldValidationError(Guid.Empty, "DepartmentId", "Selecione um departamento para usar campos personalizados.") },
-                null);
+            if (explicitFieldValues)
+                errors.Add(new DepartmentFieldValidationError(
+                    Guid.Empty, "DepartmentId", "Selecione um departamento para usar campos personalizados."));
+            merged.Clear();
         }
 
         var rawValues = new Dictionary<Guid, string>();
-        var errors = new List<DepartmentFieldValidationError>();
-        Dictionary<Guid, CustomFieldDefinition> definitions = new();
+        var definitions = new Dictionary<Guid, CustomFieldDefinition>();
 
         if (departmentId.HasValue)
         {
@@ -101,25 +106,99 @@ public class TicketSubmissionService(
                 rawValues[definitionId] = value.GetRawText();
             }
 
+            // Valida TODOS os campos do departamento (inclusive os obrigatórios
+            // que não vieram preenchidos).
             if (errors.Count == 0)
             {
-                var validationErrors = await departmentCustomFieldService.ValidateTicketFieldsAsync(
-                    departmentId.Value, rawValues, cancellationToken);
-                errors.AddRange(validationErrors);
+                errors.AddRange(await departmentCustomFieldService.ValidateTicketFieldsAsync(
+                    departmentId.Value, rawValues, cancellationToken));
             }
         }
 
         if (errors.Count > 0)
         {
             return new TicketSubmissionResult(
-                departmentId, title, description, category, priority,
-                rawValues, errors, null);
+                departmentId, title, description, category, priority, rawValues, errors, null);
         }
 
-        var snapshot = await BuildSnapshot(template, departmentId, definitions, rawValues, priority, category, title);
+        var needsSnapshot = template is not null
+            || rawValues.Count > 0
+            || request.TemplateAnswers is { Count: > 0 };
+
+        var snapshot = needsSnapshot
+            ? await BuildSnapshot(template, questions, request.TemplateAnswers, departmentId, definitions, rawValues, priority, category, title)
+            : null;
+
+        var answerDrafts = BuildAnswerDrafts(questions, request.TemplateAnswers);
 
         return new TicketSubmissionResult(
-            departmentId, title, description, category, priority, rawValues, errors, snapshot);
+            departmentId, title, description, category, priority, rawValues, errors, snapshot,
+            template?.Id, answerDrafts, template?.Name);
+    }
+
+    /// <inheritdoc />
+    public async Task SaveTemplateAnswersAsync(
+        Guid ticketId,
+        Guid? templateId,
+        IReadOnlyList<TicketAnswerDraft> answers,
+        CancellationToken cancellationToken = default)
+    {
+        if (answers.Count == 0) return;
+
+        // Reexecução (replay/idempotência) não deve violar o índice único
+        // (ticket_id, question_key): substitui as respostas do chamado.
+        // SaveChanges separado garante que o DELETE seja aplicado ANTES dos
+        // INSERTs (mesma tabela, índice único).
+        var existing = await db.TicketAnswers
+            .Where(a => a.TicketId == ticketId)
+            .ToListAsync(cancellationToken);
+        if (existing.Count > 0)
+        {
+            db.TicketAnswers.RemoveRange(existing);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        var now = DateTime.UtcNow;
+        for (var index = 0; index < answers.Count; index++)
+        {
+            var answer = answers[index];
+            db.TicketAnswers.Add(new TicketAnswer
+            {
+                Id = Guid.NewGuid(),
+                TicketId = ticketId,
+                TemplateId = templateId,
+                QuestionKey = answer.QuestionKey,
+                QuestionLabel = answer.QuestionLabel,
+                ValueText = answer.ValueText,
+                ValueJson = answer.ValueJson,
+                SortOrder = index,
+                CreatedAt = now,
+            });
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static IReadOnlyList<TicketAnswerDraft> BuildAnswerDrafts(
+        IReadOnlyList<TicketTemplateQuestion> questions,
+        IReadOnlyDictionary<string, JsonElement>? answers)
+    {
+        if (answers is null || answers.Count == 0 || questions.Count == 0)
+            return Array.Empty<TicketAnswerDraft>();
+
+        var drafts = new List<TicketAnswerDraft>();
+        foreach (var question in questions)
+        {
+            if (!answers.TryGetValue(question.Key, out var value)) continue;
+            if (value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) continue;
+
+            var text = TicketTemplateQuestions.FormatAnswer(question, value);
+            if (string.IsNullOrWhiteSpace(text)) continue;
+
+            drafts.Add(new TicketAnswerDraft(question.Key, question.Label, text, value.GetRawText()));
+        }
+
+        return drafts;
     }
 
     private static IEnumerable<(Guid DefinitionId, JsonElement Value)> ParseTemplateDefaults(string? defaultsJson)
@@ -149,6 +228,8 @@ public class TicketSubmissionService(
 
     private async Task<string?> BuildSnapshot(
         TicketTemplate? template,
+        IReadOnlyList<TicketTemplateQuestion> questions,
+        IReadOnlyDictionary<string, JsonElement>? answers,
         Guid? departmentId,
         IReadOnlyDictionary<Guid, CustomFieldDefinition> definitions,
         IReadOnlyDictionary<Guid, string> rawValues,
@@ -182,19 +263,39 @@ public class TicketSubmissionService(
 
         builder.AppendLine($"- **Enviado em:** {DateTime.UtcNow:dd/MM/yyyy HH:mm} (UTC)");
 
+        // ── Questionário do modelo ───────────────────────────────────────────
+        if (questions.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("#### Questionário do modelo");
+            builder.AppendLine();
+            builder.AppendLine("| Pergunta | Resposta |");
+            builder.AppendLine("| --- | --- |");
+            foreach (var question in questions)
+            {
+                var answer = answers is not null && answers.TryGetValue(question.Key, out var value)
+                    ? TicketTemplateQuestions.FormatAnswer(question, value)
+                    : string.Empty;
+                builder.AppendLine($"| {Escape(question.Label)} | {Escape(string.IsNullOrWhiteSpace(answer) ? "—" : answer)} |");
+            }
+        }
+
+        // ── Campos do departamento (pré-preenchidos ou informados) ───────────
         var rows = new List<(string Label, string Value)>();
         foreach (var (definitionId, rawValue) in rawValues)
         {
             if (!definitions.TryGetValue(definitionId, out var definition)) continue;
             if (definition.IsSecret) continue;
 
-            var formatted = FormatValue(definition, rawValue);
+            var formatted = FormatValue(rawValue);
             if (string.IsNullOrWhiteSpace(formatted)) continue;
             rows.Add((definition.Label, formatted));
         }
 
         if (rows.Count > 0)
         {
+            builder.AppendLine();
+            builder.AppendLine("#### Campos do departamento");
             builder.AppendLine();
             builder.AppendLine("| Campo | Valor |");
             builder.AppendLine("| --- | --- |");
@@ -205,7 +306,7 @@ public class TicketSubmissionService(
         return builder.ToString().TrimEnd();
     }
 
-    private static string FormatValue(CustomFieldDefinition definition, string rawJson)
+    private static string FormatValue(string rawJson)
     {
         try
         {

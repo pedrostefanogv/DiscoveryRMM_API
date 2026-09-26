@@ -47,7 +47,9 @@ public sealed class TicketCommandService : ITicketCommandService
         Guid clientId, Guid? siteId, Guid? agentId, Guid? departmentId,
         Guid? workflowProfileId, Guid? assignedToUserId, string? category,
         CancellationToken ct = default,
-        string? submissionSnapshotMarkdown = null)
+        string? submissionSnapshotMarkdown = null,
+        Guid? templateId = null,
+        string? templateName = null)
     {
         var now = DateTime.UtcNow;
 
@@ -104,6 +106,8 @@ public sealed class TicketCommandService : ITicketCommandService
             AssignedToUserId = assignedToUserId,
             Category = category,
             WorkflowStateId = initialState.Id,
+            TemplateId = templateId,
+            TemplateName = templateName,
             SubmissionSnapshotMarkdown = submissionSnapshotMarkdown,
             CreatedAt = now,
             UpdatedAt = now
@@ -282,5 +286,5 @@ public sealed class TicketCommandService : ITicketCommandService
         t.Category, t.Priority, t.WorkflowStateId, t.AssignedToUserId,
         t.SlaExpiresAt, t.SlaBreached, t.CreatedAt, t.UpdatedAt,
         t.ClosedAt, t.DaysOpen, t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy,
-        t.SubmissionSnapshotMarkdown);
+        t.SubmissionSnapshotMarkdown, t.TemplateId, t.TemplateName);
 }

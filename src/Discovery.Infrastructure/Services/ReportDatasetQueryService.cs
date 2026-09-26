@@ -63,6 +63,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             ReportDatasetType.TicketActivity => await QueryTicketActivityAsync(clientId, filters, cancellationToken),
             ReportDatasetType.TicketEscalations => await QueryTicketEscalationsAsync(clientId, filters, cancellationToken),
             ReportDatasetType.CustomFields => await QueryCustomFieldsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.TicketAnswers => await QueryTicketAnswersAsync(clientId, filters, cancellationToken),
             ReportDatasetType.KnowledgeBase => await QueryKnowledgeBaseAsync(clientId, filters, cancellationToken),
             _ => new ReportQueryResult { Columns = ["message"], Rows = [new Dictionary<string, object?> { ["message"] = "Dataset not supported." }] }
         };
@@ -493,6 +494,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var limit = GetLimit(filters);
         var siteId = GetGuid(filters, "siteId");
         var workflowStateId = GetGuid(filters, "workflowStateId");
+        var templateId = GetGuid(filters, "templateId");
         var from = GetDateTime(filters, "from");
         var to = GetDateTime(filters, "to");
         var orderBy = GetEnum(filters, "orderBy", TicketsOrderBy.Timestamp);
@@ -507,6 +509,8 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             query = query.Where(x => x.SiteId == siteId.Value);
         if (workflowStateId.HasValue)
             query = query.Where(x => x.WorkflowStateId == workflowStateId.Value);
+        if (templateId.HasValue)
+            query = query.Where(x => x.TemplateId == templateId.Value);
         if (from.HasValue)
             query = query.Where(x => x.CreatedAt >= from.Value);
         if (to.HasValue)
@@ -544,13 +548,15 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
                 ["slaExpiresAt"] = x.SlaExpiresAt,
                 ["slaBreached"] = x.SlaBreached,
                 ["createdAt"] = x.CreatedAt,
-                ["closedAt"] = x.ClosedAt
+                ["closedAt"] = x.ClosedAt,
+                ["templateId"] = x.TemplateId,
+                ["templateName"] = x.TemplateName
             })
             .ToList();
 
         return new ReportQueryResult
         {
-            Columns = ["id", "siteId", "agentId", "title", "priority", "workflowStateId", "slaExpiresAt", "slaBreached", "createdAt", "closedAt"],
+            Columns = ["id", "siteId", "agentId", "title", "priority", "workflowStateId", "slaExpiresAt", "slaBreached", "createdAt", "closedAt", "templateId", "templateName"],
             Rows = rows
         };
     }
@@ -1479,6 +1485,56 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         return new ReportQueryResult
         {
             Columns = ["id", "clientId", "name", "escalationLevel", "isActive", "createdAt", "updatedAt"],
+            Rows = rows
+        };
+    }
+
+    private async Task<ReportQueryResult> QueryTicketAnswersAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var templateId = GetGuid(filters, "templateId");
+        var questionKey = GetString(filters, "questionKey");
+        var valueText = GetString(filters, "valueText");
+        var descending = GetSortDescending(filters, defaultValue: true);
+
+        var tickets = _db.Tickets.AsNoTracking()
+            .Where(t => t.DeletedAt == null)
+            .Select(t => new { t.Id, t.Title, t.ClientId, t.SiteId, t.AgentId, t.TemplateName });
+
+        var joined =
+            from answer in _db.TicketAnswers.AsNoTracking()
+            join ticket in tickets on answer.TicketId equals ticket.Id
+            select new { answer, ticket };
+
+        if (clientId.HasValue) joined = joined.Where(x => x.ticket.ClientId == clientId.Value);
+        if (templateId.HasValue) joined = joined.Where(x => x.answer.TemplateId == templateId.Value);
+        if (!string.IsNullOrWhiteSpace(questionKey)) joined = joined.Where(x => x.answer.QuestionKey == questionKey);
+        if (!string.IsNullOrWhiteSpace(valueText)) joined = joined.Where(x => x.answer.ValueText == valueText);
+
+        joined = descending
+            ? joined.OrderByDescending(x => x.answer.CreatedAt)
+            : joined.OrderBy(x => x.answer.CreatedAt);
+
+        var rowsRaw = await joined.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        {
+            ["ticketId"] = x.ticket.Id,
+            ["ticketTitle"] = x.ticket.Title,
+            ["clientId"] = x.ticket.ClientId,
+            ["siteId"] = x.ticket.SiteId,
+            ["agentId"] = x.ticket.AgentId,
+            ["templateId"] = x.answer.TemplateId,
+            ["templateName"] = x.ticket.TemplateName,
+            ["questionKey"] = x.answer.QuestionKey,
+            ["questionLabel"] = x.answer.QuestionLabel,
+            ["valueText"] = x.answer.ValueText,
+            ["createdAt"] = x.answer.CreatedAt
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["ticketId", "ticketTitle", "clientId", "siteId", "agentId", "templateId", "templateName", "questionKey", "questionLabel", "valueText", "createdAt"],
             Rows = rows
         };
     }

@@ -23,6 +23,15 @@ public class Ticket
     public string Description { get; set; } = string.Empty;
     public string? Category { get; set; }
 
+    /// <summary>Template usado na abertura do chamado (null = abertura normal).</summary>
+    public Guid? TemplateId { get; set; }
+
+    /// <summary>
+    /// Snapshot do nome do template no momento da abertura. Preserva o histórico
+    /// mesmo se o template for excluído (a FK zera o TemplateId).
+    /// </summary>
+    public string? TemplateName { get; set; }
+
     /// <summary>
     /// Snapshot markdown (somente leitura) do formulário/template enviado na
     /// abertura do chamado. Gravado apenas na criação e nunca atualizado.

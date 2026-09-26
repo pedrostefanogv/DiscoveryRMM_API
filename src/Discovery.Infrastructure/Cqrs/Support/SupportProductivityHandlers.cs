@@ -112,6 +112,10 @@ public sealed class CreateTicketTemplateCommandHandler(DiscoveryDbContext db)
         if (string.IsNullOrWhiteSpace(cmd.Name) || string.IsNullOrWhiteSpace(cmd.Title))
             return Result<TicketTemplateDto>.Failure(Error.Validation("Name", "Nome e título do template são obrigatórios."));
 
+        var questionErrors = TicketTemplateQuestions.ValidateDefinitions(TicketTemplateQuestions.Parse(cmd.QuestionsJson));
+        if (questionErrors.Count > 0)
+            return Result<TicketTemplateDto>.Failure(Error.Validation(questionErrors[0].Key, questionErrors[0].Message));
+
         var template = new TicketTemplate
         {
             Id = Guid.NewGuid(),
@@ -123,6 +127,7 @@ public sealed class CreateTicketTemplateCommandHandler(DiscoveryDbContext db)
             Priority = ParsePriority(cmd.Priority),
             Category = cmd.Category,
             CustomFieldDefaultsJson = string.IsNullOrWhiteSpace(cmd.CustomFieldDefaultsJson) ? "{}" : cmd.CustomFieldDefaultsJson,
+            QuestionsJson = TicketTemplateQuestions.Serialize(TicketTemplateQuestions.Parse(cmd.QuestionsJson)),
             IsActive = cmd.IsActive,
             CreatedBy = cmd.CreatedBy,
             CreatedAt = DateTime.UtcNow,
@@ -138,7 +143,7 @@ public sealed class CreateTicketTemplateCommandHandler(DiscoveryDbContext db)
 
     internal static TicketTemplateDto MapTemplate(TicketTemplate t) => new(
         t.Id, t.ClientId, t.DepartmentId, t.Name, t.Title, t.Description,
-        t.Priority?.ToString(), t.Category, t.CustomFieldDefaultsJson, t.IsActive,
+        t.Priority?.ToString(), t.Category, t.CustomFieldDefaultsJson, t.QuestionsJson, t.IsActive,
         t.CreatedBy, t.CreatedAt, t.UpdatedAt);
 }
 
@@ -151,6 +156,10 @@ public sealed class UpdateTicketTemplateCommandHandler(DiscoveryDbContext db)
         if (template is null)
             return Result<TicketTemplateDto>.Failure(Error.NotFound("Template não encontrado."));
 
+        var questionErrors = TicketTemplateQuestions.ValidateDefinitions(TicketTemplateQuestions.Parse(cmd.QuestionsJson));
+        if (questionErrors.Count > 0)
+            return Result<TicketTemplateDto>.Failure(Error.Validation(questionErrors[0].Key, questionErrors[0].Message));
+
         template.ClientId = cmd.ClientId;
         template.DepartmentId = cmd.DepartmentId;
         template.Name = cmd.Name.Trim();
@@ -159,6 +168,7 @@ public sealed class UpdateTicketTemplateCommandHandler(DiscoveryDbContext db)
         template.Priority = CreateTicketTemplateCommandHandler.ParsePriority(cmd.Priority);
         template.Category = cmd.Category;
         template.CustomFieldDefaultsJson = string.IsNullOrWhiteSpace(cmd.CustomFieldDefaultsJson) ? "{}" : cmd.CustomFieldDefaultsJson;
+        template.QuestionsJson = TicketTemplateQuestions.Serialize(TicketTemplateQuestions.Parse(cmd.QuestionsJson));
         template.IsActive = cmd.IsActive;
         template.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
@@ -174,6 +184,17 @@ public sealed class DeleteTicketTemplateCommandHandler(DiscoveryDbContext db)
         var template = await db.TicketTemplates.FirstOrDefaultAsync(t => t.Id == cmd.Id, ct);
         if (template is null)
             return Result<VoidResult>.Failure(Error.NotFound("Template não encontrado."));
+
+        // Proteção: template já usado exige confirmação explícita. A FK
+        // ON DELETE SET NULL preserva o histórico (tickets.template_name).
+        if (!cmd.Force)
+        {
+            var inUse = await db.Tickets.CountAsync(t => t.TemplateId == cmd.Id, ct);
+            if (inUse > 0)
+                return Result<VoidResult>.Failure(Error.Conflict(
+                    $"Template usado por {inUse} chamado(s). Confirme a exclusão para continuar."));
+        }
+
         db.TicketTemplates.Remove(template);
         await db.SaveChangesAsync(ct);
         return Result<VoidResult>.Success(VoidResult.Value);

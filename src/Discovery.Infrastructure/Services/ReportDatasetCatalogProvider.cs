@@ -125,14 +125,29 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
 
         Add("tickets", 3, "Chamados (Tickets)",
             "Tickets abertos, prioridade, SLA e datas.",
-            ["id", "siteId", "agentId", "title", "priority", "workflowStateId", "slaExpiresAt", "slaBreached", "createdAt", "closedAt"],
+            ["id", "siteId", "agentId", "title", "priority", "workflowStateId", "slaExpiresAt", "slaBreached", "createdAt", "closedAt", "templateId", "templateName"],
             JoinAgentClientSite,
-            ["siteId", "workflowStateId", "from", "to"],
+            ["siteId", "workflowStateId", "templateId", "from", "to"],
             ("agentId", "Agente", "guid", true),
             ("title", "Título", "string", false),
             ("priority", "Prioridade", "string", false),
             ("createdAt", "Aberto em", "datetime", false),
-            ("closedAt", "Fechado em", "datetime", false));
+            ("closedAt", "Fechado em", "datetime", false),
+            ("templateName", "Template de abertura", "string", false));
+
+        Add("ticketAnswers", 23, "Respostas do Questionário",
+            "Respostas do mini questionário dos templates de chamado (uma linha por resposta).",
+            ["ticketId", "ticketTitle", "clientId", "siteId", "agentId", "templateId", "templateName", "questionKey", "questionLabel", "valueText", "createdAt"],
+            ["clientId", "siteId", "agentId"],
+            ["templateId", "questionKey", "valueText", "from", "to"],
+            ("ticketId", "Chamado", "guid", true),
+            ("ticketTitle", "Título do chamado", "string", false),
+            ("templateId", "Template", "guid", false),
+            ("templateName", "Template de abertura", "string", false),
+            ("questionKey", "Chave da pergunta", "string", false),
+            ("questionLabel", "Pergunta", "string", false),
+            ("valueText", "Resposta", "string", false),
+            ("createdAt", "Respondido em", "datetime", false));
 
         Add("agentHardware", 4, "Hardware dos Agentes",
             "Inventário de hardware: SO, processador, memória, GPU, discos, placa-mãe e BIOS.",

@@ -30,6 +30,6 @@ public class TicketTemplatesController(IMediator mediator) : ControllerBase
 
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> Delete(Guid id)
-        => (await mediator.Send(new DeleteTicketTemplateCommand(id), HttpContext.RequestAborted)).ToActionResult();
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] bool force = false)
+        => (await mediator.Send(new DeleteTicketTemplateCommand(id, force), HttpContext.RequestAborted)).ToActionResult();
 }

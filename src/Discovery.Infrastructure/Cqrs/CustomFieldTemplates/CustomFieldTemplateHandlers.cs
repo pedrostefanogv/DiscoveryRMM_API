@@ -188,6 +188,14 @@ public sealed class ListCustomFieldTemplatesQueryHandler(DiscoveryDbContext db)
         var query = db.CustomFieldTemplates.AsNoTracking();
         if (!q.IncludeInactive) query = query.Where(t => t.IsActive);
 
+        if (q.AllScopes)
+        {
+            // Gestão: sem recorte de escopo.
+            var all = await query.OrderBy(t => t.SortOrder).ThenBy(t => t.Label).ToListAsync(ct);
+            return Result<IReadOnlyList<CustomFieldTemplateDto>>.Success(
+                all.Select(CustomFieldTemplateMapping.Map).ToList());
+        }
+
         if (q.ClientId.HasValue)
             query = q.IncludeGlobal
                 ? query.Where(t => t.ClientId == q.ClientId || t.ClientId == null)

@@ -60,7 +60,7 @@ public sealed class CreateMyTicketHandler(
             new TicketSubmissionRequest(
                 site.ClientId, cmd.DepartmentId, cmd.TemplateId,
                 cmd.Title, cmd.Description, cmd.Category, cmd.Priority,
-                cmd.CustomFieldValues),
+                cmd.CustomFieldValues, cmd.TemplateAnswers),
             ct);
 
         if (!submission.IsValid)
@@ -99,13 +99,21 @@ public sealed class CreateMyTicketHandler(
             assignedToUserId: null,
             category: submission.Category,
             ct,
-            submission.SnapshotMarkdown);
+            submission.SnapshotMarkdown,
+            submission.TemplateId,
+            submission.TemplateName);
 
         if (submission.CustomFieldValues.Count > 0 && submission.DepartmentId.HasValue)
         {
             await departmentCustomFieldService.SaveTicketFieldValuesAsync(
                 created.Id, submission.DepartmentId.Value,
                 submission.CustomFieldValues, updatedBy: "agent", ct);
+        }
+
+        if (submission.Answers is { Count: > 0 })
+        {
+            await ticketSubmissionService.SaveTemplateAnswersAsync(
+                created.Id, submission.TemplateId, submission.Answers, ct);
         }
 
         return Result<object>.Success(created);
@@ -146,6 +154,8 @@ public sealed class GetMyTicketTemplatesHandler(
                 ? await departmentCustomFieldService.GetPublicSchemaForDepartmentAsync(template.DepartmentId.Value, ct)
                 : Array.Empty<DepartmentFieldSchemaItemDto>();
 
+            var questions = Discovery.Core.DTOs.TicketTemplateQuestions.Parse(template.QuestionsJson);
+
             result.Add(new
             {
                 template.Id,
@@ -155,6 +165,20 @@ public sealed class GetMyTicketTemplatesHandler(
                 Priority = template.Priority?.ToString(),
                 template.Category,
                 template.DepartmentId,
+                // Mini questionário do modelo (o que o usuário deve responder).
+                Questions = questions.Select(q => new
+                {
+                    q.Key,
+                    q.Label,
+                    DataType = q.DataType.ToString(),
+                    q.IsRequired,
+                    q.Options,
+                    q.ValidationRegex,
+                    q.InputMask,
+                    q.HelpText,
+                }).ToList(),
+                // Campos do departamento (sempre presentes no chamado, com a
+                // obrigatoriedade configurada em cada campo).
                 Fields = fields.Select(f => new
                 {
                     DefinitionId = f.DefinitionId,

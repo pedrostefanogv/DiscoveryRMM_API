@@ -648,6 +648,17 @@ public class TicketsController(
         return Ok(result);
     }
 
+    // ── Respostas do questionário do template ────────────────────────────
+
+    [HttpGet("{id:guid}/answers")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> GetAnswers(Guid id)
+    {
+        if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
+            return NotFound();
+        return Ok(await queryService.GetAnswersAsync(id, HttpContext.RequestAborted));
+    }
+
     // ── CSAT ─────────────────────────────────────────────────────────────
 
     /// <summary>Resumo de satisfação (CSAT) por período, cliente e departamento.</summary>

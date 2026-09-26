@@ -28,7 +28,11 @@ public sealed record TicketDetailDto(
     DateTime? RatedAt = null,
     string? RatedBy = null,
     // Snapshot markdown (somente leitura) do formulário/template enviado na abertura.
-    string? SubmissionSnapshotMarkdown = null
+    string? SubmissionSnapshotMarkdown = null,
+    // Template usado na abertura (null = abertura normal).
+    Guid? TemplateId = null,
+    // Snapshot do nome do template (preserva o histórico após exclusão).
+    string? TemplateName = null
 );
 
 /// <summary>
@@ -44,7 +48,9 @@ public sealed record TicketListItemDto(
     Guid? AssignedToUserId,
     bool SlaBreached,
     DateTime CreatedAt,
-    DateTime? ClosedAt
+    DateTime? ClosedAt,
+    Guid? TemplateId = null,
+    string? TemplateName = null
 );
 
 /// <summary>

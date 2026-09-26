@@ -24,5 +24,6 @@ public enum ReportDatasetType
     TicketActivity = 19,
     TicketEscalations = 20,
     CustomFields = 21,
-    KnowledgeBase = 22
+    KnowledgeBase = 22,
+    TicketAnswers = 23
 }

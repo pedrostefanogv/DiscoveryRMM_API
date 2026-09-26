@@ -305,9 +305,7 @@ public class SearchService : ISearchService
         var tickets = _db.Tickets
             .AsNoTracking()
             .Where(t => t.DeletedAt == null)
-            .Where(t => EF.Functions.ILike(t.Title, $"%{query}%")
-                     || EF.Functions.ILike(t.Description ?? "", $"%{query}%")
-                     || EF.Functions.ILike(t.Category ?? "", $"%{query}%"));
+            .WhereMatchesText(_db.TicketAnswers, query);
 
         if (!access.HasGlobalAccess)
         {

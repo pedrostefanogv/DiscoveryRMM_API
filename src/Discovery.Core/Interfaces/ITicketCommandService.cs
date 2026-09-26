@@ -16,7 +16,9 @@ public interface ITicketCommandService
         Guid clientId, Guid? siteId, Guid? agentId, Guid? departmentId,
         Guid? workflowProfileId, Guid? assignedToUserId, string? category,
         CancellationToken ct = default,
-        string? submissionSnapshotMarkdown = null);
+        string? submissionSnapshotMarkdown = null,
+        Guid? templateId = null,
+        string? templateName = null);
 
     /// <summary>Atualiza campos de um ticket existente.</summary>
     Task<Ticket> UpdateTicketAsync(Guid ticketId, string? title, string? description,

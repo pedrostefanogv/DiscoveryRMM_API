@@ -35,6 +35,9 @@ public sealed class TicketQueryService : ITicketQueryService
         if (f.WorkflowProfileId.HasValue) query = query.Where(t => t.WorkflowProfileId == f.WorkflowProfileId.Value);
         if (f.AssignedToUserId.HasValue) query = query.Where(t => t.AssignedToUserId == f.AssignedToUserId.Value);
         if (f.Priority.HasValue) query = query.Where(t => t.Priority == f.Priority.Value);
+        if (f.TemplateId.HasValue) query = query.Where(t => t.TemplateId == f.TemplateId.Value);
+        // Respostas do mini questionário (chave/valor, exato ou "contém").
+        query = query.WhereHasAnswer(_db.TicketAnswers, f.AnswerKey, f.AnswerValue, f.AnswerMatch);
         if (f.SlaBreached.HasValue) query = query.Where(t => t.SlaBreached == f.SlaBreached.Value);
         if (f.IsClosed.HasValue)
             query = f.IsClosed.Value
@@ -59,14 +62,8 @@ public sealed class TicketQueryService : ITicketQueryService
 
         if (!string.IsNullOrWhiteSpace(f.Text))
         {
-            // Escapa curingas do LIKE para "50%" não virar qualquer-coisa.
-            var term = f.Text.Trim()
-                .Replace("\\", "\\\\")
-                .Replace("%", "\\%")
-                .Replace("_", "\\_");
-            var pattern = $"%{term}%";
-            query = query.Where(t =>
-                EF.Functions.ILike(t.Title, pattern) || EF.Functions.ILike(t.Description, pattern));
+            // Busca ampla: título, descrição, categoria e respostas do questionário.
+            query = query.WhereMatchesText(_db.TicketAnswers, f.Text.Trim());
         }
         // O cursor é Base64 "ticks|guidN" (EncodeCreatedAtCursor). O código antigo
         // tentava Guid.TryParse direto no Base64 e sempre falhava → paginação
@@ -77,7 +74,7 @@ public sealed class TicketQueryService : ITicketQueryService
         var limit = Math.Clamp(f.Limit, 1, 200);
         var items = await query.OrderByDescending(t => t.CreatedAt).ThenByDescending(t => t.Id).Take(limit + 1)
             .Select(t => new TicketListItemDto(t.Id, t.ClientId, t.SiteId, t.Title, t.Priority,
-                t.WorkflowStateId, t.AssignedToUserId, t.SlaBreached, t.CreatedAt, t.ClosedAt))
+                t.WorkflowStateId, t.AssignedToUserId, t.SlaBreached, t.CreatedAt, t.ClosedAt, t.TemplateId, t.TemplateName))
             .ToListAsync(ct);
 
         var hm = items.Count > limit;
@@ -98,7 +95,18 @@ public sealed class TicketQueryService : ITicketQueryService
         return new TicketDetailDto(t.Id, t.ClientId, t.SiteId, t.AgentId, t.Title,
             t.Description, t.Category, t.Priority, t.WorkflowStateId, t.AssignedToUserId,
             t.SlaExpiresAt, t.SlaBreached, t.CreatedAt, t.UpdatedAt, t.ClosedAt, t.DaysOpen,
-            t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy, t.SubmissionSnapshotMarkdown);
+            t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy, t.SubmissionSnapshotMarkdown, t.TemplateId, t.TemplateName);
+    }
+
+    public async Task<IReadOnlyList<TicketAnswerDto>> GetAnswersAsync(Guid ticketId, CancellationToken ct = default)
+    {
+        return await _db.TicketAnswers
+            .AsNoTracking()
+            .Where(a => a.TicketId == ticketId)
+            // Ordem das perguntas definida no template (fallback: chave).
+            .OrderBy(a => a.SortOrder).ThenBy(a => a.QuestionKey)
+            .Select(a => new TicketAnswerDto(a.QuestionKey, a.QuestionLabel, a.ValueText, a.ValueJson, a.CreatedAt))
+            .ToListAsync(ct);
     }
 
     public async Task<CursorPageDto<TicketCommentDto>> GetCommentsAsync(

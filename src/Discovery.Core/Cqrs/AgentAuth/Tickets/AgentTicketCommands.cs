@@ -10,7 +10,8 @@ public sealed record CreateMyTicketCommand(
     Guid AgentId, string Title, string? Description, Guid? DepartmentId, Guid? WorkflowProfileId,
     string? Category, string? Priority,
     Guid? TemplateId = null,
-    IReadOnlyDictionary<Guid, JsonElement>? CustomFieldValues = null) : ICommand<Result<object>>;
+    IReadOnlyDictionary<Guid, JsonElement>? CustomFieldValues = null,
+    IReadOnlyDictionary<string, JsonElement>? TemplateAnswers = null) : ICommand<Result<object>>;
 public sealed record AddMyTicketCommentCommand(Guid AgentId, Guid TicketId, string Content, bool? IsInternal) : ICommand<Result<object>>;
 public sealed record GetMyTicketCommentsQuery(Guid AgentId, Guid TicketId) : IQuery<Result<object>>;
 public sealed record UpdateMyTicketWorkflowStateCommand(Guid AgentId, Guid TicketId, Guid WorkflowStateId) : ICommand<Result<object>>;

@@ -470,16 +470,15 @@ public class TicketRepository : ITicketRepository
         if (filter.Since.HasValue)
             query = query.Where(t => t.CreatedAt >= filter.Since.Value);
 
+        // Consistência com a listagem: template de abertura e respostas do
+        // questionário também recortam os KPIs.
+        if (filter.TemplateId.HasValue) query = query.Where(t => t.TemplateId == filter.TemplateId.Value);
+        query = query.WhereHasAnswer(_db.TicketAnswers, filter.AnswerKey, filter.AnswerValue, filter.AnswerMatch);
+
         if (!string.IsNullOrWhiteSpace(filter.Text))
         {
-            // Escapa curingas do LIKE (consistente com a listagem).
-            var term = filter.Text.Trim()
-                .Replace("\\", "\\\\")
-                .Replace("%", "\\%")
-                .Replace("_", "\\_");
-            var pattern = $"%{term}%";
-            query = query.Where(t =>
-                EF.Functions.ILike(t.Title, pattern) || EF.Functions.ILike(t.Description, pattern));
+            // Consistente com a listagem: inclui respostas do questionário.
+            query = query.WhereMatchesText(_db.TicketAnswers, filter.Text.Trim());
         }
 
         if (!filter.HasGlobalAccess)

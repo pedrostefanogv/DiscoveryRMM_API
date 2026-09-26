@@ -25,6 +25,7 @@ public static class ResultExtensions
                 return first.Code switch
                 {
                     "NotFound" => new NotFoundObjectResult(new { errors = errorList }),
+                    "Conflict" => new ObjectResult(new { errors = errorList }) { StatusCode = 409 },
                     "Validation" => new BadRequestObjectResult(new { errors = errorList }),
                     "Unauthorized" => new UnauthorizedObjectResult(new { errors = errorList }),
                     "Forbidden" => new ObjectResult(new { errors = errorList }) { StatusCode = 403 },

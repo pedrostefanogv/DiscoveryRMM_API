@@ -21,7 +21,7 @@ public sealed class CreateTicketCommandHandler(
             new TicketSubmissionRequest(
                 cmd.ClientId, cmd.DepartmentId, cmd.TemplateId,
                 cmd.Title, cmd.Description, cmd.Category, cmd.Priority.ToString(),
-                cmd.CustomFieldValues),
+                cmd.CustomFieldValues, cmd.TemplateAnswers),
             ct);
 
         if (!submission.IsValid)
@@ -42,13 +42,19 @@ public sealed class CreateTicketCommandHandler(
                 submission.Title, submission.Description, priority,
                 cmd.ClientId, cmd.SiteId, cmd.AgentId, submission.DepartmentId,
                 cmd.WorkflowProfileId, cmd.AssignedToUserId, submission.Category, ct,
-                submission.SnapshotMarkdown);
+                submission.SnapshotMarkdown, submission.TemplateId, submission.TemplateName);
 
             if (submission.CustomFieldValues.Count > 0 && submission.DepartmentId.HasValue)
             {
                 await departmentCustomFieldService.SaveTicketFieldValuesAsync(
                     ticket.Id, submission.DepartmentId.Value,
                     submission.CustomFieldValues, updatedBy: null, ct);
+            }
+
+            if (submission.Answers is { Count: > 0 })
+            {
+                await ticketSubmissionService.SaveTemplateAnswersAsync(
+                    ticket.Id, submission.TemplateId, submission.Answers, ct);
             }
 
             return Result<TicketDetailDto>.Success(TicketCommandService.ToDto(ticket));
