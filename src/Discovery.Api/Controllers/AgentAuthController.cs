@@ -587,7 +587,18 @@ public class AgentAuthController : ControllerBase
                 if (chunk.Type is "done" or "round_end") break;
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Cliente desconectou — nada a fazer.
+        }
+        catch (OperationCanceledException ex)
+        {
+            // B16: cancelamento do lado do provedor (timeout de geração). Antes era
+            // engolido em silêncio e o cliente recebia HTTP 200 sem nenhum evento.
+            _logger.LogWarning(ex, "[ChatStream] Geração cancelada antes de concluir (timeout do provedor?). TraceId={TraceId}", HttpContext.TraceIdentifier);
+            await WriteSseJsonAsync(HttpContext, new { type = "error", error = "A geração da resposta excedeu o tempo limite. Tente novamente." }, CancellationToken.None);
+            await HttpContext.Response.Body.FlushAsync(CancellationToken.None);
+        }
         catch (Exception ex)
         {
             if (!ct.IsCancellationRequested)

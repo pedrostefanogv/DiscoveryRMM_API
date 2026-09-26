@@ -194,6 +194,8 @@ public class AiChatStreamingOrchestrator
         // emitido, o agent exibia a mensagem genérica e o servidor persistia
         // uma resposta que o usuário nunca viu).
         bool anyTokenYielded = false;
+        // B16-r2: erro estruturado do provider (objeto "error" no stream do LLM).
+        string? providerError = null;
 
         var availableTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, ct) : [];
@@ -249,11 +251,17 @@ public class AiChatStreamingOrchestrator
 
             hasToolCalls = false;
             hasAgentToolCallPending = false;
+            providerError = null;
 
             if (roundTools.Count > 0)
             {
                 await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
                 {
+                    if (evt.Type == "error")
+                    {
+                        providerError = evt.Content ?? "Erro no stream do provider";
+                        break;
+                    }
                     if (IsTextToken(evt))
                     {
                         contentBuilder.Append(evt.Content);
@@ -377,6 +385,15 @@ public class AiChatStreamingOrchestrator
                     yield return new AiChatStreamChunk(Type: "token", Content: token);
                     anyTokenYielded = true;
                 }
+            }
+
+            // B16-r2: erro estruturado do provider (objeto "error" no stream) —
+            // encerra o turno com mensagem clara em vez de um done vazio.
+            if (providerError is not null)
+            {
+                _logger.LogError("[{TraceId}] Provider stream error: {Error}", traceId, providerError);
+                yield return new AiChatStreamChunk(Type: "error", Error: providerError);
+                yield break;
             }
 
             if (!hasToolCalls || toolIterations >= maxIterations - 1) break;
@@ -634,6 +651,8 @@ public class AiChatStreamingOrchestrator
         bool hasToolCalls = false;
         // B16: rastreia se algum token visível já foi transmitido ao cliente.
         bool anyTokenYielded = false;
+        // B16-r2: erro estruturado do provider (objeto "error" no stream do LLM).
+        string? providerError = null;
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
         // B17: schema registrado por tool (validação de argumentos agnóstica de modelo).
         // GroupBy evita exceção de chave duplicada se o agent registrar nomes repetidos.
@@ -669,11 +688,17 @@ public class AiChatStreamingOrchestrator
 
             hasToolCalls = false;
             bool hasAgentToolCall = false;
+            providerError = null;
 
             if (roundTools.Count > 0)
             {
                 await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
                 {
+                    if (evt.Type == "error")
+                    {
+                        providerError = evt.Content ?? "Erro no stream do provider";
+                        break;
+                    }
                     if (IsTextToken(evt))
                     {
                         contentBuilder.Append(evt.Content);
@@ -771,6 +796,15 @@ public class AiChatStreamingOrchestrator
 
             if (!hasToolCalls || toolIterations >= maxIterations - 1) break;
             toolIterations++;
+        }
+
+        // B16-r2: erro estruturado do provider — encerra o turno com error
+        // (o controller repassa ao agent) em vez de seguir para a síntese.
+        if (providerError is not null)
+        {
+            _logger.LogError("[{TraceId}] Provider stream error (multi-round): {Error}", traceId, providerError);
+            yield return new AiChatStreamChunk(Type: "error", Error: providerError);
+            yield break;
         }
 
     streamMultiRoundDone:

@@ -518,22 +518,18 @@ public class AiChatToolOrchestrator
     /// </summary>
     private static string[]? ExtractRequiredParams(object? schema)
     {
+        if (schema is null) return null;
         try
         {
-            if (schema is JsonElement el) return RequiredFromJson(el);
-            if (schema is System.Text.Json.Nodes.JsonNode node)
-                return RequiredFromJson(JsonSerializer.SerializeToElement(node));
-            if (schema is IDictionary<string, object> dict)
-            {
-                if (!dict.TryGetValue("required", out var req) || req is null) return [];
-                if (req is IEnumerable<string> names) return names.ToArray();
-                if (req is System.Collections.IEnumerable en)
-                    return en.Cast<object?>().Select(x => x?.ToString() ?? "").Where(x => x.Length > 0).ToArray();
-                return [];
-            }
+            // SerializeToElement cobre qualquer forma que o schema assuma em
+            // runtime: JsonElement, JsonNode, Dictionary<string,object>,
+            // Dictionary<string,JsonElement>, anonymous types, etc. Antes, tipos
+            // não reconhecidos caíam silenciosamente na heurística hardcoded e a
+            // validação por schema ficava inefetiva.
+            JsonElement el = schema as JsonElement? ?? JsonSerializer.SerializeToElement(schema);
+            return RequiredFromJson(el);
         }
         catch { return null; }
-        return null;
     }
 
     private static string[] RequiredFromJson(JsonElement el)

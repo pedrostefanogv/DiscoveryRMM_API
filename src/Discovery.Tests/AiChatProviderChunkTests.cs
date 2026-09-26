@@ -24,10 +24,12 @@ public class AiChatProviderChunkTests
     }
 
     [Test]
-    public void ErrorObject_ThrowsInvalidOperation()
+    public void ErrorObject_ReturnsStructuredErrorEvent()
     {
-        Assert.Throws<InvalidOperationException>(() =>
-            OpenAiProvider.ParseStreamChunk("{\"error\":{\"message\":\"insufficient credits\"}}", Pending()));
+        var evt = OpenAiProvider.ParseStreamChunk("{\"error\":{\"message\":\"insufficient credits\"}}", Pending());
+        Assert.That(evt, Is.Not.Null);
+        Assert.That(evt!.Type, Is.EqualTo("error"));
+        Assert.That(evt.Content, Does.Contain("insufficient credits"));
     }
 
     [Test]

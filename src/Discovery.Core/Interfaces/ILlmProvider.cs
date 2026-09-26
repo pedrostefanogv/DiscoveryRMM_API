@@ -89,10 +89,16 @@ public record LlmToolCall(
 /// Evento emitido durante streaming SSE com suporte a tool calls.
 /// Type = "token"      → Content contém fragmento de texto.
 /// Type = "tool_calls" → ToolCalls contém as tool calls (finish_reason=tool_calls).
-/// Type = "done"       → Fim do streaming (finish_reason=stop).
+/// Type = "done"       → Fim do streaming (finish_reason=stop/length/...).
+/// Type = "error"      → Content contém a mensagem de erro do provider (ex.: objeto
+///                       "error" no meio do stream do OpenRouter). O caller DEVE
+///                       interromper o loop e sinalizar falha — nunca ignorar.
 /// </summary>
 public record LlmStreamEvent(
     string Type,
     string? Content = null,
     List<LlmToolCall>? ToolCalls = null,
-    int? TokensUsed = null);
+    int? TokensUsed = null)
+{
+    public static LlmStreamEvent Error(string message) => new(Type: "error", Content: message);
+}

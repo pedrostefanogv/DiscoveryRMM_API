@@ -9,6 +9,16 @@ using System.Text.Json.Serialization;
 
 namespace Discovery.Infrastructure.Services;
 
+/// <summary>
+/// Erro de stream do provider (objeto "error" no SSE). Separado de
+/// InvalidOperationException para o catch dos loops não confundir com erros
+/// inesperados e não logar o chunk como "malformado".
+/// </summary>
+public sealed class ProviderStreamErrorException : Exception
+{
+    public ProviderStreamErrorException(string message) : base(message) { }
+}
+
 public class OpenAiProvider : ILlmProvider
 {
     private readonly IHttpClientFactory _httpClientFactory;
@@ -168,10 +178,10 @@ public class OpenAiProvider : ILlmProvider
             || (!string.IsNullOrWhiteSpace(baseUrl) && baseUrl.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase));
         if (!isOpenRouter) return;
 
+        // Só envia quando habilitado: "enabled:false" não é um shape documentado
+        // do OpenRouter e a ausência da chave já é o comportamento padrão.
         if (options.ReasoningEnabled)
             payloadDict["reasoning"] = new { effort = string.IsNullOrWhiteSpace(options.ReasoningEffort) ? "medium" : options.ReasoningEffort };
-        else
-            payloadDict["reasoning"] = new { enabled = false };
     }
 
     public async Task<LlmResponse> CompleteAsync(
@@ -452,7 +462,7 @@ public class OpenAiProvider : ILlmProvider
                     var msg = errProp.ValueKind == JsonValueKind.String
                         ? errProp.GetString()
                         : errProp.TryGetProperty("message", out var m) ? m.GetString() : errProp.GetRawText();
-                    throw new InvalidOperationException($"Provider stream error: {Shorten(msg, 400)}");
+                    throw new ProviderStreamErrorException($"Provider stream error: {Shorten(msg, 400)}");
                 }
                 if (root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0)
                 {
@@ -464,8 +474,9 @@ public class OpenAiProvider : ILlmProvider
                     }
                 }
             }
-            catch (JsonException)
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or ProviderStreamErrorException)
             {
+                if (ex is ProviderStreamErrorException) throw;
                 // linha malformada — ignorar
                 continue;
             }
@@ -543,6 +554,13 @@ public class OpenAiProvider : ILlmProvider
             ["messages"] = openAiMessages,
             ["max_tokens"] = options.MaxTokens,
             ["temperature"] = options.Temperature,
+            // B16-r2: mesmos parâmetros de amostragem do caminho sem tools — sem
+            // isso o round com tools e a síntese usavam amostragem diferente.
+            ["top_p"] = options.TopP,
+            ["frequency_penalty"] = options.FrequencyPenalty,
+            ["presence_penalty"] = options.PresencePenalty,
+            ["seed"] = options.Seed,
+            ["response_format"] = options.ResponseFormat,
             ["stream"] = true
         };
 
@@ -617,9 +635,9 @@ public class OpenAiProvider : ILlmProvider
             {
                 parsed = ParseStreamChunk(data, pendingToolCalls);
             }
-            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or ProviderStreamErrorException)
             {
-                if (ex is InvalidOperationException) throw;
+                if (ex is ProviderStreamErrorException) throw;
                 _logger.LogWarning("Chunk SSE invalido do provider (ignorado): {Data}", Shorten(data, 300));
                 continue;
             }
@@ -643,14 +661,13 @@ public class OpenAiProvider : ILlmProvider
         var root = doc.RootElement;
 
         // OpenRouter (e outros gateways) podem enviar um objeto de erro no meio
-        // do stream, sem "choices". Antes isso lançava KeyNotFoundException e o
-        // enumerador morria em silêncio (200 sem tokens). Agora é erro explícito.
+        // do stream, sem "choices". Vira evento estruturado tratado pelo orquestrador.
         if (root.TryGetProperty("error", out var errProp))
         {
             var msg = errProp.ValueKind == JsonValueKind.String
                 ? errProp.GetString()
                 : errProp.TryGetProperty("message", out var m) ? m.GetString() : errProp.GetRawText();
-            throw new InvalidOperationException($"Provider stream error: {Shorten(msg, 400)}");
+            return LlmStreamEvent.Error($"Provider stream error: {Shorten(msg, 400)}");
         }
 
         if (!root.TryGetProperty("choices", out var choices)
@@ -664,20 +681,13 @@ public class OpenAiProvider : ILlmProvider
         string? finishReason = null;
         if (choice.TryGetProperty("finish_reason", out var frProp) && frProp.ValueKind == JsonValueKind.String)
             finishReason = frProp.GetString();
-        // OpenRouter: native_finish_reason reflete o motivo real do upstream.
         if (string.IsNullOrEmpty(finishReason)
             && choice.TryGetProperty("native_finish_reason", out var nfr) && nfr.ValueKind == JsonValueKind.String)
             finishReason = nfr.GetString();
 
-        // 1. Delta content (texto). reasoning/reasoning_content NÃO é exibido.
-        if (hasDelta && delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
-        {
-            var token = contentProp.GetString();
-            if (!string.IsNullOrEmpty(token))
-                return new LlmStreamEvent(Type: "token", Content: token);
-        }
-
-        // 2. Delta tool_calls (incremental)
+        // 1. Acumula tool_calls PRIMEIRO: alguns providers emitem content e
+        // tool_calls no MESMO chunk; retornar o token antes de acumular perdia
+        // os deltas de argumentos (B16-r2).
         if (hasDelta && delta.TryGetProperty("tool_calls", out var tcProp) && tcProp.ValueKind == JsonValueKind.Array)
         {
             foreach (var tc in tcProp.EnumerateArray())
@@ -718,13 +728,23 @@ public class OpenAiProvider : ILlmProvider
             }
         }
 
+        // 2. content token. Prioridade sobre finish_reason: um chunk com
+        // content + finish não pode perder o texto (o finish é resolvido no
+        // [DONE]/próximo chunk, e o fim do enumerador também encerra o round).
+        if (hasDelta && delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
+        {
+            var token = contentProp.GetString();
+            if (!string.IsNullOrEmpty(token))
+                return new LlmStreamEvent(Type: "token", Content: token);
+        }
+
         int? tokensUsed = null;
         if (root.TryGetProperty("usage", out var usageProp) && usageProp.ValueKind == JsonValueKind.Object
             && usageProp.TryGetProperty("total_tokens", out var ttProp) && ttProp.ValueKind == JsonValueKind.Number)
             tokensUsed = ttProp.GetInt32();
 
-        // 3. Qualquer finish_reason terminal encerra o round. tool_calls emite as
-        // tool calls acumuladas; stop/length/content_filter/... emitem done.
+        // 3. finish_reason terminal: tool_calls emite as acumuladas; qualquer
+        // outro (stop/length/content_filter/...) encerra o round.
         if (!string.IsNullOrEmpty(finishReason))
         {
             if (string.Equals(finishReason, "tool_calls", StringComparison.OrdinalIgnoreCase) && pendingToolCalls.Count > 0)
@@ -738,7 +758,6 @@ public class OpenAiProvider : ILlmProvider
 
         return null;
     }
-
     // DTOs internos para deserialização da resposta OpenAI
     private record OpenAiChatResponse(
         [property: JsonPropertyName("id")] string Id,
