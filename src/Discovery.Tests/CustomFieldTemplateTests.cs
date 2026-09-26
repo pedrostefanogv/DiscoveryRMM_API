@@ -103,12 +103,13 @@ public class CustomFieldTemplateTests
         {
             Assert.That(result.IsValid, Is.True);
             Assert.That(result.TemplateId, Is.EqualTo(templateId));
-            Assert.That(result.TemplateName, Is.EqualTo("Criação de usuário"));
+            // Nome exibido é o Title (a chave/Name é identificador).
+            Assert.That(result.TemplateName, Is.EqualTo("Novo usuário"));
             Assert.That(result.Answers, Is.Not.Null);
             Assert.That(result.Answers!.Select(a => a.QuestionKey), Is.EquivalentTo(new[] { "nome", "email" }));
             Assert.That(result.Answers!.Single(a => a.QuestionKey == "nome").QuestionLabel, Is.EqualTo("Nome"));
             Assert.That(result.Answers!.Single(a => a.QuestionKey == "nome").ValueText, Is.EqualTo("Ana"));
-            Assert.That(result.SnapshotMarkdown, Does.Contain("Criação de usuário"));
+            Assert.That(result.SnapshotMarkdown, Does.Contain("Novo usuário"));
             Assert.That(result.SnapshotMarkdown, Does.Contain("Questionário do modelo"));
         });
     }

@@ -211,7 +211,7 @@ public class TicketSubmissionService(
 
         return new TicketSubmissionResult(
             departmentId, title, description, category, priority, rawValues, errors, snapshot,
-            template?.Id, answerDrafts, template?.Name);
+            template?.Id, answerDrafts, TemplateDisplayName(template));
     }
 
     /// <inheritdoc />
@@ -280,6 +280,15 @@ public class TicketSubmissionService(
         return drafts;
     }
 
+    /// <summary>
+    /// Nome exibido do template (histórico do chamado e snapshot). A chave
+    /// (Name) é identificador padronizado, então o texto humano é o Title.
+    /// </summary>
+    private static string TemplateDisplayName(TicketTemplate? template)
+        => template is null
+            ? string.Empty
+            : string.IsNullOrWhiteSpace(template.Title) ? template.Name : template.Title;
+
     private static IEnumerable<(Guid DefinitionId, JsonElement Value)> ParseTemplateDefaults(string? defaultsJson)
     {
         if (string.IsNullOrWhiteSpace(defaultsJson)) yield break;
@@ -321,7 +330,7 @@ public class TicketSubmissionService(
         builder.AppendLine();
 
         if (template is not null)
-            builder.AppendLine($"- **Template:** {Escape(template.Name)}");
+            builder.AppendLine($"- **Template:** {Escape(TemplateDisplayName(template))}");
         if (!string.IsNullOrWhiteSpace(title))
             builder.AppendLine($"- **Título enviado:** {Escape(title)}");
         if (!string.IsNullOrWhiteSpace(priority))

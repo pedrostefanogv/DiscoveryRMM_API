@@ -145,7 +145,9 @@ public sealed class GetMyTicketTemplatesHandler(
             .AsNoTracking()
             // Excluídos (lixeira) não podem ser ofertados ao agent/chat.
             .Where(t => t.DeletedAt == null && t.IsActive && (t.ClientId == site.ClientId || t.ClientId == null))
-            .OrderBy(t => t.Name)
+            // Título é o nome exibido ao usuário (a chave é identificador).
+            .OrderBy(t => t.Title)
+            .ThenBy(t => t.Name)
             .ToListAsync(ct);
 
         var result = new List<object>(templates.Count);

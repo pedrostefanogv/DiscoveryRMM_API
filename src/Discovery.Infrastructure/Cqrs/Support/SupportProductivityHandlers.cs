@@ -104,13 +104,60 @@ public sealed class ListTicketMacrosQueryHandler(DiscoveryDbContext db)
 
 // ── Templates de chamado ─────────────────────────────────────────────────
 
+/// <summary>Regras compartilhadas dos templates (chave padronizada + unicidade).</summary>
+internal static class TicketTemplateRules
+{
+    /// <summary>
+    /// Descreve o conflito de chave no escopo, ou null quando livre. NULLs contam
+    /// como iguais (globais também são únicos entre si), espelhando o índice
+    /// ux_ticket_templates_scope_name NULLS NOT DISTINCT da migração.
+    /// </summary>
+    public static async Task<string?> DescribeKeyConflictAsync(
+        DiscoveryDbContext db,
+        Guid? clientId,
+        Guid? departmentId,
+        string key,
+        Guid? excludeId,
+        CancellationToken ct)
+    {
+        var query = db.TicketTemplates.AsNoTracking().Where(t => t.Name == key);
+        if (excludeId.HasValue)
+            query = query.Where(t => t.Id != excludeId.Value);
+        query = clientId.HasValue
+            ? query.Where(t => t.ClientId == clientId.Value)
+            : query.Where(t => t.ClientId == null);
+        query = departmentId.HasValue
+            ? query.Where(t => t.DepartmentId == departmentId.Value)
+            : query.Where(t => t.DepartmentId == null);
+
+        var existing = await query
+            .Select(t => new { t.DeletedAt })
+            .FirstOrDefaultAsync(ct);
+
+        if (existing is null) return null;
+
+        return existing.DeletedAt is null
+            ? $"Já existe um template com a chave \"{key}\" neste escopo."
+            : $"A chave \"{key}\" está na lixeira. Restaure ou exclua definitivamente o template existente.";
+    }
+}
+
 public sealed class CreateTicketTemplateCommandHandler(DiscoveryDbContext db)
     : IRequestHandler<CreateTicketTemplateCommand, Result<TicketTemplateDto>>
 {
     public async Task<Result<TicketTemplateDto>> Handle(CreateTicketTemplateCommand cmd, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(cmd.Name) || string.IsNullOrWhiteSpace(cmd.Title))
-            return Result<TicketTemplateDto>.Failure(Error.Validation("Name", "Nome e título do template são obrigatórios."));
+        if (string.IsNullOrWhiteSpace(cmd.Title))
+            return Result<TicketTemplateDto>.Failure(Error.Validation("Title", "Informe o título do template."));
+
+        // Nome é a CHAVE padronizada (slug) do template.
+        var key = TicketTemplateKey.Resolve(cmd.Name, out var keyError);
+        if (keyError is not null)
+            return Result<TicketTemplateDto>.Failure(Error.Validation("Name", keyError));
+
+        var keyConflict = await TicketTemplateRules.DescribeKeyConflictAsync(db, cmd.ClientId, cmd.DepartmentId, key, null, ct);
+        if (keyConflict is not null)
+            return Result<TicketTemplateDto>.Failure(Error.Conflict(keyConflict));
 
         var questionErrors = TicketTemplateQuestions.ValidateDefinitions(TicketTemplateQuestions.Parse(cmd.QuestionsJson));
         if (questionErrors.Count > 0)
@@ -121,8 +168,8 @@ public sealed class CreateTicketTemplateCommandHandler(DiscoveryDbContext db)
             Id = Guid.NewGuid(),
             ClientId = cmd.ClientId,
             DepartmentId = cmd.DepartmentId,
-            Name = cmd.Name.Trim(),
-            Title = cmd.Title,
+            Name = key,
+            Title = cmd.Title.Trim(),
             Description = cmd.Description,
             Priority = ParsePriority(cmd.Priority),
             Category = cmd.Category,
@@ -156,14 +203,30 @@ public sealed class UpdateTicketTemplateCommandHandler(DiscoveryDbContext db)
         if (template is null)
             return Result<TicketTemplateDto>.Failure(Error.NotFound("Template não encontrado."));
 
+        // Excluído (lixeira) não é editável: restaure antes (a UI já bloqueia).
+        if (template.DeletedAt is not null)
+            return Result<TicketTemplateDto>.Failure(Error.Conflict(
+                "Template está na lixeira. Restaure-o antes de editar."));
+
+        if (string.IsNullOrWhiteSpace(cmd.Title))
+            return Result<TicketTemplateDto>.Failure(Error.Validation("Title", "Informe o título do template."));
+
+        var key = TicketTemplateKey.Resolve(cmd.Name, out var keyError);
+        if (keyError is not null)
+            return Result<TicketTemplateDto>.Failure(Error.Validation("Name", keyError));
+
+        var keyConflict = await TicketTemplateRules.DescribeKeyConflictAsync(db, cmd.ClientId, cmd.DepartmentId, key, cmd.Id, ct);
+        if (keyConflict is not null)
+            return Result<TicketTemplateDto>.Failure(Error.Conflict(keyConflict));
+
         var questionErrors = TicketTemplateQuestions.ValidateDefinitions(TicketTemplateQuestions.Parse(cmd.QuestionsJson));
         if (questionErrors.Count > 0)
             return Result<TicketTemplateDto>.Failure(Error.Validation(questionErrors[0].Key, questionErrors[0].Message));
 
         template.ClientId = cmd.ClientId;
         template.DepartmentId = cmd.DepartmentId;
-        template.Name = cmd.Name.Trim();
-        template.Title = cmd.Title;
+        template.Name = key;
+        template.Title = cmd.Title.Trim();
         template.Description = cmd.Description;
         template.Priority = CreateTicketTemplateCommandHandler.ParsePriority(cmd.Priority);
         template.Category = cmd.Category;
@@ -270,7 +333,11 @@ public sealed class ListTicketTemplatesQueryHandler(DiscoveryDbContext db)
         if (q.DepartmentId.HasValue)
             query = query.Where(t => t.DepartmentId == q.DepartmentId || t.DepartmentId == null);
 
-        var items = await query.OrderBy(t => t.Name).ToListAsync(ct);
+        // Ordena pelo Título (nome exibido); a chave fica só como desempate.
+        var items = await query
+            .OrderBy(t => t.Title)
+            .ThenBy(t => t.Name)
+            .ToListAsync(ct);
         return Result<IReadOnlyList<TicketTemplateDto>>.Success(
             items.Select(CreateTicketTemplateCommandHandler.MapTemplate).ToList());
     }
