@@ -200,9 +200,14 @@ public class DepartmentsController(
     /// </summary>
     [HttpGet("{id:guid}/ticket-schema")]
     [RequirePermission(ResourceType.Departments, ActionType.View)]
-    public async Task<IActionResult> GetTicketSchema(Guid id, [FromQuery] bool includeInternal = false)
+    public async Task<IActionResult> GetTicketSchema(
+        Guid id,
+        [FromQuery] bool includeInternal = false,
+        [FromQuery] Guid? ticketId = null)
         => Ok(includeInternal
-            ? await departmentCustomFieldService.GetFullSchemaForDepartmentAsync(id, null, HttpContext.RequestAborted)
+            // Com ticketId o schema já devolve o valor atual de cada campo
+            // (CurrentValueJson); sem ele os valores vêm do endpoint do chamado.
+            ? await departmentCustomFieldService.GetFullSchemaForDepartmentAsync(id, ticketId, HttpContext.RequestAborted)
             : await departmentCustomFieldService.GetPublicSchemaForDepartmentAsync(id, HttpContext.RequestAborted));
 
     private static CreateDepartmentCustomFieldInput ToCreateInput(DepartmentCustomFieldRequest r) => new(
