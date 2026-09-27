@@ -50,13 +50,14 @@ public class TicketWorkflowService : ITicketWorkflowService
         if (ticket is null)
             throw new InvalidOperationException($"Ticket {ticketId} not found");
 
-        // Carregar estados em paralelo
-        var oldStateTask = _workflowRepo.GetStateByIdAsync(ticket.WorkflowStateId);
-        var newStateTask = _workflowRepo.GetStateByIdAsync(targetStateId);
-        await Task.WhenAll(oldStateTask, newStateTask);
-
-        var oldState = oldStateTask.Result;
-        var newState = newStateTask.Result;
+        // Carregar estados em SEQUÊNCIA. Ambos os repositórios compartilham o
+        // mesmo DbContext com escopo de request: disparar as duas queries em
+        // paralelo disparava "A second operation was started on this context
+        // instance before a previous operation completed" de forma
+        // intermitente, derrubando a transição (e a transaction do handler)
+        // mesmo com o chamado e os estados corretos.
+        var oldState = await _workflowRepo.GetStateByIdAsync(ticket.WorkflowStateId);
+        var newState = await _workflowRepo.GetStateByIdAsync(targetStateId);
 
         // Estado de destino inexistente: erro explícito em vez de "transição
         // inválida", que confundia estado removido com transição não cadastrada.
@@ -132,12 +133,13 @@ public class TicketWorkflowService : ITicketWorkflowService
         // Log da mudança (usa a origem efetiva, já reparada se era órfã).
         await _activityLogService.LogStateChangeAsync(ticketId, changedByUserId, fromStateId, targetStateId);
 
-        // --- Alertas PSADT em paralelo ---
+        // --- Alertas PSADT (sequencial) ---
+        // O dispatch consulta a base (regras/escopo) no mesmo DbContext do
+        // request; em paralelo ele pode colidir com o ExecuteUpdate acima.
         var alertRules = await _alertRuleRepo.GetByWorkflowStateIdAsync(targetStateId);
-        if (alertRules.Any())
+        foreach (var rule in alertRules)
         {
-            var alertTasks = alertRules.Select(rule => DispatchAlertSafeAsync(rule, ticket, ct));
-            await Task.WhenAll(alertTasks);
+            await DispatchAlertSafeAsync(rule, ticket, ct);
         }
 
         // Recarregar do banco

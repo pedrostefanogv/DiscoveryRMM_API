@@ -124,6 +124,16 @@ public class ExceptionHandlingMiddleware
         context.Response.ContentType = "application/json";
         context.Response.StatusCode = statusCode;
 
+        // 4xx de regra de negócio (InvalidOperationException/ArgumentException):
+        // além do rótulo genérico, devolve a MENSAGEM. Sem isso o usuário via
+        // apenas "Requisição inválida" e não sabia se era estado inexistente,
+        // transição não cadastrada ou outro problema.
+        var isBadRequest = statusCode == StatusCodes.Status400BadRequest
+            && exception is InvalidOperationException or ArgumentException;
+        var detail = isBadRequest && !string.IsNullOrWhiteSpace(exception.Message)
+            ? exception.Message
+            : null;
+
         var response = new
         {
             error = statusCode switch
@@ -136,6 +146,7 @@ public class ExceptionHandlingMiddleware
                 StatusCodes.Status503ServiceUnavailable => "Serviço indisponível",
                 _ => "Erro interno do servidor"
             },
+            message = detail,
             timestamp = DateTime.UtcNow,
             traceId = context.TraceIdentifier
         };
