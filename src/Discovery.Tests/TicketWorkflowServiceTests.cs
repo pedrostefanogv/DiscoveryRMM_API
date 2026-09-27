@@ -85,13 +85,78 @@ public class TicketWorkflowServiceTests
     {
         var ticket = CreateTicket();
         var repo = new FakeTicketRepositorySingle(ticket);
-        var workflowRepo = new FakeWorkflowRepositorySimple(OldStateId, NewStateId, isValid: false);
+        // Destino intermediário (nem inicial, nem final): sem transição
+        // cadastrada a movimentação continua bloqueada.
+        var workflowRepo = new FakeWorkflowRepositorySimple(
+            OldStateId, NewStateId, isValid: false, newIsFinal: false);
         var svc = new TicketWorkflowService(
             repo, workflowRepo, new FakeSlaService(), new FakeActivityLogService(),
             new FakeTicketAlertRuleRepository(), new FakeAlertDispatchService(),
             new FakeNotificationService(), NullLogger<TicketWorkflowService>.Instance);
 
         Assert.ThrowsAsync<InvalidOperationException>(() => svc.TransitionAsync(ticket.Id, NewStateId, null));
+    }
+
+    [Test]
+    public async Task TransitionAsync_ShouldAllowFinalState_WithoutExplicitTransition()
+    {
+        // Regra de produto: qualquer chamado pode ser levado a um estado FINAL
+        // (fechar) mesmo sem a transição origem→destino cadastrada.
+        var ticket = CreateTicket();
+        var repo = new FakeTicketRepositorySingle(ticket);
+        var workflowRepo = new FakeWorkflowRepositorySimple(
+            OldStateId, NewStateId, isValid: false, newIsFinal: true);
+        var activityLog = new FakeActivityLogService();
+
+        var svc = new TicketWorkflowService(
+            repo, workflowRepo, new FakeSlaService(), activityLog,
+            new FakeTicketAlertRuleRepository(), new FakeAlertDispatchService(),
+            new FakeNotificationService(), NullLogger<TicketWorkflowService>.Instance);
+
+        var result = await svc.TransitionAsync(ticket.Id, NewStateId, null);
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(ticket.WorkflowStateId, Is.EqualTo(NewStateId));
+        Assert.That(ticket.ClosedAt, Is.Not.Null, "estado final deve preencher ClosedAt");
+    }
+
+    [Test]
+    public async Task TransitionAsync_ShouldAllowInitialState_WithoutExplicitTransition()
+    {
+        var ticket = CreateTicket();
+        var repo = new FakeTicketRepositorySingle(ticket);
+        var workflowRepo = new FakeWorkflowRepositorySimple(
+            OldStateId, NewStateId, isValid: false,
+            newIsFinal: false, newIsInitial: true);
+        var activityLog = new FakeActivityLogService();
+
+        var svc = new TicketWorkflowService(
+            repo, workflowRepo, new FakeSlaService(), activityLog,
+            new FakeTicketAlertRuleRepository(), new FakeAlertDispatchService(),
+            new FakeNotificationService(), NullLogger<TicketWorkflowService>.Instance);
+
+        var result = await svc.TransitionAsync(ticket.Id, NewStateId, null);
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(ticket.WorkflowStateId, Is.EqualTo(NewStateId));
+        Assert.That(ticket.ClosedAt, Is.Null, "estado inicial não é final");
+    }
+
+    [Test]
+    public void TransitionAsync_ShouldThrow_WhenTargetStateDoesNotExist()
+    {
+        var ticket = CreateTicket();
+        var repo = new FakeTicketRepositorySingle(ticket);
+        // FakeWorkflowRepositorySimple devolve null para um id desconhecido.
+        var unknownStateId = Guid.NewGuid();
+        var workflowRepo = new FakeWorkflowRepositorySimple(OldStateId, NewStateId, isValid: true);
+        var svc = new TicketWorkflowService(
+            repo, workflowRepo, new FakeSlaService(), new FakeActivityLogService(),
+            new FakeTicketAlertRuleRepository(), new FakeAlertDispatchService(),
+            new FakeNotificationService(), NullLogger<TicketWorkflowService>.Instance);
+
+        Assert.ThrowsAsync<InvalidOperationException>(
+            () => svc.TransitionAsync(ticket.Id, unknownStateId, null));
     }
 
     [Test]
@@ -224,6 +289,9 @@ public class TicketWorkflowServiceTests
         public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds)
         {
             UpdateWorkflowStateAsync(id, workflowStateId, closedAt);
+            // Espelha o repositório real: a transição persiste o fechamento
+            // junto com o estado (um único ExecuteUpdate).
+            if (_ticket is not null && closedAt.HasValue) _ticket.ClosedAt = closedAt;
             UpdateSlaHoldAsync(id, slaHoldStartedAt, slaPausedSeconds);
             return Task.CompletedTask;
         }
@@ -246,11 +314,19 @@ public class TicketWorkflowServiceTests
         private readonly WorkflowState _newState;
 
         public FakeWorkflowRepositorySimple(Guid oldId, Guid newId, bool isValid,
-            bool oldPausesSla = false, bool newPausesSla = false)
+            bool oldPausesSla = false, bool newPausesSla = false,
+            bool newIsFinal = true, bool newIsInitial = false)
         {
             _isValid = isValid;
             _oldState = new WorkflowState { Id = oldId, Name = "Old", PausesSla = oldPausesSla };
-            _newState = new WorkflowState { Id = newId, Name = "New", PausesSla = newPausesSla, IsFinal = true };
+            _newState = new WorkflowState
+            {
+                Id = newId,
+                Name = "New",
+                PausesSla = newPausesSla,
+                IsFinal = newIsFinal,
+                IsInitial = newIsInitial
+            };
         }
 
         public Task<WorkflowState?> GetStateByIdAsync(Guid id) =>

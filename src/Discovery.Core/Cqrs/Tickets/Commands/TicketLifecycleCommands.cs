@@ -7,6 +7,13 @@ namespace Discovery.Core.Cqrs.Tickets.Commands;
 public sealed record ReopenTicketCommand(Guid TicketId, string? Reason, Guid? ChangedByUserId)
     : ICommand<Result<TicketDetailDto>>;
 
+/// <summary>
+/// Move o chamado para a lixeira (soft delete). O registro é preservado com
+/// <c>DeletedAt</c> e deixa de aparecer nas listagens/consultas.
+/// </summary>
+public sealed record DeleteTicketCommand(Guid TicketId, Guid? ChangedByUserId)
+    : ICommand<Result<VoidResult>>;
+
 /// <summary>Avalia (CSAT 1..5) um chamado encerrado. Upsert nos campos do próprio chamado.</summary>
 public sealed record RateTicketCommand(
     Guid TicketId,

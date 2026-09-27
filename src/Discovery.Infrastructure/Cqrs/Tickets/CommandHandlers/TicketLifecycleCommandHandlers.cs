@@ -127,3 +127,36 @@ public sealed class RateTicketCommandHandler(
         return Result<TicketDetailDto>.Success(TicketCommandService.ToDto(ticket));
     }
 }
+/// <summary>
+/// Move o chamado para a lixeira (soft delete). Idempotente: excluir um chamado
+/// já excluído devolve sucesso sem alterar timestamps. Registra a atividade e
+/// preserva o histórico (comentários, anexos e timeline continuam no banco).
+/// </summary>
+public sealed class DeleteTicketCommandHandler(
+    ITicketRepository ticketRepo,
+    IActivityLogService activityLog,
+    ILogger<DeleteTicketCommandHandler> logger
+) : IRequestHandler<DeleteTicketCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(DeleteTicketCommand cmd, CancellationToken ct)
+    {
+        var ticket = await ticketRepo.GetByIdAsync(cmd.TicketId);
+        if (ticket is null || ticket.DeletedAt != null)
+        {
+            // Já ausente ou já na lixeira: a operação é idempotente e não é erro
+            // para o usuário que clicou duas vezes.
+            if (ticket is null)
+                return Result<VoidResult>.Failure(Error.NotFound($"Ticket {cmd.TicketId} not found"));
+
+            return Result<VoidResult>.Success(VoidResult.Value);
+        }
+
+        await ticketRepo.DeleteAsync(cmd.TicketId);
+        await activityLog.LogActivityAsync(
+            cmd.TicketId, TicketActivityType.Deleted, cmd.ChangedByUserId,
+            null, null, "Chamado movido para a lixeira.");
+
+        logger.LogInformation("Ticket {TicketId} soft-deleted by {UserId}", cmd.TicketId, cmd.ChangedByUserId);
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}

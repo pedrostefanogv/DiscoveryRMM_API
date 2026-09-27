@@ -58,6 +58,20 @@ public class WorkflowController(IMediator mediator) : ControllerBase
         return result.ToActionResult();
     }
 
+    /// <summary>
+    /// Transições que partem de um estado. Usado pela console para sugerir os
+    /// destinos válidos a partir da origem escolhida.
+    /// </summary>
+    [HttpGet("transitions/from/{fromStateId:guid}")]
+    public async Task<IActionResult> GetTransitionsFrom(Guid fromStateId, [FromQuery] Guid? clientId = null)
+    {
+        var transitions = await mediator.Send(new ListWorkflowTransitionsQuery(clientId), CancellationToken.None);
+        var from = transitions.IsSuccess
+            ? transitions.Value!.Where(t => t.FromStateId == fromStateId).ToList()
+            : [];
+        return Ok(from);
+    }
+
     [HttpPost("transitions")]
     [RequirePermission(ResourceType.Workflow, ActionType.Edit)]
     public async Task<IActionResult> CreateTransition([FromBody] CreateWorkflowTransitionCommand cmd)

@@ -58,6 +58,12 @@ public class TicketWorkflowService : ITicketWorkflowService
         var oldState = oldStateTask.Result;
         var newState = newStateTask.Result;
 
+        // Estado de destino inexistente: erro explícito em vez de "transição
+        // inválida", que confundia estado removido com transição não cadastrada.
+        if (newState is null)
+            throw new InvalidOperationException(
+                $"O estado de destino {targetStateId} não existe. Atualize a página e escolha um estado válido.");
+
         // M3: chamado com estado órfão (Guid.Empty ou estado removido) não tinha
         // nenhuma transição válida a partir da origem e ficava impossível de
         // fechar. Nesse caso adota o estado inicial do cliente como origem
@@ -78,8 +84,24 @@ public class TicketWorkflowService : ITicketWorkflowService
 
         // Validar transição
         var valid = await _workflowRepo.IsTransitionValidAsync(fromStateId, targetStateId, ticket.ClientId);
+
+        // Regra de produto (Configurações → Workflow): qualquer chamado pode ser
+        // levado para um estado INICIAL ou FINAL mesmo sem uma transição
+        // origem→destino cadastrada. Sem isso, um workflow que só define estados
+        // (sem a malha completa de transições) deixava o chamado impossível de
+        // fechar — exatamente o sintoma relatado em produção.
+        if (!valid && (newState.IsInitial || newState.IsFinal))
+        {
+            valid = true;
+            _logger.LogInformation(
+                "Ticket {TicketId}: transição {FromStateId}→{ToStateId} liberada pela regra de estado inicial/final.",
+                ticketId, fromStateId, targetStateId);
+        }
+
         if (!valid)
-            throw new InvalidOperationException("Invalid workflow transition");
+            throw new InvalidOperationException(
+                $"Transição inválida: '{oldState?.Name ?? "sem estado"}' → '{newState.Name}'. " +
+                "Cadastre a transição em Configurações → Workflow, ou use um estado inicial/final.");
 
         // ClosedAt
         DateTime? closedAt = newState?.IsFinal == true ? DateTime.UtcNow : null;

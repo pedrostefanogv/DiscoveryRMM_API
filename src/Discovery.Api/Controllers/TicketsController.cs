@@ -111,11 +111,45 @@ public class TicketsController(
 
     [HttpPatch("{id:guid}/workflow-state")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> UpdateWorkflowState(Guid id, [FromBody] TransitionTicketStateCommand command)
+    public async Task<IActionResult> UpdateWorkflowState(Guid id, [FromBody] TransitionTicketStateRequest request)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
             return NotFound();
-        var result = await mediator.Send(command with { TicketId = id }, HttpContext.RequestAborted);
+
+        // Aceita "targetStateId" (canônico) e "workflowStateId" (legado). Sem a
+        // resolução, um corpo com a grafia antiga virava 400 de validação em
+        // TODA troca de estado.
+        var targetStateId = request.ResolveTargetStateId();
+        if (targetStateId == Guid.Empty)
+        {
+            return BadRequest(new
+            {
+                errors = new Dictionary<string, string[]>
+                {
+                    ["targetStateId"] = ["Informe o estado de destino (targetStateId)."]
+                }
+            });
+        }
+
+        var result = await mediator.Send(
+            new TransitionTicketStateCommand(id, targetStateId, CurrentUserId),
+            HttpContext.RequestAborted);
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Move o chamado para a lixeira (soft delete). O registro é preservado com
+    /// DeletedAt preenchido e deixa de aparecer nas listagens.
+    /// </summary>
+    [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
+    public async Task<IActionResult> Delete(Guid id)
+    {
+        if (!await CanAccessTicketAsync(id, ActionType.Delete, HttpContext.RequestAborted))
+            return NotFound();
+
+        var result = await mediator.Send(
+            new DeleteTicketCommand(id, CurrentUserId), HttpContext.RequestAborted);
         return result.ToActionResult();
     }
 
