@@ -237,13 +237,15 @@ public class AgentTicketLifecycleTests
         Assert.That(keys, Does.Contain("workflowStateId"));
         Assert.That(keys, Does.Contain("ratingFeedback"));
         Assert.That(keys, Does.Contain("submissionSnapshotMarkdown"));
+        // departmentId e publico e ajuda a IA a chamar get_department_fields.
+        Assert.That(keys, Does.Contain("departmentId"));
 
         foreach (var forbidden in new[]
                  {
                      "assignedToUserId", "requesterUserId", "deletedAt",
                      "slaExpiresAt", "slaBreached", "firstRespondedAt",
                      "firstResponseSlaStartedAt", "slaPausedSeconds", "slaHoldStartedAt",
-                     "daysOpen", "templateId", "templateName", "workflowProfileId", "departmentId"
+                     "daysOpen", "templateId", "templateName", "workflowProfileId"
                  })
         {
             Assert.That(keys, Does.Not.Contain(forbidden),
@@ -354,7 +356,8 @@ public class AgentTicketLifecycleTests
         {
             var allowed = new HashSet<Type>
             {
-                typeof(Client), typeof(WorkflowState), typeof(Ticket), typeof(TicketComment), typeof(TicketActivityLog)
+                typeof(Client), typeof(WorkflowState), typeof(Ticket), typeof(TicketComment),
+                typeof(TicketActivityLog), typeof(TicketAnswer)
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -370,6 +373,7 @@ public class AgentTicketLifecycleTests
             modelBuilder.Entity<Ticket>(e => { e.HasKey(t => t.Id); e.Ignore(t => t.DaysOpen); });
             modelBuilder.Entity<TicketComment>(e => e.HasKey(c => c.Id));
             modelBuilder.Entity<TicketActivityLog>(e => e.HasKey(l => l.Id));
+            modelBuilder.Entity<TicketAnswer>(e => { e.HasKey(a => a.Id); e.Ignore(a => a.Embedding); });
         }
     }
 

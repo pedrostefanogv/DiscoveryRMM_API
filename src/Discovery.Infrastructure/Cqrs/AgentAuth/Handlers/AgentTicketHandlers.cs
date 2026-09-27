@@ -247,13 +247,13 @@ public sealed class AddMyTicketCommentHandler(
     ITicketRepository ticketRepo,
     IWorkflowRepository workflowRepo,
     ILogger<AddMyTicketCommentHandler> logger
-) : IRequestHandler<AddMyTicketCommentCommand, Result<object>>
+) : IRequestHandler<AddMyTicketCommentCommand, Result<AgentTicketCommentDto>>
 {
-    public async Task<Result<object>> Handle(AddMyTicketCommentCommand cmd, CancellationToken ct)
+    public async Task<Result<AgentTicketCommentDto>> Handle(AddMyTicketCommentCommand cmd, CancellationToken ct)
     {
         var owned = await ticketRepo.GetByIdAsync(cmd.TicketId);
         if (owned is null || owned.AgentId != cmd.AgentId)
-            return Result<object>.Failure(Error.NotFound("Ticket not found."));
+            return Result<AgentTicketCommentDto>.Failure(Error.NotFound("Ticket not found."));
 
         // Chamado encerrado não aceita novos comentários: a UI orienta a reabrir.
         // ClosedAt cobre o fluxo normal (fechamento pelo portal/agent/mesclagem);
@@ -261,11 +261,11 @@ public sealed class AddMyTicketCommentHandler(
         // estado final sem ClosedAt — evitando um round-trip extra por comentário.
         var closedMessage = "Chamado encerrado. Reabra o chamado para comentar.";
         if (owned.ClosedAt.HasValue)
-            return Result<object>.Failure(Error.Validation("TicketId", closedMessage));
+            return Result<AgentTicketCommentDto>.Failure(Error.Validation("TicketId", closedMessage));
 
         var states = await workflowRepo.GetStatesAsync(owned.ClientId);
         if (states.Any(s => s.Id == owned.WorkflowStateId && s.IsFinal))
-            return Result<object>.Failure(Error.Validation("TicketId", closedMessage));
+            return Result<AgentTicketCommentDto>.Failure(Error.Validation("TicketId", closedMessage));
 
         try
         {
@@ -276,35 +276,66 @@ public sealed class AddMyTicketCommentHandler(
                 cmd.TicketId, cmd.Content, false,
                 userId: null, userName: "Agent", ct);
 
-            return Result<object>.Success(comment);
+            return Result<AgentTicketCommentDto>.Success(
+                new AgentTicketCommentDto(comment.Id, comment.Author, comment.Content, comment.CreatedAt));
         }
         catch (KeyNotFoundException)
         {
-            return Result<object>.Failure(Error.NotFound("Ticket not found."));
+            return Result<AgentTicketCommentDto>.Failure(Error.NotFound("Ticket not found."));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to add agent comment on ticket {TicketId}", cmd.TicketId);
-            return Result<object>.Failure(Error.Internal("Failed to add comment."));
+            return Result<AgentTicketCommentDto>.Failure(Error.Internal("Failed to add comment."));
         }
     }
 }
 
 public sealed class GetMyTicketCommentsHandler(
     ITicketRepository ticketRepo
-) : IRequestHandler<GetMyTicketCommentsQuery, Result<object>>
+) : IRequestHandler<GetMyTicketCommentsQuery, Result<IReadOnlyList<AgentTicketCommentDto>>>
 {
-    public async Task<Result<object>> Handle(GetMyTicketCommentsQuery q, CancellationToken ct)
+    public async Task<Result<IReadOnlyList<AgentTicketCommentDto>>> Handle(GetMyTicketCommentsQuery q, CancellationToken ct)
     {
         var ticket = await ticketRepo.GetByIdAsync(q.TicketId);
         if (ticket is null || ticket.AgentId != q.AgentId)
-            return Result<object>.Failure(Error.NotFound("Ticket not found."));
+            return Result<IReadOnlyList<AgentTicketCommentDto>>.Failure(Error.NotFound("Ticket not found."));
 
         var comments = await ticketRepo.GetCommentsAsync(q.TicketId);
-        // Opção de produto (a): notas internas não vazam para o agente.
+        // Opção de produto (a): notas internas não vazam para o agente. O DTO
+        // público não expõe IsInternal/TicketId.
         var visible = (comments ?? Enumerable.Empty<Discovery.Core.Entities.TicketComment>())
-            .Where(comment => !comment.IsInternal);
-        return Result<object>.Success(visible);
+            .Where(comment => !comment.IsInternal)
+            .Select(comment => new AgentTicketCommentDto(
+                comment.Id, comment.Author, comment.Content, comment.CreatedAt))
+            .ToList();
+        return Result<IReadOnlyList<AgentTicketCommentDto>>.Success(visible);
+    }
+}
+
+/// <summary>
+/// Respostas do mini questionário do template com os valores gravados. Somente
+/// leitura; embedding e ValueJson não são expostos.
+/// </summary>
+public sealed class GetMyTicketAnswersHandler(
+    ITicketRepository ticketRepo,
+    DiscoveryDbContext db
+) : IRequestHandler<GetMyTicketAnswersQuery, Result<IReadOnlyList<AgentTicketAnswerDto>>>
+{
+    public async Task<Result<IReadOnlyList<AgentTicketAnswerDto>>> Handle(GetMyTicketAnswersQuery q, CancellationToken ct)
+    {
+        var ticket = await ticketRepo.GetByIdAsync(q.TicketId);
+        if (ticket is null || ticket.AgentId != q.AgentId)
+            return Result<IReadOnlyList<AgentTicketAnswerDto>>.Failure(Error.NotFound("Ticket not found."));
+
+        var answers = await db.TicketAnswers.AsNoTracking()
+            .Where(a => a.TicketId == q.TicketId)
+            .OrderBy(a => a.SortOrder)
+            .Select(a => new AgentTicketAnswerDto(
+                a.Id, a.QuestionKey, a.QuestionLabel, a.ValueText, a.CreatedAt))
+            .ToListAsync(ct);
+
+        return Result<IReadOnlyList<AgentTicketAnswerDto>>.Success(answers);
     }
 }
 

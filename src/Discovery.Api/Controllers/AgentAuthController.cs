@@ -264,6 +264,18 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetMyTicketFieldsQuery(id, ticketId)), Ok);
     }
 
+    /// <summary>
+    /// Respostas do mini questionário do template do chamado (somente leitura).
+    /// </summary>
+    [HttpGet("me/tickets/{ticketId:guid}/answers")]
+    public async Task<IActionResult> GetMyTicketAnswers(Guid ticketId)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(new GetMyTicketAnswersQuery(id, ticketId)), Ok);
+    }
+
     [HttpGet("me/ticket-templates")]
     public async Task<IActionResult> GetMyTicketTemplates()
     {

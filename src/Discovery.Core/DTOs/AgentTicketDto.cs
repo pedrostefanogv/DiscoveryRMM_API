@@ -19,6 +19,8 @@ public sealed record AgentTicketDto(
     TicketPriority Priority,
     string? Category,
     Guid WorkflowStateId,
+    // Departamento atual: a IA usa em get_department_fields.
+    Guid? DepartmentId,
     DateTime CreatedAt,
     DateTime UpdatedAt,
     DateTime? ClosedAt,
@@ -39,6 +41,27 @@ public sealed record AgentTicketFieldDto(
     bool IsRequired,
     string? ValueJson);
 
+/// <summary>
+/// Resposta do mini questionário do template, exposta ao agent no detalhe
+/// (somente leitura). Embedding e ValueJson não são expostos.
+/// </summary>
+public sealed record AgentTicketAnswerDto(
+    Guid Id,
+    string QuestionKey,
+    string QuestionLabel,
+    string? ValueText,
+    DateTime CreatedAt);
+
+/// <summary>
+/// Comentário público de chamado no contrato do agent (sem campos internos,
+/// sem id do chamado).
+/// </summary>
+public sealed record AgentTicketCommentDto(
+    Guid Id,
+    string Author,
+    string Content,
+    DateTime CreatedAt);
+
 public static class AgentTicketMapper
 {
     /// <summary>Converte a entidade para o contrato público do agent.</summary>
@@ -52,6 +75,7 @@ public static class AgentTicketMapper
         ticket.Priority,
         ticket.Category,
         ticket.WorkflowStateId,
+        ticket.DepartmentId,
         ticket.CreatedAt,
         ticket.UpdatedAt,
         ticket.ClosedAt,

@@ -12,6 +12,9 @@ public sealed record GetMyTicketQuery(Guid AgentId, Guid TicketId) : IQuery<Resu
 
 /// <summary>Campos personalizados do departamento do chamado (somente leitura).</summary>
 public sealed record GetMyTicketFieldsQuery(Guid AgentId, Guid TicketId) : IQuery<Result<IReadOnlyList<AgentTicketFieldDto>>>;
+
+/// <summary>Respostas do mini questionário do template (somente leitura).</summary>
+public sealed record GetMyTicketAnswersQuery(Guid AgentId, Guid TicketId) : IQuery<Result<IReadOnlyList<AgentTicketAnswerDto>>>;
 public sealed record GetMyTicketTemplatesQuery(Guid AgentId) : IQuery<Result<object>>;
 public sealed record CreateMyTicketCommand(
     Guid AgentId, string Title, string? Description, Guid? DepartmentId, Guid? WorkflowProfileId,
@@ -19,8 +22,8 @@ public sealed record CreateMyTicketCommand(
     Guid? TemplateId = null,
     IReadOnlyDictionary<Guid, JsonElement>? CustomFieldValues = null,
     IReadOnlyDictionary<string, JsonElement>? TemplateAnswers = null) : ICommand<Result<object>>;
-public sealed record AddMyTicketCommentCommand(Guid AgentId, Guid TicketId, string Content, bool? IsInternal) : ICommand<Result<object>>;
-public sealed record GetMyTicketCommentsQuery(Guid AgentId, Guid TicketId) : IQuery<Result<object>>;
+public sealed record AddMyTicketCommentCommand(Guid AgentId, Guid TicketId, string Content, bool? IsInternal) : ICommand<Result<AgentTicketCommentDto>>;
+public sealed record GetMyTicketCommentsQuery(Guid AgentId, Guid TicketId) : IQuery<Result<IReadOnlyList<AgentTicketCommentDto>>>;
 public sealed record CloseAndRateMyTicketCommand(Guid AgentId, Guid TicketId, int? Rating, string? Feedback, Guid? WorkflowStateId = null) : ICommand<Result<object>>;
 
 /// <summary>

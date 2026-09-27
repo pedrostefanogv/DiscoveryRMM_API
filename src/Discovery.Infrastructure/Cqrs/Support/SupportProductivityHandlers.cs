@@ -514,8 +514,13 @@ public sealed class GetTicketCsatSummaryQueryHandler(DiscoveryDbContext db)
         var to = q.To ?? DateTime.UtcNow;
         var from = q.From ?? to.AddDays(-30);
 
+        // Chamado avaliado sem ClosedAt (estado final legado/ajuste manual) entra
+        // pela data da avaliacao; os demais pela data de fechamento. Sem isso,
+        // chamados encerrados sem ClosedAt ficavam de fora do CSAT.
         var closedQuery = db.Tickets.AsNoTracking()
-            .Where(t => t.DeletedAt == null && t.ClosedAt != null && t.ClosedAt >= from && t.ClosedAt <= to);
+            .Where(t => t.DeletedAt == null && (
+                (t.ClosedAt != null && t.ClosedAt >= from && t.ClosedAt <= to) ||
+                (t.ClosedAt == null && t.RatedAt != null && t.RatedAt >= from && t.RatedAt <= to)));
         if (q.ClientId.HasValue) closedQuery = closedQuery.Where(t => t.ClientId == q.ClientId.Value);
         if (q.DepartmentId.HasValue) closedQuery = closedQuery.Where(t => t.DepartmentId == q.DepartmentId.Value);
 
