@@ -1198,7 +1198,13 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         if (agentId.HasValue)
             query = query.Where(x => x.AgentId == agentId.Value);
 
-        var rows = await query.Take(MaxAgentsForComponentDataset).ToListAsync(cancellationToken);
+        // Ordenação determinística antes do corte: sem ela, o Take devolve um
+        // subconjunto diferente a cada execução (relatórios ficam inconsistentes).
+        var rows = await query
+            .OrderBy(row => row.AgentHostname)
+            .ThenBy(row => row.AgentId)
+            .Take(MaxAgentsForComponentDataset)
+            .ToListAsync(cancellationToken);
         return rows
             .Select(row => new ComponentSourceRow(
                 row.AgentId,

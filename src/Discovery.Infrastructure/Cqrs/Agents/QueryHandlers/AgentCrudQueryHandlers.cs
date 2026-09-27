@@ -134,7 +134,11 @@ public sealed class GetDeletedAgentsQueryHandler(
                 agent.Hostname.ToLower().Contains(term) ||
                 (agent.DisplayName != null && agent.DisplayName.ToLower().Contains(term)) ||
                 (agent.LastIpAddress != null && agent.LastIpAddress.ToLower().Contains(term)) ||
-                (agent.OperatingSystem != null && agent.OperatingSystem.ToLower().Contains(term)));
+                (agent.OperatingSystem != null && agent.OperatingSystem.ToLower().Contains(term)) ||
+                // Nome do site/cliente: a UI promete buscar por "cliente".
+                db.Sites.Any(site => site.Id == agent.SiteId &&
+                    (site.Name.ToLower().Contains(term) ||
+                     db.Clients.Any(client => client.Id == site.ClientId && client.Name.ToLower().Contains(term)))));
         }
 
         var total = await query.CountAsync(ct);
