@@ -321,6 +321,34 @@ public class TechnicianMetricsServiceTests
     }
 
     [Test]
+    public async Task RefreshSnapshotsAsync_DepartmentScope_OnlyTouchesDepartmentMembers()
+    {
+        await using var db = CreateDb();
+        var (memberOfA, departmentA) = await SeedMemberAsync(db, clientId: Guid.NewGuid());
+        var (memberOfB, _) = await SeedMemberAsync(db, clientId: Guid.NewGuid());
+
+        // Responsável "global": tem chamado atribuído, mas NÃO é membro do departamento A.
+        var globalAssignee = Guid.NewGuid();
+        db.Users.Add(new User
+        {
+            Id = globalAssignee, Login = "global", Email = "g@x.com", FullName = "Global", IsActive = true
+        });
+        db.Tickets.Add(NewTicket(globalAssignee, DateTime.UtcNow.AddDays(-1), null));
+        await db.SaveChangesAsync();
+
+        var service = BuildService(db);
+        var saved = await service.RefreshSnapshotsAsync(null, departmentA.Id, CancellationToken.None);
+
+        Assert.That(saved, Is.EqualTo(1), "só o membro do departamento é recalculado");
+
+        var targets = await db.TechnicianMetricsSnapshots.AsNoTracking()
+            .Select(s => s.UserId).ToListAsync();
+        Assert.That(targets, Does.Contain(memberOfA));
+        Assert.That(targets, Does.Not.Contain(memberOfB), "membro de outro departamento fica intacto");
+        Assert.That(targets, Does.Not.Contain(globalAssignee), "responsável global não entra no refresh do departamento");
+    }
+
+    [Test]
     public async Task PurgeOrphanSnapshotsAsync_RemovesOnlyUsersWithoutScope()
     {
         await using var db = CreateDb();

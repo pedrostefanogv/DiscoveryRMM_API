@@ -526,6 +526,14 @@ public class TechnicianMetricsService(
 
         var members = await query.Select(m => m.UserId).Distinct().ToListAsync(ct);
 
+        // Refresh por departamento: recalculamos APENAS os membros do departamento,
+        // que são exatamente os alvos exibidos/usados na triagem dele. Antes, todos os
+        // responsáveis do banco eram incluídos, transformando a ação em um recálculo
+        // global (varredura da tabela de tickets inteira + N lotes) que estourava o
+        // timeout de 60s da requisição e retornava erro na tela.
+        if (departmentId.HasValue)
+            return members;
+
         var assignees = await db.Tickets.AsNoTracking()
             .Where(t => t.DeletedAt == null && t.AssignedToUserId != null)
             .Select(t => t.AssignedToUserId!.Value)
