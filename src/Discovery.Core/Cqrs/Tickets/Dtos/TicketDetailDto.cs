@@ -27,7 +27,8 @@ public sealed record TicketDetailDto(
     string? RatingFeedback = null,
     DateTime? RatedAt = null,
     string? RatedBy = null,
-    // Snapshot markdown (somente leitura) do formulário/template enviado na abertura.
+    // Snapshot markdown (somente leitura) do formulário/template enviado na
+    // abertura. Nulo em abertura comum (sem template).
     string? SubmissionSnapshotMarkdown = null,
     // Template usado na abertura (null = abertura normal).
     Guid? TemplateId = null,

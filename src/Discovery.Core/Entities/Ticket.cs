@@ -35,6 +35,8 @@ public class Ticket
     /// <summary>
     /// Snapshot markdown (somente leitura) do formulário/template enviado na
     /// abertura do chamado. Gravado apenas na criação e nunca atualizado.
+    /// Nulo quando a abertura foi comum (sem template): os campos do
+    /// departamento ficam em ticket_field_values, não aqui.
     /// </summary>
     public string? SubmissionSnapshotMarkdown { get; set; }
 

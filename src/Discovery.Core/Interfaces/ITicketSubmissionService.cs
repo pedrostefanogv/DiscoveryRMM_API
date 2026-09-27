@@ -6,6 +6,7 @@ namespace Discovery.Core.Interfaces;
 /// <summary>
 /// Orquestra o pré-preenchimento por template, o mini questionário, os campos
 /// personalizados do departamento e o snapshot markdown (somente leitura).
+/// O snapshot só é gerado quando há template na abertura.
 /// </summary>
 public interface ITicketSubmissionService
 {
@@ -48,6 +49,7 @@ public sealed record TicketSubmissionResult(
     string? Priority,
     IReadOnlyDictionary<Guid, string> CustomFieldValues,
     IReadOnlyList<DepartmentFieldValidationError> Errors,
+    /// <summary>Registro da abertura. Nulo quando não houve template.</summary>
     string? SnapshotMarkdown,
     Guid? TemplateId = null,
     IReadOnlyList<TicketAnswerDraft>? Answers = null,

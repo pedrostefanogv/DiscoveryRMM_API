@@ -199,13 +199,14 @@ public class TicketSubmissionService(
                 departmentId, title, description, category, priority, rawValues, errors, null);
         }
 
-        var needsSnapshot = template is not null
-            || rawValues.Count > 0
-            || request.TemplateAnswers is { Count: > 0 };
-
-        var snapshot = needsSnapshot
-            ? await BuildSnapshot(template, questions, request.TemplateAnswers, departmentId, definitions, rawValues, priority, category, title)
-            : null;
+        // O snapshot markdown é o registro do formulário/modelo da abertura: sem
+        // template não há o que registrar. Os campos do departamento continuam
+        // validados e salvos em ticket_field_values (fonte estruturada) e
+        // exibidos na tela do chamado — só não geram mais o bloco markdown, que
+        // fazia um chamado comum parecer ter tido formulário de abertura.
+        var snapshot = template is null
+            ? null
+            : await BuildSnapshot(template, questions, request.TemplateAnswers, departmentId, definitions, rawValues, priority, category, title);
 
         var answerDrafts = BuildAnswerDrafts(questions, request.TemplateAnswers);
 

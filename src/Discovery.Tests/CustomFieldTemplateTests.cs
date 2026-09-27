@@ -196,6 +196,70 @@ public class CustomFieldTemplateTests
     }
 
     [Test]
+    public async Task PrepareAsync_ShouldNotBuildSnapshotWithoutTemplateEvenWithDepartmentFields()
+    {
+        await using var db = CreateDb();
+        var fieldId = Guid.NewGuid();
+        var departmentId = Guid.NewGuid();
+        db.CustomFieldDefinitions.Add(new CustomFieldDefinition
+        {
+            Id = fieldId,
+            DepartmentId = departmentId,
+            Name = "tipo",
+            Label = "Tipo",
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+        });
+        await db.SaveChangesAsync();
+
+        var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
+            Guid.NewGuid(), DepartmentId: departmentId, TemplateId: null,
+            "Computador", "Solicito cotação para compra de 3 computadores", null, "Medium",
+            new Dictionary<Guid, JsonElement>
+            {
+                [fieldId] = JsonSerializer.SerializeToElement("Cotação"),
+            }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.True);
+            // Regressão: o snapshot markdown é o registro do formulário/modelo da
+            // abertura. Sem template não pode existir — era ele que fazia a tela
+            // do chamado comum exibir "Abertura normal (sem template)" com o
+            // bloco "Formulário do chamado".
+            Assert.That(result.SnapshotMarkdown, Is.Null);
+            Assert.That(result.TemplateId, Is.Null);
+            Assert.That(result.TemplateName, Is.Empty);
+            // Os campos do departamento continuam validados e persistidos.
+            Assert.That(result.CustomFieldValues, Has.Count.EqualTo(1));
+            Assert.That(
+                JsonDocument.Parse(result.CustomFieldValues[fieldId]).RootElement.GetString(),
+                Is.EqualTo("Cotação"));
+        });
+    }
+
+    [Test]
+    public async Task PrepareAsync_ShouldNotBuildSnapshotWhenTemplateBelongsToAnotherClient()
+    {
+        await using var db = CreateDb();
+        var templateId = Guid.NewGuid();
+        db.TicketTemplates.Add(Template(templateId, clientId: Guid.NewGuid()));
+        await db.SaveChangesAsync();
+
+        var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
+            Guid.NewGuid(), DepartmentId: Guid.NewGuid(), TemplateId: templateId,
+            "T", "D", null, "Medium", null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.False);
+            // Chamado recusado não pode gravar registro de abertura.
+            Assert.That(result.SnapshotMarkdown, Is.Null);
+            Assert.That(result.TemplateId, Is.Null);
+        });
+    }
+
+    [Test]
     public async Task PrepareAsync_ShouldRejectTemplateFromAnotherClient()
     {
         await using var db = CreateDb();
