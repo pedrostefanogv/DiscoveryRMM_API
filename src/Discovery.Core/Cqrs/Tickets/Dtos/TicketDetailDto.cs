@@ -34,7 +34,15 @@ public sealed record TicketDetailDto(
     // Snapshot do nome do template (preserva o histórico após exclusão).
     string? TemplateName = null,
     /// <summary>Solicitante (quem abriu). Nulo = legado ou aberto pelo chat/agent.</summary>
-    Guid? RequesterUserId = null
+    Guid? RequesterUserId = null,
+    /// <summary>
+    /// Departamento atual do chamado. Necessário para o console web exibir e
+    /// pré-selecionar o departamento na transferência (sem isso a tela sempre
+    /// mostra "Não definido" mesmo após a transferência persistir).
+    /// </summary>
+    Guid? DepartmentId = null,
+    /// <summary>Perfil de workflow atual, re-herdado na transferência de departamento.</summary>
+    Guid? WorkflowProfileId = null
 );
 
 /// <summary>
@@ -52,7 +60,9 @@ public sealed record TicketListItemDto(
     DateTime CreatedAt,
     DateTime? ClosedAt,
     Guid? TemplateId = null,
-    string? TemplateName = null
+    string? TemplateName = null,
+    /// <summary>Departamento atual (usado pelo modal "Transferir / Atribuir" da lista).</summary>
+    Guid? DepartmentId = null
 );
 
 /// <summary>

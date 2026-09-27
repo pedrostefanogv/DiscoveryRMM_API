@@ -74,7 +74,8 @@ public sealed class TicketQueryService : ITicketQueryService
         var limit = Math.Clamp(f.Limit, 1, 200);
         var items = await query.OrderByDescending(t => t.CreatedAt).ThenByDescending(t => t.Id).Take(limit + 1)
             .Select(t => new TicketListItemDto(t.Id, t.ClientId, t.SiteId, t.Title, t.Priority,
-                t.WorkflowStateId, t.AssignedToUserId, t.SlaBreached, t.CreatedAt, t.ClosedAt, t.TemplateId, t.TemplateName))
+                t.WorkflowStateId, t.AssignedToUserId, t.SlaBreached, t.CreatedAt, t.ClosedAt, t.TemplateId, t.TemplateName,
+                t.DepartmentId))
             .ToListAsync(ct);
 
         var hm = items.Count > limit;
@@ -96,7 +97,7 @@ public sealed class TicketQueryService : ITicketQueryService
             t.Description, t.Category, t.Priority, t.WorkflowStateId, t.AssignedToUserId,
             t.SlaExpiresAt, t.SlaBreached, t.CreatedAt, t.UpdatedAt, t.ClosedAt, t.DaysOpen,
             t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy, t.SubmissionSnapshotMarkdown, t.TemplateId, t.TemplateName,
-            t.RequesterUserId);
+            t.RequesterUserId, t.DepartmentId, t.WorkflowProfileId);
     }
 
     public async Task<IReadOnlyList<TicketAnswerDto>> GetAnswersAsync(Guid ticketId, CancellationToken ct = default)

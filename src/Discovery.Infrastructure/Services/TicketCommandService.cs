@@ -464,5 +464,6 @@ public sealed class TicketCommandService : ITicketCommandService
         t.Category, t.Priority, t.WorkflowStateId, t.AssignedToUserId,
         t.SlaExpiresAt, t.SlaBreached, t.CreatedAt, t.UpdatedAt,
         t.ClosedAt, t.DaysOpen, t.Rating, t.RatingFeedback, t.RatedAt, t.RatedBy,
-        t.SubmissionSnapshotMarkdown, t.TemplateId, t.TemplateName, t.RequesterUserId);
+        t.SubmissionSnapshotMarkdown, t.TemplateId, t.TemplateName, t.RequesterUserId,
+        t.DepartmentId, t.WorkflowProfileId);
 }
