@@ -95,7 +95,15 @@ public class TicketsController(
         var result = await mediator.Send(
             command with { RequesterUserId = CurrentUserId },
             HttpContext.RequestAborted);
-        return result.ToCreatedAtActionResult(nameof(GetById), new { id = result.Value!.Id }, this);
+
+        // Validar o resultado ANTES de ler Value: antes o acesso result.Value!.Id
+        // em uma falha de validação lançava NullReferenceException e o usuário
+        // recebia 500 em vez do 400 com o motivo (campo/validação).
+        if (result.IsFailure)
+            return result.ToActionResult();
+
+        var created = result.Value!;
+        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
     [HttpPut("{id:guid}")]

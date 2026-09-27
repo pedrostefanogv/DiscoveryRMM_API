@@ -52,7 +52,15 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
     {
         var cmd = new CreateClientCommand(request.Name, request.Notes);
         var result = await mediator.Send(cmd);
-        return result.ToCreatedAtActionResult(nameof(GetById), new { id = result.Value!.Id }, this);
+
+        // Validar o resultado ANTES de ler Value: em falha de validação o acesso
+        // result.Value!.Id lançava NullReferenceException (500) em vez do 400
+        // com o motivo.
+        if (result.IsFailure)
+            return result.ToActionResult();
+
+        var created = result.Value!;
+        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
     [HttpPut("{id:guid}")]
