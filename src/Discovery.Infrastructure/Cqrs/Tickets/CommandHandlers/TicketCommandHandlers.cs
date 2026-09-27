@@ -92,6 +92,12 @@ public sealed class UpdateTicketCommandHandler(
             return Result<TicketDetailDto>.Failure(
                 Error.NotFound(ex.Message.Length > 0 ? ex.Message : $"Ticket {cmd.Id} not found"));
         }
+        catch (InvalidOperationException ex)
+        {
+            // Transferência de departamento inválida (inexistente/inativo/de
+            // outro cliente) vira 400 com a causa, não 500.
+            return Result<TicketDetailDto>.Failure(Error.Validation("DepartmentId", ex.Message));
+        }
     }
 }
 

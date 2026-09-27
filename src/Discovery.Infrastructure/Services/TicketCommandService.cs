@@ -24,6 +24,7 @@ public sealed class TicketCommandService : ITicketCommandService
     private readonly IMediator _mediator;
     private readonly IUserRepository _userRepository;
     private readonly ITicketAssignmentOverrideTracker _overrideTracker;
+    private readonly IDepartmentService _departmentService;
 
     public TicketCommandService(
         ITicketRepository repo,
@@ -35,7 +36,8 @@ public sealed class TicketCommandService : ITicketCommandService
         ITicketAutoAssignmentService autoAssignment,
         IMediator mediator,
         IUserRepository userRepository,
-        ITicketAssignmentOverrideTracker overrideTracker)
+        ITicketAssignmentOverrideTracker overrideTracker,
+        IDepartmentService departmentService)
     {
         _repo = repo;
         _activityLog = activityLog;
@@ -47,6 +49,7 @@ public sealed class TicketCommandService : ITicketCommandService
         _mediator = mediator;
         _userRepository = userRepository;
         _overrideTracker = overrideTracker;
+        _departmentService = departmentService;
     }
 
     public async Task<Ticket> CreateTicketAsync(
@@ -78,11 +81,7 @@ public sealed class TicketCommandService : ITicketCommandService
         var resolvedProfileId = workflowProfileId;
         if (!resolvedProfileId.HasValue && departmentId.HasValue)
         {
-            var candidates = await _workflowProfileRepo.GetByDepartmentAsync(departmentId.Value);
-            var preferred = candidates.FirstOrDefault(p => p.ClientId == clientId)
-                ?? candidates.FirstOrDefault(p => p.ClientId == null)
-                ?? candidates.FirstOrDefault();
-            resolvedProfileId = preferred?.Id;
+            resolvedProfileId = await ResolveDefaultWorkflowProfileAsync(clientId, departmentId.Value, ct);
         }
 
         // Auto-atribuição por estratégia do departamento (round-robin/least-open)
@@ -265,18 +264,45 @@ public sealed class TicketCommandService : ITicketCommandService
         var newDepartmentId = clearDepartment
             ? null
             : (departmentId.HasValue ? departmentId.Value : ticket.DepartmentId);
+        var departmentChanged = newDepartmentId != oldDepartmentId;
+
+        // Transferência de departamento: valida o destino com as mesmas regras do
+        // create (existe, ativo e do próprio cliente ou global), senão um PUT
+        // forjado moveria o chamado para fora do escopo do cliente.
+        if (departmentChanged && newDepartmentId.HasValue)
+            await EnsureDepartmentBelongsToClientAsync(ticket.ClientId, newDepartmentId.Value, ct);
+
         ticket.DepartmentId = newDepartmentId;
 
-        var newWorkflowProfileId = clearWorkflowProfile
-            ? null
-            : (workflowProfileId.HasValue ? workflowProfileId.Value : ticket.WorkflowProfileId);
-        ticket.WorkflowProfileId = newWorkflowProfileId;
+        Guid? newWorkflowProfileId;
         if (clearWorkflowProfile)
         {
+            newWorkflowProfileId = null;
             // SLA era derivado do perfil; sem perfil não há prazo.
             ticket.SlaExpiresAt = null;
             ticket.SlaFirstResponseExpiresAt = null;
         }
+        else if (workflowProfileId.HasValue)
+        {
+            // Perfil explícito (ex.: seleção manual no console) tem precedência.
+            newWorkflowProfileId = workflowProfileId.Value;
+        }
+        else if (departmentChanged)
+        {
+            // Trocar de departamento re-herda o perfil default do novo
+            // departamento (cliente > global > primeiro ativo) e recalcula o SLA
+            // a partir do instante da transferência. Sem perfil, limpa os prazos.
+            newWorkflowProfileId = newDepartmentId.HasValue
+                ? await ResolveDefaultWorkflowProfileAsync(ticket.ClientId, newDepartmentId.Value, ct)
+                : null;
+            await RecalculateSlaForProfileAsync(ticket, newWorkflowProfileId);
+        }
+        else
+        {
+            newWorkflowProfileId = ticket.WorkflowProfileId;
+        }
+
+        ticket.WorkflowProfileId = newWorkflowProfileId;
 
         ticket.Category = category ?? ticket.Category;
         ticket.UpdatedAt = DateTime.UtcNow;
@@ -290,8 +316,8 @@ public sealed class TicketCommandService : ITicketCommandService
 
         // Logs DEPOIS do update: um log gravado antes da escrita vira órfão se o
         // update falhar.
-        if (newDepartmentId != oldDepartmentId)
-            await _activityLog.LogDepartmentChangeAsync(ticketId, null,
+        if (departmentChanged)
+            await _activityLog.LogDepartmentChangeAsync(ticketId, changedByUserId,
                 oldDepartmentId?.ToString() ?? "none", newDepartmentId?.ToString() ?? "none");
 
         if (newWorkflowProfileId != oldWorkflowProfileId)
@@ -308,6 +334,67 @@ public sealed class TicketCommandService : ITicketCommandService
                 Truncate(oldDescription), Truncate(ticket.Description), "Descrição atualizada");
 
         return ticket;
+    }
+
+    /// <summary>
+    /// Resolve o perfil de workflow default de um departamento, na mesma
+    /// preferência usada no create: perfil do cliente > global > primeiro ativo.
+    /// </summary>
+    private async Task<Guid?> ResolveDefaultWorkflowProfileAsync(
+        Guid clientId, Guid departmentId, CancellationToken ct = default)
+    {
+        var candidates = await _workflowProfileRepo.GetByDepartmentAsync(departmentId);
+        var preferred = candidates.FirstOrDefault(p => p.ClientId == clientId)
+            ?? candidates.FirstOrDefault(p => p.ClientId == null)
+            ?? candidates.FirstOrDefault();
+        return preferred?.Id;
+    }
+
+    /// <summary>
+    /// Valida que o departamento destino existe, está ativo e é do cliente do
+    /// chamado (ou global). Mesma regra do create para não permitir mover um
+    /// chamado para um departamento de outro cliente via API.
+    /// </summary>
+    private async Task EnsureDepartmentBelongsToClientAsync(
+        Guid clientId, Guid departmentId, CancellationToken ct)
+    {
+        var department = await _departmentService.GetByIdAsync(departmentId, ct);
+        if (department is null || !department.IsActive
+            || (department.ClientId.HasValue && department.ClientId.Value != clientId))
+        {
+            throw new InvalidOperationException("Departamento inválido para este cliente.");
+        }
+    }
+
+    /// <summary>
+    /// Recalcula as expirações de SLA/FRT a partir do instante atual para um
+    /// perfil recém-vinculado (transferência de departamento). Sem perfil, os
+    /// prazos são limpos. Preserva pausas e o histórico de violação.
+    /// </summary>
+    private async Task RecalculateSlaForProfileAsync(Ticket ticket, Guid? workflowProfileId)
+    {
+        if (!workflowProfileId.HasValue)
+        {
+            ticket.SlaExpiresAt = null;
+            ticket.SlaFirstResponseExpiresAt = null;
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        try
+        {
+            ticket.SlaExpiresAt = await _slaService.CalculateSlaExpiryAsync(workflowProfileId.Value, now);
+            ticket.SlaFirstResponseExpiresAt = await _slaService.CalculateFirstResponseExpiryAsync(workflowProfileId.Value, now);
+            // O FRT só reinicia quando ainda não houve primeira resposta.
+            if (!ticket.FirstRespondedAt.HasValue)
+                ticket.FirstResponseSlaStartedAt = now;
+        }
+        catch (InvalidOperationException)
+        {
+            // Perfil inválido não pode impedir a transferência (tolerância igual à do create).
+            ticket.SlaExpiresAt = null;
+            ticket.SlaFirstResponseExpiresAt = null;
+        }
     }
 
     private static string? Truncate(string? value)
