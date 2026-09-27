@@ -297,6 +297,16 @@ public sealed class TicketCommandService : ITicketCommandService
                 : null;
             await RecalculateSlaForProfileAsync(ticket, newWorkflowProfileId);
         }
+        else if (departmentId.HasValue && !clearDepartment && ticket.WorkflowProfileId is null)
+        {
+            // B: chamado sem perfil (ex.: criado antes de o departamento ter SLA)
+            // adota o default do departamento quando o departamento é (re)enviado
+            // no update, sem exigir uma troca real de departamento. Um perfil
+            // explicitamente limpo (clearWorkflowProfile) não é reatribuído aqui.
+            newWorkflowProfileId = await ResolveDefaultWorkflowProfileAsync(
+                ticket.ClientId, departmentId.Value, ct);
+            await RecalculateSlaForProfileAsync(ticket, newWorkflowProfileId);
+        }
         else
         {
             newWorkflowProfileId = ticket.WorkflowProfileId;
@@ -334,6 +344,47 @@ public sealed class TicketCommandService : ITicketCommandService
                 Truncate(oldDescription), Truncate(ticket.Description), "Descrição atualizada");
 
         return ticket;
+    }
+
+    /// <summary>
+    /// Backfill de SLA (correção A): aplica um perfil de workflow ativo aos
+    /// chamados abertos do departamento que ainda estão sem perfil. Caso típico:
+    /// chamado criado antes de o departamento receber seu SLA ficava
+    /// definitivamente "Sem SLA definido", pois o perfil não era reaplicado.
+    /// O SLA é recalculado a partir do instante do backfill (mesma semântica da
+    /// transferência), preservando pausas e histórico de violação. Chamados que
+    /// já possuem perfil (mesmo outro) NÃO são tocados.
+    /// </summary>
+    public async Task<int> BackfillDepartmentProfileAsync(
+        WorkflowProfile profile, Guid? changedByUserId = null, CancellationToken ct = default)
+    {
+        if (profile is null || !profile.IsActive || profile.DepartmentId == Guid.Empty)
+            return 0;
+
+        var tickets = await _repo.GetOpenWithoutProfileByDepartmentAsync(profile.DepartmentId);
+        var applied = 0;
+
+        foreach (var ticket in tickets)
+        {
+            ticket.WorkflowProfileId = profile.Id;
+            await RecalculateSlaForProfileAsync(ticket, profile.Id);
+            ticket.UpdatedAt = DateTime.UtcNow;
+            await _repo.UpdateAsync(ticket);
+
+            // Auditoria própria do backfill, para não se confundir com o
+            // "Workflow profile changed" registrado na transferência manual.
+            await _activityLog.LogActivityAsync(
+                ticket.Id,
+                TicketActivityType.StateChanged,
+                changedByUserId,
+                null,
+                profile.Id.ToString(),
+                "SLA do departamento aplicado retroativamente");
+
+            applied++;
+        }
+
+        return applied;
     }
 
     /// <summary>

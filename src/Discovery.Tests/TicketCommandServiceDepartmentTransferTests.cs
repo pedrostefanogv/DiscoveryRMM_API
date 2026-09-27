@@ -138,6 +138,124 @@ public class TicketCommandServiceDepartmentTransferTests
         Assert.That(sla.SlaCalls, Is.EqualTo(0));
     }
 
+    [Test]
+    public async Task UpdateTicketAsync_ShouldAdoptDepartmentDefaultProfile_WhenDepartmentResentWithoutProfile()
+    {
+        // Correção B: chamado criado antes de o departamento ter SLA (sem perfil).
+        // Reenviar o MESMO departamento no update deve adotar o default do depto.
+        var ticket = CreateTicket(DepartmentA, ProfileA);
+        ticket.WorkflowProfileId = null;
+        ticket.SlaExpiresAt = null;
+        ticket.SlaFirstResponseExpiresAt = null;
+
+        var repo = new FakeTicketRepository(ticket);
+        var activityLog = new FakeActivityLogService();
+        var profiles = new FakeWorkflowProfileRepository(DepartmentA, ProfileB, ClientId);
+        var sla = new FakeSlaService();
+        var departments = new FakeDepartmentService(DepartmentA, ClientId, isActive: true);
+
+        var svc = CreateService(repo, activityLog, profiles, sla, departments);
+
+        var updated = await svc.UpdateTicketAsync(
+            ticket.Id, null, null, null,
+            departmentId: DepartmentA, workflowProfileId: null,
+            assignedToUserId: ticket.AssignedToUserId, category: null,
+            changedByUserId: UserId);
+
+        Assert.That(updated.WorkflowProfileId, Is.EqualTo(ProfileB), "chamado sem perfil adota o default do departamento");
+        Assert.That(updated.SlaExpiresAt, Is.Not.Null, "SLA deve ser calculado");
+        Assert.That(updated.SlaFirstResponseExpiresAt, Is.Not.Null);
+        Assert.That(sla.SlaCalls, Is.GreaterThanOrEqualTo(2));
+    }
+
+    [Test]
+    public async Task UpdateTicketAsync_ShouldNotReadoptProfile_WhenDepartmentNotSent()
+    {
+        // Correção B não deve sequestrar updates que não tratam de departamento.
+        var ticket = CreateTicket(DepartmentA, ProfileA);
+        ticket.WorkflowProfileId = null;
+        ticket.SlaExpiresAt = null;
+
+        var repo = new FakeTicketRepository(ticket);
+        var activityLog = new FakeActivityLogService();
+        var profiles = new FakeWorkflowProfileRepository(DepartmentA, ProfileB, ClientId);
+        var sla = new FakeSlaService();
+        var departments = new FakeDepartmentService(DepartmentA, ClientId, isActive: true);
+
+        var svc = CreateService(repo, activityLog, profiles, sla, departments);
+
+        var updated = await svc.UpdateTicketAsync(
+            ticket.Id, "Novo título", null, null,
+            departmentId: null, workflowProfileId: null,
+            assignedToUserId: ticket.AssignedToUserId, category: null,
+            changedByUserId: UserId);
+
+        Assert.That(updated.Title, Is.EqualTo("Novo título"));
+        Assert.That(updated.WorkflowProfileId, Is.Null, "sem departamento no request não há re-herdamento");
+        Assert.That(updated.SlaExpiresAt, Is.Null);
+        Assert.That(sla.SlaCalls, Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task BackfillDepartmentProfileAsync_ShouldApplyProfileToOpenTicketsWithoutProfile()
+    {
+        // Correção A: perfil criado DEPOIS do chamado não pode deixá-lo sem SLA.
+        var ticket = CreateTicket(DepartmentA, ProfileA);
+        ticket.WorkflowProfileId = null;
+        ticket.SlaExpiresAt = null;
+        ticket.SlaFirstResponseExpiresAt = null;
+
+        var repo = new FakeTicketRepository(ticket);
+        var activityLog = new FakeActivityLogService();
+        var sla = new FakeSlaService();
+        var svc = CreateService(
+            repo, activityLog,
+            new FakeWorkflowProfileRepository(null, null, null),
+            sla,
+            new FakeDepartmentService(DepartmentA, ClientId, isActive: true));
+
+        var profile = new WorkflowProfile
+        {
+            Id = ProfileB,
+            DepartmentId = DepartmentA,
+            ClientId = ClientId,
+            Name = "96hrs",
+            IsActive = true,
+        };
+
+        var applied = await svc.BackfillDepartmentProfileAsync(profile, changedByUserId: UserId);
+
+        Assert.That(applied, Is.EqualTo(1));
+        Assert.That(ticket.WorkflowProfileId, Is.EqualTo(ProfileB));
+        Assert.That(ticket.SlaExpiresAt, Is.Not.Null);
+        Assert.That(ticket.FirstResponseSlaStartedAt, Is.Not.Null, "início da contagem de FRT deve ser gravado");
+        Assert.That(activityLog.RecordedActivities.Any(a =>
+                a.Type == TicketActivityType.StateChanged
+                && a.Comment == "SLA do departamento aplicado retroativamente"),
+            Is.True, "backfill deve ser auditado");
+    }
+
+    [Test]
+    public async Task BackfillDepartmentProfileAsync_ShouldSkipInactiveProfile()
+    {
+        var ticket = CreateTicket(DepartmentA, ProfileA);
+        ticket.WorkflowProfileId = null;
+
+        var repo = new FakeTicketRepository(ticket);
+        var svc = CreateService(
+            repo, new FakeActivityLogService(),
+            new FakeWorkflowProfileRepository(null, null, null),
+            new FakeSlaService(),
+            new FakeDepartmentService(DepartmentA, ClientId, isActive: true));
+
+        var profile = new WorkflowProfile { Id = ProfileB, DepartmentId = DepartmentA, Name = "inativo", IsActive = false };
+
+        var applied = await svc.BackfillDepartmentProfileAsync(profile);
+
+        Assert.That(applied, Is.EqualTo(0));
+        Assert.That(ticket.WorkflowProfileId, Is.Null);
+    }
+
     private static Ticket CreateTicket(Guid departmentId, Guid profileId) => new()
     {
         Id = Guid.NewGuid(),
@@ -200,6 +318,10 @@ public class TicketCommandServiceDepartmentTransferTests
             Task.FromResult<IReadOnlyList<TicketComment>>(Array.Empty<TicketComment>());
         public Task<TicketComment> AddCommentAsync(TicketComment comment) => Task.FromResult(comment);
         public Task<List<Ticket>> GetOpenTicketsWithSlaAsync(int limit = 2000) => Task.FromResult(new List<Ticket>());
+        public Task<List<Ticket>> GetOpenWithoutProfileByDepartmentAsync(Guid departmentId, int limit = 500) =>
+            Task.FromResult(new List<Ticket> { Ticket }
+                .Where(t => t.DepartmentId == departmentId && t.WorkflowProfileId is null && !t.ClosedAt.HasValue)
+                .ToList());
         public Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds) => Task.CompletedTask;
         public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds) => Task.CompletedTask;
         public Task UpdateFirstRespondedAtAsync(Guid id, DateTime firstRespondedAt) => Task.CompletedTask;

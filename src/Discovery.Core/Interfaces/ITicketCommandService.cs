@@ -38,4 +38,14 @@ public interface ITicketCommandService
     /// <summary>Atribui um ticket a um usuário.</summary>
     Task<Ticket> AssignTicketAsync(Guid ticketId, Guid? assignedToUserId,
         Guid? changedByUserId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Backfill de SLA (correção A): aplica um perfil de workflow ativo aos
+    /// chamados abertos do departamento que ainda estão sem perfil — caso típico
+    /// de chamado criado antes de o departamento receber seu SLA. O SLA passa a
+    /// contar do instante do backfill (mesma semântica da transferência).
+    /// Retorna a quantidade de chamados afetados.
+    /// </summary>
+    Task<int> BackfillDepartmentProfileAsync(
+        WorkflowProfile profile, Guid? changedByUserId = null, CancellationToken ct = default);
 }

@@ -27,6 +27,13 @@ public interface ITicketRepository
     /// </summary>
     Task<List<Ticket>> GetOpenTicketsWithSlaAsync(int limit = 2000);
 
+    /// <summary>
+    /// Chamados abertos de um departamento que ainda estão sem perfil de
+    /// workflow. Usado pelo backfill de SLA (perfil criado/reativado depois do
+    /// chamado não pode deixá-lo definitivamente "Sem SLA definido").
+    /// </summary>
+    Task<List<Ticket>> GetOpenWithoutProfileByDepartmentAsync(Guid departmentId, int limit = 500);
+
     /// <summary>Atualiza campos de SLA hold (pausa/retomada) no ticket.</summary>
     Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds);
 

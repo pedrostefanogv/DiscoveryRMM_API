@@ -5,6 +5,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Cqrs.WorkflowProfiles;
 
@@ -50,7 +51,12 @@ public sealed class GetWorkflowProfileByIdQueryHandler(IWorkflowProfileService s
     }
 }
 
-public sealed class CreateWorkflowProfileCommandHandler(IWorkflowProfileService svc, ISlaCalendarService calendars) : IRequestHandler<CreateWorkflowProfileCommand, Result<WorkflowProfileDto>>
+public sealed class CreateWorkflowProfileCommandHandler(
+    IWorkflowProfileService svc,
+    ISlaCalendarService calendars,
+    ITicketCommandService ticketCommandService,
+    ILogger<CreateWorkflowProfileCommandHandler> logger
+) : IRequestHandler<CreateWorkflowProfileCommand, Result<WorkflowProfileDto>>
 {
     public async Task<Result<WorkflowProfileDto>> Handle(CreateWorkflowProfileCommand cmd, CancellationToken ct)
     {
@@ -61,11 +67,29 @@ public sealed class CreateWorkflowProfileCommandHandler(IWorkflowProfileService 
         if (cmd.DefaultPriority is not null && Enum.TryParse(cmd.DefaultPriority, true, out TicketPriority tp)) dp = tp;
         var p = new WorkflowProfile { ClientId = cmd.ClientId, DepartmentId = cmd.DepartmentId, Name = cmd.Name, Description = cmd.Description, SlaHours = cmd.SlaHours ?? 24, SlaCalendarId = cmd.SlaCalendarId, SlaWarningPercent = cmd.SlaWarningPercent, FirstResponseSlaHours = cmd.FirstResponseSlaHours ?? 4, DefaultPriority = dp, IsActive = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
         var created = await svc.CreateAsync(p, ct);
+
+        // A (backfill): chamados abertos do departamento criados ANTES do perfil
+        // ficavam "Sem SLA definido" para sempre. Falha no backfill não pode
+        // impedir a criação do perfil.
+        try
+        {
+            await ticketCommandService.BackfillDepartmentProfileAsync(created, ct: ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Backfill de SLA falhou após criar o perfil {ProfileId}.", created.Id);
+        }
+
         return Result<WorkflowProfileDto>.Success(new WorkflowProfileDto(created.Id, created.ClientId, created.DepartmentId, created.Name, created.Description, created.SlaHours, created.SlaCalendarId, created.FirstResponseSlaHours, created.DefaultPriority.ToString(), created.IsActive, created.CreatedAt, created.UpdatedAt, created.SlaWarningPercent));
     }
 }
 
-public sealed class UpdateWorkflowProfileCommandHandler(IWorkflowProfileService svc, ISlaCalendarService calendars) : IRequestHandler<UpdateWorkflowProfileCommand, Result<WorkflowProfileDto>>
+public sealed class UpdateWorkflowProfileCommandHandler(
+    IWorkflowProfileService svc,
+    ISlaCalendarService calendars,
+    ITicketCommandService ticketCommandService,
+    ILogger<UpdateWorkflowProfileCommandHandler> logger
+) : IRequestHandler<UpdateWorkflowProfileCommand, Result<WorkflowProfileDto>>
 {
     public async Task<Result<WorkflowProfileDto>> Handle(UpdateWorkflowProfileCommand cmd, CancellationToken ct)
     {
@@ -89,6 +113,22 @@ public sealed class UpdateWorkflowProfileCommandHandler(IWorkflowProfileService 
         if (cmd.IsActive.HasValue) p.IsActive = cmd.IsActive.Value;
         p.UpdatedAt = DateTime.UtcNow;
         var updated = await svc.UpdateAsync(p, ct);
+
+        // A (backfill): reativar/editar o perfil reaplica o default apenas nos
+        // chamados abertos do departamento que continuam sem perfil — não
+        // sobrescreve perfis já atribuídos. Falha não impede o update do perfil.
+        if (updated.IsActive)
+        {
+            try
+            {
+                await ticketCommandService.BackfillDepartmentProfileAsync(updated, ct: ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Backfill de SLA falhou após atualizar o perfil {ProfileId}.", updated.Id);
+            }
+        }
+
         return Result<WorkflowProfileDto>.Success(new WorkflowProfileDto(updated.Id, updated.ClientId, updated.DepartmentId, updated.Name, updated.Description, updated.SlaHours, updated.SlaCalendarId, updated.FirstResponseSlaHours, updated.DefaultPriority.ToString(), updated.IsActive, updated.CreatedAt, updated.UpdatedAt, updated.SlaWarningPercent));
     }
 }

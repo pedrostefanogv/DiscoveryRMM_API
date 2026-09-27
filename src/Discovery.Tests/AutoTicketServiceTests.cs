@@ -503,6 +503,13 @@ public class AutoTicketServiceTests
         public Task<List<Ticket>> GetOpenTicketsWithSlaAsync(int limit = 2000)
             => Task.FromResult(_tickets.Values.Where(ticket => ticket.ClosedAt is null).ToList());
 
+        public Task<List<Ticket>> GetOpenWithoutProfileByDepartmentAsync(Guid departmentId, int limit = 500)
+            => Task.FromResult(_tickets.Values
+                .Where(ticket => ticket.DepartmentId == departmentId
+                    && ticket.WorkflowProfileId is null
+                    && ticket.ClosedAt is null)
+                .ToList());
+
         public Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds)
             => Task.CompletedTask;
 

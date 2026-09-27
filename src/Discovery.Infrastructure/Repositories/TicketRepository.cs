@@ -207,6 +207,9 @@ public class TicketRepository : ITicketRepository
             existingTicket.SlaExpiresAt = source.SlaExpiresAt;
             existingTicket.SlaFirstResponseExpiresAt = source.SlaFirstResponseExpiresAt;
             existingTicket.FirstRespondedAt = source.FirstRespondedAt;
+            // O início da contagem de FRT era descartado: o transfer/backfill
+            // recalculava o valor, mas o Apply não o copiava para o tracked entity.
+            existingTicket.FirstResponseSlaStartedAt = source.FirstResponseSlaStartedAt;
             existingTicket.SlaPausedSeconds = source.SlaPausedSeconds;
             existingTicket.SlaHoldStartedAt = source.SlaHoldStartedAt;
             existingTicket.SlaBreached = source.SlaBreached;
@@ -347,6 +350,21 @@ public class TicketRepository : ITicketRepository
             .AsNoTracking()
             .Where(ticket => !ticket.ClosedAt.HasValue && ticket.SlaExpiresAt.HasValue)
             .OrderBy(ticket => ticket.SlaExpiresAt)
+            .Take(effectiveLimit)
+            .ToListAsync();
+    }
+
+    public async Task<List<Ticket>> GetOpenWithoutProfileByDepartmentAsync(Guid departmentId, int limit = 500)
+    {
+        var effectiveLimit = Math.Clamp(limit, 1, 10_000);
+
+        return await _db.Tickets
+            .AsNoTracking()
+            .Where(ticket => ticket.DeletedAt == null
+                && ticket.DepartmentId == departmentId
+                && !ticket.ClosedAt.HasValue
+                && ticket.WorkflowProfileId == null)
+            .OrderByDescending(ticket => ticket.CreatedAt)
             .Take(effectiveLimit)
             .ToListAsync();
     }

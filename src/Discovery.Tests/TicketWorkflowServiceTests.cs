@@ -185,6 +185,7 @@ public class TicketWorkflowServiceTests
             Task.FromResult<IReadOnlyList<TicketComment>>(Array.Empty<TicketComment>());
         public Task<TicketComment> AddCommentAsync(TicketComment comment) => Task.FromResult(comment);
         public Task<List<Ticket>> GetOpenTicketsWithSlaAsync(int limit = 2000) => Task.FromResult(new List<Ticket>());
+        public Task<List<Ticket>> GetOpenWithoutProfileByDepartmentAsync(Guid departmentId, int limit = 500) => Task.FromResult(new List<Ticket>());
 
         public Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds)
         {
