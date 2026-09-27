@@ -7,6 +7,12 @@ public sealed record CreateAgentCommand(string Name, Guid ClientId, Guid SiteId,
 public sealed record UpdateAgentCommand(Guid Id, string? Name, Guid? SiteId, Guid? DepartmentId, string? MacAddress, string? Notes) : ICommand<Result<AgentDto>>;
 public sealed record DeleteAgentCommand(Guid Id) : ICommand<Result<VoidResult>>;
 
+/// <summary>Exclusão definitiva (hard delete) de um agente que já está na lixeira.</summary>
+public sealed record PurgeAgentCommand(Guid Id, bool Force = false) : ICommand<Result<VoidResult>>;
+
+/// <summary>Tira o agente da lixeira (limpa <c>DeletedAt</c>).</summary>
+public sealed record RestoreAgentCommand(Guid Id) : ICommand<Result<VoidResult>>;
+
 public sealed record AgentDto(
     Guid Id,
     string Hostname,
@@ -25,7 +31,16 @@ public sealed record AgentDto(
     bool ZeroTouchPending,
     DateTime CreatedAt,
     DateTime UpdatedAt,
-    HeartbeatMetricsDto? HeartbeatMetrics = null
+    HeartbeatMetricsDto? HeartbeatMetrics = null,
+    DateTime? DeletedAt = null
+);
+
+/// <summary>Página de agentes na lixeira (soft-deleted), com o clientId já resolvido.</summary>
+public sealed record DeletedAgentsPageDto(
+    IReadOnlyList<AgentDto> Items,
+    int Total,
+    int Page,
+    int PageSize
 );
 
 public sealed record HeartbeatMetricsDto(

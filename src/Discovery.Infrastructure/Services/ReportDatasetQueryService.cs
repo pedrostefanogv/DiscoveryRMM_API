@@ -1147,6 +1147,84 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         };
     }
 
+    /// <summary>
+    /// Limite de agentes materializados ao derivar datasets de componentes do
+    /// JSON de <c>agent_hardware_info.hardware_components_json</c>.
+    /// </summary>
+    private const int MaxAgentsForComponentDataset = 20000;
+
+    private static readonly JsonSerializerOptions ComponentJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private sealed record ComponentSourceRow(
+        Guid AgentId,
+        string AgentHostname,
+        Guid SiteId,
+        string SiteName,
+        string ClientName,
+        AgentHardwareComponents? Components);
+
+    /// <summary>
+    /// As tabelas dedicadas de hardware (disk_info/network_adapter_info/...
+    /// e as _infos do EF) não existem mais — a M052 removeu as antigas e nunca
+    /// houve migration para as plurais. Os componentes vivem no JSON.
+    /// </summary>
+    private async Task<List<ComponentSourceRow>> LoadComponentSourceRowsAsync(
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        CancellationToken cancellationToken)
+    {
+        var query =
+            from hw in _db.AgentHardwareInfos.AsNoTracking()
+            join ag in _db.Agents.AsNoTracking() on hw.AgentId equals ag.Id
+            join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
+            join cli in _db.Clients.AsNoTracking() on st.ClientId equals cli.Id
+            where !clientId.HasValue || st.ClientId == clientId.Value
+            select new
+            {
+                AgentId = ag.Id,
+                AgentHostname = ag.Hostname,
+                SiteId = st.Id,
+                SiteName = st.Name,
+                ClientName = cli.Name,
+                hw.HardwareComponentsJson
+            };
+
+        if (siteId.HasValue)
+            query = query.Where(x => x.SiteId == siteId.Value);
+        if (agentId.HasValue)
+            query = query.Where(x => x.AgentId == agentId.Value);
+
+        var rows = await query.Take(MaxAgentsForComponentDataset).ToListAsync(cancellationToken);
+        return rows
+            .Select(row => new ComponentSourceRow(
+                row.AgentId,
+                row.AgentHostname,
+                row.SiteId,
+                row.SiteName,
+                row.ClientName,
+                DeserializeComponents(row.HardwareComponentsJson)))
+            .ToList();
+    }
+
+    private static AgentHardwareComponents? DeserializeComponents(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<AgentHardwareComponents>(json, ComponentJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private async Task<ReportQueryResult> QueryAgentDisksAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
@@ -1154,42 +1232,27 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var agentId = GetGuid(filters, "agentId");
         var descending = GetSortDescending(filters, defaultValue: false);
 
-        var query = _db.DiskInfos.AsNoTracking().AsQueryable();
-        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
-        if (siteId.HasValue || clientId.HasValue)
+        var sources = await LoadComponentSourceRowsAsync(clientId, siteId, agentId, cancellationToken);
+        var entries = sources.SelectMany(source =>
+            (source.Components?.Disks ?? new List<DiskInfo>()).Select(disk => (Source: source, Disk: disk)));
+
+        var ordered = descending
+            ? entries.OrderByDescending(entry => entry.Disk.SizeBytes)
+            : entries.OrderBy(entry => entry.Disk.Interface).ThenBy(entry => entry.Disk.Name);
+
+        var rows = ordered.Take(limit).Select(entry =>
         {
-            query = from d in query
-                join ag in _db.Agents.AsNoTracking() on d.AgentId equals ag.Id
-                join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
-                where (!clientId.HasValue || st.ClientId == clientId.Value)
-                   && (!siteId.HasValue || st.Id == siteId.Value)
-                select d;
-        }
-
-        query = descending
-            ? query.OrderByDescending(x => x.SizeBytes)
-            : query.OrderBy(x => x.Interface).ThenBy(x => x.Name);
-
-        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
-
-        var agentIds = rowsRaw.Select(x => x.AgentId).Distinct().ToList();
-        var agents = await _db.Agents.AsNoTracking().Where(a => agentIds.Contains(a.Id))
-            .Join(_db.Sites.AsNoTracking(), a => a.SiteId, s => s.Id, (a, s) => new { a, s })
-            .Join(_db.Clients.AsNoTracking(), x => x.s.ClientId, c => c.Id, (x, c) => new { x.a.Id, x.a.Hostname, x.s.Name, ClientName = c.Name })
-            .ToDictionaryAsync(x => x.Id, x => (x.Hostname, SiteName: x.Name, x.ClientName), cancellationToken);
-
-        var rows = rowsRaw.Select(x =>
-        {
-            agents.TryGetValue(x.AgentId, out var agent);
+            var source = entry.Source;
+            var disk = entry.Disk;
             return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
             {
-                ["agentId"] = x.AgentId, ["agentHostname"] = agent.Hostname,
-                ["siteName"] = agent.SiteName, ["clientName"] = agent.ClientName,
-                ["diskName"] = x.Name, ["sizeBytes"] = x.SizeBytes,
-                ["freeBytes"] = x.FreeBytes, ["fileSystem"] = x.FileSystem,
-                ["interface"] = x.Interface, ["type"] = x.Type,
-                ["serialNumber"] = x.SerialNumber, ["healthStatus"] = x.HealthStatus,
-                ["collectedAt"] = x.CollectedAt
+                ["agentId"] = source.AgentId, ["agentHostname"] = source.AgentHostname,
+                ["siteName"] = source.SiteName, ["clientName"] = source.ClientName,
+                ["diskName"] = disk.Name, ["sizeBytes"] = disk.SizeBytes,
+                ["freeBytes"] = disk.FreeBytes, ["fileSystem"] = disk.FileSystem,
+                ["interface"] = disk.Interface, ["type"] = disk.Type,
+                ["serialNumber"] = disk.SerialNumber, ["healthStatus"] = disk.HealthStatus,
+                ["collectedAt"] = disk.CollectedAt
             };
         }).ToList();
 
@@ -1203,34 +1266,30 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
     private async Task<ReportQueryResult> QueryNetworkAdaptersAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
         var agentId = GetGuid(filters, "agentId");
         var descending = GetSortDescending(filters, defaultValue: false);
 
-        var query = _db.NetworkAdapterInfos.AsNoTracking().AsQueryable();
-        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
+        var sources = await LoadComponentSourceRowsAsync(clientId, siteId, agentId, cancellationToken);
+        var entries = sources.SelectMany(source =>
+            (source.Components?.NetworkAdapters ?? new List<NetworkAdapterInfo>()).Select(adapter => (Source: source, Adapter: adapter)));
 
-        query = descending
-            ? query.OrderByDescending(x => x.Name)
-            : query.OrderBy(x => x.Name);
+        var ordered = descending
+            ? entries.OrderByDescending(entry => entry.Adapter.Name)
+            : entries.OrderBy(entry => entry.Adapter.Name);
 
-        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
-        var agentIds = rowsRaw.Select(x => x.AgentId).Distinct().ToList();
-        var agents = await _db.Agents.AsNoTracking().Where(a => agentIds.Contains(a.Id))
-            .Join(_db.Sites.AsNoTracking(), a => a.SiteId, s => s.Id, (a, s) => new { a, s })
-            .Join(_db.Clients.AsNoTracking(), x => x.s.ClientId, c => c.Id, (x, c) => new { x.a.Id, x.a.Hostname, x.s.Name, ClientName = c.Name })
-            .ToDictionaryAsync(x => x.Id, x => (x.Hostname, SiteName: x.Name, x.ClientName), cancellationToken);
-
-        var rows = rowsRaw.Select(x =>
+        var rows = ordered.Take(limit).Select(entry =>
         {
-            agents.TryGetValue(x.AgentId, out var agent);
+            var source = entry.Source;
+            var adapter = entry.Adapter;
             return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
             {
-                ["agentId"] = x.AgentId, ["agentHostname"] = agent.Hostname,
-                ["siteName"] = agent.SiteName, ["clientName"] = agent.ClientName,
-                ["adapterName"] = x.Name, ["macAddress"] = x.MacAddress,
-                ["ipAddresses"] = string.Join(", ", x.IpAddresses ?? []),
-                ["speedMbps"] = x.SpeedMbps, ["isDefault"] = x.IsDefault,
-                ["collectedAt"] = x.CollectedAt
+                ["agentId"] = source.AgentId, ["agentHostname"] = source.AgentHostname,
+                ["siteName"] = source.SiteName, ["clientName"] = source.ClientName,
+                ["adapterName"] = adapter.Name, ["macAddress"] = adapter.MacAddress,
+                ["ipAddresses"] = string.Join(", ", adapter.IpAddresses),
+                ["speedMbps"] = adapter.SpeedMbps, ["isDefault"] = adapter.IsDefault,
+                ["collectedAt"] = adapter.CollectedAt
             };
         }).ToList();
 
@@ -1244,39 +1303,46 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
     private async Task<ReportQueryResult> QueryListeningPortsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
         var agentId = GetGuid(filters, "agentId");
         var port = GetInt(filters, "port");
         var processName = GetString(filters, "processName");
         var state = GetString(filters, "state");
         var descending = GetSortDescending(filters, defaultValue: false);
 
-        var query = _db.ListeningPortInfos.AsNoTracking().AsQueryable();
-        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
-        if (port.HasValue) query = query.Where(x => x.Port == port.Value);
-        if (!string.IsNullOrWhiteSpace(processName)) query = query.Where(x => x.ProcessName != null && x.ProcessName.Contains(processName));
-        if (!string.IsNullOrWhiteSpace(state)) query = query.Where(x => x.State != null && x.State.Contains(state));
+        var sources = await LoadComponentSourceRowsAsync(clientId, siteId, agentId, cancellationToken);
+        IEnumerable<(ComponentSourceRow Source, ListeningPortInfo Port)> entries = sources.SelectMany(source =>
+            (source.Components?.ListeningPorts ?? new List<ListeningPortInfo>())
+                .Select(listeningPort => (Source: source, Port: listeningPort)));
 
-        query = descending
-            ? query.OrderByDescending(x => x.Port)
-            : query.OrderBy(x => x.Port);
-
-        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
-        var agentIds = rowsRaw.Select(x => x.AgentId).Distinct().ToList();
-        var agents = await _db.Agents.AsNoTracking().Where(a => agentIds.Contains(a.Id))
-            .Join(_db.Sites.AsNoTracking(), a => a.SiteId, s => s.Id, (a, s) => new { a, s })
-            .Join(_db.Clients.AsNoTracking(), x => x.s.ClientId, c => c.Id, (x, c) => new { x.a.Id, x.a.Hostname, x.s.Name, ClientName = c.Name })
-            .ToDictionaryAsync(x => x.Id, x => (x.Hostname, SiteName: x.Name, x.ClientName), cancellationToken);
-
-        var rows = rowsRaw.Select(x =>
+        if (port.HasValue)
+            entries = entries.Where(entry => entry.Port.Port == port.Value);
+        if (!string.IsNullOrWhiteSpace(processName))
         {
-            agents.TryGetValue(x.AgentId, out var agent);
+            var processFilter = processName;
+            entries = entries.Where(entry => entry.Port.ProcessName != null && entry.Port.ProcessName.Contains(processFilter));
+        }
+        if (!string.IsNullOrWhiteSpace(state))
+        {
+            var stateFilter = state;
+            entries = entries.Where(entry => entry.Port.State != null && entry.Port.State.Contains(stateFilter));
+        }
+
+        var ordered = descending
+            ? entries.OrderByDescending(entry => entry.Port.Port)
+            : entries.OrderBy(entry => entry.Port.Port);
+
+        var rows = ordered.Take(limit).Select(entry =>
+        {
+            var source = entry.Source;
+            var listeningPort = entry.Port;
             return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
             {
-                ["agentId"] = x.AgentId, ["agentHostname"] = agent.Hostname,
-                ["siteName"] = agent.SiteName, ["clientName"] = agent.ClientName,
-                ["port"] = x.Port, ["protocol"] = x.Protocol,
-                ["processName"] = x.ProcessName, ["state"] = x.State,
-                ["collectedAt"] = x.CollectedAt
+                ["agentId"] = source.AgentId, ["agentHostname"] = source.AgentHostname,
+                ["siteName"] = source.SiteName, ["clientName"] = source.ClientName,
+                ["port"] = listeningPort.Port, ["protocol"] = listeningPort.Protocol,
+                ["processName"] = listeningPort.ProcessName, ["state"] = listeningPort.State,
+                ["collectedAt"] = listeningPort.CollectedAt
             };
         }).ToList();
 
@@ -1290,33 +1356,29 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
     private async Task<ReportQueryResult> QueryPrintersAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
         var agentId = GetGuid(filters, "agentId");
         var descending = GetSortDescending(filters, defaultValue: false);
 
-        var query = _db.PrinterInfos.AsNoTracking().AsQueryable();
-        if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
+        var sources = await LoadComponentSourceRowsAsync(clientId, siteId, agentId, cancellationToken);
+        var entries = sources.SelectMany(source =>
+            (source.Components?.Printers ?? new List<PrinterInfo>()).Select(printer => (Source: source, Printer: printer)));
 
-        query = descending
-            ? query.OrderByDescending(x => x.Name)
-            : query.OrderBy(x => x.Name);
+        var ordered = descending
+            ? entries.OrderByDescending(entry => entry.Printer.Name)
+            : entries.OrderBy(entry => entry.Printer.Name);
 
-        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
-        var agentIds = rowsRaw.Select(x => x.AgentId).Distinct().ToList();
-        var agents = await _db.Agents.AsNoTracking().Where(a => agentIds.Contains(a.Id))
-            .Join(_db.Sites.AsNoTracking(), a => a.SiteId, s => s.Id, (a, s) => new { a, s })
-            .Join(_db.Clients.AsNoTracking(), x => x.s.ClientId, c => c.Id, (x, c) => new { x.a.Id, x.a.Hostname, x.s.Name, ClientName = c.Name })
-            .ToDictionaryAsync(x => x.Id, x => (x.Hostname, SiteName: x.Name, x.ClientName), cancellationToken);
-
-        var rows = rowsRaw.Select(x =>
+        var rows = ordered.Take(limit).Select(entry =>
         {
-            agents.TryGetValue(x.AgentId, out var agent);
+            var source = entry.Source;
+            var printer = entry.Printer;
             return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
             {
-                ["agentId"] = x.AgentId, ["agentHostname"] = agent.Hostname,
-                ["siteName"] = agent.SiteName, ["clientName"] = agent.ClientName,
-                ["printerName"] = x.Name, ["driverName"] = x.DriverName,
-                ["portName"] = x.PortName, ["isDefault"] = x.IsDefault,
-                ["isShared"] = x.IsShared, ["collectedAt"] = x.CollectedAt
+                ["agentId"] = source.AgentId, ["agentHostname"] = source.AgentHostname,
+                ["siteName"] = source.SiteName, ["clientName"] = source.ClientName,
+                ["printerName"] = printer.Name, ["driverName"] = printer.DriverName,
+                ["portName"] = printer.PortName, ["isDefault"] = printer.IsDefault,
+                ["isShared"] = printer.IsShared, ["collectedAt"] = printer.CollectedAt
             };
         }).ToList();
 

@@ -83,9 +83,10 @@ public class RecordingAssemblerService : BackgroundService
         var retention = _options.Recording.Retention;
         var cutoff = DateTime.UtcNow.AddDays(-retention.MaxDays);
 
-        _logger.LogDebug("Limpando gravações expiradas (cutoff: {Cutoff})", cutoff);
+        using var scope = _services.CreateScope();
+        var cleanup = scope.ServiceProvider.GetRequiredService<IRecordingStorageCleanupService>();
+        var removed = await cleanup.CleanupExpiredAsync(cutoff, ct);
 
-        // Deletaria arquivos do storage S3/local e registros do banco
-        await Task.CompletedTask;
+        _logger.LogInformation("Limpeza de gravações expiradas: {Count} removida(s) (cutoff {Cutoff})", removed, cutoff);
     }
 }

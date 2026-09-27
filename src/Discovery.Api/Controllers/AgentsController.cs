@@ -19,6 +19,7 @@ using Discovery.Core.Cqrs.Notes.Queries;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -30,11 +31,13 @@ public class AgentsController : ControllerBase
 {
     private readonly IMediator _mediator;
     private readonly INoteService _noteService;
+    private readonly IScopeContext _scopeContext;
 
-    public AgentsController(IMediator mediator, INoteService noteService)
+    public AgentsController(IMediator mediator, INoteService noteService, IScopeContext scopeContext)
     {
         _mediator = mediator;
         _noteService = noteService;
+        _scopeContext = scopeContext;
     }
 
     /// <summary>Username do usuário autenticado (ou fallback).</summary>
@@ -77,6 +80,26 @@ public class AgentsController : ControllerBase
         return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
     }
 
+    /// <summary>
+    /// Lixeira: agentes soft-deleted, paginados (filtros opcionais por cliente/site
+    /// e busca textual). Usa AccessList para que usuários com escopo vejam apenas
+    /// os clientes permitidos.
+    /// </summary>
+    [HttpGet("deleted")]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetDeleted(
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] string? search = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50)
+    {
+        var access = await _scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        var result = await _mediator.Send(new GetDeletedAgentsQuery(
+            clientId, siteId, page, pageSize, search, access.HasGlobalAccess, access.AllowedClientIds));
+        return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
+    }
+
     [HttpGet("{id:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
@@ -107,14 +130,38 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
+    /// <summary>
+    /// Sem permanent: soft delete (vai para a lixeira, restaurável).
+    /// Com permanent=true: exclusão física; sem force=true recusa quando o
+    /// agente tem chamados vinculados (409 com a contagem).
+    /// </summary>
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.Delete)]
-    public async Task<IActionResult> Delete(Guid id)
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] bool force = false, [FromQuery] bool permanent = false)
     {
-        var result = await _mediator.Send(new DeleteAgentCommand(id));
+        var result = permanent
+            ? await _mediator.Send(new PurgeAgentCommand(id, force))
+            : await _mediator.Send(new DeleteAgentCommand(id));
+
         return result.Match<IActionResult>(
             success: _ => NoContent(),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Conflict" => Conflict(new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
+    }
+
+    /// <summary>Tira o agente da lixeira (volta a aparecer na listagem).</summary>
+    [HttpPost("{id:guid}/restore")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> Restore(Guid id)
+    {
+        var result = await _mediator.Send(new RestoreAgentCommand(id));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
     }
 
     [HttpGet("{id:guid}/custom-fields")]

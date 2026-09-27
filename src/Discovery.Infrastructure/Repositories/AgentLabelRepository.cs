@@ -87,21 +87,24 @@ public class AgentLabelRepository : IAgentLabelRepository
     {
         var safeLimit = Math.Clamp(limit, 1, 1000);
 
-        return await _db.AgentLabels
-            .AsNoTracking()
-            .Where(item => item.Label == label)
-            .Where(item => !afterAgentId.HasValue || item.AgentId.CompareTo(afterAgentId.Value) > 0)
-            .OrderBy(item => item.AgentId)
-            .Select(item => item.AgentId)
+        // Join com agents para respeitar o filtro global de soft delete:
+        // agentes na lixeira não entram no filtro por label.
+        return await (
+                from item in _db.AgentLabels.AsNoTracking()
+                join agent in _db.Agents.AsNoTracking() on item.AgentId equals agent.Id
+                where item.Label == label
+                      && (!afterAgentId.HasValue || item.AgentId.CompareTo(afterAgentId.Value) > 0)
+                orderby item.AgentId
+                select item.AgentId)
             .Take(safeLimit)
             .ToListAsync(ct);
     }
 
     public Task<int> CountAgentsByLabelAsync(string label, CancellationToken ct = default)
-        => _db.AgentLabels
-            .AsNoTracking()
-            .Where(item => item.Label == label)
-            .Select(item => item.AgentId)
+        => (from item in _db.AgentLabels.AsNoTracking()
+            join agent in _db.Agents.AsNoTracking() on item.AgentId equals agent.Id
+            where item.Label == label
+            select item.AgentId)
             .Distinct()
             .CountAsync(ct);
 
@@ -109,14 +112,17 @@ public class AgentLabelRepository : IAgentLabelRepository
     {
         var safeLimit = Math.Clamp(limit, 1, 500);
 
-        return await _db.AgentLabels
-            .AsNoTracking()
-            .GroupBy(item => item.Label)
-            .Select(group => new AgentLabelUsageDto
-            {
-                Label = group.Key,
-                AgentCount = group.Select(item => item.AgentId).Distinct().Count()
-            })
+        // Join com agents (filtro global DeletedAt == null) para a contagem do
+        // dropdown bater com a lista, que não mostra agentes na lixeira.
+        return await (
+                from label in _db.AgentLabels.AsNoTracking()
+                join agent in _db.Agents.AsNoTracking() on label.AgentId equals agent.Id
+                group label by label.Label into grouped
+                select new AgentLabelUsageDto
+                {
+                    Label = grouped.Key,
+                    AgentCount = grouped.Select(item => item.AgentId).Distinct().Count()
+                })
             .OrderByDescending(item => item.AgentCount)
             .ThenBy(item => item.Label)
             .Take(safeLimit)

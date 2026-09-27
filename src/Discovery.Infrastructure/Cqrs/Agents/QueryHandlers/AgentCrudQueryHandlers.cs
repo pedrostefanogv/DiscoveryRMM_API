@@ -5,7 +5,9 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Data;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
 
@@ -83,6 +85,88 @@ public sealed class GetAgentsByClientQueryHandler(
             dtos.Add(AgentQueryHelper.MapToDto(agent));
         }
         return Result<IReadOnlyList<AgentDto>>.Success(dtos);
+    }
+}
+
+/// <summary>
+/// Lixeira de agentes: página de soft-deleted com o clientId resolvido.
+/// Não aplica heartbeat/status online — um agente excluído é sempre offline.
+/// </summary>
+public sealed class GetDeletedAgentsQueryHandler(
+    DiscoveryDbContext db,
+    ISiteRepository siteRepo
+) : IRequestHandler<GetDeletedAgentsQuery, Result<DeletedAgentsPageDto>>
+{
+    public async Task<Result<DeletedAgentsPageDto>> Handle(GetDeletedAgentsQuery q, CancellationToken ct)
+    {
+        var safePage = q.Page < 1 ? 1 : q.Page;
+        var safePageSize = Math.Clamp(q.PageSize, 1, 200);
+
+        var query = db.Agents
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .Where(agent => agent.DeletedAt != null);
+
+        if (q.SiteId.HasValue)
+            query = query.Where(agent => agent.SiteId == q.SiteId.Value);
+
+        if (q.ClientId.HasValue)
+        {
+            var targetClientId = q.ClientId.Value;
+            query = query.Where(agent => db.Sites.Any(site => site.Id == agent.SiteId && site.ClientId == targetClientId));
+        }
+
+        // Row-level security: usuário sem acesso global só enxerga clientes permitidos.
+        if (!q.HasGlobalAccess)
+        {
+            var allowedClientIds = q.AllowedClientIds?.Distinct().ToArray() ?? [];
+            if (allowedClientIds.Length == 0)
+                return Result<DeletedAgentsPageDto>.Success(new DeletedAgentsPageDto([], 0, safePage, safePageSize));
+
+            query = query.Where(agent =>
+                db.Sites.Any(site => site.Id == agent.SiteId && allowedClientIds.Contains(site.ClientId)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(q.Search))
+        {
+            var term = q.Search.Trim().ToLowerInvariant();
+            query = query.Where(agent =>
+                agent.Hostname.ToLower().Contains(term) ||
+                (agent.DisplayName != null && agent.DisplayName.ToLower().Contains(term)) ||
+                (agent.LastIpAddress != null && agent.LastIpAddress.ToLower().Contains(term)) ||
+                (agent.OperatingSystem != null && agent.OperatingSystem.ToLower().Contains(term)));
+        }
+
+        var total = await query.CountAsync(ct);
+        var agents = await query
+            .OrderByDescending(agent => agent.DeletedAt)
+            .ThenBy(agent => agent.Hostname)
+            .Skip((safePage - 1) * safePageSize)
+            .Take(safePageSize)
+            .ToListAsync(ct);
+
+        // Uma única consulta de sites (includeInactive: o site pode ter sido
+        // desativado depois da exclusão do agente).
+        var siteIds = agents.Select(a => a.SiteId).Distinct().ToList();
+        var clientIdBySite = new Dictionary<Guid, Guid>();
+        if (siteIds.Count > 0)
+        {
+            foreach (var site in await siteRepo.GetByIdsAsync(siteIds, includeInactive: true))
+                clientIdBySite[site.Id] = site.ClientId;
+        }
+
+        var items = agents
+            .Select(a => AgentQueryHelper.MapToDto(a) with
+            {
+                ClientId = clientIdBySite.GetValueOrDefault(a.SiteId),
+                Status = "Offline",
+                IsOnline = false,
+                DeletedAt = a.DeletedAt
+            })
+            .ToList()
+            .AsReadOnly();
+
+        return Result<DeletedAgentsPageDto>.Success(new DeletedAgentsPageDto(items, total, safePage, safePageSize));
     }
 }
 

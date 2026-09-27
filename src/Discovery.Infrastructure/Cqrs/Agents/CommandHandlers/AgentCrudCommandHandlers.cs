@@ -7,7 +7,10 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
+using Discovery.Infrastructure.Data;
 using MediatR;
+using Microsoft.Extensions.Logging;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
 
@@ -128,6 +131,99 @@ public sealed class DeleteAgentCommandHandler(
         await authService.RevokeAllTokensAsync(cmd.Id);
         await agentRepo.DeleteAsync(cmd.Id);
         await CreateAgentCommandHandler.InvalidateCachesAsync(redis, siteRepo, agent.SiteId, null, cmd.Id);
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
+/// <summary>
+/// Exclusão definitiva (hard delete) do agente na lixeira. Sem <c>Force</c>,
+/// recusa quando o agente tem chamados vinculados (409 com a contagem); com
+/// <c>Force</c>, o histórico é preservado desvinculado (<c>agent_id = NULL</c>).
+/// </summary>
+public sealed class PurgeAgentCommandHandler(
+    DiscoveryDbContext db,
+    IAgentPurgeService purgeService,
+    IRedisService redis,
+    ISiteRepository siteRepo,
+    ILogger<PurgeAgentCommandHandler> logger
+) : IRequestHandler<PurgeAgentCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(PurgeAgentCommand cmd, CancellationToken ct)
+    {
+        var agent = await db.Agents
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .SingleOrDefaultAsync(a => a.Id == cmd.Id, ct);
+        if (agent is null)
+            return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        // Exclusão definitiva é o segundo passo: o agente precisa estar na lixeira.
+        if (agent.DeletedAt is null)
+            return Result<VoidResult>.Failure(Error.Conflict(
+                "Mova o agente para a lixeira antes de excluir definitivamente."));
+
+        if (!cmd.Force)
+        {
+            // Inclui chamados já excluídos (lixeira) para não subestimar o vínculo.
+            var linkedTickets = await db.Tickets
+                .IgnoreQueryFilters()
+                .CountAsync(ticket => ticket.AgentId == cmd.Id, ct);
+            if (linkedTickets > 0)
+                return Result<VoidResult>.Failure(Error.Conflict(
+                    $"Agente vinculado a {linkedTickets} chamado(s). Confirme a exclusão definitiva para continuar."));
+        }
+
+        try
+        {
+            await purgeService.PurgeAsync(cmd.Id, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // FK inesperada (tabela nova referenciando agents) ou indisponibilidade
+            // do banco: nada foi commitado. O detalhe vai para o log; o cliente
+            // recebe mensagem genérica (evita expor nomes de tabela/constraint).
+            logger.LogError(ex, "Falha ao excluir definitivamente o agente {AgentId}", cmd.Id);
+            return Result<VoidResult>.Failure(Error.Internal(
+                "Não foi possível excluir o agente definitivamente. Nenhuma alteração foi aplicada."));
+        }
+
+        try
+        {
+            await CreateAgentCommandHandler.InvalidateCachesAsync(redis, siteRepo, agent.SiteId, null, cmd.Id);
+        }
+        catch
+        {
+            // O agente já foi removido; a limpeza de cache é best-effort (TTL curto).
+        }
+
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
+/// <summary>Tira o agente da lixeira (limpa DeletedAt). Idempotente.</summary>
+public sealed class RestoreAgentCommandHandler(
+    DiscoveryDbContext db,
+    IRedisService redis,
+    ISiteRepository siteRepo
+) : IRequestHandler<RestoreAgentCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(RestoreAgentCommand cmd, CancellationToken ct)
+    {
+        var agent = await db.Agents
+            .IgnoreQueryFilters()
+            .SingleOrDefaultAsync(a => a.Id == cmd.Id, ct);
+        if (agent is null)
+            return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        // Idempotente: agente fora da lixeira já está restaurado.
+        if (agent.DeletedAt is not null)
+        {
+            agent.DeletedAt = null;
+            agent.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+            await CreateAgentCommandHandler.InvalidateCachesAsync(redis, siteRepo, agent.SiteId, null, cmd.Id);
+        }
+
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }
