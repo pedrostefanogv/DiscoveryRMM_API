@@ -1,5 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Tickets;
+using Discovery.Core.Cqrs.Tickets.Commands;
+using Discovery.Core.Cqrs.Tickets.Dtos;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -203,6 +205,7 @@ public sealed class GetMyTicketTemplatesHandler(
 public sealed class AddMyTicketCommentHandler(
     ITicketCommandService ticketCommandService,
     ITicketRepository ticketRepo,
+    IWorkflowRepository workflowRepo,
     ILogger<AddMyTicketCommentHandler> logger
 ) : IRequestHandler<AddMyTicketCommentCommand, Result<object>>
 {
@@ -211,6 +214,18 @@ public sealed class AddMyTicketCommentHandler(
         var owned = await ticketRepo.GetByIdAsync(cmd.TicketId);
         if (owned is null || owned.AgentId != cmd.AgentId)
             return Result<object>.Failure(Error.NotFound("Ticket not found."));
+
+        // Chamado encerrado não aceita novos comentários: a UI orienta a reabrir.
+        // ClosedAt cobre o fluxo normal (fechamento pelo portal/agent/mesclagem);
+        // a consulta de estados só é necessária para o caso legado de chamado em
+        // estado final sem ClosedAt — evitando um round-trip extra por comentário.
+        var closedMessage = "Chamado encerrado. Reabra o chamado para comentar.";
+        if (owned.ClosedAt.HasValue)
+            return Result<object>.Failure(Error.Validation("TicketId", closedMessage));
+
+        var states = await workflowRepo.GetStatesAsync(owned.ClientId);
+        if (states.Any(s => s.Id == owned.WorkflowStateId && s.IsFinal))
+            return Result<object>.Failure(Error.Validation("TicketId", closedMessage));
 
         try
         {
@@ -268,6 +283,56 @@ public sealed class UpdateMyTicketWorkflowStateHandler(
     }
 }
 
+/// <summary>
+/// Reabertura pelo agent: valida a posse e delega para o handler do portal,
+/// que volta ao estado inicial, limpa ClosedAt/avaliação e recalcula SLA/FRT.
+/// </summary>
+/// <remarks>
+/// A delegação é feita chamando o handler concreto (não via <c>ISender</c>):
+/// despachar outro <c>ICommand</c> pelo mediator abriria uma SEGUNDA transação
+/// dentro da transação do <c>TransactionBehavior</c> do comando externo
+/// (EF Core não permite transação aninhada na mesma conexão). Assim, o comando
+/// externo permanece dono da única transação e o handler do portal continua
+/// sendo a fonte única da regra de reabertura.
+/// </remarks>
+public sealed class ReopenMyTicketHandler(
+    ITicketRepository ticketRepo,
+    IRequestHandler<ReopenTicketCommand, Result<TicketDetailDto>> reopenHandler
+) : IRequestHandler<ReopenMyTicketCommand, Result<TicketDetailDto>>
+{
+    public async Task<Result<TicketDetailDto>> Handle(ReopenMyTicketCommand cmd, CancellationToken ct)
+    {
+        var ticket = await ticketRepo.GetByIdAsync(cmd.TicketId);
+        // Isolamento por agent: sem isso qualquer agent autenticado reabriria
+        // chamados de terceiros conhecendo o GUID (IDOR).
+        if (ticket is null || ticket.AgentId != cmd.AgentId)
+            return Result<TicketDetailDto>.Failure(Error.NotFound("Ticket not found."));
+
+        return await reopenHandler.Handle(new ReopenTicketCommand(cmd.TicketId, cmd.Reason, null), ct);
+    }
+}
+
+/// <summary>
+/// Avaliação (CSAT) pelo agent: valida a posse e delega para o handler do
+/// portal (exige chamado encerrado e nota 1..5). Ver observação em
+/// <see cref="ReopenMyTicketHandler"/> sobre a chamada direta ao handler.
+/// </summary>
+public sealed class RateMyTicketHandler(
+    ITicketRepository ticketRepo,
+    IRequestHandler<RateTicketCommand, Result<TicketDetailDto>> rateHandler
+) : IRequestHandler<RateMyTicketCommand, Result<TicketDetailDto>>
+{
+    public async Task<Result<TicketDetailDto>> Handle(RateMyTicketCommand cmd, CancellationToken ct)
+    {
+        var ticket = await ticketRepo.GetByIdAsync(cmd.TicketId);
+        if (ticket is null || ticket.AgentId != cmd.AgentId)
+            return Result<TicketDetailDto>.Failure(Error.NotFound("Ticket not found."));
+
+        return await rateHandler.Handle(
+            new RateTicketCommand(cmd.TicketId, cmd.Rating, cmd.Feedback, null, cmd.RatedByName), ct);
+    }
+}
+
 public sealed class CloseAndRateMyTicketHandler(
     ITicketRepository ticketRepo,
     IWorkflowRepository workflowRepo,
@@ -308,7 +373,9 @@ public sealed class CloseAndRateMyTicketHandler(
         if (targetStateId.HasValue)
             ticket.WorkflowStateId = targetStateId.Value;
 
-        ticket.ClosedAt = DateTime.UtcNow;
+        // Idempotente para reenvios: fecha de novo não reescreve a data original
+        // de fechamento (que define a ordem "aguardando avaliação").
+        ticket.ClosedAt ??= DateTime.UtcNow;
         ticket.UpdatedAt = DateTime.UtcNow;
         await ticketRepo.UpdateAsync(ticket);
 

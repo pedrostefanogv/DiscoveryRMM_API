@@ -36,7 +36,8 @@ public class SitesQueryHandlerTests
         var handler = new GetAllSitesQueryHandler(
             new FakeSiteRepo([active, inactive]),
             new FakeClientRepo(),
-            new FakeScope(new UserScopeAccess { HasGlobalAccess = true }));
+            new FakeScope(new UserScopeAccess { HasGlobalAccess = true }),
+            new FakeAgentCountService());
 
         var result = await handler.Handle(new GetAllSitesQuery(IncludeInactive: true), CancellationToken.None);
 
@@ -53,7 +54,8 @@ public class SitesQueryHandlerTests
         var handler = new GetAllSitesQueryHandler(
             new FakeSiteRepo([allowed, other]),
             new FakeClientRepo(),
-            new FakeScope(new UserScopeAccess { AllowedSiteIds = [allowed.Id] }));
+            new FakeScope(new UserScopeAccess { AllowedSiteIds = [allowed.Id] }),
+            new FakeAgentCountService());
 
         var result = await handler.Handle(new GetAllSitesQuery(), CancellationToken.None);
 
@@ -70,7 +72,8 @@ public class SitesQueryHandlerTests
         var handler = new GetAllSitesQueryHandler(
             new FakeSiteRepo([siteA, siteB]),
             new FakeClientRepo(),
-            new FakeScope(new UserScopeAccess { AllowedClientIds = [clientA] }));
+            new FakeScope(new UserScopeAccess { AllowedClientIds = [clientA] }),
+            new FakeAgentCountService());
 
         var result = await handler.Handle(new GetAllSitesQuery(), CancellationToken.None);
 
@@ -83,7 +86,8 @@ public class SitesQueryHandlerTests
         var handler = new GetAllSitesQueryHandler(
             new FakeSiteRepo([MakeSite(Guid.NewGuid(), "A")]),
             new FakeClientRepo(),
-            new FakeScope(new UserScopeAccess()));
+            new FakeScope(new UserScopeAccess()),
+            new FakeAgentCountService());
 
         var result = await handler.Handle(new GetAllSitesQuery(), CancellationToken.None);
 
@@ -99,12 +103,43 @@ public class SitesQueryHandlerTests
         var handler = new GetAllSitesQueryHandler(
             new FakeSiteRepo([site]),
             new FakeClientRepo(client),
-            new FakeScope(new UserScopeAccess { HasGlobalAccess = true }));
+            new FakeScope(new UserScopeAccess { HasGlobalAccess = true }),
+            new FakeAgentCountService());
 
         var result = await handler.Handle(new GetAllSitesQuery(), CancellationToken.None);
 
         Assert.That(result.Value!.Single().ClientName, Is.EqualTo("Cliente X"));
         Assert.That(result.Value!.Single().ClientActive, Is.True);
+    }
+
+    [Test]
+    public async Task GetAllSites_ReturnsAgentCountsPerSite()
+    {
+        var client = Guid.NewGuid();
+        var site = MakeSite(client, "S");
+        var counts = new Dictionary<Guid, SiteAgentCount>
+        {
+            [site.Id] = new SiteAgentCount(Total: 7, Online: 3)
+        };
+        var handler = new GetAllSitesQueryHandler(
+            new FakeSiteRepo([site]),
+            new FakeClientRepo(),
+            new FakeScope(new UserScopeAccess { HasGlobalAccess = true }),
+            new FakeAgentCountService(counts));
+
+        var result = await handler.Handle(new GetAllSitesQuery(), CancellationToken.None);
+
+        var dto = result.Value!.Single();
+        Assert.That(dto.AgentCount, Is.EqualTo(7));
+        Assert.That(dto.AgentOnlineCount, Is.EqualTo(3));
+    }
+
+    private sealed class FakeAgentCountService(IReadOnlyDictionary<Guid, SiteAgentCount>? counts = null) : ISiteAgentCountService
+    {
+        public Task<IReadOnlyDictionary<Guid, SiteAgentCount>> GetCountsBySiteIdsAsync(
+            IReadOnlyCollection<Guid> siteIds,
+            CancellationToken ct = default)
+            => Task.FromResult(counts ?? new Dictionary<Guid, SiteAgentCount>());
     }
 
     private sealed class FakeClientRepo(params Client[] clients) : IClientRepository

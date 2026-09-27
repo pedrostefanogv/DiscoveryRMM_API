@@ -523,7 +523,7 @@ public sealed class GetTicketCsatSummaryQueryHandler(DiscoveryDbContext db)
 
         var ratedRows = await closedQuery
             .Where(t => t.Rating != null)
-            .Select(t => new { Rating = t.Rating!.Value, t.DepartmentId, t.AssignedToUserId })
+            .Select(t => new { Rating = t.Rating!.Value, t.DepartmentId, t.AssignedToUserId, t.AgentId })
             .ToListAsync(ct);
 
         var distribution = new Dictionary<int, int> { [1] = 0, [2] = 0, [3] = 0, [4] = 0, [5] = 0 };
@@ -567,7 +567,30 @@ public sealed class GetTicketCsatSummaryQueryHandler(DiscoveryDbContext db)
             .OrderByDescending(g => g.Count)
             .ToList();
 
+        // CSAT por máquina: agrupa pelo agent vinculado ao chamado e resolve o
+        // hostname. Chamados sem agent entram como "Sem máquina".
+        var agentIds = ratedRows.Where(r => r.AgentId.HasValue).Select(r => r.AgentId!.Value).Distinct().ToList();
+        var agents = await db.Agents.AsNoTracking()
+            .Where(a => agentIds.Contains(a.Id))
+            .Select(a => new { a.Id, a.Hostname, a.DisplayName })
+            .ToListAsync(ct);
+        var agentMap = agents.ToDictionary(
+            a => a.Id,
+            a => string.IsNullOrWhiteSpace(a.DisplayName) ? a.Hostname : a.DisplayName);
+
+        var byHostname = ratedRows
+            .GroupBy(r => r.AgentId)
+            .Select(g => new TicketCsatGroupDto(
+                g.Key?.ToString(),
+                g.Key.HasValue && agentMap.TryGetValue(g.Key.Value, out var name) && !string.IsNullOrWhiteSpace(name)
+                    ? name
+                    : "Sem máquina",
+                g.Count(),
+                Math.Round(g.Average(r => r.Rating), 2)))
+            .OrderByDescending(g => g.Count)
+            .ToList();
+
         return Result<TicketCsatSummaryDto>.Success(new TicketCsatSummaryDto(
-            total, ratedRows.Count, average, distribution, byDepartment, byTechnician));
+            total, ratedRows.Count, average, distribution, byDepartment, byTechnician, byHostname));
     }
 }

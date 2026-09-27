@@ -70,6 +70,12 @@ public class AgentAuthController : ControllerBase
         string? Notes = null,
         Guid? WorkflowStateId = null);
 
+    /// <summary>Payload de reabertura pelo agent (motivo opcional).</summary>
+    public record ReopenMyTicketRequest(string? Reason = null);
+
+    /// <summary>Payload de avaliação (CSAT) pelo agent.</summary>
+    public record RateMyTicketRequest(int Rating, string? Feedback = null);
+
     // ── Auth Helpers ──────────────────────────────────────────────────────
 
     private bool TryGetAgentId(out Guid agentId)
@@ -364,6 +370,40 @@ public class AgentAuthController : ControllerBase
         var feedback = req.Feedback ?? req.Comment ?? req.Notes;
         var cmd = new CloseAndRateMyTicketCommand(id, ticketId, req.Rating, feedback, req.WorkflowStateId);
         return MapResult(await _mediator.Send(cmd), Ok);
+    }
+
+    /// <summary>
+    /// Reabre um chamado encerrado vinculado ao agent. A UI usa para liberar
+    /// novos comentários; a avaliação anterior é descartada pelo servidor.
+    /// </summary>
+    [HttpPost("me/tickets/{ticketId:guid}/reopen")]
+    [IdempotencyFilter]
+    public async Task<IActionResult> ReopenMyTicket(Guid ticketId, [FromBody] ReopenMyTicketRequest req)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        var cmd = new ReopenMyTicketCommand(id, ticketId, req?.Reason);
+        return MapResult(await _mediator.Send(cmd), dto => Ok(dto));
+    }
+
+    /// <summary>
+    /// Avalia (CSAT 1..5 + feedback) um chamado encerrado vinculado ao agent.
+    /// </summary>
+    [HttpPost("me/tickets/{ticketId:guid}/rating")]
+    [IdempotencyFilter]
+    public async Task<IActionResult> RateMyTicket(Guid ticketId, [FromBody] RateMyTicketRequest req)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (agent, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        // RatedByName = hostname da máquina: a UI exibe "Avaliado por: <PC>".
+        // req pode ser nulo se o corpo vier "null"; a validação de 1..5 fica no
+        // handler do portal (0 cai em erro de validação, não em 500).
+        var cmd = new RateMyTicketCommand(id, ticketId, req?.Rating ?? 0, req?.Feedback, agent?.Hostname);
+        return MapResult(await _mediator.Send(cmd), dto => Ok(dto));
     }
 
     // ── P2P ───────────────────────────────────────────────────────────────

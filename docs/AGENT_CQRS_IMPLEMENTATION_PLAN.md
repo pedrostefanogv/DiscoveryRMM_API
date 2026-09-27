@@ -78,13 +78,15 @@
 
 ## Fase 3: Média Prioridade (🟡)
 
-### 3.1 — Tickets (7 handlers)
-- **Status:** ✅ Concluído (2026-07-08)
-- **Solução:** Todos os 7 handlers implementados com `ITicketRepository`: `GetMyTicketsHandler`, `GetMyTicketHandler`, `CreateMyTicketHandler`, `AddMyTicketCommentHandler`, `GetMyTicketCommentsHandler`, `UpdateMyTicketWorkflowStateHandler`, `CloseAndRateMyTicketHandler`
+### 3.1 — Tickets (9 handlers)
+- **Status:** ✅ Concluído (2026-07-08) · ampliado em 2026-10 (reabertura/avaliação pelo agent)
+- **Solução:** Os 7 handlers originais implementados com `ITicketRepository`: `GetMyTicketsHandler`, `GetMyTicketHandler`, `CreateMyTicketHandler`, `AddMyTicketCommentHandler`, `GetMyTicketCommentsHandler`, `UpdateMyTicketWorkflowStateHandler`, `CloseAndRateMyTicketHandler`.
+  - `AddMyTicketCommentHandler` passou a rejeitar comentário em chamado encerrado (estado final ou `ClosedAt`), orientando a reabrir.
+  - `ReopenMyTicketHandler` (`POST me/tickets/{id}/reopen`) e `RateMyTicketHandler` (`POST me/tickets/{id}/rating`): validam a posse (`ticket.AgentId`) e delegam para `ReopenTicketCommand`/`RateTicketCommand` do portal (SLA/FRT, activity log, notificação e CSAT).
 - **Arquivos modificados:**
-  - ✅ `AgentTicketCommands.cs` — adicionado `AgentId` a todos os records
-  - ✅ `AgentAuthController.cs` — alterado para passar `AgentId`
-  - ✅ `AgentTicketHandlers.cs` — 7 handlers implementados
+  - ✅ `AgentTicketCommands.cs` — adicionado `AgentId` a todos os records + `ReopenMyTicketCommand`/`RateMyTicketCommand`
+  - ✅ `AgentAuthController.cs` — alterado para passar `AgentId` + rotas `reopen`/`rating`
+  - ✅ `AgentTicketHandlers.cs` — 9 handlers implementados
 
 ### 3.2 — Automação (4 handlers)
 - **Status:** ✅ Concluído (2026-07-08)

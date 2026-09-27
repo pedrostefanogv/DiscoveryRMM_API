@@ -24,7 +24,8 @@ public sealed class GetSitesByClientQueryHandler(
 public sealed class GetAllSitesQueryHandler(
     ISiteRepository repo,
     IClientRepository clientRepo,
-    IScopeContext scopeContext
+    IScopeContext scopeContext,
+    ISiteAgentCountService agentCountService
 ) : IRequestHandler<GetAllSitesQuery, Result<IReadOnlyList<SiteWithClientDto>>>
 {
     public async Task<Result<IReadOnlyList<SiteWithClientDto>>> Handle(GetAllSitesQuery q, CancellationToken ct)
@@ -58,10 +59,15 @@ public sealed class GetAllSitesQueryHandler(
         var clientMap = (await clientRepo.GetAllAsync(includeInactive: true))
             .ToDictionary(client => client.Id);
 
+        // Contagem de agentes por site em uma única query (evita N+1 na tela /sites).
+        var agentCounts = await agentCountService.GetCountsBySiteIdsAsync(
+            distinct.Select(site => site.Id).ToList(), ct);
+
         var result = distinct
             .Select(site =>
             {
                 clientMap.TryGetValue(site.ClientId, out var client);
+                agentCounts.TryGetValue(site.Id, out var count);
                 return new SiteWithClientDto(
                     site.Id,
                     site.ClientId,
@@ -71,7 +77,9 @@ public sealed class GetAllSitesQueryHandler(
                     site.CreatedAt,
                     site.UpdatedAt,
                     client?.Name,
-                    client?.IsActive ?? true);
+                    client?.IsActive ?? true,
+                    count.Total,
+                    count.Online);
             })
             .ToList();
 

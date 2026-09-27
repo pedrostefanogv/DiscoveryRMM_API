@@ -23,4 +23,9 @@ public sealed record TicketCsatSummaryDto(
     int Total, int Rated, double Average,
     IReadOnlyDictionary<int, int> Distribution,
     IReadOnlyList<TicketCsatGroupDto> ByDepartment,
-    IReadOnlyList<TicketCsatGroupDto> ByTechnician);
+    IReadOnlyList<TicketCsatGroupDto> ByTechnician,
+    // CSAT por máquina (hostname do agent). Avaliações feitas pelo usuário na
+    // aba Suporte do agent gravam RatedBy = hostname, então o agrupamento por
+    // técnico não as contempla; este recorte responde "como cada máquina
+    // avalia o atendimento".
+    IReadOnlyList<TicketCsatGroupDto> ByHostname);

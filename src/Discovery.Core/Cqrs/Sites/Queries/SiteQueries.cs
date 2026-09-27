@@ -24,7 +24,9 @@ public sealed record SiteWithClientDto(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     string? ClientName,
-    bool ClientActive
+    bool ClientActive,
+    int AgentCount = 0,
+    int AgentOnlineCount = 0
 );
 public sealed record GetSiteByIdQuery(Guid ClientId, Guid SiteId) : IQuery<Result<Site>>;
 public sealed record GetSiteCustomFieldsQuery(Guid ClientId, Guid SiteId, bool IncludeSecrets = true) : IQuery<Result<IReadOnlyList<object>>>;

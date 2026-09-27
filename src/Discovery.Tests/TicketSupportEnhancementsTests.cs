@@ -162,6 +162,8 @@ public class TicketSupportEnhancementsTests
         ticket.ClosedAt = DateTime.UtcNow;
         ticket.Rating = 5;
         ticket.RatingFeedback = "bom";
+        ticket.RatedAt = DateTime.UtcNow;
+        ticket.RatedBy = "PC-01";
         ticket.SlaBreached = true;
         db.AddRange(client, dept, profile, open, closed, ticket);
         await db.SaveChangesAsync();
@@ -181,7 +183,12 @@ public class TicketSupportEnhancementsTests
         var reloaded = await db.Tickets.AsNoTracking().FirstAsync(t => t.Id == ticket.Id);
         Assert.That(reloaded.WorkflowStateId, Is.EqualTo(open.Id));
         Assert.That(reloaded.ClosedAt, Is.Null);
+        // Reabrir invalida o CSAT anterior por completo: o chamado volta a ser
+        // avaliavel depois de encerrado de novo.
         Assert.That(reloaded.Rating, Is.Null);
+        Assert.That(reloaded.RatingFeedback, Is.Null);
+        Assert.That(reloaded.RatedAt, Is.Null);
+        Assert.That(reloaded.RatedBy, Is.Null);
         Assert.That(reloaded.SlaBreached, Is.False);
         Assert.That(reloaded.SlaExpiresAt, Is.Not.Null);
 
