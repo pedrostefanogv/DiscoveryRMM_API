@@ -603,6 +603,8 @@ public class TicketsController(
 
         var ticket = await ticketRepository.GetByIdAsync(id);
         var onHold = ticket?.SlaHoldStartedAt.HasValue == true;
+        // Chamado encerrado: o SLA é congelado no ClosedAt (não conta mais tempo).
+        var slaFrozen = ticket?.ClosedAt.HasValue == true;
         var warningLevel = slaPercent >= 90 ? "critical" : slaPercent >= 75 ? "high" : slaPercent >= 50 ? "medium" : "low";
 
         // Contrato plano consumido pelo console (tipo SlaDetails): antes o endpoint
@@ -616,9 +618,11 @@ public class TicketsController(
             hoursRemaining = (double)slaHours,
             percentUsed = slaPercent,
             breached = slaBreached,
-            status = slaBreached ? "SLA violado" : onHold ? "SLA em pausa" : "SLA ativo",
+            status = slaBreached ? "SLA violado" : slaFrozen ? "SLA encerrado" : onHold ? "SLA em pausa" : "SLA ativo",
             message = ticket?.SlaExpiresAt is null ? "SLA não configurado para este chamado." : null,
             onHold,
+            slaFrozen,
+            closedAt = ticket?.ClosedAt,
             slaHoldStartedAt = ticket?.SlaHoldStartedAt,
             slaPausedSeconds = ticket?.SlaPausedSeconds ?? 0,
             warningLevel,

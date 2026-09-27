@@ -178,6 +178,89 @@ public class SlaServiceTests
         Assert.That(effectiveExpiry!.Value, Is.GreaterThanOrEqualTo(originalExpiry.AddMinutes(29)));
     }
 
+    // ── SLA congelado no fechamento ───────────────────────────────────────
+
+    [Test]
+    public async Task GetSlaStatusAsync_ClosedBeforeExpiry_FreezesClockAtClose()
+    {
+        await using var fixture = await CreateFixtureAsync(slaHours: 8);
+
+        var ticket = fixture.Ticket;
+        var createdAt = DateTime.UtcNow.AddHours(-10);
+        ticket.CreatedAt = createdAt;
+        ticket.SlaExpiresAt = createdAt.AddHours(8); // venceria 2h atrás pelo relógio real
+        ticket.ClosedAt = createdAt.AddHours(2);     // encerrado com 25% do SLA usado
+        fixture.Db.Tickets.Update(ticket);
+        await fixture.Db.SaveChangesAsync();
+
+        var (_, percentUsed, breached) = await fixture.SlaService.GetSlaStatusAsync(ticket.Id);
+
+        Assert.That(breached, Is.False, "o SLA não deve estourar depois do encerramento");
+        Assert.That(percentUsed, Is.InRange(20.0, 30.0), "percentual deve congelar no fechamento");
+    }
+
+    [Test]
+    public async Task GetSlaStatusAsync_ClosedWhileOnHold_DoesNotKeepAddingPause()
+    {
+        await using var fixture = await CreateFixtureAsync(slaHours: 8);
+
+        var ticket = fixture.Ticket;
+        var closedAt = DateTime.UtcNow.AddHours(-1);
+        ticket.SlaExpiresAt = closedAt.AddHours(4);
+        ticket.ClosedAt = closedAt;
+        ticket.SlaHoldStartedAt = closedAt.AddMinutes(-30); // pausado 30 min antes de fechar
+        ticket.SlaPausedSeconds = 0;
+        fixture.Db.Tickets.Update(ticket);
+        await fixture.Db.SaveChangesAsync();
+
+        var effectiveExpiry = fixture.SlaService.GetEffectiveSlaExpiry(ticket);
+
+        Assert.That(effectiveExpiry, Is.Not.Null);
+        Assert.That(
+            effectiveExpiry!.Value,
+            Is.EqualTo(ticket.SlaExpiresAt!.Value.AddMinutes(30)).Within(TimeSpan.FromSeconds(5)),
+            "a pausa deve parar no fechamento, não crescer até agora");
+    }
+
+    [Test]
+    public async Task GetFrtStatusAsync_ClosedWithoutResponse_FreezesFrtAtClose()
+    {
+        await using var fixture = await CreateFixtureAsync(slaHours: 8, frtHours: 4);
+
+        var ticket = fixture.Ticket;
+        var createdAt = DateTime.UtcNow.AddHours(-10);
+        ticket.CreatedAt = createdAt;
+        ticket.SlaFirstResponseExpiresAt = createdAt.AddHours(4); // venceria 6h atrás
+        ticket.ClosedAt = createdAt.AddHours(1);                  // encerrado sem resposta
+        fixture.Db.Tickets.Update(ticket);
+        await fixture.Db.SaveChangesAsync();
+
+        var (_, percentUsed, breached, achieved) = await fixture.SlaService.GetFrtStatusAsync(ticket.Id);
+
+        Assert.That(breached, Is.False, "FRT não deve estourar depois do encerramento");
+        Assert.That(achieved, Is.False);
+        Assert.That(percentUsed, Is.InRange(20.0, 30.0));
+    }
+
+    [Test]
+    public async Task CheckAndLogSlaBreachAsync_ClosedBeforeExpiry_DoesNotMarkBreach()
+    {
+        await using var fixture = await CreateFixtureAsync(slaHours: 8);
+
+        var ticket = fixture.Ticket;
+        var createdAt = DateTime.UtcNow.AddHours(-10);
+        ticket.CreatedAt = createdAt;
+        ticket.SlaExpiresAt = createdAt.AddHours(8);
+        ticket.ClosedAt = createdAt.AddHours(2);
+        fixture.Db.Tickets.Update(ticket);
+        await fixture.Db.SaveChangesAsync();
+
+        var breached = await fixture.SlaService.CheckAndLogSlaBreachAsync(ticket);
+
+        Assert.That(breached, Is.False);
+        Assert.That(ticket.SlaBreached, Is.False);
+    }
+
     // ── Robustez de configuração (fuso/dias úteis inválidos) ─────────────
 
     [Test]

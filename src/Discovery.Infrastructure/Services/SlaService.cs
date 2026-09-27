@@ -439,6 +439,21 @@ public class SlaService : ISlaService
     }
 
     /// <summary>
+    /// Instante de referência do relógio de SLA. Em chamado encerrado, o SLA fica
+    /// congelado no momento do fechamento: o tempo não continua correndo depois
+    /// disso (nem para o percentual exibido, nem para fins estatísticos). A
+    /// reabertura zera o ClosedAt e o relógio volta a andar.
+    /// </summary>
+    internal static DateTime GetSlaClockNow(Ticket ticket)
+    {
+        if (ticket.ClosedAt is not { } closedAt) return DateTime.UtcNow;
+
+        return closedAt.Kind == DateTimeKind.Utc
+            ? closedAt
+            : DateTime.SpecifyKind(closedAt, DateTimeKind.Utc);
+    }
+
+    /// <summary>
     /// Retorna a expiração efetiva do SLA, adicionando o tempo pausado acumulado.
     /// </summary>
     public DateTime? GetEffectiveSlaExpiry(Ticket ticket)
@@ -447,10 +462,12 @@ public class SlaService : ISlaService
 
         var totalPausedSeconds = ticket.SlaPausedSeconds;
 
-        // Se ainda está em pausa agora, somar o tempo corrente
+        // Se ainda está em pausa, somar o tempo corrente. Se o chamado foi
+        // encerrado, a pausa é contada somente até o fechamento (senão o tempo
+        // pausado continuaria crescendo indefinidamente em chamados fechados).
         if (ticket.SlaHoldStartedAt.HasValue)
         {
-            var heldFor = (DateTime.UtcNow - ticket.SlaHoldStartedAt.Value).TotalSeconds;
+            var heldFor = (GetSlaClockNow(ticket) - ticket.SlaHoldStartedAt.Value).TotalSeconds;
             if (heldFor > 0) totalPausedSeconds += (int)heldFor;
         }
 
@@ -478,7 +495,8 @@ public class SlaService : ISlaService
             return (0, 0, false);
 
         var effectiveExpiry = GetEffectiveSlaExpiry(ticket)!.Value;
-        var now = DateTime.UtcNow;
+        // Chamado encerrado: usa o fechamento como "agora" para congelar o SLA.
+        var now = GetSlaClockNow(ticket);
 
         double totalSlaTime, elapsed, remainingHours;
         if (calendar is not null)
@@ -519,7 +537,8 @@ public class SlaService : ISlaService
         }
 
         var expiry = ticket.SlaFirstResponseExpiresAt.Value;
-        var now = DateTime.UtcNow;
+        // Chamado encerrado sem primeira resposta: congela o FRT no fechamento.
+        var now = GetSlaClockNow(ticket);
         var calendar = await ResolveCalendarAsync(ticket);
 
         // Base do FRT: início explícito (reiniciado na reabertura) ou a criação.
@@ -575,7 +594,8 @@ public class SlaService : ISlaService
             return false; // Sem SLA
 
         var effectiveExpiry = GetEffectiveSlaExpiry(ticket)!.Value;
-        var now = DateTime.UtcNow;
+        // Não marca novas violações depois do fechamento: o relógio para no ClosedAt.
+        var now = GetSlaClockNow(ticket);
 
         if (now > effectiveExpiry)
         {
