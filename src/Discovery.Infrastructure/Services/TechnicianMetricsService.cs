@@ -144,8 +144,6 @@ public class TechnicianMetricsService(
         if (scopes.Count == 0)
             return new MetricsRefreshResult(0, 0, 0, new Dictionary<Guid, int>(), 0);
 
-        var snapshotTimes = await LoadSnapshotTimesAsync(
-            scopes.Values.SelectMany(ids => ids).Distinct().ToList(), ct);
         var states = await db.ProcessingScopeStates
             .Where(s => s.ScopeType == ProcessingScopeTypes.TechnicianMetrics)
             .ToListAsync(ct);
@@ -175,6 +173,11 @@ public class TechnicianMetricsService(
             {
                 continue;
             }
+
+            // Carrega os snapshots do escopo só depois do vencimento: menos dados por
+            // tick e um usuário compartilhado entre dois clientes não é recalculado
+            // duas vezes no mesmo ciclo (o segundo escopo já vê o snapshot fresco).
+            var snapshotTimes = await LoadSnapshotTimesAsync(userIds, ct);
 
             var cutoff = now.AddMinutes(-metricsSettings.StaleThresholdMinutes);
             var due = userIds
@@ -237,10 +240,12 @@ public class TechnicianMetricsService(
     public async Task<MetricsBackfillProgress> RefreshForcedAsync(
         Guid? clientId, DateTime sessionStartUtc, int maxUsers, CancellationToken ct = default)
     {
-        var scopes = await LoadScopeTargetsAsync(ct);
+        // clientId null = todos os escopos (backfill global); caso contrário filtra
+        // os alvos no banco (departamentos/chamados do escopo) — evita varrer todos
+        // os departamentos e todos os responsáveis a cada lote.
+        var scopes = await LoadScopeTargetsAsync(ct, clientId);
 
-        // clientId null = todos os escopos (backfill global); Guid.Empty = escopo
-        // global de departamentos sem cliente.
+        // Guid.Empty = escopo global de departamentos sem cliente.
         var targetUsers = clientId is null
             ? scopes.Values.SelectMany(ids => ids).Distinct().ToList()
             : scopes.TryGetValue(clientId.Value, out var scopeUsers)
@@ -284,13 +289,22 @@ public class TechnicianMetricsService(
         var scopes = await LoadScopeTargetsAsync(ct);
         var valid = scopes.Values.SelectMany(ids => ids).Distinct().ToHashSet();
 
-        var snapshots = await db.TechnicianMetricsSnapshots.ToListAsync(ct);
-        var orphans = snapshots.Where(snapshot => !valid.Contains(snapshot.UserId)).ToList();
+        // Primeiro só a coluna (barato) para descobrir os órfãos; depois carrega e
+        // remove APENAS as linhas órfãs (antes: tabela inteira em memória).
+        var userIds = await db.TechnicianMetricsSnapshots.AsNoTracking()
+            .Select(snapshot => snapshot.UserId)
+            .ToListAsync(ct);
+
+        var orphans = userIds.Where(id => !valid.Contains(id)).Distinct().ToList();
         if (orphans.Count == 0) return 0;
 
-        db.TechnicianMetricsSnapshots.RemoveRange(orphans);
+        var rows = await db.TechnicianMetricsSnapshots
+            .Where(snapshot => orphans.Contains(snapshot.UserId))
+            .ToListAsync(ct);
+
+        db.TechnicianMetricsSnapshots.RemoveRange(rows);
         await db.SaveChangesAsync(ct);
-        return orphans.Count;
+        return rows.Count;
     }
 
     // ── Cálculo e persistência ───────────────────────────────────────────
@@ -365,8 +379,60 @@ public class TechnicianMetricsService(
     /// diferentes; ele é processado no escopo do cliente com necessidade (dedupe
     /// por escopo). Departamento global entra no escopo Guid.Empty.
     /// </summary>
-    private async Task<Dictionary<Guid, List<Guid>>> LoadScopeTargetsAsync(CancellationToken ct)
+    /// <param name="onlyScope">
+    /// Quando informado, filtra no banco os departamentos/chamados do escopo
+    /// (Guid.Empty = departamentos sem cliente) em vez de varrer todos.
+    /// </param>
+    /// <summary>Alvos de um único escopo (departamentos do cliente + responsáveis por chamados dele).</summary>
+    private async Task<Dictionary<Guid, List<Guid>>> LoadSingleScopeTargetsAsync(
+        Guid scopeId, CancellationToken ct)
     {
+        var users = new HashSet<Guid>();
+
+        if (scopeId == Guid.Empty)
+        {
+            // Escopo global: departamentos sem cliente. Chamados sempre têm cliente.
+            var globalMembers = await db.DepartmentMembers.AsNoTracking()
+                .Where(m => m.IsActive)
+                .Join(db.Departments.AsNoTracking().Where(d => d.ClientId == null),
+                    m => m.DepartmentId, d => d.Id, (m, _) => m.UserId)
+                .ToListAsync(ct);
+
+            foreach (var userId in globalMembers)
+                users.Add(userId);
+        }
+        else
+        {
+            var members = await db.DepartmentMembers.AsNoTracking()
+                .Where(m => m.IsActive)
+                .Join(db.Departments.AsNoTracking().Where(d => d.ClientId == scopeId),
+                    m => m.DepartmentId, d => d.Id, (m, _) => m.UserId)
+                .ToListAsync(ct);
+
+            foreach (var userId in members)
+                users.Add(userId);
+
+            var assignees = await db.Tickets.AsNoTracking()
+                .Where(t => t.DeletedAt == null && t.AssignedToUserId != null && t.ClientId == scopeId)
+                .Select(t => t.AssignedToUserId!.Value)
+                .Distinct()
+                .ToListAsync(ct);
+
+            foreach (var userId in assignees)
+                users.Add(userId);
+        }
+
+        return users.Count == 0
+            ? []
+            : new Dictionary<Guid, List<Guid>> { [scopeId] = users.ToList() };
+    }
+
+    private async Task<Dictionary<Guid, List<Guid>>> LoadScopeTargetsAsync(
+        CancellationToken ct, Guid? onlyScope = null)
+    {
+        if (onlyScope is { } scoped)
+            return await LoadSingleScopeTargetsAsync(scoped, ct);
+
         var scopes = new Dictionary<Guid, HashSet<Guid>>();
 
         void Add(Guid? clientId, Guid userId)

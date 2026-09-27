@@ -147,6 +147,11 @@ a idade do snapshot mais antigo usado na decisão.
   e o tick aplicado.
 - Ações: "Rodar métricas agora" / "Rodar triagem agora" (`jobsApi.trigger`), "Backfill de snapshots" e
   "Cancelar backfill" quando há um em andamento.
+- O painel usa **polling adaptativo**: 10 s enquanto há backfill pendente/em andamento e 60 s com tudo
+  parado; o backfill exibido é sempre o **do próprio escopo** (o card global olha a linha global, o do
+  cliente olha a linha dele).
+- O formulário é semeado por **conteúdo** da configuração (não por identidade de objeto), para que um
+  re-render do pai não descarte edições em andamento.
 
 ## 9. Backfill de snapshots (fase 4)
 

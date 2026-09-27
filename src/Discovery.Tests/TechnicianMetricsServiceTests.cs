@@ -294,6 +294,71 @@ public class TechnicianMetricsServiceTests
         Assert.That(await db.TechnicianMetricsSnapshots.AsNoTracking().CountAsync(), Is.EqualTo(3));
     }
 
+    [Test]
+    public async Task RefreshForcedAsync_ForClientScope_OnlyTouchesThatClientsUsers()
+    {
+        await using var db = CreateDb();
+        var clientA = Guid.NewGuid();
+        var clientB = Guid.NewGuid();
+        var (userA, _) = await SeedMemberAsync(db, clientA);
+        var (userB, _) = await SeedMemberAsync(db, clientB);
+
+        db.Tickets.AddRange(
+            NewTicket(userA, DateTime.UtcNow.AddDays(-1), null, clientId: clientA),
+            NewTicket(userB, DateTime.UtcNow.AddDays(-1), null, clientId: clientB));
+        await db.SaveChangesAsync();
+
+        var service = BuildService(db);
+        var progress = await service.RefreshForcedAsync(
+            clientA, DateTime.UtcNow, maxUsers: 10, CancellationToken.None);
+
+        Assert.That(progress.Total, Is.EqualTo(1));
+        Assert.That(progress.HasMore, Is.False);
+
+        var snapshots = await db.TechnicianMetricsSnapshots.AsNoTracking().ToListAsync();
+        Assert.That(snapshots.Any(s => s.UserId == userA), Is.True);
+        Assert.That(snapshots.Any(s => s.UserId == userB), Is.False, "escopo do backfill é respeitado");
+    }
+
+    [Test]
+    public async Task PurgeOrphanSnapshotsAsync_RemovesOnlyUsersWithoutScope()
+    {
+        await using var db = CreateDb();
+        var clientId = Guid.NewGuid();
+        var (validUser, _) = await SeedMemberAsync(db, clientId);
+        var orphanUser = Guid.NewGuid();
+
+        db.Tickets.Add(NewTicket(validUser, DateTime.UtcNow.AddDays(-1), null, clientId: clientId));
+        db.TechnicianMetricsSnapshots.AddRange(
+            new TechnicianMetricsSnapshot
+            {
+                Id = Guid.NewGuid(),
+                UserId = validUser,
+                WindowDays = 90,
+                ComputedAt = DateTime.UtcNow,
+                TopCategoriesJson = "[]",
+                TopTagsJson = "[]"
+            },
+            new TechnicianMetricsSnapshot
+            {
+                Id = Guid.NewGuid(),
+                UserId = orphanUser,
+                WindowDays = 90,
+                ComputedAt = DateTime.UtcNow,
+                TopCategoriesJson = "[]",
+                TopTagsJson = "[]"
+            });
+        await db.SaveChangesAsync();
+
+        var removed = await BuildService(db).PurgeOrphanSnapshotsAsync(CancellationToken.None);
+
+        Assert.That(removed, Is.EqualTo(1));
+
+        var remaining = await db.TechnicianMetricsSnapshots.AsNoTracking().ToListAsync();
+        Assert.That(remaining, Has.Count.EqualTo(1));
+        Assert.That(remaining[0].UserId, Is.EqualTo(validUser));
+    }
+
     // ── Fakes ────────────────────────────────────────────────────────────
 
     /// <summary>Porta da agregação (mesma semântica do SQL) para o provider InMemory.</summary>

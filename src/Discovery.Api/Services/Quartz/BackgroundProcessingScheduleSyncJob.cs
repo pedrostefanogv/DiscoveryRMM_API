@@ -35,15 +35,9 @@ public sealed class BackgroundProcessingScheduleSyncJob : IJob
 
         try
         {
+            // O log de mudanças fica no próprio serviço (só quando reprograma).
             var snapshot = await scheduleService.ApplyAsync(force: false, ct);
             context.Result = snapshot;
-
-            foreach (var process in snapshot.Processes.Where(p => p.Enabled && p.AppliedTickSeconds != p.TickSeconds))
-            {
-                logger.LogInformation(
-                    "Agendamento de {Process}: tick aplicado {Applied}s (desejado {Tick}s).",
-                    process.Process, process.AppliedTickSeconds, process.TickSeconds);
-            }
         }
         catch (Exception ex)
         {
