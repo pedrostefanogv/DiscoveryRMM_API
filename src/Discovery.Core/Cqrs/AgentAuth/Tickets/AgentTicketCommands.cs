@@ -9,6 +9,9 @@ namespace Discovery.Core.Cqrs.AgentAuth.Tickets;
 // a entidade Ticket crua.
 public sealed record GetMyTicketsQuery(Guid AgentId, Guid? WorkflowStateId) : IQuery<Result<IReadOnlyList<AgentTicketDto>>>;
 public sealed record GetMyTicketQuery(Guid AgentId, Guid TicketId) : IQuery<Result<AgentTicketDto>>;
+
+/// <summary>Campos personalizados do departamento do chamado (somente leitura).</summary>
+public sealed record GetMyTicketFieldsQuery(Guid AgentId, Guid TicketId) : IQuery<Result<IReadOnlyList<AgentTicketFieldDto>>>;
 public sealed record GetMyTicketTemplatesQuery(Guid AgentId) : IQuery<Result<object>>;
 public sealed record CreateMyTicketCommand(
     Guid AgentId, string Title, string? Description, Guid? DepartmentId, Guid? WorkflowProfileId,

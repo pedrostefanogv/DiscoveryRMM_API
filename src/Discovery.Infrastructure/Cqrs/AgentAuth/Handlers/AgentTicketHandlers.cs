@@ -41,6 +41,41 @@ public sealed class GetMyTicketHandler(
     }
 }
 
+/// <summary>
+/// Campos personalizados do departamento vinculados ao chamado, com os valores
+/// já gravados. Campos internos não são expostos ao agent.
+/// </summary>
+public sealed class GetMyTicketFieldsHandler(
+    ITicketRepository ticketRepo,
+    IDepartmentCustomFieldService departmentCustomFieldService
+) : IRequestHandler<GetMyTicketFieldsQuery, Result<IReadOnlyList<AgentTicketFieldDto>>>
+{
+    public async Task<Result<IReadOnlyList<AgentTicketFieldDto>>> Handle(GetMyTicketFieldsQuery q, CancellationToken ct)
+    {
+        var ticket = await ticketRepo.GetByIdAsync(q.TicketId);
+        if (ticket is null || ticket.AgentId != q.AgentId)
+            return Result<IReadOnlyList<AgentTicketFieldDto>>.Failure(Error.NotFound("Ticket not found."));
+
+        if (ticket.DepartmentId is null)
+            return Result<IReadOnlyList<AgentTicketFieldDto>>.Success([]);
+
+        var schema = await departmentCustomFieldService
+            .GetFullSchemaForDepartmentAsync(ticket.DepartmentId.Value, ticket.Id, ct);
+
+        var dtos = schema
+            .Where(field => !field.IsInternal)
+            .Select(field => new AgentTicketFieldDto(
+                field.DefinitionId,
+                field.Label,
+                field.DataType.ToString(),
+                field.IsRequired,
+                field.CurrentValueJson))
+            .ToList();
+
+        return Result<IReadOnlyList<AgentTicketFieldDto>>.Success(dtos);
+    }
+}
+
 public sealed class CreateMyTicketHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
@@ -172,6 +207,9 @@ public sealed class GetMyTicketTemplatesHandler(
                 Priority = template.Priority?.ToString(),
                 template.Category,
                 template.DepartmentId,
+                // Defaults dos campos do departamento (definitionId -> valor):
+                // permitem pré-preencher o formulário antes do envio.
+                template.CustomFieldDefaultsJson,
                 // Mini questionário do modelo (o que o usuário deve responder).
                 Questions = questions.Select(q => new
                 {

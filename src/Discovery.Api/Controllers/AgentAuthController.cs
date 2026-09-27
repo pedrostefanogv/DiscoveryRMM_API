@@ -34,6 +34,7 @@ public class AgentAuthController : ControllerBase
     private readonly IAiChatService _aiChat;
     private readonly IDepartmentRepository _departmentRepo;
     private readonly IWorkflowProfileRepository _workflowProfileRepo;
+    private readonly IDepartmentCustomFieldService _departmentCustomFieldService;
     private readonly ILogger<AgentAuthController> _logger;
 
     public AgentAuthController(
@@ -44,6 +45,7 @@ public class AgentAuthController : ControllerBase
         IAiChatService aiChat,
         IDepartmentRepository departmentRepo,
         IWorkflowProfileRepository workflowProfileRepo,
+        IDepartmentCustomFieldService departmentCustomFieldService,
         ILogger<AgentAuthController> logger)
     {
         _mediator = mediator;
@@ -53,6 +55,7 @@ public class AgentAuthController : ControllerBase
         _aiChat = aiChat;
         _departmentRepo = departmentRepo;
         _workflowProfileRepo = workflowProfileRepo;
+        _departmentCustomFieldService = departmentCustomFieldService;
         _logger = logger;
     }
 
@@ -248,6 +251,19 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetMyTicketQuery(id, ticketId)), Ok);
     }
 
+    /// <summary>
+    /// Campos personalizados do departamento do chamado com os valores gravados,
+    /// para o detalhe do agent (somente leitura; campos internos ficam de fora).
+    /// </summary>
+    [HttpGet("me/tickets/{ticketId:guid}/fields")]
+    public async Task<IActionResult> GetMyTicketFields(Guid ticketId)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(new GetMyTicketFieldsQuery(id, ticketId)), Ok);
+    }
+
     [HttpGet("me/ticket-templates")]
     public async Task<IActionResult> GetMyTicketTemplates()
     {
@@ -348,6 +364,50 @@ public class AgentAuthController : ControllerBase
                 .Select(p => new { p.Id, p.Name, p.DepartmentId })
                 .ToList()
         });
+    }
+
+    /// <summary>
+    /// Campos personalizados públicos de um departamento, para o formulário de
+    /// abertura do agent. Os campos do departamento valem para TODO chamado do
+    /// departamento — com ou sem template — e são validados pelo servidor.
+    /// </summary>
+    [HttpGet("me/tickets/departments/{departmentId:guid}/fields")]
+    public async Task<IActionResult> GetMyDepartmentFields(Guid departmentId)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (agent, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        Guid? clientId = null;
+        if (agent!.SiteId != Guid.Empty)
+        {
+            var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+            clientId = site?.ClientId;
+        }
+
+        // Escopo: departamento do próprio cliente ou global (mesma regra da
+        // abertura). Não revela existência de departamentos de terceiros.
+        var department = await _departmentRepo.GetByIdAsync(departmentId);
+        if (department is null || (department.ClientId.HasValue && department.ClientId.Value != clientId))
+            return NotFound(new { error = "Departamento não encontrado para este agente." });
+
+        var fields = await _departmentCustomFieldService.GetPublicSchemaForDepartmentAsync(departmentId);
+        return Ok(fields.Select(f => new
+        {
+            f.DefinitionId,
+            f.Name,
+            f.Label,
+            f.Description,
+            DataType = f.DataType.ToString(),
+            f.IsRequired,
+            f.Options,
+            f.ValidationRegex,
+            f.InputMask,
+            f.MinLength,
+            f.MaxLength,
+            f.MinValue,
+            f.MaxValue,
+        }));
     }
 
     [HttpPost("me/tickets/{ticketId:guid}/close")]

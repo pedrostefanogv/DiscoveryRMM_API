@@ -28,6 +28,17 @@ public sealed record AgentTicketDto(
     string? RatedBy,
     string? SubmissionSnapshotMarkdown);
 
+/// <summary>
+/// Valor de um campo personalizado do departamento em um chamado, exposto ao
+/// agent no detalhe (somente leitura).
+/// </summary>
+public sealed record AgentTicketFieldDto(
+    Guid DefinitionId,
+    string Label,
+    string DataType,
+    bool IsRequired,
+    string? ValueJson);
+
 public static class AgentTicketMapper
 {
     /// <summary>Converte a entidade para o contrato público do agent.</summary>
