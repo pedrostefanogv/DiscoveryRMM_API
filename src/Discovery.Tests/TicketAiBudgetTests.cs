@@ -201,7 +201,6 @@ public class TicketAiBudgetTests
         public Task<Ticket> CreateAsync(Ticket value) => throw new NotSupportedException();
         public Task UpdateAsync(Ticket value) => throw new NotSupportedException();
         public Task DeleteAsync(Guid id) => throw new NotSupportedException();
-        public Task UpdateWorkflowStateAsync(Guid id, Guid workflowStateId, DateTime? closedAt = null) => throw new NotSupportedException();
         public Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketComment>> GetCommentsPageAsync(Guid ticketId, string? cursor, int limit) => throw new NotSupportedException();
         public Task<TicketComment> AddCommentAsync(TicketComment comment) => throw new NotSupportedException();

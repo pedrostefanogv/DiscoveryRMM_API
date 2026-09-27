@@ -265,12 +265,6 @@ public class TicketWorkflowServiceTests
         public Task UpdateAsync(Ticket ticket) => Task.CompletedTask;
         public Task DeleteAsync(Guid id) => Task.CompletedTask;
 
-        public Task UpdateWorkflowStateAsync(Guid id, Guid workflowStateId, DateTime? closedAt = null)
-        {
-            if (_ticket is not null) _ticket.WorkflowStateId = workflowStateId;
-            return Task.CompletedTask;
-        }
-
         public Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId) =>
             Task.FromResult<IEnumerable<TicketComment>>(Array.Empty<TicketComment>());
         public Task<IReadOnlyList<TicketComment>> GetCommentsPageAsync(Guid ticketId, string? cursor, int limit) =>
@@ -288,7 +282,9 @@ public class TicketWorkflowServiceTests
 
         public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds)
         {
-            UpdateWorkflowStateAsync(id, workflowStateId, closedAt);
+            // Espelha o repositório real: a transição persiste estado + fechamento
+            // (um único ExecuteUpdate); não há mais UpdateWorkflowStateAsync separado.
+            if (_ticket is not null) _ticket.WorkflowStateId = workflowStateId;
             // Espelha o repositório real: a transição persiste o fechamento
             // junto com o estado (um único ExecuteUpdate).
             if (_ticket is not null && closedAt.HasValue) _ticket.ClosedAt = closedAt;

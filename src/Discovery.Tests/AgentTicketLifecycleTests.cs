@@ -10,6 +10,7 @@ using Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 using Discovery.Infrastructure.Cqrs.Tickets.CommandHandlers;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Repositories;
+using System.Text.Json;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -208,6 +209,65 @@ public class AgentTicketLifecycleTests
         Assert.That(delegated.Rating, Is.EqualTo(4));
         Assert.That(delegated.Feedback, Is.EqualTo("bom atendimento"));
         Assert.That(delegated.RatedByName, Is.EqualTo("PC-01"));
+    }
+
+    // Contrato do agent: a listagem/detalhe devolvem AgentTicketDto, nunca a
+    // entidade Ticket crua (campos internos não podem vazar para a máquina).
+    [Test]
+    public async Task GetMyTicket_ReturnsAgentContractWithoutInternalFields()
+    {
+        var agentId = Guid.NewGuid();
+        var state = NewState("Aberto", isFinal: false);
+        var ticket = NewTicket(Guid.NewGuid(), state.Id, agentId);
+        ticket.AssignedToUserId = Guid.NewGuid();
+        ticket.RequesterUserId = Guid.NewGuid();
+        ticket.SlaExpiresAt = DateTime.UtcNow.AddHours(4);
+        ticket.SlaBreached = true;
+        await using var db = await SeedAsync(ticket, state);
+
+        var handler = new GetMyTicketHandler(new TicketRepository(db, new NoopAgentMessaging()));
+        var result = await handler.Handle(new GetMyTicketQuery(agentId, ticket.Id), default);
+
+        Assert.That(result.IsSuccess, Is.True);
+
+        var json = JsonSerializer.Serialize(result.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var keys = JsonDocument.Parse(json).RootElement.EnumerateObject()
+            .Select(p => p.Name).ToHashSet();
+
+        Assert.That(keys, Does.Contain("workflowStateId"));
+        Assert.That(keys, Does.Contain("ratingFeedback"));
+        Assert.That(keys, Does.Contain("submissionSnapshotMarkdown"));
+
+        foreach (var forbidden in new[]
+                 {
+                     "assignedToUserId", "requesterUserId", "deletedAt",
+                     "slaExpiresAt", "slaBreached", "firstRespondedAt",
+                     "firstResponseSlaStartedAt", "slaPausedSeconds", "slaHoldStartedAt",
+                     "daysOpen", "templateId", "templateName", "workflowProfileId", "departmentId"
+                 })
+        {
+            Assert.That(keys, Does.Not.Contain(forbidden),
+                $"campo interno '{forbidden}' não deve vazar no contrato do agent");
+        }
+    }
+
+    [Test]
+    public async Task GetMyTickets_ProjectsOwnedTicketsOnly()
+    {
+        var agentId = Guid.NewGuid();
+        var otherAgentId = Guid.NewGuid();
+        var state = NewState("Aberto", isFinal: false);
+        var mine = NewTicket(Guid.NewGuid(), state.Id, agentId);
+        var theirs = NewTicket(Guid.NewGuid(), state.Id, otherAgentId);
+        await using var db = await SeedAsync(mine, state);
+        db.Tickets.Add(theirs);
+        await db.SaveChangesAsync();
+
+        var handler = new GetMyTicketsHandler(new TicketRepository(db, new NoopAgentMessaging()));
+        var result = await handler.Handle(new GetMyTicketsQuery(agentId, null), default);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.Select(t => t.Id), Is.EquivalentTo(new[] { mine.Id }));
     }
 
     // Guarda de injeção: os handlers do agent dependem da interface fechada dos

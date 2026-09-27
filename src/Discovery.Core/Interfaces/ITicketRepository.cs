@@ -13,7 +13,6 @@ public interface ITicketRepository
     Task<Ticket> CreateAsync(Ticket ticket);
     Task UpdateAsync(Ticket ticket);
     Task DeleteAsync(Guid id);
-    Task UpdateWorkflowStateAsync(Guid id, Guid workflowStateId, DateTime? closedAt = null);
     Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId);
 
     /// <summary>Pagina comentários usando cursor (CreatedAt + Id).</summary>

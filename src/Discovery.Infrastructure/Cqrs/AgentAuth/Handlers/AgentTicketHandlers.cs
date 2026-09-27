@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Tickets;
 using Discovery.Core.Cqrs.Tickets.Commands;
 using Discovery.Core.Cqrs.Tickets.Dtos;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -14,28 +15,29 @@ namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 
 public sealed class GetMyTicketsHandler(
     ITicketRepository ticketRepo
-) : IRequestHandler<GetMyTicketsQuery, Result<object>>
+) : IRequestHandler<GetMyTicketsQuery, Result<IReadOnlyList<AgentTicketDto>>>
 {
-    public async Task<Result<object>> Handle(GetMyTicketsQuery q, CancellationToken ct)
+    public async Task<Result<IReadOnlyList<AgentTicketDto>>> Handle(GetMyTicketsQuery q, CancellationToken ct)
     {
         var tickets = await ticketRepo.GetByAgentIdAsync(q.AgentId, q.WorkflowStateId);
-        return Result<object>.Success(tickets);
+        var dtos = (tickets ?? []).Select(ticket => ticket.ToAgentTicketDto()).ToList();
+        return Result<IReadOnlyList<AgentTicketDto>>.Success(dtos);
     }
 }
 
 public sealed class GetMyTicketHandler(
     ITicketRepository ticketRepo
-) : IRequestHandler<GetMyTicketQuery, Result<object>>
+) : IRequestHandler<GetMyTicketQuery, Result<AgentTicketDto>>
 {
-    public async Task<Result<object>> Handle(GetMyTicketQuery q, CancellationToken ct)
+    public async Task<Result<AgentTicketDto>> Handle(GetMyTicketQuery q, CancellationToken ct)
     {
         var ticket = await ticketRepo.GetByIdAsync(q.TicketId);
         // Isolamento por agente: sem isso, qualquer agente autenticado leria
         // qualquer ticket por GUID (IDOR). Não revela existência de terceiros.
         if (ticket is null || ticket.AgentId != q.AgentId)
-            return Result<object>.Failure(Error.NotFound("Ticket not found."));
+            return Result<AgentTicketDto>.Failure(Error.NotFound("Ticket not found."));
 
-        return Result<object>.Success(ticket);
+        return Result<AgentTicketDto>.Success(ticket.ToAgentTicketDto());
     }
 }
 
@@ -265,21 +267,6 @@ public sealed class GetMyTicketCommentsHandler(
         var visible = (comments ?? Enumerable.Empty<Discovery.Core.Entities.TicketComment>())
             .Where(comment => !comment.IsInternal);
         return Result<object>.Success(visible);
-    }
-}
-
-public sealed class UpdateMyTicketWorkflowStateHandler(
-    ITicketRepository ticketRepo
-) : IRequestHandler<UpdateMyTicketWorkflowStateCommand, Result<object>>
-{
-    public async Task<Result<object>> Handle(UpdateMyTicketWorkflowStateCommand cmd, CancellationToken ct)
-    {
-        var ticket = await ticketRepo.GetByIdAsync(cmd.TicketId);
-        if (ticket is null || ticket.AgentId != cmd.AgentId)
-            return Result<object>.Failure(Error.NotFound("Ticket not found."));
-
-        await ticketRepo.UpdateWorkflowStateAsync(cmd.TicketId, cmd.WorkflowStateId);
-        return Result<object>.Success(new { ticketId = cmd.TicketId, workflowStateId = cmd.WorkflowStateId });
     }
 }
 

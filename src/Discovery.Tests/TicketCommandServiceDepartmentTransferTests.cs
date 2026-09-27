@@ -311,7 +311,6 @@ public class TicketCommandServiceDepartmentTransferTests
             Task.FromResult<IEnumerable<Ticket>>(Array.Empty<Ticket>());
         public Task<IReadOnlyList<Ticket>> GetAllPageAsync(TicketFilterQuery filter) =>
             Task.FromResult<IReadOnlyList<Ticket>>(Array.Empty<Ticket>());
-        public Task UpdateWorkflowStateAsync(Guid id, Guid workflowStateId, DateTime? closedAt = null) => Task.CompletedTask;
         public Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId) =>
             Task.FromResult<IEnumerable<TicketComment>>(Array.Empty<TicketComment>());
         public Task<IReadOnlyList<TicketComment>> GetCommentsPageAsync(Guid ticketId, string? cursor, int limit) =>

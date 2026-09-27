@@ -480,17 +480,6 @@ public class AutoTicketServiceTests
             return Task.CompletedTask;
         }
 
-        public Task UpdateWorkflowStateAsync(Guid id, Guid workflowStateId, DateTime? closedAt = null)
-        {
-            if (_tickets.TryGetValue(id, out var ticket))
-            {
-                ticket.WorkflowStateId = workflowStateId;
-                ticket.ClosedAt = closedAt;
-            }
-
-            return Task.CompletedTask;
-        }
-
         public Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId)
             => Task.FromResult<IEnumerable<TicketComment>>([]);
 

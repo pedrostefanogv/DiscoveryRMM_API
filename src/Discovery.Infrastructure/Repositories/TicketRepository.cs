@@ -259,25 +259,6 @@ public class TicketRepository : ITicketRepository
             await PublishDashboardEventAsync("TicketDeleted", deletedTicket);
     }
 
-    public async Task UpdateWorkflowStateAsync(Guid id, Guid workflowStateId, DateTime? closedAt = null)
-    {
-        var now = DateTime.UtcNow;
-
-        await _db.Tickets
-            .Where(ticket => ticket.Id == id)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(ticket => ticket.WorkflowStateId, _ => workflowStateId)
-                .SetProperty(ticket => ticket.ClosedAt, _ => closedAt)
-                .SetProperty(ticket => ticket.UpdatedAt, _ => now));
-
-        var updatedTicket = await _db.Tickets
-            .AsNoTracking()
-            .SingleOrDefaultAsync(ticket => ticket.Id == id);
-
-        if (updatedTicket is not null)
-            await PublishDashboardEventAsync("TicketWorkflowChanged", updatedTicket);
-    }
-
     public async Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId)
     {
         return await _db.TicketComments

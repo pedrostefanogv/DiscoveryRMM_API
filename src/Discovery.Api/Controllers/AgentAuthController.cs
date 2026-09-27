@@ -286,15 +286,6 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetMyTicketCommentsQuery(id, ticketId)), Ok);
     }
 
-    [HttpPatch("me/tickets/{ticketId:guid}/workflow-state")]
-    public async Task<IActionResult> UpdateMyTicketWorkflowState(Guid ticketId, [FromBody] UpdateMyTicketWorkflowStateCommand cmd)
-    {
-        if (!TryGetAgentId(out var id)) return Unauthorized();
-        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
-        if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { AgentId = id, TicketId = ticketId }), Ok);
-    }
-
     /// <summary>
     /// Lista os estados de workflow disponíveis para os tickets do agente.
     /// O seletor de estado final da UI de suporte do agente chama este endpoint.
