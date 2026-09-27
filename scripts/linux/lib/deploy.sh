@@ -151,6 +151,25 @@ resolve_remote_session_max_minutes() {
   printf '%s' "$(( ${REMOTE_SESSION_MAX_DURATION_HOURS:-1} * 60 ))"
 }
 
+# ── Stream de fan-out: lado da API ─────────────────────────────────────────
+# O instalador configura o stream via CLI `nats` (NATS_JS_FANOUT_STREAM_*),
+# mas a API tambem recria/atualiza o MESMO stream no startup a partir de
+# Nats:FanoutStream:* (NatsFanoutStreamOptions). Sem emitir esse lado, o valor
+# do discovery.env era ignorado no startup e o bootstrap reaplicava o padrao.
+# Por isso o env expõe os dois lados derivados da MESMA fonte.
+build_fanout_subject_lines() {
+  local subjects="${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*.agents.command,tenant.*.agents.command}"
+  local out="" subject i=0
+  IFS=',' read -r -a subject_parts <<< "$subjects"
+  for subject in "${subject_parts[@]}"; do
+    subject="${subject//[[:space:]]/}"
+    [[ -n "$subject" ]] || continue
+    out+="Nats__FanoutStream__Subjects__${i}=${subject}"$'\n'
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
 write_environment_file() {
   log "Escrevendo arquivo de ambiente da API"
 
@@ -213,6 +232,7 @@ write_environment_file() {
   done
 
   local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
+  local fanout_subject_lines; fanout_subject_lines="$(build_fanout_subject_lines)"
 
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
@@ -244,6 +264,12 @@ NATS_JS_FANOUT_STREAM_SUBJECTS=${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*
 NATS_JS_FANOUT_STREAM_MAX_AGE=${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}
 NATS_JS_FANOUT_STREAM_MAX_BYTES=${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}
 NATS_JS_FANOUT_STREAM_DUPE_WINDOW=${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}
+# Lado da API: a API atualiza o stream de fan-out no startup.
+Nats__FanoutStream__Enabled=$( [[ "${NATS_JS_FANOUT_STREAM_ENABLED:-1}" == "1" || "${NATS_JS_FANOUT_STREAM_ENABLED:-1}" == "true" ]] && echo true || echo false )
+Nats__FanoutStream__Name=${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}
+${fanout_subject_lines}Nats__FanoutStream__MaxAge=${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}
+Nats__FanoutStream__MaxBytes=${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}
+Nats__FanoutStream__DuplicateWindow=${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}
 AgentPackage__PublicApiScheme=https
 AgentPackage__PublicApiServer=${public_host}
 AgentPackage__Profiles__linux__DiscoveryProjectPath=${DISCOVERY_AGENT_SRC}
@@ -818,6 +844,7 @@ update_nats_environment_file() {
     !/^NATS_JS_FANOUT_STREAM_MAX_AGE=/ &&
     !/^NATS_JS_FANOUT_STREAM_MAX_BYTES=/ &&
     !/^NATS_JS_FANOUT_STREAM_DUPE_WINDOW=/ &&
+    !/^Nats__FanoutStream__/ &&
     !/^NATS_WS_PORT=/ &&
     !/^NATS_WS_HOST=/ &&
     !/^NATS_WS_TLS_ENABLED=/
@@ -826,6 +853,7 @@ update_nats_environment_file() {
   local nats_server_external_host
   nats_server_external_host="$(normalize_host_without_scheme "${NATS_SERVER_HOST_EXTERNAL:-${EXTERNAL_API_HOST:-${INTERNAL_API_HOST:-}}}")"
   local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
+  local fanout_subject_lines; fanout_subject_lines="$(build_fanout_subject_lines)"
 
   cat >> "$tmp_file" <<EOF
 # Credenciais ficam em Nats__AuthUser/Nats__AuthPassword — nunca na URL.
@@ -851,6 +879,12 @@ NATS_JS_FANOUT_STREAM_SUBJECTS=${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*
 NATS_JS_FANOUT_STREAM_MAX_AGE=${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}
 NATS_JS_FANOUT_STREAM_MAX_BYTES=${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}
 NATS_JS_FANOUT_STREAM_DUPE_WINDOW=${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}
+# Lado da API: a API atualiza o stream de fan-out no startup.
+Nats__FanoutStream__Enabled=$( [[ "${NATS_JS_FANOUT_STREAM_ENABLED:-1}" == "1" || "${NATS_JS_FANOUT_STREAM_ENABLED:-1}" == "true" ]] && echo true || echo false )
+Nats__FanoutStream__Name=${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}
+${fanout_subject_lines}Nats__FanoutStream__MaxAge=${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}
+Nats__FanoutStream__MaxBytes=${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}
+Nats__FanoutStream__DuplicateWindow=${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}
 NATS_WS_PORT=${NATS_WS_PORT:-8081}
 NATS_WS_HOST=${NATS_WS_HOST:-127.0.0.1}
 NATS_WS_TLS_ENABLED=${NATS_WS_TLS_ENABLED:-false}
