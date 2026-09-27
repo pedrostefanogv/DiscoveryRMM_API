@@ -11,7 +11,20 @@
 # --force-confold preserva arquivos de config locais e nunca trava em prompt
 # interativo (DEBIAN_FRONTEND=noninteractive).
 apply_system_updates() {
-  if [[ "${DISCOVERY_APPLY_SYSTEM_UPDATES:-0}" != "1" ]]; then
+  # Prioridade: ambiente (--config do instalador ou export) > discovery.env.
+  #
+  # O discovery.env NAO e carregado no ambiente do instalador, e esta funcao
+  # roda ANTES de load_update_defaults. Sem este fallback, definir
+  # DISCOVERY_APPLY_SYSTEM_UPDATES=1 no discovery.env nao tinha efeito nenhum:
+  # o update sempre reportava "pulado". Segue o mesmo precedente do
+  # DISCOVERY_CLEAN_BUILD em modes.sh (le do arquivo quando falta no ambiente).
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  local apply_updates="${DISCOVERY_APPLY_SYSTEM_UPDATES:-}"
+  if [[ -z "$apply_updates" ]] && sudo test -f "$env_file"; then
+    apply_updates="$(sudo awk -F= '/^DISCOVERY_APPLY_SYSTEM_UPDATES=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+  fi
+
+  if [[ "${apply_updates:-0}" != "1" ]]; then
     log "Update de pacotes do SO pulado (opt-in: defina DISCOVERY_APPLY_SYSTEM_UPDATES=1)."
     return 0
   fi

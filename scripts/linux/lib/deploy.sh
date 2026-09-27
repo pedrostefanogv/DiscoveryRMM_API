@@ -234,6 +234,15 @@ write_environment_file() {
   local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
   local fanout_subject_lines; fanout_subject_lines="$(build_fanout_subject_lines)"
 
+  # Preserva o opt-in de update do SO. Ele nao vem do ambiente do instalador
+  # (o discovery.env nao e carregado), entao precisa ser lido do arquivo ANTES
+  # do tee truncar — senao um install completo apagaria a configuracao.
+  local apply_system_updates_value="${DISCOVERY_APPLY_SYSTEM_UPDATES:-}"
+  if [[ -z "$apply_system_updates_value" ]] && sudo test -f /etc/discovery-api/discovery.env; then
+    apply_system_updates_value="$(sudo awk -F= '/^DISCOVERY_APPLY_SYSTEM_UPDATES=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+  fi
+  case "${apply_system_updates_value:-0}" in 0|1) ;; *) apply_system_updates_value="0" ;; esac
+
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
 ASPNETCORE_URLS=http://127.0.0.1:8080
@@ -295,6 +304,8 @@ DISCOVERY_AGENT_GIT_REPO=${DISCOVERY_AGENT_GIT_REPO:-}
 DISCOVERY_GIT_BRANCH=${DISCOVERY_GIT_BRANCH}
 DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}
 DISCOVERY_CLEAN_BUILD=${DISCOVERY_CLEAN_BUILD:-1}
+# Opt-in do update do SO (lido tambem por apply_system_updates em install.sh).
+DISCOVERY_APPLY_SYSTEM_UPDATES=${apply_system_updates_value}
 DISCOVERY_SITE_API_URL=${DISCOVERY_SITE_API_URL}
 DISCOVERY_SITE_REALTIME_PROVIDER=${DISCOVERY_SITE_REALTIME_PROVIDER}
 DISCOVERY_SITE_NATS_ENABLED=${DISCOVERY_SITE_NATS_ENABLED}
