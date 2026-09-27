@@ -17,6 +17,7 @@ public class AlertToTicketService : IAlertToTicketService
     private readonly IAgentAlertRepository _alertRepo;
     private readonly IActivityLogService _activityLogService;
     private readonly ISlaService _slaService;
+    private readonly ITicketAutoAssignmentService _autoAssignment;
     private readonly ILogger<AlertToTicketService> _logger;
 
     public AlertToTicketService(
@@ -25,6 +26,7 @@ public class AlertToTicketService : IAlertToTicketService
         IAgentAlertRepository alertRepo,
         IActivityLogService activityLogService,
         ISlaService slaService,
+        ITicketAutoAssignmentService autoAssignment,
         ILogger<AlertToTicketService> logger)
     {
         _ticketRepo = ticketRepo;
@@ -32,6 +34,7 @@ public class AlertToTicketService : IAlertToTicketService
         _alertRepo = alertRepo;
         _activityLogService = activityLogService;
         _slaService = slaService;
+        _autoAssignment = autoAssignment;
         _logger = logger;
     }
 
@@ -130,6 +133,19 @@ public class AlertToTicketService : IAlertToTicketService
             CreatedAt = now,
             UpdatedAt = now
         });
+
+        // Chamados de alerta/evento passam pela MESMA auto-atribuição dos demais
+        // (round-robin / menos abertos / fila da triagem por IA).
+        try
+        {
+            await _autoAssignment.ApplyAfterCreateAsync(ticket, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Auto-atribuição falhou para o chamado {TicketId} criado por alerta; seguindo sem responsável.",
+                ticket.Id);
+        }
 
         await _activityLogService.LogActivityAsync(
             ticket.Id,

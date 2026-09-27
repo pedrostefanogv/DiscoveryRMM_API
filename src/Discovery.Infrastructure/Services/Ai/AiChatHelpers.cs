@@ -12,7 +12,9 @@ internal static class AiChatHelpers
         => settings.MaxHistoryMessages is >= 1 and <= 50 ? settings.MaxHistoryMessages : AiChatConstants.DefaultMaxHistoryMessages;
 
     public static int ClampMaxTokens(AIIntegrationSettings settings)
-        => settings.MaxTokensPerRequest is >= 100 and <= 8000 ? settings.MaxTokensPerRequest : AiChatConstants.DefaultMaxTokens;
+        => settings.MaxTokensPerRequest is >= 100 and <= AiChatConstants.MaxOutputTokensCeiling
+            ? settings.MaxTokensPerRequest
+            : AiChatConstants.DefaultMaxTokens;
 
     public static double ClampTemperature(AIIntegrationSettings settings)
         => settings.Temperature is >= 0 and <= 2 ? settings.Temperature : AiChatConstants.DefaultTemperature;

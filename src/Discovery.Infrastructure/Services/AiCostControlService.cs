@@ -71,7 +71,33 @@ public class AiCostControlService : IAiCostControlService
         var rateKey = $"ai:ratelimit:{scopeKey}";
         var budgetKey = $"ai:budget:{scopeKey}";
 
-        // 1. Rate limit check
+        // 1. Budget diário ANTES do rate limit: consumir um slot de rate e depois
+        // bloquear por budget castigava o usuário duas vezes (o slot ficava gasto
+        // por uma requisição que nunca chegou ao provedor).
+        if (_redis?.IsConnected == true)
+        {
+            var used = await _redis.GetAsync(budgetKey);
+            var currentUsed = string.IsNullOrEmpty(used) ? 0 : int.Parse(used);
+
+            if (currentUsed >= settings.TokenBudgetDaily)
+            {
+                _logger.LogWarning("AI daily budget exceeded for scope {Scope}: {Used}/{Budget}",
+                    scopeKey, currentUsed, settings.TokenBudgetDaily);
+                return false;
+            }
+        }
+        else
+        {
+            var budget = _localBudgets.GetOrAdd(budgetKey, _ => new DailyBudget());
+            if (budget.Used >= settings.TokenBudgetDaily)
+            {
+                _logger.LogWarning("AI daily budget exceeded (local) for scope {Scope}: {Used}/{Budget}",
+                    scopeKey, budget.Used, settings.TokenBudgetDaily);
+                return false;
+            }
+        }
+
+        // 2. Rate limit (consome o slot somente quando a requisição vai prosseguir).
         if (_redis?.IsConnected == true)
         {
             var count = await _redis.GetAsync(rateKey);
@@ -99,30 +125,6 @@ public class AiCostControlService : IAiCostControlService
             {
                 _logger.LogWarning("AI rate limit exceeded (local) for scope {Scope}: {Max}/min",
                     scopeKey, settings.RateLimitPerMinute);
-                return false;
-            }
-        }
-
-        // 2. Budget diário check
-        if (_redis?.IsConnected == true)
-        {
-            var used = await _redis.GetAsync(budgetKey);
-            var currentUsed = string.IsNullOrEmpty(used) ? 0 : int.Parse(used);
-
-            if (currentUsed >= settings.TokenBudgetDaily)
-            {
-                _logger.LogWarning("AI daily budget exceeded for scope {Scope}: {Used}/{Budget}",
-                    scopeKey, currentUsed, settings.TokenBudgetDaily);
-                return false;
-            }
-        }
-        else
-        {
-            var budget = _localBudgets.GetOrAdd(budgetKey, _ => new DailyBudget());
-            if (budget.Used >= settings.TokenBudgetDaily)
-            {
-                _logger.LogWarning("AI daily budget exceeded (local) for scope {Scope}: {Used}/{Budget}",
-                    scopeKey, budget.Used, settings.TokenBudgetDaily);
                 return false;
             }
         }

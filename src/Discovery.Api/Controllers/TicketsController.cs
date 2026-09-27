@@ -104,7 +104,8 @@ public class TicketsController(
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
             return NotFound();
-        var result = await mediator.Send(command with { Id = id }, HttpContext.RequestAborted);
+        var result = await mediator.Send(
+            command with { Id = id, ChangedByUserId = CurrentUserId }, HttpContext.RequestAborted);
         return result.ToActionResult();
     }
 

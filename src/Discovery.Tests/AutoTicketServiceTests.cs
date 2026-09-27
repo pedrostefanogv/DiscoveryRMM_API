@@ -250,6 +250,7 @@ public class AutoTicketServiceTests
             alertRepository,
             activityLogService,
             new FakeSlaService(),
+            new NoopAutoAssignmentService(),
             NullLogger<AlertToTicketService>.Instance);
 
         var alert = new AgentAlertDefinition
@@ -293,6 +294,7 @@ public class AutoTicketServiceTests
             alertRepository,
             activityLogService,
             new FakeSlaService(),
+            new NoopAutoAssignmentService(),
             NullLogger<AlertToTicketService>.Instance);
 
         var result = await service.CreateTicketFromMonitoringEventAsync(new AutoTicketCreateTicketRequest
@@ -420,6 +422,16 @@ public class AutoTicketServiceTests
         public Task<bool> CheckAndLogSlaBreachAsync(Guid ticketId) => Task.FromResult(false);
 
         public Task<bool> CheckAndLogSlaBreachAsync(Ticket ticket) => Task.FromResult(false);
+    }
+
+    private sealed class NoopAutoAssignmentService : ITicketAutoAssignmentService
+    {
+        public Task<AutoAssignmentResolution> ResolveAsync(
+            Guid? departmentId, Guid? explicitAssignee, CancellationToken ct = default)
+            => Task.FromResult(new AutoAssignmentResolution(explicitAssignee, false, null));
+
+        public Task<bool> ApplyAfterCreateAsync(Ticket ticket, CancellationToken ct = default)
+            => Task.FromResult(false);
     }
 
     private sealed class FakeTicketRepository : ITicketRepository

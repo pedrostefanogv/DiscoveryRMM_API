@@ -7,6 +7,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
+using Discovery.Infrastructure.Services.Ai;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
@@ -32,6 +33,7 @@ public class AiChatService : IAiChatService
     private readonly ILogger<AiChatService> _logger;
     private readonly IMcpToolExecutor _mcpToolExecutor;
     private readonly IAiCostControlService _costControl;
+    private readonly IAiTokenBudgetResolver _tokenBudgetResolver;
     private readonly IConfigurationResolver _configurationResolver;
     private readonly IAiCredentialResolver _credentialResolver;
     private readonly AiChatSystemPromptBuilder _promptBuilder;
@@ -51,6 +53,7 @@ public class AiChatService : IAiChatService
         ILogger<AiChatService> logger,
         IMcpToolExecutor mcpToolExecutor,
         IAiCostControlService costControl,
+        IAiTokenBudgetResolver tokenBudgetResolver,
         IConfigurationResolver configurationResolver,
         IAiCredentialResolver credentialResolver,
         AiChatSystemPromptBuilder promptBuilder,
@@ -69,6 +72,7 @@ public class AiChatService : IAiChatService
         _logger = logger;
         _mcpToolExecutor = mcpToolExecutor;
         _costControl = costControl;
+        _tokenBudgetResolver = tokenBudgetResolver;
         _configurationResolver = configurationResolver;
         _credentialResolver = credentialResolver;
         _promptBuilder = promptBuilder;
@@ -130,7 +134,15 @@ public class AiChatService : IAiChatService
 
             var availableTools = await BuildAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, aiSettings, ct);
             var maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
-            var clampedMaxTokens = requestMaxTokens.HasValue ? Math.Clamp(requestMaxTokens.Value, 100, 8000) : AiChatHelpers.ClampMaxTokens(aiSettings);
+            // Orçamento model-aware também no chat síncrono: o pedido explícito do
+            // cliente é limitado pela capacidade real do modelo e pelo teto do
+            // produto (antes havia um clamp fixo de 8000 que rebaixava o pedido).
+            var requestedMaxTokens = requestMaxTokens.HasValue
+                ? Math.Clamp(requestMaxTokens.Value, 100, AiChatConstants.MaxOutputTokensCeiling)
+                : AiChatHelpers.ClampMaxTokens(aiSettings);
+
+            var clampedMaxTokens = (await _tokenBudgetResolver.ResolveForSiteAsync(
+                scopeSiteId, requestedMaxTokens, null, ct)).MaxOutputTokens;
 
             var llmOptions = new LlmOptions(clampedMaxTokens, AiChatHelpers.ClampTemperature(aiSettings),
                 aiSettings.ChatModel, aiSettings.BaseUrl, aiSettings.ApiKey,
@@ -284,13 +296,93 @@ public class AiChatService : IAiChatService
     // ProcessTicketPromptAsync
     // ══════════════════════════════════════════════════════════════════════════
 
-    public async Task<LlmResponse> ProcessTicketPromptAsync(string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature, Guid? departmentId = null, CancellationToken ct = default)
+    public Task<LlmResponse> ProcessTicketPromptAsync(string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature, Guid? departmentId = null, CancellationToken ct = default)
+        => ExecuteTicketPromptAsync(systemPrompt, userMessage, siteId, maxTokens, temperature, null, ct);
+
+    /// <summary>
+    /// Igual a <see cref="ProcessTicketPromptAsync"/>, mas permite exigir saída
+    /// estruturada (response_format). Usado pela triagem de atribuição por IA.
+    /// </summary>
+    public Task<LlmResponse> ProcessTicketPromptJsonAsync(
+        string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature,
+        string? responseFormat, Guid? departmentId = null, CancellationToken ct = default)
+        => ExecuteTicketPromptAsync(systemPrompt, userMessage, siteId, maxTokens, temperature, responseFormat, ct);
+
+    /// <summary>
+    /// Execução única dos prompts de ticket: resolve credenciais/escopo, aplica o
+    /// teto de tokens efetivo e respeita rate limit + budget diário de IA
+    /// (IAiCostControlService). O bloqueio vira <see cref="AiUsageLimitException"/>,
+    /// que os chamadores tratam como degradação para fallback — nunca erro 500.
+    /// </summary>
+    private async Task<LlmResponse> ExecuteTicketPromptAsync(
+        string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature,
+        string? responseFormat, CancellationToken ct)
     {
-        var aiSettings = await ResolveAiSettingsAsync(siteId, ct);
+        var (aiSettings, clientId) = await ResolveScopeAsync(siteId, ct);
         if (!aiSettings.Enabled || string.IsNullOrWhiteSpace(aiSettings.ApiKey)) throw new InvalidOperationException("IA não configurada.");
         if (!aiSettings.ChatAIEnabled) throw new InvalidOperationException("Chat IA desabilitado.");
 
-        return await _llmProvider.CompleteAsync(systemPrompt, [new LlmMessage("user", userMessage)], new LlmOptions(maxTokens, temperature, aiSettings.ChatModel, aiSettings.BaseUrl, aiSettings.ApiKey, Provider: aiSettings.Provider), ct);
+        // Orçamento de tokens AUTOMÁTICO para todos os fluxos de IA de ticket:
+        // menor entre o pedido, a configuração do tenant, a capacidade real do
+        // modelo (catálogo, cacheado) e o teto do produto. Antes o teto do modelo
+        // só era aplicado na triagem; os demais fluxos podiam passar do limite.
+        var budget = await _tokenBudgetResolver.ResolveAsync(
+            siteId, clientId, aiSettings, maxTokens, null, ct);
+        var effectiveMaxTokens = Math.Clamp(
+            budget.MaxOutputTokens,
+            AiTokenLimits.MinimumOutputTokens,
+            AiChatConstants.MaxOutputTokensCeiling);
+
+        var scopeClientId = clientId ?? Guid.Empty;
+        var acquired = false;
+        if (aiSettings.CostControlEnabled)
+        {
+            acquired = await _costControl.TryAcquireAsync(scopeClientId, siteId, aiSettings, ct);
+            if (!acquired)
+            {
+                throw new AiUsageLimitException(
+                    AiUsageLimitReason.RateOrBudget,
+                    "rate limit ou budget diário de IA atingido");
+            }
+        }
+
+        var options = new LlmOptions(
+            effectiveMaxTokens,
+            temperature,
+            aiSettings.ChatModel,
+            aiSettings.BaseUrl,
+            aiSettings.ApiKey,
+            Provider: aiSettings.Provider,
+            TimeoutMs: aiSettings.TimeoutMs,
+            TopP: aiSettings.TopP,
+            FrequencyPenalty: aiSettings.FrequencyPenalty,
+            PresencePenalty: aiSettings.PresencePenalty,
+            Seed: aiSettings.Seed,
+            ResponseFormat: responseFormat ?? aiSettings.ResponseFormat,
+            ReasoningEnabled: aiSettings.ReasoningEnabled,
+            ReasoningEffort: aiSettings.ReasoningEffort);
+
+        try
+        {
+            var response = await _llmProvider.CompleteAsync(
+                systemPrompt, [new LlmMessage("user", userMessage)], options, ct);
+
+            if (acquired && response.TokensUsed > 0)
+                await _costControl.RecordUsageAsync(scopeClientId, siteId, response.TokensUsed, ct);
+
+            return response;
+        }
+        catch (AiUsageLimitException)
+        {
+            throw;
+        }
+        catch
+        {
+            // Devolve o slot quando a chamada falhou antes de consumir o LLM.
+            if (acquired)
+                await _costControl.ReleaseAsync(scopeClientId, siteId, aiSettings, ct);
+            throw;
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -354,6 +446,14 @@ public class AiChatService : IAiChatService
     }
 
     private async Task<AIIntegrationSettings> ResolveAiSettingsAsync(Guid siteId, CancellationToken ct)
+        => (await ResolveScopeAsync(siteId, ct)).Settings;
+
+    /// <summary>
+    /// Resolve as configurações de IA e o cliente do escopo. O cliente é usado
+    /// pelo cost control (rate limit/budget são por cliente+site).
+    /// </summary>
+    private async Task<(AIIntegrationSettings Settings, Guid? ClientId)> ResolveScopeAsync(
+        Guid siteId, CancellationToken ct)
     {
         var resolved = await _configurationResolver.ResolveForSiteAsync(siteId);
         ct.ThrowIfCancellationRequested();
@@ -371,7 +471,8 @@ public class AiChatService : IAiChatService
                 if (!string.IsNullOrWhiteSpace(credential.Provider)) ai.Provider = credential.Provider;
             }
         }
-        return ai;
+
+        return (ai, resolved.ClientId);
     }
 
     private async Task LogChatAsync(Guid agentId, Guid siteId, Guid clientId, Guid sessionId, int nextSeq, LlmResponse llmResponse, Stopwatch sw, string traceId, CancellationToken ct)

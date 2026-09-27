@@ -28,7 +28,8 @@ public interface ITicketCommandService
         bool clearDepartment = false, bool clearWorkflowProfile = false,
         CancellationToken ct = default,
         Guid? requesterUserId = null, bool clearRequester = false,
-        Guid? agentId = null, bool clearAgent = false);
+        Guid? agentId = null, bool clearAgent = false,
+        Guid? changedByUserId = null);
 
     /// <summary>Adiciona um comentário a um ticket.</summary>
     Task<TicketComment> AddCommentAsync(Guid ticketId, string content, bool isInternal,

@@ -138,6 +138,48 @@ public static class QuartzServiceCollectionExtensions
                 .WithIdentity($"{AgentLabelingReconciliationJob.Key.Name}-trigger", AgentLabelingReconciliationJob.Key.Group)
                 .WithSimpleSchedule(s => s.WithIntervalInMinutes(10).RepeatForever())
                 .WithDescription("Reconcile agent labels with auto-labeling rules"));
+
+            // ── Triagem por IA na auto-atribuição: a cada N segundos ───
+            var aiAssignmentEnabled = configuration.GetValue<bool?>("BackgroundJobs:AiTicketAssignment:Enabled") ?? true;
+            if (aiAssignmentEnabled)
+            {
+                // Piso de 10s: o processador tem teto por ciclo (BatchSize) e o
+                // custo ocioso é uma consulta indexada na fila.
+                var aiAssignmentIntervalSeconds = Math.Max(10, configuration.GetValue<int?>("BackgroundJobs:AiTicketAssignment:IntervalSeconds") ?? 20);
+                var aiAssignmentStartupDelaySeconds = Math.Max(0, configuration.GetValue<int?>("BackgroundJobs:AiTicketAssignment:StartupDelaySeconds") ?? 20);
+
+                q.ScheduleJob<AiTicketAssignmentJob>(trigger => trigger
+                    .WithIdentity($"{AiTicketAssignmentJob.Key.Name}-trigger", AiTicketAssignmentJob.Key.Group)
+                    .StartAt(DateTimeOffset.UtcNow.AddSeconds(aiAssignmentStartupDelaySeconds))
+                    .WithSimpleSchedule(s => s.WithIntervalInSeconds(aiAssignmentIntervalSeconds).RepeatForever())
+                    .WithDescription("Processa a fila da triagem por IA e aplica o fallback de chamados sem responsável"));
+            }
+
+            // ── Métricas por atendente: a cada N minutos ───────────────
+            var metricsRefreshEnabled = configuration.GetValue<bool?>("BackgroundJobs:TechnicianMetrics:Enabled") ?? true;
+            if (metricsRefreshEnabled)
+            {
+                var metricsIntervalMinutes = Math.Max(5, configuration.GetValue<int?>("BackgroundJobs:TechnicianMetrics:IntervalMinutes") ?? 15);
+                var metricsStartupDelaySeconds = Math.Max(0, configuration.GetValue<int?>("BackgroundJobs:TechnicianMetrics:StartupDelaySeconds") ?? 60);
+
+                q.ScheduleJob<TechnicianMetricsRefreshJob>(trigger => trigger
+                    .WithIdentity($"{TechnicianMetricsRefreshJob.Key.Name}-trigger", TechnicianMetricsRefreshJob.Key.Group)
+                    .StartAt(DateTimeOffset.UtcNow.AddSeconds(metricsStartupDelaySeconds))
+                    .WithSimpleSchedule(s => s.WithIntervalInMinutes(metricsIntervalMinutes).RepeatForever())
+                    .WithDescription("Recalcula os snapshots de métricas por atendente usados pela triagem por IA"));
+            }
+
+            // ── Aprendizado da triagem por IA: diário ───────────────────
+            var learningEnabled = configuration.GetValue<bool?>("BackgroundJobs:AiAssignmentLearning:Enabled") ?? true;
+            if (learningEnabled)
+            {
+                var learningHour = Math.Clamp(configuration.GetValue<int?>("BackgroundJobs:AiAssignmentLearning:HourUtc") ?? 4, 0, 23);
+
+                q.ScheduleJob<AiAssignmentLearningJob>(trigger => trigger
+                    .WithIdentity($"{AiAssignmentLearningJob.Key.Name}-trigger", AiAssignmentLearningJob.Key.Group)
+                    .WithCronSchedule($"0 30 {learningHour} * * ?")
+                    .WithDescription("Ciclo de aprendizado da triagem por IA (competências e pesos)"));
+            }
         });
 
         services.AddQuartzHostedService(options =>

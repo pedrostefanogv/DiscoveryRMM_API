@@ -27,7 +27,9 @@ public sealed record SuggestTicketKnowledgeQuery(
     int MaxResults = 5) : IQuery<Result<IReadOnlyList<ArticleResponse>>>;
 
 // ── Audit Timeline ───────────────────────────────────────────────────────
-public sealed record GetTicketAuditTimelineQuery(Guid TicketId) : IQuery<Result<List<TicketActivityLog>>>;
+// O DTO já traz tipo como `activityType`, valores resolvidos e descrição legível.
+public sealed record GetTicketAuditTimelineQuery(Guid TicketId)
+    : IQuery<Result<IReadOnlyList<TicketTimelineEntryDto>>>;
 
 // ── KPI ──────────────────────────────────────────────────────────────────
 // Reutiliza TicketFilterQuery para aceitar os mesmos filtros da listagem (+ ACL).

@@ -128,6 +128,26 @@ public partial class DiscoveryDbContext
             entity.Property(dept => dept.IsActive).HasColumnName("is_active");
             entity.Property(dept => dept.AssignmentStrategy).HasColumnName("assignment_strategy");
             entity.Property(dept => dept.RoundRobinLastUserId).HasColumnName("round_robin_last_user_id");
+
+            // Triagem por IA
+            entity.Property(dept => dept.AiAssignmentMode).HasColumnName("ai_assignment_mode");
+            entity.Property(dept => dept.AiAssignmentMinConfidence).HasColumnName("ai_assignment_min_confidence").HasColumnType("numeric(4,3)");
+            entity.Property(dept => dept.AiAssignmentFallbackStrategy).HasColumnName("ai_assignment_fallback_strategy");
+            entity.Property(dept => dept.AiAssignmentMaxCandidates).HasColumnName("ai_assignment_max_candidates");
+            entity.Property(dept => dept.AiAssignmentWeightsJson).HasColumnName("ai_assignment_weights_json").HasColumnType("jsonb");
+            entity.Property(dept => dept.AiAssignmentInstructions).HasColumnName("ai_assignment_instructions").HasColumnType("text");
+            entity.Property(dept => dept.AiAssignmentUseAffinity).HasColumnName("ai_assignment_use_affinity");
+            entity.Property(dept => dept.AiAssignmentMaxOutputTokens).HasColumnName("ai_assignment_max_output_tokens");
+
+            // Aprendizado (competências e pesos)
+            entity.Property(dept => dept.AiSkillLearningMode).HasColumnName("ai_skill_learning_mode");
+            entity.Property(dept => dept.AiSkillMinEvidence).HasColumnName("ai_skill_min_evidence");
+            entity.Property(dept => dept.AiSkillMaxTags).HasColumnName("ai_skill_max_tags");
+            entity.Property(dept => dept.AiWeightLearningMode).HasColumnName("ai_weight_learning_mode");
+            entity.Property(dept => dept.AiWeightMaxDeltaPerCycle).HasColumnName("ai_weight_max_delta_per_cycle").HasColumnType("numeric(4,3)");
+            entity.Property(dept => dept.AiWeightCycleDays).HasColumnName("ai_weight_cycle_days");
+            entity.Property(dept => dept.AiWeightMin).HasColumnName("ai_weight_min").HasColumnType("numeric(4,3)");
+            entity.Property(dept => dept.AiWeightMax).HasColumnName("ai_weight_max").HasColumnType("numeric(4,3)");
             entity.Property(dept => dept.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(dept => dept.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 
@@ -313,6 +333,14 @@ public partial class DiscoveryDbContext
             entity.Property(m => m.UserId).HasColumnName("user_id");
             entity.Property(m => m.IsActive).HasColumnName("is_active");
             entity.Property(m => m.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+
+            // Perfil usado pela triagem por IA
+            entity.Property(m => m.SkillTagsJson).HasColumnName("skill_tags_json").HasColumnType("jsonb");
+            entity.Property(m => m.SkillLevel).HasColumnName("skill_level");
+            entity.Property(m => m.MaxOpenTickets).HasColumnName("max_open_tickets");
+            entity.Property(m => m.Weight).HasColumnName("weight").HasColumnType("numeric(4,2)");
+            entity.Property(m => m.AcceptsAiAssignment).HasColumnName("accepts_ai_assignment");
+
             entity.HasOne<Department>().WithMany().HasForeignKey(m => m.DepartmentId).OnDelete(DeleteBehavior.Cascade);
         });
     }

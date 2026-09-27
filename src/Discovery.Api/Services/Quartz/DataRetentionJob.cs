@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Discovery.Core.Configuration;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +21,7 @@ namespace Discovery.Api.Services.Quartz;
 /// - Old P2P telemetry
 /// - Old automation execution reports
 /// - Old agent label change history
+/// - Itens antigos da fila da triagem por IA (a decisão permanece em ticket_assignment_decisions)
 ///
 /// Schedule: daily at 3:30 AM (0 30 3 * * ?)
 /// </summary>
@@ -124,6 +126,19 @@ public sealed class DataRetentionJob : IJob
         if (labelChangesDeleted > 0)
             logger.LogInformation("DataRetention: deleted {Count} agent label change log records.", labelChangesDeleted);
         results["agentLabelChanges"] = labelChangesDeleted;
+
+        // 9. Fila da triagem por IA: itens já processados/ignorados e antigos.
+        //    As linhas concluídas não têm valor operacional (a decisão fica em
+        //    ticket_assignment_decisions) e a tabela seria monotônica.
+        var aiQueueCutoff = now.AddDays(-30);
+        var aiQueueDeleted = await db.AiAssignmentQueueItems
+            .Where(item => (item.Status == AiAssignmentQueueStatus.Done
+                            || item.Status == AiAssignmentQueueStatus.Skipped)
+                           && item.UpdatedAt < aiQueueCutoff)
+            .ExecuteDeleteAsync(ct);
+        if (aiQueueDeleted > 0)
+            logger.LogInformation("DataRetention: deleted {Count} ai assignment queue items.", aiQueueDeleted);
+        results["aiAssignmentQueue"] = aiQueueDeleted;
 
         var totalDeleted = results.Values.Sum();
         logger.LogInformation("DataRetention completed. Total purged: {Total} records across {Tables} tables.",

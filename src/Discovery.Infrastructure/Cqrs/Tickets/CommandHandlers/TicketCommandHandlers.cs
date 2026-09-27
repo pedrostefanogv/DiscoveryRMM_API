@@ -81,7 +81,8 @@ public sealed class UpdateTicketCommandHandler(
                 cmd.DepartmentId, cmd.WorkflowProfileId, cmd.AssignedToUserId,
                 cmd.Category, cmd.ClearDepartment, cmd.ClearWorkflowProfile, ct,
                 requesterUserId: cmd.RequesterUserId, clearRequester: cmd.ClearRequester,
-                agentId: cmd.AgentId, clearAgent: cmd.ClearAgent);
+                agentId: cmd.AgentId, clearAgent: cmd.ClearAgent,
+                changedByUserId: cmd.ChangedByUserId);
             return Result<TicketDetailDto>.Success(TicketCommandService.ToDto(ticket));
         }
         catch (KeyNotFoundException ex)

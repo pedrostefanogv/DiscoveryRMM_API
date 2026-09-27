@@ -33,5 +33,11 @@ public enum TicketActivityType
     /// <summary>Solicitante (quem abriu) definido/alterado/removido.</summary>
     RequesterChanged = 25,
     /// <summary>Agent (máquina) vinculado/alterado/removido do chamado.</summary>
-    AgentChanged = 26
+    AgentChanged = 26,
+
+    /// <summary>Responsável definido automaticamente pela triagem por IA.</summary>
+    AiAssigned = 27,
+
+    /// <summary>Triagem por IA gerou sugestão de responsável (modo assistido).</summary>
+    AiAssignmentSuggested = 28
 }

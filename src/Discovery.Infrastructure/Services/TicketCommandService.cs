@@ -20,9 +20,10 @@ public sealed class TicketCommandService : ITicketCommandService
     private readonly IWorkflowRepository _workflowRepo;
     private readonly IWorkflowProfileRepository _workflowProfileRepo;
     private readonly ISlaService _slaService;
-    private readonly ITicketAssignmentService _assignmentService;
+    private readonly ITicketAutoAssignmentService _autoAssignment;
     private readonly IMediator _mediator;
     private readonly IUserRepository _userRepository;
+    private readonly ITicketAssignmentOverrideTracker _overrideTracker;
 
     public TicketCommandService(
         ITicketRepository repo,
@@ -31,9 +32,10 @@ public sealed class TicketCommandService : ITicketCommandService
         IWorkflowRepository workflowRepo,
         IWorkflowProfileRepository workflowProfileRepo,
         ISlaService slaService,
-        ITicketAssignmentService assignmentService,
+        ITicketAutoAssignmentService autoAssignment,
         IMediator mediator,
-        IUserRepository userRepository)
+        IUserRepository userRepository,
+        ITicketAssignmentOverrideTracker overrideTracker)
     {
         _repo = repo;
         _activityLog = activityLog;
@@ -41,9 +43,10 @@ public sealed class TicketCommandService : ITicketCommandService
         _workflowRepo = workflowRepo;
         _workflowProfileRepo = workflowProfileRepo;
         _slaService = slaService;
-        _assignmentService = assignmentService;
+        _autoAssignment = autoAssignment;
         _mediator = mediator;
         _userRepository = userRepository;
+        _overrideTracker = overrideTracker;
     }
 
     public async Task<Ticket> CreateTicketAsync(
@@ -83,12 +86,17 @@ public sealed class TicketCommandService : ITicketCommandService
         }
 
         // Auto-atribuição por estratégia do departamento (round-robin/least-open)
-        // quando nenhum responsável foi informado.
+        // quando nenhum responsável foi informado. Na estratégia de triagem por
+        // IA o chamado nasce sem responsável e entra na fila assíncrona abaixo.
+        // A MESMA regra vale para chamados criados por alerta
+        // (AlertToTicketService usa o mesmo serviço).
+        var resolution = new AutoAssignmentResolution(assignedToUserId, false, null);
         if (!assignedToUserId.HasValue && departmentId.HasValue)
         {
             try
             {
-                assignedToUserId = await _assignmentService.ResolveAssigneeAsync(departmentId.Value, ct);
+                resolution = await _autoAssignment.ResolveAsync(departmentId.Value, null, ct);
+                assignedToUserId = resolution.AssignedToUserId;
             }
             catch
             {
@@ -135,6 +143,21 @@ public sealed class TicketCommandService : ITicketCommandService
         }
 
         await _repo.CreateAsync(ticket);
+
+        // Fila da triagem por IA: o job processa em segundos e o sweep de
+        // segurança cobre o chamado mesmo se o enfileiramento falhar.
+        if (resolution.QueueAiTriage && departmentId.HasValue)
+        {
+            try
+            {
+                await _autoAssignment.ApplyAfterCreateAsync(ticket, ct);
+            }
+            catch
+            {
+                // Enfileiramento não pode impedir a criação do chamado.
+            }
+        }
+
         await _activityLog.LogActivityAsync(ticket.Id, TicketActivityType.Created,
             null, null, null, "Ticket created");
         await _mediator.Publish(new TicketCreatedEvent(ticket.Id, ticket.Title,
@@ -150,7 +173,8 @@ public sealed class TicketCommandService : ITicketCommandService
         bool clearDepartment = false, bool clearWorkflowProfile = false,
         CancellationToken ct = default,
         Guid? requesterUserId = null, bool clearRequester = false,
-        Guid? agentId = null, bool clearAgent = false)
+        Guid? agentId = null, bool clearAgent = false,
+        Guid? changedByUserId = null)
     {
         var ticket = await _repo.GetByIdAsync(ticketId);
         if (ticket is null)
@@ -170,11 +194,13 @@ public sealed class TicketCommandService : ITicketCommandService
                 oldPriority.ToString(), priority.Value.ToString());
         }
 
+        var assignmentChanged = false;
         if (assignedToUserId != ticket.AssignedToUserId)
         {
             var oldAssignee = ticket.AssignedToUserId;
             ticket.AssignedToUserId = assignedToUserId;
-            await _activityLog.LogAssignmentAsync(ticketId, null, oldAssignee, assignedToUserId);
+            assignmentChanged = true;
+            await _activityLog.LogAssignmentAsync(ticketId, changedByUserId, oldAssignee, assignedToUserId);
             if (assignedToUserId.HasValue)
             {
                 await _notification.PublishAsync(new NotificationPublishRequest(
@@ -254,6 +280,12 @@ public sealed class TicketCommandService : ITicketCommandService
         ticket.UpdatedAt = DateTime.UtcNow;
         await _repo.UpdateAsync(ticket);
 
+        // Feedback da triagem por IA DEPOIS do update: o tracker chama SaveChanges
+        // e, se rodasse antes, poderia comitar um update que ainda falharia nas
+        // validações posteriores (ex.: solicitante inexistente).
+        if (assignmentChanged)
+            await _overrideTracker.MarkIfOverriddenAsync(ticketId, assignedToUserId, changedByUserId, ct);
+
         // Logs DEPOIS do update: um log gravado antes da escrita vira órfão se o
         // update falhar.
         if (newDepartmentId != oldDepartmentId)
@@ -330,6 +362,9 @@ public sealed class TicketCommandService : ITicketCommandService
         await _repo.UpdateAsync(ticket);
         await _activityLog.LogAssignmentAsync(ticketId, changedByUserId,
             oldAssignee, assignedToUserId);
+
+        // Feedback da triagem por IA (mesmo caminho do UpdateTicketAsync).
+        await _overrideTracker.MarkIfOverriddenAsync(ticketId, assignedToUserId, changedByUserId, ct);
 
         return ticket;
     }

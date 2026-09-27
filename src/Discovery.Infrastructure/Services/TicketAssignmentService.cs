@@ -5,28 +5,58 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Services;
 
-public class TicketAssignmentService(DiscoveryDbContext db) : ITicketAssignmentService
+public class TicketAssignmentService(
+    DiscoveryDbContext db,
+    IDepartmentTeamResolver teamResolver) : ITicketAssignmentService
 {
+    public async Task<int?> GetStrategyAsync(Guid departmentId, CancellationToken ct = default)
+    {
+        var dept = await db.Departments.AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == departmentId, ct);
+        return dept?.AssignmentStrategy;
+    }
+
     public async Task<Guid?> ResolveAssigneeAsync(Guid departmentId, CancellationToken ct = default)
     {
         var dept = await db.Departments.AsNoTracking().FirstOrDefaultAsync(d => d.Id == departmentId, ct);
-        if (dept is null || dept.AssignmentStrategy == (int)TicketAssignmentStrategy.None)
-            return null;
+        if (dept is null) return null;
 
-        var members = await db.DepartmentMembers.AsNoTracking()
-            .Where(m => m.DepartmentId == departmentId && m.IsActive)
-            .Join(db.Users.Where(u => u.IsActive), m => m.UserId, u => u.Id, (m, _) => new { m.UserId, m.CreatedAt })
-            .OrderBy(x => x.CreatedAt)
-            .Select(x => x.UserId)
-            .ToListAsync(ct);
+        // None: sem auto-atribuição. AiTriage: a triagem por IA roda de forma
+        // assíncrona (fila) e decide por conta própria — não é round-robin.
+        if (dept.AssignmentStrategy is (int)TicketAssignmentStrategy.None
+            or (int)TicketAssignmentStrategy.AiTriage)
+        {
+            return null;
+        }
+
+        return await ResolveFallbackAsync(departmentId, dept.AssignmentStrategy, ct);
+    }
+
+    /// <summary>
+    /// Estratégia determinística explícita (usada também como fallback da
+    /// triagem por IA e pela rede de segurança de chamados sem responsável).
+    /// </summary>
+    public async Task<Guid?> ResolveFallbackAsync(Guid departmentId, int fallbackStrategy, CancellationToken ct = default)
+    {
+        // Mesmo resolvedor da triagem: garante que estratégia determinística e IA
+        // enxerguem exatamente o mesmo conjunto de candidatos.
+        var members = (await teamResolver.ResolveMembersAsync(departmentId, ct))
+            .Select(member => member.UserId)
+            .ToList();
 
         if (members.Count == 0)
             return null;
 
-        if (dept.AssignmentStrategy == (int)TicketAssignmentStrategy.RoundRobin)
+        if (fallbackStrategy == (int)TicketAssignmentStrategy.RoundRobin)
         {
-            var index = dept.RoundRobinLastUserId.HasValue ? members.IndexOf(dept.RoundRobinLastUserId.Value) : -1;
+            var lastId = await db.Departments.AsNoTracking()
+                .Where(d => d.Id == departmentId)
+                .Select(d => d.RoundRobinLastUserId)
+                .FirstOrDefaultAsync(ct);
+
+            var index = lastId.HasValue ? members.IndexOf(lastId.Value) : -1;
             var next = members[(index + 1) % members.Count];
+
             var tracked = await db.Departments.FirstAsync(d => d.Id == departmentId, ct);
             tracked.RoundRobinLastUserId = next;
             await db.SaveChangesAsync(ct);
@@ -40,6 +70,7 @@ public class TicketAssignmentService(DiscoveryDbContext db) : ITicketAssignmentS
             .GroupBy(t => t.AssignedToUserId!.Value)
             .Select(g => new { UserId = g.Key, Count = g.Count() })
             .ToListAsync(ct);
+
         var counts = openCounts.ToDictionary(x => x.UserId, x => x.Count);
         return members.OrderBy(u => counts.TryGetValue(u, out var c) ? c : 0).First();
     }

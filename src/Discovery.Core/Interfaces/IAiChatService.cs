@@ -54,6 +54,21 @@ public interface IAiChatService
         CancellationToken ct = default);
 
     /// <summary>
+    /// Igual a <see cref="ProcessTicketPromptAsync"/>, mas permite response_format
+    /// (ex.: "json_object") — usado pelos fluxos que exigem saída estruturada,
+    /// como a triagem de atribuição por IA.
+    /// </summary>
+    Task<LlmResponse> ProcessTicketPromptJsonAsync(
+        string systemPrompt,
+        string userMessage,
+        Guid siteId,
+        int maxTokens,
+        double temperature,
+        string? responseFormat,
+        Guid? departmentId = null,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Responde via SSE streaming — emite chunks incrementais enquanto o LLM gera tokens.
     /// Suporta tool calls (loop de MCP tools) e RAG departamental.
     /// </summary>

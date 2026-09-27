@@ -58,7 +58,9 @@ public class AiChatSettingsResolver
         => settings.MaxKbContextTokens is >= 500 and <= 8000 ? settings.MaxKbContextTokens : DefaultMaxKbContextTokens;
 
     public static int ClampMaxTokens(AIIntegrationSettings settings)
-        => settings.MaxTokensPerRequest is >= 100 and <= 8000 ? settings.MaxTokensPerRequest : DefaultMaxTokens;
+        => settings.MaxTokensPerRequest is >= 100 and <= AiChatConstants.MaxOutputTokensCeiling
+            ? settings.MaxTokensPerRequest
+            : DefaultMaxTokens;
 
     public static double ClampTemperature(AIIntegrationSettings settings)
         => settings.Temperature is >= 0 and <= 2 ? settings.Temperature : DefaultTemperature;

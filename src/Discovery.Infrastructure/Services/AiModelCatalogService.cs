@@ -246,7 +246,7 @@ public class AiModelCatalogService : IAiModelCatalogService
                 OutputModalities: outputMods,
                 SupportedParameters: capabilities.Contains("tools") ? new List<string> { "tools", "tool_choice" } : [],
                 ContextLength: GetOpenAiContextLength(id),
-                MaxCompletionTokens: null,
+                MaxCompletionTokens: GetOpenAiMaxCompletionTokens(id),
                 Pricing: null,
                 IsFree: false,
                 IsRecommendedForChat: capabilities.Contains("chat") && !capabilities.Contains("embeddings"),
@@ -359,6 +359,21 @@ public class AiModelCatalogService : IAiModelCatalogService
         string s when s.StartsWith("o1") => 200000,
         string s when s.StartsWith("o3") => 200000,
         string s when s.StartsWith("o4") => 200000,
+        _ => null
+    };
+
+    /// <summary>
+    /// Limite de tokens de SAÍDA por família de modelos OpenAI. A API /models da
+    /// OpenAI não expõe esse dado (só id + owned_by), então ele é derivado do id —
+    /// sem isso o catálogo devolvia null e o produto caía no teto conservador.
+    /// </summary>
+    private static int? GetOpenAiMaxCompletionTokens(string id) => id switch
+    {
+        string s when s.StartsWith("gpt-4o") || s.StartsWith("gpt-4.1") => 16384,
+        string s when s.StartsWith("gpt-4-turbo") => 4096,
+        string s when s.StartsWith("gpt-5") => 16384,
+        string s when s.StartsWith("o1") || s.StartsWith("o3") || s.StartsWith("o4") => 32768,
+        string s when s.StartsWith("gpt-3.5") => 4096,
         _ => null
     };
 

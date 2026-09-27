@@ -24,5 +24,10 @@ public sealed record UpdateTicketCommand(
     /// <summary>Agent (máquina) vinculado ao chamado.</summary>
     Guid? AgentId = null,
     /// <summary>Quando true, remove o agent mesmo sem enviar um novo Id.</summary>
-    bool ClearAgent = false
+    bool ClearAgent = false,
+    /// <summary>
+    /// Autor da alteração (preenchido pelo controller com o usuário autenticado).
+    /// Usado na auditoria da atribuição e para marcar override da decisão da IA.
+    /// </summary>
+    Guid? ChangedByUserId = null
 ) : ICommand<Result<TicketDetailDto>>;

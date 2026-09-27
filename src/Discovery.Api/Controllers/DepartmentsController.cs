@@ -4,6 +4,7 @@ using Discovery.Core.Cqrs.Departments.Commands;
 using Discovery.Core.Cqrs.Support.Departments;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Cqrs.Departments.Queries;
+using Discovery.Core.Cqrs.Support.Assignments;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -37,9 +38,11 @@ public record DepartmentCustomFieldRequest(
 public class DepartmentsController(
     IMediator mediator,
     ICustomFieldService customFieldService,
-    IDepartmentCustomFieldService departmentCustomFieldService) : ControllerBase
+    IDepartmentCustomFieldService departmentCustomFieldService,
+    IAiAssignmentLearningService learningService) : ControllerBase
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
+    private Guid? CurrentUserId => HttpContext.Items["UserId"] is Guid uid ? uid : null;
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? clientId = null,
@@ -110,6 +113,87 @@ public class DepartmentsController(
     [RequirePermission(ResourceType.Departments, ActionType.Edit)]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
         => (await mediator.Send(new RemoveDepartmentMemberCommand(id, userId), HttpContext.RequestAborted)).ToActionResult();
+
+    // ── Triagem por IA (auto-atribuição) ────────────────────────────────
+
+    /// <summary>Perfil (competências/capacidade) + métricas de cada membro da equipe.</summary>
+    [HttpGet("{id:guid}/assignment/team-metrics")]
+    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    public async Task<IActionResult> GetAssignmentTeamMetrics(Guid id)
+        => (await mediator.Send(new GetDepartmentAssignmentTeamMetricsQuery(id), HttpContext.RequestAborted)).ToActionResult();
+
+    /// <summary>Atualiza competências, teto de chamados, peso e opt-out do membro.</summary>
+    [HttpPut("{id:guid}/members/{userId:guid}/profile")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> UpdateMemberProfile(
+        Guid id, Guid userId, [FromBody] UpdateDepartmentMemberProfileRequest request)
+        => (await mediator.Send(new UpdateDepartmentMemberProfileCommand(
+                id, userId, request.SkillTags, request.SkillLevel, request.MaxOpenTickets,
+                request.Weight, request.AcceptsAiAssignment, request.ClearMaxOpenTickets),
+            HttpContext.RequestAborted)).ToActionResult();
+
+    /// <summary>Força o recálculo dos snapshots de métricas usados pela triagem.</summary>
+    [HttpPost("{id:guid}/assignment/metrics/refresh")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> RefreshAssignmentMetrics(Guid id)
+        => (await mediator.Send(new RefreshTechnicianMetricsCommand(id), HttpContext.RequestAborted)).ToActionResult();
+
+    // ── Aprendizado da triagem por IA (competências e pesos) ────────────
+
+    /// <summary>Sugestões pendentes de competências e de recalibração de pesos.</summary>
+    [HttpGet("{id:guid}/learning/suggestions")]
+    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    public async Task<IActionResult> GetLearningSuggestions(Guid id)
+        => Ok(await learningService.GetSuggestionsAsync(id, HttpContext.RequestAborted));
+
+    /// <summary>Roda um ciclo de aprendizado sob demanda para o departamento.</summary>
+    [HttpPost("{id:guid}/learning/run")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> RunLearningCycle(Guid id)
+    {
+        var created = await learningService.RunCycleAsync(id, CurrentUserId, HttpContext.RequestAborted);
+        return Ok(new { created });
+    }
+
+    [HttpPost("{id:guid}/learning/skills/{suggestionId:guid}/apply")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> ApplySkillSuggestion(Guid id, Guid suggestionId)
+    {
+        var result = await learningService.ApplySkillSuggestionAsync(
+            id, suggestionId, CurrentUserId, HttpContext.RequestAborted);
+        return result is null
+            ? NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sugestão não encontrada ou já decidida." } } })
+            : Ok(result);
+    }
+
+    [HttpPost("{id:guid}/learning/skills/{suggestionId:guid}/discard")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> DiscardSkillSuggestion(Guid id, Guid suggestionId)
+    {
+        var discarded = await learningService.DiscardSkillSuggestionAsync(
+            id, suggestionId, CurrentUserId, HttpContext.RequestAborted);
+        return discarded ? NoContent() : NotFound();
+    }
+
+    [HttpPost("{id:guid}/learning/weights/{suggestionId:guid}/apply")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> ApplyWeightSuggestion(Guid id, Guid suggestionId)
+    {
+        var result = await learningService.ApplyWeightSuggestionAsync(
+            id, suggestionId, CurrentUserId, HttpContext.RequestAborted);
+        return result is null
+            ? NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sugestão não encontrada ou já decidida." } } })
+            : Ok(result);
+    }
+
+    [HttpPost("{id:guid}/learning/weights/{suggestionId:guid}/discard")]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    public async Task<IActionResult> DiscardWeightSuggestion(Guid id, Guid suggestionId)
+    {
+        var discarded = await learningService.DiscardWeightSuggestionAsync(
+            id, suggestionId, CurrentUserId, HttpContext.RequestAborted);
+        return discarded ? NoContent() : NotFound();
+    }
 
     // ── Custom Fields ────────────────────────────────────────────────────
 

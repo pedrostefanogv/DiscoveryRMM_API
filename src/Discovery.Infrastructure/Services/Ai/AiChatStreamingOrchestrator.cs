@@ -27,6 +27,7 @@ public class AiChatStreamingOrchestrator
     private readonly AiChatSystemPromptBuilder _promptBuilder;
     private readonly AiChatToolOrchestrator _toolOrchestrator;
     private readonly AiChatQuickReply _quickReply;
+    private readonly IAiTokenBudgetResolver _tokenBudgetResolver;
     private readonly IMemoryCache _memoryCache;
 
     public AiChatStreamingOrchestrator(
@@ -40,6 +41,7 @@ public class AiChatStreamingOrchestrator
         AiChatSystemPromptBuilder promptBuilder,
         AiChatToolOrchestrator toolOrchestrator,
         AiChatQuickReply quickReply,
+        IAiTokenBudgetResolver tokenBudgetResolver,
         IMemoryCache memoryCache)
     {
         _sessionRepository = sessionRepository;
@@ -52,6 +54,7 @@ public class AiChatStreamingOrchestrator
         _promptBuilder = promptBuilder;
         _toolOrchestrator = toolOrchestrator;
         _quickReply = quickReply;
+        _tokenBudgetResolver = tokenBudgetResolver;
         _memoryCache = memoryCache;
     }
 
@@ -72,6 +75,30 @@ public class AiChatStreamingOrchestrator
     /// antes de encerrar o loop de tools e sintetizar uma resposta sem tools.
     /// </summary>
     private const int MaxConsecutiveAgentToolArgErrors = 3;
+
+    /// <summary>
+    /// Teto de tokens efetivo do chat: valor configurado no tenant limitado pela
+    /// capacidade REAL do modelo e pelo teto do produto — o mesmo orçamento usado
+    /// nos fluxos de IA de ticket. Sem isso, o chat aceitava a configuração do
+    /// tenant mesmo quando o modelo não suporta aquele volume de saída.
+    /// Falha do resolvedor não interrompe o chat: mantém o teto do tenant.
+    /// </summary>
+    private async Task<int> ResolveChatMaxTokensAsync(
+        Guid siteId, AIIntegrationSettings aiSettings, CancellationToken ct)
+    {
+        var tenantMaxTokens = AiChatHelpers.ClampMaxTokens(aiSettings);
+
+        try
+        {
+            var budget = await _tokenBudgetResolver.ResolveForSiteAsync(siteId, tenantMaxTokens, null, ct);
+            return budget.MaxOutputTokens;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Falha ao resolver o orçamento de tokens do chat; usando o teto do tenant.");
+            return tenantMaxTokens;
+        }
+    }
 
     /// <summary>Trunca um texto para log sem depender de helpers externos.</summary>
     private static string Shorten(string? value, int max)
@@ -99,6 +126,7 @@ public class AiChatStreamingOrchestrator
         Guid scopeClientId = Guid.Empty;
         Guid scopeSiteId = Guid.Empty;
         int maxIterations = AiChatConstants.DefaultMaxToolCallIterations;
+        int maxTokens = AiChatConstants.DefaultMaxTokens;
 
         try
         {
@@ -117,6 +145,7 @@ public class AiChatStreamingOrchestrator
                 throw new InvalidOperationException("Chat IA está desabilitado para este escopo.");
 
             maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
+            maxTokens = await ResolveChatMaxTokensAsync(scopeSiteId, aiSettings, ct);
 
             if (sessionId.HasValue)
             {
@@ -231,7 +260,7 @@ public class AiChatStreamingOrchestrator
                 : availableTools;
 
             var streamOptions = new LlmOptions(
-                MaxTokens: AiChatHelpers.ClampMaxTokens(aiSettings),
+                MaxTokens: maxTokens,
                 Temperature: AiChatHelpers.ClampTemperature(aiSettings),
                 Model: string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
                 BaseUrl: string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
@@ -453,7 +482,7 @@ public class AiChatStreamingOrchestrator
             {
                 contentBuilder.Clear(); // evita resíduo de tokens descartados
                 var synthesisOptions = new LlmOptions(
-                    AiChatHelpers.ClampMaxTokens(aiSettings), AiChatHelpers.ClampTemperature(aiSettings),
+                    maxTokens, AiChatHelpers.ClampTemperature(aiSettings),
                     string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
                     string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
                     string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
@@ -533,6 +562,8 @@ public class AiChatStreamingOrchestrator
 
         var aiSettings = await resolveAiSettings(session.SiteId, ct);
         if (!aiSettings.Enabled || !aiSettings.ChatAIEnabled) { yield return new AiChatStreamChunk(Type: "error", Error: "Chat IA desabilitado."); yield break; }
+
+        var maxTokens = await ResolveChatMaxTokensAsync(session.SiteId, aiSettings, ct);
 
         var history = await _messageRepository.GetRecentBySessionAsync(session.Id, AiChatHelpers.ClampHistoryMessages(aiSettings), ct);
         var nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
@@ -843,7 +874,7 @@ public class AiChatStreamingOrchestrator
             {
                 contentBuilder.Clear();
                 var synthesisOptions = new LlmOptions(
-                    AiChatHelpers.ClampMaxTokens(aiSettings), AiChatHelpers.ClampTemperature(aiSettings),
+                    maxTokens, AiChatHelpers.ClampTemperature(aiSettings),
                     string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
                     string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
                     string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,

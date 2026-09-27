@@ -7,7 +7,11 @@ using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Core.Interfaces.Identity;
+using Discovery.Infrastructure.Data;
+using Discovery.Infrastructure.Services;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Cqrs.Tickets.QueryHandlers;
 
@@ -23,8 +27,169 @@ public sealed class GetTicketAutomationLinksQueryHandler(ITicketAutomationLinkRe
 public sealed class GetTicketKnowledgeLinksQueryHandler(ITicketKnowledgeLinkRepository repo) : IRequestHandler<GetTicketKnowledgeLinksQuery, Result<List<TicketKnowledgeLink>>>
 { public async Task<Result<List<TicketKnowledgeLink>>> Handle(GetTicketKnowledgeLinksQuery q, CancellationToken ct) => Result<List<TicketKnowledgeLink>>.Success(await repo.GetByTicketAsync(q.TicketId, ct)); }
 
-public sealed class GetTicketAuditTimelineQueryHandler(ITicketActivityLogRepository repo) : IRequestHandler<GetTicketAuditTimelineQuery, Result<List<TicketActivityLog>>>
-{ public async Task<Result<List<TicketActivityLog>>> Handle(GetTicketAuditTimelineQuery q, CancellationToken ct) => Result<List<TicketActivityLog>>.Success(await repo.GetByTicketAsync(q.TicketId)); }
+/// <summary>
+/// Timeline de auditoria do chamado. Resolve os GUIDs de responsável/estado/
+/// departamento/chamado relacionado/máquina para nomes em consultas EM LOTE
+/// (uma por entidade, sem N+1) e delega a descrição ao <see cref="TicketTimelineMapper"/>.
+/// </summary>
+public sealed class GetTicketAuditTimelineQueryHandler(
+    ITicketActivityLogRepository repo,
+    DiscoveryDbContext db)
+    : IRequestHandler<GetTicketAuditTimelineQuery, Result<IReadOnlyList<TicketTimelineEntryDto>>>
+{
+    public async Task<Result<IReadOnlyList<TicketTimelineEntryDto>>> Handle(
+        GetTicketAuditTimelineQuery q,
+        CancellationToken ct)
+    {
+        var logs = await repo.GetByTicketAsync(q.TicketId);
+        if (logs.Count == 0)
+            return Result<IReadOnlyList<TicketTimelineEntryDto>>.Success(Array.Empty<TicketTimelineEntryDto>());
+
+        var changedByIds = logs
+            .Where(l => l.ChangedByUserId.HasValue)
+            .Select(l => l.ChangedByUserId!.Value)
+            .Distinct()
+            .ToList();
+
+        // (tipo, valor cru, GUID) — cada tipo aponta para uma entidade.
+        var pending = new List<PendingValue>();
+        foreach (var log in logs)
+        {
+            var kind = ResolveKind(log);
+            if (kind == ValueKind.None) continue;
+
+            foreach (var raw in new[] { log.OldValue, log.NewValue })
+            {
+                if (Guid.TryParse(raw, out var id))
+                    pending.Add(new PendingValue(kind, raw, id));
+            }
+        }
+
+        var nameByKindId = new Dictionary<(ValueKind, Guid), string>();
+
+        // Usuários: quem alterou + old/new de atribuição/solicitante/IA.
+        var userIds = changedByIds.ToHashSet();
+        foreach (var item in pending)
+        {
+            if (item.Kind == ValueKind.User) userIds.Add(item.Id);
+        }
+
+        if (userIds.Count > 0)
+        {
+            var users = await db.Users.AsNoTracking()
+                .Where(u => userIds.Contains(u.Id))
+                .Select(u => new { u.Id, u.FullName, u.Login, u.Email })
+                .ToListAsync(ct);
+
+            foreach (var user in users)
+                AddName(nameByKindId, ValueKind.User, user.Id, user.FullName ?? user.Login ?? user.Email);
+        }
+
+        var stateIds = IdsOf(pending, ValueKind.State);
+        if (stateIds.Count > 0)
+        {
+            var states = await db.WorkflowStates.AsNoTracking()
+                .Where(s => stateIds.Contains(s.Id))
+                .Select(s => new { s.Id, s.Name })
+                .ToListAsync(ct);
+
+            foreach (var state in states)
+                AddName(nameByKindId, ValueKind.State, state.Id, state.Name);
+        }
+
+        var departmentIds = IdsOf(pending, ValueKind.Department);
+        if (departmentIds.Count > 0)
+        {
+            var departments = await db.Departments.AsNoTracking()
+                .Where(d => departmentIds.Contains(d.Id))
+                .Select(d => new { d.Id, d.Name })
+                .ToListAsync(ct);
+
+            foreach (var department in departments)
+                AddName(nameByKindId, ValueKind.Department, department.Id, department.Name);
+        }
+
+        var ticketIds = IdsOf(pending, ValueKind.Ticket);
+        if (ticketIds.Count > 0)
+        {
+            var tickets = await db.Tickets.AsNoTracking()
+                .Where(t => ticketIds.Contains(t.Id))
+                .Select(t => new { t.Id, t.Title })
+                .ToListAsync(ct);
+
+            foreach (var ticket in tickets)
+                AddName(nameByKindId, ValueKind.Ticket, ticket.Id, ticket.Title);
+        }
+
+        var agentIds = IdsOf(pending, ValueKind.Agent);
+        if (agentIds.Count > 0)
+        {
+            var agents = await db.Agents.AsNoTracking()
+                .Where(a => agentIds.Contains(a.Id))
+                .Select(a => new { a.Id, a.DisplayName, a.Hostname })
+                .ToListAsync(ct);
+
+            foreach (var agent in agents)
+                AddName(nameByKindId, ValueKind.Agent, agent.Id, agent.DisplayName ?? agent.Hostname);
+        }
+
+        var labelByValue = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in pending)
+        {
+            if (labelByValue.ContainsKey(item.Raw)) continue;
+            if (nameByKindId.TryGetValue((item.Kind, item.Id), out var name))
+                labelByValue[item.Raw] = name;
+        }
+
+        var entries = logs
+            // Feed: mais recente primeiro.
+            .OrderByDescending(l => l.CreatedAt)
+            .ThenByDescending(l => l.Id)
+            .Select(log => TicketTimelineMapper.Map(
+                log,
+                log.ChangedByUserId.HasValue
+                && nameByKindId.TryGetValue((ValueKind.User, log.ChangedByUserId.Value), out var name)
+                    ? name
+                    : null,
+                labelByValue))
+            .ToList();
+
+        return Result<IReadOnlyList<TicketTimelineEntryDto>>.Success(entries);
+    }
+
+    private readonly record struct PendingValue(ValueKind Kind, string Raw, Guid Id);
+
+    private static List<Guid> IdsOf(List<PendingValue> pending, ValueKind kind)
+        => pending.Where(item => item.Kind == kind).Select(item => item.Id).Distinct().ToList();
+
+    private static void AddName(
+        Dictionary<(ValueKind, Guid), string> target,
+        ValueKind kind,
+        Guid id,
+        string? name)
+    {
+        if (!string.IsNullOrWhiteSpace(name)) target[(kind, id)] = name;
+    }
+
+    private enum ValueKind { None, User, State, Department, Ticket, Agent }
+
+    private static ValueKind ResolveKind(TicketActivityLog log) => log.Type switch
+    {
+        TicketActivityType.Assigned
+            or TicketActivityType.RequesterChanged
+            // newValue dos eventos de IA é o usuário escolhido.
+            or TicketActivityType.AiAssigned
+            or TicketActivityType.AiAssignmentSuggested => ValueKind.User,
+        // StateChanged é reaproveitado para "workflow profile changed" — nesse
+        // caso o valor é um perfil, então não resolvemos como estado.
+        TicketActivityType.StateChanged when string.Equals(log.Comment, "Workflow profile changed", StringComparison.OrdinalIgnoreCase) => ValueKind.None,
+        TicketActivityType.StateChanged => ValueKind.State,
+        TicketActivityType.DepartmentChanged => ValueKind.Department,
+        TicketActivityType.AgentChanged => ValueKind.Agent,
+        TicketActivityType.TicketRelationAdded or TicketActivityType.TicketRelationRemoved => ValueKind.Ticket,
+        _ => ValueKind.None
+    };
+}
 
 public sealed class GetTicketKpiQueryHandler(
     ITicketKpiCacheService kpiCache,
