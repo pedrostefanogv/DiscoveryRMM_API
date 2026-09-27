@@ -370,6 +370,23 @@ public class AgentTrashTests
         Assert.That(result.Value.Items[0].Hostname, Is.EqualTo("BETA-02"));
     }
 
+    [Test]
+    public async Task GetDeleted_Search_MatchesClientName()
+    {
+        using var db = CreateDbContext();
+        await SeedBaseAsync(db); // cliente "Cliente", site "Site"
+        db.Agents.Add(NewAgent("PC-01", DateTime.UtcNow));
+        await db.SaveChangesAsync();
+
+        var handler = new GetDeletedAgentsQueryHandler(db, new FakeSiteRepository(db));
+        var result = await handler.Handle(
+            new GetDeletedAgentsQuery(null, null, 1, 50, Search: "cliente"),
+            CancellationToken.None);
+
+        Assert.That(result.Value!.Total, Is.EqualTo(1));
+        Assert.That(result.Value.Items[0].Hostname, Is.EqualTo("PC-01"));
+    }
+
     // -------------------------------------------------------------------------
     // Fakes / contexto de teste
     // -------------------------------------------------------------------------

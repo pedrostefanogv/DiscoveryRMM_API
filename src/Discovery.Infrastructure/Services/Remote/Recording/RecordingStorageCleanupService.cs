@@ -56,6 +56,14 @@ public class RecordingStorageCleanupService : IRecordingStorageCleanupService
 
         await DeleteStorageObjectsAsync(expired, ct);
 
+        // Evita referência pendurada em remote_sessions.recording_id (não há FK).
+        var sessionIds = expired.Select(r => r.RemoteSessionId).Distinct().ToList();
+        var sessions = await _db.RemoteSessions
+            .Where(s => sessionIds.Contains(s.Id) && s.RecordingId != null)
+            .ToListAsync(ct);
+        foreach (var session in sessions)
+            session.RecordingId = null;
+
         _db.RemoteSessionRecordings.RemoveRange(expired);
         await _db.SaveChangesAsync(ct);
         return expired.Count;

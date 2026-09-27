@@ -97,13 +97,18 @@ public class AgentPurgeService : IAgentPurgeService
         // os DELETE/UPDATE sem schema abaixo. Necessário porque a M052 removeu
         // disk_info/network_adapter_info/memory_module_info e o EF ainda mapeia
         // entidades para disk_infos/network_adapter_infos/printer_infos/...
+        // Lista em linha (constantes internas, sem entrada de usuário) — evita
+        // depender de binding de array de parâmetro no SqlQueryRaw.
         var candidates = AgentOwnedTables.Concat(DetachedTables).Distinct().ToArray();
+        var arrayLiteral = string.Join(",", candidates.Select(table => "'" + table + "'"));
+#pragma warning disable EF1003 // array de identificadores constantes, sem entrada externa
         var existingTables = (await _db.Database
                 .SqlQueryRaw<string>(
-                    "SELECT t AS \"Value\" FROM unnest({0}::text[]) AS t WHERE to_regclass(t) IS NOT NULL",
-                    candidates)
+                    "SELECT t AS \"Value\" FROM unnest(ARRAY[" + arrayLiteral + "]::text[]) AS t " +
+                    "WHERE to_regclass(t) IS NOT NULL")
                 .ToListAsync(ct))
             .ToHashSet(StringComparer.Ordinal);
+#pragma warning restore EF1003
 
         // Nomes de tabela vêm de constantes do próprio serviço (não de entrada do
         // usuário); o valor do agente vai como parâmetro ({0}).
