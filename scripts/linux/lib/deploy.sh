@@ -504,6 +504,23 @@ write_site_proxy_config() {
     done
   fi
 
+  # Deduplica preservando a ordem. Um dos hosts resolvidos pode ser
+  # literalmente "localhost"/"127.0.0.1" (ja na base) — ex.: quando
+  # DISCOVERY_FIDO2_SERVER_DOMAIN nao esta no env e resolve_fido2_server_domain
+  # cai no fallback. O nginx aceita server_name repetido, mas emite
+  # "conflicting server name ... ignored" e o nome duplicado nao serve nada.
+  local -a server_names_unique=()
+  local name existing found
+  for name in "${server_names[@]}"; do
+    [[ -n "$name" ]] || continue
+    found=0
+    for existing in "${server_names_unique[@]}"; do
+      [[ "$existing" == "$name" ]] && { found=1; break; }
+    done
+    (( found == 1 )) || server_names_unique+=("$name")
+  done
+  server_names=("${server_names_unique[@]}")
+
   local server_name_list; server_name_list="$(printf '%s ' "${server_names[@]}")"
   server_name_list="${server_name_list% }"
 
