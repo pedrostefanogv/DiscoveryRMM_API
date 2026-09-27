@@ -41,6 +41,33 @@ public class TicketWorkflowServiceTests
     }
 
     [Test]
+    public async Task TransitionAsync_ShouldAdoptInitialState_WhenCurrentStateIsOrphan()
+    {
+        // M3: chamado legado com WorkflowStateId = Guid.Empty não tinha transição
+        // válida a partir da origem e não podia ser fechado.
+        var ticket = CreateTicket();
+        ticket.WorkflowStateId = Guid.Empty;
+
+        var repo = new FakeTicketRepositorySingle(ticket);
+        var workflowRepo = new FakeWorkflowRepositorySimple(OldStateId, NewStateId, isValid: true);
+        var activityLog = new FakeActivityLogService();
+
+        var svc = new TicketWorkflowService(
+            repo, workflowRepo, new FakeSlaService(), activityLog,
+            new FakeTicketAlertRuleRepository(), new FakeAlertDispatchService(),
+            new FakeNotificationService(), NullLogger<TicketWorkflowService>.Instance);
+
+        var result = await svc.TransitionAsync(ticket.Id, NewStateId, null);
+
+        Assert.That(result, Is.Not.Null);
+        Assert.That(ticket.WorkflowStateId, Is.EqualTo(NewStateId));
+        var log = activityLog.RecordedActivities
+            .Single(a => a.Type == TicketActivityType.StateChanged);
+        Assert.That(log.OldValue, Is.EqualTo(OldStateId.ToString()),
+            "a origem efetiva deve ser o estado inicial adotado");
+    }
+
+    [Test]
     public void TransitionAsync_ShouldThrow_WhenTicketNotFound()
     {
         var repo = new FakeTicketRepositorySingle(null);

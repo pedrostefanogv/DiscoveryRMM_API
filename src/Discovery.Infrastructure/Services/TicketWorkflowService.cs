@@ -58,8 +58,26 @@ public class TicketWorkflowService : ITicketWorkflowService
         var oldState = oldStateTask.Result;
         var newState = newStateTask.Result;
 
+        // M3: chamado com estado órfão (Guid.Empty ou estado removido) não tinha
+        // nenhuma transição válida a partir da origem e ficava impossível de
+        // fechar. Nesse caso adota o estado inicial do cliente como origem
+        // efetiva, permitindo a transição sem depender da sanitização manual.
+        var fromStateId = ticket.WorkflowStateId;
+        if (oldState is null)
+        {
+            var initialState = await _workflowRepo.GetInitialStateAsync(ticket.ClientId);
+            if (initialState is not null)
+            {
+                fromStateId = initialState.Id;
+                oldState = initialState;
+                _logger.LogWarning(
+                    "Ticket {TicketId} tinha estado órfão {OrphanStateId}; adotando o estado inicial {InitialStateId} como origem da transição.",
+                    ticketId, ticket.WorkflowStateId, initialState.Id);
+            }
+        }
+
         // Validar transição
-        var valid = await _workflowRepo.IsTransitionValidAsync(ticket.WorkflowStateId, targetStateId, ticket.ClientId);
+        var valid = await _workflowRepo.IsTransitionValidAsync(fromStateId, targetStateId, ticket.ClientId);
         if (!valid)
             throw new InvalidOperationException("Invalid workflow transition");
 
@@ -89,8 +107,8 @@ public class TicketWorkflowService : ITicketWorkflowService
                 ticketId, targetStateId, closedAt, ticket.SlaHoldStartedAt, ticket.SlaPausedSeconds);
         }
 
-        // Log da mudança
-        await _activityLogService.LogStateChangeAsync(ticketId, changedByUserId, ticket.WorkflowStateId, targetStateId);
+        // Log da mudança (usa a origem efetiva, já reparada se era órfã).
+        await _activityLogService.LogStateChangeAsync(ticketId, changedByUserId, fromStateId, targetStateId);
 
         // --- Alertas PSADT em paralelo ---
         var alertRules = await _alertRuleRepo.GetByWorkflowStateIdAsync(targetStateId);
