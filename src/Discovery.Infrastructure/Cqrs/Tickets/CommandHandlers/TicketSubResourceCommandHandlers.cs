@@ -12,27 +12,6 @@ public sealed class AddTicketWatcherCommandHandler(ITicketWatcherRepository repo
 public sealed class RemoveTicketWatcherCommandHandler(ITicketWatcherRepository repo) : IRequestHandler<RemoveTicketWatcherCommand, Result<VoidResult>>
 { public async Task<Result<VoidResult>> Handle(RemoveTicketWatcherCommand cmd, CancellationToken ct) { await repo.RemoveAsync(cmd.TicketId, cmd.UserId); return Result<VoidResult>.Success(VoidResult.Value); } }
 
-public sealed class CreateTicketRemoteSessionCommandHandler(ITicketRemoteSessionRepository repo) : IRequestHandler<CreateTicketRemoteSessionCommand, Result<TicketRemoteSession>>
-{
-    public async Task<Result<TicketRemoteSession>> Handle(CreateTicketRemoteSessionCommand cmd, CancellationToken ct)
-    {
-        var session = new TicketRemoteSession { TicketId = cmd.TicketId, AgentId = cmd.AgentId, MeshNodeId = cmd.MeshNodeId, StartedBy = cmd.StartedBy, Note = cmd.Note, StartedAt = DateTime.UtcNow };
-        return Result<TicketRemoteSession>.Success(await repo.CreateAsync(session, ct));
-    }
-}
-
-public sealed class EndTicketRemoteSessionCommandHandler(ITicketRemoteSessionRepository repo) : IRequestHandler<EndTicketRemoteSessionCommand, Result<TicketRemoteSession>>
-{
-    public async Task<Result<TicketRemoteSession>> Handle(EndTicketRemoteSessionCommand cmd, CancellationToken ct)
-    {
-        var sessions = await repo.GetByTicketAsync(cmd.TicketId, ct);
-        var session = sessions.FirstOrDefault(s => s.Id == cmd.SessionId);
-        if (session is null) return Result<TicketRemoteSession>.Failure(Error.NotFound("Remote session not found."));
-        session.EndedAt = DateTime.UtcNow;
-        return Result<TicketRemoteSession>.Success(await repo.UpdateAsync(session, ct));
-    }
-}
-
 public sealed class CreateTicketAutomationLinkCommandHandler(ITicketAutomationLinkRepository repo) : IRequestHandler<CreateTicketAutomationLinkCommand, Result<TicketAutomationLink>>
 {
     public async Task<Result<TicketAutomationLink>> Handle(CreateTicketAutomationLinkCommand cmd, CancellationToken ct)

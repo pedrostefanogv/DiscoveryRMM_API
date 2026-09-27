@@ -180,9 +180,7 @@ public sealed class MergeTicketsCommandHandler(
                 answer.TicketId = targetId;
         }
 
-        // Sessões remotas, automações e vínculos de KB
-        foreach (var session in await db.TicketRemoteSessions.Where(s => s.TicketId == sourceId).ToListAsync(ct))
-            session.TicketId = targetId;
+        // Automações e vínculos de KB
         foreach (var link in await db.TicketAutomationLinks.Where(l => l.TicketId == sourceId).ToListAsync(ct))
             link.TicketId = targetId;
         foreach (var link in await db.TicketKnowledgeLinks.Where(l => l.TicketId == sourceId).ToListAsync(ct))

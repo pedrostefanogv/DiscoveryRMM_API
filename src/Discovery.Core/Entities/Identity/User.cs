@@ -34,19 +34,4 @@ public class User
 
     /// <summary>Se preenchido, a conta está bloqueada até esta data/hora (lockout temporário).</summary>
     public DateTime? LockoutUntil { get; set; }
-
-    /// <summary>Identificador da conta no MeshCentral (ex.: user/domain/username).</summary>
-    public string? MeshCentralUserId { get; set; }
-
-    /// <summary>Username efetivo sincronizado no MeshCentral.</summary>
-    public string? MeshCentralUsername { get; set; }
-
-    /// <summary>Último momento de sincronização bem-sucedida com MeshCentral.</summary>
-    public DateTime? MeshCentralLastSyncedAt { get; set; }
-
-    /// <summary>Status do último sync (ex.: synced, pending, failed).</summary>
-    public string? MeshCentralSyncStatus { get; set; }
-
-    /// <summary>Último erro de sincronização registrado para troubleshooting.</summary>
-    public string? MeshCentralSyncError { get; set; }
 }

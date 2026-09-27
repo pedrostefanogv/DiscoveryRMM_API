@@ -7,9 +7,6 @@ namespace Discovery.Core.Cqrs.Tickets.Queries;
 // ── Watchers ─────────────────────────────────────────────────────────────
 public sealed record GetTicketWatchersQuery(Guid TicketId) : IQuery<Result<IEnumerable<TicketWatcher>>>;
 
-// ── Remote Sessions ──────────────────────────────────────────────────────
-public sealed record GetTicketRemoteSessionsQuery(Guid TicketId) : IQuery<Result<IEnumerable<TicketRemoteSession>>>;
-
 // ── Automation Links ─────────────────────────────────────────────────────
 public sealed record GetTicketAutomationLinksQuery(Guid TicketId) : IQuery<Result<IReadOnlyList<TicketAutomationLink>>>;
 

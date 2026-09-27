@@ -5,7 +5,6 @@ namespace Discovery.Core.Entities;
 
 /// <summary>
 /// Sessão de acesso remoto nativo a um agent (screen, terminal, files, proxy).
-/// Substitui TicketRemoteSession (MeshCentral).
 /// </summary>
 public class RemoteSession
 {

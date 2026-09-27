@@ -91,10 +91,6 @@ public sealed class GetAgentConfigurationHandler(
             // TLS cert hashes (computed at runtime by the server)
             ["apiTlsCertHash"] = (string?)null,   // TODO: compute from server certificate
             ["natsTlsCertHash"] = (string?)null,  // TODO: compute from NATS certificate
-
-            // MeshCentral legacy — always disabled after removal
-            ["meshCentralEnabled"] = false,
-            ["meshCentralGroupPolicyProfile"] = (string?)null
         };
 
         return Result<object>.Success(effective);

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Configurations.Commands;
 using Discovery.Core.Cqrs.Configurations.Queries;
@@ -23,6 +24,8 @@ public class ConfigurationsController(
     DiscoveryDbContext db,
     ILogger<ConfigurationsController> logger) : ControllerBase
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     private string? CurrentUser => HttpContext.Items["Username"] as string;
 
     /// <summary>
@@ -48,22 +51,82 @@ public class ConfigurationsController(
     public async Task<IActionResult> GetServer()
     {
         var result = await mediator.Send(new GetServerConfigQuery());
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: config => Ok(ProjectServerConfigForClient(config)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpGet("server/metadata")]
     [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
-    public IActionResult GetServerMetadata() => Ok(new { fields = new[] { "AgentOnlineGraceSeconds", "NatsEnabled", "NatsServerHostInternal" } });
+    public async Task<IActionResult> GetServerMetadata()
+    {
+        var server = (await mediator.Send(new GetServerConfigQuery())).Value;
+        if (server is null)
+            return Ok(new ConfigurationMetadataResult(new(), []));
 
+        var result = await mediator.Send(new GetConfigurationMetadataQuery("Server", server.Id));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    /// <summary>
+    /// Cópia da configuração do servidor para o cliente web: nunca expõe segredos
+    /// (Secret Key do storage e ApiKey/EmbeddingApiKey de IA) — apenas flags de
+    /// "configurado", para que o front preserve o valor ao salvar.
+    /// </summary>
+    private static ServerConfiguration ProjectServerConfigForClient(ServerConfiguration config)
+    {
+        var clone = JsonSerializer.Deserialize<ServerConfiguration>(
+            JsonSerializer.Serialize(config, JsonOptions), JsonOptions) ?? config;
+
+        clone.ObjectStorageSecretKeyConfigured = !string.IsNullOrWhiteSpace(config.ObjectStorageSecretKey);
+        clone.ObjectStorageSecretKey = string.Empty;
+
+        var ai = DeserializeAiSettings(clone.AIIntegrationSettingsJson);
+        if (ai is not null)
+        {
+            clone.AiApiKeyConfigured = !string.IsNullOrWhiteSpace(ai.ApiKey);
+            ai.ApiKey = null;
+            ai.EmbeddingApiKey = null;
+            clone.AIIntegrationSettingsJson = JsonSerializer.Serialize(ai, JsonOptions);
+        }
+
+        return clone;
+    }
+
+    private static AIIntegrationSettings? DeserializeAiSettings(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<AIIntegrationSettings>(json, JsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Atualiza a configuração do servidor com semântica de MERGE (patch): apenas as
+    /// chaves enviadas são alteradas. Mantido para compatibilidade; antes substituía a
+    /// entidade inteira e apagava campos ausentes do payload (bug de perda de dados).
+    /// </summary>
     [HttpPut("server")]
     [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
-    public async Task<IActionResult> UpdateServer([FromBody] ServerConfiguration config)
+    public async Task<IActionResult> UpdateServer([FromBody] Dictionary<string, object> updates)
     {
-        var result = await mediator.Send(new UpdateServerConfigCommand(config, CurrentUser));
+        var result = await mediator.Send(new PatchServerConfigCommand(updates, CurrentUser));
         if (result.IsSuccess)
             await ApplyScheduleSafeAsync();
 
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        var payload = result.Match<IActionResult>(
+            success: config => Ok(ProjectServerConfigForClient(config)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return payload;
     }
 
     [HttpPatch("server")]
@@ -85,22 +148,56 @@ public class ConfigurationsController(
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
-    [HttpGet("server/reporting")]
+    /// <summary>
+    /// Impacto de bloquear campos no servidor: overrides de clientes/sites que a
+    /// cascata removeria. Usado para confirmar antes de aplicar locks.
+    /// </summary>
+    [HttpPost("server/locks/impact")]
     [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
-    public async Task<IActionResult> GetServerReporting()
+    public async Task<IActionResult> GetLocksImpact([FromBody] LockImpactRequest request)
     {
-        var result = await mediator.Send(new GetServerReportingQuery());
+        var result = await mediator.Send(new GetServerLocksImpactQuery(request.Fields ?? []));
         return result.Match<IActionResult>(
-            success: value => Ok(value),
+            success: Ok,
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
-    [HttpPut("server/reporting")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
-    public async Task<IActionResult> UpdateServerReporting([FromBody] object reporting)
+    /// <summary>Exporta a configuração do servidor sem segredos.</summary>
+    [HttpGet("server/export")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    public async Task<IActionResult> ExportServer()
     {
-        var result = await mediator.Send(new UpdateServerReportingCommand(reporting, CurrentUser));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        var result = await mediator.Send(new ExportServerConfigurationQuery());
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    /// <summary>Importa configuração exportada (merge validado). DryRun só valida as chaves.</summary>
+    [HttpPost("server/import")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    public async Task<IActionResult> ImportServer([FromBody] ServerImportRequest request)
+    {
+        var result = await mediator.Send(
+            new ImportServerConfigurationCommand(request.Settings ?? [], request.DryRun, CurrentUser));
+
+        if (result.IsSuccess)
+            await ApplyScheduleSafeAsync();
+
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    /// <summary>Testa a API key de IA armazenada (write-only) contra o provider.</summary>
+    [HttpPost("server/ai/test")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute)]
+    public async Task<IActionResult> TestStoredAiKey(CancellationToken ct)
+    {
+        var result = await mediator.Send(new TestStoredAiKeyCommand(), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPost("server/object-storage/test")]
@@ -136,6 +233,16 @@ public class ConfigurationsController(
     {
         var result = await mediator.Send(new GetTicketAttachmentSettingsQuery());
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    [HttpPut("server/ticket-attachments")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    public async Task<IActionResult> UpdateTicketAttachmentSettings([FromBody] TicketAttachmentSettings settings)
+    {
+        var result = await mediator.Send(new UpdateTicketAttachmentSettingsCommand(settings, CurrentUser));
+        return result.Match<IActionResult>(
+            success: config => Ok(TicketAttachmentSettings.FromJson(config.TicketAttachmentSettingsJson)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     // ── Clients ────────────────────────────────────────────────────────
@@ -223,6 +330,35 @@ public class ConfigurationsController(
     {
         var result = await mediator.Send(new GetSiteEffectiveConfigQuery(siteId));
         return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+    }
+
+    /// <summary>Configuração efetiva de um cliente (server → client).</summary>
+    [HttpGet("clients/{clientId:guid}/effective")]
+    [RequirePermission(ResourceType.ClientConfig, ActionType.View)]
+    public async Task<IActionResult> GetClientEffective(Guid clientId)
+    {
+        var result = await mediator.Send(new GetClientEffectiveConfigQuery(clientId));
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+    }
+
+    /// <summary>Metadados de edição por campo (origem + locks) no escopo do cliente.</summary>
+    [HttpGet("clients/{clientId:guid}/metadata")]
+    [RequirePermission(ResourceType.ClientConfig, ActionType.View)]
+    public async Task<IActionResult> GetClientMetadata(Guid clientId)
+        => await SendMetadata("Client", clientId);
+
+    /// <summary>Metadados de edição por campo (origem + locks) no escopo do site.</summary>
+    [HttpGet("sites/{siteId:guid}/metadata")]
+    [RequirePermission(ResourceType.SiteConfig, ActionType.View)]
+    public async Task<IActionResult> GetSiteMetadata(Guid siteId)
+        => await SendMetadata("Site", siteId);
+
+    private async Task<IActionResult> SendMetadata(string entityType, Guid entityId)
+    {
+        var result = await mediator.Send(new GetConfigurationMetadataQuery(entityType, entityId));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     // ── Processamento em segundo plano (ciclos agendados) ───────────────
@@ -391,3 +527,5 @@ public class ConfigurationsController(
 }
 
 public record NatsConnectionTestRequest(string Url, string User, string Password);
+public record LockImpactRequest(string[] Fields);
+public record ServerImportRequest(Dictionary<string, object> Settings, bool DryRun);

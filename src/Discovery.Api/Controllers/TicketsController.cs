@@ -232,38 +232,6 @@ public class TicketsController(
         return NoContent();
     }
 
-    // ── Remote Sessions ──────────────────────────────────────────────────
-
-    [HttpGet("{id:guid}/remote-sessions")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> GetRemoteSessions(Guid id)
-    {
-        if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
-            return NotFound();
-        var result = await mediator.Send(new GetTicketRemoteSessionsQuery(id));
-        return result.ToActionResult();
-    }
-
-    [HttpPost("{id:guid}/remote-sessions")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> CreateRemoteSession(Guid id, [FromBody] TicketRemoteSession body)
-    {
-        if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
-            return NotFound();
-        var result = await mediator.Send(new CreateTicketRemoteSessionCommand(id, body.AgentId, body.MeshNodeId, Username, body.Note));
-        return result.Match<IActionResult>(success: s => CreatedAtAction(nameof(GetRemoteSessions), new { id }, s), failure: BadRequest);
-    }
-
-    [HttpPatch("{id:guid}/remote-sessions/{sessionId:guid}/end")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
-    public async Task<IActionResult> EndRemoteSession(Guid id, Guid sessionId)
-    {
-        if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
-            return NotFound();
-        var result = await mediator.Send(new EndTicketRemoteSessionCommand(id, sessionId));
-        return result.ToActionResult();
-    }
-
     // ── Automation Links ─────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/automation-links")]

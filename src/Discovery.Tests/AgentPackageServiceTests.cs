@@ -19,7 +19,6 @@ public class AgentPackageServiceTests
         public Task<ServerConfiguration> GetServerConfigAsync() =>
             Task.FromResult(new ServerConfiguration());
 
-        public Task<ServerConfiguration> UpdateServerAsync(ServerConfiguration config, string? updatedBy = null) => throw new NotImplementedException();
         public Task<ServerConfiguration> PatchServerAsync(Dictionary<string, object> updates, string? updatedBy = null) => throw new NotImplementedException();
         public Task<ServerConfiguration> ResetServerAsync(string? resetBy = null) => throw new NotImplementedException();
         public Task<ClientConfiguration?> GetClientConfigAsync(Guid clientId) => throw new NotImplementedException();

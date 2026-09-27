@@ -31,14 +31,8 @@ public partial class DiscoveryDbContext
             e.Property(u => u.LastLoginAt).HasColumnName("last_login_at").HasColumnType("timestamptz");
             e.Property(u => u.FailedLoginAttempts).HasColumnName("failed_login_attempts");
             e.Property(u => u.LockoutUntil).HasColumnName("lockout_until").HasColumnType("timestamptz");
-            e.Property(u => u.MeshCentralUserId).HasColumnName("meshcentral_user_id").HasMaxLength(256);
-            e.Property(u => u.MeshCentralUsername).HasColumnName("meshcentral_username").HasMaxLength(100);
-            e.Property(u => u.MeshCentralLastSyncedAt).HasColumnName("meshcentral_last_synced_at").HasColumnType("timestamptz");
-            e.Property(u => u.MeshCentralSyncStatus).HasColumnName("meshcentral_sync_status").HasMaxLength(32);
-            e.Property(u => u.MeshCentralSyncError).HasColumnName("meshcentral_sync_error").HasMaxLength(1024);
             e.HasIndex(u => u.Login).IsUnique().HasDatabaseName("ix_users_login");
             e.HasIndex(u => u.Email).IsUnique().HasDatabaseName("ix_users_email");
-            e.HasIndex(u => u.MeshCentralUserId).HasDatabaseName("ix_users_meshcentral_user_id");
         });
 
         modelBuilder.Entity<UserGroup>(e =>
@@ -72,8 +66,6 @@ public partial class DiscoveryDbContext
             e.Property(r => r.Type).HasColumnName("type").HasConversion<string>();
             e.Property(r => r.IsSystem).HasColumnName("is_system");
             e.Property(r => r.MfaRequirement).HasColumnName("mfa_requirement").HasConversion<string>();
-            e.Property(r => r.MeshRightsMask).HasColumnName("mesh_rights_mask");
-            e.Property(r => r.MeshRightsProfile).HasColumnName("mesh_rights_profile").HasMaxLength(64);
             e.Property(r => r.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(r => r.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });

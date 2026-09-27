@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
@@ -63,45 +64,47 @@ public class ConfigurationService : IConfigurationService
         return config;
     }
 
-    public async Task<ServerConfiguration> UpdateServerAsync(ServerConfiguration config, string? updatedBy = null)
-    {
-        var existing = await _serverRepo.GetOrCreateDefaultAsync();
-        var previousLocks = ParseLockedFields(existing.LockedFieldsJson);
-
-        config.Id = existing.Id;
-        config.CreatedAt = existing.CreatedAt;
-        config.CreatedBy = existing.CreatedBy;
-        config.Version = existing.Version + 1;
-        config.UpdatedBy = updatedBy;
-        ProtectSensitiveData(config);
-        await _serverRepo.UpdateAsync(config);
-
-        var addedLocks = GetAddedLocks(previousLocks, ParseLockedFields(config.LockedFieldsJson));
-        if (addedLocks.Count > 0)
-            await ApplyServerLockCascadeAsync(addedLocks, updatedBy);
-
-        _resolver.ClearCache();
-        await _redisService.DeleteAsync(ServerConfigCacheKey);
-        await _audit.LogChangeAsync("Server", config.Id, "*", null, null, "Full update", updatedBy);
-        return config;
-    }
-
     public async Task<ServerConfiguration> PatchServerAsync(Dictionary<string, object> updates, string? updatedBy = null)
     {
         var config = await _serverRepo.GetOrCreateDefaultAsync();
         var previousLocks = ParseLockedFields(config.LockedFieldsJson);
+
+        EnsureKnownFields(typeof(ServerConfiguration), updates, "Server");
 
         foreach (var (key, value) in updates)
         {
             var prop = typeof(ServerConfiguration).GetProperty(key,
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
             if (prop is null || !prop.CanWrite) continue;
+
+            if (prop.Name.Equals(nameof(ServerConfiguration.ObjectStorageSecretKey), StringComparison.OrdinalIgnoreCase)
+                && IsSecretUnchanged(value, config.ObjectStorageSecretKey))
+            {
+                continue;
+            }
+
             var oldValue = prop.GetValue(config)?.ToString();
             var converted = ConvertToPropertyValue(value, prop.PropertyType);
+
+            // "Limpar" o segredo grava string vazia — nunca null na coluna não-anulável.
+            if (prop.Name.Equals(nameof(ServerConfiguration.ObjectStorageSecretKey), StringComparison.OrdinalIgnoreCase)
+                && converted is null)
+            {
+                converted = string.Empty;
+            }
+
+            if (prop.Name.Equals(nameof(ServerConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase)
+                && converted is string aiJson)
+            {
+                converted = MergeAiSecrets(aiJson, config.AIIntegrationSettingsJson);
+            }
+
             converted = ProtectPatchValue(key, converted);
             prop.SetValue(config, converted);
             await _audit.LogChangeAsync("Server", config.Id, key, MaskForAudit(key, oldValue), MaskForAudit(key, converted?.ToString()), null, updatedBy);
         }
+
+        await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
         config.UpdatedBy = updatedBy;
         await _serverRepo.UpdateAsync(config);
@@ -197,6 +200,8 @@ public class ConfigurationService : IConfigurationService
             config = new ClientConfiguration { ClientId = clientId };
         }
 
+        EnsureKnownFields(typeof(ClientConfiguration), updates, "Client");
+
         foreach (var (key, value) in updates)
         {
             var prop = typeof(ClientConfiguration).GetProperty(key,
@@ -213,6 +218,7 @@ public class ConfigurationService : IConfigurationService
         NormalizeNullableBooleanDefaults(config);
         ProtectSensitiveData(config);
 
+        await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
         config.UpdatedBy = updatedBy;
         if (isNew)
@@ -337,6 +343,8 @@ public class ConfigurationService : IConfigurationService
 
         var blockedFields = await GetBlockedFieldsForClientAsync(clientId);
 
+        EnsureKnownFields(typeof(SiteConfiguration), updates, "Site");
+
         foreach (var (key, value) in updates)
         {
             var prop = typeof(SiteConfiguration).GetProperty(key,
@@ -353,6 +361,7 @@ public class ConfigurationService : IConfigurationService
         NormalizeNullableBooleanDefaults(config);
         ProtectSensitiveData(config);
 
+        await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
         config.UpdatedBy = updatedBy;
         if (isNew)
@@ -405,8 +414,9 @@ public class ConfigurationService : IConfigurationService
         CheckRange(type, config, "InventoryIntervalHours", 1, 168, errors);
         CheckRange(type, config, "AgentHeartbeatIntervalSeconds", 10, 3600, errors);
         CheckRange(type, config, "AgentOnlineGraceSeconds", 60, 3600, errors);
-        CheckRange(type, config, "NatsAgentJwtTtlMinutes", 1, 1440, errors);
-        CheckRange(type, config, "NatsUserJwtTtlMinutes", 1, 1440, errors);
+        CheckRange(type, config, "ObjectStorageUrlTtlHours", 1, 168, errors);
+        CheckRange(type, config, "NatsAgentJwtTtlMinutes", 15, 4320, errors);
+        CheckRange(type, config, "NatsUserJwtTtlMinutes", 15, 4320, errors);
 
         if (config is ServerConfiguration serverConfiguration)
         {
@@ -446,6 +456,98 @@ public class ConfigurationService : IConfigurationService
         catch (JsonException ex)
         {
             return Task.FromResult((false, new[] { $"Invalid JSON for {objectType}: {ex.Message}" }));
+        }
+    }
+
+    /// <summary>
+    /// Rejeita chaves desconhecidas, somente-leitura ou de auditoria em um patch.
+    /// Antes, campos inexistentes (ex.: nomes legados/typos) eram ignorados silenciosamente
+    /// e a API devolvia 200 como se o valor tivesse sido salvo.
+    /// </summary>
+    private static void EnsureKnownFields(Type type, Dictionary<string, object> updates, string level)
+        => ConfigurationPatchValidator.EnsureKnownFields(type, updates.Keys, level);
+
+    /// <summary>
+    /// Valida o resultado do merge, mas só bloqueia quando o erro se refere a um
+    /// campo efetivamente alterado no patch. Isso evita "lockout" por estado legado
+    /// inválido armazenado (que o admin ainda precisa poder corrigir).
+    /// </summary>
+    private async Task ValidateOrThrowAsync(object config, IReadOnlyCollection<string>? touchedKeys = null)
+    {
+        var (_, errors) = await ValidateAsync(config);
+        if (errors.Length == 0)
+            return;
+
+        if (touchedKeys is null || touchedKeys.Count == 0)
+            throw new ArgumentException(string.Join(" ", errors));
+
+        var relevant = errors
+            .Where(error => touchedKeys.Any(key =>
+                !string.IsNullOrWhiteSpace(key) &&
+                error.Contains(key, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+
+        if (relevant.Length > 0)
+            throw new ArgumentException(string.Join(" ", relevant));
+    }
+
+    /// <summary>
+    /// Segredo de storage é write-only: vazio ou igual ao já armazenado = não alterar.
+    /// null explícito significa "limpar" e não é tratado aqui (retorna false).
+    /// </summary>
+    private static bool IsSecretUnchanged(object? incoming, string? currentProtected)
+    {
+        if (incoming is null)
+            return false; // limpar
+
+        if (incoming is JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Null)
+                return false; // limpar
+
+            if (element.ValueKind != JsonValueKind.String)
+                return false;
+
+            var text = element.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+                return true; // manter
+            return string.Equals(text, currentProtected, StringComparison.Ordinal);
+        }
+
+        var raw = incoming.ToString();
+        if (string.IsNullOrWhiteSpace(raw))
+            return true;
+        return string.Equals(raw, currentProtected, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Preserva ApiKey/EmbeddingApiKey já armazenados (cifrados) quando o patch não os
+    /// reenvia — o GET não devolve os valores, então um patch de IA não pode apagá-los.
+    /// </summary>
+    private static string MergeAiSecrets(string? incomingJson, string? existingJson)
+    {
+        if (string.IsNullOrWhiteSpace(incomingJson))
+            return existingJson ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(existingJson))
+            return incomingJson;
+
+        try
+        {
+            var incoming = JsonSerializer.Deserialize<AIIntegrationSettings>(incomingJson, JsonOptions);
+            var existing = JsonSerializer.Deserialize<AIIntegrationSettings>(existingJson, JsonOptions);
+            if (incoming is null || existing is null)
+                return incomingJson;
+
+            if (string.IsNullOrWhiteSpace(incoming.ApiKey))
+                incoming.ApiKey = existing.ApiKey;
+            if (string.IsNullOrWhiteSpace(incoming.EmbeddingApiKey))
+                incoming.EmbeddingApiKey = existing.EmbeddingApiKey;
+
+            return JsonSerializer.Serialize(incoming, JsonOptions);
+        }
+        catch
+        {
+            return incomingJson;
         }
     }
 
@@ -702,7 +804,7 @@ public class ConfigurationService : IConfigurationService
 
     private void ProtectSensitiveData(ServerConfiguration config)
     {
-        if (!string.IsNullOrWhiteSpace(config.ObjectStorageSecretKey))
+        if (!string.IsNullOrWhiteSpace(config.ObjectStorageSecretKey) && !_secretProtector.IsProtected(config.ObjectStorageSecretKey))
             config.ObjectStorageSecretKey = _secretProtector.Protect(config.ObjectStorageSecretKey);
 
         config.AIIntegrationSettingsJson = ProtectAiJson(config.AIIntegrationSettingsJson);
@@ -729,7 +831,7 @@ public class ConfigurationService : IConfigurationService
             converted is string secret &&
             !string.IsNullOrWhiteSpace(secret))
         {
-            return _secretProtector.Protect(secret);
+            return _secretProtector.IsProtected(secret) ? secret : _secretProtector.Protect(secret);
         }
 
         if (key.Equals(nameof(ServerConfiguration.AIIntegrationSettingsJson), StringComparison.OrdinalIgnoreCase) ||
@@ -753,10 +855,10 @@ public class ConfigurationService : IConfigurationService
             if (ai is null)
                 return json;
 
-            if (!string.IsNullOrWhiteSpace(ai.ApiKey))
+            if (!string.IsNullOrWhiteSpace(ai.ApiKey) && !_secretProtector.IsProtected(ai.ApiKey))
                 ai.ApiKey = _secretProtector.Protect(ai.ApiKey);
 
-            if (!string.IsNullOrWhiteSpace(ai.EmbeddingApiKey))
+            if (!string.IsNullOrWhiteSpace(ai.EmbeddingApiKey) && !_secretProtector.IsProtected(ai.EmbeddingApiKey))
                 ai.EmbeddingApiKey = _secretProtector.Protect(ai.EmbeddingApiKey);
 
             return JsonSerializer.Serialize(ai, JsonSerializerOptions.Web);

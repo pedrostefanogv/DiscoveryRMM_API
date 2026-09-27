@@ -12,7 +12,6 @@ public interface IConfigurationService
     // ============ Server Configuration ============
     
     Task<ServerConfiguration> GetServerConfigAsync();
-    Task<ServerConfiguration> UpdateServerAsync(ServerConfiguration config, string? updatedBy = null);
     Task<ServerConfiguration> PatchServerAsync(Dictionary<string, object> updates, string? updatedBy = null);
     Task<ServerConfiguration> ResetServerAsync(string? resetBy = null);
     

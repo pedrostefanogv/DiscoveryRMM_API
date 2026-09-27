@@ -83,7 +83,6 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<TicketAlertRule> TicketAlertRules => Set<TicketAlertRule>();
     public DbSet<TicketEscalationRule> TicketEscalationRules => Set<TicketEscalationRule>();
     public DbSet<TicketWatcher> TicketWatchers => Set<TicketWatcher>();
-    public DbSet<TicketRemoteSession> TicketRemoteSessions => Set<TicketRemoteSession>();
     public DbSet<TicketAutomationLink> TicketAutomationLinks => Set<TicketAutomationLink>();
     public DbSet<SlaCalendar> SlaCalendars => Set<SlaCalendar>();
     public DbSet<SlaCalendarHoliday> SlaCalendarHolidays => Set<SlaCalendarHoliday>();

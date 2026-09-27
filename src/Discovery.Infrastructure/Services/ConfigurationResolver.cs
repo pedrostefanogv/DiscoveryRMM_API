@@ -196,6 +196,30 @@ public class ConfigurationResolver : IConfigurationResolver
 
         var site = await _siteRepo.GetBySiteIdAsync(siteId);
         var client = await _clientRepo.GetByClientIdAsync(siteEntity.ClientId);
+        var resolved = BuildResolved(server, client, site, siteEntity.ClientId, siteId);
+
+        var payload = JsonSerializer.Serialize(resolved, JsonOptions);
+        await _redisService.SetAsync(cacheKey, payload, (int)CacheTtl.TotalSeconds);
+        return resolved;
+    }
+
+    /// <summary>
+    /// Resolve a configuração efetiva para um cliente (server → client), sem nível de site.
+    /// </summary>
+    public async Task<ResolvedConfiguration> ResolveForClientAsync(Guid clientId)
+    {
+        var server = await _serverRepo.GetOrCreateDefaultAsync();
+        var client = await _clientRepo.GetByClientIdAsync(clientId);
+        return BuildResolved(server, client, null, clientId, null);
+    }
+
+    private ResolvedConfiguration BuildResolved(
+        ServerConfiguration server,
+        ClientConfiguration? client,
+        SiteConfiguration? site,
+        Guid? clientId,
+        Guid? siteId)
+    {
         var globalLocks = GetBlockedFields(server.LockedFieldsJson);
         var clientLocks = GetBlockedFields(client?.LockedFieldsJson);
         var siteLocks = GetBlockedFields(site?.LockedFieldsJson);
@@ -234,7 +258,7 @@ public class ConfigurationResolver : IConfigurationResolver
         var resolved = new ResolvedConfiguration
         {
             SiteId = siteId,
-            ClientId = siteEntity.ClientId,
+            ClientId = clientId,
             RecoveryEnabled = recovery.Value,
             DiscoveryEnabled = discovery.Value,
             P2PFilesEnabled = p2p.Value,
@@ -269,8 +293,6 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["AIIntegration"] = (int)aiSource;
         resolved.Inheritance["BackgroundProcessing"] = (int)backgroundSource;
 
-        var payload = JsonSerializer.Serialize(resolved, JsonOptions);
-        await _redisService.SetAsync(cacheKey, payload, (int)CacheTtl.TotalSeconds);
         return resolved;
     }
 

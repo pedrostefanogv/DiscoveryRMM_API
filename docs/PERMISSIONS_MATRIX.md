@@ -192,16 +192,20 @@
 | `PUT /api/v1/configurations/server`                    | `ServerConfig.Edit` | G     |
 | `PATCH /api/v1/configurations/server`                  | `ServerConfig.Edit` | G     |
 | `POST /api/v1/configurations/server/reset`             | `ServerConfig.Edit` | G     |
-| `POST /api/v1/configurations/server/nats/test`         | `ServerConfig.View` | G     |
-| `PATCH /api/v1/configurations/server/nats`             | `ServerConfig.Edit` | G     |
 | `GET /api/v1/configurations/server/metadata`           | `ServerConfig.View` | G     |
-| `GET /api/v1/configurations/server/reporting`          | `ServerConfig.View` | G     |
-| `PUT /api/v1/configurations/server/reporting`          | `ServerConfig.Edit` | G     |
+| `POST /api/v1/configurations/server/locks/impact`      | `ServerConfig.View` | G     |
+| `GET /api/v1/configurations/server/export`             | `ServerConfig.View` | G     |
+| `POST /api/v1/configurations/server/import`            | `ServerConfig.Edit` | G     |
+| `POST /api/v1/configurations/server/ai/test`           | `ServerConfig.Execute` | G  |
+| `POST /api/v1/configurations/server/nats/test`         | `ServerConfig.Execute` | G  |
+| `PATCH /api/v1/configurations/server/nats`             | `ServerConfig.Edit` | G     |
+| `POST /api/v1/configurations/server/object-storage/test` | `ServerConfig.Execute` | G |
 | `GET /api/v1/configurations/server/ticket-attachments` | `ServerConfig.View` | G     |
 | `PUT /api/v1/configurations/server/ticket-attachments` | `ServerConfig.Edit` | G     |
-| `GET /api/v1/configurations/server/retention`          | `ServerConfig.View` | G     |
-| `PUT /api/v1/configurations/server/retention`          | `ServerConfig.Edit` | G     |
-| `POST /api/v1/configurations/server/retention/reset`   | `ServerConfig.Edit` | G     |
+| `GET /api/v1/configurations/clients/{id}/effective`     | `ClientConfig.View` | G     |
+| `GET /api/v1/configurations/clients/{id}/metadata`      | `ClientConfig.View` | G     |
+| `GET /api/v1/configurations/sites/{id}/effective`       | `SiteConfig.View`   | G     |
+| `GET /api/v1/configurations/sites/{id}/metadata`        | `SiteConfig.View`   | G     |
 
 ### Deploy Tokens
 

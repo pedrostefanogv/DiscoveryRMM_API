@@ -4,7 +4,7 @@ namespace Discovery.Core.Interfaces;
 
 /// <summary>
 /// Service responsável pela transferência de agentes entre sites/clientes.
-/// Lida com validação de permissões cross-scope, atualização de ACLs no MeshCentral
+/// Lida com validação de permissões cross-scope, atualização de ACLs de acesso remoto
 /// e notificações em tempo real.
 /// </summary>
 public interface IAgentTransferService
@@ -12,7 +12,7 @@ public interface IAgentTransferService
     /// <summary>
     /// Transfere um agente para outro site.
     /// Se o site destino pertencer a outro cliente, a transferência é cross-client
-    /// e requer permissão em ambos os escopos, além de atualização de ACL no MeshCentral.
+    /// e requer permissão em ambos os escopos, além de atualização de ACL de acesso remoto.
     /// </summary>
     /// <param name="agentId">ID do agente a ser transferido.</param>
     /// <param name="targetSiteId">ID do site de destino.</param>

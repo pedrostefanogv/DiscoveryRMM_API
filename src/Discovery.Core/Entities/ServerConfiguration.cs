@@ -1,5 +1,6 @@
 using Discovery.Core.Enums;
 using Discovery.Core.ValueObjects;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
 
 namespace Discovery.Core.Entities;
@@ -156,6 +157,20 @@ public class ServerConfiguration
 
     /// <summary>Secret Key para autenticação (criptografada em repouso)</summary>
     public string ObjectStorageSecretKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Somente leitura para o cliente: indica que há um segredo de storage configurado,
+    /// sem expor o valor cifrado. Não é persistido.
+    /// </summary>
+    [NotMapped]
+    public bool ObjectStorageSecretKeyConfigured { get; set; }
+
+    /// <summary>
+    /// Somente leitura para o cliente: indica que há uma ApiKey de IA configurada,
+    /// sem expor o valor cifrado. Não é persistido.
+    /// </summary>
+    [NotMapped]
+    public bool AiApiKeyConfigured { get; set; }
 
     /// <summary>TTL padrão para URLs pré-assinadas do download (horas, default 24)</summary>
     public int ObjectStorageUrlTtlHours { get; set; } = 24;

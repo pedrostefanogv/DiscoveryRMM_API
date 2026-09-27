@@ -278,24 +278,6 @@ public partial class DiscoveryDbContext
             entity.HasIndex(w => new { w.TicketId, w.UserId }).IsUnique().HasDatabaseName("uq_ticket_watchers_ticket_user");
         });
 
-        modelBuilder.Entity<TicketRemoteSession>(entity =>
-        {
-            entity.ToTable("ticket_remote_sessions");
-            entity.HasKey(s => s.Id);
-            entity.Property(s => s.Id).HasColumnName("id").ValueGeneratedNever();
-            entity.Property(s => s.TicketId).HasColumnName("ticket_id");
-            entity.Property(s => s.AgentId).HasColumnName("agent_id");
-            entity.Property(s => s.MeshNodeId).HasColumnName("mesh_node_id").HasMaxLength(512);
-            entity.Property(s => s.SessionUrl).HasColumnName("session_url").HasMaxLength(2048);
-            entity.Property(s => s.StartedBy).HasColumnName("started_by").HasMaxLength(255);
-            entity.Property(s => s.StartedAt).HasColumnName("started_at").HasColumnType("timestamptz");
-            entity.Property(s => s.EndedAt).HasColumnName("ended_at").HasColumnType("timestamptz");
-            entity.Property(s => s.DurationSeconds).HasColumnName("duration_seconds");
-            entity.Property(s => s.Note).HasColumnName("note").HasMaxLength(2000);
-            entity.HasIndex(s => s.TicketId).HasDatabaseName("ix_ticket_remote_sessions_ticket_id");
-            entity.HasOne(s => s.Ticket).WithMany().HasForeignKey(s => s.TicketId).OnDelete(DeleteBehavior.Cascade);
-        });
-
         modelBuilder.Entity<TicketAutomationLink>(entity =>
         {
             entity.ToTable("ticket_automation_links");

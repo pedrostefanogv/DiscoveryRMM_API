@@ -57,6 +57,13 @@ public interface IConfigurationResolver
     Task<ResolvedConfiguration> ResolveForSiteAsync(Guid siteId);
 
     /// <summary>
+    /// Resolve configuração completa para um cliente (server → client), sem nível de site.
+    /// Implementação padrão lança para não quebrar fakes de teste que não a utilizam.
+    /// </summary>
+    Task<ResolvedConfiguration> ResolveForClientAsync(Guid clientId)
+        => throw new NotSupportedException("ResolveForClientAsync não implementado.");
+
+    /// <summary>
     /// Configuração efetiva dos processamentos em segundo plano (métricas de
     /// atendente e triagem por IA) para um cliente: global + override do cliente
     /// (null/Empty = apenas o global). Ausentes no override herdam o global.

@@ -18,9 +18,6 @@ namespace Discovery.Infrastructure.Cqrs.Tickets.QueryHandlers;
 public sealed class GetTicketWatchersQueryHandler(ITicketWatcherRepository repo) : IRequestHandler<GetTicketWatchersQuery, Result<IEnumerable<TicketWatcher>>>
 { public async Task<Result<IEnumerable<TicketWatcher>>> Handle(GetTicketWatchersQuery q, CancellationToken ct) => Result<IEnumerable<TicketWatcher>>.Success(await repo.GetByTicketAsync(q.TicketId)); }
 
-public sealed class GetTicketRemoteSessionsQueryHandler(ITicketRemoteSessionRepository repo) : IRequestHandler<GetTicketRemoteSessionsQuery, Result<IEnumerable<TicketRemoteSession>>>
-{ public async Task<Result<IEnumerable<TicketRemoteSession>>> Handle(GetTicketRemoteSessionsQuery q, CancellationToken ct) => Result<IEnumerable<TicketRemoteSession>>.Success(await repo.GetByTicketAsync(q.TicketId, ct)); }
-
 public sealed class GetTicketAutomationLinksQueryHandler(ITicketAutomationLinkRepository repo) : IRequestHandler<GetTicketAutomationLinksQuery, Result<IReadOnlyList<TicketAutomationLink>>>
 { public async Task<Result<IReadOnlyList<TicketAutomationLink>>> Handle(GetTicketAutomationLinksQuery q, CancellationToken ct) => Result<IReadOnlyList<TicketAutomationLink>>.Success(await repo.GetByTicketAsync(q.TicketId, ct)); }
 
