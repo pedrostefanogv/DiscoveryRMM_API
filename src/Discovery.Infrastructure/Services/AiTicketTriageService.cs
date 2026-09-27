@@ -107,10 +107,10 @@ public class AiTicketTriageService(
             comment: BuildActivityComment(evaluation));
 
         await notification.PublishAsync(new NotificationPublishRequest(
-            "ticket.assigned", "tickets", "Ticket atribuído pela triagem por IA",
-            $"Ticket #{ticket.Id}",
+            "ticket.assigned", "tickets", "Chamado atribuído pela triagem por IA",
+            $"Chamado \"{ticket.Title}\" atribuído pela triagem por IA.",
             NotificationSeverity.Informational,
-            new { ticketId = ticket.Id, decisionId = evaluation.DecisionId, confidence = evaluation.Confidence },
+            new { ticketId = ticket.Id, ticketTitle = ticket.Title, decisionId = evaluation.DecisionId, confidence = evaluation.Confidence },
             evaluation.ChosenUserId.Value), ct);
 
         return await PersistAsync(evaluation, apply: true, null, triggeredByUserId, ct);
@@ -839,9 +839,10 @@ public class AiTicketTriageService(
             $"Fallback determinístico da triagem por IA ({reason}).");
 
         await notification.PublishAsync(new NotificationPublishRequest(
-            "ticket.assigned", "tickets", "Ticket atribuído (fallback da triagem por IA)",
-            $"Ticket #{ticket.Id}", NotificationSeverity.Informational,
-            new { ticketId = ticket.Id }, assignee.Value), ct);
+            "ticket.assigned", "tickets", "Chamado atribuído (fallback da triagem por IA)",
+            $"Chamado \"{ticket.Title}\" atribuído (fallback da triagem por IA).",
+            NotificationSeverity.Informational,
+            new { ticketId = ticket.Id, ticketTitle = ticket.Title }, assignee.Value), ct);
 
         return true;
     }

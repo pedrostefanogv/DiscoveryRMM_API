@@ -79,7 +79,7 @@ public sealed class ReopenTicketCommandHandler(
                 Title: "Chamado reaberto",
                 Message: $"O chamado '{ticket.Title}' foi reaberto.",
                 Severity: NotificationSeverity.Warning,
-                Payload: new { ticketId = ticket.Id },
+                Payload: new { ticketId = ticket.Id, ticketTitle = ticket.Title },
                 RecipientUserId: ticket.AssignedToUserId), ct);
         }
 

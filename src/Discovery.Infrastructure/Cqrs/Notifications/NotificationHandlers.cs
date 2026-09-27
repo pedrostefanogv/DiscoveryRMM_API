@@ -17,7 +17,7 @@ public sealed class ListNotificationsQueryHandler(
             q.RecipientUserId, q.RecipientAgentId, null, q.Topic, null, q.IsRead, q.Limit);
         var items = notifications.Select(n => new NotificationDto(
             n.Id, n.EventType, n.Topic, n.Title, n.Message,
-            n.Severity.ToString(), n.IsRead, n.CreatedAt)).ToList().AsReadOnly();
+            n.Severity.ToString(), n.IsRead, n.CreatedAt, n.PayloadJson)).ToList().AsReadOnly();
         return Result<IReadOnlyList<NotificationDto>>.Success(items);
     }
 }

@@ -113,7 +113,7 @@ public class TicketWorkflowService : ITicketWorkflowService
                 Title: "Estado do ticket alterado",
                 Message: $"O ticket #{ticketId} '{updatedTicket.Title}' mudou para o estado '{stateLabel}'.",
                 Severity: NotificationSeverity.Informational,
-                Payload: new { ticketId, workflowStateId = targetStateId },
+                Payload: new { ticketId, ticketTitle = updatedTicket.Title, workflowStateId = targetStateId },
                 RecipientUserId: updatedTicket.AssignedToUserId
             ), ct);
         }

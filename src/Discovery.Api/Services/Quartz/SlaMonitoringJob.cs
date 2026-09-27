@@ -89,7 +89,7 @@ public sealed class SlaMonitoringJob : IJob
                         Title: "SLA violado",
                         Message: $"O SLA do ticket '{ticket.Title}' foi violado.",
                         Severity: NotificationSeverity.Critical,
-                        Payload: new { ticketId = ticket.Id },
+                        Payload: new { ticketId = ticket.Id, ticketTitle = ticket.Title },
                         RecipientUserId: ticket.AssignedToUserId
                     ), ct);
                 }
@@ -113,7 +113,7 @@ public sealed class SlaMonitoringJob : IJob
                                 Title: "Aviso de SLA",
                                 Message: $"O ticket '{ticket.Title}' utilizou {percentUsed:F0}% do tempo de SLA.",
                                 Severity: NotificationSeverity.Warning,
-                                Payload: new { ticketId = ticket.Id, percentUsed },
+                                Payload: new { ticketId = ticket.Id, ticketTitle = ticket.Title, percentUsed },
                                 RecipientUserId: ticket.AssignedToUserId
                             ), ct);
 

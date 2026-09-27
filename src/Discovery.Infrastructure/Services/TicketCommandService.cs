@@ -204,9 +204,11 @@ public sealed class TicketCommandService : ITicketCommandService
             if (assignedToUserId.HasValue)
             {
                 await _notification.PublishAsync(new NotificationPublishRequest(
-                    "ticket.assigned", "tickets", "Ticket assigned",
-                    $"Ticket #{ticketId}", NotificationSeverity.Informational,
-                    new { ticketId }, assignedToUserId), ct);
+                    "ticket.assigned", "tickets", "Chamado atribuído",
+                    $"Chamado \"{ticket.Title}\" atribuído a você.",
+                    NotificationSeverity.Informational,
+                    new { ticketId, ticketTitle = ticket.Title, clientId = ticket.ClientId },
+                    assignedToUserId), ct);
             }
         }
 

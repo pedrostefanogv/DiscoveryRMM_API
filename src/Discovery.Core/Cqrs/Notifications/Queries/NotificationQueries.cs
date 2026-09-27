@@ -1,4 +1,4 @@
-﻿using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs;
 
 namespace Discovery.Core.Cqrs.Notifications.Queries;
 
@@ -9,5 +9,6 @@ public sealed record ListNotificationsQuery(
 
 public sealed record NotificationDto(
     Guid Id, string EventType, string Topic, string Title,
-    string Message, string Severity, bool IsRead, DateTime CreatedAt
+    string Message, string Severity, bool IsRead, DateTime CreatedAt,
+    string? PayloadJson = null
 );
