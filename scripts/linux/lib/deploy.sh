@@ -259,21 +259,16 @@ Authentication__Jwt__RefreshTokenExpirationDays=7
 Authentication__Fido2__ServerDomain=${fido2_server_domain}
 Authentication__Fido2__ServerName=${fido2_server_name}
 ${cors_lines}${fido2_origin_lines}DISCOVERY_ADDITIONAL_ALLOWED_ORIGINS=${DISCOVERY_ADDITIONAL_ALLOWED_ORIGINS:-}
+# Paths/URLs do SELF-UPDATE aposentado NAO entram mais aqui: o instalador
+# recalcula tudo internamente (install_discovery_server.sh / modes.sh) e nunca
+# le esses valores de volta. Emiti-los so inchava o discovery.env. Mantidos
+# apenas os que o instalador realmente relê do arquivo.
 DISCOVERY_API_BASE=${DISCOVERY_API_BASE}
-DISCOVERY_API_SOURCE=${DISCOVERY_API_SOURCE}
-DISCOVERY_API_RELEASES=${DISCOVERY_API_RELEASES}
 DISCOVERY_API_CURRENT=${DISCOVERY_API_CURRENT}
-DISCOVERY_GIT_REPO=${DISCOVERY_GIT_REPO}
 DISCOVERY_AGENT_GIT_REPO=${DISCOVERY_AGENT_GIT_REPO:-}
 DISCOVERY_GIT_BRANCH=${DISCOVERY_GIT_BRANCH}
 DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}
-DISCOVERY_DOTNET_RUNTIME=${DISCOVERY_DOTNET_RUNTIME}
 DISCOVERY_CLEAN_BUILD=${DISCOVERY_CLEAN_BUILD:-1}
-DISCOVERY_SITE_GIT_REPO=${DISCOVERY_SITE_GIT_REPO}
-DISCOVERY_SITE_BASE=${DISCOVERY_SITE_BASE}
-DISCOVERY_SITE_SOURCE=${DISCOVERY_SITE_SOURCE}
-DISCOVERY_SITE_RELEASES=${DISCOVERY_SITE_RELEASES}
-DISCOVERY_SITE_CURRENT=${DISCOVERY_SITE_CURRENT}
 DISCOVERY_SITE_API_URL=${DISCOVERY_SITE_API_URL}
 DISCOVERY_SITE_REALTIME_PROVIDER=${DISCOVERY_SITE_REALTIME_PROVIDER}
 DISCOVERY_SITE_NATS_ENABLED=${DISCOVERY_SITE_NATS_ENABLED}
@@ -722,7 +717,11 @@ update_remote_access_environment_file() {
   # do `tr|head` de forma segura — nao usar pipeline cru aqui).
   local jwt_key="${REMOTE_ACCESS_NATS_JWT_SIGNING_KEY:-}"
   if [[ -z "$jwt_key" ]]; then
-    jwt_key="$(sudo awk -F= '/^REMOTE_ACCESS_NATS_JWT_SIGNING_KEY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+    # O arquivo guarda a chave como RemoteAccess__Nats__JwtSigningKey (nome que
+    # a API le). Antes procurava-se REMOTE_ACCESS_NATS_JWT_SIGNING_KEY, que
+    # nunca existe no discovery.env: a chave era REGERADA a cada update e as
+    # sessoes de acesso remoto em andamento caiam.
+    jwt_key="$(sudo awk -F= '/^RemoteAccess__Nats__JwtSigningKey=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
   fi
   if [[ -z "$jwt_key" ]]; then
     log "Gerando chave JWT para RemoteAccess (NATS session tokens)..."
@@ -736,10 +735,13 @@ update_remote_access_environment_file() {
 
   local tmp_file; tmp_file="$(mktemp)"
 
-  # Copia todas as linhas que NAO comecam com RemoteAccess__
+  # Copia todas as linhas que NAO pertencem aos blocos reescritos abaixo.
+  # IMPORTANTE: o heredoc adiante grava RemoteAccess__ E RemoteDebug__. Se
+  # apenas RemoteAccess__ for filtrado, cada execucao acrescenta um novo
+  # bloco RemoteDebug__ ao arquivo (era a origem das 36 copias duplicadas).
   # set +e evita que awk quebre o script em caso de pipe fechado
   set +e
-  sudo awk '!/^RemoteAccess__/' "$env_file" > "$tmp_file" 2>/dev/null
+  sudo awk '!/^RemoteAccess__/ && !/^RemoteDebug__/' "$env_file" > "$tmp_file" 2>/dev/null
   set -e
 
   cat >> "$tmp_file" <<EOF
