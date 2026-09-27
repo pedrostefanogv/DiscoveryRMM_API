@@ -1,7 +1,9 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -68,8 +70,13 @@ public class TicketAutoAssignmentServiceTests
         return (db, department.Id, user.Id, ticket);
     }
 
-    private static TicketAutoAssignmentService BuildService(DiscoveryDbContext db, FakeQueue queue)
-        => new(new TicketAssignmentService(db, new DepartmentTeamResolver(db)), queue, db);
+    private static TicketAutoAssignmentService BuildService(
+        DiscoveryDbContext db, FakeQueue queue, BackgroundProcessingSettings? settings = null)
+        => new(
+            new TicketAssignmentService(db, new DepartmentTeamResolver(db)),
+            queue,
+            new FakeProcessingConfig(settings ?? new BackgroundProcessingSettings()),
+            db);
 
     [Test]
     public async Task Resolve_KeepsExplicitAssignee()
@@ -131,6 +138,27 @@ public class TicketAutoAssignmentServiceTests
     }
 
     [Test]
+    public async Task ApplyAfterCreate_WithBatchOnlyClient_DoesNotEnqueue()
+    {
+        var (db, departmentId, _, ticket) = await SeedAsync(TicketAssignmentStrategy.AiTriage);
+        await using var _db = db;
+
+        var settings = new BackgroundProcessingSettings();
+        settings.Triage.EnqueueOnCreate = false;
+
+        var queue = new FakeQueue();
+        var applied = await BuildService(db, queue, settings).ApplyAfterCreateAsync(ticket, CancellationToken.None);
+
+        Assert.That(applied, Is.False, "modo somente-lotes não enfileira na abertura");
+        Assert.That(queue.Enqueued, Is.Empty);
+
+        var resolution = await BuildService(db, queue, settings)
+            .ResolveAsync(departmentId, null, CancellationToken.None);
+        Assert.That(resolution.QueueAiTriage, Is.False);
+        Assert.That(resolution.Strategy, Is.EqualTo((int)TicketAssignmentStrategy.AiTriage));
+    }
+
+    [Test]
     public async Task ApplyAfterCreate_WithNoneStrategy_DoesNothing()
     {
         var (db, _, _, ticket) = await SeedAsync(TicketAssignmentStrategy.None);
@@ -155,10 +183,36 @@ public class TicketAutoAssignmentServiceTests
         public Task<IReadOnlyList<AiAssignmentQueueItem>> ClaimBatchAsync(int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AiAssignmentQueueItem>>([]);
 
+        public Task<IReadOnlyList<Guid>> ListPendingClientScopesAsync(int maxScopes, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Guid>>([]);
+
+        public Task<IReadOnlyList<AiAssignmentQueueItem>> ClaimBatchForClientAsync(
+            Guid clientId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AiAssignmentQueueItem>>([]);
+
         public Task MarkDoneAsync(Guid id, CancellationToken ct = default) => Task.CompletedTask;
         public Task MarkFailedAsync(Guid id, string errorMessage, TimeSpan retryDelay, CancellationToken ct = default) => Task.CompletedTask;
         public Task MarkSkippedAsync(Guid id, string reason, CancellationToken ct = default) => Task.CompletedTask;
         public Task<int> CountOutstandingAsync(CancellationToken ct = default) => Task.FromResult(0);
+    }
+
+    private sealed class FakeProcessingConfig(BackgroundProcessingSettings settings) : IConfigurationResolver
+    {
+        public Task<BackgroundProcessingSettings> ResolveBackgroundProcessingAsync(
+            Guid? clientId, CancellationToken ct = default)
+            => Task.FromResult(settings);
+
+        public Task<ServerConfiguration> GetServerAsync() => throw new NotSupportedException();
+        public Task<ClientConfiguration?> GetClientAsync(Guid clientId) => throw new NotSupportedException();
+        public Task<SiteConfiguration?> GetSiteAsync(Guid siteId) => throw new NotSupportedException();
+        public Task<T?> GetEffectiveValueAsync<T>(string level, string key, Guid? targetId = null) => throw new NotSupportedException();
+        public Task<T?> GetConfigurationObjectAsync<T>(string objectType) where T : class => throw new NotSupportedException();
+        public Task<AutoUpdateSettings> GetAutoUpdateSettingsAsync(string level, Guid? targetId = null) => throw new NotSupportedException();
+        public Task<BrandingSettings> GetBrandingSettingsAsync() => throw new NotSupportedException();
+        public Task<AIIntegrationSettings> GetAISettingsAsync() => throw new NotSupportedException();
+        public Task<ResolvedConfiguration> ResolveForSiteAsync(Guid siteId) => throw new NotSupportedException();
+        public Task ValidateInheritanceAsync() => Task.CompletedTask;
+        public void ClearCache() { }
     }
 
     private sealed class AutoAssignTestDbContext(DbContextOptions<DiscoveryDbContext> options) : DiscoveryDbContext(options)

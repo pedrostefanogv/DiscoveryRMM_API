@@ -159,14 +159,16 @@ public static class QuartzServiceCollectionExtensions
             var metricsRefreshEnabled = configuration.GetValue<bool?>("BackgroundJobs:TechnicianMetrics:Enabled") ?? true;
             if (metricsRefreshEnabled)
             {
-                var metricsIntervalMinutes = Math.Max(5, configuration.GetValue<int?>("BackgroundJobs:TechnicianMetrics:IntervalMinutes") ?? 15);
+                // Tick é a granularidade MÍNIMA de varredura; o intervalo efetivo por
+                // cliente vem da configuração (piso de 10 min) e é verificado no ciclo.
+                var metricsTickSeconds = Math.Max(60, configuration.GetValue<int?>("BackgroundJobs:TechnicianMetrics:TickSeconds") ?? 300);
                 var metricsStartupDelaySeconds = Math.Max(0, configuration.GetValue<int?>("BackgroundJobs:TechnicianMetrics:StartupDelaySeconds") ?? 60);
 
                 q.ScheduleJob<TechnicianMetricsRefreshJob>(trigger => trigger
                     .WithIdentity($"{TechnicianMetricsRefreshJob.Key.Name}-trigger", TechnicianMetricsRefreshJob.Key.Group)
                     .StartAt(DateTimeOffset.UtcNow.AddSeconds(metricsStartupDelaySeconds))
-                    .WithSimpleSchedule(s => s.WithIntervalInMinutes(metricsIntervalMinutes).RepeatForever())
-                    .WithDescription("Recalcula os snapshots de métricas por atendente usados pela triagem por IA"));
+                    .WithSimpleSchedule(s => s.WithIntervalInSeconds(metricsTickSeconds).RepeatForever())
+                    .WithDescription("Atualiza, por escopo de cliente vencido, os snapshots de métricas usados pela triagem por IA"));
             }
 
             // ── Aprendizado da triagem por IA: diário ───────────────────
@@ -179,6 +181,30 @@ public static class QuartzServiceCollectionExtensions
                     .WithIdentity($"{AiAssignmentLearningJob.Key.Name}-trigger", AiAssignmentLearningJob.Key.Group)
                     .WithCronSchedule($"0 30 {learningHour} * * ?")
                     .WithDescription("Ciclo de aprendizado da triagem por IA (competências e pesos)"));
+            }
+
+            // ── Backfill de snapshots de métricas: a cada N segundos ───
+            var backfillEnabled = configuration.GetValue<bool?>("BackgroundJobs:TechnicianMetricsBackfill:Enabled") ?? true;
+            if (backfillEnabled)
+            {
+                var backfillIntervalSeconds = Math.Max(10, configuration.GetValue<int?>("BackgroundJobs:TechnicianMetricsBackfill:IntervalSeconds") ?? 30);
+
+                q.ScheduleJob<TechnicianMetricsBackfillJob>(trigger => trigger
+                    .WithIdentity($"{TechnicianMetricsBackfillJob.Key.Name}-trigger", TechnicianMetricsBackfillJob.Key.Group)
+                    .WithSimpleSchedule(s => s.WithIntervalInSeconds(backfillIntervalSeconds).RepeatForever())
+                    .WithDescription("Processa em lotes o backfill (recálculo forçado) dos snapshots de métricas"));
+            }
+
+            // ── Sincronização do agendamento (tick vindo do banco) ─────
+            var scheduleSyncEnabled = configuration.GetValue<bool?>("BackgroundJobs:BackgroundProcessingScheduleSync:Enabled") ?? true;
+            if (scheduleSyncEnabled)
+            {
+                var scheduleSyncIntervalSeconds = Math.Max(30, configuration.GetValue<int?>("BackgroundJobs:BackgroundProcessingScheduleSync:IntervalSeconds") ?? 120);
+
+                q.ScheduleJob<BackgroundProcessingScheduleSyncJob>(trigger => trigger
+                    .WithIdentity($"{BackgroundProcessingScheduleSyncJob.Key.Name}-trigger", BackgroundProcessingScheduleSyncJob.Key.Group)
+                    .WithSimpleSchedule(s => s.WithIntervalInSeconds(scheduleSyncIntervalSeconds).RepeatForever())
+                    .WithDescription("Sincroniza o tick dos processamentos em segundo plano com a configuração global"));
             }
         });
 

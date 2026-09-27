@@ -1,3 +1,4 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.ValueObjects;
 
@@ -54,6 +55,14 @@ public interface IConfigurationResolver
     /// Resolve configuração completa para um site sem nenhum valor null (herança aplicada).
     /// </summary>
     Task<ResolvedConfiguration> ResolveForSiteAsync(Guid siteId);
+
+    /// <summary>
+    /// Configuração efetiva dos processamentos em segundo plano (métricas de
+    /// atendente e triagem por IA) para um cliente: global + override do cliente
+    /// (null/Empty = apenas o global). Ausentes no override herdam o global.
+    /// </summary>
+    Task<BackgroundProcessingSettings> ResolveBackgroundProcessingAsync(
+        Guid? clientId, CancellationToken ct = default);
 
     /// <summary>
     /// Valida se todas as referências de herança estão corretas.

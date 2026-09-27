@@ -1,3 +1,4 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Enums;
 
 namespace Discovery.Core.ValueObjects;
@@ -40,6 +41,12 @@ public class ResolvedConfiguration
     // ============ IA ============
 
     public AIIntegrationSettings AIIntegration { get; set; } = new();
+
+    /// <summary>
+    /// Processamentos em segundo plano (métricas de atendente e triagem por IA)
+    /// já mesclados: global + override do cliente.
+    /// </summary>
+    public BackgroundProcessingSettings BackgroundProcessing { get; set; } = new();
 
     // ============ Token / Heartbeat ============
 

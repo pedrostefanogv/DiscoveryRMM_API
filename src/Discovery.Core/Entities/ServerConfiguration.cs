@@ -133,6 +133,13 @@ public class ServerConfiguration
     /// </summary>
     public string TicketAttachmentSettingsJson { get; set; } = "{}";
 
+    /// <summary>
+    /// Configuração global dos processamentos em segundo plano (JSON): ciclo das
+    /// métricas por atendente e ciclo de triagem por IA. Herdada por clientes
+    /// (ver BackgroundProcessingSettingsJson em ClientConfiguration).
+    /// </summary>
+    public string BackgroundProcessingSettingsJson { get; set; } = "{}";
+
     // ============ Object Storage (S3-compatível) ============
 
     /// <summary>Nome do bucket global para armazenamento</summary>

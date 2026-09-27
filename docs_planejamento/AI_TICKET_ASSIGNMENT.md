@@ -1,6 +1,10 @@
 # Triagem por IA na Auto-atribuição de Chamados
 
 > Implementado em: migração M179 (20261001_179). Escopo: API (DiscoveryRMM_API) e console (DiscoveryRMM_Site).
+>
+> Fase 3 (segunda evolução): orçamento de tokens por modelo, cost control, aprendizado híbrido e
+> auto-atribuição de chamados de alerta (M180); processamento periódico configurável das métricas e da
+> triagem, com configuração global herdada pelo cliente (M181) — ver BACKGROUND_PROCESSING_SETTINGS.md.
 
 ## 1. Visão geral
 
@@ -292,4 +296,6 @@ quando for, entra apenas nesse resolvedor. Detalhes em DEPARTMENT_INHERITANCE_SE
 ## 12. Testes
 
 Backend (NUnit): AiAssignmentScorerTests, TicketSignalExtractorTests, TechnicianMetricsServiceTests,
-AiTicketTriageServiceTests. Frontend (Vitest): TicketAiAssignmentCard.test.tsx.
+AiTicketTriageServiceTests, TicketAutoAssignmentServiceTests, AiAssignmentLearningServiceTests,
+AiCostControlServiceTests, TicketAiBudgetTests, AiTokenBudgetTests, WeightCalibratorTests e
+SkillExtractorTests. Frontend (Vitest): TicketAiAssignmentCard.test.tsx e DepartmentLearningCard.test.tsx.

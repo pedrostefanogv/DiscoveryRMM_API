@@ -60,6 +60,7 @@ public partial class DiscoveryDbContext
             entity.Property(decision => decision.TokensUsed).HasColumnName("tokens_used");
             entity.Property(decision => decision.MaxOutputTokens).HasColumnName("max_output_tokens");
             entity.Property(decision => decision.PromptChars).HasColumnName("prompt_chars");
+            entity.Property(decision => decision.MetricsSnapshotAgeMinutes).HasColumnName("metrics_snapshot_age_minutes");
             entity.Property(decision => decision.Applied).HasColumnName("applied");
             entity.Property(decision => decision.NotAppliedReason).HasColumnName("not_applied_reason").HasColumnType("text");
             entity.Property(decision => decision.OverriddenAt).HasColumnName("overridden_at").HasColumnType("timestamptz");

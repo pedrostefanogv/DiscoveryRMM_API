@@ -17,6 +17,7 @@ public static class ConfigurationFieldCatalog
         "AgentUpdatePolicyJson",
         "AIIntegrationSettingsJson",
         "TicketAttachmentSettingsJson",
+        "BackgroundProcessingSettingsJson",
         "AgentHeartbeatIntervalSeconds",
         "AgentOnlineGraceSeconds",
         "NatsAuthEnabled",

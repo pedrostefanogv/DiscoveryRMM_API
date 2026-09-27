@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text.Json;
+using Discovery.Core.Configuration;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -32,11 +34,14 @@ public class AiTicketTriageService(
     INotificationService notification,
     IAiTokenBudgetResolver tokenBudgetResolver,
     IDepartmentTeamResolver teamResolver,
+    IConfigurationResolver configurationResolver,
     ILogger<AiTicketTriageService> logger) : IAiTicketTriageService
 {
     private const double Temperature = 0.2;
-    private const int MaxAttempts = 3;
     private const int AffinityPoolSize = 30;
+
+    /// <summary>Escopos processados por execução do ciclo (fairness/limite de trabalho).</summary>
+    private const int MaxScopesPerRun = 50;
 
     // Marcador de bloco de código (tres crases) sem literal no fonte.
     private static readonly string Fence = string.Concat(Enumerable.Repeat((char)96, 3));
@@ -111,9 +116,66 @@ public class AiTicketTriageService(
         return await PersistAsync(evaluation, apply: true, null, triggeredByUserId, ct);
     }
 
-    public async Task<int> ProcessQueueBatchAsync(int limit, CancellationToken ct = default)
+    // ── Ciclo periódico por cliente ──────────────────────────────────────
+
+    public async Task<TriageCycleResult> ProcessDueAsync(CancellationToken ct = default)
     {
-        var items = await queueRepository.ClaimBatchAsync(limit, ct);
+        var stopwatch = Stopwatch.StartNew();
+
+        var queueScopes = await queueRepository.ListPendingClientScopesAsync(MaxScopesPerRun, ct);
+        var sweepScopes = await ListSweepScopesAsync(MaxScopesPerRun, ct);
+        var scopes = queueScopes.Concat(sweepScopes).Distinct().ToList();
+
+        if (scopes.Count == 0)
+            return new TriageCycleResult(0, 0, 0, new Dictionary<Guid, int>(), 0);
+
+        var states = await db.ProcessingScopeStates
+            .Where(s => s.ScopeType == ProcessingScopeTypes.TicketTriage)
+            .ToListAsync(ct);
+        var stateByScope = states.ToDictionary(s => s.ScopeId);
+
+        var triagedByClient = new Dictionary<Guid, int>();
+        var scopesProcessed = 0;
+        var triaged = 0;
+        var swept = 0;
+
+        foreach (var scopeId in scopes)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var settings = (await configurationResolver
+                .ResolveBackgroundProcessingAsync(NormalizeScope(scopeId), ct)).Triage;
+
+            if (!settings.Enabled) continue;
+
+            // Vencimento por cliente: o tick do job é a granularidade mínima.
+            if (stateByScope.TryGetValue(scopeId, out var state)
+                && DateTime.UtcNow - state.LastRunAt < TimeSpan.FromSeconds(settings.IntervalSeconds))
+            {
+                continue;
+            }
+
+            var quota = Math.Max(1, Math.Min(settings.BatchSize, settings.MaxPerClientPerRun));
+
+            var scopeTriaged = await ProcessQueueForClientAsync(scopeId, quota, settings, ct);
+            var scopeSwept = await SweepUnassignedForClientAsync(scopeId, quota, settings, ct);
+
+            triaged += scopeTriaged;
+            swept += scopeSwept;
+            scopesProcessed++;
+            triagedByClient[scopeId] = scopeTriaged;
+
+            await SaveScopeStateAsync(stateByScope, scopeId, scopeTriaged, scopeSwept, ct);
+        }
+
+        stopwatch.Stop();
+        return new TriageCycleResult(scopesProcessed, triaged, swept, triagedByClient, stopwatch.ElapsedMilliseconds);
+    }
+
+    private async Task<int> ProcessQueueForClientAsync(
+        Guid scopeId, int quota, TicketTriageProcessingSettings settings, CancellationToken ct)
+    {
+        var items = await queueRepository.ClaimBatchForClientAsync(scopeId, quota, ct);
         var processed = 0;
 
         foreach (var item in items)
@@ -159,7 +221,7 @@ public class AiTicketTriageService(
                     "Triagem por IA falhou para o chamado {TicketId} (tentativa {Attempts}).",
                     item.TicketId, item.Attempts);
 
-                if (item.Attempts >= MaxAttempts)
+                if (item.Attempts >= Math.Max(1, settings.MaxAttempts))
                 {
                     var fellBack = await TryFallbackSafeAsync(item.TicketId, "ai_failed", ct);
                     if (fellBack)
@@ -177,22 +239,76 @@ public class AiTicketTriageService(
         return processed;
     }
 
-    public async Task<int> SweepUnassignedAsync(TimeSpan olderThan, int limit, CancellationToken ct = default)
+    /// <summary>
+    /// Escopos com chamados AiTriage sem responsável. Cobre o modo somente-lotes
+    /// (EnqueueOnCreate = false) e a rede de segurança do modo com fila.
+    /// </summary>
+    private async Task<List<Guid>> ListSweepScopesAsync(int maxScopes, CancellationToken ct)
     {
-        var cutoff = DateTime.UtcNow - olderThan;
-
-        var stale = await db.Tickets.AsNoTracking()
-            .Where(t => t.DeletedAt == null && t.AssignedToUserId == null
-                        && t.DepartmentId != null && t.CreatedAt <= cutoff
-                        // Somente modo automático: no modo assistido o chamado
-                        // deve permanecer sem responsável até a confirmação humana.
-                        && db.Departments.Any(d => d.Id == t.DepartmentId!.Value
-                            && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage
-                            && d.AiAssignmentMode == (int)AiAssignmentMode.AutoAssign))
-            .OrderBy(t => t.CreatedAt)
-            .Select(t => t.Id)
-            .Take(Math.Clamp(limit, 1, 200))
+        var rows = await db.Tickets.AsNoTracking()
+            .Where(t => t.DeletedAt == null && t.AssignedToUserId == null && t.DepartmentId != null)
+            .Join(db.Departments.AsNoTracking().Where(d =>
+                    d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage
+                    && d.AiAssignmentMode == (int)AiAssignmentMode.AutoAssign),
+                t => t.DepartmentId!.Value, d => d.Id,
+                (t, d) => new { ClientId = (Guid?)d.ClientId, t.CreatedAt })
+            .OrderBy(x => x.CreatedAt)
+            .Take(Math.Clamp(maxScopes, 1, 500))
             .ToListAsync(ct);
+
+        var scopes = new List<Guid>();
+        foreach (var row in rows)
+        {
+            var scopeId = row.ClientId ?? Guid.Empty;
+            if (!scopes.Contains(scopeId))
+                scopes.Add(scopeId);
+        }
+
+        return scopes;
+    }
+
+    private async Task<int> SweepUnassignedForClientAsync(
+        Guid scopeId, int quota, TicketTriageProcessingSettings settings, CancellationToken ct)
+    {
+        // No modo com fila a varredura é a rede de segurança (RetryAfterMinutes); no
+        // modo somente-lotes ela é o caminho principal e usa BatchDelaySeconds.
+        var minAgeMinutes = settings.EnqueueOnCreate
+            ? settings.RetryAfterMinutes
+            : Math.Max(0, settings.BatchDelaySeconds) / 60.0;
+
+        var cutoff = DateTime.UtcNow.AddMinutes(-minAgeMinutes);
+        var limit = Math.Clamp(quota, 1, 200);
+
+        var baseQuery = db.Tickets.AsNoTracking()
+            .Where(t => t.DeletedAt == null && t.AssignedToUserId == null
+                        && t.DepartmentId != null && t.CreatedAt <= cutoff);
+
+        List<Guid> stale;
+        if (scopeId == Guid.Empty)
+        {
+            stale = await baseQuery
+                .Where(t => db.Departments.Any(d => d.Id == t.DepartmentId!.Value
+                    && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage
+                    && d.AiAssignmentMode == (int)AiAssignmentMode.AutoAssign
+                    && d.ClientId == null))
+                .OrderBy(t => t.CreatedAt)
+                .Select(t => t.Id)
+                .Take(limit)
+                .ToListAsync(ct);
+        }
+        else
+        {
+            var scope = scopeId;
+            stale = await baseQuery
+                .Where(t => db.Departments.Any(d => d.Id == t.DepartmentId!.Value
+                    && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage
+                    && d.AiAssignmentMode == (int)AiAssignmentMode.AutoAssign
+                    && d.ClientId == scope))
+                .OrderBy(t => t.CreatedAt)
+                .Select(t => t.Id)
+                .Take(limit)
+                .ToListAsync(ct);
+        }
 
         var assigned = 0;
         foreach (var ticketId in stale)
@@ -204,6 +320,44 @@ public class AiTicketTriageService(
 
         return assigned;
     }
+
+    private async Task SaveScopeStateAsync(
+        Dictionary<Guid, ProcessingScopeState> stateByScope,
+        Guid scopeId, int triagedCount, int sweptCount, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var payload = JsonSerializer.Serialize(new
+        {
+            triaged = triagedCount,
+            swept = sweptCount,
+            type = ProcessingScopeTypes.TicketTriage
+        });
+
+        if (stateByScope.TryGetValue(scopeId, out var state))
+        {
+            state.LastRunAt = now;
+            state.LastResultJson = payload;
+            state.UpdatedAt = now;
+        }
+        else
+        {
+            state = new ProcessingScopeState
+            {
+                Id = Guid.NewGuid(),
+                ScopeType = ProcessingScopeTypes.TicketTriage,
+                ScopeId = scopeId,
+                LastRunAt = now,
+                LastResultJson = payload,
+                UpdatedAt = now
+            };
+            db.ProcessingScopeStates.Add(state);
+            stateByScope[scopeId] = state;
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static Guid? NormalizeScope(Guid scopeId) => scopeId == Guid.Empty ? null : scopeId;
 
     // ── Avaliação ────────────────────────────────────────────────────────
 
@@ -241,8 +395,18 @@ public class AiTicketTriageService(
         }
 
         var userIds = eligible.Select(m => m.UserId).ToList();
-        var metrics = (await metricsService.GetMetricsForUsersAsync(userIds, ct))
+
+        // Escopo do cliente do departamento: define janela e política de snapshot.
+        var metrics = (await metricsService.GetMetricsForUsersAsync(userIds, department.ClientId, ct))
             .ToDictionary(m => m.UserId);
+
+        // Auditoria: idade do snapshot mais antigo usado nesta decisão (null = sem
+        // snapshot; o ciclo agendado preenche).
+        var snapshotAges = metrics.Values
+            .Where(m => m.ComputedAt.HasValue)
+            .Select(m => (int)Math.Max(0, (DateTime.UtcNow - m.ComputedAt!.Value).TotalMinutes))
+            .ToList();
+        evaluation.MetricsSnapshotAgeMinutes = snapshotAges.Count > 0 ? snapshotAges.Max() : null;
 
         var affinityHits = department.AiAssignmentUseAffinity
             ? await affinityRepository.FindSimilarResolvedAsync(
@@ -537,6 +701,7 @@ public class AiTicketTriageService(
             TokensUsed = evaluation.TokensUsed,
             MaxOutputTokens = evaluation.MaxOutputTokens,
             PromptChars = evaluation.PromptChars,
+            MetricsSnapshotAgeMinutes = evaluation.MetricsSnapshotAgeMinutes,
             Applied = apply,
             NotAppliedReason = apply ? null : notAppliedReason,
             OverriddenByUserId = triggeredByUserId,
@@ -577,13 +742,14 @@ public class AiTicketTriageService(
             candidates.FirstOrDefault(c => c.UserId == decision.ChosenUserId)?.UserName,
             decision.Confidence, decision.Score, decision.Rationale, decision.Model, decision.TokensUsed,
             decision.Applied, decision.NotAppliedReason, decision.OverriddenAt, decision.OverriddenByUserId,
-            decision.CreatedAt, candidates, decision.MaxOutputTokens, decision.PromptChars);
+            decision.CreatedAt, candidates, decision.MaxOutputTokens, decision.PromptChars,
+            decision.MetricsSnapshotAgeMinutes);
 
     private static TicketAssignmentResultDto NotFoundResult(Guid ticketId)
         => new(
             new TicketAssignmentDecisionDto(
                 Guid.Empty, ticketId, Guid.Empty, 0, AiAssignmentDecisionSource.Error, 3, null, null,
-                0, 0, "Chamado não encontrado.", null, 0, false, null, null, null, DateTime.UtcNow, [], 0, 0),
+                0, 0, "Chamado não encontrado.", null, 0, false, null, null, null, DateTime.UtcNow, [], 0, 0, null),
             null, false, AiAssignmentDecisionSource.Error);
 
     /// <summary>
@@ -773,6 +939,7 @@ public class AiTicketTriageService(
         public int TokensUsed { get; set; }
         public int MaxOutputTokens { get; set; }
         public int PromptChars { get; set; }
+        public int? MetricsSnapshotAgeMinutes { get; set; }
     }
 
     /// <summary>Resposta do modelo + tamanho do prompt enviado (auditoria do orçamento).</summary>

@@ -50,6 +50,13 @@ public class ClientConfiguration
     /// </summary>
     public string? AIIntegrationSettingsJson { get; set; }
 
+    /// <summary>
+    /// Override da configuração de processamentos em segundo plano (null = herda o
+    /// global integralmente). Armazena apenas campos sobrescrevíveis
+    /// (BackgroundProcessingSettingsOverride); ausentes herdam o global.
+    /// </summary>
+    public string? BackgroundProcessingSettingsJson { get; set; }
+
     // ============ Configuração de Inventário e Updates ============
 
     /// <summary>Intervalo de atualização de inventário (horas)</summary>

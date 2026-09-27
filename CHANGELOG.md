@@ -64,6 +64,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🗃️ **Migração M180** (`M180_AddAiTokenBudgetAndLearning`), aditiva e com defaults.
 - 📖 **Documentação**: seções novas em `docs_planejamento/AI_TICKET_ASSIGNMENT.md` e
   `docs_planejamento/DEPARTMENT_INHERITANCE_SEAM.md`.
+- 🖥️ **Card dedicado de Processamento em Segundo Plano**: campos tipados no servidor e, no cliente,
+  override por campo com indicação "herdado do global"; painel de últimos ciclos por escopo, botões
+  "rodar agora" e backfill/cancelar.
+- ⚙️ **Tick dinâmico a partir do banco**: `BackgroundProcessingScheduleService` reprograma os triggers do
+  Quartz (`TickSeconds` de métricas/triagem) no startup, após salvar a configuração e por job de
+  sincronização — sem restart; endpoint `GET /configurations/background-processing/schedule`.
+- 🧱 **Backfill de snapshots de métricas**: recálculo forçado da janela configurada em lotes, com pedido
+  idempotente, progresso persistido (`processing_scope_state`), cancelamento e limpeza opcional de
+  snapshots órfãos (`POST /configurations/background-processing/backfill`).
+- ⏱️ **Processamento periódico configurável (métricas + triagem)**: ciclos por escopo de cliente com
+  tick fixo (5 min para métricas) e vencimento por intervalo configurado, **global herdado e sobrescrito
+  por cliente** (campos ausentes herdam; bloqueável por `LockedFieldsJson`). Estado do último ciclo por
+  escopo em `processing_scope_state`.
+- 🧮 **Métricas agregadas em SQL** (uma linha por atendente em vez de todos os tickets do lote), com
+  índice parcial `ix_tickets_assigned_user_created`, lotes com rotação pelo snapshot mais antigo, teto de
+  lotes/tempo por execução e **leitura sem recálculo** (snapshot-only; bootstrap só para quem nunca teve
+  snapshot). A triagem registra `metrics_snapshot_age_minutes` na decisão.
+- 🎯 **Triagem em lotes por cliente**: cota por cliente (`MaxPerClientPerRun`) para fairness, intervalo
+  por escopo, retry/backoff por configuração e `EnqueueOnCreate = false` para o modo somente-lotes.
+- 🔌 **Endpoints** `GET /configurations/background-processing/effective` e `/status` (efetivo e último ciclo).
+- 🗃️ **Migração M181** (`M181_AddBackgroundProcessingSettings`) e documentação em
+  `docs_planejamento/BACKGROUND_PROCESSING_SETTINGS.md`.
 - 💬 **Orçamento model-aware no chat do agente**: `AiChatStreamingOrchestrator` (stream e multi-round,
   com sínteses forçadas) e `ProcessSyncAsync` passaram a limitar o teto do tenant pela capacidade real
   do modelo e pelo teto do produto. O clamp fixo de 8000 no `requestMaxTokens` síncrono foi removido.

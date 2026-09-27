@@ -25,7 +25,8 @@ internal static class AssignmentDecisionMapper
             candidates.FirstOrDefault(c => c.UserId == decision.ChosenUserId)?.UserName,
             decision.Confidence, decision.Score, decision.Rationale, decision.Model, decision.TokensUsed,
             decision.Applied, decision.NotAppliedReason, decision.OverriddenAt, decision.OverriddenByUserId,
-            decision.CreatedAt, candidates, decision.MaxOutputTokens, decision.PromptChars);
+            decision.CreatedAt, candidates, decision.MaxOutputTokens, decision.PromptChars,
+            decision.MetricsSnapshotAgeMinutes);
 
     public static TicketAssignmentDecisionDto ToDto(TicketAssignmentDecision decision)
         => ToDto(decision, DeserializeCandidates(decision.CandidatesJson));
@@ -52,6 +53,11 @@ public sealed class GetDepartmentAssignmentTeamMetricsQueryHandler(
     public async Task<Result<IReadOnlyList<DepartmentMemberProfileDto>>> Handle(
         GetDepartmentAssignmentTeamMetricsQuery q, CancellationToken ct)
     {
+        var departmentClientId = await db.Departments.AsNoTracking()
+            .Where(d => d.Id == q.DepartmentId)
+            .Select(d => (Guid?)d.ClientId)
+            .FirstOrDefaultAsync(ct);
+
         var exists = await db.Departments.AnyAsync(d => d.Id == q.DepartmentId, ct);
         if (!exists)
             return Result<IReadOnlyList<DepartmentMemberProfileDto>>.Failure(
@@ -82,7 +88,8 @@ public sealed class GetDepartmentAssignmentTeamMetricsQueryHandler(
             u => u.Id,
             u => string.IsNullOrWhiteSpace(u.FullName) ? u.Login : u.FullName);
 
-        var metrics = (await metricsService.GetMetricsForUsersAsync(userIds, ct))
+        // Escopo do cliente define a janela/TTL efetivos das métricas.
+        var metrics = (await metricsService.GetMetricsForUsersAsync(userIds, departmentClientId, ct))
             .ToDictionary(m => m.UserId);
 
         var dtos = members.Select(m => new DepartmentMemberProfileDto(

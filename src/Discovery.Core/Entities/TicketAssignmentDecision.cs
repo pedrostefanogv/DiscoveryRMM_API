@@ -38,6 +38,12 @@ public class TicketAssignmentDecision
     /// <summary>Caracteres do prompt enviado ao modelo (auditoria do orçamento).</summary>
     public int PromptChars { get; set; }
 
+    /// <summary>
+    /// Idade (minutos) do snapshot de métricas usado na decisão. Null = não havia
+    /// snapshot (métricas neutras). Ajuda a diagnosticar qualidade da triagem.
+    /// </summary>
+    public int? MetricsSnapshotAgeMinutes { get; set; }
+
     /// <summary>True quando a decisão foi efetivamente aplicada ao chamado.</summary>
     public bool Applied { get; set; }
 

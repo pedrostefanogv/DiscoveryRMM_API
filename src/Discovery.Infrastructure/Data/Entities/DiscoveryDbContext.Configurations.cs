@@ -44,6 +44,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.RetentionSettingsJson).HasColumnName("retention_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.TicketAttachmentSettingsJson).HasColumnName("ticket_attachment_settings_json").HasColumnType("jsonb");
+            entity.Property(config => config.BackgroundProcessingSettingsJson).HasColumnName("background_processing_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.ObjectStorageBucketName).HasColumnName("object_storage_bucket_name");
             entity.Property(config => config.ObjectStorageEndpoint).HasColumnName("object_storage_endpoint");
             entity.Property(config => config.ObjectStorageRegion).HasColumnName("object_storage_region");
@@ -78,6 +79,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
+            entity.Property(config => config.BackgroundProcessingSettingsJson).HasColumnName("background_processing_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AutoUpdateSettingsJson).HasColumnName("auto_update_settings_json");
             entity.Property(config => config.AgentUpdatePolicyJson).HasColumnName("agent_update_policy_json");

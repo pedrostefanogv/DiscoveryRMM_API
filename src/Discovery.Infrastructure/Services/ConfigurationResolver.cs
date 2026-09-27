@@ -224,6 +224,13 @@ public class ConfigurationResolver : IConfigurationResolver
         var ai = ResolveAI(site?.AIIntegrationSettingsJson, client?.AIIntegrationSettingsJson, server.AIIntegrationSettingsJson);
         var aiSource = ResolveObjectSource("AIIntegrationSettingsJson", blocked, site?.AIIntegrationSettingsJson, client?.AIIntegrationSettingsJson);
 
+        // Processamentos em segundo plano: Global -> Cliente (site NÃO participa por
+        // decisão de produto). O campo pode ser bloqueado como qualquer outro.
+        var backgroundProcessing = ResolveBackgroundProcessing(
+            client?.BackgroundProcessingSettingsJson, server.BackgroundProcessingSettingsJson);
+        var backgroundSource = ResolveObjectSource(
+            "BackgroundProcessingSettingsJson", blocked, null, client?.BackgroundProcessingSettingsJson);
+
         var resolved = new ResolvedConfiguration
         {
             SiteId = siteId,
@@ -242,6 +249,7 @@ public class ConfigurationResolver : IConfigurationResolver
             AutoUpdate = autoUpdate,
             AgentUpdate = agentUpdate,
             AIIntegration = ai,
+            BackgroundProcessing = backgroundProcessing,
             BlockedFields = blocked.OrderBy(x => x).ToArray(),
         };
 
@@ -259,6 +267,7 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["AutoUpdate"] = (int)autoUpdateSource;
         resolved.Inheritance["AgentUpdate"] = (int)agentUpdateSource;
         resolved.Inheritance["AIIntegration"] = (int)aiSource;
+        resolved.Inheritance["BackgroundProcessing"] = (int)backgroundSource;
 
         var payload = JsonSerializer.Serialize(resolved, JsonOptions);
         await _redisService.SetAsync(cacheKey, payload, (int)CacheTtl.TotalSeconds);
@@ -275,6 +284,28 @@ public class ConfigurationResolver : IConfigurationResolver
     public void ClearCache()
     {
         _ = _redisService.DeleteByPrefixAsync(ResolvedSiteCachePrefix);
+    }
+
+    /// <summary>
+    /// Merge da configuração de processamento em segundo plano (global + cliente).
+    /// </summary>
+    private static BackgroundProcessingSettings ResolveBackgroundProcessing(string? clientJson, string serverJson)
+        => BackgroundProcessingSettingsMerger.Merge(
+            DeserializeOrDefault<BackgroundProcessingSettings>(serverJson),
+            string.IsNullOrWhiteSpace(clientJson)
+                ? null
+                : DeserializeOrDefault<BackgroundProcessingSettingsOverride>(clientJson));
+
+    public async Task<BackgroundProcessingSettings> ResolveBackgroundProcessingAsync(
+        Guid? clientId, CancellationToken ct = default)
+    {
+        var server = await _serverRepo.GetOrCreateDefaultAsync();
+
+        if (clientId is null || clientId == Guid.Empty)
+            return ResolveBackgroundProcessing(null, server.BackgroundProcessingSettingsJson);
+
+        var client = await _clientRepo.GetByClientIdAsync(clientId.Value);
+        return ResolveBackgroundProcessing(client?.BackgroundProcessingSettingsJson, server.BackgroundProcessingSettingsJson);
     }
 
     private static AutoUpdateSettings ResolveAutoUpdate(string? siteJson, string? clientJson, string serverJson)

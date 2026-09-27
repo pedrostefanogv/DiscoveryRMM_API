@@ -1,3 +1,4 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
@@ -300,6 +301,8 @@ public class TicketAnswerSemanticTests
         public Task<AutoUpdateSettings> GetAutoUpdateSettingsAsync(string level, Guid? targetId = null) => throw new NotSupportedException();
         public Task<BrandingSettings> GetBrandingSettingsAsync() => throw new NotSupportedException();
         public Task<ResolvedConfiguration> ResolveForSiteAsync(Guid siteId) => throw new NotSupportedException();
+        public Task<BackgroundProcessingSettings> ResolveBackgroundProcessingAsync(
+            Guid? clientId, CancellationToken ct = default) => Task.FromResult(new BackgroundProcessingSettings());
         public Task ValidateInheritanceAsync() => Task.CompletedTask;
     }
 

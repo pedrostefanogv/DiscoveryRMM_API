@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Discovery.Core.Configuration;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -490,6 +491,8 @@ public class AgentUpdateServiceTests
         public Task<AutoUpdateSettings> GetAutoUpdateSettingsAsync(string level, Guid? targetId = null) => throw new NotSupportedException();
         public Task<BrandingSettings> GetBrandingSettingsAsync() => throw new NotSupportedException();
         public Task<AIIntegrationSettings> GetAISettingsAsync() => throw new NotSupportedException();
+        public Task<BackgroundProcessingSettings> ResolveBackgroundProcessingAsync(
+            Guid? clientId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task ValidateInheritanceAsync() => throw new NotSupportedException();
         public void ClearCache() { }
     }

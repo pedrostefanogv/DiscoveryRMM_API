@@ -110,6 +110,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<TechnicianSkillSuggestion> TechnicianSkillSuggestions => Set<TechnicianSkillSuggestion>();
     public DbSet<AiWeightSuggestion> AiWeightSuggestions => Set<AiWeightSuggestion>();
 
+    // Ciclos agendados por escopo
+    public DbSet<ProcessingScopeState> ProcessingScopeStates => Set<ProcessingScopeState>();
+
     // Hardware inventory (reports)
     public DbSet<DiskInfo> DiskInfos => Set<DiskInfo>();
     public DbSet<NetworkAdapterInfo> NetworkAdapterInfos => Set<NetworkAdapterInfo>();
@@ -170,6 +173,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         // AI Chat & MCP
         ConfigureAiChat(modelBuilder);
         ConfigureAiAssignment(modelBuilder);
+        ConfigureBackgroundProcessing(modelBuilder);
 
         // Attachments
         ConfigureAttachments(modelBuilder);
@@ -198,6 +202,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureCustomFields(ModelBuilder modelBuilder);
     static partial void ConfigureAiChat(ModelBuilder modelBuilder);
     static partial void ConfigureAiAssignment(ModelBuilder modelBuilder);
+    static partial void ConfigureBackgroundProcessing(ModelBuilder modelBuilder);
     static partial void ConfigureAttachments(ModelBuilder modelBuilder);
     static partial void ConfigureRemoteSessions(ModelBuilder modelBuilder);
 

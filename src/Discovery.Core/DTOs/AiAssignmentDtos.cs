@@ -112,7 +112,8 @@ public sealed record TicketAssignmentDecisionDto(
     DateTime CreatedAt,
     IReadOnlyList<AssignmentCandidateDto> Candidates,
     int MaxOutputTokens = 0,
-    int PromptChars = 0);
+    int PromptChars = 0,
+    int? MetricsSnapshotAgeMinutes = null);
 
 // ── Aprendizado (competências e pesos) ──────────────────────────────────
 
@@ -149,6 +150,28 @@ public sealed record AiWeightSuggestionDto(
 public sealed record DepartmentLearningSuggestionsDto(
     IReadOnlyList<TechnicianSkillSuggestionDto> Skills,
     IReadOnlyList<AiWeightSuggestionDto> Weights);
+
+/// <summary>Resumo de uma execução do ciclo de triagem (observabilidade).</summary>
+public sealed record TriageCycleResult(
+    int ScopesProcessed,
+    int Triaged,
+    int Swept,
+    IReadOnlyDictionary<Guid, int> TriagedByClient,
+    long ElapsedMs);
+
+/// <summary>Progresso do backfill de snapshots de métricas.</summary>
+public sealed record MetricsBackfillProgress(
+    int Processed,
+    int Total,
+    bool HasMore);
+
+/// <summary>Resumo de uma execução do ciclo de métricas (observabilidade).</summary>
+public sealed record MetricsRefreshResult(
+    int ScopesProcessed,
+    int UsersUpdated,
+    int UsersPending,
+    IReadOnlyDictionary<Guid, int> UpdatedByClient,
+    long ElapsedMs);
 
 /// <summary>Resultado de uma execução da triagem (preview/aplicação).</summary>
 public sealed record TicketAssignmentResultDto(

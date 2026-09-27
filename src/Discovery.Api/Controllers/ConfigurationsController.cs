@@ -6,16 +6,40 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
+using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/configurations")]
-public class ConfigurationsController(IMediator mediator, IAiModelCatalogService aiCatalog, ILogger<ConfigurationsController> logger) : ControllerBase
+public class ConfigurationsController(
+    IMediator mediator,
+    IAiModelCatalogService aiCatalog,
+    IConfigurationResolver configurationResolver,
+    IBackgroundProcessingScheduleService scheduleService,
+    DiscoveryDbContext db,
+    ILogger<ConfigurationsController> logger) : ControllerBase
 {
     private string? CurrentUser => HttpContext.Items["Username"] as string;
+
+    /// <summary>
+    /// Aplica o tick persistido. Falha aqui NÃO invalida o salvamento da
+    /// configuração — apenas fica registrada para a sincronização periódica.
+    /// </summary>
+    private async Task ApplyScheduleSafeAsync()
+    {
+        try
+        {
+            await scheduleService.ApplyAsync(force: false, HttpContext.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao aplicar o agendamento após salvar a configuração.");
+        }
+    }
 
     // ── Server ──────────────────────────────────────────────────────────
 
@@ -36,6 +60,9 @@ public class ConfigurationsController(IMediator mediator, IAiModelCatalogService
     public async Task<IActionResult> UpdateServer([FromBody] ServerConfiguration config)
     {
         var result = await mediator.Send(new UpdateServerConfigCommand(config, CurrentUser));
+        if (result.IsSuccess)
+            await ApplyScheduleSafeAsync();
+
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
@@ -44,6 +71,9 @@ public class ConfigurationsController(IMediator mediator, IAiModelCatalogService
     public async Task<IActionResult> PatchServer([FromBody] Dictionary<string, object> updates)
     {
         var result = await mediator.Send(new PatchServerConfigCommand(updates, CurrentUser));
+        if (result.IsSuccess)
+            await ApplyScheduleSafeAsync();
+
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
@@ -193,6 +223,75 @@ public class ConfigurationsController(IMediator mediator, IAiModelCatalogService
     {
         var result = await mediator.Send(new GetSiteEffectiveConfigQuery(siteId));
         return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+    }
+
+    // ── Processamento em segundo plano (ciclos agendados) ───────────────
+
+    /// <summary>
+    /// Configuração efetiva dos ciclos (métricas de atendente e triagem por IA)
+    /// para um cliente: global + override do cliente.
+    /// </summary>
+    [HttpGet("background-processing/effective")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    public async Task<IActionResult> GetBackgroundProcessingEffective(
+        [FromQuery] Guid? clientId, CancellationToken ct)
+    {
+        var settings = await configurationResolver.ResolveBackgroundProcessingAsync(clientId, ct);
+        return Ok(settings);
+    }
+
+    /// <summary>Última execução (e resumo) dos ciclos por escopo de cliente.</summary>
+    [HttpGet("background-processing/status")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    public async Task<IActionResult> GetBackgroundProcessingStatus(
+        [FromQuery] Guid? clientId, CancellationToken ct)
+    {
+        var query = db.ProcessingScopeStates.AsNoTracking();
+        if (clientId.HasValue)
+            query = query.Where(state => state.ScopeId == clientId.Value);
+
+        var states = await query
+            .OrderBy(state => state.ScopeType)
+            .ThenBy(state => state.ScopeId)
+            .ToListAsync(ct);
+
+        return Ok(states);
+    }
+
+    /// <summary>
+    /// Tick aplicado vs desejado por processo, kill switch e próximo disparo.
+    /// </summary>
+    [HttpGet("background-processing/schedule")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    public async Task<IActionResult> GetBackgroundProcessingSchedule(CancellationToken ct)
+        => Ok(await scheduleService.GetStatusAsync(ct));
+
+    /// <summary>
+    /// Pede o recálculo forçado (backfill) dos snapshots de métricas do escopo
+    /// informado (null = global). O trabalho roda em lotes no job de backfill.
+    /// </summary>
+    [HttpPost("background-processing/backfill")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    public async Task<IActionResult> RequestBackgroundProcessingBackfill(
+        [FromQuery] Guid? clientId,
+        [FromQuery] bool purgeOrphans,
+        [FromServices] IBackgroundProcessingBackfillService backfillService,
+        CancellationToken ct)
+    {
+        var state = await backfillService.RequestAsync(clientId, purgeOrphans, CurrentUser, ct);
+        return Accepted(state);
+    }
+
+    /// <summary>Cancela um backfill pendente/em andamento do escopo.</summary>
+    [HttpPost("background-processing/backfill/cancel")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    public async Task<IActionResult> CancelBackgroundProcessingBackfill(
+        [FromQuery] Guid? clientId,
+        [FromServices] IBackgroundProcessingBackfillService backfillService,
+        CancellationToken ct)
+    {
+        var cancelled = await backfillService.CancelAsync(clientId, CurrentUser, ct);
+        return cancelled ? NoContent() : NotFound();
     }
 
     // ── AI ─────────────────────────────────────────────────────────────

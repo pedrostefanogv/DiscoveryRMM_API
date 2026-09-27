@@ -9,6 +9,7 @@ using Discovery.Api.Validators;
 using FluentMigrator.Runner;
 using Discovery.Api.Middleware;
 using Discovery.Api.Services;
+using Discovery.Api.Services.BackgroundProcessing;
 using Discovery.Core.Configuration;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
@@ -285,6 +286,10 @@ builder.Services.AddDiscoveryHealthChecks(builder.Configuration);
 builder.Services.AddDiscoveryOutputCache(builder.Configuration);
 builder.Services.AddDiscoveryQuartz(builder.Configuration);
 
+// Aplica no Quartz o tick persistido na configuração (singleton: guarda o último aplicado).
+builder.Services.AddSingleton<IBackgroundProcessingScheduler, QuartzBackgroundProcessingScheduler>();
+builder.Services.AddSingleton<IBackgroundProcessingScheduleService, BackgroundProcessingScheduleService>();
+
 // FluentMigrator
 builder.Services.AddFluentMigratorCore()
     .ConfigureRunner(rb =>
@@ -350,6 +355,17 @@ await DatabaseSeeder.SeedAsync(app.Services);
 
 // Wire Quartz job execution history listener
 await QuartzServiceCollectionExtensions.WireJobListenerAsync(app.Services);
+
+// Alinha os triggers com o tick persistido na configuração (sem restart).
+try
+{
+    var scheduleService = app.Services.GetRequiredService<IBackgroundProcessingScheduleService>();
+    await scheduleService.ApplyAsync(force: true);
+}
+catch (Exception ex)
+{
+    app.Logger.LogWarning(ex, "Falha ao aplicar o agendamento dos processamentos em segundo plano no startup.");
+}
 
 // Configure the HTTP request pipeline
 var openApiEnabled = builder.Configuration.GetValue("OpenApi:Enabled", app.Environment.IsDevelopment());

@@ -1,9 +1,11 @@
 using System.Text.Json;
+using Discovery.Core.Configuration;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Repositories;
 using Discovery.Infrastructure.Services.Ai;
@@ -103,10 +105,12 @@ public class AiTicketTriageServiceTests
         return (db, ticket, department, top, other);
     }
 
-    private static AiTicketTriageService BuildService(DiscoveryDbContext db, IAiChatService aiChat)
+    private static AiTicketTriageService BuildService(
+        DiscoveryDbContext db, IAiChatService aiChat,
+        FakeQueue? queue = null, BackgroundProcessingSettings? settings = null)
         => new(
             db,
-            new NoopQueue(),
+            queue ?? new FakeQueue(),
             new StaticMetrics(),
             new NoopAffinity(),
             new TicketDifficultyAssessor(),
@@ -116,6 +120,7 @@ public class AiTicketTriageServiceTests
             new NoopNotifications(),
             new FakeTokenBudget(),
             new DepartmentTeamResolver(db),
+            new FakeProcessingConfig(settings ?? new BackgroundProcessingSettings()),
             NullLogger<AiTicketTriageService>.Instance);
 
     [Test]
@@ -289,48 +294,137 @@ public class AiTicketTriageServiceTests
     }
 
     [Test]
-    public async Task Sweep_DoesNotTouchSuggestModeDepartments()
+    public async Task ProcessDueAsync_DoesNotAssignInSuggestMode()
     {
         var (db, ticket, _, _, _) = await SeedAsync(AiAssignmentMode.Suggest);
         await using var _db = db;
 
         var service = BuildService(db, new ThrowingAiChat());
-        var assigned = await service.SweepUnassignedAsync(TimeSpan.Zero, 10);
+        var result = await service.ProcessDueAsync();
 
-        Assert.That(assigned, Is.EqualTo(0));
+        Assert.That(result.Swept, Is.EqualTo(0));
+        Assert.That(result.Triaged, Is.EqualTo(0));
 
         var stored = await db.Tickets.AsNoTracking().FirstAsync(t => t.Id == ticket.Id);
-        Assert.That(stored.AssignedToUserId, Is.Null);
+        Assert.That(stored.AssignedToUserId, Is.Null,
+            "no modo assistido o chamado espera confirmação humana");
     }
 
     [Test]
-    public async Task Sweep_AssignsByFallback_InAutoMode()
+    public async Task ProcessDueAsync_SweepsUnassignedInAutoMode()
     {
         var (db, ticket, _, top, _) = await SeedAsync(AiAssignmentMode.AutoAssign);
         await using var _db = db;
 
-        var service = BuildService(db, new ThrowingAiChat());
-        var assigned = await service.SweepUnassignedAsync(TimeSpan.Zero, 10);
+        // RetryAfterMinutes = 0: a varredura de segurança age no mesmo ciclo.
+        var settings = new BackgroundProcessingSettings();
+        settings.Triage.RetryAfterMinutes = 0;
 
-        Assert.That(assigned, Is.EqualTo(1));
+        var service = BuildService(db, new ThrowingAiChat(), settings: settings);
+        var result = await service.ProcessDueAsync();
+
+        Assert.That(result.Swept, Is.EqualTo(1));
 
         var stored = await db.Tickets.AsNoTracking().FirstAsync(t => t.Id == ticket.Id);
         Assert.That(stored.AssignedToUserId, Is.EqualTo(top.Id));
+    }
+
+    [Test]
+    public async Task ProcessDueAsync_ProcessesQueuedItemForDueScope()
+    {
+        var (db, ticket, department, top, _) = await SeedAsync(AiAssignmentMode.AutoAssign);
+        await using var _db = db;
+
+        var queue = new FakeQueue();
+        queue.Pending.Add(new AiAssignmentQueueItem
+        {
+            Id = Guid.NewGuid(),
+            TicketId = ticket.Id,
+            DepartmentId = department.Id,
+            Status = AiAssignmentQueueStatus.Pending,
+            Attempts = 0,
+            AvailableAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var service = BuildService(db, new FakeAiChat(top.Id, 0.9), queue);
+        var result = await service.ProcessDueAsync();
+
+        Assert.That(result.Triaged, Is.EqualTo(1));
+        Assert.That(result.ScopesProcessed, Is.EqualTo(1));
+        Assert.That(queue.MarkedDone, Has.Count.EqualTo(1));
+
+        var stored = await db.Tickets.AsNoTracking().FirstAsync(t => t.Id == ticket.Id);
+        Assert.That(stored.AssignedToUserId, Is.EqualTo(top.Id));
+    }
+
+    [Test]
+    public async Task ProcessDueAsync_SkipsScopeBeforeItsInterval()
+    {
+        var (db, ticket, department, top, _) = await SeedAsync(AiAssignmentMode.AutoAssign);
+        await using var _db = db;
+
+        var queue = new FakeQueue();
+        queue.Pending.Add(new AiAssignmentQueueItem
+        {
+            Id = Guid.NewGuid(),
+            TicketId = ticket.Id,
+            DepartmentId = department.Id,
+            Status = AiAssignmentQueueStatus.Pending,
+            Attempts = 0,
+            AvailableAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var service = BuildService(db, new FakeAiChat(top.Id, 0.9), queue);
+
+        await service.ProcessDueAsync();
+
+        // Segunda execução imediata: o escopo ainda não venceu (IntervalSeconds).
+        queue.Pending.Add(new AiAssignmentQueueItem
+        {
+            Id = Guid.NewGuid(),
+            TicketId = ticket.Id,
+            DepartmentId = department.Id,
+            Status = AiAssignmentQueueStatus.Pending,
+            Attempts = 0,
+            AvailableAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var second = await service.ProcessDueAsync();
+
+        Assert.That(second.ScopesProcessed, Is.EqualTo(0), "escopo não venceu novamente");
+        Assert.That(queue.MarkedDone, Has.Count.EqualTo(1), "nada novo foi processado");
     }
 
     // ── Fakes ────────────────────────────────────────────────────────────
 
     private sealed class StaticMetrics : ITechnicianMetricsService
     {
-        public Task<TechnicianMetricsDto> GetMetricsAsync(Guid userId, CancellationToken ct = default)
+        public Task<TechnicianMetricsDto> GetMetricsAsync(
+            Guid userId, Guid? clientScope = null, CancellationToken ct = default)
             => Task.FromResult(MetricsFor(userId));
 
         public Task<IReadOnlyList<TechnicianMetricsDto>> GetMetricsForUsersAsync(
-            IReadOnlyCollection<Guid> userIds, CancellationToken ct = default)
+            IReadOnlyCollection<Guid> userIds, Guid? clientScope = null, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<TechnicianMetricsDto>>(userIds.Select(MetricsFor).ToList());
 
         public Task<int> RefreshSnapshotsAsync(
             IReadOnlyCollection<Guid>? userIds = null, Guid? departmentId = null, CancellationToken ct = default)
+            => Task.FromResult(0);
+
+        public Task<MetricsRefreshResult> RefreshDueAsync(CancellationToken ct = default)
+            => Task.FromResult(new MetricsRefreshResult(0, 0, 0, new Dictionary<Guid, int>(), 0));
+
+        public Task<MetricsBackfillProgress> RefreshForcedAsync(
+            Guid? clientId, DateTime sessionStartUtc, int maxUsers, CancellationToken ct = default)
+            => Task.FromResult(new MetricsBackfillProgress(0, 0, false));
+
+        public Task<int> PurgeOrphanSnapshotsAsync(CancellationToken ct = default)
             => Task.FromResult(0);
 
         private static TechnicianMetricsDto MetricsFor(Guid userId)
@@ -344,16 +438,67 @@ public class AiTicketTriageServiceTests
             => Task.FromResult<IReadOnlyList<TechnicianAffinityHit>>([]);
     }
 
-    private sealed class NoopQueue : IAiAssignmentQueueRepository
+    private sealed class FakeQueue : IAiAssignmentQueueRepository
     {
+        public List<AiAssignmentQueueItem> Pending { get; } = [];
+        public List<Guid> MarkedDone { get; } = [];
+        public List<(Guid Id, string Reason)> MarkedSkipped { get; } = [];
+
         public Task EnqueueAsync(Guid ticketId, Guid departmentId, string? reason, CancellationToken ct = default)
             => Task.CompletedTask;
+
         public Task<IReadOnlyList<AiAssignmentQueueItem>> ClaimBatchAsync(int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AiAssignmentQueueItem>>([]);
-        public Task MarkDoneAsync(Guid id, CancellationToken ct = default) => Task.CompletedTask;
-        public Task MarkFailedAsync(Guid id, string errorMessage, TimeSpan retryDelay, CancellationToken ct = default) => Task.CompletedTask;
-        public Task MarkSkippedAsync(Guid id, string reason, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<int> CountOutstandingAsync(CancellationToken ct = default) => Task.FromResult(0);
+
+        // Os departamentos dos testes são globais (ClientId = null) => escopo Guid.Empty,
+        // o mesmo que a varredura de segurança calcula.
+        public Task<IReadOnlyList<Guid>> ListPendingClientScopesAsync(int maxScopes, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Guid>>(
+                Pending.Select(_ => Guid.Empty).Distinct().ToList());
+
+        public Task<IReadOnlyList<AiAssignmentQueueItem>> ClaimBatchForClientAsync(
+            Guid clientId, int limit, CancellationToken ct = default)
+        {
+            var claimed = Pending.Take(limit).ToList();
+            Pending.RemoveRange(0, claimed.Count);
+            return Task.FromResult<IReadOnlyList<AiAssignmentQueueItem>>(claimed);
+        }
+
+        public Task MarkDoneAsync(Guid id, CancellationToken ct = default)
+        {
+            MarkedDone.Add(id);
+            return Task.CompletedTask;
+        }
+
+        public Task MarkFailedAsync(Guid id, string errorMessage, TimeSpan retryDelay, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task MarkSkippedAsync(Guid id, string reason, CancellationToken ct = default)
+        {
+            MarkedSkipped.Add((id, reason));
+            return Task.CompletedTask;
+        }
+
+        public Task<int> CountOutstandingAsync(CancellationToken ct = default) => Task.FromResult(Pending.Count);
+    }
+
+    private sealed class FakeProcessingConfig(BackgroundProcessingSettings settings) : IConfigurationResolver
+    {
+        public Task<BackgroundProcessingSettings> ResolveBackgroundProcessingAsync(
+            Guid? clientId, CancellationToken ct = default)
+            => Task.FromResult(settings);
+
+        public Task<ServerConfiguration> GetServerAsync() => throw new NotSupportedException();
+        public Task<ClientConfiguration?> GetClientAsync(Guid clientId) => throw new NotSupportedException();
+        public Task<SiteConfiguration?> GetSiteAsync(Guid siteId) => throw new NotSupportedException();
+        public Task<T?> GetEffectiveValueAsync<T>(string level, string key, Guid? targetId = null) => throw new NotSupportedException();
+        public Task<T?> GetConfigurationObjectAsync<T>(string objectType) where T : class => throw new NotSupportedException();
+        public Task<AutoUpdateSettings> GetAutoUpdateSettingsAsync(string level, Guid? targetId = null) => throw new NotSupportedException();
+        public Task<BrandingSettings> GetBrandingSettingsAsync() => throw new NotSupportedException();
+        public Task<AIIntegrationSettings> GetAISettingsAsync() => throw new NotSupportedException();
+        public Task<ResolvedConfiguration> ResolveForSiteAsync(Guid siteId) => throw new NotSupportedException();
+        public Task ValidateInheritanceAsync() => Task.CompletedTask;
+        public void ClearCache() { }
     }
 
     private sealed class FakeTokenBudget : IAiTokenBudgetResolver
@@ -454,7 +599,8 @@ public class AiTicketTriageServiceTests
             var allowed = new HashSet<Type>
             {
                 typeof(User), typeof(Client), typeof(Site), typeof(Department), typeof(DepartmentMember),
-                typeof(Ticket), typeof(TicketActivityLog), typeof(TicketAssignmentDecision)
+                typeof(Ticket), typeof(TicketActivityLog), typeof(TicketAssignmentDecision),
+                typeof(ProcessingScopeState)
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -473,6 +619,7 @@ public class AiTicketTriageServiceTests
             modelBuilder.Entity<Ticket>(e => { e.HasKey(t => t.Id); e.Ignore(t => t.DaysOpen); });
             modelBuilder.Entity<TicketActivityLog>(e => e.HasKey(l => l.Id));
             modelBuilder.Entity<TicketAssignmentDecision>(e => e.HasKey(d => d.Id));
+            modelBuilder.Entity<ProcessingScopeState>(e => e.HasKey(s => s.Id));
         }
     }
 }

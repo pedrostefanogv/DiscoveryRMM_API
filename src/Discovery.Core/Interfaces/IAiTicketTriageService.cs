@@ -24,12 +24,10 @@ public interface IAiTicketTriageService
     Task<TicketAssignmentResultDto> ApplyAsync(
         Guid ticketId, Guid? triggeredByUserId = null, CancellationToken ct = default);
 
-    /// <summary>Processa um lote da fila. Retorna a quantidade de chamados triados.</summary>
-    Task<int> ProcessQueueBatchAsync(int limit, CancellationToken ct = default);
-
     /// <summary>
-    /// Rede de segurança: aplica fallback determinístico em chamados com
-    /// estratégia AiTriage que continuam sem responsável após o tempo limite.
+    /// Ciclo periódico em lotes POR CLIENTE: respeita o vencimento do escopo
+    /// (IntervalSeconds), a cota por cliente (fairness) e, no fim, aplica o
+    /// fallback determinístico nos chamados que continuam sem responsável.
     /// </summary>
-    Task<int> SweepUnassignedAsync(TimeSpan olderThan, int limit, CancellationToken ct = default);
+    Task<TriageCycleResult> ProcessDueAsync(CancellationToken ct = default);
 }

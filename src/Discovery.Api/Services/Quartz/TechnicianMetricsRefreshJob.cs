@@ -39,11 +39,15 @@ public sealed class TechnicianMetricsRefreshJob : IJob
 
         try
         {
-            var saved = await metrics.RefreshSnapshotsAsync(null, null, ct);
-            context.Result = saved;
+            var result = await metrics.RefreshDueAsync(ct);
+            context.Result = result;
 
-            if (saved > 0)
-                logger.LogInformation("Métricas de atendentes recalculadas: {Count} snapshots.", saved);
+            if (result.ScopesProcessed > 0 || result.UsersUpdated > 0)
+            {
+                logger.LogInformation(
+                    "Métricas de atendentes: {Scopes} escopo(s) vencido(s), {Updated} snapshot(s) atualizado(s), {Pending} pendente(s) em {Elapsed}ms.",
+                    result.ScopesProcessed, result.UsersUpdated, result.UsersPending, result.ElapsedMs);
+            }
         }
         catch (Exception ex)
         {

@@ -36,21 +36,22 @@ public sealed class AiTicketAssignmentJob : IJob
             return;
         }
 
-        var batchSize = Math.Clamp(config.GetValue<int?>("BackgroundJobs:AiTicketAssignment:BatchSize") ?? 25, 1, 200);
-        var retryAfterMinutes = Math.Max(1, config.GetValue<int?>("BackgroundJobs:AiTicketAssignment:RetryAfterMinutes") ?? 5);
-
+        // Tamanho de lote, cota por cliente, intervalo e tentativas vêm da
+        // configuração (global herdada por cliente), não de appsettings.
         await using var scope = scopeFactory.CreateAsyncScope();
         var triage = scope.ServiceProvider.GetRequiredService<IAiTicketTriageService>();
 
         try
         {
-            var processed = await triage.ProcessQueueBatchAsync(batchSize, ct);
-            var swept = await triage.SweepUnassignedAsync(TimeSpan.FromMinutes(retryAfterMinutes), batchSize, ct);
+            var result = await triage.ProcessDueAsync(ct);
+            context.Result = result;
 
-            context.Result = processed + swept;
-
-            if (processed > 0 || swept > 0)
-                logger.LogInformation("Triagem por IA: {Processed} triados, {Swept} atribuídos por fallback.", processed, swept);
+            if (result.ScopesProcessed > 0 || result.Triaged > 0 || result.Swept > 0)
+            {
+                logger.LogInformation(
+                    "Triagem por IA: {Scopes} escopo(s) vencido(s), {Triaged} triado(s), {Swept} atribuído(s) por fallback em {Elapsed}ms.",
+                    result.ScopesProcessed, result.Triaged, result.Swept, result.ElapsedMs);
+            }
         }
         catch (Exception ex)
         {

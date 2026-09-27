@@ -2,12 +2,14 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Services;
 
 public class TicketAutoAssignmentService(
     ITicketAssignmentService assignmentService,
     IAiAssignmentQueueRepository queue,
+    IConfigurationResolver configurationResolver,
     DiscoveryDbContext db) : ITicketAutoAssignmentService
 {
     public async Task<AutoAssignmentResolution> ResolveAsync(
@@ -22,7 +24,17 @@ public class TicketAutoAssignmentService(
             return new AutoAssignmentResolution(null, false, strategy);
 
         if (strategy == (int)TicketAssignmentStrategy.AiTriage)
-            return new AutoAssignmentResolution(null, true, strategy);
+        {
+            // O cliente pode optar por NÃO enfileirar na abertura: nesse caso o
+            // chamado é pego pelo ciclo periódico em lotes (varredura de segurança).
+            var clientId = await db.Departments.AsNoTracking()
+                .Where(d => d.Id == departmentId.Value)
+                .Select(d => (Guid?)d.ClientId)
+                .FirstOrDefaultAsync(ct);
+
+            var settings = await configurationResolver.ResolveBackgroundProcessingAsync(clientId, ct);
+            return new AutoAssignmentResolution(null, settings.Triage.EnqueueOnCreate, strategy);
+        }
 
         var assignee = await assignmentService.ResolveFallbackAsync(departmentId.Value, strategy.Value, ct);
         return new AutoAssignmentResolution(assignee, false, strategy);

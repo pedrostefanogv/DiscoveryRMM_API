@@ -74,6 +74,93 @@ public class AiAssignmentQueueRepository(DiscoveryDbContext db) : IAiAssignmentQ
             .ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<Guid>> ListPendingClientScopesAsync(
+        int maxScopes, CancellationToken ct = default)
+    {
+        const string sql = @"
+            SELECT d.client_id
+            FROM ai_assignment_queue q
+            JOIN departments d ON d.id = q.department_id
+            WHERE q.status IN (@pending, @failed)
+              AND q.available_at <= now()
+            GROUP BY d.client_id
+            ORDER BY MIN(q.updated_at)
+            LIMIT @max_scopes;";
+
+        var parameters = new[]
+        {
+            new NpgsqlParameter("pending", AiAssignmentQueueStatus.Pending),
+            new NpgsqlParameter("failed", AiAssignmentQueueStatus.Failed),
+            new NpgsqlParameter("max_scopes", Math.Clamp(maxScopes, 1, 500))
+        };
+
+        var scopes = new List<Guid>();
+        var connection = db.Database.GetDbConnection();
+        var openedHere = connection.State != System.Data.ConnectionState.Open;
+        if (openedHere) await connection.OpenAsync(ct);
+
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            foreach (var parameter in parameters)
+                command.Parameters.Add(parameter);
+
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                scopes.Add(reader.IsDBNull(0) ? Guid.Empty : reader.GetGuid(0));
+        }
+        finally
+        {
+            if (openedHere) await connection.CloseAsync();
+        }
+
+        return scopes;
+    }
+
+    public async Task<IReadOnlyList<AiAssignmentQueueItem>> ClaimBatchForClientAsync(
+        Guid clientId, int limit, CancellationToken ct = default)
+    {
+        // Departamento global (Guid.Empty) usa client_id NULL no banco.
+        var clientFilter = clientId == Guid.Empty
+            ? "d.client_id IS NULL"
+            : "d.client_id = @client_id";
+
+        var sql = @"
+            UPDATE ai_assignment_queue
+            SET status = @processing,
+                attempts = attempts + 1,
+                updated_at = now()
+            WHERE id IN (
+                SELECT q.id
+                FROM ai_assignment_queue q
+                JOIN departments d ON d.id = q.department_id
+                WHERE q.status IN (@pending, @failed)
+                  AND q.available_at <= now()
+                  AND " + clientFilter + @"
+                ORDER BY q.updated_at
+                FOR UPDATE OF q SKIP LOCKED
+                LIMIT @limit
+            )
+            RETURNING id, ticket_id, department_id, status, attempts, available_at, last_error, reason, created_at, updated_at;";
+
+        var parameters = new List<NpgsqlParameter>
+        {
+            new("processing", AiAssignmentQueueStatus.Processing),
+            new("pending", AiAssignmentQueueStatus.Pending),
+            new("failed", AiAssignmentQueueStatus.Failed),
+            new("limit", Math.Clamp(limit, 1, 200))
+        };
+
+        if (clientId != Guid.Empty)
+            parameters.Add(new NpgsqlParameter("client_id", clientId));
+
+        return await db.AiAssignmentQueueItems
+            .FromSqlRaw(sql, parameters.ToArray())
+            .AsNoTracking()
+            .ToListAsync(ct);
+    }
+
     public async Task MarkDoneAsync(Guid id, CancellationToken ct = default)
         => await SetStatusAsync(id, AiAssignmentQueueStatus.Done, null, null, ct);
 
