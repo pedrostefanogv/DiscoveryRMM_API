@@ -363,6 +363,9 @@ EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
   sudo chown root:discovery-api /etc/discovery-api/discovery.env
+
+  # Retencao: nao deixar .bak do env acumulando indefinidamente.
+  prune_backups "${DISCOVERY_KEEP_ENV_BACKUPS:-2}" /etc/discovery-api/discovery.env.bak*
 }
 
 # ── Self-update automation (REMOVED) ──────────────────────────────────────
@@ -545,16 +548,29 @@ write_site_proxy_config() {
   sudo rm -f /etc/nginx/sites-enabled/default
   sudo ln -sfn /etc/nginx/sites-available/discovery-rmm /etc/nginx/sites-enabled/discovery-rmm
 
-  # M-fix (warnings "conflicting server name"/"protocol options redefined"):
-  # versoes antigas do instalador deixavam arquivos de trabalho em sites-enabled
-  # (ex.: discovery-rmm.working). O nginx CARREGA esses arquivos e reporta
-  # dezenas de warnings por servidor duplicado. Remove os nossos residuais.
-  sudo find /etc/nginx/sites-enabled -maxdepth 1 -name "discovery-rmm.working*" -delete 2>/dev/null || true
+  # O nginx CARREGA todo arquivo em sites-enabled (`include .../sites-enabled/*`).
+  # Qualquer residuo NOSSO com prefixo "discovery-rmm." (working, bak, bak2, old)
+  # vira um server block duplicado e gera dezenas de warnings "conflicting server
+  # name". O instalador antigo so removia "discovery-rmm.working*" e o
+  # diagnostico abaixo EXCLUIA tudo que continha "discovery-rmm" — entao um
+  # discovery-rmm.bak2 ficava invisivel E carregado pelo nginx.
+  # Agora qualquer "discovery-rmm.*" residual sai de sites-enabled.
+  local residual
+  while IFS= read -r residual; do
+    [[ -n "$residual" ]] || continue
+    sudo mkdir -p /etc/nginx/backups
+    if sudo mv -f "$residual" /etc/nginx/backups/ 2>/dev/null; then
+      warn "Residual do nginx movido para /etc/nginx/backups: $(basename "$residual")"
+    fi
+  done < <(sudo find /etc/nginx/sites-enabled -maxdepth 1 -name "discovery-rmm.*" 2>/dev/null || true)
+
+  # Retencao dos backups do config do portal.
+  prune_backups "${DISCOVERY_KEEP_NGINX_BACKUPS:-2}" /etc/nginx/sites-available/discovery-rmm.bak*
 
   # Diagnostico: configs de TERCEIROS que declaram localhost/127.0.0.1 geram os
   # mesmos warnings. Nao removemos (nao sao nossos), apenas avisamos.
   local conflict_files
-  conflict_files="$(sudo grep -lE "server_name[[:space:]].*(localhost|127\.0\.0\.1)" /etc/nginx/sites-enabled/* 2>/dev/null | grep -v discovery-rmm || true)"
+  conflict_files="$(sudo grep -lE "server_name[[:space:]].*(localhost|127\.0\.0\.1)" /etc/nginx/sites-enabled/* 2>/dev/null | grep -v '/discovery-rmm$' || true)"
   if [[ -n "$conflict_files" ]]; then
     warn "Server names localhost/127.0.0.1 declarados em outros configs do nginx (nginx ignora duplicados): $conflict_files"
   fi

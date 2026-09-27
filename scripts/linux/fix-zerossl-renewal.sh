@@ -19,6 +19,26 @@ fail() { printf '[fix][erro] %s\n' "$*" >&2; exit 1; }
 
 require_cmd() { command -v "$1" >/dev/null 2>&1 || fail "Comando obrigatorio ausente: $1"; }
 
+# Mantem apenas os <keep> backups mais recentes (evita acumular .bak-fix-* a
+# cada execucao — rerun deste script gerava um backup novo por vez).
+prune_backups() {
+  local keep="$1"; shift
+  local resolved=() f
+  for f in "$@"; do
+    [[ -e "$f" ]] && resolved+=("$f")
+  done
+  (( ${#resolved[@]} > keep )) || return 0
+  local sorted=()
+  mapfile -t sorted < <(ls -1dt "${resolved[@]}" 2>/dev/null || true)
+  local i=0
+  for f in "${sorted[@]}"; do
+    i=$((i + 1))
+    (( i <= keep )) && continue
+    rm -f "$f" 2>/dev/null || true
+    log "Backup antigo removido: $f"
+  done
+}
+
 [[ "$(id -u)" -eq 0 ]] || fail "Execute como root (o script altera $ENV_FILE e $SCRIPT)."
 require_cmd python3
 [[ -f "$ENV_FILE" ]] || fail "Arquivo $ENV_FILE nao encontrado (execute o instalador primeiro)."
@@ -80,6 +100,10 @@ log "Ajustando $SCRIPT para EAB opcional (conta ja registrada)"
 
 # Backup do script
 cp "$SCRIPT" "$SCRIPT.bak-fix-$STAMP"
+
+# Retencao: 2 mais recentes por familia (env e script).
+prune_backups 2 "$ENV_FILE".bak-fix-*
+prune_backups 2 "$SCRIPT".bak-fix-*
 
 # 2a) Validacao de EAB: so exige se a conta nao estiver registrada
 python3 - "$SCRIPT" "$ACCOUNT_DIR" <<'PYEOF'

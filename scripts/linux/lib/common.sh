@@ -332,3 +332,32 @@ resolve_nats_conf_path() {
   nats_conf="$(systemctl cat nats-server 2>/dev/null | sed -n 's/.*-c \([^ ]*\).*/\1/p' | head -n 1)"
   printf '%s' "${nats_conf:-/etc/nats-server.conf}"
 }
+
+# ── Retencao de backups ─────────────────────────────────────────────────────
+# Mantem apenas os <keep> arquivos mais recentes de cada familia de backup.
+# Sem isso, cada update/execucao de script de correcao deixa mais um .bak no
+# disco e o diretorio vira um deposito (era o caso do discovery.env e do
+# nats-server.conf). Glob sem match e ignorado em silencio.
+# Uso: prune_backups <keep> <glob...>
+# Ex.: prune_backups 2 /etc/discovery-api/discovery.env.bak*
+prune_backups() {
+  local keep="$1"; shift
+  [[ "$keep" =~ ^[0-9]+$ ]] || return 0
+  (( $# > 0 )) || return 0
+
+  local resolved=() f
+  for f in "$@"; do
+    [[ -e "$f" ]] && resolved+=("$f")
+  done
+  (( ${#resolved[@]} > keep )) || return 0
+
+  local sorted=()
+  mapfile -t sorted < <(ls -1dt "${resolved[@]}" 2>/dev/null || true)
+  local i=0
+  for f in "${sorted[@]}"; do
+    i=$((i + 1))
+    (( i <= keep )) && continue
+    sudo rm -f "$f" 2>/dev/null || true
+    log "Backup antigo removido: $f"
+  done
+}

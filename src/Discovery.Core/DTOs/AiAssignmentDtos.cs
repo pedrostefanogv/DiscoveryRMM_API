@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Discovery.Core.DTOs;
 
 // ── Configuração da triagem por IA (departamento) ────────────────────────
@@ -31,37 +33,41 @@ public sealed record AiAssignmentSettingsDto(
 
 // ── Métricas por atendente ───────────────────────────────────────────────
 
+// Campos anuláveis são sempre serializados (`null` explícito). O serializer global
+// usa JsonIgnoreCondition.WhenWritingNull, o que OMITE a propriedade; o contrato do
+// front (types.ts) declara `number | null` — omitir vira `undefined` e derruba
+// consumidores que testam `=== null`. Nunca ignorar mantém o contrato verídico.
 public sealed record TechnicianMetricsDto(
     Guid UserId,
     int WindowDays,
     int AssignedTotal,
     int ResolvedTotal,
     int OpenNow,
-    double? AvgFirstResponseMinutes,
-    double? AvgResolutionMinutes,
-    double? P90ResolutionMinutes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] double? AvgFirstResponseMinutes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] double? AvgResolutionMinutes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] double? P90ResolutionMinutes,
     double SlaBreachRate,
     double ReopenRate,
-    double? CsatAverage,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] double? CsatAverage,
     int CsatRatedCount,
-    double? DifficultyAverage,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] double? DifficultyAverage,
     IReadOnlyList<string> TopCategories,
     IReadOnlyList<string> TopTags,
-    DateTime? ComputedAt);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTime? ComputedAt);
 
 /// <summary>Perfil do membro (competências/capacidade) + métricas, usado na tela do departamento.</summary>
 public sealed record DepartmentMemberProfileDto(
     Guid DepartmentId,
     Guid UserId,
-    string? UserName,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? UserName,
     bool IsActive,
     DateTime CreatedAt,
     IReadOnlyList<string> SkillTags,
     int SkillLevel,
-    int? MaxOpenTickets,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxOpenTickets,
     decimal Weight,
     bool AcceptsAiAssignment,
-    TechnicianMetricsDto? Metrics);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] TechnicianMetricsDto? Metrics);
 
 public sealed record UpdateDepartmentMemberProfileRequest(
     IReadOnlyList<string>? SkillTags = null,
