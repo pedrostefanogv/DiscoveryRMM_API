@@ -224,10 +224,10 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
             ("threshold", "Limiar", "number", false));
 
         Add("p2pTelemetry", 11, "Telemetria P2P",
-            "Métricas de replicação e desempenho dos peers P2P.",
-            ["id", "agentId", "siteId", "clientId", "collectedAt", "receivedAt", "publishedArtifacts", "replicationsSucceeded", "replicationsFailed", "bytesServed", "bytesDownloaded", "activeReplications", "hostCpuPercent", "hostMemoryPercent", "hostDiskBusyPercent", "hostCpuCores", "hostRamGB", "knownPeers", "connectedPeers", "planTotalAgents", "planSelectedSeeds"],
+            "Métricas de replicação e desempenho dos peers P2P. Bytes e replicações são INCREMENTOS do período (contadores cumulativos normalizados, reset-aware); o valor absoluto desde o início do processo do agent fica nas colunas *Cumulative.",
+            ["id", "agentId", "siteId", "clientId", "collectedAt", "receivedAt", "publishedArtifacts", "replicationsStarted", "replicationsSucceeded", "replicationsFailed", "bytesServed", "bytesDownloaded", "replicationsStartedCumulative", "replicationsSucceededCumulative", "replicationsFailedCumulative", "bytesServedCumulative", "bytesDownloadedCumulative", "activeReplications", "hostCpuPercent", "hostMemoryPercent", "hostDiskBusyPercent", "hostCpuCores", "hostRamGB", "knownPeers", "connectedPeers", "planTotalAgents", "planSelectedSeeds"],
             JoinAgentClientSite,
-            ["siteId", "agentId"],
+            ["siteId", "agentId", "from", "to"],
             ("agentId", "Agente", "guid", true),
             ("bytesServed", "Bytes servidos", "number", false),
             ("bytesDownloaded", "Bytes baixados", "number", false),

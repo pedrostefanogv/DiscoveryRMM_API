@@ -1114,12 +1114,16 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
         var limit = GetLimit(filters);
         var siteId = GetGuid(filters, "siteId");
         var agentId = GetGuid(filters, "agentId");
+        var from = GetDateTime(filters, "from");
+        var to = GetDateTime(filters, "to");
         var descending = GetSortDescending(filters, defaultValue: true);
 
         var query = _db.P2pAgentTelemetries.AsNoTracking().AsQueryable();
         if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
         if (siteId.HasValue) query = query.Where(x => x.SiteId == siteId.Value);
         if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
+        if (from.HasValue) query = query.Where(x => x.CollectedAt >= from.Value);
+        if (to.HasValue) query = query.Where(x => x.CollectedAt <= to.Value);
 
         query = descending
             ? query.OrderByDescending(x => x.CollectedAt)
@@ -1127,24 +1131,85 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
 
         var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
 
-        var rows = rowsRaw.Select(x => (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+        // Os contadores do agent são CUMULATIVOS e zeram quando ele reinicia. Expor
+        // o valor cru fazia qualquer agregação do relatório (SUM/AVG) somar o
+        // acumulado em vez do tráfego do período. As colunas de métrica passam a
+        // trazer o incremento (regra reset-aware) e o valor cru fica explícito nas
+        // colunas *Cumulative.
+        var deltas = ComputeP2pTelemetryDeltas(rowsRaw);
+
+        var rows = rowsRaw.Select(x =>
         {
-            ["id"] = x.Id, ["agentId"] = x.AgentId, ["siteId"] = x.SiteId, ["clientId"] = x.ClientId,
-            ["collectedAt"] = x.CollectedAt, ["receivedAt"] = x.ReceivedAt,
-            ["publishedArtifacts"] = x.PublishedArtifacts, ["replicationsSucceeded"] = x.ReplicationsSucceeded,
-            ["replicationsFailed"] = x.ReplicationsFailed, ["bytesServed"] = x.BytesServed,
-            ["bytesDownloaded"] = x.BytesDownloaded, ["activeReplications"] = x.ActiveReplications,
-            ["hostCpuPercent"] = x.HostCpuPercent, ["hostMemoryPercent"] = x.HostMemoryPercent,
-            ["hostDiskBusyPercent"] = x.HostDiskBusyPercent, ["hostCpuCores"] = x.HostCpuCores,
-            ["hostRamGB"] = x.HostRamGB, ["knownPeers"] = x.KnownPeers, ["connectedPeers"] = x.ConnectedPeers,
-            ["planTotalAgents"] = x.PlanTotalAgents, ["planSelectedSeeds"] = x.PlanSelectedSeeds
+            var delta = deltas[x.Id];
+            return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+            {
+                ["id"] = x.Id, ["agentId"] = x.AgentId, ["siteId"] = x.SiteId, ["clientId"] = x.ClientId,
+                ["collectedAt"] = x.CollectedAt, ["receivedAt"] = x.ReceivedAt,
+                ["publishedArtifacts"] = x.PublishedArtifacts,
+                ["replicationsStarted"] = delta.Started,
+                ["replicationsSucceeded"] = delta.Succeeded,
+                ["replicationsFailed"] = delta.Failed,
+                ["bytesServed"] = delta.Served,
+                ["bytesDownloaded"] = delta.Downloaded,
+                ["bytesServedCumulative"] = x.BytesServed,
+                ["bytesDownloadedCumulative"] = x.BytesDownloaded,
+                ["replicationsStartedCumulative"] = x.ReplicationsStarted,
+                ["replicationsSucceededCumulative"] = x.ReplicationsSucceeded,
+                ["replicationsFailedCumulative"] = x.ReplicationsFailed,
+                ["activeReplications"] = x.ActiveReplications,
+                ["hostCpuPercent"] = x.HostCpuPercent, ["hostMemoryPercent"] = x.HostMemoryPercent,
+                ["hostDiskBusyPercent"] = x.HostDiskBusyPercent, ["hostCpuCores"] = x.HostCpuCores,
+                ["hostRamGB"] = x.HostRamGB, ["knownPeers"] = x.KnownPeers, ["connectedPeers"] = x.ConnectedPeers,
+                ["planTotalAgents"] = x.PlanTotalAgents, ["planSelectedSeeds"] = x.PlanSelectedSeeds
+            };
         }).ToList();
 
         return new ReportQueryResult
         {
-            Columns = ["id", "agentId", "siteId", "clientId", "collectedAt", "receivedAt", "publishedArtifacts", "replicationsSucceeded", "replicationsFailed", "bytesServed", "bytesDownloaded", "activeReplications", "hostCpuPercent", "hostMemoryPercent", "hostDiskBusyPercent", "hostCpuCores", "hostRamGB", "knownPeers", "connectedPeers", "planTotalAgents", "planSelectedSeeds"],
+            Columns = ["id", "agentId", "siteId", "clientId", "collectedAt", "receivedAt", "publishedArtifacts",
+                "replicationsStarted", "replicationsSucceeded", "replicationsFailed", "bytesServed", "bytesDownloaded",
+                "replicationsStartedCumulative", "replicationsSucceededCumulative", "replicationsFailedCumulative",
+                "bytesServedCumulative", "bytesDownloadedCumulative", "activeReplications",
+                "hostCpuPercent", "hostMemoryPercent", "hostDiskBusyPercent", "hostCpuCores", "hostRamGB",
+                "knownPeers", "connectedPeers", "planTotalAgents", "planSelectedSeeds"],
             Rows = rows
         };
+    }
+
+    /// <summary>
+    /// Incrementos reset-aware dos contadores cumulativos por agente:
+    ///   - sem amostra anterior -> 0 (baseline desconhecido; não inflar o relatório);
+    ///   - valor &gt;= anterior -> diferença;
+    ///   - valor &lt; anterior (restart do agent) -> valor atual (novo segmento).
+    /// Ordena por collected_at (relógio do snapshot) para tolerar replay fora de ordem.
+    /// </summary>
+    internal static Dictionary<long, (long Served, long Downloaded, long Started, long Succeeded, long Failed)>
+        ComputeP2pTelemetryDeltas(IReadOnlyList<P2pAgentTelemetry> rows)
+    {
+        var result = new Dictionary<long, (long, long, long, long, long)>();
+        foreach (var group in rows.GroupBy(row => row.AgentId))
+        {
+            P2pAgentTelemetry? previous = null;
+            foreach (var current in group.OrderBy(row => row.CollectedAt).ThenBy(row => row.Id))
+            {
+                result[current.Id] = (
+                    CounterDelta(previous?.BytesServed, current.BytesServed),
+                    CounterDelta(previous?.BytesDownloaded, current.BytesDownloaded),
+                    CounterDelta(previous?.ReplicationsStarted, current.ReplicationsStarted),
+                    CounterDelta(previous?.ReplicationsSucceeded, current.ReplicationsSucceeded),
+                    CounterDelta(previous?.ReplicationsFailed, current.ReplicationsFailed));
+                previous = current;
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Incremento de um contador cumulativo (ver ComputeP2pTelemetryDeltas).</summary>
+    internal static long CounterDelta(long? previous, long current)
+    {
+        if (!previous.HasValue)
+            return 0;
+        return current >= previous.Value ? current - previous.Value : current;
     }
 
     /// <summary>
