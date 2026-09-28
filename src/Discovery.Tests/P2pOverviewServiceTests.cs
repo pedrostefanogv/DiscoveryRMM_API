@@ -233,6 +233,53 @@ public class P2pOverviewServiceTests
         Assert.That(series.Summary.Total, Is.EqualTo(500));
     }
 
+    [Test]
+    public async Task EnsureSeedPlanFreshAsync_RecalculatesWhenPlanIsEmpty()
+    {
+        await using var db = CreateDbContext();
+        var (siteId, clientId) = (Guid.NewGuid(), Guid.NewGuid());
+        var now = DateTime.UtcNow;
+
+        db.P2pAgentTelemetries.AddRange(
+            Snapshot(1, Guid.NewGuid(), siteId, clientId, now.AddMinutes(-1), 0, 0, 0, 0, 0, 0),
+            Snapshot(2, Guid.NewGuid(), siteId, clientId, now.AddMinutes(-1), 0, 0, 0, 0, 0, 0));
+        // Plano "zerado" como ficaria entre o boot dos agentes e o job de 15 min.
+        db.P2pSeedPlans.Add(new P2pSeedPlan
+        {
+            SiteId = siteId, ClientId = clientId, TotalAgents = 0, SelectedSeeds = 0,
+            GeneratedAt = now.AddHours(-1)
+        });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        await service.EnsureSeedPlanFreshAsync(siteId, clientId, CancellationToken.None);
+
+        var plan = await db.P2pSeedPlans.AsNoTracking().SingleAsync(p => p.SiteId == siteId);
+        Assert.That(plan.TotalAgents, Is.EqualTo(2));
+        Assert.That(plan.SelectedSeeds, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task EnsureSeedPlanFreshAsync_KeepsExistingPlanWhenNotEmpty()
+    {
+        await using var db = CreateDbContext();
+        var (siteId, clientId) = (Guid.NewGuid(), Guid.NewGuid());
+        var now = DateTime.UtcNow;
+
+        db.P2pSeedPlans.Add(new P2pSeedPlan
+        {
+            SiteId = siteId, ClientId = clientId, TotalAgents = 7, SelectedSeeds = 7,
+            GeneratedAt = now.AddMinutes(-1)
+        });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        await service.EnsureSeedPlanFreshAsync(siteId, clientId, CancellationToken.None);
+
+        var plan = await db.P2pSeedPlans.AsNoTracking().SingleAsync(p => p.SiteId == siteId);
+        Assert.That(plan.TotalAgents, Is.EqualTo(7), "plano já populado não deve ser recalculado a cada ingest");
+    }
+
     private static DiscoveryDbContext CreateDbContext()
     {
         var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
@@ -273,7 +320,8 @@ public class P2pOverviewServiceTests
             var allowedTypes = new HashSet<Type>
             {
                 typeof(P2pAgentTelemetry),
-                typeof(P2pArtifactPresence)
+                typeof(P2pArtifactPresence),
+                typeof(P2pSeedPlan)
             };
 
             foreach (var entityType in typeof(P2pAgentTelemetry).Assembly.GetTypes()
@@ -287,6 +335,7 @@ public class P2pOverviewServiceTests
             modelBuilder.Entity<P2pAgentTelemetry>(entity => entity.HasKey(item => item.Id));
             modelBuilder.Entity<P2pArtifactPresence>(entity =>
                 entity.HasKey(item => new { item.ArtifactId, item.AgentId }));
+            modelBuilder.Entity<P2pSeedPlan>(entity => entity.HasKey(item => item.SiteId));
         }
     }
 }

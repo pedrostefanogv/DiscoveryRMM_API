@@ -64,10 +64,20 @@ public class P2pService : IP2pService
                 plan.SelectedSeeds));
     }
 
-    private async Task<P2pSeedPlan> RecalculateSeedPlanAsync(Guid siteId, CancellationToken ct)
+    // internal para testes; clientIdOverride evita a consulta ao repositório de
+    // sites quando o chamador já conhece o cliente (ingestão de telemetria).
+    internal async Task<P2pSeedPlan> RecalculateSeedPlanAsync(Guid siteId, CancellationToken ct, Guid? clientIdOverride = null)
     {
-        var site = await _siteRepo.GetByIdAsync(siteId);
-        var clientId = site?.ClientId ?? Guid.Empty;
+        Guid clientId;
+        if (clientIdOverride.HasValue)
+        {
+            clientId = clientIdOverride.Value;
+        }
+        else
+        {
+            var site = await _siteRepo.GetByIdAsync(siteId);
+            clientId = site?.ClientId ?? Guid.Empty;
+        }
 
         // Contar agentes ativos nos últimos 10 minutos
         var cutoff = DateTime.UtcNow.AddMinutes(-10);
@@ -107,6 +117,25 @@ public class P2pService : IP2pService
 
         await _db.SaveChangesAsync(ct);
         return existing;
+    }
+
+    /// <summary>
+    /// Recalcula o seed-plan do site quando ele ainda está ausente ou zerado.
+    /// Sem isso, um site que acabou de ligar os agentes fica até 15 minutos
+    /// (P2pMaintenanceJob) com total_agents/selected_seeds = 0, e o dashboard
+    /// mostra "Seeders ativos" e o plano errados. internal para testes.
+    /// </summary>
+    internal async Task EnsureSeedPlanFreshAsync(Guid siteId, Guid clientId, CancellationToken ct)
+    {
+        var currentTotal = await _db.P2pSeedPlans
+            .AsNoTracking()
+            .Where(p => p.SiteId == siteId)
+            .Select(p => p.TotalAgents)
+            .FirstOrDefaultAsync(ct);
+
+        if (currentTotal > 0) return;
+
+        await RecalculateSeedPlanAsync(siteId, ct, clientId);
     }
 
     private static int CalculateSelectedSeeds(int totalAgents, int configuredPercent, int minSeeds)
@@ -242,6 +271,10 @@ public class P2pService : IP2pService
 
             await _db.SaveChangesAsync(ct);
         }
+
+        // Mantém o seed-plan fresco para o site (apenas quando ainda está
+        // zerado/ausente), evitando depender só do job de 15 min.
+        await EnsureSeedPlanFreshAsync(agent.SiteId, clientId, ct);
 
         return errors;
     }
