@@ -49,6 +49,10 @@ public partial class DiscoveryDbContext
             e.HasIndex(t => new { t.AgentId, t.CollectedAt }).HasDatabaseName("ix_p2p_telemetry_agent_time");
             e.HasIndex(t => new { t.SiteId, t.CollectedAt }).HasDatabaseName("ix_p2p_telemetry_site_time");
             e.HasIndex(t => new { t.ClientId, t.CollectedAt }).HasDatabaseName("ix_p2p_telemetry_client_time");
+            // Consultas de ops/dashboard filtram por received_at (relógio do servidor).
+            e.HasIndex(t => t.ReceivedAt).HasDatabaseName("ix_p2p_telemetry_received_at");
+            e.HasIndex(t => new { t.SiteId, t.ReceivedAt }).HasDatabaseName("ix_p2p_telemetry_site_received");
+            e.HasIndex(t => new { t.ClientId, t.ReceivedAt }).HasDatabaseName("ix_p2p_telemetry_client_received");
         });
 
         modelBuilder.Entity<P2pArtifactPresence>(e =>

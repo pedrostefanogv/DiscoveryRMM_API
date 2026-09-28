@@ -116,6 +116,12 @@ public class P2pKpisDto
     public double ReplicationSuccessRate { get; set; }
     public long BytesServedDelta { get; set; }
     public long BytesDownloadedDelta { get; set; }
+
+    /// <summary>Replicações iniciadas na janela (delta das contagens cumulativas).</summary>
+    public long ReplicationsStartedDelta { get; set; }
+
+    /// <summary>Replicações concluídas com sucesso na janela.</summary>
+    public long ReplicationsSucceededDelta { get; set; }
     public double QueuePressure { get; set; }
     public int ArtifactsWithPeers { get; set; }
     public string? LastTelemetryAtUtc { get; set; }

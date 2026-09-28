@@ -28,8 +28,12 @@ public class RetentionSettings
     /// <summary>Days to keep sync ping delivery records. Default: 7.</summary>
     public int SyncPingRetentionDays { get; set; } = 7;
 
-    /// <summary>Days to keep P2P agent telemetry. Default: 7.</summary>
-    public int TelemetryRetentionDays { get; set; } = 7;
+    /// <summary>
+    /// Days to keep P2P agent telemetry. Default: 30 — alinhado com a maior
+    /// janela (30d) do card de Métricas P2P do dashboard. Com 7 dias, a janela
+    /// de 30d exibiria apenas 1/4 do período rotulado.
+    /// </summary>
+    public int TelemetryRetentionDays { get; set; } = 30;
 
     /// <summary>Days to keep automation execution reports. Default: 30.</summary>
     public int AutomationReportRetentionDays { get; set; } = 30;

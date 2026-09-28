@@ -35,6 +35,7 @@ public class AgentAuthController : ControllerBase
     private readonly IDepartmentRepository _departmentRepo;
     private readonly IWorkflowProfileRepository _workflowProfileRepo;
     private readonly IDepartmentCustomFieldService _departmentCustomFieldService;
+    private readonly IP2pService _p2pService;
     private readonly ILogger<AgentAuthController> _logger;
 
     public AgentAuthController(
@@ -46,6 +47,7 @@ public class AgentAuthController : ControllerBase
         IDepartmentRepository departmentRepo,
         IWorkflowProfileRepository workflowProfileRepo,
         IDepartmentCustomFieldService departmentCustomFieldService,
+        IP2pService p2pService,
         ILogger<AgentAuthController> logger)
     {
         _mediator = mediator;
@@ -56,6 +58,7 @@ public class AgentAuthController : ControllerBase
         _departmentRepo = departmentRepo;
         _workflowProfileRepo = workflowProfileRepo;
         _departmentCustomFieldService = departmentCustomFieldService;
+        _p2pService = p2pService;
         _logger = logger;
     }
 
@@ -486,6 +489,21 @@ public class AgentAuthController : ControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
+
+        // Rate limit server-side (5 req/10 min por agente). Estava implementado em
+        // P2pService.CheckTelemetryRateLimitAsync mas nunca era chamado — o agente
+        // tinha toda a lógica de retry para 429 que nunca acontecia.
+        var retryAfterSeconds = await _p2pService.CheckTelemetryRateLimitAsync(id, ct);
+        if (retryAfterSeconds > 0)
+        {
+            Response.Headers.RetryAfter = retryAfterSeconds.ToString();
+            return StatusCode(StatusCodes.Status429TooManyRequests, new
+            {
+                error = "rate limit de telemetria excedido",
+                code = "RATE_LIMIT_EXCEEDED"
+            });
+        }
+
         return MapResult(await _mediator.Send(new IngestP2pTelemetryCommand(id, request), ct), Ok);
     }
 

@@ -331,11 +331,22 @@ public class P2pService : IP2pService
             _ => query // global
         };
 
-        var snapshots = await query
-            .OrderByDescending(t => t.CollectedAt)
+        // Agregação no banco: apenas as duas linhas de fronteira por agente
+        // (mais recente e mais antiga da janela) em vez de materializar todas as
+        // amostras do período em memória. O EF traduz para subconsultas
+        // ordenadas por agente (ORDER BY ... LIMIT 1) no PostgreSQL.
+        var samples = await query
+            .GroupBy(t => t.AgentId)
+            .Select(g => new
+            {
+                AgentId = g.Key,
+                MaxReceivedAt = g.Max(t => t.ReceivedAt),
+                Latest = g.OrderByDescending(t => t.CollectedAt).ThenByDescending(t => t.ReceivedAt).First(),
+                Earliest = g.OrderBy(t => t.CollectedAt).ThenBy(t => t.ReceivedAt).First()
+            })
             .ToListAsync(ct);
 
-        if (snapshots.Count == 0)
+        if (samples.Count == 0)
         {
             return new P2pOverviewDto
             {
@@ -343,50 +354,45 @@ public class P2pService : IP2pService
                 ScopeId = (tenantId ?? siteId ?? agentId)?.ToString(),
                 Window = FormatWindow(window),
                 Kpis = new P2pKpisDto(),
-                Health = "ok",
+                // Sem snapshots na janela: não há dados (e não "saudável com zeros").
+                // O frontend usa isso + lastTelemetryAtUtc para exibir empty state.
+                Health = "nodata",
                 UpdatedAtUtc = DateTime.UtcNow.ToString("O")
             };
         }
 
-        // Último snapshot por agente para calcular estado corrente
-        var latestByAgent = snapshots
-            .GroupBy(t => t.AgentId)
-            .Select(g => g.First())
-            .ToList();
-
-        // Primeiro snapshot por agente no período (para calcular delta)
-        var firstByAgent = snapshots
-            .GroupBy(t => t.AgentId)
-            .Select(g => g.Last())
-            .ToList();
-
         long bytesServedDelta = 0, bytesDownloadedDelta = 0;
         long startedDelta = 0, succeededDelta = 0;
-        foreach (var latest in latestByAgent)
+        foreach (var sample in samples)
         {
-            var first = firstByAgent.FirstOrDefault(f => f.AgentId == latest.AgentId);
-            if (first is null) continue;
+            var latest = sample.Latest;
+            var first = sample.Earliest;
             bytesServedDelta += Math.Max(0, latest.BytesServed - first.BytesServed);
             bytesDownloadedDelta += Math.Max(0, latest.BytesDownloaded - first.BytesDownloaded);
             startedDelta += Math.Max(0, latest.ReplicationsStarted - first.ReplicationsStarted);
             succeededDelta += Math.Max(0, latest.ReplicationsSucceeded - first.ReplicationsSucceeded);
         }
 
-        var activeAgents = latestByAgent.Count;
-        var successRate = startedDelta > 0 ? (double)succeededDelta / startedDelta : 1.0;
-        var queueAvg = latestByAgent.Average(s => (double)s.QueuedReplications);
+        var activeAgents = samples.Count;
+        // Sem replicações na janela não há taxa observável: 0 (o frontend mostra
+        // "—" quando ReplicationsStartedDelta == 0). Antes devolvia 1.0 (100%).
+        var successRate = startedDelta > 0 ? (double)succeededDelta / startedDelta : 0.0;
+        var queueAvg = samples.Average(s => (double)s.Latest.QueuedReplications);
         var queuePressure = Math.Min(queueAvg / 1000.0, 1.0);
 
         // Artifacts com peers na janela TTL 2h
         var presenceCutoff = DateTime.UtcNow.AddHours(-2);
-        var artifactsWithPeers = await BuildArtifactPresenceQuery(scope, tenantId, siteId)
+        var artifactsWithPeers = await BuildArtifactPresenceQuery(scope, tenantId, siteId, agentId)
             .Where(p => p.LastSeenAt >= presenceCutoff)
             .Select(p => p.ArtifactId)
             .Distinct()
             .CountAsync(ct);
 
-        var activeSeeders = latestByAgent.Count(s => s.PlanSelectedSeeds > 0);
-        var health = DetermineHealth(1.0 - successRate, queuePressure);
+        var activeSeeders = samples.Count(s => s.Latest.PlanSelectedSeeds > 0);
+        // Sem replicações na janela não há taxa de falha observável: não penalizar
+        // a saúde da rede por ausência de atividade (antes: failureRate=1.0 → "critical").
+        var observedFailureRate = startedDelta > 0 ? 1.0 - successRate : 0.0;
+        var health = DetermineHealth(observedFailureRate, queuePressure);
 
         return new P2pOverviewDto
         {
@@ -397,12 +403,15 @@ public class P2pService : IP2pService
             {
                 ActiveAgents = activeAgents,
                 ActiveSeeders = activeSeeders,
-                ReplicationSuccessRate = Math.Round(successRate, 4),
+                // Percentual (0..100), consistente com DashboardService.CalculateSuccessRate.
+                ReplicationSuccessRate = Math.Round(successRate * 100, 2),
                 BytesServedDelta = bytesServedDelta,
                 BytesDownloadedDelta = bytesDownloadedDelta,
+                ReplicationsStartedDelta = startedDelta,
+                ReplicationsSucceededDelta = succeededDelta,
                 QueuePressure = Math.Round(queuePressure, 4),
                 ArtifactsWithPeers = artifactsWithPeers,
-                LastTelemetryAtUtc = snapshots.Max(s => s.ReceivedAt).ToString("O")
+                LastTelemetryAtUtc = samples.Max(s => s.MaxReceivedAt).ToString("O")
             },
             Health = health,
             UpdatedAtUtc = DateTime.UtcNow.ToString("O")
@@ -420,9 +429,12 @@ public class P2pService : IP2pService
         TimeSpan interval,
         CancellationToken ct = default)
     {
+        // Consistente com overview/ranking/retenção: janela pelo received_at
+        // (relógio do servidor). Antes usava collected_at (relógio do agente),
+        // o que podia divergir e não usava o índice ix_p2p_telemetry_received_at.
         var query = _db.P2pAgentTelemetries
             .AsNoTracking()
-            .Where(t => t.CollectedAt >= from && t.CollectedAt <= to);
+            .Where(t => t.ReceivedAt >= from && t.ReceivedAt <= to);
 
         query = scope switch
         {
@@ -433,7 +445,7 @@ public class P2pService : IP2pService
         };
 
         var snapshots = await query
-            .OrderBy(t => t.CollectedAt)
+            .OrderBy(t => t.ReceivedAt)
             .ToListAsync(ct);
 
         var points = BuildTimeseries(snapshots, metric, from, to, interval);
@@ -494,25 +506,38 @@ public class P2pService : IP2pService
         else if (scope == "site" && siteId.HasValue)
             query = query.Where(t => t.SiteId == siteId.Value);
 
-        var snapshots = await query.OrderBy(t => t.CollectedAt).ToListAsync(ct);
-        if (snapshots.Count == 0) return new List<P2pAgentRankingItem>();
+        // Mesma agregação do overview: apenas as linhas de fronteira por agente,
+        // calculadas no banco (ROW_NUMBER por agente), em vez de materializar
+        // toda a janela em memória.
+        var samples = await query
+            .GroupBy(t => t.AgentId)
+            .Select(g => new
+            {
+                AgentId = g.Key,
+                Latest = g.OrderByDescending(t => t.CollectedAt).ThenByDescending(t => t.ReceivedAt).First(),
+                Earliest = g.OrderBy(t => t.CollectedAt).ThenBy(t => t.ReceivedAt).First(),
+                QueueAvg = g.Average(t => (double)t.QueuedReplications),
+                ActiveAvg = g.Average(t => (double)t.ActiveReplications)
+            })
+            .ToListAsync(ct);
 
-        var grouped = snapshots.GroupBy(t => t.AgentId).ToList();
+        if (samples.Count == 0) return new List<P2pAgentRankingItem>();
+
         var items = new List<P2pAgentRankingItem>();
 
-        foreach (var g in grouped)
+        foreach (var sample in samples)
         {
-            var ordered = g.OrderBy(s => s.CollectedAt).ToList();
-            var first = ordered.First();
-            var last = ordered.Last();
+            var first = sample.Earliest;
+            var last = sample.Latest;
 
             var startedDelta = Math.Max(0, last.ReplicationsStarted - first.ReplicationsStarted);
             var succeededDelta = Math.Max(0, last.ReplicationsSucceeded - first.ReplicationsSucceeded);
             var failedDelta = Math.Max(0, last.ReplicationsFailed - first.ReplicationsFailed);
 
-            var successRate = startedDelta > 0 ? (double)succeededDelta / startedDelta : 1.0;
+            // Sem replicações não há taxa observável: 0 (antes: success=100%).
+            var successRate = startedDelta > 0 ? (double)succeededDelta / startedDelta : 0.0;
             var failureRate = startedDelta > 0 ? (double)failedDelta / startedDelta : 0.0;
-            var queueAvg = ordered.Average(s => (double)s.QueuedReplications);
+            var queueAvg = sample.QueueAvg;
             var queuePressure = Math.Min(queueAvg / 1000.0, 1.0);
             var healthScore = Math.Max(0, 100.0 - (failureRate * 40 + queuePressure * 30));
 
@@ -523,11 +548,12 @@ public class P2pService : IP2pService
                 ClientId = first.ClientId.ToString(),
                 HealthScore = Math.Round(healthScore, 1),
                 ReplicationsStartedDelta = startedDelta,
-                SuccessRate = Math.Round(successRate, 4),
-                FailureRate = Math.Round(failureRate, 4),
+                // Percentuais (0..100), consistentes com o overview do dashboard.
+                SuccessRate = Math.Round(successRate * 100, 2),
+                FailureRate = Math.Round(failureRate * 100, 2),
                 BytesServedDelta = Math.Max(0, last.BytesServed - first.BytesServed),
                 BytesDownloadedDelta = Math.Max(0, last.BytesDownloaded - first.BytesDownloaded),
-                ActiveReplicationsAvg = Math.Round(ordered.Average(s => (double)s.ActiveReplications), 2),
+                ActiveReplicationsAvg = Math.Round(sample.ActiveAvg, 2),
                 QueuedReplicationsAvg = Math.Round(queueAvg, 2),
                 LastTelemetryAtUtc = last.ReceivedAt.ToString("O")
             });
@@ -866,13 +892,16 @@ public class P2pService : IP2pService
         return (items, total);
     }
 
-    private IQueryable<P2pArtifactPresence> BuildArtifactPresenceQuery(string scope, Guid? tenantId, Guid? siteId)
+    private IQueryable<P2pArtifactPresence> BuildArtifactPresenceQuery(string scope, Guid? tenantId, Guid? siteId, Guid? agentId)
     {
         var q = _db.P2pArtifactPresences.AsNoTracking();
         return scope switch
         {
             "tenant" when tenantId.HasValue => q.Where(p => p.ClientId == tenantId.Value),
             "site" when siteId.HasValue => q.Where(p => p.SiteId == siteId.Value),
+            // O escopo "agent" não filtrava a presença — o KPI contava artefatos
+            // de outros agentes do mesmo site/cliente.
+            "agent" when agentId.HasValue => q.Where(p => p.AgentId == agentId.Value),
             _ => q
         };
     }
@@ -890,7 +919,7 @@ public class P2pService : IP2pService
         while (current < to)
         {
             var next = current + interval;
-            var bucket = snapshots.Where(s => s.CollectedAt >= current && s.CollectedAt < next).ToList();
+            var bucket = snapshots.Where(s => s.ReceivedAt >= current && s.ReceivedAt < next).ToList();
 
             double value = bucket.Count == 0 ? 0 : metric switch
             {
@@ -923,6 +952,7 @@ public class P2pService : IP2pService
         <= 1 => "1h",
         <= 24 => "24h",
         <= 168 => "7d",
+        <= 720 => "30d",
         _ => $"{(int)window.TotalHours}h"
     };
 
