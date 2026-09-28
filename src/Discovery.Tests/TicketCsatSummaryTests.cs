@@ -84,13 +84,65 @@ public class TicketCsatSummaryTests
         Assert.That(noMachine!.Count, Is.EqualTo(1));
     }
 
+    [Test]
+    public async Task CsatSummary_CountsRatedTicketWithoutClosedAt()
+    {
+        await using var db = CreateDb();
+        var clientId = Guid.NewGuid();
+        var department = new Department { Id = Guid.NewGuid(), Name = "TI", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        var agent = new Agent { Id = Guid.NewGuid(), SiteId = Guid.NewGuid(), Hostname = "PC-09" };
+        db.AddRange(department, agent);
+
+        var ticket = NewRatedTicket(clientId, department.Id, agent.Id, 5);
+        // Estado final legado: sem ClosedAt, mas com avaliacao registrada.
+        ticket.ClosedAt = null;
+        db.Add(ticket);
+        await db.SaveChangesAsync();
+
+        var handler = new GetTicketCsatSummaryQueryHandler(db);
+        var result = await handler.Handle(new GetTicketCsatSummaryQuery(), default);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.Rated, Is.EqualTo(1), "avaliado sem ClosedAt deve entrar no CSAT");
+        Assert.That(result.Value!.ByHostname.SingleOrDefault(g => g.Label == "PC-09"), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task CsatSummary_CountsFinalStateTicketWithoutClosedAtInTotal()
+    {
+        await using var db = CreateDb();
+        var clientId = Guid.NewGuid();
+        var department = new Department { Id = Guid.NewGuid(), Name = "TI", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        var finalState = new WorkflowState { Id = Guid.NewGuid(), Name = "Fechado", IsFinal = true, SortOrder = 2 };
+        db.AddRange(department, finalState);
+
+        var ticket = NewRatedTicket(clientId, department.Id, null, 5);
+        // Estado final sem ClosedAt e sem avaliacao: entra no total pela data de
+        // atualizacao (aproximacao documentada).
+        ticket.WorkflowStateId = finalState.Id;
+        ticket.ClosedAt = null;
+        ticket.RatedAt = null;
+        ticket.Rating = null;
+        ticket.UpdatedAt = DateTime.UtcNow;
+        db.Add(ticket);
+        await db.SaveChangesAsync();
+
+        var handler = new GetTicketCsatSummaryQueryHandler(db);
+        var result = await handler.Handle(new GetTicketCsatSummaryQuery(), default);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.Total, Is.EqualTo(1), "estado final sem ClosedAt deve contar no total");
+        Assert.That(result.Value!.Rated, Is.EqualTo(0));
+    }
+
     private sealed class CsatTestDbContext(DbContextOptions<DiscoveryDbContext> options) : DiscoveryDbContext(options)
     {
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             var allowed = new HashSet<Type>
             {
-                typeof(Client), typeof(Department), typeof(User), typeof(Agent), typeof(Ticket)
+                typeof(Client), typeof(Department), typeof(User), typeof(Agent), typeof(Ticket),
+                typeof(WorkflowState)
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -106,6 +158,7 @@ public class TicketCsatSummaryTests
             modelBuilder.Entity<User>(e => e.HasKey(u => u.Id));
             modelBuilder.Entity<Agent>(e => e.HasKey(a => a.Id));
             modelBuilder.Entity<Ticket>(e => { e.HasKey(t => t.Id); e.Ignore(t => t.DaysOpen); });
+            modelBuilder.Entity<WorkflowState>(e => e.HasKey(s => s.Id));
         }
     }
 }

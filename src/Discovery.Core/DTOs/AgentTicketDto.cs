@@ -28,6 +28,9 @@ public sealed record AgentTicketDto(
     string? RatingFeedback,
     DateTime? RatedAt,
     string? RatedBy,
+    // Template usado na abertura (nome preservado em TemplateName).
+    Guid? TemplateId,
+    string? TemplateName,
     string? SubmissionSnapshotMarkdown);
 
 /// <summary>
@@ -83,5 +86,7 @@ public static class AgentTicketMapper
         ticket.RatingFeedback,
         ticket.RatedAt,
         ticket.RatedBy,
+        ticket.TemplateId,
+        ticket.TemplateName,
         ticket.SubmissionSnapshotMarkdown);
 }

@@ -520,7 +520,12 @@ public sealed class GetTicketCsatSummaryQueryHandler(DiscoveryDbContext db)
         var closedQuery = db.Tickets.AsNoTracking()
             .Where(t => t.DeletedAt == null && (
                 (t.ClosedAt != null && t.ClosedAt >= from && t.ClosedAt <= to) ||
-                (t.ClosedAt == null && t.RatedAt != null && t.RatedAt >= from && t.RatedAt <= to)));
+                (t.ClosedAt == null && t.RatedAt != null && t.RatedAt >= from && t.RatedAt <= to) ||
+                // Estado final sem ClosedAt (legado/ajuste manual) e sem nota: usa
+                // UpdatedAt como data aproximada de referencia do periodo.
+                (t.ClosedAt == null && t.RatedAt == null
+                    && db.WorkflowStates.Any(s => s.Id == t.WorkflowStateId && s.IsFinal)
+                    && t.UpdatedAt >= from && t.UpdatedAt <= to)));
         if (q.ClientId.HasValue) closedQuery = closedQuery.Where(t => t.ClientId == q.ClientId.Value);
         if (q.DepartmentId.HasValue) closedQuery = closedQuery.Where(t => t.DepartmentId == q.DepartmentId.Value);
 

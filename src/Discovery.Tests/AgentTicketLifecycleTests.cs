@@ -239,13 +239,15 @@ public class AgentTicketLifecycleTests
         Assert.That(keys, Does.Contain("submissionSnapshotMarkdown"));
         // departmentId e publico e ajuda a IA a chamar get_department_fields.
         Assert.That(keys, Does.Contain("departmentId"));
+        Assert.That(keys, Does.Contain("templateId"));
+        Assert.That(keys, Does.Contain("templateName"));
 
         foreach (var forbidden in new[]
                  {
                      "assignedToUserId", "requesterUserId", "deletedAt",
                      "slaExpiresAt", "slaBreached", "firstRespondedAt",
                      "firstResponseSlaStartedAt", "slaPausedSeconds", "slaHoldStartedAt",
-                     "daysOpen", "templateId", "templateName", "workflowProfileId"
+                     "daysOpen", "workflowProfileId"
                  })
         {
             Assert.That(keys, Does.Not.Contain(forbidden),
@@ -270,6 +272,64 @@ public class AgentTicketLifecycleTests
 
         Assert.That(result.IsSuccess, Is.True);
         Assert.That(result.Value!.Select(t => t.Id), Is.EquivalentTo(new[] { mine.Id }));
+    }
+
+    [Test]
+    public async Task GetMyTicketComments_ProjectsPublicContractOnly()
+    {
+        var agentId = Guid.NewGuid();
+        var state = NewState("Aberto", isFinal: false);
+        var ticket = NewTicket(Guid.NewGuid(), state.Id, agentId);
+        await using var db = await SeedAsync(ticket, state);
+        db.TicketComments.AddRange(
+            new TicketComment { Id = Guid.NewGuid(), TicketId = ticket.Id, Author = "Usuario", Content = "comentario publico", IsInternal = false, CreatedAt = DateTime.UtcNow },
+            new TicketComment { Id = Guid.NewGuid(), TicketId = ticket.Id, Author = "Tecnico", Content = "nota interna", IsInternal = true, CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var handler = new GetMyTicketCommentsHandler(new TicketRepository(db, new NoopAgentMessaging()));
+        var result = await handler.Handle(new GetMyTicketCommentsQuery(agentId, ticket.Id), default);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!, Has.Count.EqualTo(1), "nota interna nao pode aparecer para o agent");
+        Assert.That(result.Value![0].Content, Is.EqualTo("comentario publico"));
+
+        var json = JsonSerializer.Serialize(result.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        var keys = doc.RootElement[0].EnumerateObject().Select(p => p.Name).ToHashSet();
+        Assert.That(keys, Does.Not.Contain("isInternal"));
+        Assert.That(keys, Does.Not.Contain("ticketId"));
+    }
+
+    [Test]
+    public async Task GetMyTicketAnswers_ReturnsOnlyOwnedTicketAnswers()
+    {
+        var agentId = Guid.NewGuid();
+        var state = NewState("Aberto", isFinal: false);
+        var ticket = NewTicket(Guid.NewGuid(), state.Id, agentId);
+        await using var db = await SeedAsync(ticket, state);
+        db.TicketAnswers.Add(new TicketAnswer
+        {
+            Id = Guid.NewGuid(),
+            TicketId = ticket.Id,
+            QuestionKey = "tipo",
+            QuestionLabel = "Tipo de equipamento",
+            ValueText = "Notebook",
+            ValueJson = "\"Notebook\"",
+            SortOrder = 0,
+            CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var handler = new GetMyTicketAnswersHandler(new TicketRepository(db, new NoopAgentMessaging()), db);
+        var result = await handler.Handle(new GetMyTicketAnswersQuery(agentId, ticket.Id), default);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.Select(a => a.QuestionLabel), Is.EquivalentTo(new[] { "Tipo de equipamento" }));
+        Assert.That(result.Value![0].ValueText, Is.EqualTo("Notebook"));
+
+        // Isolamento por agent (IDOR)
+        var other = await handler.Handle(new GetMyTicketAnswersQuery(Guid.NewGuid(), ticket.Id), default);
+        Assert.That(other.IsFailure, Is.True);
     }
 
     // Guarda de injeção: os handlers do agent dependem da interface fechada dos
