@@ -221,6 +221,11 @@ public sealed class GetMyTicketTemplatesHandler(
                     q.ValidationRegex,
                     q.InputMask,
                     q.HelpText,
+                    // Limites: necessários para validar no cliente do agent.
+                    q.MinLength,
+                    q.MaxLength,
+                    q.MinValue,
+                    q.MaxValue,
                 }).ToList(),
                 // Campos do departamento (sempre presentes no chamado, com a
                 // obrigatoriedade configurada em cada campo).
