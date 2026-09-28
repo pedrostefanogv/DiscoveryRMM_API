@@ -31,6 +31,12 @@ public class P2pAgentTelemetry
     public long ChunkedDownloads { get; set; }
     public long ChunksDownloaded { get; set; }
 
+    /// <summary>
+    /// Pré-cargas P2P ignoradas por o pacote já estar em estado final (instalado /
+    /// sem update pendente) — mede tráfego evitado. Cumulativo desde o início do processo.
+    /// </summary>
+    public long PreloadSkippedFinalState { get; set; }
+
     // --- Seed plan vigente no momento da coleta ---
     public int PlanTotalAgents { get; set; }
     public int PlanConfiguredPercent { get; set; }

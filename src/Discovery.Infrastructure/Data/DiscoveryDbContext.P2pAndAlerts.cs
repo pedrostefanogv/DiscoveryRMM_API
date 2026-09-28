@@ -34,6 +34,7 @@ public partial class DiscoveryDbContext
             e.Property(t => t.CatalogRefreshRuns).HasColumnName("catalog_refresh_runs");
             e.Property(t => t.ChunkedDownloads).HasColumnName("chunked_downloads");
             e.Property(t => t.ChunksDownloaded).HasColumnName("chunks_downloaded");
+            e.Property(t => t.PreloadSkippedFinalState).HasColumnName("preload_skipped_final_state");
             e.Property(t => t.PlanTotalAgents).HasColumnName("plan_total_agents");
             e.Property(t => t.PlanConfiguredPercent).HasColumnName("plan_configured_percent");
             e.Property(t => t.PlanMinSeeds).HasColumnName("plan_min_seeds");
@@ -47,6 +48,8 @@ public partial class DiscoveryDbContext
             e.Property(t => t.KnownPeers).HasColumnName("known_peers");
             e.Property(t => t.ConnectedPeers).HasColumnName("connected_peers");
             e.HasIndex(t => new { t.AgentId, t.CollectedAt }).HasDatabaseName("ix_p2p_telemetry_agent_time");
+            // Um snapshot por (agent, collected_at): reenvio de outbox/restart não duplica.
+            e.HasIndex(t => new { t.AgentId, t.CollectedAt }).IsUnique().HasDatabaseName("ux_p2p_telemetry_agent_collected");
             e.HasIndex(t => new { t.SiteId, t.CollectedAt }).HasDatabaseName("ix_p2p_telemetry_site_time");
             e.HasIndex(t => new { t.ClientId, t.CollectedAt }).HasDatabaseName("ix_p2p_telemetry_client_time");
             // Consultas de ops/dashboard filtram por received_at (relógio do servidor).

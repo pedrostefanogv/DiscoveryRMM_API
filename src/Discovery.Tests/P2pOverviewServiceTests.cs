@@ -315,6 +315,73 @@ public class P2pOverviewServiceTests
         Assert.That(plan.TotalAgents, Is.EqualTo(7), "plano já populado não deve ser recalculado a cada ingest");
     }
 
+    [Test]
+    public async Task GetOverviewAsync_TreatsCounterResetAsNewSegment()
+    {
+        await using var db = CreateDbContext();
+        var (agentId, siteId, clientId) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var now = DateTime.UtcNow;
+
+        // Contadores cumulativos + restart no meio da janela (zeram para 0).
+        // O total é a soma dos segmentos, não "último - primeiro" (que dava 0).
+        db.P2pAgentTelemetries.AddRange(
+            Snapshot(1, agentId, siteId, clientId, now.AddMinutes(-20), started: 0, succeeded: 0, served: 500, downloaded: 100, seeds: 0, queued: 0),
+            Snapshot(2, agentId, siteId, clientId, now.AddMinutes(-15), started: 0, succeeded: 0, served: 900, downloaded: 400, seeds: 0, queued: 0),
+            Snapshot(3, agentId, siteId, clientId, now.AddMinutes(-10), started: 0, succeeded: 0, served: 0, downloaded: 0, seeds: 0, queued: 0),
+            Snapshot(4, agentId, siteId, clientId, now.AddMinutes(-5), started: 0, succeeded: 0, served: 300, downloaded: 200, seeds: 0, queued: 0));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        var result = await service.GetOverviewAsync("global", null, null, null, TimeSpan.FromHours(24));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Kpis.BytesServedDelta, Is.EqualTo(1200), "500 + 400 + 0 + 300");
+            Assert.That(result.Kpis.BytesDownloadedDelta, Is.EqualTo(600), "100 + 300 + 0 + 200");
+            Assert.That(result.Kpis.ActiveAgents, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task GetOverviewAsync_DuplicateSnapshotIsNotDoubleCounted()
+    {
+        await using var db = CreateDbContext();
+        var (agentId, siteId, clientId) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var now = DateTime.UtcNow;
+
+        // Reenvio do MESMO snapshot (retry do outbox após restart): contador igual
+        // não gera incremento, então não conta em dobro.
+        db.P2pAgentTelemetries.AddRange(
+            Snapshot(1, agentId, siteId, clientId, now.AddMinutes(-10), started: 0, succeeded: 0, served: 500, downloaded: 0, seeds: 0, queued: 0),
+            Snapshot(2, agentId, siteId, clientId, now.AddMinutes(-5), started: 0, succeeded: 0, served: 500, downloaded: 0, seeds: 0, queued: 0));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        var result = await service.GetOverviewAsync("global", null, null, null, TimeSpan.FromHours(24));
+
+        Assert.That(result.Kpis.BytesServedDelta, Is.EqualTo(500));
+    }
+
+    [Test]
+    public async Task GetOverviewAsync_ReportsPreloadSkippedFinalStateDelta()
+    {
+        await using var db = CreateDbContext();
+        var (agentId, siteId, clientId) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var now = DateTime.UtcNow;
+
+        var first = Snapshot(1, agentId, siteId, clientId, now.AddMinutes(-10), 0, 0, 0, 0, 0, 0);
+        first.PreloadSkippedFinalState = 3;
+        var second = Snapshot(2, agentId, siteId, clientId, now.AddMinutes(-5), 0, 0, 0, 0, 0, 0);
+        second.PreloadSkippedFinalState = 5;
+        db.P2pAgentTelemetries.AddRange(first, second);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        var result = await service.GetOverviewAsync("global", null, null, null, TimeSpan.FromHours(24));
+
+        Assert.That(result.Kpis.PreloadSkippedFinalStateDelta, Is.EqualTo(5));
+    }
+
     private static DiscoveryDbContext CreateDbContext()
     {
         var options = new DbContextOptionsBuilder<DiscoveryDbContext>()

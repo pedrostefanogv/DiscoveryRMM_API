@@ -83,6 +83,9 @@ public class P2pMetricsDto
     public long CatalogRefreshRuns { get; set; }
     public long ChunkedDownloads { get; set; }
     public long ChunksDownloaded { get; set; }
+
+    /// <summary>Pré-cargas ignoradas por estado final (pacote já instalado/atualizado).</summary>
+    public long PreloadSkippedFinalState { get; set; }
 }
 
 // ─── Distribution status ─────────────────────────────────────────────────────
@@ -122,6 +125,9 @@ public class P2pKpisDto
 
     /// <summary>Replicações concluídas com sucesso na janela.</summary>
     public long ReplicationsSucceededDelta { get; set; }
+
+    /// <summary>Pré-cargas evitadas na janela por o pacote já estar em estado final.</summary>
+    public long PreloadSkippedFinalStateDelta { get; set; }
     public double QueuePressure { get; set; }
     public int ArtifactsWithPeers { get; set; }
     public string? LastTelemetryAtUtc { get; set; }

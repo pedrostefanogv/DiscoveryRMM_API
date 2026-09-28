@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.RegularExpressions;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
@@ -5,6 +6,8 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -234,6 +237,7 @@ public class P2pService : IP2pService
             CatalogRefreshRuns = metrics.CatalogRefreshRuns,
             ChunkedDownloads = metrics.ChunkedDownloads,
             ChunksDownloaded = metrics.ChunksDownloaded,
+            PreloadSkippedFinalState = metrics.PreloadSkippedFinalState,
             PlanTotalAgents = plan.TotalAgents,
             PlanConfiguredPercent = plan.ConfiguredPercent,
             PlanMinSeeds = plan.MinSeeds,
@@ -248,8 +252,25 @@ public class P2pService : IP2pService
             HostRamGB = hostLoad?.RamGB ?? 0,
         };
 
-        _db.P2pAgentTelemetries.Add(snapshot);
-        await _db.SaveChangesAsync(ct);
+        // Idempotência por (agent_id, collected_at): o outbox do agent reenvia o
+        // mesmo snapshot quando a resposta se perde ou após restart. Sem isso a
+        // amostra entrava duas vezes e os contadores cumulativos eram somados em
+        // dobro. O índice único é a rede de segurança para corrida entre requests.
+        var alreadyStored = await _db.P2pAgentTelemetries
+            .AsNoTracking()
+            .AnyAsync(t => t.AgentId == agentId && t.CollectedAt == collectedAt, ct);
+        if (!alreadyStored)
+        {
+            _db.P2pAgentTelemetries.Add(snapshot);
+            try
+            {
+                await _db.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+            {
+                _db.Entry(snapshot).State = EntityState.Detached;
+            }
+        }
 
         // ── Upsert de P2pArtifactPresence a partir de Artifacts[] ──
         if (request.Artifacts is { Count: > 0 })
@@ -395,34 +416,12 @@ public class P2pService : IP2pService
     {
         var cutoff = DateTime.UtcNow - window;
 
-        var query = _db.P2pAgentTelemetries
-            .AsNoTracking()
-            .Where(t => t.ReceivedAt >= cutoff);
+        // Deltas reset-aware por agente (ver QueryAgentCounterDeltasAsync): os
+        // contadores do agent zeram ao reiniciar, então "última - primeira amostra"
+        // devolvia 0 B mesmo com centenas de MB transferidos na janela.
+        var deltas = await QueryAgentCounterDeltasAsync(scope, tenantId, siteId, agentId, cutoff, ct);
 
-        query = scope switch
-        {
-            "tenant" when tenantId.HasValue => query.Where(t => t.ClientId == tenantId.Value),
-            "site" when siteId.HasValue => query.Where(t => t.SiteId == siteId.Value),
-            "agent" when agentId.HasValue => query.Where(t => t.AgentId == agentId.Value),
-            _ => query // global
-        };
-
-        // Agregação no banco: apenas as duas linhas de fronteira por agente
-        // (mais recente e mais antiga da janela) em vez de materializar todas as
-        // amostras do período em memória. O EF traduz para subconsultas
-        // ordenadas por agente (ORDER BY ... LIMIT 1) no PostgreSQL.
-        var samples = await query
-            .GroupBy(t => t.AgentId)
-            .Select(g => new
-            {
-                AgentId = g.Key,
-                MaxReceivedAt = g.Max(t => t.ReceivedAt),
-                Latest = g.OrderByDescending(t => t.CollectedAt).ThenByDescending(t => t.ReceivedAt).First(),
-                Earliest = g.OrderBy(t => t.CollectedAt).ThenBy(t => t.ReceivedAt).First()
-            })
-            .ToListAsync(ct);
-
-        if (samples.Count == 0)
+        if (deltas.Count == 0)
         {
             return new P2pOverviewDto
             {
@@ -437,23 +436,17 @@ public class P2pService : IP2pService
             };
         }
 
-        long bytesServedDelta = 0, bytesDownloadedDelta = 0;
-        long startedDelta = 0, succeededDelta = 0;
-        foreach (var sample in samples)
-        {
-            var latest = sample.Latest;
-            var first = sample.Earliest;
-            bytesServedDelta += Math.Max(0, latest.BytesServed - first.BytesServed);
-            bytesDownloadedDelta += Math.Max(0, latest.BytesDownloaded - first.BytesDownloaded);
-            startedDelta += Math.Max(0, latest.ReplicationsStarted - first.ReplicationsStarted);
-            succeededDelta += Math.Max(0, latest.ReplicationsSucceeded - first.ReplicationsSucceeded);
-        }
+        var bytesServedDelta = deltas.Sum(d => d.BytesServedDelta);
+        var bytesDownloadedDelta = deltas.Sum(d => d.BytesDownloadedDelta);
+        var startedDelta = deltas.Sum(d => d.ReplicationsStartedDelta);
+        var succeededDelta = deltas.Sum(d => d.ReplicationsSucceededDelta);
+        var preloadSkippedDelta = deltas.Sum(d => d.PreloadSkippedFinalStateDelta);
 
-        var activeAgents = samples.Count;
+        var activeAgents = deltas.Count;
         // Sem replicações na janela não há taxa observável: 0 (o frontend mostra
         // "—" quando ReplicationsStartedDelta == 0). Antes devolvia 1.0 (100%).
         var successRate = startedDelta > 0 ? (double)succeededDelta / startedDelta : 0.0;
-        var queueAvg = samples.Average(s => (double)s.Latest.QueuedReplications);
+        var queueAvg = deltas.Average(d => d.QueueAvg);
         var queuePressure = Math.Min(queueAvg / 1000.0, 1.0);
 
         // Artifacts com peers na janela TTL 2h
@@ -464,7 +457,7 @@ public class P2pService : IP2pService
             .Distinct()
             .CountAsync(ct);
 
-        var activeSeeders = samples.Count(s => s.Latest.PlanSelectedSeeds > 0);
+        var activeSeeders = deltas.Count(d => d.MaxSelectedSeeds > 0);
         // Sem replicações na janela não há taxa de falha observável: não penalizar
         // a saúde da rede por ausência de atividade (antes: failureRate=1.0 → "critical").
         var observedFailureRate = startedDelta > 0 ? 1.0 - successRate : 0.0;
@@ -485,9 +478,10 @@ public class P2pService : IP2pService
                 BytesDownloadedDelta = bytesDownloadedDelta,
                 ReplicationsStartedDelta = startedDelta,
                 ReplicationsSucceededDelta = succeededDelta,
+                PreloadSkippedFinalStateDelta = preloadSkippedDelta,
                 QueuePressure = Math.Round(queuePressure, 4),
                 ArtifactsWithPeers = artifactsWithPeers,
-                LastTelemetryAtUtc = samples.Max(s => s.MaxReceivedAt).ToString("O")
+                LastTelemetryAtUtc = deltas.Max(d => d.LastReceivedAt).ToString("O")
             },
             Health = health,
             UpdatedAtUtc = DateTime.UtcNow.ToString("O")
@@ -573,67 +567,47 @@ public class P2pService : IP2pService
     {
         var cutoff = DateTime.UtcNow - window;
 
-        var query = _db.P2pAgentTelemetries
-            .AsNoTracking()
-            .Where(t => t.ReceivedAt >= cutoff);
+        // Mesma agregação reset-aware do overview (contadores zeram no restart do agent).
+        var deltas = await QueryAgentCounterDeltasAsync(
+            scope,
+            scope == "tenant" ? tenantId : null,
+            scope == "site" ? siteId : null,
+            null,
+            cutoff,
+            ct);
 
-        if (scope == "tenant" && tenantId.HasValue)
-            query = query.Where(t => t.ClientId == tenantId.Value);
-        else if (scope == "site" && siteId.HasValue)
-            query = query.Where(t => t.SiteId == siteId.Value);
+        if (deltas.Count == 0) return new List<P2pAgentRankingItem>();
 
-        // Mesma agregação do overview: apenas as linhas de fronteira por agente,
-        // calculadas no banco (ROW_NUMBER por agente), em vez de materializar
-        // toda a janela em memória.
-        var samples = await query
-            .GroupBy(t => t.AgentId)
-            .Select(g => new
-            {
-                AgentId = g.Key,
-                Latest = g.OrderByDescending(t => t.CollectedAt).ThenByDescending(t => t.ReceivedAt).First(),
-                Earliest = g.OrderBy(t => t.CollectedAt).ThenBy(t => t.ReceivedAt).First(),
-                QueueAvg = g.Average(t => (double)t.QueuedReplications),
-                ActiveAvg = g.Average(t => (double)t.ActiveReplications)
-            })
-            .ToListAsync(ct);
-
-        if (samples.Count == 0) return new List<P2pAgentRankingItem>();
-
-        var items = new List<P2pAgentRankingItem>();
-
-        foreach (var sample in samples)
+        var items = deltas.Select(delta =>
         {
-            var first = sample.Earliest;
-            var last = sample.Latest;
-
-            var startedDelta = Math.Max(0, last.ReplicationsStarted - first.ReplicationsStarted);
-            var succeededDelta = Math.Max(0, last.ReplicationsSucceeded - first.ReplicationsSucceeded);
-            var failedDelta = Math.Max(0, last.ReplicationsFailed - first.ReplicationsFailed);
+            var startedDelta = delta.ReplicationsStartedDelta;
+            var succeededDelta = delta.ReplicationsSucceededDelta;
+            var failedDelta = delta.ReplicationsFailedDelta;
 
             // Sem replicações não há taxa observável: 0 (antes: success=100%).
             var successRate = startedDelta > 0 ? (double)succeededDelta / startedDelta : 0.0;
             var failureRate = startedDelta > 0 ? (double)failedDelta / startedDelta : 0.0;
-            var queueAvg = sample.QueueAvg;
+            var queueAvg = delta.QueueAvg;
             var queuePressure = Math.Min(queueAvg / 1000.0, 1.0);
             var healthScore = Math.Max(0, 100.0 - (failureRate * 40 + queuePressure * 30));
 
-            items.Add(new P2pAgentRankingItem
+            return new P2pAgentRankingItem
             {
-                AgentId = first.AgentId.ToString(),
-                SiteId = first.SiteId.ToString(),
-                ClientId = first.ClientId.ToString(),
+                AgentId = delta.AgentId.ToString(),
+                SiteId = delta.SiteId.ToString(),
+                ClientId = delta.ClientId.ToString(),
                 HealthScore = Math.Round(healthScore, 1),
                 ReplicationsStartedDelta = startedDelta,
                 // Percentuais (0..100), consistentes com o overview do dashboard.
                 SuccessRate = Math.Round(successRate * 100, 2),
                 FailureRate = Math.Round(failureRate * 100, 2),
-                BytesServedDelta = Math.Max(0, last.BytesServed - first.BytesServed),
-                BytesDownloadedDelta = Math.Max(0, last.BytesDownloaded - first.BytesDownloaded),
-                ActiveReplicationsAvg = Math.Round(sample.ActiveAvg, 2),
+                BytesServedDelta = delta.BytesServedDelta,
+                BytesDownloadedDelta = delta.BytesDownloadedDelta,
+                ActiveReplicationsAvg = Math.Round(delta.ActiveAvg, 2),
                 QueuedReplicationsAvg = Math.Round(queueAvg, 2),
-                LastTelemetryAtUtc = last.ReceivedAt.ToString("O")
-            });
-        }
+                LastTelemetryAtUtc = delta.LastReceivedAt.ToString("O")
+            };
+        }).ToList();
 
         return sortBy switch
         {
@@ -967,6 +941,244 @@ public class P2pService : IP2pService
 
         return (items, total);
     }
+
+    private static bool IsUniqueViolation(DbUpdateException ex)
+        => ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation;
+
+    /// <summary>Deltas cumulativos por agente na janela, já tratando reset de processo.</summary>
+    internal sealed record P2pAgentCounterDelta(
+        Guid AgentId,
+        Guid SiteId,
+        Guid ClientId,
+        long BytesServedDelta,
+        long BytesDownloadedDelta,
+        long ReplicationsStartedDelta,
+        long ReplicationsSucceededDelta,
+        long ReplicationsFailedDelta,
+        long PreloadSkippedFinalStateDelta,
+        double QueueAvg,
+        double ActiveAvg,
+        int MaxSelectedSeeds,
+        int SampleCount,
+        DateTime LastReceivedAt);
+
+    /// <summary>
+    /// Soma os incrementos dos contadores cumulativos por agente dentro da janela.
+    ///
+    /// Os contadores vivem em memória no agent e ZERAM quando ele reinicia. Calcular
+    /// "última amostra - primeira amostra" devolvia 0 (ou negativo, clampeado) nesse
+    /// cenário — era por isso que bytes servidos/baixados apareciam como 0 B mesmo com
+    /// centenas de MB transferidos. Aqui, ordenando as amostras:
+    ///   - se o contador cresceu: soma a diferença;
+    ///   - se caiu (restart): soma o valor atual como início de um novo segmento;
+    ///   - amostra repetida (mesmo collected_at) gera diferença zero → não duplica.
+    /// Um baseline (último snapshot ANTES da janela) evita contar o que foi transferido
+    /// antes dela.
+    ///
+    /// Feito em SQL com funções de janela (LAG/DISTINCT ON) para não materializar todas
+    /// as amostras. Provider PostgreSQL (único usado pelo projeto).
+    /// </summary>
+    private async Task<List<P2pAgentCounterDelta>> QueryAgentCounterDeltasAsync(
+        string scope,
+        Guid? tenantId,
+        Guid? siteId,
+        Guid? agentId,
+        DateTime cutoff,
+        CancellationToken ct)
+    {
+        var (scopeFilter, scopeValue) = scope switch
+        {
+            "tenant" when tenantId.HasValue => (" AND client_id = @scope_id", (Guid?)tenantId.Value),
+            "site" when siteId.HasValue => (" AND site_id = @scope_id", (Guid?)siteId.Value),
+            "agent" when agentId.HasValue => (" AND agent_id = @scope_id", (Guid?)agentId.Value),
+            _ => (string.Empty, (Guid?)null)
+        };
+
+        var sql = $@"
+WITH scoped AS (
+    SELECT id, agent_id, site_id, client_id, received_at,
+           bytes_served, bytes_downloaded,
+           replications_started, replications_succeeded, replications_failed,
+           queued_replications, active_replications, plan_selected_seeds,
+           preload_skipped_final_state
+    FROM p2p_agent_telemetry
+    WHERE received_at >= @cutoff{scopeFilter}
+),
+agents AS (SELECT DISTINCT agent_id FROM scoped),
+baseline AS (
+    SELECT DISTINCT ON (t.agent_id)
+           t.agent_id, t.bytes_served, t.bytes_downloaded,
+           t.replications_started, t.replications_succeeded, t.replications_failed,
+           t.preload_skipped_final_state
+    FROM p2p_agent_telemetry t
+    JOIN agents a ON a.agent_id = t.agent_id
+    WHERE t.received_at < @cutoff
+    ORDER BY t.agent_id, t.received_at DESC, t.id DESC
+),
+ordered AS (
+    SELECT s.*,
+        COALESCE(LAG(s.bytes_served) OVER w, b.bytes_served, 0) AS prev_served,
+        COALESCE(LAG(s.bytes_downloaded) OVER w, b.bytes_downloaded, 0) AS prev_downloaded,
+        COALESCE(LAG(s.replications_started) OVER w, b.replications_started, 0) AS prev_started,
+        COALESCE(LAG(s.replications_succeeded) OVER w, b.replications_succeeded, 0) AS prev_succeeded,
+        COALESCE(LAG(s.replications_failed) OVER w, b.replications_failed, 0) AS prev_failed,
+        COALESCE(LAG(s.preload_skipped_final_state) OVER w, b.preload_skipped_final_state, 0) AS prev_preload
+    FROM scoped s
+    LEFT JOIN baseline b ON b.agent_id = s.agent_id
+    WINDOW w AS (PARTITION BY s.agent_id ORDER BY s.received_at, s.id)
+)
+SELECT agent_id,
+       (array_agg(site_id))[1] AS site_id,
+       (array_agg(client_id))[1] AS client_id,
+       COALESCE(SUM(CASE WHEN bytes_served >= prev_served THEN bytes_served - prev_served ELSE bytes_served END), 0) AS served_delta,
+       COALESCE(SUM(CASE WHEN bytes_downloaded >= prev_downloaded THEN bytes_downloaded - prev_downloaded ELSE bytes_downloaded END), 0) AS downloaded_delta,
+       COALESCE(SUM(CASE WHEN replications_started >= prev_started THEN replications_started - prev_started ELSE replications_started END), 0) AS started_delta,
+       COALESCE(SUM(CASE WHEN replications_succeeded >= prev_succeeded THEN replications_succeeded - prev_succeeded ELSE replications_succeeded END), 0) AS succeeded_delta,
+       COALESCE(SUM(CASE WHEN replications_failed >= prev_failed THEN replications_failed - prev_failed ELSE replications_failed END), 0) AS failed_delta,
+       COALESCE(SUM(CASE WHEN preload_skipped_final_state >= prev_preload THEN preload_skipped_final_state - prev_preload ELSE preload_skipped_final_state END), 0) AS preload_delta,
+       COALESCE(AVG(queued_replications), 0)::float8 AS queue_avg,
+       COALESCE(AVG(active_replications), 0)::float8 AS active_avg,
+       COALESCE(MAX(plan_selected_seeds), 0) AS max_selected_seeds,
+       COUNT(*)::int AS sample_count,
+       MAX(received_at) AS last_received_at
+FROM ordered
+GROUP BY agent_id";
+
+        // Providers sem funções de janela (testes/InMemory/SQLite) usam o mesmo
+        // algoritmo em memória; produção (PostgreSQL) roda tudo no banco.
+        if (!_db.Database.IsNpgsql())
+            return await QueryAgentCounterDeltasInMemoryAsync(scope, tenantId, siteId, agentId, cutoff, ct);
+
+        var result = new List<P2pAgentCounterDelta>();
+        var connection = _db.Database.GetDbConnection();
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Parameters.Add(new NpgsqlParameter("cutoff", NpgsqlDbType.TimestampTz) { Value = cutoff });
+        if (scopeValue.HasValue)
+            cmd.Parameters.Add(new NpgsqlParameter("scope_id", NpgsqlDbType.Uuid) { Value = scopeValue.Value });
+
+        if (connection.State != ConnectionState.Open)
+            await connection.OpenAsync(ct);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            result.Add(new P2pAgentCounterDelta(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetGuid(2),
+                reader.GetInt64(3),
+                reader.GetInt64(4),
+                reader.GetInt64(5),
+                reader.GetInt64(6),
+                reader.GetInt64(7),
+                reader.GetInt64(8),
+                reader.GetDouble(9),
+                reader.GetDouble(10),
+                reader.GetInt32(11),
+                reader.GetInt32(12),
+                DateTime.SpecifyKind(reader.GetDateTime(13), DateTimeKind.Utc)));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Fallback do cálculo de deltas para providers sem funções de janela
+    /// (InMemory/SQLite usados em testes). Mantém exatamente a mesma semântica
+    /// reset-aware do SQL.
+    /// </summary>
+    private async Task<List<P2pAgentCounterDelta>> QueryAgentCounterDeltasInMemoryAsync(
+        string scope,
+        Guid? tenantId,
+        Guid? siteId,
+        Guid? agentId,
+        DateTime cutoff,
+        CancellationToken ct)
+    {
+        var windowQuery = ApplyTelemetryScope(_db.P2pAgentTelemetries.AsNoTracking(), scope, tenantId, siteId, agentId)
+            .Where(t => t.ReceivedAt >= cutoff);
+        var windowRows = await windowQuery.ToListAsync(ct);
+        if (windowRows.Count == 0)
+            return [];
+
+        var agentIds = windowRows.Select(t => t.AgentId).Distinct().ToList();
+        var beforeRows = await _db.P2pAgentTelemetries.AsNoTracking()
+            .Where(t => agentIds.Contains(t.AgentId) && t.ReceivedAt < cutoff)
+            .ToListAsync(ct);
+
+        return ComputeCounterDeltas(windowRows, beforeRows);
+    }
+
+    private static IQueryable<P2pAgentTelemetry> ApplyTelemetryScope(
+        IQueryable<P2pAgentTelemetry> query,
+        string scope,
+        Guid? tenantId,
+        Guid? siteId,
+        Guid? agentId) => scope switch
+        {
+            "tenant" when tenantId.HasValue => query.Where(t => t.ClientId == tenantId.Value),
+            "site" when siteId.HasValue => query.Where(t => t.SiteId == siteId.Value),
+            "agent" when agentId.HasValue => query.Where(t => t.AgentId == agentId.Value),
+            _ => query
+        };
+
+    /// <summary>
+    /// Acumula os incrementos dos contadores cumulativos (mesma regra do SQL):
+    /// crescimento soma a diferença; queda (restart) soma o valor atual como novo
+    /// segmento; amostra repetida gera diferença zero.
+    /// </summary>
+    internal static List<P2pAgentCounterDelta> ComputeCounterDeltas(
+        IReadOnlyList<P2pAgentTelemetry> windowRows,
+        IReadOnlyList<P2pAgentTelemetry> beforeRows)
+    {
+        var baseline = beforeRows
+            .GroupBy(t => t.AgentId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderBy(t => t.ReceivedAt).ThenBy(t => t.Id).Last());
+
+        var result = new List<P2pAgentCounterDelta>();
+        foreach (var group in windowRows.GroupBy(t => t.AgentId))
+        {
+            var ordered = group.OrderBy(t => t.ReceivedAt).ThenBy(t => t.Id).ToList();
+            var previous = baseline.GetValueOrDefault(group.Key);
+
+            long served = 0, downloaded = 0, started = 0, succeeded = 0, failed = 0, preload = 0;
+            foreach (var current in ordered)
+            {
+                served += CounterIncrement(previous?.BytesServed, current.BytesServed);
+                downloaded += CounterIncrement(previous?.BytesDownloaded, current.BytesDownloaded);
+                started += CounterIncrement(previous?.ReplicationsStarted, current.ReplicationsStarted);
+                succeeded += CounterIncrement(previous?.ReplicationsSucceeded, current.ReplicationsSucceeded);
+                failed += CounterIncrement(previous?.ReplicationsFailed, current.ReplicationsFailed);
+                preload += CounterIncrement(previous?.PreloadSkippedFinalState, current.PreloadSkippedFinalState);
+                previous = current;
+            }
+
+            var last = ordered[^1];
+            result.Add(new P2pAgentCounterDelta(
+                group.Key,
+                last.SiteId,
+                last.ClientId,
+                served,
+                downloaded,
+                started,
+                succeeded,
+                failed,
+                preload,
+                ordered.Average(t => (double)t.QueuedReplications),
+                ordered.Average(t => (double)t.ActiveReplications),
+                ordered.Max(t => t.PlanSelectedSeeds),
+                ordered.Count,
+                ordered.Max(t => t.ReceivedAt)));
+        }
+
+        return result;
+    }
+
+    private static long CounterIncrement(long? previous, long current)
+        => previous.HasValue && current >= previous.Value ? current - previous.Value : current;
 
     private IQueryable<P2pArtifactPresence> BuildArtifactPresenceQuery(string scope, Guid? tenantId, Guid? siteId, Guid? agentId)
     {
