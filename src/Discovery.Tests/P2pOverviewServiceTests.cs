@@ -1,3 +1,4 @@
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Services;
@@ -231,6 +232,40 @@ public class P2pOverviewServiceTests
             now.AddHours(-1), now.AddMinutes(1), TimeSpan.FromMinutes(10));
 
         Assert.That(series.Summary.Total, Is.EqualTo(500));
+    }
+
+    [Test]
+    public async Task UpsertArtifactPresenceAsync_DeduplicatesAndUpdatesExisting()
+    {
+        await using var db = CreateDbContext();
+        var (agentId, siteId, clientId) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var artifactA = Guid.NewGuid();
+        var artifactB = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+
+        db.P2pArtifactPresences.Add(new P2pArtifactPresence
+        {
+            ArtifactId = artifactA, AgentId = agentId, SiteId = siteId, ClientId = clientId,
+            ArtifactName = "antigo", LastSeenAt = now.AddHours(-1)
+        });
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        await service.UpsertArtifactPresenceAsync(agentId, siteId, clientId,
+        [
+            new P2pArtifactPresenceDto { ArtifactId = artifactA.ToString(), ArtifactName = "novo" },
+            // Duplicado no mesmo payload: antes gerava violação de PK.
+            new P2pArtifactPresenceDto { ArtifactId = artifactA.ToString(), ArtifactName = "novo-2" },
+            new P2pArtifactPresenceDto { ArtifactId = artifactB.ToString(), ArtifactName = "b" },
+        ], CancellationToken.None);
+
+        var rows = await db.P2pArtifactPresences.AsNoTracking()
+            .Where(p => p.AgentId == agentId)
+            .ToListAsync();
+
+        Assert.That(rows, Has.Count.EqualTo(2), "dedupe deve evitar inserir a mesma presença duas vezes");
+        Assert.That(rows.Single(p => p.ArtifactId == artifactA).ArtifactName, Is.EqualTo("novo-2"));
+        Assert.That(rows.Single(p => p.ArtifactId == artifactB).ArtifactName, Is.EqualTo("b"));
     }
 
     [Test]

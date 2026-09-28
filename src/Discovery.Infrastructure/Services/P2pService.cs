@@ -135,7 +135,22 @@ public class P2pService : IP2pService
 
         if (currentTotal > 0) return;
 
-        await RecalculateSeedPlanAsync(siteId, ct, clientId);
+        try
+        {
+            await RecalculateSeedPlanAsync(siteId, ct, clientId);
+        }
+        catch (DbUpdateException)
+        {
+            // Corrida: dois ingests simultâneos do mesmo site tentaram criar o
+            // plano (PK = SiteId). O janitor de 15 min recria/atualiza — a
+            // ingestão de telemetria não pode falhar por causa disso. Desanexa a
+            // entidade pendente para não deixar o DbContext inutilizável.
+            foreach (var entry in _db.ChangeTracker.Entries<P2pSeedPlan>()
+                         .Where(e => e.State == EntityState.Added).ToList())
+            {
+                entry.State = EntityState.Detached;
+            }
+        }
     }
 
     private static int CalculateSelectedSeeds(int totalAgents, int configuredPercent, int minSeeds)
@@ -239,37 +254,7 @@ public class P2pService : IP2pService
         // ── Upsert de P2pArtifactPresence a partir de Artifacts[] ──
         if (request.Artifacts is { Count: > 0 })
         {
-            var now = DateTime.UtcNow;
-            foreach (var artifact in request.Artifacts)
-            {
-                var (presenceId, isSynthetic) = ResolveArtifactPresenceId(artifact.ArtifactId);
-                if (presenceId == Guid.Empty) continue;
-
-                var existing = await _db.P2pArtifactPresences
-                    .FirstOrDefaultAsync(p => p.ArtifactId == presenceId && p.AgentId == agentId, ct);
-
-                if (existing is not null)
-                {
-                    existing.LastSeenAt = now;
-                    existing.ArtifactName = artifact.ArtifactName;
-                    existing.IdIsSynthetic = isSynthetic;
-                }
-                else
-                {
-                    _db.P2pArtifactPresences.Add(new P2pArtifactPresence
-                    {
-                        ArtifactId = presenceId,
-                        ArtifactName = artifact.ArtifactName,
-                        IdIsSynthetic = isSynthetic,
-                        AgentId = agentId,
-                        SiteId = agent.SiteId,
-                        ClientId = clientId,
-                        LastSeenAt = now,
-                    });
-                }
-            }
-
-            await _db.SaveChangesAsync(ct);
+            await UpsertArtifactPresenceAsync(agentId, agent.SiteId, clientId, request.Artifacts, ct);
         }
 
         // Mantém o seed-plan fresco para o site (apenas quando ainda está
@@ -277,6 +262,64 @@ public class P2pService : IP2pService
         await EnsureSeedPlanFreshAsync(agent.SiteId, clientId, ct);
 
         return errors;
+    }
+
+    /// <summary>
+    /// Upsert em lote das presenças de artifact reportadas pelo agent.
+    ///
+    /// Antes era um SELECT por artifact (até 500 por telemetria) — N+1 a cada
+    /// ~5 min por agente — e IDs repetidos no payload causavam violação de PK,
+    /// porque o SELECT não enxerga entidades ainda pendentes no change tracker.
+    /// Agora faz uma única consulta e deduplica por ArtifactId.
+    /// internal para testes.
+    /// </summary>
+    internal async Task UpsertArtifactPresenceAsync(
+        Guid agentId,
+        Guid siteId,
+        Guid clientId,
+        IReadOnlyList<P2pArtifactPresenceDto> artifacts,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+
+        // Resolve + deduplica (a última ocorrência vence).
+        var requested = new Dictionary<Guid, (bool IsSynthetic, P2pArtifactPresenceDto Artifact)>();
+        foreach (var artifact in artifacts)
+        {
+            var (presenceId, isSynthetic) = ResolveArtifactPresenceId(artifact.ArtifactId);
+            if (presenceId == Guid.Empty) continue;
+            requested[presenceId] = (isSynthetic, artifact);
+        }
+        if (requested.Count == 0) return;
+
+        var ids = requested.Keys.ToList();
+        var existingByArtifact = await _db.P2pArtifactPresences
+            .Where(p => p.AgentId == agentId && ids.Contains(p.ArtifactId))
+            .ToDictionaryAsync(p => p.ArtifactId, ct);
+
+        foreach (var (presenceId, entry) in requested)
+        {
+            if (existingByArtifact.TryGetValue(presenceId, out var existing))
+            {
+                existing.LastSeenAt = now;
+                existing.ArtifactName = entry.Artifact.ArtifactName;
+                existing.IdIsSynthetic = entry.IsSynthetic;
+                continue;
+            }
+
+            _db.P2pArtifactPresences.Add(new P2pArtifactPresence
+            {
+                ArtifactId = presenceId,
+                ArtifactName = entry.Artifact.ArtifactName,
+                IdIsSynthetic = entry.IsSynthetic,
+                AgentId = agentId,
+                SiteId = siteId,
+                ClientId = clientId,
+                LastSeenAt = now,
+            });
+        }
+
+        await _db.SaveChangesAsync(ct);
     }
 
     /// <summary>
