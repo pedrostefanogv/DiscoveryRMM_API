@@ -37,7 +37,25 @@ public class AutomationTaskDefinition
     public string? ScheduleCron { get; set; }
 
     // Governance
+    /// <summary>
+    /// Notifica o usuário (prompt Welcome do PSADT, "Continuar"/"Adiar") antes de
+    /// executar. NAO e um fluxo de aprovacao: a tarefa executa apos a confirmacao
+    /// ou quando o tempo de acao padrao expirar.
+    /// </summary>
     public bool RequiresApproval { get; set; }
+
+    /// <summary>Permite que o usuario adie a execucao (botao Adiar do Welcome).</summary>
+    public bool AllowDefer { get; set; } = true;
+
+    /// <summary>Processos que devem ser fechados antes de executar (CloseProcesses), em JSON.</summary>
+    public string? CloseProcessesJson { get; set; }
+
+    /// <summary>
+    /// Tempo em segundos para a acao padrao de continuar quando o usuario nao
+    /// responde ao prompt. Default 60s.
+    /// </summary>
+    public int UserPromptTimeoutSeconds { get; set; } = 60;
+
     public bool IsActive { get; set; } = true;
     public DateTime? DeletedAt { get; set; }
 

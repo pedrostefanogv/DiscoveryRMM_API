@@ -1,4 +1,5 @@
-﻿using Discovery.Core.Cqrs;
+using System.Text.Json;
+using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AutomationTasks.Commands;
 using Discovery.Core.Cqrs.AutomationTasks.Queries;
 using Discovery.Core.DTOs;
@@ -57,22 +58,67 @@ public sealed class GetAutomationTaskExecutionsQueryHandler(
             return Result<IReadOnlyList<AutomationTaskExecutionDto>>.Failure(Error.NotFound($"Task {q.Id} not found"));
 
         var items = await reportRepo.GetByTaskIdAsync(q.Id, q.Limit);
-        var dtos = items.Select(e => new AutomationTaskExecutionDto
+        var dtos = items.Select(e =>
         {
-            Id = e.Id,
-            CommandId = e.CommandId,
-            AgentId = e.AgentId,
-            SourceType = e.SourceType.ToString(),
-            Status = e.Status.ToString(),
-            CorrelationId = e.CorrelationId,
-            CreatedAt = e.CreatedAt,
-            AcknowledgedAt = e.AcknowledgedAt,
-            ResultReceivedAt = e.ResultReceivedAt,
-            ExitCode = e.ExitCode,
-            ErrorMessage = e.ErrorMessage
+            var (skipReason, decidedBy) = ExtractWingetDecision(e.ResultMetadataJson);
+            return new AutomationTaskExecutionDto
+            {
+                Id = e.Id,
+                CommandId = e.CommandId,
+                AgentId = e.AgentId,
+                SourceType = e.SourceType.ToString(),
+                Status = e.Status.ToString(),
+                CorrelationId = e.CorrelationId,
+                CreatedAt = e.CreatedAt,
+                AcknowledgedAt = e.AcknowledgedAt,
+                ResultReceivedAt = e.ResultReceivedAt,
+                ExitCode = e.ExitCode,
+                ErrorMessage = e.ErrorMessage,
+                SkipReason = skipReason,
+                DecidedBy = decidedBy
+            };
         }).ToList();
 
         return Result<IReadOnlyList<AutomationTaskExecutionDto>>.Success(dtos);
+    }
+
+    /// <summary>
+    /// Extrai a decisão do winget do metadata de resultado do agent
+    /// (wingetDecision.skip/decidedBy). Permite medir quantas execuções foram
+    /// puladas sem download e por qual fonte ("winget" × "inventory-cache").
+    /// </summary>
+    private static (string? SkipReason, string? DecidedBy) ExtractWingetDecision(string? resultMetadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultMetadataJson))
+            return (null, null);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(resultMetadataJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("wingetDecision", out var decision)
+                || decision.ValueKind != JsonValueKind.Object)
+                return (null, null);
+
+            var decidedBy = decision.TryGetProperty("decidedBy", out var decidedByElement)
+                && decidedByElement.ValueKind == JsonValueKind.String
+                    ? decidedByElement.GetString()
+                    : null;
+
+            var skipped = decision.TryGetProperty("skip", out var skipElement)
+                && skipElement.ValueKind == JsonValueKind.True;
+            var reason = skipped
+                && decision.TryGetProperty("reason", out var reasonElement)
+                && reasonElement.ValueKind == JsonValueKind.String
+                    ? reasonElement.GetString()
+                    : null;
+
+            return (reason, decidedBy);
+        }
+        catch (JsonException)
+        {
+            return (null, null);
+        }
     }
 }
 
@@ -103,6 +149,9 @@ public sealed class CreateAutomationTaskCommandHandler(
             TriggerOnAgentCheckIn = cmd.TriggerOnAgentCheckIn,
             ScheduleCron = cmd.ScheduleCron,
             RequiresApproval = cmd.RequiresApproval,
+            AllowDefer = cmd.AllowDefer,
+            CloseProcesses = cmd.CloseProcesses ?? (IReadOnlyList<string>)[],
+            PromptTimeoutSeconds = cmd.PromptTimeoutSeconds,
             IsActive = cmd.IsActive
         };
 
@@ -151,6 +200,13 @@ public sealed class UpdateAutomationTaskCommandHandler(
 {
     public async Task<Result<AutomationTaskDetailDto>> Handle(UpdateAutomationTaskCommand cmd, CancellationToken ct)
     {
+        // PUT parcial: os campos de notificacao ausentes preservam o valor atual
+        // em vez de voltarem ao default do contrato (nao "zerar" a configuracao
+        // de quem so mandou parte do payload).
+        var current = await svc.GetByIdAsync(cmd.Id, includeInactive: true, cancellationToken: ct);
+        if (current is null)
+            return Result<AutomationTaskDetailDto>.Failure(Error.NotFound($"Task {cmd.Id} not found"));
+
         var request = new UpdateAutomationTaskRequest
         {
             Name = cmd.Name ?? string.Empty,
@@ -171,6 +227,9 @@ public sealed class UpdateAutomationTaskCommandHandler(
             ScheduleCron = cmd.ScheduleCron,
             RequiresApproval = cmd.RequiresApproval ?? false,
             IsActive = cmd.IsActive ?? true,
+            AllowDefer = cmd.AllowDefer ?? current.AllowDefer,
+            CloseProcesses = cmd.CloseProcesses ?? current.CloseProcesses,
+            PromptTimeoutSeconds = cmd.PromptTimeoutSeconds ?? current.PromptTimeoutSeconds,
             Reason = cmd.Reason
         };
 

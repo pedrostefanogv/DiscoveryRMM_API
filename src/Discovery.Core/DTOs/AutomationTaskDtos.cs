@@ -19,7 +19,14 @@ public class AutomationTaskSummaryDto
     /// <summary>SiteId resolvido do escopo (para popular cascata de selects na edição).</summary>
     public Guid? ScopeSiteId { get; set; }
     public bool IsActive { get; set; }
+    /// <summary>Notifica o usuario (Welcome PSADT) antes de executar. Nao e aprovacao.</summary>
     public bool RequiresApproval { get; set; }
+    /// <summary>Usuario pode adiar a execucao.</summary>
+    public bool AllowDefer { get; set; } = true;
+    /// <summary>Processos fechados antes de executar.</summary>
+    public IReadOnlyList<string> CloseProcesses { get; set; } = [];
+    /// <summary>Tempo (s) para a acao padrao continuar quando o usuario nao responde.</summary>
+    public int PromptTimeoutSeconds { get; set; } = 60;
     public DateTime LastUpdatedAt { get; set; }
     public bool IsDeleted { get; set; }
     public DateTime? DeletedAt { get; set; }
@@ -83,6 +90,10 @@ public class AutomationTaskExecutionDto
     public DateTime? ResultReceivedAt { get; set; }
     public int? ExitCode { get; set; }
     public string? ErrorMessage { get; set; }
+    /// <summary>Motivo do skip benigno do winget (ex.: pacote já instalado). Null quando executou.</summary>
+    public string? SkipReason { get; set; }
+    /// <summary>Fonte da decisão: "winget" ou "inventory-cache" (winget indisponível).</summary>
+    public string? DecidedBy { get; set; }
 }
 
 public class AutomationTaskTargetPreviewItemDto
@@ -129,6 +140,10 @@ public class CreateAutomationTaskRequest
     public bool TriggerOnAgentCheckIn { get; set; }
     public string? ScheduleCron { get; set; }
     public bool RequiresApproval { get; set; }
+    public bool AllowDefer { get; set; } = true;
+    public IReadOnlyList<string> CloseProcesses { get; set; } = [];
+    /// <summary>Tempo (s) do prompt para a acao padrao continuar. Mesmo nome do contrato do agent.</summary>
+    public int PromptTimeoutSeconds { get; set; } = 60;
     public bool IsActive { get; set; } = true;
 }
 

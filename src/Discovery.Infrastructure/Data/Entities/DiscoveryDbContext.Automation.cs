@@ -84,6 +84,9 @@ public partial class DiscoveryDbContext
             entity.Property(t => t.TriggerOnAgentCheckIn).HasColumnName("trigger_on_agent_check_in");
             entity.Property(t => t.ScheduleCron).HasColumnName("schedule_cron").HasMaxLength(100);
             entity.Property(t => t.RequiresApproval).HasColumnName("requires_approval");
+            entity.Property(t => t.AllowDefer).HasColumnName("allow_defer");
+            entity.Property(t => t.CloseProcessesJson).HasColumnName("close_processes_json").HasColumnType("jsonb");
+            entity.Property(t => t.UserPromptTimeoutSeconds).HasColumnName("user_prompt_timeout_seconds");
             entity.Property(t => t.IsActive).HasColumnName("is_active");
             entity.Property(t => t.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
             entity.Property(t => t.LastUpdatedAt).HasColumnName("last_updated_at").HasColumnType("timestamptz");

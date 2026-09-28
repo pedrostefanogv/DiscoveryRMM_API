@@ -47,7 +47,11 @@ public class AgentAutomationTaskPolicyDto
     public Guid? ScriptId { get; set; }
     public string? CommandPayload { get; set; }
     public AppApprovalScopeType ScopeType { get; set; }
+    /// <summary>Notifica o usuario (Welcome PSADT) antes de executar.</summary>
     public bool RequiresApproval { get; set; }
+    public bool AllowDefer { get; set; } = true;
+    public IReadOnlyList<string> CloseProcesses { get; set; } = [];
+    public int PromptTimeoutSeconds { get; set; } = 60;
     public bool TriggerImmediate { get; set; }
     public bool TriggerRecurring { get; set; }
     public bool TriggerOnUserLogin { get; set; }

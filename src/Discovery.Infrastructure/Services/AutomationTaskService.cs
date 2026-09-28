@@ -16,6 +16,13 @@ public class AutomationTaskService : IAutomationTaskService
         PropertyNameCaseInsensitive = true
     };
 
+    /// <summary>Tempo padrao (s) para a acao continuar quando o usuario nao responde ao prompt.</summary>
+    public const int DefaultPromptTimeoutSeconds = 60;
+    private const int MinPromptTimeoutSeconds = 5;
+    private const int MaxPromptTimeoutSeconds = 3600;
+    private const int MaxCloseProcesses = 20;
+    private const int MaxCloseProcessNameLength = 120;
+
     private readonly IAutomationTaskRepository _taskRepository;
     private readonly IAutomationTaskAuditRepository _auditRepository;
     private readonly IAutomationScriptRepository _scriptRepository;
@@ -138,6 +145,9 @@ public class AutomationTaskService : IAutomationTaskService
             TriggerOnAgentCheckIn = request.TriggerOnAgentCheckIn,
             ScheduleCron = request.ScheduleCron,
             RequiresApproval = request.RequiresApproval,
+            AllowDefer = request.AllowDefer,
+            CloseProcessesJson = SerializeTags(request.CloseProcesses),
+            UserPromptTimeoutSeconds = NormalizePromptTimeout(request.PromptTimeoutSeconds),
             IsActive = request.IsActive
         };
 
@@ -219,6 +229,9 @@ public class AutomationTaskService : IAutomationTaskService
         existing.TriggerOnAgentCheckIn = request.TriggerOnAgentCheckIn;
         existing.ScheduleCron = request.ScheduleCron;
         existing.RequiresApproval = request.RequiresApproval;
+        existing.AllowDefer = request.AllowDefer;
+        existing.CloseProcessesJson = SerializeTags(request.CloseProcesses);
+        existing.UserPromptTimeoutSeconds = NormalizePromptTimeout(request.PromptTimeoutSeconds);
         existing.IsActive = request.IsActive;
 
         ValidateTask(existing);
@@ -507,6 +520,9 @@ public class AutomationTaskService : IAutomationTaskService
                 CommandPayload = task.CommandPayload,
                 ScopeType = task.ScopeType,
                 RequiresApproval = task.RequiresApproval,
+                AllowDefer = task.AllowDefer,
+                CloseProcesses = ParseTags(task.CloseProcessesJson),
+                PromptTimeoutSeconds = NormalizePromptTimeout(task.UserPromptTimeoutSeconds),
                 TriggerImmediate = task.TriggerImmediate,
                 TriggerRecurring = task.TriggerRecurring,
                 TriggerOnUserLogin = task.TriggerOnUserLogin,
@@ -698,7 +714,39 @@ public class AutomationTaskService : IAutomationTaskService
             && !CronScheduleValidator.IsValid(task.ScheduleCron))
             throw new InvalidOperationException(
                 $"ScheduleCron '{task.ScheduleCron}' is not a valid 5-field cron expression (minute hour day-of-month month day-of-week).");
+
+        // Processos a fechar: limita quantidade/tamanho (o Welcome do PSADT recebe a
+        // lista por linha de comando; nomes absurdos quebram o cmdlet).
+        var closeProcesses = ParseTags(task.CloseProcessesJson);
+        if (closeProcesses.Count > MaxCloseProcesses)
+            throw new InvalidOperationException($"CloseProcesses must have up to {MaxCloseProcesses} process names.");
+
+        foreach (var process in closeProcesses)
+        {
+            if (process.Length > MaxCloseProcessNameLength)
+                throw new InvalidOperationException(
+                    $"CloseProcesses entry '{process[..Math.Min(32, process.Length)]}...' exceeds {MaxCloseProcessNameLength} characters.");
+
+            if (!CloseProcessNameRegex.IsMatch(process))
+                throw new InvalidOperationException(
+                    $"CloseProcesses entry '{process}' contains invalid characters (use letters, numbers, '.', '_', '-' or space).");
+        }
     }
+
+    /// <summary>
+    /// Normaliza o timeout do prompt para a faixa suportada pelo Welcome do PSADT.
+    /// 0 ou negativo = default de 60s (acao padrao continuar).
+    /// </summary>
+    public static int NormalizePromptTimeout(int seconds)
+    {
+        if (seconds <= 0)
+            return DefaultPromptTimeoutSeconds;
+
+        return Math.Clamp(seconds, MinPromptTimeoutSeconds, MaxPromptTimeoutSeconds);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex CloseProcessNameRegex =
+        new(@"^[A-Za-z0-9._ -]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static (Guid? clientId, Guid? siteId, Guid? agentId) ResolveScope(AppApprovalScopeType scopeType, Guid? scopeId)
     {
@@ -799,7 +847,12 @@ public class AutomationTaskService : IAutomationTaskService
                 .Append(task.TriggerOnUserLogin ? '1' : '0')
                 .Append(task.TriggerOnAgentCheckIn ? '1' : '0').Append('|')
                 .Append(task.ScheduleCron ?? string.Empty).Append('|')
-                .Append(task.RequiresApproval ? '1' : '0')
+                // Separadores explícitos: sem eles "timeout=601,ativo=1" e
+                // "timeout=60,ativo=11" colidiriam na chave.
+                .Append(task.RequiresApproval ? '1' : '0').Append('|')
+                .Append(task.AllowDefer ? '1' : '0').Append('|')
+                .Append(task.CloseProcessesJson ?? string.Empty).Append('|')
+                .Append(NormalizePromptTimeout(task.UserPromptTimeoutSeconds)).Append('|')
                 .Append(task.IsActive ? '1' : '0')
                 .Append(';');
         }
@@ -910,6 +963,9 @@ public class AutomationTaskService : IAutomationTaskService
             ScopeId = ResolveScopeId(task),
             IsActive = task.IsActive,
             RequiresApproval = task.RequiresApproval,
+            AllowDefer = task.AllowDefer,
+            CloseProcesses = ParseTags(task.CloseProcessesJson),
+            PromptTimeoutSeconds = NormalizePromptTimeout(task.UserPromptTimeoutSeconds),
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt
@@ -928,6 +984,9 @@ public class AutomationTaskService : IAutomationTaskService
             ScopeId = ResolveScopeId(task),
             IsActive = task.IsActive,
             RequiresApproval = task.RequiresApproval,
+            AllowDefer = task.AllowDefer,
+            CloseProcesses = ParseTags(task.CloseProcessesJson),
+            PromptTimeoutSeconds = NormalizePromptTimeout(task.UserPromptTimeoutSeconds),
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt,
@@ -971,6 +1030,9 @@ public class AutomationTaskService : IAutomationTaskService
             task.TriggerOnAgentCheckIn,
             task.ScheduleCron,
             task.RequiresApproval,
+            task.AllowDefer,
+            CloseProcesses = ParseTags(task.CloseProcessesJson),
+            task.UserPromptTimeoutSeconds,
             task.IsActive,
             task.DeletedAt,
             task.LastUpdatedAt,

@@ -228,6 +228,9 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         existing.TriggerOnAgentCheckIn = task.TriggerOnAgentCheckIn;
         existing.ScheduleCron = task.ScheduleCron;
         existing.RequiresApproval = task.RequiresApproval;
+        existing.AllowDefer = task.AllowDefer;
+        existing.CloseProcessesJson = task.CloseProcessesJson;
+        existing.UserPromptTimeoutSeconds = task.UserPromptTimeoutSeconds;
         existing.IsActive = task.IsActive;
         existing.LastUpdatedAt = DateTime.UtcNow;
         existing.UpdatedAt = DateTime.UtcNow;
