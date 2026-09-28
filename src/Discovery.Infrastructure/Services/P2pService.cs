@@ -568,10 +568,15 @@ public class P2pService : IP2pService
         var cutoff = DateTime.UtcNow - window;
 
         // Mesma agregação reset-aware do overview (contadores zeram no restart do agent).
+        // Escopo sem tenant/site informado cai em "global" explícito: passar "agent"
+        // com agentId nulo acabava sem filtro nenhum (ranking global silencioso).
+        var effectiveScope = scope == "tenant" && tenantId.HasValue
+            ? "tenant"
+            : scope == "site" && siteId.HasValue ? "site" : "global";
         var deltas = await QueryAgentCounterDeltasAsync(
-            scope,
-            scope == "tenant" ? tenantId : null,
-            scope == "site" ? siteId : null,
+            effectiveScope,
+            effectiveScope == "tenant" ? tenantId : null,
+            effectiveScope == "site" ? siteId : null,
             null,
             cutoff,
             ct);
@@ -996,7 +1001,7 @@ public class P2pService : IP2pService
 
         var sql = $@"
 WITH scoped AS (
-    SELECT id, agent_id, site_id, client_id, received_at,
+    SELECT id, agent_id, site_id, client_id, received_at, collected_at,
            bytes_served, bytes_downloaded,
            replications_started, replications_succeeded, replications_failed,
            queued_replications, active_replications, plan_selected_seeds,
@@ -1013,7 +1018,7 @@ baseline AS (
     FROM p2p_agent_telemetry t
     JOIN agents a ON a.agent_id = t.agent_id
     WHERE t.received_at < @cutoff
-    ORDER BY t.agent_id, t.received_at DESC, t.id DESC
+    ORDER BY t.agent_id, t.collected_at DESC, t.id DESC
 ),
 ordered AS (
     SELECT s.*,
@@ -1025,7 +1030,10 @@ ordered AS (
         COALESCE(LAG(s.preload_skipped_final_state) OVER w, b.preload_skipped_final_state, 0) AS prev_preload
     FROM scoped s
     LEFT JOIN baseline b ON b.agent_id = s.agent_id
-    WINDOW w AS (PARTITION BY s.agent_id ORDER BY s.received_at, s.id)
+    -- Ordena pelo relógio do SNAPSHOT (collected_at), não pelo de chegada:
+    -- replays do outbox podem chegar fora de ordem e um valor antigo depois de um
+    -- novo seria interpretado como reset, contando o mesmo trafego duas vezes.
+    WINDOW w AS (PARTITION BY s.agent_id ORDER BY s.collected_at, s.id)
 )
 SELECT agent_id,
        (array_agg(site_id))[1] AS site_id,
@@ -1136,12 +1144,14 @@ GROUP BY agent_id";
             .GroupBy(t => t.AgentId)
             .ToDictionary(
                 g => g.Key,
-                g => g.OrderBy(t => t.ReceivedAt).ThenBy(t => t.Id).Last());
+                g => g.OrderBy(t => t.CollectedAt).ThenBy(t => t.Id).Last());
 
         var result = new List<P2pAgentCounterDelta>();
         foreach (var group in windowRows.GroupBy(t => t.AgentId))
         {
-            var ordered = group.OrderBy(t => t.ReceivedAt).ThenBy(t => t.Id).ToList();
+            // Ordena pelo relógio do snapshot (ver comentário no SQL): replay de
+            // outbox fora de ordem não pode virar "reset" e contar em dobro.
+            var ordered = group.OrderBy(t => t.CollectedAt).ThenBy(t => t.Id).ToList();
             var previous = baseline.GetValueOrDefault(group.Key);
 
             long served = 0, downloaded = 0, started = 0, succeeded = 0, failed = 0, preload = 0;
@@ -1201,33 +1211,69 @@ GROUP BY agent_id";
         DateTime to,
         TimeSpan interval)
     {
-        var points = new List<P2pTimeseriesPoint>();
-        var current = from;
+        var bucketCount = Math.Max(1, (int)Math.Ceiling((to - from) / interval));
+        var totals = new double[bucketCount];
+        var gaugeSums = new double[bucketCount];
+        var gaugeCounts = new int[bucketCount];
 
-        while (current < to)
+        // Métricas cumulativas: o valor do bucket é o INCREMENTO desde o snapshot
+        // anterior DO MESMO agente (queda = restart do agent → conta o valor atual
+        // como novo segmento). Somar o valor absoluto por bucket (comportamento
+        // antigo) desenhava o acumulado, não o tráfego do período. Ordena por
+        // collected_at para tolerar replay de outbox fora de ordem.
+        var cumulative = IsCumulativeMetric(metric);
+        var previous = new Dictionary<Guid, long>();
+        foreach (var snapshot in snapshots.OrderBy(s => s.CollectedAt).ThenBy(s => s.Id))
         {
-            var next = current + interval;
-            var bucket = snapshots.Where(s => s.ReceivedAt >= current && s.ReceivedAt < next).ToList();
+            var index = (int)((snapshot.ReceivedAt - from).Ticks / interval.Ticks);
+            if (index < 0) index = 0;
+            if (index >= bucketCount) index = bucketCount - 1;
 
-            double value = bucket.Count == 0 ? 0 : metric switch
+            if (cumulative)
             {
-                "replicationsSucceeded" => bucket.Sum(s => s.ReplicationsSucceeded),
-                "replicationsFailed" => bucket.Sum(s => s.ReplicationsFailed),
-                "replicationsStarted" => bucket.Sum(s => s.ReplicationsStarted),
-                "bytesServed" => bucket.Sum(s => s.BytesServed),
-                "bytesDownloaded" => bucket.Sum(s => s.BytesDownloaded),
-                "activeReplications" => bucket.Average(s => (double)s.ActiveReplications),
-                "queuedReplications" => bucket.Average(s => (double)s.QueuedReplications),
-                "chunkedDownloads" => bucket.Sum(s => s.ChunkedDownloads),
+                var current = GetCumulativeCounter(metric, snapshot);
+                previous.TryGetValue(snapshot.AgentId, out var previousValue);
+                var first = !previous.ContainsKey(snapshot.AgentId);
+                totals[index] += first ? current : CounterIncrement(previousValue, current);
+                previous[snapshot.AgentId] = current;
+                continue;
+            }
+
+            gaugeSums[index] += metric switch
+            {
+                "activeReplications" => snapshot.ActiveReplications,
+                "queuedReplications" => snapshot.QueuedReplications,
                 _ => 0
             };
+            gaugeCounts[index]++;
+        }
 
-            points.Add(new P2pTimeseriesPoint(current.ToString("O"), value));
-            current = next;
+        var points = new List<P2pTimeseriesPoint>(bucketCount);
+        for (var i = 0; i < bucketCount; i++)
+        {
+            var value = cumulative
+                ? totals[i]
+                : gaugeCounts[i] == 0 ? 0 : gaugeSums[i] / gaugeCounts[i];
+            points.Add(new P2pTimeseriesPoint((from + interval * i).ToString("O"), value));
         }
 
         return points;
     }
+
+    private static bool IsCumulativeMetric(string metric) => metric is
+        "bytesServed" or "bytesDownloaded" or "replicationsStarted" or
+        "replicationsSucceeded" or "replicationsFailed" or "chunkedDownloads";
+
+    private static long GetCumulativeCounter(string metric, P2pAgentTelemetry snapshot) => metric switch
+    {
+        "bytesServed" => snapshot.BytesServed,
+        "bytesDownloaded" => snapshot.BytesDownloaded,
+        "replicationsStarted" => snapshot.ReplicationsStarted,
+        "replicationsSucceeded" => snapshot.ReplicationsSucceeded,
+        "replicationsFailed" => snapshot.ReplicationsFailed,
+        "chunkedDownloads" => snapshot.ChunkedDownloads,
+        _ => 0
+    };
 
     private static string GetMetricUnit(string metric) => metric switch
     {

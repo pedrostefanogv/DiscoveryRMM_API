@@ -382,6 +382,74 @@ public class P2pOverviewServiceTests
         Assert.That(result.Kpis.PreloadSkippedFinalStateDelta, Is.EqualTo(5));
     }
 
+    [Test]
+    public async Task GetOverviewAsync_OutOfOrderReplayDoesNotDoubleCount()
+    {
+        await using var db = CreateDbContext();
+        var (agentId, siteId, clientId) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var now = DateTime.UtcNow;
+
+        // Snapshot antigo (collectedAt -25) reenviado tardiamente pelo outbox
+        // (receivedAt -1). Ordenar por collected_at evita lê-lo como "reset" e
+        // contar o mesmo tráfego duas vezes.
+        db.P2pAgentTelemetries.AddRange(
+            Snapshot(1, agentId, siteId, clientId, now.AddMinutes(-20), started: 0, succeeded: 0, served: 500, downloaded: 0, seeds: 0, queued: 0),
+            Snapshot(2, agentId, siteId, clientId, now.AddMinutes(-10), started: 0, succeeded: 0, served: 900, downloaded: 0, seeds: 0, queued: 0),
+            Snapshot(3, agentId, siteId, clientId, now.AddMinutes(-25), started: 0, succeeded: 0, served: 500, downloaded: 0, seeds: 0, queued: 0,
+                receivedAt: now.AddMinutes(-1)));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        var result = await service.GetOverviewAsync("global", null, null, null, TimeSpan.FromHours(24));
+
+        Assert.That(result.Kpis.BytesServedDelta, Is.EqualTo(900), "500 + 0 + 400 (sem duplicar o replay)");
+    }
+
+    [Test]
+    public async Task GetTimeseriesAsync_CumulativeMetricUsesIncrements()
+    {
+        await using var db = CreateDbContext();
+        var (agentId, siteId, clientId) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var now = DateTime.UtcNow;
+
+        // Contadores cumulativos: a série deve mostrar o INCREMENTO no período
+        // (500 + 400 = 900), não a soma dos valores absolutos (1400).
+        db.P2pAgentTelemetries.AddRange(
+            Snapshot(1, agentId, siteId, clientId, now.AddMinutes(-30), 0, 0, served: 500, downloaded: 0, seeds: 0, queued: 0),
+            Snapshot(2, agentId, siteId, clientId, now.AddMinutes(-20), 0, 0, served: 900, downloaded: 0, seeds: 0, queued: 0));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        var series = await service.GetTimeseriesAsync(
+            "global", null, null, null, "bytesServed",
+            now.AddHours(-1), now.AddMinutes(1), TimeSpan.FromMinutes(10));
+
+        Assert.That(series.Summary.Total, Is.EqualTo(900));
+    }
+
+    [Test]
+    public async Task GetTimeseriesAsync_CumulativeMetricTreatsReset()
+    {
+        await using var db = CreateDbContext();
+        var (agentId, siteId, clientId) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var now = DateTime.UtcNow;
+
+        // Restart no meio (contador volta a 0): soma os segmentos (500+400+0+300).
+        db.P2pAgentTelemetries.AddRange(
+            Snapshot(1, agentId, siteId, clientId, now.AddMinutes(-40), 0, 0, served: 500, downloaded: 0, seeds: 0, queued: 0),
+            Snapshot(2, agentId, siteId, clientId, now.AddMinutes(-30), 0, 0, served: 900, downloaded: 0, seeds: 0, queued: 0),
+            Snapshot(3, agentId, siteId, clientId, now.AddMinutes(-20), 0, 0, served: 0, downloaded: 0, seeds: 0, queued: 0),
+            Snapshot(4, agentId, siteId, clientId, now.AddMinutes(-10), 0, 0, served: 300, downloaded: 0, seeds: 0, queued: 0));
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+        var series = await service.GetTimeseriesAsync(
+            "global", null, null, null, "bytesServed",
+            now.AddHours(-1), now.AddMinutes(1), TimeSpan.FromMinutes(10));
+
+        Assert.That(series.Summary.Total, Is.EqualTo(1200));
+    }
+
     private static DiscoveryDbContext CreateDbContext()
     {
         var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
