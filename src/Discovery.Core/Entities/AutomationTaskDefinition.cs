@@ -56,6 +56,20 @@ public class AutomationTaskDefinition
     /// </summary>
     public int UserPromptTimeoutSeconds { get; set; } = 60;
 
+    /// <summary>
+    /// Como notificar o usuario: Silent (nada), Prompt (Welcome PSADT com
+    /// Continuar/Adiar) ou Toast (aviso informativo sem interacao).
+    /// <see cref="RequiresApproval"/> e mantido derivado (= Prompt) para
+    /// compatibilidade com agents/payloads antigos.
+    /// </summary>
+    public AutomationNotificationMode NotificationMode { get; set; } = AutomationNotificationMode.Silent;
+
+    /// <summary>
+    /// Momento do toast informativo (Before = antes de executar,
+    /// After = apos a conclusao). So se aplica quando NotificationMode = Toast.
+    /// </summary>
+    public AutomationToastTiming ToastTiming { get; set; } = AutomationToastTiming.After;
+
     public bool IsActive { get; set; } = true;
     public DateTime? DeletedAt { get; set; }
 

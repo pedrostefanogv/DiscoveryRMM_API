@@ -27,6 +27,10 @@ public class AutomationTaskSummaryDto
     public IReadOnlyList<string> CloseProcesses { get; set; } = [];
     /// <summary>Tempo (s) para a acao padrao continuar quando o usuario nao responde.</summary>
     public int PromptTimeoutSeconds { get; set; } = 60;
+    /// <summary>Como notificar o usuario: Silent, Prompt (Welcome) ou Toast.</summary>
+    public AutomationNotificationMode NotificationMode { get; set; } = AutomationNotificationMode.Silent;
+    /// <summary>Momento do toast informativo (Before/After). So se aplica ao modo Toast.</summary>
+    public AutomationToastTiming ToastTiming { get; set; } = AutomationToastTiming.After;
     public DateTime LastUpdatedAt { get; set; }
     public bool IsDeleted { get; set; }
     public DateTime? DeletedAt { get; set; }
@@ -144,6 +148,10 @@ public class CreateAutomationTaskRequest
     public IReadOnlyList<string> CloseProcesses { get; set; } = [];
     /// <summary>Tempo (s) do prompt para a acao padrao continuar. Mesmo nome do contrato do agent.</summary>
     public int PromptTimeoutSeconds { get; set; } = 60;
+    /// <summary>Como notificar o usuario. Ausente = derivado de <see cref="RequiresApproval"/>.</summary>
+    public AutomationNotificationMode? NotificationMode { get; set; }
+    /// <summary>Momento do toast informativo. Ausente = After.</summary>
+    public AutomationToastTiming? ToastTiming { get; set; }
     public bool IsActive { get; set; } = true;
 }
 

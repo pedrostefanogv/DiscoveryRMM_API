@@ -52,6 +52,10 @@ public class AgentAutomationTaskPolicyDto
     public bool AllowDefer { get; set; } = true;
     public IReadOnlyList<string> CloseProcesses { get; set; } = [];
     public int PromptTimeoutSeconds { get; set; } = 60;
+    /// <summary>Como notificar o usuario: Silent, Prompt (Welcome) ou Toast.</summary>
+    public AutomationNotificationMode NotificationMode { get; set; } = AutomationNotificationMode.Silent;
+    /// <summary>Momento do toast informativo (Before/After).</summary>
+    public AutomationToastTiming ToastTiming { get; set; } = AutomationToastTiming.After;
     public bool TriggerImmediate { get; set; }
     public bool TriggerRecurring { get; set; }
     public bool TriggerOnUserLogin { get; set; }

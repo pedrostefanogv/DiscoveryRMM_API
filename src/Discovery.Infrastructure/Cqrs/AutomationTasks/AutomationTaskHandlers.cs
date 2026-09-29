@@ -152,6 +152,8 @@ public sealed class CreateAutomationTaskCommandHandler(
             AllowDefer = cmd.AllowDefer,
             CloseProcesses = cmd.CloseProcesses ?? (IReadOnlyList<string>)[],
             PromptTimeoutSeconds = cmd.PromptTimeoutSeconds,
+            NotificationMode = cmd.NotificationMode,
+            ToastTiming = cmd.ToastTiming,
             IsActive = cmd.IsActive
         };
 
@@ -230,6 +232,8 @@ public sealed class UpdateAutomationTaskCommandHandler(
             AllowDefer = cmd.AllowDefer ?? current.AllowDefer,
             CloseProcesses = cmd.CloseProcesses ?? current.CloseProcesses,
             PromptTimeoutSeconds = cmd.PromptTimeoutSeconds ?? current.PromptTimeoutSeconds,
+            NotificationMode = cmd.NotificationMode ?? current.NotificationMode,
+            ToastTiming = cmd.ToastTiming ?? current.ToastTiming,
             Reason = cmd.Reason
         };
 

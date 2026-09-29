@@ -26,6 +26,8 @@ public sealed record CreateAutomationTaskCommand(
     bool AllowDefer = true,
     IReadOnlyList<string>? CloseProcesses = null,
     int PromptTimeoutSeconds = 60,
+    AutomationNotificationMode? NotificationMode = null,
+    AutomationToastTiming? ToastTiming = null,
     string? ChangedBy = null,
     string? IpAddress = null,
     string? CorrelationId = null
@@ -54,6 +56,8 @@ public sealed record UpdateAutomationTaskCommand(
     bool? AllowDefer = null,
     IReadOnlyList<string>? CloseProcesses = null,
     int? PromptTimeoutSeconds = null,
+    AutomationNotificationMode? NotificationMode = null,
+    AutomationToastTiming? ToastTiming = null,
     string? Reason = null,
     string? ChangedBy = null,
     string? IpAddress = null,

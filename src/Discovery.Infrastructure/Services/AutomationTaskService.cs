@@ -124,6 +124,10 @@ public class AutomationTaskService : IAutomationTaskService
         var resolvedScope = ResolveScope(request.ScopeType, request.ScopeId);
         await ValidateActionPayloadAsync(request.ActionType, request.InstallationType, request.PackageId, request.ScriptId, request.CommandPayload);
 
+        // NotificationMode e a fonte de verdade; RequiresApproval fica derivado
+        // (= Prompt) para compatibilidade com o contrato antigo de agents.
+        var notificationMode = ResolveNotificationMode(request);
+
         var task = new AutomationTaskDefinition
         {
             Name = request.Name.Trim(),
@@ -144,7 +148,9 @@ public class AutomationTaskService : IAutomationTaskService
             TriggerOnUserLogin = request.TriggerOnUserLogin,
             TriggerOnAgentCheckIn = request.TriggerOnAgentCheckIn,
             ScheduleCron = request.ScheduleCron,
-            RequiresApproval = request.RequiresApproval,
+            RequiresApproval = notificationMode == AutomationNotificationMode.Prompt,
+            NotificationMode = notificationMode,
+            ToastTiming = request.ToastTiming ?? AutomationToastTiming.After,
             AllowDefer = request.AllowDefer,
             CloseProcessesJson = SerializeTags(request.CloseProcesses),
             UserPromptTimeoutSeconds = NormalizePromptTimeout(request.PromptTimeoutSeconds),
@@ -228,7 +234,12 @@ public class AutomationTaskService : IAutomationTaskService
         existing.TriggerOnUserLogin = request.TriggerOnUserLogin;
         existing.TriggerOnAgentCheckIn = request.TriggerOnAgentCheckIn;
         existing.ScheduleCron = request.ScheduleCron;
-        existing.RequiresApproval = request.RequiresApproval;
+        var notificationMode = request.NotificationMode ?? existing.NotificationMode;
+        existing.NotificationMode = notificationMode;
+        existing.ToastTiming = request.ToastTiming ?? existing.ToastTiming;
+        // RequiresApproval derivado do modo (Prompt) — o handler de PUT ja
+        // preserva o valor atual quando o campo nao vem no payload.
+        existing.RequiresApproval = notificationMode == AutomationNotificationMode.Prompt;
         existing.AllowDefer = request.AllowDefer;
         existing.CloseProcessesJson = SerializeTags(request.CloseProcesses);
         existing.UserPromptTimeoutSeconds = NormalizePromptTimeout(request.PromptTimeoutSeconds);
@@ -523,6 +534,8 @@ public class AutomationTaskService : IAutomationTaskService
                 AllowDefer = task.AllowDefer,
                 CloseProcesses = ParseTags(task.CloseProcessesJson),
                 PromptTimeoutSeconds = NormalizePromptTimeout(task.UserPromptTimeoutSeconds),
+                NotificationMode = task.NotificationMode,
+                ToastTiming = task.ToastTiming,
                 TriggerImmediate = task.TriggerImmediate,
                 TriggerRecurring = task.TriggerRecurring,
                 TriggerOnUserLogin = task.TriggerOnUserLogin,
@@ -745,6 +758,15 @@ public class AutomationTaskService : IAutomationTaskService
         return Math.Clamp(seconds, MinPromptTimeoutSeconds, MaxPromptTimeoutSeconds);
     }
 
+    /// <summary>
+    /// Fonte de verdade do modo de notificacao no create. Quando o cliente nao
+    /// envia o campo (contrato antigo), deriva do booleano RequiresApproval:
+    /// true = Prompt (Welcome), false = Silent.
+    /// </summary>
+    public static AutomationNotificationMode ResolveNotificationMode(CreateAutomationTaskRequest request)
+        => request.NotificationMode
+           ?? (request.RequiresApproval ? AutomationNotificationMode.Prompt : AutomationNotificationMode.Silent);
+
     private static readonly System.Text.RegularExpressions.Regex CloseProcessNameRegex =
         new(@"^[A-Za-z0-9._ -]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
@@ -853,6 +875,8 @@ public class AutomationTaskService : IAutomationTaskService
                 .Append(task.AllowDefer ? '1' : '0').Append('|')
                 .Append(task.CloseProcessesJson ?? string.Empty).Append('|')
                 .Append(NormalizePromptTimeout(task.UserPromptTimeoutSeconds)).Append('|')
+                .Append((int)task.NotificationMode).Append('|')
+                .Append((int)task.ToastTiming).Append('|')
                 .Append(task.IsActive ? '1' : '0')
                 .Append(';');
         }
@@ -966,6 +990,8 @@ public class AutomationTaskService : IAutomationTaskService
             AllowDefer = task.AllowDefer,
             CloseProcesses = ParseTags(task.CloseProcessesJson),
             PromptTimeoutSeconds = NormalizePromptTimeout(task.UserPromptTimeoutSeconds),
+            NotificationMode = task.NotificationMode,
+            ToastTiming = task.ToastTiming,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt
@@ -987,6 +1013,8 @@ public class AutomationTaskService : IAutomationTaskService
             AllowDefer = task.AllowDefer,
             CloseProcesses = ParseTags(task.CloseProcessesJson),
             PromptTimeoutSeconds = NormalizePromptTimeout(task.UserPromptTimeoutSeconds),
+            NotificationMode = task.NotificationMode,
+            ToastTiming = task.ToastTiming,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt,
@@ -1030,6 +1058,8 @@ public class AutomationTaskService : IAutomationTaskService
             task.TriggerOnAgentCheckIn,
             task.ScheduleCron,
             task.RequiresApproval,
+            task.NotificationMode,
+            task.ToastTiming,
             task.AllowDefer,
             CloseProcesses = ParseTags(task.CloseProcessesJson),
             task.UserPromptTimeoutSeconds,

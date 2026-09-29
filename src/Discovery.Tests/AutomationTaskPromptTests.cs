@@ -1,3 +1,5 @@
+using Discovery.Core.DTOs;
+using Discovery.Core.Enums;
 using Discovery.Infrastructure.Services;
 using NUnit.Framework;
 
@@ -25,4 +27,26 @@ public class AutomationTaskPromptTests
     [Test]
     public void DefaultPromptTimeout_IsSixtySeconds()
         => Assert.That(AutomationTaskService.DefaultPromptTimeoutSeconds, Is.EqualTo(60));
+
+    // Fonte de verdade = notificationMode. Ausente, deriva do booleano antigo
+    // RequiresApproval (true = Prompt, false = Silent).
+    [TestCase(false, null, AutomationNotificationMode.Silent)]
+    [TestCase(true, null, AutomationNotificationMode.Prompt)]
+    [TestCase(false, AutomationNotificationMode.Silent, AutomationNotificationMode.Silent)]
+    [TestCase(false, AutomationNotificationMode.Prompt, AutomationNotificationMode.Prompt)]
+    [TestCase(false, AutomationNotificationMode.Toast, AutomationNotificationMode.Toast)]
+    [TestCase(true, AutomationNotificationMode.Toast, AutomationNotificationMode.Toast)]
+    public void ResolveNotificationMode_ExplicitWinsAndLegacyFallsBack(
+        bool requiresApproval,
+        AutomationNotificationMode? explicitMode,
+        AutomationNotificationMode expected)
+    {
+        var request = new CreateAutomationTaskRequest
+        {
+            RequiresApproval = requiresApproval,
+            NotificationMode = explicitMode
+        };
+
+        Assert.That(AutomationTaskService.ResolveNotificationMode(request), Is.EqualTo(expected));
+    }
 }
