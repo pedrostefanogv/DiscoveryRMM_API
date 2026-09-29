@@ -140,11 +140,16 @@ public class AgentRepository : IAgentRepository
                 .SetProperty(agent => agent.UpdatedAt, _ => now));
     }
 
+    /// <summary>
+    /// Agentes online "de verdade": exclui os que estão na lixeira (soft-deleted),
+    /// que continuam com Status=Online até o heartbeat expirar. Consumidores que
+    /// dependem disso: HeartbeatExpiryBackgroundService e a reentrega de comandos.
+    /// </summary>
     public async Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default)
     {
         return await _db.Agents
             .AsNoTracking()
-            .Where(agent => agent.Status == AgentStatus.Online)
+            .Where(agent => agent.Status == AgentStatus.Online && agent.DeletedAt == null)
             .OrderBy(agent => agent.Hostname)
             .ToListAsync(ct);
     }

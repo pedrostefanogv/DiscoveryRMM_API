@@ -45,12 +45,68 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
             .SingleOrDefaultAsync(x => x.CommandId == commandId);
     }
 
-    public async Task<IReadOnlyList<AutomationExecutionReport>> GetByAgentIdAsync(Guid agentId, int limit = 100)
+    public async Task<AutomationExecutionReport?> GetByIdAsync(Guid id)
     {
-        var safeLimit = Math.Clamp(limit, 1, 500);
         return await _db.AutomationExecutionReports
             .AsNoTracking()
-            .Where(x => x.AgentId == agentId)
+            .SingleOrDefaultAsync(x => x.Id == id);
+    }
+
+    public async Task<bool> MarkCancelledAsync(Guid executionId, string? errorMessage, DateTime cancelledAt)
+    {
+        var report = await _db.AutomationExecutionReports
+            .AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == executionId);
+
+        if (report is null)
+            return false;
+
+        // Filtro de estado no UPDATE: atômico contra a chegada simultânea do
+        // resultado do agent.
+        var affected = await _db.AutomationExecutionReports
+            .Where(x => x.Id == executionId
+                && x.Status != AutomationExecutionStatus.Completed
+                && x.Status != AutomationExecutionStatus.Failed
+                && x.Status != AutomationExecutionStatus.Cancelled)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, _ => AutomationExecutionStatus.Cancelled)
+                .SetProperty(x => x.ErrorMessage, _ => errorMessage)
+                .SetProperty(x => x.ResultReceivedAt, _ => cancelledAt)
+                .SetProperty(x => x.UpdatedAt, _ => DateTime.UtcNow));
+
+        if (affected > 0)
+        {
+            await PublishDashboardEventAsync(
+                "AutomationExecutionResult", report.AgentId, report.CommandId,
+                AutomationExecutionStatus.Cancelled, report.TaskId, report.ScriptId, report.CorrelationId);
+        }
+
+        return affected > 0;
+    }
+
+    public async Task<IReadOnlyList<AutomationExecutionReport>> GetByAgentIdAsync(
+        Guid agentId,
+        int limit = 100,
+        AutomationExecutionStatus? status = null,
+        AutomationExecutionSourceType? sourceType = null,
+        Guid? taskId = null,
+        Guid? scriptId = null)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var query = _db.AutomationExecutionReports
+            .AsNoTracking()
+            .Where(x => x.AgentId == agentId);
+
+        if (status.HasValue)
+            query = query.Where(x => x.Status == status.Value);
+        if (sourceType.HasValue)
+            query = query.Where(x => x.SourceType == sourceType.Value);
+        if (taskId.HasValue)
+            query = query.Where(x => x.TaskId == taskId.Value);
+        if (scriptId.HasValue)
+            query = query.Where(x => x.ScriptId == scriptId.Value);
+
+        return await query
             .OrderByDescending(x => x.CreatedAt)
             .Take(safeLimit)
             .ToListAsync();
@@ -147,7 +203,9 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
         // caminhos (NATS e endpoint de automação). Não reaplica nem republica
         // o evento quando o report já está em estado terminal.
         if (report is not null
-            && (report.Status == AutomationExecutionStatus.Completed || report.Status == AutomationExecutionStatus.Failed))
+            && (report.Status == AutomationExecutionStatus.Completed
+                || report.Status == AutomationExecutionStatus.Failed
+                || report.Status == AutomationExecutionStatus.Cancelled))
         {
             return;
         }
@@ -157,7 +215,8 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
         var affected = await _db.AutomationExecutionReports
             .Where(x => x.CommandId == commandId
                 && x.Status != AutomationExecutionStatus.Completed
-                && x.Status != AutomationExecutionStatus.Failed)
+                && x.Status != AutomationExecutionStatus.Failed
+                && x.Status != AutomationExecutionStatus.Cancelled)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(x => x.TaskId, _ => taskId)
                 .SetProperty(x => x.ScriptId, _ => scriptId)
@@ -186,7 +245,9 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
             return;
 
         // Idempotência: resultado já aplicado (NATS + endpoint de automação).
-        if (report.Status == AutomationExecutionStatus.Completed || report.Status == AutomationExecutionStatus.Failed)
+        if (report.Status == AutomationExecutionStatus.Completed
+            || report.Status == AutomationExecutionStatus.Failed
+            || report.Status == AutomationExecutionStatus.Cancelled)
             return;
 
         var finalStatus = success ? AutomationExecutionStatus.Completed : AutomationExecutionStatus.Failed;
@@ -195,7 +256,8 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
         var affected = await _db.AutomationExecutionReports
             .Where(x => x.CommandId == commandId
                 && x.Status != AutomationExecutionStatus.Completed
-                && x.Status != AutomationExecutionStatus.Failed)
+                && x.Status != AutomationExecutionStatus.Failed
+                && x.Status != AutomationExecutionStatus.Cancelled)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(x => x.ResultMetadataJson, _ => resultMetadataJson)
                 .SetProperty(x => x.ResultReceivedAt, _ => resultReceivedAt)

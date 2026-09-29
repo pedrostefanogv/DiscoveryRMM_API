@@ -50,8 +50,13 @@ public static class NatsServiceCollectionExtensions
         services.Configure<NatsGlobalPongOptions>(
             configuration.GetSection(NatsGlobalPongOptions.SectionName));
 
+        services.Configure<NatsCommandRedeliveryOptions>(
+            configuration.GetSection(NatsCommandRedeliveryOptions.SectionName));
+
         services.AddHostedService<NatsBackgroundService>();
         services.AddHostedService<NatsFanoutStreamBootstrapService>();
+        // Reentrega de comandos não confirmados (agente estava offline no envio).
+        services.AddHostedService<PendingCommandRedeliveryService>();
         services.AddHostedService<RemoteDebugSessionCleanupService>();
 
         services.AddSingleton<IAiChatJobQueue, AiChatJobBackgroundService>();

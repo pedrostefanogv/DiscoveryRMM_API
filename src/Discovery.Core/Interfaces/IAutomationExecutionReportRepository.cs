@@ -7,7 +7,25 @@ public interface IAutomationExecutionReportRepository
 {
     Task<AutomationExecutionReport> CreateAsync(AutomationExecutionReport report);
     Task<AutomationExecutionReport?> GetByCommandIdAsync(Guid commandId);
-    Task<IReadOnlyList<AutomationExecutionReport>> GetByAgentIdAsync(Guid agentId, int limit = 100);
+    Task<AutomationExecutionReport?> GetByIdAsync(Guid id);
+
+    /// <summary>
+    /// Marca a execução como <see cref="AutomationExecutionStatus.Cancelled"/>
+    /// apenas se ela ainda não estiver em estado terminal. Retorna false quando
+    /// nada foi alterado (corrida com a conclusão do comando).
+    /// </summary>
+    Task<bool> MarkCancelledAsync(Guid executionId, string? errorMessage, DateTime cancelledAt);
+    /// <summary>
+    /// Histórico recente do agent. Os filtros opcionais combinam em AND e são
+    /// aplicados no banco (não em memória), para não trazer linhas descartadas.
+    /// </summary>
+    Task<IReadOnlyList<AutomationExecutionReport>> GetByAgentIdAsync(
+        Guid agentId,
+        int limit = 100,
+        AutomationExecutionStatus? status = null,
+        AutomationExecutionSourceType? sourceType = null,
+        Guid? taskId = null,
+        Guid? scriptId = null);
     Task<IReadOnlyList<AutomationExecutionReport>> GetByTaskIdAsync(Guid taskId, int limit = 100);
     Task UpdateAckAsync(Guid commandId, Guid? taskId, Guid? scriptId, string? ackMetadataJson, DateTime acknowledgedAt, string? correlationId);
     Task UpdateResultAsync(Guid commandId, Guid? taskId, Guid? scriptId, bool success, int? exitCode, string? errorMessage, string? resultMetadataJson, DateTime resultReceivedAt, string? correlationId);

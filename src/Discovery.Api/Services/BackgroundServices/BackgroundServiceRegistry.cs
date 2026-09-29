@@ -204,6 +204,7 @@ public static class BackgroundServiceCategoryMap
         ["NatsBackgroundService"] = BackgroundServiceCategories.Messaging,
         ["NatsFanoutStreamBootstrapService"] = BackgroundServiceCategories.Messaging,
         ["NatsAuthCalloutBackgroundService"] = BackgroundServiceCategories.Messaging,
+        ["PendingCommandRedeliveryService"] = BackgroundServiceCategories.Messaging,
         // Knowledge — migrated to Quartz (KnowledgeEmbeddingJob)
         // Alerts — migrated to Quartz (AlertSchedulerJob, SlaMonitoringJob)
         // Reports — migrated to Quartz (ReportGenerationJob, ReportScheduleDispatchJob)

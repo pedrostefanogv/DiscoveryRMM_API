@@ -9,6 +9,12 @@ public interface IAutomationTaskRepository
     Task<AutomationTaskDefinition?> GetByIdAsync(Guid id, bool includeInactive = false);
     Task<AutomationTaskDefinition?> GetByIdIncludingDeletedAsync(Guid id, bool includeInactive = false);
 
+    /// <summary>
+    /// Nomes por id numa única consulta (projeção leve, inclui inativos e
+    /// excluídos). Evita N+1 ao enriquecer listagens de execuções.
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, string>> GetNamesByIdsAsync(IReadOnlyCollection<Guid> ids);
+
     Task<IReadOnlyList<AutomationTaskDefinition>> GetListPageAsync(
         AppApprovalScopeType? scopeType,
         Guid? scopeId,

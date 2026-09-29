@@ -16,6 +16,8 @@ public record HardwareReportRequest(string? Hostname, string? DisplayName, Agent
 public record HardwareComponentsPayload(List<DiskInfo>? Disks, List<NetworkAdapterInfo>? NetworkAdapters, List<MemoryModuleInfo>? MemoryModules, List<PrinterInfo>? Printers, List<ListeningPortInfo>? ListeningPorts, List<OpenSocketInfo>? OpenSockets);
 public record CreateTokenRequest(string? Description);
 public record ForceAutomationSyncRequest(bool Policies = true, bool Inventory = false, bool Software = false, bool AppStore = false);
+/// <summary>Flags do force sync em massa; o escopo (cliente/site) vem da rota.</summary>
+public record ForceAutomationSyncScopeRequest(bool? Policies = null, bool? Inventory = null, bool? Software = null, bool? AppStore = null);
 public record RefreshAgentDataRequest(bool ListeningPorts = false, bool OpenConnections = false, bool Software = false, bool Printers = false, bool Hardware = false, bool StartupItems = false, bool ScheduledTasks = false);
 public record StartupItemActionRequest(string Action, string Type, string Name, string? Source = null, string? Hive = null);
 public record ScheduledTaskEditRequest(string TriggerType, string? Time = null, int[]? DaysOfWeek = null, int? DaysInterval = null, string? ActionPath = null, string? ActionArgs = null);

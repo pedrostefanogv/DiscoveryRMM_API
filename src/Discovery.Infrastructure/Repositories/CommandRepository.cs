@@ -41,6 +41,51 @@ public class CommandRepository : ICommandRepository
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<AgentCommand>> GetRedeliveryCandidatesAsync(
+        IReadOnlyCollection<Guid> agentIds,
+        DateTime createdAfterUtc,
+        DateTime staleBeforeUtc,
+        int limit,
+        CancellationToken ct = default)
+    {
+        if (agentIds.Count == 0)
+            return [];
+
+        var safeLimit = Math.Clamp(limit, 1, 1000);
+        var effectiveIds = agentIds.Distinct().ToList();
+
+        return await _db.AgentCommands
+            .AsNoTracking()
+            .Where(command => effectiveIds.Contains(command.AgentId)
+                && command.CreatedAt >= createdAfterUtc
+                && (command.Status == CommandStatus.Pending
+                    || command.Status == CommandStatus.Sent
+                    || command.Status == CommandStatus.Running)
+                && ((command.SentAt == null && command.CreatedAt <= staleBeforeUtc)
+                    || (command.SentAt != null && command.SentAt < staleBeforeUtc)))
+            .OrderBy(command => command.CreatedAt)
+            .Take(safeLimit)
+            .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<AgentCommand>> GetExpiredUnconfirmedAsync(
+        DateTime createdBeforeUtc,
+        int limit,
+        CancellationToken ct = default)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 1000);
+
+        return await _db.AgentCommands
+            .AsNoTracking()
+            .Where(command => command.CreatedAt < createdBeforeUtc
+                && (command.Status == CommandStatus.Pending
+                    || command.Status == CommandStatus.Sent
+                    || command.Status == CommandStatus.Running))
+            .OrderBy(command => command.CreatedAt)
+            .Take(safeLimit)
+            .ToListAsync(ct);
+    }
+
     public async Task<AgentCommand> CreateAsync(AgentCommand command)
     {
         command.Id = IdGenerator.NewId();

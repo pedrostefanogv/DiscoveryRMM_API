@@ -36,6 +36,21 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         return await query.SingleOrDefaultAsync();
     }
 
+    public async Task<IReadOnlyDictionary<Guid, string>> GetNamesByIdsAsync(IReadOnlyCollection<Guid> ids)
+    {
+        if (ids.Count == 0)
+            return new Dictionary<Guid, string>();
+
+        var idList = ids.Distinct().ToList();
+        var rows = await _db.AutomationTaskDefinitions
+            .AsNoTracking()
+            .Where(t => idList.Contains(t.Id))
+            .Select(t => new { t.Id, t.Name })
+            .ToListAsync();
+
+        return rows.ToDictionary(row => row.Id, row => row.Name);
+    }
+
     public async Task<AutomationTaskDefinition?> GetByIdIncludingDeletedAsync(Guid id, bool includeInactive = false)
     {
         // includeInactive is intentionally ignored here: deleted tasks always have IsActive=false,

@@ -34,6 +34,21 @@ public class AutomationScriptRepository : IAutomationScriptRepository
         return await query.SingleOrDefaultAsync();
     }
 
+    public async Task<IReadOnlyDictionary<Guid, string>> GetNamesByIdsAsync(IReadOnlyCollection<Guid> ids)
+    {
+        if (ids.Count == 0)
+            return new Dictionary<Guid, string>();
+
+        var idList = ids.Distinct().ToList();
+        var rows = await _db.AutomationScriptDefinitions
+            .AsNoTracking()
+            .Where(script => idList.Contains(script.Id))
+            .Select(script => new { script.Id, script.Name })
+            .ToListAsync();
+
+        return rows.ToDictionary(row => row.Id, row => row.Name);
+    }
+
     public async Task<IReadOnlyList<AutomationScriptDefinition>> GetListPageAsync(Guid? clientId, bool activeOnly, string? cursor, int limit)
     {
         var safeLimit = Math.Clamp(limit, 1, 500);

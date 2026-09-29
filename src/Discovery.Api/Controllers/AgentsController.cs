@@ -17,6 +17,7 @@ using Discovery.Core.Cqrs.Agents.Transfer.Commands;
 using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Notes.Queries;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
@@ -299,11 +300,20 @@ public class AgentsController : ControllerBase
 
     // ── Automation ────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Correlation id enviado pelo cliente (header X-Correlation-Id). É gravado no
+    /// report de execução para permitir rastrear a operação disparada na UI.
+    /// </summary>
+    private string? RequestCorrelationId()
+        => Request.Headers.TryGetValue("X-Correlation-Id", out var values)
+            ? values.FirstOrDefault()
+            : null;
+
     [HttpPost("{id:guid}/automation/tasks/{taskId:guid}/run-now")]
     [RequirePermission(ResourceType.Automation, ActionType.Execute)]
     public async Task<IActionResult> RunAutomationTaskNow(Guid id, Guid taskId, CancellationToken ct = default)
     {
-        var result = await _mediator.Send(new RunAutomationTaskCommand(id, taskId), ct);
+        var result = await _mediator.Send(new RunAutomationTaskCommand(id, taskId, RequestCorrelationId()), ct);
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetCommands), new { id }, dto),
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
@@ -313,7 +323,7 @@ public class AgentsController : ControllerBase
     [RequirePermission(ResourceType.Automation, ActionType.Execute)]
     public async Task<IActionResult> RunAutomationScriptNow(Guid id, Guid scriptId, CancellationToken ct = default)
     {
-        var result = await _mediator.Send(new RunAutomationScriptCommand(id, scriptId), ct);
+        var result = await _mediator.Send(new RunAutomationScriptCommand(id, scriptId, RequestCorrelationId()), ct);
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetCommands), new { id }, dto),
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
@@ -323,7 +333,12 @@ public class AgentsController : ControllerBase
     [RequirePermission(ResourceType.Automation, ActionType.Execute)]
     public async Task<IActionResult> ForceAutomationSync(Guid id, [FromBody] ForceAutomationSyncCommand cmd)
     {
-        var result = await _mediator.Send(cmd with { AgentId = id });
+        var result = await _mediator.Send(cmd with
+        {
+            AgentId = id,
+            // Header vence o body: é o valor gerado pela UI para rastreio.
+            CorrelationId = RequestCorrelationId() ?? cmd.CorrelationId
+        });
         return result.Match<IActionResult>(
             success: _ => CreatedAtAction(nameof(GetCommands), new { id }, new { sync = "dispatched" }),
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
@@ -442,11 +457,42 @@ public class AgentsController : ControllerBase
                 : BadRequest(new { error = errors[0].Message }));
     }
 
+    /// <summary>
+    /// Histórico de execuções de automação do agent. Filtros opcionais
+    /// (status, origem, tarefa, script) alimentam a página de operações.
+    /// </summary>
+    /// <summary>
+    /// Cancela uma execução ainda pendente. Marca o comando como terminal, o que
+    /// o remove da reentrega automática (útil para lotes enfileirados para
+    /// agentes offline). Não interrompe execução já em andamento no agent.
+    /// </summary>
+    [HttpPost("{id:guid}/automation/executions/{executionId:guid}/cancel")]
+    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
+    public async Task<IActionResult> CancelAutomationExecution(Guid id, Guid executionId, CancellationToken ct = default)
+    {
+        var result = await _mediator.Send(new CancelAutomationExecutionCommand(id, executionId, RequestCorrelationId()), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Conflict" => Conflict(new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
+    }
+
     [HttpGet("{id:guid}/automation/executions")]
     [RequirePermission(ResourceType.Automation, ActionType.View)]
-    public async Task<IActionResult> GetAutomationExecutionHistory(Guid id, [FromQuery] int limit = 50)
+    public async Task<IActionResult> GetAutomationExecutionHistory(
+        Guid id,
+        [FromQuery] int limit = 50,
+        [FromQuery] AutomationExecutionStatus? status = null,
+        [FromQuery] AutomationExecutionSourceType? sourceType = null,
+        [FromQuery] Guid? taskId = null,
+        [FromQuery] Guid? scriptId = null)
     {
-        var result = await _mediator.Send(new GetAutomationExecutionsQuery(id, limit));
+        var result = await _mediator.Send(new GetAutomationExecutionsQuery(
+            id, limit, status, sourceType, taskId, scriptId));
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());

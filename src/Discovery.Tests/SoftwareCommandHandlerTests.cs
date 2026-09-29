@@ -193,7 +193,15 @@ public class SoftwareCommandHandlerTests
         }
 
         public Task<AutomationExecutionReport?> GetByCommandIdAsync(Guid commandId) => throw new NotSupportedException();
-        public Task<IReadOnlyList<AutomationExecutionReport>> GetByAgentIdAsync(Guid agentId, int limit = 100) => throw new NotSupportedException();
+        public Task<AutomationExecutionReport?> GetByIdAsync(Guid id) => throw new NotSupportedException();
+        public Task<bool> MarkCancelledAsync(Guid executionId, string? errorMessage, DateTime cancelledAt) => throw new NotSupportedException();
+        public Task<IReadOnlyList<AutomationExecutionReport>> GetByAgentIdAsync(
+            Guid agentId,
+            int limit = 100,
+            AutomationExecutionStatus? status = null,
+            AutomationExecutionSourceType? sourceType = null,
+            Guid? taskId = null,
+            Guid? scriptId = null) => throw new NotSupportedException();
         public Task<IReadOnlyList<AutomationExecutionReport>> GetByTaskIdAsync(Guid taskId, int limit = 100) => throw new NotSupportedException();
         public Task UpdateAckAsync(Guid commandId, Guid? taskId, Guid? scriptId, string? ackMetadataJson, DateTime acknowledgedAt, string? correlationId) => throw new NotSupportedException();
         public Task UpdateResultAsync(Guid commandId, Guid? taskId, Guid? scriptId, bool success, int? exitCode, string? errorMessage, string? resultMetadataJson, DateTime resultReceivedAt, string? correlationId) => throw new NotSupportedException();

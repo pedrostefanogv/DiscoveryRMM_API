@@ -30,7 +30,7 @@ public sealed class RunAutomationTaskCommandHandler(
         var command = await BuildAgentCommandFromTaskAsync(cmd.AgentId, task, scriptService, appPackageRepo, ct);
         var created = await dispatcher.DispatchAsync(command, ct);
         await CreateReportAsync(reportRepo, created, task.Id, task.ScriptId, AutomationExecutionSourceType.RunNow,
-            new { mode = "task-run-now", actionType = task.ActionType.ToString() });
+            new { mode = "task-run-now", actionType = task.ActionType.ToString() }, cmd.CorrelationId);
 
         return Result<AutomationExecutionDto>.Success(new AutomationExecutionDto(created.Id, created.Status.ToString(), created.CreatedAt));
     }
@@ -162,7 +162,12 @@ public sealed class RunAutomationTaskCommandHandler(
         return new AgentCommand { AgentId = agentId, CommandType = CommandType.PowerShell, Payload = task.CommandPayload };
     }
 
-    internal static async Task CreateReportAsync(IAutomationExecutionReportRepository reportRepo, AgentCommand command, Guid? taskId, Guid? scriptId, AutomationExecutionSourceType sourceType, object metadata)
+    /// <summary>
+    /// Registra a execução recém-despachada. O <paramref name="correlationId"/> vem do
+    /// header X-Correlation-Id da requisição: sem ele o histórico perdia o vínculo
+    /// com a operação disparada na UI.
+    /// </summary>
+    internal static async Task CreateReportAsync(IAutomationExecutionReportRepository reportRepo, AgentCommand command, Guid? taskId, Guid? scriptId, AutomationExecutionSourceType sourceType, object metadata, string? correlationId = null)
     {
         await reportRepo.CreateAsync(new AutomationExecutionReport
         {
@@ -172,6 +177,7 @@ public sealed class RunAutomationTaskCommandHandler(
             ScriptId = scriptId,
             SourceType = sourceType,
             Status = AutomationExecutionStatus.Dispatched,
+            CorrelationId = string.IsNullOrWhiteSpace(correlationId) ? null : correlationId.Trim(),
             RequestMetadataJson = JsonSerializer.Serialize(metadata)
         });
     }
@@ -195,7 +201,7 @@ public sealed class RunAutomationScriptCommandHandler(
         var command = new AgentCommand { AgentId = cmd.AgentId, CommandType = CommandType.Script, Payload = script.Content };
         var created = await dispatcher.DispatchAsync(command, ct);
         await RunAutomationTaskCommandHandler.CreateReportAsync(reportRepo, created, null, script.Id, AutomationExecutionSourceType.RunNow,
-            new { mode = "script-run-now", version = script.Version, contentHash = script.ContentHashSha256 });
+            new { mode = "script-run-now", version = script.Version, contentHash = script.ContentHashSha256 }, cmd.CorrelationId);
 
         return Result<AutomationExecutionDto>.Success(new AutomationExecutionDto(created.Id, created.Status.ToString(), created.CreatedAt));
     }
@@ -212,14 +218,52 @@ public sealed class ForceAutomationSyncCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
 
-        var payload = JsonSerializer.Serialize(new { Operation = "force-sync", TaskIds = cmd.TaskIds, RequestedAt = DateTime.UtcNow });
+        var flags = ResolveForceSyncFlags(cmd);
+
+        // As flags vão EXPLÍCITAS no payload: o agent respeita "tudo desmarcado"
+        // (não re-sincroniza nada) em vez de cair no default histórico.
+        var payload = JsonSerializer.Serialize(new
+        {
+            Operation = "force-sync",
+            Policies = flags.Policies,
+            Inventory = flags.Inventory,
+            Software = flags.Software,
+            AppStore = flags.AppStore,
+            TaskIds = cmd.TaskIds,
+            RequestedAt = DateTime.UtcNow
+        });
+
         var command = new AgentCommand { AgentId = cmd.AgentId, CommandType = CommandType.SystemInfo, Payload = payload };
         var created = await dispatcher.DispatchAsync(command, ct);
-        await RunAutomationTaskCommandHandler.CreateReportAsync(reportRepo, created, null, null, AutomationExecutionSourceType.ForceSync, new { taskIds = cmd.TaskIds });
+        await RunAutomationTaskCommandHandler.CreateReportAsync(reportRepo, created, null, null, AutomationExecutionSourceType.ForceSync,
+            new { taskIds = cmd.TaskIds, flags.Policies, flags.Inventory, flags.Software, flags.AppStore }, cmd.CorrelationId);
 
         return Result<VoidResult>.Success(VoidResult.Value);
     }
+
+    /// <summary>
+    /// Resolve as flags efetivas do force sync. Sem nenhuma flag informada
+    /// (cliente legado / body vazio), mantém o default histórico do agent
+    /// (policies + inventory). Com flags informadas, o valor explícito manda —
+    /// inclusive "tudo desmarcado".
+    /// </summary>
+    internal static ForceSyncFlags ResolveForceSyncFlags(ForceAutomationSyncCommand cmd)
+    {
+        var anyProvided = cmd.Policies.HasValue || cmd.Inventory.HasValue
+            || cmd.Software.HasValue || cmd.AppStore.HasValue;
+
+        return anyProvided
+            ? new ForceSyncFlags(
+                cmd.Policies ?? false,
+                cmd.Inventory ?? false,
+                cmd.Software ?? false,
+                cmd.AppStore ?? false)
+            : new ForceSyncFlags(Policies: true, Inventory: true, Software: false, AppStore: false);
+    }
 }
+
+/// <summary>Flags efetivas de um force sync.</summary>
+internal readonly record struct ForceSyncFlags(bool Policies, bool Inventory, bool Software, bool AppStore);
 
 public sealed class RefreshAgentDataCommandHandler(
     IAgentRepository agentRepo,
