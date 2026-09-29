@@ -3,6 +3,7 @@ using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.Cqrs.AgentLabels.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -37,11 +38,16 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
         return result.ToActionResult();
     }
 
-    /// <summary>Alias de /manual — mantido para compatibilidade, mas agora protegido por permissao.</summary>
+    /// <summary>
+    /// DEPRECATED — use <c>POST /agent-labels/manual</c>. Alias mantido por
+    /// compatibilidade (protegido por permissao); sera removido em uma janela futura.
+    /// </summary>
+    [Obsolete("Use POST /agent-labels/manual.")]
     [HttpPost]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
     public async Task<IActionResult> Add([FromBody] AddAgentLabelCommand cmd)
     {
+        Response.Headers["Deprecation"] = "true";
         var result = await mediator.Send(cmd);
         return result.Match<IActionResult>(success: dto => Created("", dto), failure: errors => errors[0].Code == "Conflict" ? Conflict(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
@@ -54,12 +60,17 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
         return result.Match<IActionResult>(success: dto => Created("", dto), failure: errors => errors[0].Code == "Conflict" ? Conflict(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
-    /// <summary>Alias de /manual/{id} — protegido por permissao.</summary>
+    /// <summary>
+    /// DEPRECATED — use <c>DELETE /agent-labels/manual/{id}</c>. Alias mantido por
+    /// compatibilidade; sera removido em uma janela futura.
+    /// </summary>
+    [Obsolete("Use DELETE /agent-labels/manual/{id}.")]
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
     public async Task<IActionResult> Remove(Guid id)
     {
-        var result = await mediator.Send(new RemoveAgentLabelCommand(id));
+        Response.Headers["Deprecation"] = "true";
+        var result = await mediator.Send(new RemoveAgentLabelCommand(id, Actor()));
         return result.Match<IActionResult>(
             success: _ => NoContent(),
             failure: errors => errors[0].Code == "NotFound"
@@ -71,7 +82,7 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
     public async Task<IActionResult> RemoveManual(Guid id)
     {
-        var result = await mediator.Send(new RemoveAgentLabelCommand(id));
+        var result = await mediator.Send(new RemoveAgentLabelCommand(id, Actor()));
         return result.Match<IActionResult>(
             success: _ => NoContent(),
             failure: errors => errors[0].Code == "NotFound"
@@ -84,7 +95,7 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> Reprocess()
     {
-        var result = await mediator.Send(new ReprocessLabelsCommand());
+        var result = await mediator.Send(new ReprocessLabelsCommand(Actor()));
         return result.Match<IActionResult>(
             success: jobId => Ok(new { jobId, message = "Reprocessamento iniciado." }),
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
@@ -121,6 +132,15 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
     public async Task<IActionResult> GetSuppressions(Guid agentId)
     {
         var result = await mediator.Send(new GetAgentLabelSuppressionsQuery(agentId));
+        return result.ToActionResult();
+    }
+
+    /// <summary>Historico de mudancas de label do agente (Added/Removed), mais recente primeiro.</summary>
+    [HttpGet("agents/{agentId:guid}/history")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetHistory(Guid agentId, [FromQuery] int limit = 50)
+    {
+        var result = await mediator.Send(new GetAgentLabelHistoryQuery(agentId, limit));
         return result.ToActionResult();
     }
 
@@ -162,9 +182,9 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
 
     [HttpGet("distinct")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetDistinct()
+    public async Task<IActionResult> GetDistinct([FromQuery] int limit = 500)
     {
-        var result = await mediator.Send(new GetDistinctLabelsQuery());
+        var result = await mediator.Send(new GetDistinctLabelsQuery(limit));
         return result.ToActionResult();
     }
 
@@ -186,8 +206,20 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
 
     [HttpPost("rules")]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
-    public async Task<IActionResult> CreateRule([FromBody] CreateLabelRuleCommand cmd)
+    public async Task<IActionResult> CreateRule([FromBody] CreateAgentLabelRuleRequest request)
     {
+        // O command guarda a expressao como JSON; o DTO da API a expoe como objeto.
+        // Sem esta traducao o front enviava "expression" e o command recebia
+        // ExpressionJson = null (400 "Expression is required").
+        var cmd = new CreateLabelRuleCommand(
+            request.Name,
+            request.Label,
+            request.Description,
+            request.IsEnabled,
+            request.ApplyMode.ToString(),
+            AgentLabelExpressionJson.Serialize(request.Expression),
+            Actor());
+
         var result = await mediator.Send(cmd);
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetRuleById), new { id = dto.Id }, dto),
@@ -198,9 +230,19 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
 
     [HttpPut("rules/{id:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
-    public async Task<IActionResult> UpdateRule(Guid id, [FromBody] UpdateLabelRuleCommand cmd)
+    public async Task<IActionResult> UpdateRule(Guid id, [FromBody] UpdateAgentLabelRuleRequest request)
     {
-        var result = await mediator.Send(cmd with { Id = id });
+        var cmd = new UpdateLabelRuleCommand(
+            id,
+            request.Name,
+            request.Label,
+            request.Description,
+            request.IsEnabled,
+            request.ApplyMode.ToString(),
+            AgentLabelExpressionJson.Serialize(request.Expression),
+            Actor());
+
+        var result = await mediator.Send(cmd);
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
@@ -210,6 +252,35 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
     {
         var result = await mediator.Send(new DeleteLabelRuleCommand(id));
         return result.Match<IActionResult>(success: _ => NoContent(), failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    /// <summary>Historico de versoes (configuracao) de uma regra, mais recente primeiro.</summary>
+    [HttpGet("rules/{id:guid}/versions")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetRuleVersions(Guid id, [FromQuery] int limit = 20)
+    {
+        var result = await mediator.Send(new GetLabelRuleVersionsQuery(id, limit));
+        return result.ToActionResult();
+    }
+
+    /// <summary>Exporta todas as regras em JSON portavel (backup / promocao entre ambientes).</summary>
+    [HttpGet("rules/export")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> ExportRules()
+    {
+        var result = await mediator.Send(new ExportLabelRulesQuery());
+        return result.ToActionResult();
+    }
+
+    /// <summary>Importa regras de um JSON exportado. Por padrao nao sobrescreve regras de mesmo nome.</summary>
+    [HttpPost("rules/import")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> ImportRules([FromBody] AgentLabelRuleImportRequest request)
+    {
+        var result = await mediator.Send(new ImportLabelRulesCommand(request, Actor()));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     /// <summary>Lists available Agent, Site and Client scoped custom fields usable in label rule expressions.</summary>
@@ -232,6 +303,17 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
             failure: errors => errors[0].Code == "NotFound"
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    /// <summary>Runs a dry-run (preview) of a rule expression against several agents in one call.</summary>
+    [HttpPost("rules/dry-run/batch")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> DryRunBatch([FromBody] AgentLabelRuleDryRunBatchRequest request)
+    {
+        var result = await mediator.Send(new DryRunLabelRuleBatchQuery(request));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     /// <summary>Estimates how many agents across the fleet a rule would affect.</summary>
@@ -257,4 +339,13 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
+
+    /// <summary>
+    /// Ator da acao para auditoria (mesma convencao do AgentUpdatesController):
+    /// usuario autenticado vira "user:{id}"; token de API usa o username; jobs usam "system".
+    /// </summary>
+    private string Actor()
+        => HttpContext.Items["UserId"] is Guid userId
+            ? $"user:{userId}"
+            : HttpContext.Items["Username"] as string ?? "system";
 }

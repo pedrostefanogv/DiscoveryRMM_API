@@ -193,7 +193,7 @@ public class AgentLabelCustomFieldTests
     // -------------------------------------------------------------------------
 
     [Test]
-    public void Validate_CustomField_NoTypesProvided_ReturnsDefinitionNotFoundError()
+    public void Validate_CustomField_NoTypesProvided_SkipsTypeChecks()
     {
         var expression = BuildCustomFieldCondition(
             AgentLabelField.AgentCustomField,
@@ -201,8 +201,27 @@ public class AgentLabelCustomFieldTests
             AgentLabelComparisonOperator.Equals,
             "val");
 
-        // Passing null — same as not providing types
+        // Sem o mapa de tipos (ex.: previa que valida so a ESTRUTURA) os checks de
+        // operador/tipo do custom field nao podem ser feitos; a estrutura ja foi
+        // validada (o campo exige CustomFieldDefinitionId).
         var errors = AgentLabelExpressionValidator.Validate(expression, null);
+
+        Assert.That(errors, Is.Empty);
+    }
+
+    [Test]
+    public void Validate_CustomField_WithTypesButMissingDefinition_ReturnsDefinitionNotFoundError()
+    {
+        var expression = BuildCustomFieldCondition(
+            AgentLabelField.AgentCustomField,
+            DefinitionId,
+            AgentLabelComparisonOperator.Equals,
+            "val");
+
+        // Mapa vazio: a definicao nao existe/esta inativa — erro mantido.
+        var errors = AgentLabelExpressionValidator.Validate(
+            expression,
+            new Dictionary<Guid, CustomFieldDataType>());
 
         Assert.That(errors, Has.Count.EqualTo(1));
         Assert.That(errors[0], Does.Contain("not found"));

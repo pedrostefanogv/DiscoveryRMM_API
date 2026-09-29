@@ -33,7 +33,8 @@ public interface IAgentLabelRepository
 
     /// <summary>Labels distintas com a contagem de agentes de cada uma.</summary>
     Task<IReadOnlyList<AgentLabelUsageDto>> GetLabelUsageAsync(int limit, CancellationToken ct = default);
-    Task<IReadOnlyList<string>> GetDistinctLabelsAsync();
+    /// <summary>Labels distintas, limitadas (evita payload ilimitado em frotas grandes).</summary>
+    Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default);
     Task<AgentLabel?> GetByIdAsync(Guid id);
 
     /// <summary>Registra (idempotente) que o usuario removeu manualmente esta label automatica.</summary>
@@ -45,8 +46,11 @@ public interface IAgentLabelRepository
     /// <summary>Lista as supressoes de um agente (com o nome da regra que produz a label).</summary>
     Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default);
 
-    /// <summary>Libera uma supressao pelo Id. Retorna false quando nao existe.</summary>
-    Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default);
+    /// <summary>Libera uma supressao pelo Id e devolve o agente afetado (null quando nao existe).</summary>
+    Task<Guid?> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default);
+
+    /// <summary>Historico de aplicacao/remocao de labels do agente, mais recente primeiro.</summary>
+    Task<IReadOnlyList<AgentLabelChangeLogDto>> GetChangeLogAsync(Guid agentId, int limit, CancellationToken ct = default);
     Task<AgentLabel> AddAsync(AgentLabel label);
     Task DeleteAsync(Guid id);
 }

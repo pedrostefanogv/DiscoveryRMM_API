@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Discovery.Core.DTOs;
@@ -8,6 +9,7 @@ using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -17,6 +19,9 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     {
         PropertyNameCaseInsensitive = true
     };
+    /// <summary>Teto absoluto de agentes por previa em lote (alinhado ao endpoint).</summary>
+    private const int AbsoluteMaxBatchAgents = 500;
+
     private const string EnabledRulesCacheKey = AgentLabelingCacheKeys.EnabledRules;
     private const int EnabledRulesCacheTtlSeconds = AgentLabelingCacheKeys.EnabledRulesTtlSeconds;
 
@@ -64,31 +69,71 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         _logger = logger;
     }
 
-    public async Task EvaluateAgentAsync(Guid agentId, string reason, CancellationToken cancellationToken = default)
+    public async Task EvaluateAgentAsync(Guid agentId, string reason, string? actor = null, CancellationToken cancellationToken = default)
     {
         var rules = await PrepareEnabledRulesAsync(cancellationToken);
         if (rules.Count == 0)
             return;
 
-        await EvaluateAgentWithRulesAsync(agentId, reason, rules, cancellationToken);
+        await EvaluateAgentWithRulesAsync(agentId, reason, actor, rules, cancellationToken);
     }
 
-    public async Task<bool> HasEnabledRulesAsync(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Avalia um conjunto de agentes em uma unica passagem (1 carregamento por chunk).
+    /// Substitui o loop de EvaluateAgentAsync que, ao mudar um custom field de Site ou
+    /// Cliente, disparava ~5 queries + SaveChanges por agente.
+    /// </summary>
+    public async Task EvaluateAgentsAsync(
+        IReadOnlyCollection<Guid> agentIds,
+        string reason,
+        string? actor = null,
+        CancellationToken cancellationToken = default)
     {
-        _ = cancellationToken;
-        var rules = await GetCachedEnabledRulesAsync();
-        return rules.Count > 0;
+        if (agentIds.Count == 0)
+            return;
+
+        var rules = await PrepareEnabledRulesAsync(cancellationToken);
+        if (rules.Count == 0)
+            return;
+
+        // Chunks para nao estourar o parametro IN nem o ChangeTracker em frotas grandes.
+        const int chunkSize = 500;
+        var ids = agentIds.Distinct().ToList();
+        for (var offset = 0; offset < ids.Count; offset += chunkSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var chunk = ids.Skip(offset).Take(chunkSize).ToList();
+            var agents = await _agentRepository.GetByIdsAsync(chunk, cancellationToken);
+            if (agents.Count == 0)
+                continue;
+
+            await EvaluateAgentsBatchAsync(agents, reason, actor, rules, cancellationToken);
+        }
     }
 
-    public async Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, CancellationToken cancellationToken = default)
+    public Task<bool> HasEnabledRulesAsync(CancellationToken cancellationToken = default)
     {
-        await ReprocessAllAgentsAsync(reason, batchSize, progress: null, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return HasEnabledRulesCoreAsync();
+
+        async Task<bool> HasEnabledRulesCoreAsync()
+        {
+            var rules = await GetCachedEnabledRulesAsync();
+            return rules.Count > 0;
+        }
+    }
+
+    public async Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, string? actor = null, CancellationToken cancellationToken = default)
+    {
+        await ReprocessAllAgentsAsync(reason, batchSize, progress: null, actor, cancellationToken);
     }
 
     public async Task ReprocessAllAgentsAsync(
         string reason,
         int batchSize,
         IProgress<AgentLabelReprocessProgress>? progress,
+        string? actor = null,
         CancellationToken cancellationToken = default)
     {
         var safeBatchSize = Math.Clamp(batchSize, 25, 1000);
@@ -117,7 +162,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 break;
 
             cancellationToken.ThrowIfCancellationRequested();
-            await EvaluateAgentsBatchAsync(currentBatch, reason, rules, cancellationToken);
+            await EvaluateAgentsBatchAsync(currentBatch, reason, actor, rules, cancellationToken);
 
             processed += currentBatch.Count;
             cursor = currentBatch[^1].Id;
@@ -125,6 +170,135 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         }
 
         progress?.Report(new AgentLabelReprocessProgress(processed, totalAgents, true, null));
+    }
+
+    /// <summary>
+    /// Reconciliacao incremental: avalia apenas agentes alterados desde a ultima passagem.
+    ///
+    /// A marca d'agua e o instante de INICIO da ultima passagem concluida (guardado em
+    /// Redis). Capturada antes da selecao, ela garante que mudancas ocorridas durante a
+    /// execucao entrem na proxima — nada e perdido por corrida. Se o watermark nao puder
+    /// ser lido, faz a passagem completa (mais caro, porem seguro).
+    /// </summary>
+    public async Task ReprocessChangedAgentsAsync(
+        string reason,
+        int batchSize = 200,
+        IProgress<AgentLabelReprocessProgress>? progress = null,
+        string? actor = null,
+        CancellationToken cancellationToken = default)
+    {
+        var safeBatchSize = Math.Clamp(batchSize, 25, 1000);
+        var rules = await PrepareEnabledRulesAsync(cancellationToken);
+
+        // Sem regra habilitada nao ha o que avaliar — e NAO avancamos o watermark, para
+        // que os agentes alterados agora sejam cobertos quando uma regra for criada.
+        if (rules.Count == 0)
+        {
+            progress?.Report(new AgentLabelReprocessProgress(0, 0, true, "Nenhuma regra habilitada."));
+            return;
+        }
+
+        var runStartedAt = DateTime.UtcNow;
+        var watermark = await ReadReconciliationWatermarkAsync();
+        var query = BuildChangedAgentsQuery(watermark);
+        var totalChanged = await query.CountAsync(cancellationToken);
+
+        if (totalChanged == 0)
+        {
+            progress?.Report(new AgentLabelReprocessProgress(0, 0, true, "Nenhum agente alterado."));
+            await WriteReconciliationWatermarkAsync(runStartedAt);
+            return;
+        }
+
+        var processed = 0;
+        Guid? cursor = null;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var currentBatch = await BuildChangedAgentsQuery(watermark)
+                .Where(agent => !cursor.HasValue || agent.Id.CompareTo(cursor.Value) > 0)
+                .OrderBy(agent => agent.Id)
+                .Take(safeBatchSize)
+                .ToListAsync(cancellationToken);
+
+            if (currentBatch.Count == 0)
+                break;
+
+            cancellationToken.ThrowIfCancellationRequested();
+            await EvaluateAgentsBatchAsync(currentBatch, reason, actor, rules, cancellationToken);
+
+            processed += currentBatch.Count;
+            cursor = currentBatch[^1].Id;
+            progress?.Report(new AgentLabelReprocessProgress(processed, totalChanged, false, null));
+        }
+
+        progress?.Report(new AgentLabelReprocessProgress(processed, totalChanged, true, null));
+
+        // Avanca o watermark somente apos a passagem concluir.
+        await WriteReconciliationWatermarkAsync(runStartedAt);
+    }
+
+    /// <summary>
+    /// Agentes cujos dados que ALIMENTAM regras mudaram desde o watermark: o proprio
+    /// agente (hostname/SO/status/IP), hardware, inventario de software e custom fields
+    /// de escopo Agente. Custom fields de Site/Cliente nao sao atribuiveis a um agente
+    /// por este filtro; esses casos sao cobertos pelo disparo event-driven da mudanca.
+    /// </summary>
+    private IQueryable<Agent> BuildChangedAgentsQuery(DateTime? since)
+    {
+        var query = _db.Agents.AsNoTracking();
+        if (since is null)
+            return query;
+
+        var watermark = since.Value;
+        return query.Where(agent =>
+            agent.UpdatedAt > watermark
+            || _db.AgentHardwareInfos.Any(hardware =>
+                hardware.AgentId == agent.Id && hardware.UpdatedAt > watermark)
+            || _db.AgentSoftwareInventories.Any(software =>
+                software.AgentId == agent.Id && software.LastSeenAt > watermark)
+            || _db.CustomFieldValues.Any(value =>
+                value.EntityId == agent.Id
+                && value.ScopeType == CustomFieldScopeType.Agent
+                && value.UpdatedAt > watermark));
+    }
+
+    private async Task<DateTime?> ReadReconciliationWatermarkAsync()
+    {
+        try
+        {
+            var raw = await _redisService.GetAsync(AgentLabelingCacheKeys.ReconciliationWatermark);
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            return DateTime.TryParse(
+                raw,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out var parsed)
+                ? parsed.ToUniversalTime()
+                : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao ler o watermark da reconciliacao de labels; executando passagem completa.");
+            return null;
+        }
+    }
+
+    private async Task WriteReconciliationWatermarkAsync(DateTime value)
+    {
+        try
+        {
+            await _redisService.SetAsync(
+                AgentLabelingCacheKeys.ReconciliationWatermark,
+                value.ToString("O", CultureInfo.InvariantCulture),
+                AgentLabelingCacheKeys.ReconciliationWatermarkTtlSeconds);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: sem watermark a proxima passagem sera completa.
+            _logger.LogWarning(ex, "Falha ao gravar o watermark da reconciliacao de labels.");
+        }
     }
 
     public async Task<AgentLabelRuleDryRunResponse> DryRunAsync(AgentLabelRuleDryRunRequest request, CancellationToken cancellationToken = default)
@@ -153,6 +327,14 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
 
         var matched = EvaluateNode(request.Expression, agent, hardware, software, customFieldValues, disks);
 
+        // Dry-run explicado: quando nao casa, descreve as condicoes falsas.
+        var failedConditions = new List<string>();
+        if (!matched)
+        {
+            CollectFailedConditions(
+                request.Expression, agent, hardware, software, customFieldValues, disks, null, "root", failedConditions);
+        }
+
         var automaticLabels = await _db.AgentLabels
             .AsNoTracking()
             .Where(label => label.AgentId == request.AgentId && label.SourceType == AgentLabelSourceType.Automatic)
@@ -174,8 +356,99 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
                 && !string.IsNullOrWhiteSpace(request.Label)
                 && hasLabel,
-            CurrentAutomaticLabels = automaticLabels
+            CurrentAutomaticLabels = automaticLabels,
+            FailedConditions = failedConditions
         };
+    }
+
+    /// <summary>
+    /// Previa de uma regra para varios agentes com carregamentos em LOTE. Substitui
+    /// o N+1 da UI, que disparava uma requisicao HTTP por agente (ate 100 concorrentes).
+    /// </summary>
+    public async Task<IReadOnlyList<AgentLabelRuleDryRunResponse>> DryRunBatchAsync(
+        AgentLabelRuleDryRunBatchRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var agentIds = (request.AgentIds ?? []).Distinct().Take(AbsoluteMaxBatchAgents).ToList();
+        if (agentIds.Count == 0)
+            return [];
+
+        var agents = await _agentRepository.GetByIdsAsync(agentIds, cancellationToken);
+        if (agents.Count == 0)
+            return [];
+
+        var ids = agents.Select(agent => agent.Id).ToList();
+
+        var needsHardware = HasHardwareConditions(request.Expression);
+        var needsSoftware = HasSoftwareConditions(request.Expression);
+        var needsDisks = HasDiskConditions(request.Expression);
+        var needsCustomFields = HasCustomFieldConditions(request.Expression);
+
+        var hardwareByAgent = needsHardware
+            ? await _hardwareRepository.GetByAgentIdsAsync(ids, cancellationToken)
+            : new Dictionary<Guid, AgentHardwareInfo>();
+        var softwareByAgent = needsSoftware
+            ? await _softwareRepository.GetCurrentByAgentIdsAsync(ids, cancellationToken)
+            : new Dictionary<Guid, IReadOnlyList<AgentInstalledSoftware>>();
+        var disksByAgent = needsDisks
+            ? await _hardwareRepository.GetDisksByAgentIdsAsync(ids, cancellationToken)
+            : new Dictionary<Guid, IReadOnlyList<DiskInfo>>();
+        var customFieldsByAgent = needsCustomFields
+            ? await LoadCustomFieldValuesForAgentsAsync(agents, cancellationToken)
+            : new Dictionary<Guid, IReadOnlyDictionary<Guid, CustomFieldEntry>>();
+
+        var automaticLabelsByAgent = (await _db.AgentLabels
+                .AsNoTracking()
+                .Where(label => ids.Contains(label.AgentId) && label.SourceType == AgentLabelSourceType.Automatic)
+                .Select(label => new { label.AgentId, label.Label })
+                .ToListAsync(cancellationToken))
+            .GroupBy(item => item.AgentId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<string>)group.Select(item => item.Label).OrderBy(label => label).ToList());
+
+        var normalizedLabel = string.IsNullOrWhiteSpace(request.Label) ? null : request.Label.Trim();
+        var results = new List<AgentLabelRuleDryRunResponse>(agents.Count);
+
+        foreach (var agent in agents)
+        {
+            hardwareByAgent.TryGetValue(agent.Id, out var hardware);
+            softwareByAgent.TryGetValue(agent.Id, out var software);
+            disksByAgent.TryGetValue(agent.Id, out var disks);
+            customFieldsByAgent.TryGetValue(agent.Id, out var customFieldValues);
+
+            var matched = EvaluateNode(
+                request.Expression, agent, hardware, software ?? [], customFieldValues, disks);
+
+            var currentLabels = automaticLabelsByAgent.TryGetValue(agent.Id, out var labels) ? labels : [];
+            var hasLabel = normalizedLabel is not null
+                && currentLabels.Contains(normalizedLabel, StringComparer.OrdinalIgnoreCase);
+
+            var failedConditions = new List<string>();
+            if (!matched)
+            {
+                CollectFailedConditions(
+                    request.Expression, agent, hardware, software ?? [], customFieldValues, disks, null, "root", failedConditions);
+            }
+
+            results.Add(new AgentLabelRuleDryRunResponse
+            {
+                AgentId = agent.Id,
+                Matched = matched,
+                Label = request.Label,
+                WouldAddLabel = matched && normalizedLabel is not null && !hasLabel,
+                WouldRemoveLabel = !matched
+                    && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
+                    && normalizedLabel is not null
+                    && hasLabel,
+                CurrentAutomaticLabels = currentLabels,
+                FailedConditions = failedConditions
+            });
+        }
+
+        return results;
     }
 
     /// <summary>
@@ -196,51 +469,48 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         if (totalAgents <= sampleSize)
             return await query.ToListAsync(cancellationToken);
 
-        // Distribuicao de agentes por site (proxy de cliente/similaridade).
-        var perSite = await query
-            .GroupBy(agent => agent.SiteId)
-            .Select(group => new { SiteId = group.Key, Count = group.Count() })
+        // UMA projecao enxuta (Id + SiteId). Antes: 1 query para as contagens e
+        // mais 1 query POR SITE carregando TODOS os ids do site, materializando
+        // entidades — em frotas grandes isso era o custo dominante da estimativa.
+        var population = await query
+            .Select(agent => new { agent.Id, agent.SiteId })
             .ToListAsync(cancellationToken);
 
-        if (perSite.Count == 0)
+        if (population.Count == 0)
             return [];
 
-        var result = new List<Agent>(sampleSize);
+        var chosenIds = new HashSet<Guid>();
         var random = Random.Shared;
 
         // Aloca por estrato de forma proporcional, com no minimo 1 agente por site,
-        // e sorteia dentro de cada estrato.
-        foreach (var bucket in perSite)
+        // e sorteia dentro de cada estrato (Fisher-Yates parcial).
+        foreach (var bucket in population.GroupBy(item => item.SiteId))
         {
-            var share = (int)Math.Round((double)bucket.Count / totalAgents * sampleSize);
-            var take = Math.Clamp(share, 1, Math.Min(bucket.Count, sampleSize - result.Count));
+            if (chosenIds.Count >= sampleSize)
+                break;
+
+            var bucketCount = bucket.Count();
+            var share = (int)Math.Round((double)bucketCount / totalAgents * sampleSize);
+            var take = Math.Clamp(share, 1, Math.Min(bucketCount, sampleSize - chosenIds.Count));
             if (take <= 0)
                 continue;
 
-            var ids = await query
-                .Where(agent => agent.SiteId == bucket.SiteId)
-                .Select(agent => agent.Id)
-                .ToListAsync(cancellationToken);
-
-            // Sorteio sem reposicao (Fisher-Yates parcial).
+            var ids = bucket.Select(item => item.Id).ToList();
             for (var i = 0; i < take && i < ids.Count; i++)
             {
                 var j = random.Next(i, ids.Count);
                 (ids[i], ids[j]) = (ids[j], ids[i]);
+                chosenIds.Add(ids[i]);
             }
-
-            var chosen = ids.Take(take).ToList();
-            var picked = await query
-                .Where(agent => chosen.Contains(agent.Id))
-                .ToListAsync(cancellationToken);
-            result.AddRange(picked);
-
-            if (result.Count >= sampleSize)
-                break;
         }
 
-        // Garante que nao estouramos o tamanho pedido.
-        return result.Count > sampleSize ? result.Take(sampleSize).ToList() : result;
+        if (chosenIds.Count == 0)
+            return [];
+
+        var chosen = chosenIds.Take(sampleSize).ToList();
+        return await query
+            .Where(agent => chosen.Contains(agent.Id))
+            .ToListAsync(cancellationToken);
     }
 
     /// <summary>
@@ -375,6 +645,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     private async Task EvaluateAgentWithRulesAsync(
         Guid agentId,
         string reason,
+        string? actor,
         IReadOnlyList<PreparedRule> rules,
         CancellationToken cancellationToken)
     {
@@ -382,7 +653,58 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         if (agent is null)
             return;
 
-        await EvaluateAgentsBatchAsync([agent], reason, rules, cancellationToken);
+        await EvaluateAgentsBatchAsync([agent], reason, actor, rules, cancellationToken);
+    }
+
+    /// <summary>
+    /// Avalia um lote com tolerancia a corrida de unicidade.
+    ///
+    /// Dois avaliadores concorrentes (job periodico x disparo por custom field) podem
+    /// inserir o mesmo match/label entre a leitura e a gravacao. Em vez de descartar o
+    /// lote, re-tenta uma vez: o estado e recarregado do banco no inicio do core e o
+    /// segundo passe converge, porque o registro do outro processo ja aparece na leitura.
+    /// </summary>
+    private async Task EvaluateAgentsBatchAsync(
+        IReadOnlyList<Agent> agents,
+        string reason,
+        string? actor,
+        IReadOnlyList<PreparedRule> rules,
+        CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 2;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                await EvaluateAgentsBatchCoreAsync(agents, reason, actor, rules, cancellationToken);
+                LabelingMetrics.AgentsEvaluated.Add(agents.Count);
+                return;
+            }
+            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+            {
+                LabelingMetrics.UniqueConflicts.Add(1);
+                DetachTrackedEntries();
+
+                if (attempt < maxAttempts)
+                {
+                    _logger.LogWarning(ex, "Conflito de unicidade ao gravar labels do lote; recarregando o estado e re-tentando.");
+                    continue;
+                }
+
+                // Duas tentativas nao bastaram (escrita muito concorrente). Descarta o lote
+                // em vez de derrubar a passagem inteira; a reconciliacao periodica corrige.
+                // LogError (e nao Warning) para ser alertavel: labels podem ficar defasadas.
+                _logger.LogError(ex, "Conflito de unicidade persistente ao gravar labels do lote; lote descartado. Metricas: agent_labeling.unique_conflicts.");
+                return;
+            }
+        }
+    }
+
+    private void DetachTrackedEntries()
+    {
+        foreach (var entry in _db.ChangeTracker.Entries().ToList())
+            entry.State = EntityState.Detached;
     }
 
     /// <summary>
@@ -391,9 +713,10 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     /// Regras cujas expressoes nao usam hardware/software/discos nao pagam o custo
     /// desses carregamentos.
     /// </summary>
-    private async Task EvaluateAgentsBatchAsync(
+    private async Task EvaluateAgentsBatchCoreAsync(
         IReadOnlyList<Agent> agents,
         string reason,
+        string? actor,
         IReadOnlyList<PreparedRule> rules,
         CancellationToken cancellationToken)
     {
@@ -557,11 +880,16 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 changes);
         }
 
-        // Um unico SaveChanges por lote (antes: ate 2 por agente).
+        // Um unico SaveChanges por lote (antes: ate 2 por agente). Conflitos de unicidade
+        // sao tratados pelo wrapper EvaluateAgentsBatchAsync (re-tentativa).
         await _db.SaveChangesAsync(cancellationToken);
 
         if (changes.Count > 0)
-            await RecordLabelChangesAsync(changes, reason, cancellationToken);
+        {
+            LabelingMetrics.LabelsAdded.Add(changes.Count(change => change.Action == "Added"));
+            LabelingMetrics.LabelsRemoved.Add(changes.Count(change => change.Action == "Removed"));
+            await RecordLabelChangesAsync(changes, reason, actor, cancellationToken);
+        }
 
         _logger.LogInformation(
             "Agent auto-labeling evaluated for {AgentCount} agent(s). Reason: {Reason}",
@@ -875,6 +1203,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     private async Task RecordLabelChangesAsync(
         IReadOnlyList<AgentLabelChange> changes,
         string reason,
+        string? actor,
         CancellationToken cancellationToken)
     {
         foreach (var change in changes)
@@ -898,6 +1227,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 SourceType = change.SourceType,
                 Action = change.Action,
                 Reason = reason,
+                Actor = actor ?? "system",
                 OccurredAt = DateTime.UtcNow
             }));
 
@@ -906,6 +1236,15 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Falha ao registrar o historico de mudancas de labels de agentes.");
+
+            // Remove as entradas pendentes: se ficassem no ChangeTracker, um SaveChanges
+            // posterior no mesmo escopo tentaria grava-las novamente (ou falharia junto).
+            foreach (var entry in _db.ChangeTracker.Entries<AgentLabelChangeLog>()
+                         .Where(entry => entry.State == EntityState.Added)
+                         .ToList())
+            {
+                entry.State = EntityState.Detached;
+            }
         }
     }
 
@@ -996,9 +1335,9 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             AgentLabelField.OperatingSystem => EvaluateText(agent.OperatingSystem, op, expected),
             AgentLabelField.OsVersion => EvaluateText(agent.OsVersion, op, expected),
             AgentLabelField.Status => EvaluateText(agent.Status.ToString(), op, expected),
-            AgentLabelField.SoftwareName => software.Any(item => EvaluateText(item.Name, op, expected)),
-            AgentLabelField.SoftwarePublisher => software.Any(item => EvaluateText(item.Publisher, op, expected)),
-            AgentLabelField.SoftwareVersion => software.Any(item => EvaluateText(item.Version, op, expected)),
+            AgentLabelField.SoftwareName => EvaluateSoftwareCollection(software, item => item.Name, op, expected),
+            AgentLabelField.SoftwarePublisher => EvaluateSoftwareCollection(software, item => item.Publisher, op, expected),
+            AgentLabelField.SoftwareVersion => EvaluateSoftwareCollection(software, item => item.Version, op, expected),
             AgentLabelField.SoftwareCount => EvaluateNumber((int?)software.Count, op, expected),
             AgentLabelField.Processor => EvaluateText(hardware?.Processor, op, expected),
             AgentLabelField.TotalMemoryBytes => EvaluateNumber(hardware?.TotalMemoryBytes, op, expected),
@@ -1021,6 +1360,106 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             _ => false
         };
     }
+
+    /// <summary>
+    /// Avalia um campo de uma COLECAO de softwares.
+    ///
+    /// A negacao em colecao exige semantica universal: o codigo antigo fazia
+    /// software.Any(item => EvaluateText(...)) tambem para NotContains/NotEquals, o
+    /// que virava "existe algum software que nao contem X" — verdadeiro para
+    /// praticamente qualquer maquina com mais de um software. Agora "Nome nao contem
+    /// X" significa "NENHUM software contem X".
+    /// </summary>
+    private static bool EvaluateSoftwareCollection(
+        IReadOnlyCollection<AgentInstalledSoftware> software,
+        Func<AgentInstalledSoftware, string?> selector,
+        AgentLabelComparisonOperator op,
+        string expected)
+    {
+        return op switch
+        {
+            AgentLabelComparisonOperator.NotContains =>
+                !software.Any(item => EvaluateText(selector(item), AgentLabelComparisonOperator.Contains, expected)),
+            AgentLabelComparisonOperator.NotEquals =>
+                !software.Any(item => EvaluateText(selector(item), AgentLabelComparisonOperator.Equals, expected)),
+            _ => software.Any(item => EvaluateText(selector(item), op, expected))
+        };
+    }
+
+    /// <summary>
+    /// Diagnostico da previa: descreve as condicoes FALSAS, para o usuario entender por
+    /// que a regra nao casou. E um caminho separado do avaliador de producao.
+    /// </summary>
+    private static void CollectFailedConditions(
+        AgentLabelRuleExpressionNodeDto node,
+        Agent agent,
+        AgentHardwareInfo? hardware,
+        IReadOnlyCollection<AgentInstalledSoftware> software,
+        IReadOnlyDictionary<Guid, CustomFieldEntry>? customFieldValues,
+        IReadOnlyCollection<DiskInfo>? disks,
+        DiskInfo? currentDisk,
+        string path,
+        List<string> failures)
+    {
+        if (node.NodeType == AgentLabelNodeType.Condition)
+        {
+            if (!EvaluateCondition(node, agent, hardware, software, customFieldValues, currentDisk))
+                failures.Add(DescribeCondition(node, path));
+
+            return;
+        }
+
+        if (node.NodeType == AgentLabelNodeType.DiskGroup)
+        {
+            if (disks is null || disks.Count == 0)
+            {
+                failures.Add($"{path}: nenhum disco coletado");
+                return;
+            }
+
+            foreach (var child in node.Children)
+            {
+                if (child.NodeType == AgentLabelNodeType.Condition)
+                {
+                    // So reporta a condicao que NENHUM disco atende — e o que explica o
+                    // nao-match do grupo.
+                    var satisfiedByAnyDisk = disks.Any(disk =>
+                        EvaluateCondition(child, agent, hardware, software, customFieldValues, disk));
+
+                    if (!satisfiedByAnyDisk)
+                        failures.Add(DescribeCondition(child, $"{path}.disco"));
+
+                    continue;
+                }
+
+                CollectFailedConditions(
+                    child, agent, hardware, software, customFieldValues, disks, disks.First(), path, failures);
+            }
+
+            return;
+        }
+
+        foreach (var child in node.Children)
+        {
+            CollectFailedConditions(
+                child, agent, hardware, software, customFieldValues, disks, currentDisk, path, failures);
+        }
+    }
+
+    private static string DescribeCondition(AgentLabelRuleExpressionNodeDto node, string path)
+    {
+        var field = node.Field?.ToString() ?? "?";
+        var op = node.Operator?.ToString() ?? "?";
+        var value = node.Value ?? string.Empty;
+        if (value.Length > 40)
+            value = value[..40] + "…";
+
+        return $"{path}: {field} {op} \"{value}\"";
+    }
+
+    /// <summary>Violacao de indice unico do Postgres (corrida entre avaliadores).</summary>
+    private static bool IsUniqueViolation(DbUpdateException ex)
+        => ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation;
 
     private static bool EvaluateText(string? current, AgentLabelComparisonOperator op, string expected)
     {

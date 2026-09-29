@@ -68,7 +68,8 @@ public sealed class GetAgentHardwareQueryHandler(
 
 public sealed class ReportAgentHardwareCommandHandler(
     IAgentRepository agentRepo,
-    IAgentHardwareRepository hardwareRepo
+    IAgentHardwareRepository hardwareRepo,
+    ILabelRevaluationQueue? revaluationQueue = null
 ) : IRequestHandler<ReportAgentHardwareCommand, Result<VoidResult>>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -223,6 +224,9 @@ public sealed class ReportAgentHardwareCommandHandler(
             collectedAt);
 
         await hardwareRepo.UpsertAsync(hardwareInfo, components);
+
+        // Agendamento debounced: no-op quando AgentLabeling:TriggerOnInventorySync=false.
+        revaluationQueue?.Schedule(cmd.AgentId);
 
         return Result<VoidResult>.Success(VoidResult.Value);
     }

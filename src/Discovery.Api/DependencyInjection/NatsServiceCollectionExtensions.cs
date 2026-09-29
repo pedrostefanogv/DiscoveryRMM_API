@@ -60,6 +60,10 @@ public static class NatsServiceCollectionExtensions
         services.AddSingleton<ILabelReprocessQueue, LabelReprocessBackgroundService>();
         services.AddHostedService(sp => (LabelReprocessBackgroundService)sp.GetRequiredService<ILabelReprocessQueue>());
 
+        // Gatilho de reavaliacao por sync de inventario (desabilitado por padrao).
+        services.AddSingleton<ILabelRevaluationQueue, LabelRevaluationBackgroundService>();
+        services.AddHostedService(sp => (LabelRevaluationBackgroundService)sp.GetRequiredService<ILabelRevaluationQueue>());
+
         services.AddSingleton<INatsAuthCalloutReloadSignal, NatsAuthCalloutReloadSignal>();
         services.AddHostedService<NatsAuthCalloutBackgroundService>();
 

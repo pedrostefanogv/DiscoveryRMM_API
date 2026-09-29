@@ -214,19 +214,21 @@ public class SendScopeNotificationCommandHandlerTests
 
         public Task<IReadOnlyList<AgentLabel>> GetByAgentIdAsync(Guid agentId) => Task.FromResult<IReadOnlyList<AgentLabel>>([]);
         public Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds) => Task.FromResult<IReadOnlyList<AgentLabel>>([]);
+        public Task<IReadOnlyList<AgentLabelChangeLogDto>> GetChangeLogAsync(Guid agentId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelChangeLogDto>>([]);
         public Task<(int Total, IReadOnlyList<AgentLabelRuleAgentResponse> Agents)> GetAgentsByRuleIdPagedAsync(Guid ruleId, int page, int pageSize, CancellationToken ct = default)
             => Task.FromResult((0, (IReadOnlyList<AgentLabelRuleAgentResponse>)[]));
         public Task<int> CountAgentsByLabelAsync(string label, CancellationToken ct = default)
             => Task.FromResult(AgentIdsByLabel.TryGetValue(label, out var v) ? v.Length : 0);
         public Task<IReadOnlyList<AgentLabelUsageDto>> GetLabelUsageAsync(int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelUsageDto>>([]);
-        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
         public Task<AgentLabel?> GetByIdAsync(Guid id) => Task.FromResult<AgentLabel?>(null);
         public Task SuppressAutomaticLabelAsync(Guid agentId, string label, string? suppressedBy, CancellationToken ct = default) => Task.CompletedTask;
         public Task ClearSuppressionAsync(Guid agentId, string label, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelSuppressionDto>>([]);
-        public Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default) => Task.FromResult(false);
+        public Task<Guid?> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default) => Task.FromResult<Guid?>(null);
         public Task<AgentLabel> AddAsync(AgentLabel label) => Task.FromResult(label);
         public Task DeleteAsync(Guid id) => Task.CompletedTask;
     }

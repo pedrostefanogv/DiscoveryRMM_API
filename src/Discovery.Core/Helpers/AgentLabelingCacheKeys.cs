@@ -15,6 +15,18 @@ public static class AgentLabelingCacheKeys
     /// <summary>TTL em segundos do cache de regras habilitadas.</summary>
     public const int EnabledRulesTtlSeconds = 300;
 
-    /// <summary>Prefixo de progresso dos jobs de reprocessamento.</summary>
+    /// <summary>
+    /// Marca d'agua da reconciliacao incremental: instante do inicio da ultima passagem
+    /// concluida. A proxima passagem avalia apenas agentes alterados depois disso.
+    /// </summary>
+    public const string ReconciliationWatermark = "label-reconciliation:watermark";
+
+    /// <summary>TTL do watermark (rede de seguranca; ele e reescrito a cada passagem).</summary>
+    public const int ReconciliationWatermarkTtlSeconds = 7 * 24 * 3600;
+
+    /// <summary>Prefixo do progresso dos jobs de reprocessamento (compartilhado entre replicas).</summary>
     public const string ReprocessProgressPrefix = "label-reprocess:progress:";
+
+    /// <summary>TTL do progresso de um job (tempo suficiente para o usuario acompanhar).</summary>
+    public const int ReprocessProgressTtlSeconds = 3600;
 }

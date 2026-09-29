@@ -30,7 +30,7 @@ public sealed class LabelService : ILabelService
 
     public Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
         => _labels.GetByAgentIdsAsync(agentIds);
-    public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(CancellationToken ct = default) => _labels.GetDistinctLabelsAsync();
+    public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default) => _labels.GetDistinctLabelsAsync(limit, ct);
     public Task<AgentLabel?> GetByIdAsync(Guid id, CancellationToken ct = default) => _labels.GetByIdAsync(id);
     public Task<AgentLabel> AddAsync(AgentLabel label, CancellationToken ct = default) => _labels.AddAsync(label);
 
@@ -72,6 +72,8 @@ public sealed class LabelService : ILabelService
     public async Task<AgentLabelRule> CreateRuleAsync(AgentLabelRule rule, CancellationToken ct = default)
     {
         var created = await _rules.CreateAsync(rule);
+        // Snapshot de configuracao: audita quem criou e permite rollback manual.
+        await _rules.AddVersionAsync(created, created.CreatedBy, ct);
         await InvalidateEnabledRulesCacheAsync();
         return created;
     }
@@ -79,6 +81,7 @@ public sealed class LabelService : ILabelService
     public async Task UpdateRuleAsync(AgentLabelRule rule, CancellationToken ct = default)
     {
         await _rules.UpdateAsync(rule);
+        await _rules.AddVersionAsync(rule, rule.UpdatedBy, ct);
         await InvalidateEnabledRulesCacheAsync();
     }
 
@@ -86,6 +89,35 @@ public sealed class LabelService : ILabelService
     {
         await _rules.DeleteAsync(id);
         await InvalidateEnabledRulesCacheAsync();
+    }
+
+    public async Task ImportRulesAsync(IReadOnlyList<AgentLabelRule> rules, CancellationToken ct = default)
+    {
+        if (rules.Count == 0)
+            return;
+
+        await _rules.UpsertRangeAsync(rules, ct);
+        await _rules.AddVersionsAsync(rules, ct);
+        await InvalidateEnabledRulesCacheAsync();
+    }
+
+    public async Task<IReadOnlyList<LabelRuleVersionDto>> GetRuleVersionsAsync(Guid ruleId, int limit, CancellationToken ct = default)
+    {
+        var versions = await _rules.GetVersionsAsync(ruleId, limit, ct);
+
+        return versions.Select(version => new LabelRuleVersionDto
+        {
+            Id = version.Id,
+            RuleId = version.RuleId,
+            Name = version.Name,
+            Label = version.Label,
+            Description = version.Description,
+            IsEnabled = version.IsEnabled,
+            ApplyMode = version.ApplyMode.ToString(),
+            Expression = AgentLabelExpressionJson.DeserializeOrDefault(version.ExpressionJson),
+            ChangedBy = version.ChangedBy,
+            ChangedAt = version.ChangedAt
+        }).ToList().AsReadOnly();
     }
 
     public Task<(int Total, IReadOnlyList<AgentLabelRuleAgentResponse> Agents)> GetAgentsByRuleIdPagedAsync(
@@ -98,8 +130,11 @@ public sealed class LabelService : ILabelService
     public Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default)
         => _labels.GetSuppressionsByAgentIdAsync(agentId, ct);
 
-    public Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default)
+    public Task<Guid?> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default)
         => _labels.ReleaseSuppressionAsync(suppressionId, ct);
+
+    public Task<IReadOnlyList<AgentLabelChangeLogDto>> GetChangeLogAsync(Guid agentId, int limit, CancellationToken ct = default)
+        => _labels.GetChangeLogAsync(agentId, limit, ct);
 
     public Task<int> CountAgentsByLabelAsync(string label, CancellationToken ct = default)
         => _labels.CountAgentsByLabelAsync(label, ct);

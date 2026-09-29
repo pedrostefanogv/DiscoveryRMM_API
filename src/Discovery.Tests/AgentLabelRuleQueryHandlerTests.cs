@@ -20,6 +20,23 @@ public class AgentLabelRuleQueryHandlerTests
     private static readonly Guid RuleId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid AgentId = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
+    /// <summary>Expressao estruturalmente valida (o dry-run passou a validar a arvore).</summary>
+    private static AgentLabelRuleExpressionNodeDto ValidExpression() => new()
+    {
+        NodeType = AgentLabelNodeType.Group,
+        LogicalOperator = AgentLabelLogicalOperator.And,
+        Children =
+        [
+            new AgentLabelRuleExpressionNodeDto
+            {
+                NodeType = AgentLabelNodeType.Condition,
+                Field = AgentLabelField.Hostname,
+                Operator = AgentLabelComparisonOperator.Contains,
+                Value = "SRV"
+            }
+        ]
+    };
+
     // -------------------------------------------------------------------------
     // ListAgentsByRuleQueryHandler
     // -------------------------------------------------------------------------
@@ -85,7 +102,7 @@ public class AgentLabelRuleQueryHandlerTests
         var handler = new DryRunLabelRuleQueryHandler(auto);
 
         var result = await handler.Handle(
-            new DryRunLabelRuleQuery(new AgentLabelRuleDryRunRequest { AgentId = AgentId }),
+            new DryRunLabelRuleQuery(new AgentLabelRuleDryRunRequest { AgentId = AgentId, Expression = ValidExpression() }),
             CancellationToken.None);
 
         Assert.That(result.IsFailure, Is.True);
@@ -99,12 +116,74 @@ public class AgentLabelRuleQueryHandlerTests
         var handler = new DryRunLabelRuleQueryHandler(auto);
 
         var result = await handler.Handle(
-            new DryRunLabelRuleQuery(new AgentLabelRuleDryRunRequest { AgentId = AgentId, Label = "Windows" }),
+            new DryRunLabelRuleQuery(new AgentLabelRuleDryRunRequest
+            {
+                AgentId = AgentId,
+                Label = "Windows",
+                Expression = ValidExpression()
+            }),
             CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
         Assert.That(result.Value, Is.Not.Null);
         Assert.That(result.Value!.AgentId, Is.EqualTo(AgentId));
+    }
+
+    [Test]
+    public async Task DryRun_WhenExpressionInvalid_ReturnsValidationError()
+    {
+        var handler = new DryRunLabelRuleQueryHandler(new FakeAutoLabelingService());
+
+        // Grupo vazio: o dry-run agora valida a arvore antes de tocar o motor.
+        var result = await handler.Handle(
+            new DryRunLabelRuleQuery(new AgentLabelRuleDryRunRequest { AgentId = AgentId }),
+            CancellationToken.None);
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Field, Is.EqualTo("expression"));
+    }
+
+    // -------------------------------------------------------------------------
+    // DryRunLabelRuleBatchQueryHandler
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task DryRunBatch_WithoutAgents_ReturnsValidationError()
+    {
+        var handler = new DryRunLabelRuleBatchQueryHandler(new FakeAutoLabelingService());
+
+        var result = await handler.Handle(
+            new DryRunLabelRuleBatchQuery(new AgentLabelRuleDryRunBatchRequest { Expression = ValidExpression() }),
+            CancellationToken.None);
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Field, Is.EqualTo("agentIds"));
+    }
+
+    [Test]
+    public async Task DryRunBatch_WithMoreThanLimit_ReturnsValidationError()
+    {
+        var handler = new DryRunLabelRuleBatchQueryHandler(new FakeAutoLabelingService());
+        var agentIds = Enumerable.Range(0, 501).Select(_ => Guid.NewGuid()).ToList();
+
+        var result = await handler.Handle(
+            new DryRunLabelRuleBatchQuery(new AgentLabelRuleDryRunBatchRequest { AgentIds = agentIds, Expression = ValidExpression() }),
+            CancellationToken.None);
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Field, Is.EqualTo("agentIds"));
+    }
+
+    [Test]
+    public async Task DryRunBatch_WithValidAgents_ReturnsSuccess()
+    {
+        var handler = new DryRunLabelRuleBatchQueryHandler(new FakeAutoLabelingService());
+
+        var result = await handler.Handle(
+            new DryRunLabelRuleBatchQuery(new AgentLabelRuleDryRunBatchRequest { AgentIds = [AgentId], Expression = ValidExpression() }),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
     }
 
     // -------------------------------------------------------------------------
@@ -128,7 +207,7 @@ public class AgentLabelRuleQueryHandlerTests
         public Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabel>>([]);
 
-        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(CancellationToken ct = default)
+        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<string>>([]);
 
         public Task<AgentLabel?> GetByIdAsync(Guid id, CancellationToken ct = default)
@@ -158,8 +237,11 @@ public class AgentLabelRuleQueryHandlerTests
         public Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelSuppressionDto>>([]);
 
-        public Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default)
-            => Task.FromResult(true);
+        public Task<Guid?> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default)
+            => Task.FromResult<Guid?>(AgentId);
+
+        public Task<IReadOnlyList<AgentLabelChangeLogDto>> GetChangeLogAsync(Guid agentId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelChangeLogDto>>([]);
 
         public Task<IReadOnlyList<AgentLabelRule>> GetRulesAsync(bool includeDisabled = true, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelRule>>([]);
@@ -172,6 +254,12 @@ public class AgentLabelRuleQueryHandlerTests
 
         public Task UpdateRuleAsync(AgentLabelRule rule, CancellationToken ct = default)
             => Task.CompletedTask;
+
+        public Task ImportRulesAsync(IReadOnlyList<AgentLabelRule> rules, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<IReadOnlyList<LabelRuleVersionDto>> GetRuleVersionsAsync(Guid ruleId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<LabelRuleVersionDto>>([]);
 
         public Task DeleteRuleAsync(Guid id, CancellationToken ct = default)
             => Task.CompletedTask;
@@ -203,16 +291,22 @@ public class AgentLabelRuleQueryHandlerTests
             _throwAgentNotFound = throwAgentNotFound;
         }
 
-        public Task EvaluateAgentAsync(Guid agentId, string reason, CancellationToken cancellationToken = default)
+        public Task EvaluateAgentAsync(Guid agentId, string reason, string? actor = null, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task EvaluateAgentsAsync(IReadOnlyCollection<Guid> agentIds, string reason, string? actor = null, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task<bool> HasEnabledRulesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(false);
 
-        public Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, CancellationToken cancellationToken = default)
+        public Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, string? actor = null, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
-        public Task ReprocessAllAgentsAsync(string reason, int batchSize, IProgress<AgentLabelReprocessProgress>? progress, CancellationToken cancellationToken = default)
+        public Task ReprocessAllAgentsAsync(string reason, int batchSize, IProgress<AgentLabelReprocessProgress>? progress, string? actor = null, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task ReprocessChangedAgentsAsync(string reason, int batchSize = 200, IProgress<AgentLabelReprocessProgress>? progress = null, string? actor = null, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task<AgentLabelRuleDryRunResponse> DryRunAsync(AgentLabelRuleDryRunRequest request, CancellationToken cancellationToken = default)
@@ -230,6 +324,9 @@ public class AgentLabelRuleQueryHandlerTests
                 CurrentAutomaticLabels = []
             });
         }
+
+        public Task<IReadOnlyList<AgentLabelRuleDryRunResponse>> DryRunBatchAsync(AgentLabelRuleDryRunBatchRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelRuleDryRunResponse>>([]);
 
         public Task<AgentLabelRuleImpactResponse> EvaluateImpactAsync(AgentLabelRuleImpactRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new AgentLabelRuleImpactResponse());

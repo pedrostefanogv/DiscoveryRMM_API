@@ -8,6 +8,7 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
@@ -23,23 +24,23 @@ public class CustomFieldService : ICustomFieldService
     private readonly DiscoveryDbContext _db;
     private readonly IAgentRepository _agentRepository;
     private readonly ISiteRepository _siteRepository;
-    private readonly IAgentAutoLabelingService _autoLabelingService;
     private readonly ILogRepository _logRepository;
+    private readonly IServiceScopeFactory? _scopeFactory;
     private readonly ILogger<CustomFieldService> _logger;
 
     public CustomFieldService(
         DiscoveryDbContext db,
         IAgentRepository agentRepository,
         ISiteRepository siteRepository,
-        IAgentAutoLabelingService autoLabelingService,
         ILogRepository logRepository,
-        ILogger<CustomFieldService> logger)
+        ILogger<CustomFieldService> logger,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _db = db;
         _agentRepository = agentRepository;
         _siteRepository = siteRepository;
-        _autoLabelingService = autoLabelingService;
         _logRepository = logRepository;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -524,7 +525,11 @@ public class CustomFieldService : ICustomFieldService
 
         await _db.SaveChangesAsync(cancellationToken);
 
-        _ = TriggerLabelRevaluationAsync(input.ScopeType, input.EntityId);
+        // A reavaliacao roda DEPOIS da resposta e em ESCOPO PROPRIO. Antes era
+        // fire-and-forget no escopo da requisicao, que e descartado assim que o
+        // request termina (DbContext descartado -> falha engolida pelo catch), e
+        // chamava EvaluateAgentAsync por agente (N+1).
+        _ = RevalueLabelsInBackgroundAsync(input.ScopeType, input.EntityId);
         await AuditAsync("ValueUpdated", definition.Name, input.ScopeType, input.EntityId, definition.Id.ToString(), valueJson, input.UpdatedBy, cancellationToken);
 
         return new CustomFieldResolvedValueDto(
@@ -770,38 +775,66 @@ public class CustomFieldService : ICustomFieldService
             throw new InvalidOperationException("entityId is required for client, site and agent scopes.");
     }
 
-    private async Task TriggerLabelRevaluationAsync(CustomFieldScopeType scopeType, Guid? entityId)
+    /// <summary>
+    /// Reavalia labels apos mudanca de custom field, em escopo proprio e em LOTE.
+    /// O pre-check usa o cache de regras habilitadas no escopo atual (barato) para
+    /// nao criar um escopo quando nao existe nenhuma regra.
+    /// </summary>
+    private async Task RevalueLabelsInBackgroundAsync(CustomFieldScopeType scopeType, Guid? entityId)
     {
-        if (!await _autoLabelingService.HasEnabledRulesAsync())
-            return;
-
         try
         {
+            // Em testes de unidade o factory nao e fornecido; sem ele nao ha escopo proprio.
+            if (_scopeFactory is null)
+                return;
+
+            // TUDO roda dentro do escopo novo — inclusive o pre-check. Antes o servico
+            // scoped da requisicao era usado aqui e podia ja estar descartado quando a
+            // continuacao do fire-and-forget executava (falha engolida pelo catch).
+            using var scope = _scopeFactory.CreateScope();
+            var service = scope.ServiceProvider.GetRequiredService<IAgentAutoLabelingService>();
+            var db = scope.ServiceProvider.GetRequiredService<DiscoveryDbContext>();
+
+            if (!await service.HasEnabledRulesAsync())
+                return;
+
+            var reason = $"custom-field-value-updated:{scopeType}:{entityId}";
+
             switch (scopeType)
             {
                 case CustomFieldScopeType.Agent when entityId.HasValue:
-                    await _autoLabelingService.EvaluateAgentAsync(
-                        entityId.Value,
-                        $"custom-field-value-updated:agent:{entityId.Value}");
+                    await service.EvaluateAgentsAsync([entityId.Value], reason, "system");
                     break;
 
                 case CustomFieldScopeType.Site when entityId.HasValue:
                 {
-                    var agents = await _agentRepository.GetBySiteIdAsync(entityId.Value);
-                    foreach (var agent in agents)
-                        await _autoLabelingService.EvaluateAgentAsync(
-                            agent.Id,
-                            $"custom-field-value-updated:site:{entityId.Value}");
+                    // Projecao so de Ids: antes os agentes eram materializados apenas
+                    // para extrair as chaves (frota grande = custo desnecessario).
+                    var agentIds = await db.Agents
+                        .AsNoTracking()
+                        .Where(agent => agent.SiteId == entityId.Value)
+                        .Select(agent => agent.Id)
+                        .ToListAsync();
+
+                    await service.EvaluateAgentsAsync(agentIds, reason, "system");
                     break;
                 }
 
                 case CustomFieldScopeType.Client when entityId.HasValue:
                 {
-                    var agents = await _agentRepository.GetByClientIdAsync(entityId.Value);
-                    foreach (var agent in agents)
-                        await _autoLabelingService.EvaluateAgentAsync(
-                            agent.Id,
-                            $"custom-field-value-updated:client:{entityId.Value}");
+                    var siteIds = await db.Sites
+                        .AsNoTracking()
+                        .Where(site => site.ClientId == entityId.Value)
+                        .Select(site => site.Id)
+                        .ToListAsync();
+
+                    var agentIds = await db.Agents
+                        .AsNoTracking()
+                        .Where(agent => siteIds.Contains(agent.SiteId))
+                        .Select(agent => agent.Id)
+                        .ToListAsync();
+
+                    await service.EvaluateAgentsAsync(agentIds, reason, "system");
                     break;
                 }
             }

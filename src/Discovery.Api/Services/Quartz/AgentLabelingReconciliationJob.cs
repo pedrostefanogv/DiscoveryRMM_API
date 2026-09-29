@@ -29,7 +29,8 @@ public sealed class AgentLabelingReconciliationJob : IJob
 
         try
         {
-            await service.ReprocessAllAgentsAsync("periodic-reconciliation", cancellationToken: ct);
+            // Passagem INCREMENTAL: so agentes alterados desde a ultima execucao.
+            await service.ReprocessChangedAgentsAsync("periodic-reconciliation", cancellationToken: ct);
             logger.LogInformation("Agent label reconciliation finished.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

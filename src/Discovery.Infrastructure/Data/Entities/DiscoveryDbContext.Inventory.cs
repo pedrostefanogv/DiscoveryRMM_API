@@ -140,6 +140,25 @@ public partial class DiscoveryDbContext
             entity.Property<uint>("xmin").HasColumnName("xmin").HasColumnType("xid").IsRowVersion();
         });
 
+        modelBuilder.Entity<AgentLabelRuleVersion>(entity =>
+        {
+            entity.ToTable("agent_label_rule_versions");
+            entity.HasKey(version => version.Id);
+            entity.HasIndex(version => new { version.RuleId, version.ChangedAt })
+                .HasDatabaseName("ix_agent_label_rule_versions_rule_changed");
+
+            entity.Property(version => version.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(version => version.RuleId).HasColumnName("rule_id");
+            entity.Property(version => version.Name).HasColumnName("name").HasMaxLength(200);
+            entity.Property(version => version.Label).HasColumnName("label").HasMaxLength(120);
+            entity.Property(version => version.Description).HasColumnName("description").HasMaxLength(2000);
+            entity.Property(version => version.IsEnabled).HasColumnName("is_enabled");
+            entity.Property(version => version.ApplyMode).HasColumnName("apply_mode").HasConversion<int>();
+            entity.Property(version => version.ExpressionJson).HasColumnName("expression_json").HasColumnType("jsonb");
+            entity.Property(version => version.ChangedBy).HasColumnName("changed_by").HasMaxLength(256);
+            entity.Property(version => version.ChangedAt).HasColumnName("changed_at").HasColumnType("timestamptz");
+        });
+
         modelBuilder.Entity<AgentLabel>(entity =>
         {
             entity.ToTable("agent_labels");
@@ -147,6 +166,9 @@ public partial class DiscoveryDbContext
             entity.HasIndex(label => new { label.AgentId, label.Label })
                 .IsUnique()
                 .HasDatabaseName("ux_agent_labels_agent_label");
+            // Consultas label-first (agents-by-label, usage, distinct): migration M187.
+            entity.HasIndex(label => new { label.Label, label.AgentId })
+                .HasDatabaseName("ix_agent_labels_label_agent");
 
             entity.Property(label => label.Id).HasColumnName("id").ValueGeneratedNever();
             entity.Property(label => label.AgentId).HasColumnName("agent_id");

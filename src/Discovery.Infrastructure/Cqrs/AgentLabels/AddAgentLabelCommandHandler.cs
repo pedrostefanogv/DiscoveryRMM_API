@@ -4,6 +4,8 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Discovery.Infrastructure.Cqrs.AgentLabels;
 
@@ -40,11 +42,15 @@ public sealed class AddAgentLabelCommandHandler(ILabelService svc) : IRequestHan
             return Result<AgentLabelDto>.Success(
                 new AgentLabelDto(created.Id, created.AgentId, created.Label, created.SourceType.ToString(), created.CreatedAt));
         }
-        catch (Exception)
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
         {
             // Corrida entre o check e o insert: o indice unico ux_agent_labels_agent_label
-            // garante a unicidade e nos permite responder 409 em vez de 500.
+            // garante a unicidade e nos permite responder 409 em vez de 500. Antes um
+            // catch-all mascarava QUALQUER falha de banco como "label duplicada".
             return Result<AgentLabelDto>.Failure(Error.Conflict($"Agent already has label '{label}'."));
         }
     }
+
+    private static bool IsUniqueViolation(DbUpdateException ex)
+        => ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation;
 }

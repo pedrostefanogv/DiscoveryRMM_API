@@ -546,7 +546,6 @@ public class CustomFieldServiceTests
             db,
             new TestAgentRepository(db),
             new TestSiteRepository(db),
-            new TestAgentAutoLabelingService(),
             new TestLogRepository(),
             NullLogger<CustomFieldService>.Instance);
 
@@ -732,11 +731,14 @@ public class CustomFieldServiceTests
 
     private sealed class TestAgentAutoLabelingService : IAgentAutoLabelingService
     {
-        public Task EvaluateAgentAsync(Guid agentId, string reason, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task EvaluateAgentAsync(Guid agentId, string reason, string? actor = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task EvaluateAgentsAsync(IReadOnlyCollection<Guid> agentIds, string reason, string? actor = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<bool> HasEnabledRulesAsync(CancellationToken cancellationToken = default) => Task.FromResult(false);
-        public Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ReprocessAllAgentsAsync(string reason, int batchSize, IProgress<AgentLabelReprocessProgress>? progress, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ReprocessAllAgentsAsync(string reason, int batchSize = 200, string? actor = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ReprocessAllAgentsAsync(string reason, int batchSize, IProgress<AgentLabelReprocessProgress>? progress, string? actor = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ReprocessChangedAgentsAsync(string reason, int batchSize = 200, IProgress<AgentLabelReprocessProgress>? progress = null, string? actor = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<AgentLabelRuleDryRunResponse> DryRunAsync(AgentLabelRuleDryRunRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<AgentLabelRuleDryRunResponse>> DryRunBatchAsync(AgentLabelRuleDryRunBatchRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<AgentLabelRuleImpactResponse> EvaluateImpactAsync(AgentLabelRuleImpactRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 

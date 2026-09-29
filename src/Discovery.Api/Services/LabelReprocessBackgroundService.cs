@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Threading.Channels;
 using Discovery.Core.DTOs;
 using Discovery.Core.Helpers;
@@ -13,13 +14,11 @@ namespace Discovery.Api.Services;
 /// como saber se o trabalho terminou ou quanto falta.
 ///
 /// <para>
-/// IMPORTANTE (deploy multi-instancia): o estado dos jobs vive em memoria e e,
-/// portanto, POR INSTANCIA. Com mais de uma replica da API, um
-/// <c>GET /agent-labels/reprocess/{jobId}</c> pode cair em outra replica e responder
-/// 404 mesmo com o job em andamento. O deploy atual e de instancia unica, entao o
-/// comportamento e correto; se um dia houver replicas, mover este estado para o Redis
-/// (ver <see cref="Discovery.Core.Interfaces.IRedisService"/>) e o caminho natural —
-/// a fila em si ja e idempotente e continua funcionando.
+/// MULTI-INSTANCIA: o estado e mantido em memoria (rapido) e publicado no Redis a cada
+/// atualizacao, com TTL. Assim um <c>GET /agent-labels/reprocess/{jobId}</c> que caia em
+/// outra replica encontra o progresso. A coalescencia de jobs continua por instancia
+/// (a fila e serial e idempotente), mas o acompanhamento deixa de responder 404.
+/// Redis e best-effort: falha de cache nunca derruba o reprocessamento.
 /// </para>
 /// </summary>
 public sealed class LabelReprocessBackgroundService : BackgroundService, ILabelReprocessQueue
@@ -29,20 +28,38 @@ public sealed class LabelReprocessBackgroundService : BackgroundService, ILabelR
 
     private readonly Channel<string> _queue = Channel.CreateUnbounded<string>();
     private readonly ConcurrentDictionary<string, AgentLabelReprocessStatusResponse> _jobs = new();
+    private readonly ConcurrentDictionary<string, string?> _jobActors = new();
     private readonly ConcurrentQueue<string> _jobOrder = new();
     private readonly IServiceProvider _serviceProvider;
+    private readonly IRedisService _redis;
     private readonly ILogger<LabelReprocessBackgroundService> _logger;
+
+    private static readonly JsonSerializerOptions ProgressJson = new(JsonSerializerDefaults.Web);
 
     public LabelReprocessBackgroundService(
         IServiceProvider serviceProvider,
+        IRedisService redis,
         ILogger<LabelReprocessBackgroundService> logger)
     {
         _serviceProvider = serviceProvider;
+        _redis = redis;
         _logger = logger;
     }
 
-    public async ValueTask<string> EnqueueAsync(CancellationToken cancellationToken = default)
+    public async ValueTask<string> EnqueueAsync(string? actor = null, CancellationToken cancellationToken = default, bool coalesce = true)
     {
+        // Idempotencia: cliques repetidos em "Reprocessar" enfileiravam varias
+        // passagens completas pela frota (a fila e serial). Se ja ha um job ativo,
+        // devolve o mesmo id em vez de duplicar o trabalho.
+        if (coalesce)
+        {
+            foreach (var active in _jobs)
+            {
+                if (active.Value.State is "Queued" or "Running")
+                    return active.Key;
+            }
+        }
+
         var jobId = Guid.NewGuid().ToString("N");
         var status = new AgentLabelReprocessStatusResponse
         {
@@ -53,8 +70,12 @@ public sealed class LabelReprocessBackgroundService : BackgroundService, ILabelR
         };
 
         _jobs[jobId] = status;
+        _jobActors[jobId] = actor;
         _jobOrder.Enqueue(jobId);
         TrimOldJobs();
+
+        // Publica o estado inicial: outra replica ja consegue acompanhar o job.
+        await PersistStatusAsync(jobId, Snapshot(status));
 
         // Sem ContinueWith: uma falha na escrita precisa propagar (e o job rastreado
         // removido), em vez de devolver um jobId de um job que nunca foi enfileirado.
@@ -65,35 +86,73 @@ public sealed class LabelReprocessBackgroundService : BackgroundService, ILabelR
         catch
         {
             _jobs.TryRemove(jobId, out _);
+            _jobActors.TryRemove(jobId, out _);
             throw;
         }
 
         return jobId;
     }
 
-    public Task<AgentLabelReprocessStatusResponse?> GetStatusAsync(string jobId, CancellationToken cancellationToken = default)
+    public async Task<AgentLabelReprocessStatusResponse?> GetStatusAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        // Snapshot: o objeto interno e mutado pelo worker, e serializar enquanto ele e
+        // atualizado poderia emitir um estado inconsistente.
+        if (_jobs.TryGetValue(jobId, out var status))
+        {
+            lock (status)
+            {
+                return Snapshot(status);
+            }
+        }
+
+        // Nao esta nesta replica: pode ter sido enfileirado em outra (multi-instancia).
+        return await ReadPersistedStatusAsync(jobId, cancellationToken);
+    }
+
+    private static AgentLabelReprocessStatusResponse Snapshot(AgentLabelReprocessStatusResponse status) => new()
+    {
+        JobId = status.JobId,
+        State = status.State,
+        Processed = status.Processed,
+        Total = status.Total,
+        Percent = status.Percent,
+        IsCompleted = status.IsCompleted,
+        Message = status.Message,
+        StartedAt = status.StartedAt,
+        FinishedAt = status.FinishedAt
+    };
+
+    private async Task PersistStatusAsync(string jobId, AgentLabelReprocessStatusResponse snapshot)
+    {
+        try
+        {
+            await _redis.SetAsync(
+                AgentLabelingCacheKeys.ReprocessProgressPrefix + jobId,
+                JsonSerializer.Serialize(snapshot, ProgressJson),
+                AgentLabelingCacheKeys.ReprocessProgressTtlSeconds);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: o acompanhamento local continua funcionando.
+            _logger.LogWarning(ex, "Falha ao publicar o progresso do job {JobId} no Redis.", jobId);
+        }
+    }
+
+    private async Task<AgentLabelReprocessStatusResponse?> ReadPersistedStatusAsync(string jobId, CancellationToken cancellationToken)
     {
         _ = cancellationToken;
 
-        if (!_jobs.TryGetValue(jobId, out var status))
-            return Task.FromResult<AgentLabelReprocessStatusResponse?>(null);
-
-        // Devolve um snapshot: o objeto interno e mutado pelo worker, e serializar
-        // enquanto ele e atualizado poderia emitir um estado inconsistente.
-        lock (status)
+        try
         {
-            return Task.FromResult<AgentLabelReprocessStatusResponse?>(new AgentLabelReprocessStatusResponse
-            {
-                JobId = status.JobId,
-                State = status.State,
-                Processed = status.Processed,
-                Total = status.Total,
-                Percent = status.Percent,
-                IsCompleted = status.IsCompleted,
-                Message = status.Message,
-                StartedAt = status.StartedAt,
-                FinishedAt = status.FinishedAt
-            });
+            var raw = await _redis.GetAsync(AgentLabelingCacheKeys.ReprocessProgressPrefix + jobId);
+            return string.IsNullOrWhiteSpace(raw)
+                ? null
+                : JsonSerializer.Deserialize<AgentLabelReprocessStatusResponse>(raw, ProgressJson);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao ler o progresso do job {JobId} no Redis.", jobId);
+            return null;
         }
     }
 
@@ -155,7 +214,8 @@ public sealed class LabelReprocessBackgroundService : BackgroundService, ILabelR
                 });
             });
 
-            await service.ReprocessAllAgentsAsync("manual-reprocess", 200, progress, ct);
+            var actor = _jobActors.TryGetValue(jobId, out var recordedActor) ? recordedActor : null;
+            await service.ReprocessAllAgentsAsync("manual-reprocess", 200, progress, actor, ct);
 
             UpdateJob(jobId, status =>
             {
@@ -185,19 +245,29 @@ public sealed class LabelReprocessBackgroundService : BackgroundService, ILabelR
 
     private void UpdateJob(string jobId, Action<AgentLabelReprocessStatusResponse> update)
     {
+        AgentLabelReprocessStatusResponse? snapshot = null;
+
         if (_jobs.TryGetValue(jobId, out var status))
         {
             lock (status)
             {
                 update(status);
+                snapshot = Snapshot(status);
             }
         }
+
+        // Persistencia best-effort (o helper trata e loga qualquer falha de Redis).
+        if (snapshot is not null)
+            _ = PersistStatusAsync(jobId, snapshot);
     }
 
     /// <summary>Mantem apenas os jobs mais recentes em memoria.</summary>
     private void TrimOldJobs()
     {
         while (_jobOrder.Count > MaxTrackedJobs && _jobOrder.TryDequeue(out var oldest))
+        {
             _jobs.TryRemove(oldest, out _);
+            _jobActors.TryRemove(oldest, out _);
+        }
     }
 }

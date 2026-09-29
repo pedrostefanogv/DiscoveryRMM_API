@@ -7,13 +7,22 @@ namespace Discovery.Core.Cqrs.AgentLabels.Queries;
 public sealed record ListAgentLabelsQuery(Guid? AgentId) : IQuery<Result<IReadOnlyList<AgentLabelDto>>>;
 public sealed record ListLabelRulesQuery(bool IncludeDisabled = true) : IQuery<Result<IReadOnlyList<LabelRuleDto>>>;
 public sealed record GetLabelRuleByIdQuery(Guid Id) : IQuery<Result<LabelRuleDto>>;
-public sealed record GetDistinctLabelsQuery : IQuery<Result<IReadOnlyList<string>>>;
+
+/// <summary>Versoes de uma regra (auditoria de configuracao).</summary>
+public sealed record GetLabelRuleVersionsQuery(Guid RuleId, int Limit = 20) : IQuery<Result<IReadOnlyList<LabelRuleVersionDto>>>;
+
+/// <summary>Exporta todas as regras em formato portavel (JSON).</summary>
+public sealed record ExportLabelRulesQuery : IQuery<Result<IReadOnlyList<AgentLabelRuleExportDto>>>;
+public sealed record GetDistinctLabelsQuery(int Limit = 500) : IQuery<Result<IReadOnlyList<string>>>;
 
 /// <summary>Labels com contagem de agentes (alimenta o filtro da lista de agentes).</summary>
 public sealed record GetLabelUsageQuery(int Limit = 200) : IQuery<Result<IReadOnlyList<AgentLabelUsageDto>>>;
 
 /// <summary>Supressoes de labels de um agente.</summary>
 public sealed record GetAgentLabelSuppressionsQuery(Guid AgentId) : IQuery<Result<IReadOnlyList<AgentLabelSuppressionDto>>>;
+
+/// <summary>Historico de mudancas de label de um agente (Added/Removed).</summary>
+public sealed record GetAgentLabelHistoryQuery(Guid AgentId, int Limit = 50) : IQuery<Result<IReadOnlyList<AgentLabelChangeLogDto>>>;
 
 /// <summary>Ids de agentes que possuem uma label, com cursor.</summary>
 public sealed record GetAgentIdsByLabelQuery(string Label, Guid? AfterAgentId, int Limit = 500) : IQuery<Result<AgentIdsByLabelResponse>>;
@@ -28,4 +37,5 @@ public sealed record AvailableCustomFieldDto(
     Guid Id, string Name, string Label, string? Description, int ScopeType, int DataType, IReadOnlyList<string> Options
 );
 public sealed record DryRunLabelRuleQuery(AgentLabelRuleDryRunRequest Request) : IQuery<Result<AgentLabelRuleDryRunResponse>>;
+public sealed record DryRunLabelRuleBatchQuery(AgentLabelRuleDryRunBatchRequest Request) : IQuery<Result<IReadOnlyList<AgentLabelRuleDryRunResponse>>>;
 public sealed record EvaluateLabelRuleImpactQuery(AgentLabelRuleImpactRequest Request) : IQuery<Result<AgentLabelRuleImpactResponse>>;

@@ -10,7 +10,7 @@ public interface ILabelService
 
     /// <summary>Labels de varios agentes em uma unica consulta.</summary>
     Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default);
-    Task<IReadOnlyList<string>> GetDistinctLabelsAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default);
     Task<AgentLabel?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<AgentLabel> AddAsync(AgentLabel label, CancellationToken ct = default);
 
@@ -32,6 +32,14 @@ public interface ILabelService
     Task UpdateRuleAsync(AgentLabelRule rule, CancellationToken ct = default);
     Task DeleteRuleAsync(Guid id, CancellationToken ct = default);
 
+    /// <summary>
+    /// Cria/atualiza varias regras em uma unica gravacao e invalida o cache UMA vez.
+    /// </summary>
+    Task ImportRulesAsync(IReadOnlyList<AgentLabelRule> rules, CancellationToken ct = default);
+
+    /// <summary>Versoes de uma regra (auditoria de configuracao), mais recente primeiro.</summary>
+    Task<IReadOnlyList<LabelRuleVersionDto>> GetRuleVersionsAsync(Guid ruleId, int limit, CancellationToken ct = default);
+
     // Agents matched by a rule
     Task<(int Total, IReadOnlyList<AgentLabelRuleAgentResponse> Agents)> GetAgentsByRuleIdPagedAsync(
         Guid ruleId,
@@ -44,8 +52,11 @@ public interface ILabelService
     /// <summary>Supressoes de labels de um agente (visivel ao usuario).</summary>
     Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default);
 
-    /// <summary>Libera uma supressao; a label e reaplicada na proxima reconciliacao.</summary>
-    Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default);
+    /// <summary>Libera uma supressao e devolve o agente afetado (null quando nao existe).</summary>
+    Task<Guid?> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default);
+
+    /// <summary>Historico de aplicacao/remocao de labels do agente (auditoria).</summary>
+    Task<IReadOnlyList<AgentLabelChangeLogDto>> GetChangeLogAsync(Guid agentId, int limit, CancellationToken ct = default);
     Task<int> CountAgentsByLabelAsync(string label, CancellationToken ct = default);
     Task<IReadOnlyList<AgentLabelUsageDto>> GetLabelUsageAsync(int limit, CancellationToken ct = default);
 }

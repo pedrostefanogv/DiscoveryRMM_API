@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -133,6 +134,79 @@ public class AgentAutoLabelingServiceTests
 
         Assert.That(logs, Has.Count.EqualTo(2));
         Assert.That(logs[1].Action, Is.EqualTo("Removed"));
+    }
+
+    [Test]
+    public async Task Evaluate_SoftwareNotContains_UsesUniversalSemantics()
+    {
+        // Regressao: a negacao em colecao usava software.Any(item => !contains), que e
+        // verdadeiro para praticamente qualquer maquina com mais de um software — uma
+        // regra "nao tem Chrome" marcava a frota inteira.
+        var expression = new Core.DTOs.AgentLabelRuleExpressionNodeDto
+        {
+            NodeType = AgentLabelNodeType.Group,
+            LogicalOperator = AgentLabelLogicalOperator.And,
+            Children =
+            [
+                new Core.DTOs.AgentLabelRuleExpressionNodeDto
+                {
+                    NodeType = AgentLabelNodeType.Condition,
+                    Field = AgentLabelField.SoftwareName,
+                    Operator = AgentLabelComparisonOperator.NotContains,
+                    Value = "Chrome"
+                }
+            ]
+        };
+
+        await using var withChrome = await Fixture.CreateAsync(
+            hostname: "SRV-01",
+            applyMode: AgentLabelApplyMode.ApplyAndRemove,
+            expression: expression,
+            installedSoftware: ["Google Chrome", "7-Zip"]);
+
+        await withChrome.Service.EvaluateAgentAsync(withChrome.AgentId, "test");
+        Assert.That(await withChrome.Db.AgentLabels.CountAsync(), Is.EqualTo(0),
+            "Com Chrome instalado, 'Nome nao contem Chrome' nao pode dar match.");
+
+        await using var withoutChrome = await Fixture.CreateAsync(
+            hostname: "SRV-02",
+            applyMode: AgentLabelApplyMode.ApplyAndRemove,
+            expression: expression,
+            installedSoftware: ["7-Zip"]);
+
+        await withoutChrome.Service.EvaluateAgentAsync(withoutChrome.AgentId, "test");
+        Assert.That(await withoutChrome.Db.AgentLabels.CountAsync(), Is.EqualTo(1),
+            "Sem Chrome, 'Nome nao contem Chrome' deve dar match.");
+    }
+
+    [Test]
+    public async Task DryRun_WhenNoMatch_DescribesFailedConditions()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "WORKSTATION-01", applyMode: AgentLabelApplyMode.ApplyAndRemove);
+
+        var response = await fx.Service.DryRunAsync(new Core.DTOs.AgentLabelRuleDryRunRequest
+        {
+            AgentId = fx.AgentId,
+            Label = "PROD",
+            ApplyMode = AgentLabelApplyMode.ApplyAndRemove,
+            Expression = Fixture.HostnameContainsSrvExpression()
+        });
+
+        Assert.That(response.Matched, Is.False);
+        Assert.That(response.FailedConditions, Is.Not.Empty, "Dry-run explicado deve descrever a condicao falsa.");
+        Assert.That(response.FailedConditions[0], Does.Contain("Hostname"));
+    }
+
+    [Test]
+    public async Task Evaluate_RecordsActorInChangeLog()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-PROD-01", applyMode: AgentLabelApplyMode.ApplyAndRemove);
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "manual-reprocess", "user:1234");
+
+        var log = await fx.Db.AgentLabelChangeLogs.AsNoTracking().SingleAsync();
+        Assert.That(log.Actor, Is.EqualTo("user:1234"),
+            "A auditoria deve registrar o autor da acao (antes Actor ficava sempre nulo).");
     }
 
     [Test]
@@ -421,7 +495,7 @@ public class AgentAutoLabelingServiceTests
 
         // Liberar a supressao faz a label voltar na proxima avaliacao.
         var released = await fx.LabelRepository.ReleaseSuppressionAsync(listed[0].Id);
-        Assert.That(released, Is.True);
+        Assert.That(released, Is.EqualTo(fx.AgentId), "Liberar deve devolver o agente afetado.");
         Assert.That(await fx.Db.AgentLabelSuppressions.CountAsync(), Is.EqualTo(0));
 
         await fx.Service.EvaluateAgentAsync(fx.AgentId, "after-release");
@@ -432,11 +506,158 @@ public class AgentAutoLabelingServiceTests
     // Fixture
     // -------------------------------------------------------------------------
 
+    [Test]
+    public async Task ReprocessChangedAgents_WhenNothingChanged_SkipsEvaluation()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-PROD-01", applyMode: AgentLabelApplyMode.ApplyAndRemove);
+
+        // Primeira passagem (sem watermark) avalia o agente.
+        var first = new CollectingProgress();
+        await fx.Service.ReprocessChangedAgentsAsync("first", progress: first);
+        Assert.That(first.Last?.Processed, Is.EqualTo(1));
+
+        // Segunda passagem sem mudancas: nada e reavaliado.
+        var second = new CollectingProgress();
+        await fx.Service.ReprocessChangedAgentsAsync("second", progress: second);
+
+        Assert.That(second.Last?.Processed, Is.EqualTo(0),
+            "Sem mudanca desde o watermark, a reconciliacao incremental nao deve avaliar ninguem.");
+        Assert.That(await fx.Db.AgentLabelChangeLogs.CountAsync(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ReprocessChangedAgents_WhenAgentChanged_EvaluatesOnlyIt()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-PROD-01", applyMode: AgentLabelApplyMode.ApplyAndRemove);
+        await fx.Service.ReprocessChangedAgentsAsync("first");
+        Assert.That(await fx.Db.AgentLabels.CountAsync(), Is.EqualTo(1), "pre-condicao: label aplicada");
+
+        // O agente muda (hostname + UpdatedAt) depois do watermark.
+        var agent = await fx.Db.Agents.SingleAsync(a => a.Id == fx.AgentId);
+        agent.Hostname = "WORKSTATION-99";
+        agent.UpdatedAt = DateTime.UtcNow.AddMinutes(1);
+        await fx.Db.SaveChangesAsync();
+
+        var progress = new CollectingProgress();
+        await fx.Service.ReprocessChangedAgentsAsync("second", progress: progress);
+
+        Assert.That(progress.Last?.Processed, Is.EqualTo(1), "O agente alterado deve ser reavaliado.");
+        Assert.That(await fx.Db.AgentLabels.CountAsync(), Is.EqualTo(0),
+            "O agente deixou de casar e a label deve sair ja na passagem incremental.");
+    }
+
+    [Test]
+    public async Task ReprocessChangedAgents_WhenSoftwareInventoryChanged_EvaluatesIt()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "WORKSTATION-01", applyMode: AgentLabelApplyMode.ApplyAndRemove);
+
+        // Watermark inicial (nada instalado -> nenhum match).
+        await fx.Service.ReprocessChangedAgentsAsync("first");
+
+        // Instala um software DEPOIS do watermark (LastSeenAt/UpdatedAt futuros).
+        var now = DateTime.UtcNow.AddMinutes(1);
+        var catalog = new SoftwareCatalog
+        {
+            Id = Guid.NewGuid(),
+            Name = "Google Chrome",
+            Publisher = "Google",
+            Fingerprint = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        fx.Db.SoftwareCatalogs.Add(catalog);
+        fx.Db.AgentSoftwareInventories.Add(new AgentSoftwareInventory
+        {
+            Id = Guid.NewGuid(),
+            AgentId = fx.AgentId,
+            SoftwareId = catalog.Id,
+            IsPresent = true,
+            Version = "1.0.0",
+            CollectedAt = now,
+            FirstSeenAt = now,
+            LastSeenAt = now,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        await fx.Db.SaveChangesAsync();
+
+        var progress = new CollectingProgress();
+        await fx.Service.ReprocessChangedAgentsAsync("second", progress: progress);
+
+        Assert.That(progress.Last?.Processed, Is.EqualTo(1),
+            "Mudanca no inventario de software deve colocar o agente na passagem incremental.");
+    }
+
+    [Test]
+    public async Task LabelService_RecordsRuleVersionsOnCreateAndUpdate()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-01", applyMode: AgentLabelApplyMode.ApplyAndRemove);
+
+        var ruleRepository = new AgentLabelRuleRepository(fx.Db);
+        var service = new LabelService(
+            new AgentLabelRepository(fx.Db), ruleRepository, fx.Redis, NullLogger<LabelService>.Instance);
+
+        var created = await service.CreateRuleAsync(new AgentLabelRule
+        {
+            Name = "Versao 1",
+            Label = "V1",
+            ExpressionJson = "{}",
+            CreatedBy = "user:1"
+        });
+
+        var versions = await service.GetRuleVersionsAsync(created.Id, 10);
+        Assert.That(versions, Has.Count.EqualTo(1), "Criar regra deve gerar um snapshot de configuracao.");
+        Assert.That(versions[0].ChangedBy, Is.EqualTo("user:1"));
+        Assert.That(versions[0].Name, Is.EqualTo("Versao 1"));
+
+        created.Name = "Versao 2";
+        created.UpdatedBy = "user:2";
+        await service.UpdateRuleAsync(created);
+
+        versions = await service.GetRuleVersionsAsync(created.Id, 10);
+        Assert.That(versions, Has.Count.EqualTo(2), "Cada escrita deve gerar um snapshot.");
+        Assert.That(versions[0].Name, Is.EqualTo("Versao 2"), "Mais recente primeiro.");
+        Assert.That(versions[0].ChangedBy, Is.EqualTo("user:2"));
+    }
+
+    [Test]
+    public async Task Evaluate_PublishesLabelingMetrics()
+    {
+        long added = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Meter.Name == LabelingMetrics.MeterName)
+                meterListener.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
+        {
+            if (instrument.Name == "agent_labeling.labels_added")
+                Interlocked.Add(ref added, measurement);
+        });
+        listener.Start();
+
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-PROD-01", applyMode: AgentLabelApplyMode.ApplyAndRemove);
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "metrics");
+
+        Assert.That(added, Is.GreaterThanOrEqualTo(1),
+            "Aplicar uma label deve ser observavel em agent_labeling.labels_added.");
+    }
+
+    private sealed class CollectingProgress : IProgress<Core.DTOs.AgentLabelReprocessProgress>
+    {
+        public List<Core.DTOs.AgentLabelReprocessProgress> Reports { get; } = [];
+        public Core.DTOs.AgentLabelReprocessProgress? Last => Reports.Count > 0 ? Reports[^1] : null;
+        public void Report(Core.DTOs.AgentLabelReprocessProgress value) => Reports.Add(value);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         public required DiscoveryDbContext Db { get; init; }
         public required AgentAutoLabelingService Service { get; init; }
         public required AgentLabelRepository LabelRepository { get; init; }
+        public required NoopRedisService Redis { get; init; }
         public required Guid AgentId { get; init; }
         public required Guid SiteId { get; init; }
         public required Guid RuleId { get; init; }
@@ -459,7 +680,11 @@ public class AgentAutoLabelingServiceTests
             ]
         };
 
-        public static async Task<Fixture> CreateAsync(string hostname, AgentLabelApplyMode applyMode)
+        public static async Task<Fixture> CreateAsync(
+            string hostname,
+            AgentLabelApplyMode applyMode,
+            Core.DTOs.AgentLabelRuleExpressionNodeDto? expression = null,
+            IReadOnlyList<string>? installedSoftware = null)
         {
             var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
                 .UseInMemoryDatabase($"auto-labeling-tests-{Guid.NewGuid():N}")
@@ -488,7 +713,7 @@ public class AgentAutoLabelingServiceTests
                 IsEnabled = true,
                 ApplyMode = applyMode,
                 ExpressionJson = System.Text.Json.JsonSerializer.Serialize(
-                    HostnameContainsSrvExpression(),
+                    expression ?? HostnameContainsSrvExpression(),
                     new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)),
                 CreatedAt = now,
                 UpdatedAt = now
@@ -498,8 +723,39 @@ public class AgentAutoLabelingServiceTests
             db.Sites.Add(site);
             db.Agents.Add(agent);
             db.AgentLabelRules.Add(rule);
+
+            // Inventario de software opcional: necessario para exercitar os campos
+            // SoftwareName/Publisher/Version (e a negacao em colecao).
+            foreach (var softwareName in installedSoftware ?? [])
+            {
+                var catalog = new SoftwareCatalog
+                {
+                    Id = Guid.NewGuid(),
+                    Name = softwareName,
+                    Publisher = "Test",
+                    Fingerprint = Guid.NewGuid().ToString("N"),
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                db.SoftwareCatalogs.Add(catalog);
+                db.AgentSoftwareInventories.Add(new AgentSoftwareInventory
+                {
+                    Id = Guid.NewGuid(),
+                    AgentId = agent.Id,
+                    SoftwareId = catalog.Id,
+                    IsPresent = true,
+                    Version = "1.0.0",
+                    CollectedAt = now,
+                    FirstSeenAt = now,
+                    LastSeenAt = now,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                });
+            }
+
             await db.SaveChangesAsync();
 
+            var redis = new NoopRedisService();
             var service = new AgentAutoLabelingService(
                 db,
                 new AgentRepository(db),
@@ -507,7 +763,7 @@ public class AgentAutoLabelingServiceTests
                 new AgentSoftwareRepository(db),
                 new AgentLabelRuleRepository(db),
                 new SiteRepository(db),
-                new NoopRedisService(),
+                redis,
                 NullLogger<AgentAutoLabelingService>.Instance);
 
             return new Fixture
@@ -515,6 +771,7 @@ public class AgentAutoLabelingServiceTests
                 Db = db,
                 Service = service,
                 LabelRepository = new AgentLabelRepository(db),
+                Redis = redis,
                 AgentId = agent.Id,
                 SiteId = site.Id,
                 RuleId = rule.Id
@@ -541,6 +798,10 @@ public class AgentAutoLabelingServiceTests
                 typeof(AgentLabelRuleMatch),
                 typeof(AgentLabelChangeLog),
                 typeof(AgentLabelSuppression),
+                typeof(AgentLabelRuleVersion),
+                typeof(SoftwareCatalog),
+                typeof(AgentSoftwareInventory),
+                typeof(AgentHardwareInfo),
                 typeof(CustomFieldDefinition),
                 typeof(CustomFieldValue)
             };
@@ -571,6 +832,7 @@ public class AgentAutoLabelingServiceTests
             });
 
             modelBuilder.Entity<AgentLabelChangeLog>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<AgentLabelRuleVersion>(entity => entity.HasKey(item => item.Id));
 
             modelBuilder.Entity<AgentLabelSuppression>(entity =>
             {
@@ -579,6 +841,9 @@ public class AgentAutoLabelingServiceTests
             });
             modelBuilder.Entity<CustomFieldDefinition>(entity => entity.HasKey(item => item.Id));
             modelBuilder.Entity<CustomFieldValue>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<SoftwareCatalog>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<AgentSoftwareInventory>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<AgentHardwareInfo>(entity => entity.HasKey(item => item.Id));
         }
     }
 

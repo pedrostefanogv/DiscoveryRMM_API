@@ -1,4 +1,5 @@
 using Discovery.Core.Cqrs.AgentLabels.Commands;
+using Discovery.Core.Cqrs.AgentLabels.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -85,7 +86,7 @@ public class AgentLabelRegressionTests
     [Test]
     public async Task CreateRule_WithInvalidApplyMode_Fails()
     {
-        var handler = new CreateLabelRuleCommandHandler(new StubLabelService(), new StubCustomFieldService());
+        var handler = new CreateLabelRuleCommandHandler(new StubLabelService(), new StubCustomFieldService(), new StubReprocessQueue());
 
         var result = await handler.Handle(
             new CreateLabelRuleCommand("r", "L", null, true, "ManualX", ValidTextExpression(), null),
@@ -98,7 +99,7 @@ public class AgentLabelRegressionTests
     [Test]
     public async Task CreateRule_WithMalformedJson_Fails()
     {
-        var handler = new CreateLabelRuleCommandHandler(new StubLabelService(), new StubCustomFieldService());
+        var handler = new CreateLabelRuleCommandHandler(new StubLabelService(), new StubCustomFieldService(), new StubReprocessQueue());
 
         var result = await handler.Handle(
             new CreateLabelRuleCommand("r", "L", null, true, "ApplyOnly", "{ nao-e-json", null),
@@ -118,7 +119,7 @@ public class AgentLabelRegressionTests
         ]}
         """;
 
-        var handler = new CreateLabelRuleCommandHandler(new StubLabelService(), new StubCustomFieldService());
+        var handler = new CreateLabelRuleCommandHandler(new StubLabelService(), new StubCustomFieldService(), new StubReprocessQueue());
         var result = await handler.Handle(
             new CreateLabelRuleCommand("r", "L", null, true, "ApplyOnly", expression, null),
             CancellationToken.None);
@@ -137,13 +138,31 @@ public class AgentLabelRegressionTests
         """;
 
         var svc = new StubLabelService();
-        var handler = new CreateLabelRuleCommandHandler(svc, new StubCustomFieldService());
+        var handler = new CreateLabelRuleCommandHandler(svc, new StubCustomFieldService(), new StubReprocessQueue());
         var result = await handler.Handle(
             new CreateLabelRuleCommand("PC", "SSD", null, true, "ApplyOnly", expression, null),
             CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True, string.Join("; ", result.Errors.Select(e => e.Message)));
         Assert.That(result.Value!.Label, Is.EqualTo("SSD"));
+    }
+
+    [Test]
+    public async Task CreateRule_InManualMode_AcceptsEmptyExpression()
+    {
+        // A UI envia um grupo vazio para regras Manual de proposito; o handler exigia
+        // ao menos um filho e a criacao falhava com 400.
+        var svc = new StubLabelService();
+        var handler = new CreateLabelRuleCommandHandler(svc, new StubCustomFieldService(), new StubReprocessQueue());
+        var emptyGroup = """{"nodeType":0,"logicalOperator":0,"children":[]}""";
+
+        var result = await handler.Handle(
+            new CreateLabelRuleCommand("Manual", "MANUAL", null, true, "Manual", emptyGroup, null),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True, string.Join("; ", result.Errors.Select(e => e.Message)));
+        Assert.That(svc.Created!.ExpressionJson, Is.EqualTo("{}"),
+            "Regra Manual nao tem expressao avaliavel.");
     }
 
     [Test]
@@ -181,7 +200,7 @@ public class AgentLabelRegressionTests
     [Test]
     public async Task CreateRule_WithOversizedName_Fails()
     {
-        var handler = new CreateLabelRuleCommandHandler(new StubLabelService(), new StubCustomFieldService());
+        var handler = new CreateLabelRuleCommandHandler(new StubLabelService(), new StubCustomFieldService(), new StubReprocessQueue());
 
         var result = await handler.Handle(
             new CreateLabelRuleCommand(new string('n', 201), "L", null, true, "ApplyOnly", ValidTextExpression(), null),
@@ -248,8 +267,146 @@ public class AgentLabelRegressionTests
     }
 
     // -------------------------------------------------------------------------
+    // 7. Historico e import/export de regras
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public void History_ReturnsChangeLogWithActor()
+    {
+        var svc = new StubLabelService();
+        svc.ChangeLog.Add(new AgentLabelChangeLogDto
+        {
+            Id = Guid.NewGuid(),
+            AgentId = AgentId,
+            Label = "PROD",
+            Action = "Added",
+            Actor = "user:1",
+            OccurredAt = DateTime.UtcNow
+        });
+
+        var handler = new GetAgentLabelHistoryQueryHandler(svc);
+        var result = handler.Handle(new GetAgentLabelHistoryQuery(AgentId, 20), CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value, Has.Count.EqualTo(1));
+        Assert.That(result.Value![0].Actor, Is.EqualTo("user:1"));
+    }
+
+    [Test]
+    public void History_WithEmptyAgentId_Fails()
+    {
+        var handler = new GetAgentLabelHistoryQueryHandler(new StubLabelService());
+        var result = handler.Handle(new GetAgentLabelHistoryQuery(Guid.Empty, 20), CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Field, Is.EqualTo("agentId"));
+    }
+
+    [Test]
+    public void ExportRules_ReturnsExpressionAsObject()
+    {
+        var svc = new StubLabelService();
+        svc.Rules.Add(new AgentLabelRule
+        {
+            Id = RuleId,
+            Name = "Servidores",
+            Label = "PROD",
+            ApplyMode = AgentLabelApplyMode.ApplyAndRemove,
+            ExpressionJson = ValidTextExpression()
+        });
+
+        var handler = new ExportLabelRulesQueryHandler(svc);
+        var result = handler.Handle(new ExportLabelRulesQuery(), CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value, Has.Count.EqualTo(1));
+        Assert.That(result.Value![0].Expression.Children, Has.Count.EqualTo(1),
+            "O export devolve a expressao como objeto, nao como string JSON.");
+        Assert.That(result.Value![0].ApplyMode, Is.EqualTo("ApplyAndRemove"));
+    }
+
+    [Test]
+    public void ImportRules_SkipsExistingWithoutOverwrite_AndCreatesNew()
+    {
+        var svc = new StubLabelService();
+        svc.Rules.Add(new AgentLabelRule { Id = RuleId, Name = "Existente", Label = "OLD", ExpressionJson = ValidTextExpression() });
+
+        var handler = new ImportLabelRulesCommandHandler(svc, new StubCustomFieldService(), new StubReprocessQueue());
+        var result = handler.Handle(new ImportLabelRulesCommand(new AgentLabelRuleImportRequest
+        {
+            OverwriteExisting = false,
+            Rules =
+            [
+                new AgentLabelRuleExportDto { Name = "Existente", Label = "NEW", ApplyMode = "ApplyOnly", Expression = TextExpressionDto() },
+                new AgentLabelRuleExportDto { Name = "Nova", Label = "NOVA", ApplyMode = "ApplyAndRemove", Expression = TextExpressionDto() }
+            ]
+        }, "user:1"), CancellationToken.None).GetAwaiter().GetResult();
+
+        Assert.That(result.IsSuccess, Is.True, string.Join("; ", result.Errors.Select(e => e.Message)));
+        Assert.That(result.Value!.Skipped, Is.EqualTo(1));
+        Assert.That(result.Value!.Created, Is.EqualTo(1));
+
+        var imported = svc.Rules.SingleOrDefault(rule => rule.Name == "Nova");
+        Assert.That(imported, Is.Not.Null, "O import em lote deve persistir a regra nova.");
+        Assert.That(imported!.CreatedBy, Is.EqualTo("user:1"));
+    }
+
+    [Test]
+    public void ImportRules_WithOverwrite_UpdatesExistingRule()
+    {
+        var svc = new StubLabelService();
+        svc.Rules.Add(new AgentLabelRule { Id = RuleId, Name = "Existente", Label = "OLD", IsEnabled = true, ExpressionJson = ValidTextExpression() });
+
+        var handler = new ImportLabelRulesCommandHandler(svc, new StubCustomFieldService(), new StubReprocessQueue());
+        var result = handler.Handle(new ImportLabelRulesCommand(new AgentLabelRuleImportRequest
+        {
+            OverwriteExisting = true,
+            Rules =
+            [
+                new AgentLabelRuleExportDto { Name = "Existente", Label = "NEW", ApplyMode = "ApplyOnly", IsEnabled = false, Expression = TextExpressionDto() }
+            ]
+        }, "user:2"), CancellationToken.None).GetAwaiter().GetResult();
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.Updated, Is.EqualTo(1));
+        Assert.That(svc.Rules[0].Label, Is.EqualTo("NEW"));
+        Assert.That(svc.Rules[0].IsEnabled, Is.False);
+        Assert.That(svc.Rules[0].UpdatedBy, Is.EqualTo("user:2"));
+    }
+
+    [Test]
+    public void ImportRules_WithEmptyList_Fails()
+    {
+        var handler = new ImportLabelRulesCommandHandler(new StubLabelService(), new StubCustomFieldService(), new StubReprocessQueue());
+        var result = handler.Handle(new ImportLabelRulesCommand(new AgentLabelRuleImportRequest(), "user:1"), CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Field, Is.EqualTo("rules"));
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    private static AgentLabelRuleExpressionNodeDto TextExpressionDto() => new()
+    {
+        NodeType = AgentLabelNodeType.Group,
+        LogicalOperator = AgentLabelLogicalOperator.And,
+        Children =
+        [
+            new AgentLabelRuleExpressionNodeDto
+            {
+                NodeType = AgentLabelNodeType.Condition,
+                Field = AgentLabelField.Hostname,
+                Operator = AgentLabelComparisonOperator.Contains,
+                Value = "SRV"
+            }
+        ]
+    };
 
     private static string ValidTextExpression() => """
     {"nodeType":0,"logicalOperator":0,"children":[
@@ -295,7 +452,7 @@ public class AgentLabelRegressionTests
         public Task<IReadOnlyList<AgentLabelRuleAgentResponse>> GetAgentsByRuleIdAsync(Guid ruleId) => Task.FromResult<IReadOnlyList<AgentLabelRuleAgentResponse>>([]);
         public Task<(int Total, IReadOnlyList<AgentLabelRuleAgentResponse> Agents)> GetAgentsByRuleIdPagedAsync(Guid ruleId, int page, int pageSize, CancellationToken ct = default)
             => Task.FromResult((0, (IReadOnlyList<AgentLabelRuleAgentResponse>)[]));
-        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
         public Task<AgentLabel?> GetByIdAsync(Guid id) => Task.FromResult<AgentLabel?>(null);
         public Task<AgentLabel> AddAsync(AgentLabel label) => Task.FromResult(label);
         public Task DeleteAsync(Guid id) => Task.CompletedTask;
@@ -303,12 +460,14 @@ public class AgentLabelRegressionTests
         public Task ClearSuppressionAsync(Guid agentId, string label, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelSuppressionDto>>([]);
-        public Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default) => Task.FromResult(true);
+        public Task<Guid?> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default) => Task.FromResult<Guid?>(AgentId);
         public Task<IReadOnlyList<Guid>> GetAgentIdsByLabelPagedAsync(string label, Guid? afterAgentId, int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<Guid>>([]);
         public Task<int> CountAgentsByLabelAsync(string label, CancellationToken ct = default) => Task.FromResult(0);
         public Task<IReadOnlyList<AgentLabelUsageDto>> GetLabelUsageAsync(int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelUsageDto>>([]);
+        public Task<IReadOnlyList<AgentLabelChangeLogDto>> GetChangeLogAsync(Guid agentId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelChangeLogDto>>([]);
     }
 
     private sealed class StubAgentLabelRuleRepository : IAgentLabelRuleRepository
@@ -318,6 +477,11 @@ public class AgentLabelRegressionTests
         public Task<AgentLabelRule?> GetByIdAsync(Guid id) => Task.FromResult<AgentLabelRule?>(null);
         public Task<AgentLabelRule> CreateAsync(AgentLabelRule rule) => Task.FromResult(rule);
         public Task UpdateAsync(AgentLabelRule rule) => Task.CompletedTask;
+        public Task UpsertRangeAsync(IReadOnlyCollection<AgentLabelRule> rules, CancellationToken ct = default) => Task.CompletedTask;
+        public Task AddVersionAsync(AgentLabelRule rule, string? changedBy, CancellationToken ct = default) => Task.CompletedTask;
+        public Task AddVersionsAsync(IReadOnlyCollection<AgentLabelRule> rules, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<AgentLabelRuleVersion>> GetVersionsAsync(Guid ruleId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelRuleVersion>>([]);
         public Task DeleteAsync(Guid id) => Task.CompletedTask;
     }
 
@@ -325,12 +489,15 @@ public class AgentLabelRegressionTests
     {
         public bool DeleteResult { get; init; } = true;
         public AgentLabelRule? Created { get; private set; }
+        public List<AgentLabelRule> Rules { get; } = [];
+        public List<AgentLabelChangeLogDto> ChangeLog { get; } = [];
+        public int UpdateCount { get; private set; }
 
         public Task<IReadOnlyList<AgentLabel>> GetByAgentIdAsync(Guid agentId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabel>>([]);
         public Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabel>>([]);
-        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(CancellationToken ct = default)
+        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<string>>([]);
         public Task<AgentLabel?> GetByIdAsync(Guid id, CancellationToken ct = default)
             => Task.FromResult<AgentLabel?>(null);
@@ -347,24 +514,56 @@ public class AgentLabelRegressionTests
             => Task.FromResult<IReadOnlyList<AgentLabelUsageDto>>([]);
         public Task<IReadOnlyList<AgentLabelSuppressionDto>> GetSuppressionsByAgentIdAsync(Guid agentId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelSuppressionDto>>([]);
-        public Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default) => Task.FromResult(true);
+        public Task<Guid?> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default) => Task.FromResult<Guid?>(AgentId);
+        public Task<IReadOnlyList<AgentLabelChangeLogDto>> GetChangeLogAsync(Guid agentId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelChangeLogDto>>(ChangeLog);
 
         public Task<IReadOnlyList<AgentLabelRule>> GetRulesAsync(bool includeDisabled = true, CancellationToken ct = default)
-            => Task.FromResult<IReadOnlyList<AgentLabelRule>>([]);
+            => Task.FromResult<IReadOnlyList<AgentLabelRule>>(Rules);
         public Task<AgentLabelRule?> GetRuleByIdAsync(Guid id, CancellationToken ct = default)
-            => Task.FromResult<AgentLabelRule?>(null);
+            => Task.FromResult(Rules.FirstOrDefault(rule => rule.Id == id));
         public Task<AgentLabelRule> CreateRuleAsync(AgentLabelRule rule, CancellationToken ct = default)
         {
             Created = rule;
+            Rules.Add(rule);
             return Task.FromResult(rule);
         }
-        public Task UpdateRuleAsync(AgentLabelRule rule, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpdateRuleAsync(AgentLabelRule rule, CancellationToken ct = default)
+        {
+            UpdateCount++;
+            return Task.CompletedTask;
+        }
         public Task DeleteRuleAsync(Guid id, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ImportRulesAsync(IReadOnlyList<AgentLabelRule> rules, CancellationToken ct = default)
+        {
+            foreach (var rule in rules)
+            {
+                if (!Rules.Contains(rule)) Rules.Add(rule);
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<LabelRuleVersionDto>> GetRuleVersionsAsync(Guid ruleId, int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<LabelRuleVersionDto>>([]);
 
         public Task<IReadOnlyList<AgentLabelRuleAgentResponse>> GetAgentsByRuleIdAsync(Guid ruleId, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelRuleAgentResponse>>([]);
         public Task<(int Total, IReadOnlyList<AgentLabelRuleAgentResponse> Agents)> GetAgentsByRuleIdPagedAsync(Guid ruleId, int page, int pageSize, CancellationToken ct = default)
             => Task.FromResult((0, (IReadOnlyList<AgentLabelRuleAgentResponse>)[]));
+    }
+
+    private sealed class StubReprocessQueue : ILabelReprocessQueue
+    {
+        public int EnqueuedCount { get; private set; }
+
+        public ValueTask<string> EnqueueAsync(string? actor = null, CancellationToken cancellationToken = default, bool coalesce = true)
+        {
+            EnqueuedCount++;
+            return ValueTask.FromResult(Guid.NewGuid().ToString("N"));
+        }
+
+        public Task<AgentLabelReprocessStatusResponse?> GetStatusAsync(string jobId, CancellationToken cancellationToken = default)
+            => Task.FromResult<AgentLabelReprocessStatusResponse?>(null);
     }
 
     private sealed class StubCustomFieldService : ICustomFieldService

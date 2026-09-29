@@ -16,3 +16,21 @@ public class AgentLabelSuppressionDto
     /// <summary>Nome da regra que produz esta label, quando identificavel.</summary>
     public string? RuleName { get; set; }
 }
+
+/// <summary>
+/// Item do historico de aplicacao/remocao de labels de um agente. Os dados ja eram
+/// gravados em agent_label_change_logs, mas nao havia endpoint nem tela para consulta-los.
+/// </summary>
+public class AgentLabelChangeLogDto
+{
+    public Guid Id { get; set; }
+    public Guid AgentId { get; set; }
+    public string Label { get; set; } = string.Empty;
+    public string SourceType { get; set; } = string.Empty;
+
+    /// <summary>"Added" ou "Removed".</summary>
+    public string Action { get; set; } = string.Empty;
+    public string? Reason { get; set; }
+    public string? Actor { get; set; }
+    public DateTime OccurredAt { get; set; }
+}

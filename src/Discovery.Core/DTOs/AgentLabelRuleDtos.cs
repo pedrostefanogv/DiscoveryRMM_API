@@ -1,4 +1,6 @@
+using System.Text.Json.Serialization;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 
 namespace Discovery.Core.DTOs;
 
@@ -14,11 +16,13 @@ public class AgentLabelRuleExpressionNodeDto
     public string? Value { get; set; }
 }
 
+/// <summary>Payload de criacao de regra. Espelha exatamente o que a UI envia.</summary>
 public class CreateAgentLabelRuleRequest
 {
     public string Name { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
     public string? Description { get; set; }
+    public bool IsEnabled { get; set; } = true;
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
 }
@@ -33,25 +37,24 @@ public class UpdateAgentLabelRuleRequest
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
 }
 
-public class AgentLabelRuleResponse
-{
-    public Guid Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public string Label { get; set; } = string.Empty;
-    public string? Description { get; set; }
-    public bool IsEnabled { get; set; }
-    public AgentLabelApplyMode ApplyMode { get; set; }
-    public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
-    public DateTime CreatedAt { get; set; }
-    public DateTime UpdatedAt { get; set; }
-}
-
 public class AgentLabelRuleDryRunRequest
 {
     public Guid AgentId { get; set; }
     public string? Label { get; set; }
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
+}
+
+/// <summary>
+/// Previa de uma regra para VARIOS agentes em uma unica chamada. A UI disparava
+/// um POST /rules/dry-run por agente (ate 100 requisicoes concorrentes por clique).
+/// </summary>
+public class AgentLabelRuleDryRunBatchRequest
+{
+    public string? Label { get; set; }
+    public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
+    public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
+    public IReadOnlyCollection<Guid> AgentIds { get; set; } = [];
 }
 
 /// <summary>
@@ -101,6 +104,12 @@ public class AgentLabelRuleDryRunResponse
     public bool WouldAddLabel { get; set; }
     public bool WouldRemoveLabel { get; set; }
     public IReadOnlyList<string> CurrentAutomaticLabels { get; set; } = [];
+
+    /// <summary>
+    /// Diagnostico da previa: condicoes avaliadas como FALSAS para este agente.
+    /// Preenchido apenas quando nao houve match (dry-run explicado).
+    /// </summary>
+    public IReadOnlyList<string> FailedConditions { get; set; } = [];
 }
 
 public class AgentLabelRuleAgentResponse
@@ -127,34 +136,60 @@ public class AgentLabelRuleAgentsResponse
     public IReadOnlyList<AgentLabelRuleAgentResponse> Agents { get; set; } = [];
 }
 
+/// <summary>
+/// Snapshot de uma regra (auditoria de configuracao). A expressao vai como OBJETO,
+/// no mesmo formato do editor, para permitir diff na UI.
+/// </summary>
+public class LabelRuleVersionDto
+{
+    public Guid Id { get; set; }
+    public Guid RuleId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public bool IsEnabled { get; set; }
+    public string ApplyMode { get; set; } = string.Empty;
+    public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
+    public string? ChangedBy { get; set; }
+    public DateTime ChangedAt { get; set; }
+}
+
 /// <summary>Requisicao de consulta de labels em lote.</summary>
 public class ListAgentLabelsBatchRequest
 {
     public IReadOnlyCollection<Guid> AgentIds { get; set; } = [];
 }
 
-public class AddManualLabelRequest
+/// <summary>
+/// Representacao portavel de uma regra (import/export entre ambientes). A expressao
+/// viaja como OBJETO, no mesmo formato usado pelo editor da UI.
+/// </summary>
+public class AgentLabelRuleExportDto
 {
-    public Guid AgentId { get; set; }
-    public string Label { get; set; } = string.Empty;
-}
-
-public class ManualLabelResponse
-{
-    public Guid Id { get; set; }
-    public Guid AgentId { get; set; }
-    public string Label { get; set; } = string.Empty;
-    public DateTime CreatedAt { get; set; }
-    public DateTime UpdatedAt { get; set; }
-}
-
-/// <summary>Summary of a custom field definition usable as a label rule condition.</summary>
-public class LabelRuleCustomFieldSummaryDto
-{
-    public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
     public string? Description { get; set; }
-    public CustomFieldScopeType ScopeType { get; set; }
-    public CustomFieldDataType DataType { get; set; }
+
+    /// <summary>Aceita "ApplyOnly" (export) ou 0 (arquivo editado a mao).</summary>
+    [JsonConverter(typeof(StringOrNumberJsonConverter))]
+    public string ApplyMode { get; set; } = string.Empty;
+    public bool IsEnabled { get; set; } = true;
+    public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
 }
+
+public class AgentLabelRuleImportRequest
+{
+    public IReadOnlyList<AgentLabelRuleExportDto> Rules { get; set; } = [];
+
+    /// <summary>Quando true, atualiza regras existentes com o mesmo nome (case-insensitive).</summary>
+    public bool OverwriteExisting { get; set; }
+}
+
+public class AgentLabelRuleImportResultDto
+{
+    public int Created { get; set; }
+    public int Updated { get; set; }
+    public int Skipped { get; set; }
+    public IReadOnlyList<string> Errors { get; set; } = [];
+}
+

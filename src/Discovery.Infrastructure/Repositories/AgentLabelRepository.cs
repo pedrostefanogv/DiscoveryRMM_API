@@ -69,14 +69,17 @@ public class AgentLabelRepository : IAgentLabelRepository
         return (total, agents);
     }
 
-    public async Task<IReadOnlyList<string>> GetDistinctLabelsAsync()
+    public async Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default)
     {
+        var safeLimit = Math.Clamp(limit, 1, 1000);
+
         return await _db.AgentLabels
             .AsNoTracking()
             .Select(l => l.Label)
             .Distinct()
             .OrderBy(l => l)
-            .ToListAsync();
+            .Take(safeLimit)
+            .ToListAsync(ct);
     }
 
     public async Task<IReadOnlyList<Guid>> GetAgentIdsByLabelPagedAsync(
@@ -212,17 +215,55 @@ public class AgentLabelRepository : IAgentLabelRepository
             .ToList();
     }
 
-    public async Task<bool> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<AgentLabelChangeLogDto>> GetChangeLogAsync(Guid agentId, int limit, CancellationToken ct = default)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 200);
+
+        // Projeta o enum como esta e faz o ToString em memoria: EF/Npgsql nao traduz
+        // enum.ToString() para SQL.
+        var rows = await _db.AgentLabelChangeLogs
+            .AsNoTracking()
+            .Where(log => log.AgentId == agentId)
+            .OrderByDescending(log => log.OccurredAt)
+            .Take(safeLimit)
+            .Select(log => new
+            {
+                log.Id,
+                log.AgentId,
+                log.Label,
+                log.SourceType,
+                log.Action,
+                log.Reason,
+                log.Actor,
+                log.OccurredAt
+            })
+            .ToListAsync(ct);
+
+        return rows.Select(log => new AgentLabelChangeLogDto
+        {
+            Id = log.Id,
+            AgentId = log.AgentId,
+            Label = log.Label,
+            SourceType = log.SourceType.ToString(),
+            Action = log.Action,
+            Reason = log.Reason,
+            Actor = log.Actor,
+            OccurredAt = log.OccurredAt
+        }).ToList();
+    }
+
+    public async Task<Guid?> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default)
     {
         var suppression = await _db.AgentLabelSuppressions
             .FirstOrDefaultAsync(s => s.Id == suppressionId, ct);
 
         if (suppression is null)
-            return false;
+            return null;
 
+        var agentId = suppression.AgentId;
         _db.AgentLabelSuppressions.Remove(suppression);
         await _db.SaveChangesAsync(ct);
-        return true;
+        return agentId;
     }
 
     public async Task DeleteAsync(Guid id)

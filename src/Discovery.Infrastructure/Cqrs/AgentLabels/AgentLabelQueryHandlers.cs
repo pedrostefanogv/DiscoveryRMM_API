@@ -4,6 +4,7 @@ using Discovery.Core.Cqrs.AgentLabels.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using MediatR;
 
@@ -57,7 +58,7 @@ public sealed class GetDistinctLabelsQueryHandler(ILabelService svc)
 {
     public async Task<Result<IReadOnlyList<string>>> Handle(GetDistinctLabelsQuery q, CancellationToken ct)
     {
-        var labels = await svc.GetDistinctLabelsAsync(ct);
+        var labels = await svc.GetDistinctLabelsAsync(q.Limit, ct);
         return Result<IReadOnlyList<string>>.Success(labels);
     }
 }
@@ -122,15 +123,46 @@ public sealed class GetAgentLabelSuppressionsQueryHandler(ILabelService svc)
     }
 }
 
-public sealed class ReleaseAgentLabelSuppressionCommandHandler(ILabelService svc)
+/// <summary>Historico de mudancas de label do agente (auditoria de aplicacao/remocao).</summary>
+public sealed class GetAgentLabelHistoryQueryHandler(ILabelService svc)
+    : IRequestHandler<GetAgentLabelHistoryQuery, Result<IReadOnlyList<AgentLabelChangeLogDto>>>
+{
+    public async Task<Result<IReadOnlyList<AgentLabelChangeLogDto>>> Handle(GetAgentLabelHistoryQuery q, CancellationToken ct)
+    {
+        if (q.AgentId == Guid.Empty)
+            return Result<IReadOnlyList<AgentLabelChangeLogDto>>.Failure(
+                Error.Validation("agentId", "Agent ID is required."));
+
+        var history = await svc.GetChangeLogAsync(q.AgentId, q.Limit, ct);
+        return Result<IReadOnlyList<AgentLabelChangeLogDto>>.Success(history);
+    }
+}
+
+public sealed class ReleaseAgentLabelSuppressionCommandHandler(ILabelService svc, IAgentAutoLabelingService autoLabeling)
     : IRequestHandler<ReleaseAgentLabelSuppressionCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(ReleaseAgentLabelSuppressionCommand cmd, CancellationToken ct)
     {
-        var released = await svc.ReleaseSuppressionAsync(cmd.SuppressionId, ct);
-        return released
-            ? Result<VoidResult>.Success(VoidResult.Value)
-            : Result<VoidResult>.Failure(Error.NotFound($"Suppression {cmd.SuppressionId} not found"));
+        var agentId = await svc.ReleaseSuppressionAsync(cmd.SuppressionId, ct);
+        if (agentId is null)
+            return Result<VoidResult>.Failure(Error.NotFound($"Suppression {cmd.SuppressionId} not found"));
+
+        // Reavalia o agente imediatamente: antes a label so voltava na reconciliacao
+        // seguinte (ate 10 min), mesmo com o usuario pedindo a liberacao agora.
+        try
+        {
+            await autoLabeling.EvaluateAgentAsync(
+                agentId.Value,
+                $"suppression-released:{cmd.SuppressionId}",
+                "system",
+                ct);
+        }
+        catch (Exception)
+        {
+            // Best-effort: a reconciliacao periodica tambem reaplica a label.
+        }
+
+        return Result<VoidResult>.Success(VoidResult.Value);
     }
 }
 
@@ -158,7 +190,7 @@ public sealed class ListLabelRulesQueryHandler(ILabelService svc)
         var rules = await svc.GetRulesAsync(q.IncludeDisabled, ct);
         var dtos = rules.Select(r => new LabelRuleDto(
             r.Id, r.Name, r.Label, r.Description, r.IsEnabled,
-            r.ApplyMode.ToString(), r.ExpressionJson,
+            r.ApplyMode.ToString(), AgentLabelExpressionJson.DeserializeOrDefault(r.ExpressionJson),
             r.CreatedBy, r.CreatedAt, r.UpdatedAt
         )).ToList().AsReadOnly();
         return Result<IReadOnlyList<LabelRuleDto>>.Success(dtos);
@@ -176,7 +208,7 @@ public sealed class GetLabelRuleByIdQueryHandler(ILabelService svc)
 
         return Result<LabelRuleDto>.Success(new LabelRuleDto(
             rule.Id, rule.Name, rule.Label, rule.Description, rule.IsEnabled,
-            rule.ApplyMode.ToString(), rule.ExpressionJson,
+            rule.ApplyMode.ToString(), AgentLabelExpressionJson.DeserializeOrDefault(rule.ExpressionJson),
             rule.CreatedBy, rule.CreatedAt, rule.UpdatedAt));
     }
 }
@@ -294,6 +326,13 @@ public sealed class DryRunLabelRuleQueryHandler(IAgentAutoLabelingService svc)
         if (q.Request.Expression is null)
             return Result<AgentLabelRuleDryRunResponse>.Failure(Error.Validation("expression", "Expression is required."));
 
+        // Valida a ESTRUTURA (profundidade, nos, filhos, disco-em-grupo, regex): uma
+        // previa com expressao fora dos limites consumia recursos sem necessidade.
+        var expressionErrors = AgentLabelExpressionValidator.Validate(q.Request.Expression);
+        if (expressionErrors.Count > 0)
+            return Result<AgentLabelRuleDryRunResponse>.Failure(
+                Error.Validation("expression", string.Join(" ", expressionErrors)));
+
         try
         {
             var response = await svc.DryRunAsync(q.Request, ct);
@@ -307,5 +346,84 @@ public sealed class DryRunLabelRuleQueryHandler(IAgentAutoLabelingService svc)
         {
             return Result<AgentLabelRuleDryRunResponse>.Failure(Error.Internal($"Falha ao executar prévia da regra: {ex.Message}"));
         }
+    }
+}
+
+/// <summary>
+/// Previa em lote: valida a lista uma vez e avalia todos os agentes em uma unica
+/// passagem no servidor, em vez de a UI fazer uma requisicao por agente.
+/// </summary>
+public sealed class DryRunLabelRuleBatchQueryHandler(IAgentAutoLabelingService svc)
+    : IRequestHandler<DryRunLabelRuleBatchQuery, Result<IReadOnlyList<AgentLabelRuleDryRunResponse>>>
+{
+    private const int MaxAgentsPerRequest = 500;
+
+    public async Task<Result<IReadOnlyList<AgentLabelRuleDryRunResponse>>> Handle(
+        DryRunLabelRuleBatchQuery q,
+        CancellationToken ct)
+    {
+        if (q.Request.Expression is null)
+            return Result<IReadOnlyList<AgentLabelRuleDryRunResponse>>.Failure(
+                Error.Validation("expression", "Expression is required."));
+
+        var expressionErrors = AgentLabelExpressionValidator.Validate(q.Request.Expression);
+        if (expressionErrors.Count > 0)
+            return Result<IReadOnlyList<AgentLabelRuleDryRunResponse>>.Failure(
+                Error.Validation("expression", string.Join(" ", expressionErrors)));
+
+        if (q.Request.AgentIds is null || q.Request.AgentIds.Count == 0)
+            return Result<IReadOnlyList<AgentLabelRuleDryRunResponse>>.Failure(
+                Error.Validation("agentIds", "Informe ao menos um agente para a prévia."));
+
+        if (q.Request.AgentIds.Count > MaxAgentsPerRequest)
+            return Result<IReadOnlyList<AgentLabelRuleDryRunResponse>>.Failure(
+                Error.Validation("agentIds", $"No máximo {MaxAgentsPerRequest} agentes por prévia."));
+
+        try
+        {
+            var response = await svc.DryRunBatchAsync(q.Request, ct);
+            return Result<IReadOnlyList<AgentLabelRuleDryRunResponse>>.Success(response);
+        }
+        catch (Exception ex)
+        {
+            return Result<IReadOnlyList<AgentLabelRuleDryRunResponse>>.Failure(
+                Error.Internal($"Falha ao executar prévia em lote: {ex.Message}"));
+        }
+    }
+}
+
+/// <summary>Historico de versoes (configuracao) de uma regra de label.</summary>
+public sealed class GetLabelRuleVersionsQueryHandler(ILabelService svc)
+    : IRequestHandler<GetLabelRuleVersionsQuery, Result<IReadOnlyList<LabelRuleVersionDto>>>
+{
+    public async Task<Result<IReadOnlyList<LabelRuleVersionDto>>> Handle(GetLabelRuleVersionsQuery q, CancellationToken ct)
+    {
+        if (q.RuleId == Guid.Empty)
+            return Result<IReadOnlyList<LabelRuleVersionDto>>.Failure(
+                Error.Validation("ruleId", "Rule ID is required."));
+
+        var versions = await svc.GetRuleVersionsAsync(q.RuleId, q.Limit, ct);
+        return Result<IReadOnlyList<LabelRuleVersionDto>>.Success(versions);
+    }
+}
+
+/// <summary>Exporta todas as regras no formato portavel de import/export.</summary>
+public sealed class ExportLabelRulesQueryHandler(ILabelService svc)
+    : IRequestHandler<ExportLabelRulesQuery, Result<IReadOnlyList<AgentLabelRuleExportDto>>>
+{
+    public async Task<Result<IReadOnlyList<AgentLabelRuleExportDto>>> Handle(ExportLabelRulesQuery q, CancellationToken ct)
+    {
+        var rules = await svc.GetRulesAsync(includeDisabled: true, ct);
+        var dtos = rules.Select(rule => new AgentLabelRuleExportDto
+        {
+            Name = rule.Name,
+            Label = rule.Label,
+            Description = rule.Description,
+            ApplyMode = rule.ApplyMode.ToString(),
+            IsEnabled = rule.IsEnabled,
+            Expression = AgentLabelExpressionJson.DeserializeOrDefault(rule.ExpressionJson)
+        }).ToList().AsReadOnly();
+
+        return Result<IReadOnlyList<AgentLabelRuleExportDto>>.Success(dtos);
     }
 }

@@ -248,7 +248,13 @@ public static class AgentLabelExpressionValidator
                 return;
             }
 
-            if (customFieldTypes is null || !customFieldTypes.TryGetValue(customFieldDefinitionId.Value, out var dataType))
+            // Sem o mapa de tipos (ex.: previa que so valida a ESTRUTURA da arvore) nao
+            // ha como checar operador/tipo do custom field; os checks estruturais acima
+            // ja foram aplicados.
+            if (customFieldTypes is null)
+                return;
+
+            if (!customFieldTypes.TryGetValue(customFieldDefinitionId.Value, out var dataType))
             {
                 errors.Add($"{path}: custom field definition '{customFieldDefinitionId}' was not found or is not active.");
                 return;

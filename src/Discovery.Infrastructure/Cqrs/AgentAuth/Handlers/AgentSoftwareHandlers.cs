@@ -22,7 +22,8 @@ public sealed class GetAgentSoftwareHandler(
 
 public sealed class ReportAgentSoftwareHandler(
     IAgentSoftwareRepository softwareRepo,
-    ILogger<ReportAgentSoftwareHandler>? logger = null
+    ILogger<ReportAgentSoftwareHandler>? logger = null,
+    ILabelRevaluationQueue? revaluationQueue = null
 ) : IRequestHandler<ReportAgentSoftwareCommand, Result<VoidResult>>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -37,6 +38,10 @@ public sealed class ReportAgentSoftwareHandler(
             var collectedAt = cmd.CollectedAt ?? DateTime.UtcNow;
             var entries = ParseSoftwareEntries(cmd.Software);
             await softwareRepo.ReplaceInventoryAsync(cmd.AgentId, collectedAt, entries);
+
+            // Agendamento debounced: no-op quando AgentLabeling:TriggerOnInventorySync=false.
+            revaluationQueue?.Schedule(cmd.AgentId);
+
             return Result<VoidResult>.Success(VoidResult.Value);
         }
         catch (Exception ex)
