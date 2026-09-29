@@ -229,7 +229,9 @@ public class AiChatToolOrchestrator
 
             "list_ticket_templates" => "Lista os templates (modelos) de abertura de chamado disponíveis para esta máquina/cliente, incluindo os campos personalizados de cada um (tipo, obrigatório, opções, máscara). Use SEMPRE antes de abrir um chamado: se houver templates, apresente as opções ao usuário (preferencialmente renderizando um formulário A2UI); se não houver, siga o fluxo normal de create_ticket.",
 
-            "create_ticket" => "Abre um chamado de suporte técnico para a equipe de TI. Use APENAS quando: (a) você não conseguiu resolver o problema com as ferramentas disponíveis, ou (b) o usuário solicitou explicitamente abrir um chamado. NÃO abra chamado sem antes tentar resolver o problema ou sem confirmar os dados com o usuário. Parâmetros obrigatórios: title (título resumido, ex: 'Instalação do Foxit Reader no DESKTOP-ABC'), description (detalhamento completo do problema, ações já tentadas e contexto), category (Software, Hardware, Rede, Impressora, Acesso/Senha, Outro) e priority (Baixa, Média, Alta — avalie pelo impacto e urgência). Quando um template foi escolhido, envie também templateId e answers (respostas do mini questionário do template, chave->valor); envie customFields apenas para os campos personalizados do departamento (definitionId->valor). NUNCA envie parâmetros vazios — extraia do histórico da conversa.",
+            "list_tickets" => "Lista os chamados vinculados a esta máquina em formato resumido (id, title, description curta, category, priority, workflowStateId, isOpen, createdAt, closedAt), com os ABERTOS primeiro e os contadores total/openCount/returned/truncated. Chame SEMPRE antes de create_ticket para verificar se já existe chamado ABERTO (isOpen=true, equivalente a ClosedAt nulo) sobre o MESMO assunto e evitar chamado duplicado. Se existir, NÃO abra duplicata: informe o usuário e ofereça complementar o chamado existente com add_ticket_comment. Se truncated=true, existem chamados fora do recorte — não conclua que não há duplicata sem considerar isso. Use get_ticket_details(ticketId) para o texto completo. Use também quando o usuário perguntar quais chamados ele tem.",
+
+            "create_ticket" => "Abre um chamado de suporte técnico para a equipe de TI. Use APENAS quando: (a) você não conseguiu resolver o problema com as ferramentas disponíveis, ou (b) o usuário solicitou explicitamente abrir um chamado. PRÉ-REQUISITO ANTIDUPLICIDADE (OBRIGATÓRIO): antes de abrir, chame list_tickets e confirme que NÃO existe chamado aberto (ClosedAt nulo) sobre o mesmo assunto; se existir, NÃO abra um novo chamado — avise o usuário e ofereça complementar o existente via add_ticket_comment. Só abra um chamado novo se o usuário confirmar explicitamente que é um problema diferente. NÃO abra chamado sem antes tentar resolver o problema ou sem confirmar os dados com o usuário. Parâmetros obrigatórios: title (título resumido, ex: 'Instalação do Foxit Reader no DESKTOP-ABC'), description (detalhamento completo do problema, ações já tentadas e contexto), category (Software, Hardware, Rede, Impressora, Acesso/Senha, Outro) e priority (Baixa, Média, Alta — avalie pelo impacto e urgência). Quando um template foi escolhido, envie também templateId e answers (respostas do mini questionário do template, chave->valor); envie customFields apenas para os campos personalizados do departamento (definitionId->valor). NUNCA envie parâmetros vazios — extraia do histórico da conversa.",
 
             _ => null
         };
@@ -249,6 +251,7 @@ public class AiChatToolOrchestrator
         var hasInstallPackage = false;
         var hasAskUser = false;
         var hasTicketTemplates = false;
+        var hasListTickets = false;
 
         foreach (var tool in tools)
         {
@@ -262,6 +265,7 @@ public class AiChatToolOrchestrator
             if (tool.Name == "install_package") hasInstallPackage = true;
             if (tool.Name == "ask_user") hasAskUser = true;
             if (tool.Name == "list_ticket_templates") hasTicketTemplates = true;
+            if (tool.Name == "list_tickets") hasListTickets = true;
         }
         sb.AppendLine();
 
@@ -280,9 +284,12 @@ public class AiChatToolOrchestrator
         if (hasTicketTemplates)
             sb.AppendLine(" `list_ticket_templates`: use ANTES de abrir um chamado para conhecer os modelos disponíveis. Se houver modelos, apresente as opções (A2UI ou ask_user) e use o escolhido em `create_ticket` via `templateId`; preencha `customFields` com os valores informados.");
 
+        if (hasListTickets)
+            sb.AppendLine(" `list_tickets`: lista os chamados da máquina (abertos e encerrados, com `ClosedAt`). OBRIGATÓRIO antes de `create_ticket`: se já houver chamado ABERTO (`ClosedAt` nulo) sobre o mesmo assunto, NÃO abra duplicata — avise o usuário e ofereça `add_ticket_comment` no chamado existente.");
+
         if (hasCreateTicket)
         {
-            sb.AppendLine(" `create_ticket`: use APENAS quando esgotou as tentativas de solução OU o usuário pediu explicitamente. Preencha title, description, category e priority baseado no que foi discutido. Só execute APÓS confirmação do usuário. Quando um template foi escolhido, envie `templateId` e `customFields`.");
+            sb.AppendLine(" `create_ticket`: use APENAS quando esgotou as tentativas de solução OU o usuário pediu explicitamente. ANTES de abrir, confirme com `list_tickets` que não existe chamado aberto sobre o mesmo assunto (sem duplicidade). Preencha title, description, category e priority baseado no que foi discutido. Só execute APÓS confirmação do usuário. Quando um template foi escolhido, envie `templateId` e `customFields`.");
             // Departamento é obrigatório na API: sem ele o chamado nasce sem
             // responsável/perfil (SLA), então a IA precisa escolher ou perguntar.
             sb.AppendLine(" `create_ticket` EXIGE `departmentId` (obrigatório). Antes de abrir, chame `list_departments` e escolha o departamento que melhor se enquadra no relato; se não conseguir decidir, use `ask_user` mostrando os departamentos e só abra após a resposta.");

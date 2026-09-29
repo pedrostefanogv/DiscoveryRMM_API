@@ -77,7 +77,7 @@ Você pode, quando fizer sentido, enriquecer sua resposta com uma interface inte
 ```
 Ao rotular os modelos para o usuário use `title` (nome exibido); `name` é a chave técnica do modelo e não deve ser mostrada.
 Passo 2, ao receber a ação `template_selected`, monte o formulário do **questionário do modelo** a partir do array `questions` retornado por `list_ticket_templates` (um componente por pergunta). Texto usa `TextField` (com `value` inicial vazio), Dropdown usa `ChoicePicker` (`value` + `options` da pergunta), Sim/Não usa `CheckBox`, Data/Data-Hora usa `DateTimeInput`, ListBox usa `TextField`. Preencha sempre o `value` exigido por cada componente e sinalize as perguntas com `isRequired`. Inclua `inputMask`/`validationRegex`/`helpText` no próprio label quando existirem. Finalize com um `Button` enviando a ação `create_ticket_from_template` e as respostas no `context`.
-Passo 3, ao receber `create_ticket_from_template`, chame `create_ticket` com `templateId` e `answers` (chave da pergunta → valor). Os `customFields` (campos personalizados do departamento) são SEPARADOS do questionário: eles existem em todo chamado do departamento, com a obrigatoriedade de cada campo, e devem ser preenchidos apenas se o usuário os informar. NÃO re-renderize formulário após a criação — apenas o resumo em markdown.
+Passo 3, ao receber `create_ticket_from_template`, cumpra a verificação de duplicidade (`list_tickets`): se já existir chamado aberto sobre o mesmo assunto, NÃO crie — avise o usuário e ofereça `add_ticket_comment` no existente. Sem duplicata, chame `create_ticket` com `templateId` e `answers` (chave da pergunta → valor). Os `customFields` (campos personalizados do departamento) são SEPARADOS do questionário: eles existem em todo chamado do departamento, com a obrigatoriedade de cada campo, e devem ser preenchidos apenas se o usuário os informar. NÃO re-renderize formulário após a criação — apenas o resumo em markdown.
 
 **REGRAS:**
 - Cada linha do bloco `a2ui` DEVE ser um JSON válido com `"version":"v0.9"` e um dos verbos: `createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`.
@@ -85,6 +85,40 @@ Passo 3, ao receber `create_ticket_from_template`, chame `create_ticket` com `te
 - Fora do bloco `a2ui`, escreva texto/markdown normal que complementa a interface (ex.: uma frase explicando o que o usuário vê).
 - Se não tiver certeza do JSON, NÃO emita A2UI — use markdown normal.
 """;
+
+    /// <summary>
+    /// Seção anti-duplicidade de chamados. Aplicada SEMPRE (inclusive em
+    /// templates customizados do banco) para que a IA consulte os chamados
+    /// existentes da máquina antes de abrir um novo e não gere duplicatas.
+    /// </summary>
+    public const string TicketDedupSection = """
+###  DEDUPLICAÇÃO DE CHAMADOS (OBRIGATÓRIA)
+Antes de abrir QUALQUER chamado, verifique se já existe um chamado aberto sobre o mesmo assunto para esta máquina. Nunca abra chamado duplicado.
+
+1. **Consulte os chamados existentes:** chame `list_tickets`. Ele devolve um resumo dos chamados vinculados a esta máquina — abertos E encerrados — com `id`, `title`, `description` (curta), `category`, `priority`, `workflowStateId`, `isOpen`, `createdAt` e `closedAt`. Os abertos vêm primeiro. Use `get_ticket_details(ticketId)` somente se precisar do texto completo de algum chamado.
+2. **Chamado aberto = item com `isOpen: true`** (equivalente a `ClosedAt` nulo/ausente). Chamado com `isOpen: false` já foi encerrado e NÃO bloqueia uma nova abertura.
+3. **Compare o relato atual com `Title` e `Description` dos chamados abertos** procurando o MESMO problema (mesmo software, mesmo erro, mesma impressora/equipamento, mesma solicitação).
+4. **Se existir chamado aberto do mesmo assunto:**
+   - NÃO chame `create_ticket` — isso criaria uma duplicata.
+   - Avise o usuário em linguagem natural: "Já existe um chamado aberto sobre isso: <título> (aberto em <data>)."
+   - Ofereça as opções: complementar o chamado existente com `add_ticket_comment` (pergunte o que deseja acrescentar) ou continuar o atendimento por ele. Se o usuário pedir detalhes, use `get_ticket_details`.
+   - Só abra um chamado NOVO se o usuário disser EXPLICITAMENTE que é um problema diferente ou que quer um chamado novo mesmo assim.
+5. **Se os chamados abertos forem de assuntos diferentes**, prossiga com a abertura normal — cite apenas os realmente relacionados ao relato atual.
+6. **Se `list_tickets` falhar ou vier vazio (`total: 0`)**, siga com a abertura normal. NUNCA invente chamados existentes. Se vier com `truncated: true` e nenhum aberto semelhante no recorte, seja transparente com o usuário: pode existir um chamado antigo fora da lista — confirme o assunto antes de abrir.
+7. Quando o usuário apenas perguntar se há chamados abertos, use `list_tickets` e responda com base nos chamados abertos (`ClosedAt` nulo) — sem mencionar ferramentas ou consultas internas.
+""";
+
+    /// <summary>
+    /// Garante que o prompt final contenha a seção anti-duplicidade de chamados,
+    /// inclusive quando o template vem do banco (prompt customizado) e não
+    /// inclui a seção de fluxo de chamados do prompt default.
+    /// </summary>
+    public static string EnsureTicketDedupSection(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt)) return prompt;
+        if (prompt.Contains("DEDUPLICAÇÃO DE CHAMADOS", StringComparison.OrdinalIgnoreCase)) return prompt;
+        return prompt + "\n\n" + TicketDedupSection;
+    }
 
     /// <summary>
     /// Constrói o system prompt padrão com contexto do agent.
@@ -133,11 +167,12 @@ Passo 3, ao receber `create_ticket_from_template`, chame `create_ticket` com `te
 
 **ABERTURA DE CHAMADO**
 Quando o usuário solicitar abrir um chamado (ex.: ""abra um chamado"", ""quero abrir chamado""):
+0. **VERIFICAÇÃO DE DUPLICIDADE (OBRIGATÓRIA):** chame `list_tickets` ANTES de qualquer abertura e procure chamados ABERTOS (`isOpen: true`, `ClosedAt` nulo) sobre o MESMO assunto. Se encontrar, NÃO chame `create_ticket` — siga a seção DEDUPLICAÇÃO DE CHAMADOS (avise o usuário e ofereça complementar o chamado existente). A verificação vale também para abertura por template (`create_ticket_from_template`).
 1. Chame `list_ticket_templates` para descobrir se existem modelos de abertura disponíveis para esta máquina/cliente.
 1b. Chame `list_departments` e escolha o DEPARTAMENTO responsável pelo atendimento (define quem atende e o SLA): use o que melhor se enquadra no relato do usuário. Se houver dúvida, pergunte ao usuário com as opções e aguarde a resposta. O `departmentId` é OBRIGATÓRIO em `create_ticket`.
 2. **Se houver modelos:** apresente as opções ao usuário usando o campo `title` de cada modelo como rótulo (`name` é apenas a chave técnica) (preferencialmente com uma interface A2UI com ChoicePicker + botão). O usuário pode escolher um modelo OU abrir normalmente sem template — nunca force o uso de um modelo.
    - Ao escolher um modelo, renderize o formulário A2UI com as PERGUNTAS do modelo (array `questions`) e aguarde o usuário enviar as respostas (ver receita em INTERFACES RICAS).
-   - Ao receber a ação `create_ticket_from_template`, chame `create_ticket` enviando `templateId` e `answers` (pergunta→valor). Os campos personalizados do departamento (`customFields`) são independentes e sempre existem no chamado, conforme a configuração de cada campo.
+   - Ao receber a ação `create_ticket_from_template`, verifique antes se já existe chamado aberto do mesmo assunto (`list_tickets`); sem duplicata, chame `create_ticket` enviando `templateId` e `answers` (pergunta→valor). Os campos personalizados do departamento (`customFields`) são independentes e sempre existem no chamado, conforme a configuração de cada campo.
    - Se o usuário preferir não usar modelo, siga o passo 3.
 3. **Sem modelos (ou usuário sem template):** monte a proposta (Título, Descrição, Categoria, Prioridade) com base no que já foi discutido e peça confirmação UMA única vez:
    ""Montei a solicitação de suporte com esses dados:
@@ -146,11 +181,13 @@ Quando o usuário solicitar abrir um chamado (ex.: ""abra um chamado"", ""quero 
    - **Categoria:** ...
    - **Prioridade:** ...
    Posso abrir o chamado para você?""
-4. **Assim que o usuário confirmar (mesmo com ""sim"", ""abra"", ""prossiga"", ""pode abrir""), emita a function call `create_ticket` NO MESMO TURNO (não esqueça o `departmentId` escolhido no passo 1b).** Não repita ""vou abrir"", não tente coletar mais dados e não chame ferramentas de diagnóstico extras — apenas crie o chamado com os dados já coletados.
+4. **Assim que o usuário confirmar (mesmo com ""sim"", ""abra"", ""prossiga"", ""pode abrir""), emita a function call `create_ticket` NO MESMO TURNO (não esqueça o `departmentId` escolhido no passo 1b e a verificação de duplicidade do passo 0).** Não repita ""vou abrir"", não tente coletar mais dados e não chame ferramentas de diagnóstico extras — apenas crie o chamado com os dados já coletados.
 5. Após criar, responda com o resumo em markdown (protocolo, título, departamento, prioridade, categoria e campos enviados) — somente leitura.
 
 **CONSULTA DE CHAMADOS**
-Quando o usuário perguntar se existem chamados abertos para a máquina (ex.: ""tem algum chamado aberto?"", ""quais são meus chamados?""), use a ferramenta de listagem de chamados disponível (`list_tickets`) e responda com base no resultado. NUNCA diga ""deixa eu verificar"" e encerre o turno sem executar a ferramenta.
+Quando o usuário perguntar se existem chamados abertos para a máquina (ex.: ""tem algum chamado aberto?"", ""quais são meus chamados?""), use a ferramenta de listagem de chamados disponível (`list_tickets`) e responda com base no resultado, mostrando apenas os abertos (`ClosedAt` nulo). NUNCA diga ""deixa eu verificar"" e encerre o turno sem executar a ferramenta.
+
+" + TicketDedupSection + $@"
 
 ---
 
@@ -256,6 +293,11 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
                 basePrompt += A2uiPromptSection;
             }
         }
+
+        // Anti-duplicidade de chamados: garantida SEMPRE, inclusive para
+        // templates customizados do banco que não trazem o fluxo de chamados.
+        basePrompt = EnsureTicketDedupSection(basePrompt);
+
         var injected = new List<Guid>();
 
         if (!aiSettings.KnowledgeBaseEnabled || !aiSettings.EmbeddingEnabled || !aiSettings.EmbeddingArticlesEnabled)
