@@ -86,6 +86,7 @@ public class AgentLabelRuleRepository : IAgentLabelRuleRepository
         target.Description = source.Description;
         target.IsEnabled = source.IsEnabled;
         target.ApplyMode = source.ApplyMode;
+        target.LabelMatch = source.LabelMatch;
         target.ExpressionJson = source.ExpressionJson;
         target.UpdatedBy = source.UpdatedBy;
     }
@@ -164,6 +165,7 @@ public class AgentLabelRuleRepository : IAgentLabelRuleRepository
         Description = rule.Description,
         IsEnabled = rule.IsEnabled,
         ApplyMode = rule.ApplyMode,
+        LabelMatch = rule.LabelMatch,
         ExpressionJson = rule.ExpressionJson,
         ChangedBy = changedBy,
         ChangedAt = DateTime.UtcNow

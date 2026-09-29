@@ -1,5 +1,6 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 
 namespace Discovery.Core.Interfaces;
 
@@ -10,7 +11,7 @@ public interface ILabelService
 
     /// <summary>Labels de varios agentes em uma unica consulta.</summary>
     Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default);
-    Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default);
+    Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, AgentLabelSourceType? sourceType, CancellationToken ct = default);
     Task<AgentLabel?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<AgentLabel> AddAsync(AgentLabel label, CancellationToken ct = default);
 
@@ -39,6 +40,11 @@ public interface ILabelService
 
     /// <summary>Versoes de uma regra (auditoria de configuracao), mais recente primeiro.</summary>
     Task<IReadOnlyList<LabelRuleVersionDto>> GetRuleVersionsAsync(Guid ruleId, int limit, CancellationToken ct = default);
+
+    // Labels protegidas (modo Remover)
+    Task<IReadOnlyList<AgentLabelProtectedLabelDto>> GetProtectedLabelsAsync(CancellationToken ct = default);
+    Task<AgentLabelProtectedLabelDto> AddProtectedLabelAsync(string label, string? createdBy, CancellationToken ct = default);
+    Task<bool> RemoveProtectedLabelAsync(Guid id, CancellationToken ct = default);
 
     // Agents matched by a rule
     Task<(int Total, IReadOnlyList<AgentLabelRuleAgentResponse> Agents)> GetAgentsByRuleIdPagedAsync(

@@ -222,7 +222,7 @@ public class SendScopeNotificationCommandHandlerTests
             => Task.FromResult(AgentIdsByLabel.TryGetValue(label, out var v) ? v.Length : 0);
         public Task<IReadOnlyList<AgentLabelUsageDto>> GetLabelUsageAsync(int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabelUsageDto>>([]);
-        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, AgentLabelSourceType? sourceType, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
         public Task<AgentLabel?> GetByIdAsync(Guid id) => Task.FromResult<AgentLabel?>(null);
         public Task SuppressAutomaticLabelAsync(Guid agentId, string label, string? suppressedBy, CancellationToken ct = default) => Task.CompletedTask;
         public Task ClearSuppressionAsync(Guid agentId, string label, CancellationToken ct = default) => Task.CompletedTask;
@@ -231,5 +231,10 @@ public class SendScopeNotificationCommandHandlerTests
         public Task<Guid?> ReleaseSuppressionAsync(Guid suppressionId, CancellationToken ct = default) => Task.FromResult<Guid?>(null);
         public Task<AgentLabel> AddAsync(AgentLabel label) => Task.FromResult(label);
         public Task DeleteAsync(Guid id) => Task.CompletedTask;
+        public Task<IReadOnlyList<AgentLabelProtectedLabel>> GetProtectedLabelsAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelProtectedLabel>>([]);
+        public Task<AgentLabelProtectedLabel> AddProtectedLabelAsync(AgentLabelProtectedLabel protectedLabel, CancellationToken ct = default)
+            => Task.FromResult(protectedLabel);
+        public Task<bool> RemoveProtectedLabelAsync(Guid id, CancellationToken ct = default) => Task.FromResult(true);
     }
 }

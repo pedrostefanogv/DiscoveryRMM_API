@@ -129,6 +129,7 @@ public partial class DiscoveryDbContext
             entity.Property(rule => rule.Description).HasColumnName("description").HasMaxLength(2000);
             entity.Property(rule => rule.IsEnabled).HasColumnName("is_enabled");
             entity.Property(rule => rule.ApplyMode).HasColumnName("apply_mode").HasConversion<int>();
+            entity.Property(rule => rule.LabelMatch).HasColumnName("label_match").HasConversion<int>();
             entity.Property(rule => rule.ExpressionJson).HasColumnName("expression_json").HasColumnType("jsonb");
             entity.Property(rule => rule.CreatedBy).HasColumnName("created_by").HasMaxLength(256);
             entity.Property(rule => rule.UpdatedBy).HasColumnName("updated_by").HasMaxLength(256);
@@ -154,9 +155,24 @@ public partial class DiscoveryDbContext
             entity.Property(version => version.Description).HasColumnName("description").HasMaxLength(2000);
             entity.Property(version => version.IsEnabled).HasColumnName("is_enabled");
             entity.Property(version => version.ApplyMode).HasColumnName("apply_mode").HasConversion<int>();
+            entity.Property(version => version.LabelMatch).HasColumnName("label_match").HasConversion<int>();
             entity.Property(version => version.ExpressionJson).HasColumnName("expression_json").HasColumnType("jsonb");
             entity.Property(version => version.ChangedBy).HasColumnName("changed_by").HasMaxLength(256);
             entity.Property(version => version.ChangedAt).HasColumnName("changed_at").HasColumnType("timestamptz");
+        });
+
+        modelBuilder.Entity<AgentLabelProtectedLabel>(entity =>
+        {
+            entity.ToTable("agent_label_protected_labels");
+            entity.HasKey(protectedLabel => protectedLabel.Id);
+            entity.HasIndex(protectedLabel => protectedLabel.Label)
+                .IsUnique()
+                .HasDatabaseName("ux_agent_label_protected_labels_label");
+
+            entity.Property(protectedLabel => protectedLabel.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(protectedLabel => protectedLabel.Label).HasColumnName("label").HasMaxLength(120);
+            entity.Property(protectedLabel => protectedLabel.CreatedBy).HasColumnName("created_by").HasMaxLength(256);
+            entity.Property(protectedLabel => protectedLabel.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
         });
 
         modelBuilder.Entity<AgentLabel>(entity =>
@@ -225,6 +241,7 @@ public partial class DiscoveryDbContext
             entity.Property(log => log.SourceType).HasColumnName("source_type").HasConversion<int>();
             entity.Property(log => log.Action).HasColumnName("action").HasMaxLength(20);
             entity.Property(log => log.Reason).HasColumnName("reason").HasMaxLength(256);
+            entity.Property(log => log.RuleId).HasColumnName("rule_id");
             entity.Property(log => log.Actor).HasColumnName("actor").HasMaxLength(256);
             entity.Property(log => log.OccurredAt).HasColumnName("occurred_at").HasColumnType("timestamptz");
 

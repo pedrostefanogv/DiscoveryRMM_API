@@ -30,7 +30,8 @@ public sealed class LabelService : ILabelService
 
     public Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
         => _labels.GetByAgentIdsAsync(agentIds);
-    public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default) => _labels.GetDistinctLabelsAsync(limit, ct);
+    public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, AgentLabelSourceType? sourceType, CancellationToken ct = default)
+        => _labels.GetDistinctLabelsAsync(limit, sourceType, ct);
     public Task<AgentLabel?> GetByIdAsync(Guid id, CancellationToken ct = default) => _labels.GetByIdAsync(id);
     public Task<AgentLabel> AddAsync(AgentLabel label, CancellationToken ct = default) => _labels.AddAsync(label);
 
@@ -101,6 +102,59 @@ public sealed class LabelService : ILabelService
         await InvalidateEnabledRulesCacheAsync();
     }
 
+    public async Task<IReadOnlyList<AgentLabelProtectedLabelDto>> GetProtectedLabelsAsync(CancellationToken ct = default)
+    {
+        var protectedLabels = await _labels.GetProtectedLabelsAsync(ct);
+
+        return protectedLabels.Select(item => new AgentLabelProtectedLabelDto
+        {
+            Id = item.Id,
+            Label = item.Label,
+            CreatedBy = item.CreatedBy,
+            CreatedAt = item.CreatedAt
+        }).ToList().AsReadOnly();
+    }
+
+    public async Task<AgentLabelProtectedLabelDto> AddProtectedLabelAsync(string label, string? createdBy, CancellationToken ct = default)
+    {
+        var normalized = label.Trim();
+
+        // Idempotente por nome (case-insensitive) — o indice unico garante no banco.
+        var existing = await _labels.GetProtectedLabelsAsync(ct);
+        var current = existing.FirstOrDefault(item =>
+            string.Equals(item.Label, normalized, StringComparison.OrdinalIgnoreCase));
+
+        if (current is not null)
+        {
+            return new AgentLabelProtectedLabelDto
+            {
+                Id = current.Id,
+                Label = current.Label,
+                CreatedBy = current.CreatedBy,
+                CreatedAt = current.CreatedAt
+            };
+        }
+
+        var created = await _labels.AddProtectedLabelAsync(new AgentLabelProtectedLabel
+        {
+            Id = IdGenerator.NewId(),
+            Label = normalized,
+            CreatedBy = createdBy,
+            CreatedAt = DateTime.UtcNow
+        }, ct);
+
+        return new AgentLabelProtectedLabelDto
+        {
+            Id = created.Id,
+            Label = created.Label,
+            CreatedBy = created.CreatedBy,
+            CreatedAt = created.CreatedAt
+        };
+    }
+
+    public Task<bool> RemoveProtectedLabelAsync(Guid id, CancellationToken ct = default)
+        => _labels.RemoveProtectedLabelAsync(id, ct);
+
     public async Task<IReadOnlyList<LabelRuleVersionDto>> GetRuleVersionsAsync(Guid ruleId, int limit, CancellationToken ct = default)
     {
         var versions = await _rules.GetVersionsAsync(ruleId, limit, ct);
@@ -114,6 +168,7 @@ public sealed class LabelService : ILabelService
             Description = version.Description,
             IsEnabled = version.IsEnabled,
             ApplyMode = version.ApplyMode.ToString(),
+            LabelMatch = version.LabelMatch.ToString(),
             Expression = AgentLabelExpressionJson.DeserializeOrDefault(version.ExpressionJson),
             ChangedBy = version.ChangedBy,
             ChangedAt = version.ChangedAt

@@ -30,7 +30,7 @@ public class AgentLabelsControllerContractTests
     {
         var mediator = new CapturingMediator();
         mediator.Responder = _ => Result<LabelRuleDto>.Success(new LabelRuleDto(
-            RuleId, "r", "L", null, true, "ApplyAndRemove", TextExpression(), null, DateTime.UtcNow, DateTime.UtcNow));
+            RuleId, "r", "L", null, true, "ApplyAndRemove", "Exact", TextExpression(), null, DateTime.UtcNow, DateTime.UtcNow));
         var controller = BuildController(mediator);
 
         var result = await controller.CreateRule(new CreateAgentLabelRuleRequest
@@ -38,6 +38,7 @@ public class AgentLabelsControllerContractTests
             Name = "Windows PROD",
             Label = "PROD",
             ApplyMode = AgentLabelApplyMode.ApplyAndRemove,
+            LabelMatch = AgentLabelLabelMatch.Prefix,
             Expression = TextExpression()
         });
 
@@ -48,6 +49,7 @@ public class AgentLabelsControllerContractTests
             "A expressao (objeto) precisa ser serializada para o command.");
         Assert.That(serialized.Children[0].Field, Is.EqualTo(AgentLabelField.OperatingSystem));
         Assert.That(command.CreatedBy, Is.EqualTo("user:" + UserId), "O ator vem do usuario autenticado.");
+        Assert.That(command.LabelMatch, Is.EqualTo("Prefix"), "O alvo do modo Remove precisa ser repassado.");
 
         Assert.That(result, Is.InstanceOf<CreatedAtActionResult>());
         var created = (LabelRuleDto)((CreatedAtActionResult)result).Value!;
@@ -60,7 +62,7 @@ public class AgentLabelsControllerContractTests
     {
         var mediator = new CapturingMediator();
         mediator.Responder = _ => Result<LabelRuleDto>.Success(new LabelRuleDto(
-            RuleId, "r2", "L2", null, true, "ApplyOnly", TextExpression(), null, DateTime.UtcNow, DateTime.UtcNow));
+            RuleId, "r2", "L2", null, true, "ApplyOnly", "Exact", TextExpression(), null, DateTime.UtcNow, DateTime.UtcNow));
         var controller = BuildController(mediator);
 
         var result = await controller.UpdateRule(RuleId, new UpdateAgentLabelRuleRequest

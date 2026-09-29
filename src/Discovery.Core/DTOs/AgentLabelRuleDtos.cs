@@ -24,6 +24,9 @@ public class CreateAgentLabelRuleRequest
     public string? Description { get; set; }
     public bool IsEnabled { get; set; } = true;
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
+
+    /// <summary>Só tem efeito no modo Remove (Exact/Prefix/Regex).</summary>
+    public AgentLabelLabelMatch LabelMatch { get; set; } = AgentLabelLabelMatch.Exact;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
 }
 
@@ -34,6 +37,9 @@ public class UpdateAgentLabelRuleRequest
     public string? Description { get; set; }
     public bool IsEnabled { get; set; } = true;
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
+
+    /// <summary>Só tem efeito no modo Remove (Exact/Prefix/Regex).</summary>
+    public AgentLabelLabelMatch LabelMatch { get; set; } = AgentLabelLabelMatch.Exact;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
 }
 
@@ -42,6 +48,9 @@ public class AgentLabelRuleDryRunRequest
     public Guid AgentId { get; set; }
     public string? Label { get; set; }
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
+
+    /// <summary>Só tem efeito no modo Remove (Exact/Prefix/Regex).</summary>
+    public AgentLabelLabelMatch LabelMatch { get; set; } = AgentLabelLabelMatch.Exact;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
 }
 
@@ -53,6 +62,9 @@ public class AgentLabelRuleDryRunBatchRequest
 {
     public string? Label { get; set; }
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
+
+    /// <summary>Só tem efeito no modo Remove (Exact/Prefix/Regex).</summary>
+    public AgentLabelLabelMatch LabelMatch { get; set; } = AgentLabelLabelMatch.Exact;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
     public IReadOnlyCollection<Guid> AgentIds { get; set; } = [];
 }
@@ -65,6 +77,9 @@ public class AgentLabelRuleImpactRequest
 {
     public string? Label { get; set; }
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
+
+    /// <summary>Só tem efeito no modo Remove (Exact/Prefix/Regex).</summary>
+    public AgentLabelLabelMatch LabelMatch { get; set; } = AgentLabelLabelMatch.Exact;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
     public Guid? ClientId { get; set; }
     public Guid? SiteId { get; set; }
@@ -94,6 +109,12 @@ public class AgentLabelRuleImpactSample
     public bool WouldAddLabel { get; set; }
     public bool WouldRemoveLabel { get; set; }
     public IReadOnlyList<string> CurrentAutomaticLabels { get; set; } = [];
+
+    /// <summary>Labels manuais presentes no agente amostrado.</summary>
+    public IReadOnlyList<string> CurrentManualLabels { get; set; } = [];
+
+    /// <summary>Labels manuais que a regra removeria neste agente.</summary>
+    public IReadOnlyList<string> RemovableLabels { get; set; } = [];
 }
 
 public class AgentLabelRuleDryRunResponse
@@ -104,6 +125,12 @@ public class AgentLabelRuleDryRunResponse
     public bool WouldAddLabel { get; set; }
     public bool WouldRemoveLabel { get; set; }
     public IReadOnlyList<string> CurrentAutomaticLabels { get; set; } = [];
+
+    /// <summary>Labels manuais presentes no agente (relevantes para o modo Remove).</summary>
+    public IReadOnlyList<string> CurrentManualLabels { get; set; } = [];
+
+    /// <summary>Labels manuais que uma regra Remove apagaria deste agente.</summary>
+    public IReadOnlyList<string> RemovableLabels { get; set; } = [];
 
     /// <summary>
     /// Diagnostico da previa: condicoes avaliadas como FALSAS para este agente.
@@ -149,6 +176,7 @@ public class LabelRuleVersionDto
     public string? Description { get; set; }
     public bool IsEnabled { get; set; }
     public string ApplyMode { get; set; } = string.Empty;
+    public string LabelMatch { get; set; } = string.Empty;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
     public string? ChangedBy { get; set; }
     public DateTime ChangedAt { get; set; }
@@ -173,6 +201,10 @@ public class AgentLabelRuleExportDto
     /// <summary>Aceita "ApplyOnly" (export) ou 0 (arquivo editado a mao).</summary>
     [JsonConverter(typeof(StringOrNumberJsonConverter))]
     public string ApplyMode { get; set; } = string.Empty;
+
+    /// <summary>Aceita "Exact" (export) ou 0. Ausente = Exact (arquivos antigos).</summary>
+    [JsonConverter(typeof(StringOrNumberJsonConverter))]
+    public string LabelMatch { get; set; } = "Exact";
     public bool IsEnabled { get; set; } = true;
     public AgentLabelRuleExpressionNodeDto Expression { get; set; } = new();
 }

@@ -28,6 +28,14 @@ public static class LabelingMetrics
     public static readonly Counter<long> LabelsRemoved = Meter.CreateCounter<long>(
         "agent_labeling.labels_removed", unit: "labels", description: "Labels automaticas removidas.");
 
+    /// <summary>Labels MANUAIS removidas por regras no modo Remover.</summary>
+    public static readonly Counter<long> ManualLabelsRemoved = Meter.CreateCounter<long>(
+        "agent_labeling.manual_labels_removed", unit: "labels", description: "Labels manuais removidas pelo modo Remove.");
+
+    /// <summary>Conflitos de concorrencia (linha ja removida por outro avaliador).</summary>
+    public static readonly Counter<long> ConcurrencyConflicts = Meter.CreateCounter<long>(
+        "agent_labeling.concurrency_conflicts", unit: "conflicts", description: "Conflitos de concorrencia ao gravar labels.");
+
     /// <summary>Conflitos de unicidade ao gravar um lote (corrida entre avaliadores).</summary>
     public static readonly Counter<long> UniqueConflicts = Meter.CreateCounter<long>(
         "agent_labeling.unique_conflicts", unit: "conflicts", description: "Conflitos de unicidade ao gravar labels.");

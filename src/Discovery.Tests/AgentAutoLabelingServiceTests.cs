@@ -124,6 +124,12 @@ public class AgentAutoLabelingServiceTests
         Assert.That(logs[0].Action, Is.EqualTo("Added"));
         Assert.That(logs[0].Label, Is.EqualTo("PROD"));
         Assert.That(logs[0].Reason, Is.EqualTo("first"));
+        Assert.That(logs[0].RuleId, Is.EqualTo(fx.RuleId),
+            "O historico precisa atribuir QUAL regra aplicou a label (diagnostico de oscilacoes).");
+
+        // O DTO consultado pela UI resolve o nome da regra.
+        var history = await fx.LabelRepository.GetChangeLogAsync(fx.AgentId, 10);
+        Assert.That(history[0].RuleName, Is.EqualTo("Servidores"));
 
         var agent = await fx.Db.Agents.SingleAsync(a => a.Id == fx.AgentId);
         agent.Hostname = "WORKSTATION-99";
@@ -645,6 +651,271 @@ public class AgentAutoLabelingServiceTests
             "Aplicar uma label deve ser observavel em agent_labeling.labels_added.");
     }
 
+    // -------------------------------------------------------------------------
+    // Modo Remover (labels manuais)
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task Remove_Exact_RemovesManualLabelWhenMatched()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-PROD-01", applyMode: AgentLabelApplyMode.Remove);
+        AddManualLabel(fx, "PROD");
+        await fx.Db.SaveChangesAsync();
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "remove-rule");
+
+        Assert.That(await fx.Db.AgentLabels.CountAsync(), Is.EqualTo(0),
+            "A condicao casou e a label manual deve ser removida.");
+        Assert.That(await fx.Db.AgentLabelRuleMatches.CountAsync(), Is.EqualTo(1),
+            "O match da regra Remove e registrado para exibicao/progresso.");
+
+        var logs = await fx.Db.AgentLabelChangeLogs.AsNoTracking().ToListAsync();
+        Assert.That(logs, Has.Count.EqualTo(1));
+        Assert.That(logs[0].Action, Is.EqualTo("Removed"));
+        Assert.That(logs[0].SourceType, Is.EqualTo(AgentLabelSourceType.Manual));
+        Assert.That(logs[0].RuleId, Is.EqualTo(fx.RuleId),
+            "A remocao pelo modo Remove deve apontar a regra responsavel.");
+    }
+
+    [Test]
+    public async Task Remove_Exact_KeepsManualLabelWhenNotMatched()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "WORKSTATION-01", applyMode: AgentLabelApplyMode.Remove);
+        AddManualLabel(fx, "PROD");
+        await fx.Db.SaveChangesAsync();
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "no-match");
+
+        Assert.That(await fx.Db.AgentLabels.CountAsync(), Is.EqualTo(1),
+            "Condicao falsa nao remove nada.");
+    }
+
+    [Test]
+    public async Task Remove_TouchesOnlyManualLabels()
+    {
+        // Regra Remove aponta para TEMP-X; uma regra ADITIVA mantem a automatica PROD.
+        await using var fx = await Fixture.CreateAsync(
+            hostname: "SRV-PROD-01",
+            applyMode: AgentLabelApplyMode.Remove,
+            ruleLabel: "TEMP-X");
+
+        fx.Db.AgentLabelRules.Add(new AgentLabelRule
+        {
+            Id = Guid.NewGuid(),
+            Name = "Aditiva",
+            Label = "PROD",
+            IsEnabled = true,
+            ApplyMode = AgentLabelApplyMode.ApplyOnly,
+            LabelMatch = AgentLabelLabelMatch.Exact,
+            ExpressionJson = System.Text.Json.JsonSerializer.Serialize(
+                Fixture.HostnameContainsSrvExpression(),
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        fx.Db.AgentLabels.Add(new AgentLabel
+        {
+            Id = Guid.NewGuid(),
+            AgentId = fx.AgentId,
+            Label = "PROD",
+            SourceType = AgentLabelSourceType.Automatic,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        AddManualLabel(fx, "TEMP-X");
+        await fx.Db.SaveChangesAsync();
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "sources");
+
+        var remaining = await fx.Db.AgentLabels.AsNoTracking().Select(label => label.Label).ToListAsync();
+        Assert.That(remaining, Is.EquivalentTo(new[] { "PROD" }),
+            "A automatica mantida pela regra aditiva permanece; a manual alvo da Remove sai.");
+    }
+
+    [Test]
+    public async Task Remove_Prefix_RemovesAllMatchingManualLabels()
+    {
+        await using var fx = await Fixture.CreateAsync(
+            hostname: "SRV-PROD-01",
+            applyMode: AgentLabelApplyMode.Remove,
+            ruleLabel: "TEMP-",
+            labelMatch: AgentLabelLabelMatch.Prefix);
+
+        AddManualLabel(fx, "TEMP-2026");
+        AddManualLabel(fx, "TEMP-LAB");
+        AddManualLabel(fx, "PROD");
+        await fx.Db.SaveChangesAsync();
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "prefix");
+
+        var remaining = await fx.Db.AgentLabels.AsNoTracking().Select(label => label.Label).ToListAsync();
+        Assert.That(remaining, Is.EquivalentTo(new[] { "PROD" }),
+            "O prefixo TEMP- remove apenas as labels que casam.");
+    }
+
+    [Test]
+    public async Task Remove_ProtectedLabelIsNotRemoved()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-PROD-01", applyMode: AgentLabelApplyMode.Remove);
+        AddManualLabel(fx, "PROD");
+
+        fx.Db.AgentLabelProtectedLabels.Add(new AgentLabelProtectedLabel
+        {
+            Id = Guid.NewGuid(),
+            Label = "PROD",
+            CreatedBy = "user:1",
+            CreatedAt = DateTime.UtcNow
+        });
+        await fx.Db.SaveChangesAsync();
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "protected");
+
+        Assert.That(await fx.Db.AgentLabels.CountAsync(), Is.EqualTo(1),
+            "Whitelist vence o modo Remove (defesa em profundidade).");
+    }
+
+    [Test]
+    public async Task Remove_AdditiveRuleWins()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-PROD-01", applyMode: AgentLabelApplyMode.Remove);
+
+        // Regra aditiva habilitada que mantem "PROD" neste agente.
+        fx.Db.AgentLabelRules.Add(new AgentLabelRule
+        {
+            Id = Guid.NewGuid(),
+            Name = "Aditiva",
+            Label = "PROD",
+            IsEnabled = true,
+            ApplyMode = AgentLabelApplyMode.ApplyOnly,
+            LabelMatch = AgentLabelLabelMatch.Exact,
+            ExpressionJson = System.Text.Json.JsonSerializer.Serialize(
+                Fixture.HostnameContainsSrvExpression(),
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        AddManualLabel(fx, "PROD");
+        await fx.Db.SaveChangesAsync();
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "additive-wins");
+
+        Assert.That(await fx.Db.AgentLabels.CountAsync(), Is.EqualTo(1),
+            "Label mantida por regra aditiva nunca e removida pelo modo Remove.");
+    }
+
+    [Test]
+    public async Task Remove_ReAddedWhileMatched_IsRemovedAgain()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-PROD-01", applyMode: AgentLabelApplyMode.Remove);
+        AddManualLabel(fx, "PROD");
+        await fx.Db.SaveChangesAsync();
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "first");
+        Assert.That(await fx.Db.AgentLabels.CountAsync(), Is.EqualTo(0));
+
+        AddManualLabel(fx, "PROD");
+        await fx.Db.SaveChangesAsync();
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "second");
+
+        Assert.That(await fx.Db.AgentLabels.CountAsync(), Is.EqualTo(0),
+            "Enforcement: enquanto a condicao valer, a re-adicao e removida de novo.");
+    }
+
+    [Test]
+    public async Task DryRun_RemoveMode_ReportsRemovableManualLabels()
+    {
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-PROD-01", applyMode: AgentLabelApplyMode.Remove);
+        AddManualLabel(fx, "PROD");
+        AddManualLabel(fx, "TEMP-1");
+        await fx.Db.SaveChangesAsync();
+
+        var response = await fx.Service.DryRunAsync(new Core.DTOs.AgentLabelRuleDryRunRequest
+        {
+            AgentId = fx.AgentId,
+            Label = "PROD",
+            ApplyMode = AgentLabelApplyMode.Remove,
+            LabelMatch = AgentLabelLabelMatch.Exact,
+            Expression = Fixture.HostnameContainsSrvExpression()
+        });
+
+        Assert.That(response.Matched, Is.True);
+        Assert.That(response.RemovableLabels, Is.EquivalentTo(new[] { "PROD" }));
+        Assert.That(response.CurrentManualLabels, Is.EquivalentTo(new[] { "PROD", "TEMP-1" }));
+        Assert.That(response.WouldRemoveLabel, Is.True);
+        Assert.That(response.WouldAddLabel, Is.False, "Modo Remove nunca adiciona.");
+    }
+
+    [Test]
+    public async Task Remove_ShortPrefixRule_IsSkippedByDefenseInDepth()
+    {
+        // Regra com prefixo de 1 caractere nao pode "apagar tudo" nem se chegar ao banco
+        // por um caminho que burle a validacao de escrita.
+        await using var fx = await Fixture.CreateAsync(
+            hostname: "SRV-PROD-01",
+            applyMode: AgentLabelApplyMode.Remove,
+            ruleLabel: "T",
+            labelMatch: AgentLabelLabelMatch.Prefix);
+
+        AddManualLabel(fx, "TEMP-1");
+        await fx.Db.SaveChangesAsync();
+
+        await fx.Service.EvaluateAgentAsync(fx.AgentId, "short-prefix");
+
+        Assert.That(await fx.Db.AgentLabels.CountAsync(), Is.EqualTo(1),
+            "A regra invalida deve ser ignorada pelo motor (defesa em profundidade).");
+    }
+
+    [Test]
+    public async Task GetDistinctLabels_WithSourceFilter_ReturnsOnlyThatSource()
+    {
+        // O seletor de vinculacao manual do agente precisa ver SO as labels manuais.
+        await using var fx = await Fixture.CreateAsync(hostname: "SRV-01", applyMode: AgentLabelApplyMode.ApplyAndRemove);
+
+        fx.Db.AgentLabels.AddRange(
+            new AgentLabel
+            {
+                Id = Guid.NewGuid(),
+                AgentId = fx.AgentId,
+                Label = "PROD",
+                SourceType = AgentLabelSourceType.Automatic,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            },
+            new AgentLabel
+            {
+                Id = Guid.NewGuid(),
+                AgentId = fx.AgentId,
+                Label = "Livre",
+                SourceType = AgentLabelSourceType.Manual,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            });
+        await fx.Db.SaveChangesAsync();
+
+        var repository = new AgentLabelRepository(fx.Db);
+
+        var manual = await repository.GetDistinctLabelsAsync(500, AgentLabelSourceType.Manual);
+        Assert.That(manual, Is.EquivalentTo(new[] { "Livre" }));
+
+        var all = await repository.GetDistinctLabelsAsync(500, null);
+        Assert.That(all, Is.EquivalentTo(new[] { "Livre", "PROD" }));
+    }
+
+    private static void AddManualLabel(Fixture fx, string label)
+    {
+        fx.Db.AgentLabels.Add(new AgentLabel
+        {
+            Id = Guid.NewGuid(),
+            AgentId = fx.AgentId,
+            Label = label,
+            SourceType = AgentLabelSourceType.Manual,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+    }
+
     private sealed class CollectingProgress : IProgress<Core.DTOs.AgentLabelReprocessProgress>
     {
         public List<Core.DTOs.AgentLabelReprocessProgress> Reports { get; } = [];
@@ -684,7 +955,9 @@ public class AgentAutoLabelingServiceTests
             string hostname,
             AgentLabelApplyMode applyMode,
             Core.DTOs.AgentLabelRuleExpressionNodeDto? expression = null,
-            IReadOnlyList<string>? installedSoftware = null)
+            IReadOnlyList<string>? installedSoftware = null,
+            string ruleLabel = "PROD",
+            AgentLabelLabelMatch labelMatch = AgentLabelLabelMatch.Exact)
         {
             var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
                 .UseInMemoryDatabase($"auto-labeling-tests-{Guid.NewGuid():N}")
@@ -709,9 +982,10 @@ public class AgentAutoLabelingServiceTests
             {
                 Id = Guid.NewGuid(),
                 Name = "Servidores",
-                Label = "PROD",
+                Label = ruleLabel,
                 IsEnabled = true,
                 ApplyMode = applyMode,
+                LabelMatch = labelMatch,
                 ExpressionJson = System.Text.Json.JsonSerializer.Serialize(
                     expression ?? HostnameContainsSrvExpression(),
                     new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)),
@@ -799,6 +1073,7 @@ public class AgentAutoLabelingServiceTests
                 typeof(AgentLabelChangeLog),
                 typeof(AgentLabelSuppression),
                 typeof(AgentLabelRuleVersion),
+                typeof(AgentLabelProtectedLabel),
                 typeof(SoftwareCatalog),
                 typeof(AgentSoftwareInventory),
                 typeof(AgentHardwareInfo),
@@ -833,6 +1108,7 @@ public class AgentAutoLabelingServiceTests
 
             modelBuilder.Entity<AgentLabelChangeLog>(entity => entity.HasKey(item => item.Id));
             modelBuilder.Entity<AgentLabelRuleVersion>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<AgentLabelProtectedLabel>(entity => entity.HasKey(item => item.Id));
 
             modelBuilder.Entity<AgentLabelSuppression>(entity =>
             {

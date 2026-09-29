@@ -261,13 +261,30 @@
 | Endpoint                                         | Permissão        | Scope |
 | ------------------------------------------------ | ---------------- | ----- |
 | `GET /api/v1/agent-labels/agents/{agentId}`      | `Agents.View`    | G     |
+| `GET /api/v1/agent-labels/agents/{agentId}/suppressions` | `Agents.View` | G  |
+| `GET /api/v1/agent-labels/agents/{agentId}/history` | `Agents.View`  | G     |
+| `DELETE /api/v1/agent-labels/suppressions/{id}`  | `Agents.Edit`    | G     |
+| `POST /api/v1/agent-labels/batch`                | `Agents.View`    | G     |
+| `GET /api/v1/agent-labels/usage`                 | `Agents.View`    | G     |
+| `GET /api/v1/agent-labels/agents-by-label`       | `Agents.View`    | G     |
 | `GET /api/v1/agent-labels/rules/{ruleId}/agents` | `Agents.View`    | G     |
 | `GET /api/v1/agent-labels/rules`                 | `Agents.View`    | G     |
+| `GET /api/v1/agent-labels/rules/{id}/versions`   | `Agents.View`    | G     |
+| `GET /api/v1/agent-labels/rules/export`          | `Agents.View`    | G     |
 | `POST /api/v1/agent-labels/rules`                | `Agents.Create`  | G     |
+| `PUT /api/v1/agent-labels/rules/{id}`            | `Agents.Edit`    | G     |
+| `DELETE /api/v1/agent-labels/rules/{id}`         | `Agents.Edit`    | G     |
+| `POST /api/v1/agent-labels/rules/import`         | `Agents.Edit`    | G     |
+| `POST /api/v1/agent-labels/rules/impact`         | `Agents.View`    | G     |
 | `POST /api/v1/agent-labels/rules/dry-run`        | `Agents.View`    | G     |
+| `POST /api/v1/agent-labels/rules/dry-run/batch`  | `Agents.View`    | G     |
+| `GET /api/v1/agent-labels/protected-labels`      | `Agents.View`    | G     |
+| `POST /api/v1/agent-labels/protected-labels`     | `Agents.Edit`    | G     |
+| `DELETE /api/v1/agent-labels/protected-labels/{id}` | `Agents.Edit` | G     |
 | `POST /api/v1/agent-labels/manual`               | `Agents.Edit`    | G     |
 | `DELETE /api/v1/agent-labels/manual/{id}`        | `Agents.Edit`    | G     |
 | `POST /api/v1/agent-labels/reprocess`            | `Agents.Execute` | G     |
+| `GET /api/v1/agent-labels/reprocess/{jobId}`     | `Agents.View`    | G     |
 
 ### Monitoring Events
 

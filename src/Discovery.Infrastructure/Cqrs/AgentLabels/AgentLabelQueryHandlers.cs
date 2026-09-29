@@ -6,7 +6,9 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Data;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Cqrs.AgentLabels;
 
@@ -58,7 +60,7 @@ public sealed class GetDistinctLabelsQueryHandler(ILabelService svc)
 {
     public async Task<Result<IReadOnlyList<string>>> Handle(GetDistinctLabelsQuery q, CancellationToken ct)
     {
-        var labels = await svc.GetDistinctLabelsAsync(q.Limit, ct);
+        var labels = await svc.GetDistinctLabelsAsync(q.Limit, q.SourceType, ct);
         return Result<IReadOnlyList<string>>.Success(labels);
     }
 }
@@ -190,7 +192,8 @@ public sealed class ListLabelRulesQueryHandler(ILabelService svc)
         var rules = await svc.GetRulesAsync(q.IncludeDisabled, ct);
         var dtos = rules.Select(r => new LabelRuleDto(
             r.Id, r.Name, r.Label, r.Description, r.IsEnabled,
-            r.ApplyMode.ToString(), AgentLabelExpressionJson.DeserializeOrDefault(r.ExpressionJson),
+            r.ApplyMode.ToString(), r.LabelMatch.ToString(),
+            AgentLabelExpressionJson.DeserializeOrDefault(r.ExpressionJson),
             r.CreatedBy, r.CreatedAt, r.UpdatedAt
         )).ToList().AsReadOnly();
         return Result<IReadOnlyList<LabelRuleDto>>.Success(dtos);
@@ -208,7 +211,8 @@ public sealed class GetLabelRuleByIdQueryHandler(ILabelService svc)
 
         return Result<LabelRuleDto>.Success(new LabelRuleDto(
             rule.Id, rule.Name, rule.Label, rule.Description, rule.IsEnabled,
-            rule.ApplyMode.ToString(), AgentLabelExpressionJson.DeserializeOrDefault(rule.ExpressionJson),
+            rule.ApplyMode.ToString(), rule.LabelMatch.ToString(),
+            AgentLabelExpressionJson.DeserializeOrDefault(rule.ExpressionJson),
             rule.CreatedBy, rule.CreatedAt, rule.UpdatedAt));
     }
 }
@@ -392,6 +396,64 @@ public sealed class DryRunLabelRuleBatchQueryHandler(IAgentAutoLabelingService s
     }
 }
 
+/// <summary>Labels protegidas: nenhuma regra no modo Remover pode apaga-las.</summary>
+public sealed class GetProtectedLabelsQueryHandler(ILabelService svc)
+    : IRequestHandler<GetProtectedLabelsQuery, Result<IReadOnlyList<AgentLabelProtectedLabelDto>>>
+{
+    public async Task<Result<IReadOnlyList<AgentLabelProtectedLabelDto>>> Handle(GetProtectedLabelsQuery q, CancellationToken ct)
+    {
+        var labels = await svc.GetProtectedLabelsAsync(ct);
+        return Result<IReadOnlyList<AgentLabelProtectedLabelDto>>.Success(labels);
+    }
+}
+
+public sealed class AddProtectedLabelCommandHandler(ILabelService svc)
+    : IRequestHandler<AddProtectedLabelCommand, Result<AgentLabelProtectedLabelDto>>
+{
+    public async Task<Result<AgentLabelProtectedLabelDto>> Handle(AddProtectedLabelCommand cmd, CancellationToken ct)
+    {
+        var label = cmd.Label?.Trim() ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(label))
+            return Result<AgentLabelProtectedLabelDto>.Failure(
+                Error.Validation("label", "Label is required."));
+
+        if (label.Length > 120)
+            return Result<AgentLabelProtectedLabelDto>.Failure(
+                Error.Validation("label", "Label exceeds maximum length of 120."));
+
+        try
+        {
+            var created = await svc.AddProtectedLabelAsync(label, cmd.CreatedBy, ct);
+            return Result<AgentLabelProtectedLabelDto>.Success(created);
+        }
+        catch (DbUpdateException ex) when (PostgresErrors.IsUniqueViolation(ex))
+        {
+            // Corrida entre duas requisicoes: a outra inseriu a mesma label. Idempotente:
+            // devolve o registro existente em vez de 500.
+            var existing = (await svc.GetProtectedLabelsAsync(ct))
+                .FirstOrDefault(item => string.Equals(item.Label, label, StringComparison.OrdinalIgnoreCase));
+
+            return existing is not null
+                ? Result<AgentLabelProtectedLabelDto>.Success(existing)
+                : Result<AgentLabelProtectedLabelDto>.Failure(
+                    Error.Conflict($"Protected label '{label}' already exists."));
+        }
+    }
+}
+
+public sealed class RemoveProtectedLabelCommandHandler(ILabelService svc)
+    : IRequestHandler<RemoveProtectedLabelCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(RemoveProtectedLabelCommand cmd, CancellationToken ct)
+    {
+        var removed = await svc.RemoveProtectedLabelAsync(cmd.Id, ct);
+        return removed
+            ? Result<VoidResult>.Success(VoidResult.Value)
+            : Result<VoidResult>.Failure(Error.NotFound($"Protected label {cmd.Id} not found"));
+    }
+}
+
 /// <summary>Historico de versoes (configuracao) de uma regra de label.</summary>
 public sealed class GetLabelRuleVersionsQueryHandler(ILabelService svc)
     : IRequestHandler<GetLabelRuleVersionsQuery, Result<IReadOnlyList<LabelRuleVersionDto>>>
@@ -420,6 +482,7 @@ public sealed class ExportLabelRulesQueryHandler(ILabelService svc)
             Label = rule.Label,
             Description = rule.Description,
             ApplyMode = rule.ApplyMode.ToString(),
+            LabelMatch = rule.LabelMatch.ToString(),
             IsEnabled = rule.IsEnabled,
             Expression = AgentLabelExpressionJson.DeserializeOrDefault(rule.ExpressionJson)
         }).ToList().AsReadOnly();

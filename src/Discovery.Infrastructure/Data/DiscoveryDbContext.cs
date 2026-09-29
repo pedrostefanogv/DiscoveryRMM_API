@@ -66,6 +66,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<AgentLabel> AgentLabels => Set<AgentLabel>();
     public DbSet<AgentLabelRuleMatch> AgentLabelRuleMatches => Set<AgentLabelRuleMatch>();
     public DbSet<AgentLabelRuleVersion> AgentLabelRuleVersions => Set<AgentLabelRuleVersion>();
+    public DbSet<AgentLabelProtectedLabel> AgentLabelProtectedLabels => Set<AgentLabelProtectedLabel>();
     public DbSet<AgentLabelChangeLog> AgentLabelChangeLogs => Set<AgentLabelChangeLog>();
     public DbSet<AgentLabelSuppression> AgentLabelSuppressions => Set<AgentLabelSuppression>();
     public DbSet<CustomFieldDefinition> CustomFieldDefinitions => Set<CustomFieldDefinition>();

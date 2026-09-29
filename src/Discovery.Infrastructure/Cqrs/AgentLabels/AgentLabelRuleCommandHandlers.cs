@@ -106,6 +106,104 @@ internal static class LabelRuleValidation
                 Error.Validation("applyMode", $"ApplyMode '{applyMode}' is not valid."));
     }
 
+    /// <summary>LabelMatch invalido agora e erro explicito (antes nao existia o eixo).</summary>
+    public static Result<AgentLabelLabelMatch> ParseLabelMatch(string? labelMatch, AgentLabelLabelMatch fallback)
+    {
+        if (string.IsNullOrWhiteSpace(labelMatch))
+            return Result<AgentLabelLabelMatch>.Success(fallback);
+
+        return Enum.TryParse<AgentLabelLabelMatch>(labelMatch, ignoreCase: true, out var match)
+            ? Result<AgentLabelLabelMatch>.Success(match)
+            : Result<AgentLabelLabelMatch>.Failure(
+                Error.Validation("labelMatch", $"LabelMatch '{labelMatch}' is not valid."));
+    }
+
+    /// <summary>
+    /// Valida o alvo do modo Remover: match coerente com o modo, tamanho/validade do
+    /// padrao, colisao com label protegida e conflito direto com regra aditiva habilitada.
+    /// </summary>
+    public static Result<string> ValidateLabelTarget(
+        AgentLabelApplyMode applyMode,
+        AgentLabelLabelMatch labelMatch,
+        string? label,
+        IReadOnlyCollection<string> protectedLabels,
+        IReadOnlyCollection<string> additiveLabels)
+    {
+        if (applyMode != AgentLabelApplyMode.Remove)
+        {
+            return labelMatch == AgentLabelLabelMatch.Exact
+                ? Result<string>.Success("ok")
+                : Result<string>.Failure(Error.Validation(
+                    "labelMatch", "LabelMatch is only supported for the Remove apply mode."));
+        }
+
+        if (string.IsNullOrWhiteSpace(label))
+            return Result<string>.Failure(Error.Validation(
+                "label", "Remove rules require a target label or pattern."));
+
+        var target = label.Trim();
+
+        if (labelMatch == AgentLabelLabelMatch.Prefix && target.Length < 2)
+            return Result<string>.Failure(Error.Validation(
+                "label", "Prefix must have at least 2 characters."));
+
+        if (!LabelRemovalMatcher.TryCreate(target, labelMatch, out var matcher) || matcher is null)
+            return Result<string>.Failure(Error.Validation(
+                "label", labelMatch == AgentLabelLabelMatch.Regex
+                    ? "Invalid or too long regex pattern."
+                    : "Invalid target label."));
+
+        foreach (var protectedLabel in protectedLabels)
+        {
+            if (matcher.Matches(protectedLabel))
+                return Result<string>.Failure(Error.Validation(
+                    "label", $"Target matches protected label '{protectedLabel}'."));
+        }
+
+        if (labelMatch == AgentLabelLabelMatch.Exact
+            && additiveLabels.Any(existing => string.Equals(existing, target, StringComparison.OrdinalIgnoreCase)))
+        {
+            return Result<string>.Failure(Error.Validation(
+                "label", $"Label '{target}' is also produced by an enabled rule that applies labels."));
+        }
+
+        return Result<string>.Success("ok");
+    }
+
+    /// <summary>
+    /// Resolve o contexto (protegidas + labels de regras aditivas habilitadas) e valida
+    /// o alvo. Para regras que nao usam Remove/pattern, retorna sem consultar nada.
+    /// </summary>
+    public static async Task<Result<string>> ValidateTargetAsync(
+        ILabelService svc,
+        AgentLabelApplyMode applyMode,
+        AgentLabelLabelMatch labelMatch,
+        string? label,
+        Guid? excludeRuleId,
+        CancellationToken ct,
+        bool checkAdditiveConflict = true)
+    {
+        if (applyMode != AgentLabelApplyMode.Remove && labelMatch == AgentLabelLabelMatch.Exact)
+            return Result<string>.Success("ok");
+
+        var protectedLabels = (await svc.GetProtectedLabelsAsync(ct))
+            .Select(item => item.Label)
+            .ToList();
+
+        List<string> additiveLabels = [];
+        if (checkAdditiveConflict)
+        {
+            var enabledRules = await svc.GetRulesAsync(includeDisabled: false, ct);
+            additiveLabels = enabledRules
+                .Where(rule => rule.ApplyMode is AgentLabelApplyMode.ApplyOnly or AgentLabelApplyMode.ApplyAndRemove)
+                .Where(rule => excludeRuleId is null || rule.Id != excludeRuleId.Value)
+                .Select(rule => rule.Label)
+                .ToList();
+        }
+
+        return ValidateLabelTarget(applyMode, labelMatch, label, protectedLabels, additiveLabels);
+    }
+
     public static Result<string> ValidateIdentity(string? name, string? label, bool requireName, bool requireLabel)
     {
         if (requireName)
@@ -167,6 +265,15 @@ public sealed class CreateLabelRuleCommandHandler(ILabelService svc, ICustomFiel
         if (!applyMode.IsSuccess)
             return Result<LabelRuleDto>.Failure(applyMode.Errors[0]);
 
+        var labelMatch = LabelRuleValidation.ParseLabelMatch(cmd.LabelMatch, AgentLabelLabelMatch.Exact);
+        if (!labelMatch.IsSuccess)
+            return Result<LabelRuleDto>.Failure(labelMatch.Errors[0]);
+
+        var targetValidation = await LabelRuleValidation.ValidateTargetAsync(
+            svc, applyMode.Value, labelMatch.Value, cmd.Label, excludeRuleId: null, ct);
+        if (!targetValidation.IsSuccess)
+            return Result<LabelRuleDto>.Failure(targetValidation.Errors[0]);
+
         // Regras em modo Manual nao possuem expressao avaliavel: exigir uma arvore
         // valida (grupo com pelo menos um filho) tornava impossivel criar a regra
         // pela UI, que envia um grupo vazio de proposito.
@@ -188,6 +295,7 @@ public sealed class CreateLabelRuleCommandHandler(ILabelService svc, ICustomFiel
             Description = cmd.Description,
             IsEnabled = cmd.IsEnabled,
             ApplyMode = applyMode.Value,
+            LabelMatch = labelMatch.Value,
             ExpressionJson = expressionJson,
             CreatedBy = cmd.CreatedBy,
             CreatedAt = DateTime.UtcNow,
@@ -201,7 +309,8 @@ public sealed class CreateLabelRuleCommandHandler(ILabelService svc, ICustomFiel
 
     internal static LabelRuleDto ToDto(AgentLabelRule r) => new(
         r.Id, r.Name, r.Label, r.Description, r.IsEnabled,
-        r.ApplyMode.ToString(), AgentLabelExpressionJson.DeserializeOrDefault(r.ExpressionJson),
+        r.ApplyMode.ToString(), r.LabelMatch.ToString(),
+        AgentLabelExpressionJson.DeserializeOrDefault(r.ExpressionJson),
         r.CreatedBy, r.CreatedAt, r.UpdatedAt);
 }
 
@@ -228,7 +337,31 @@ public sealed class UpdateLabelRuleCommandHandler(ILabelService svc, ICustomFiel
             parsedMode = mode.Value;
         }
 
+        AgentLabelLabelMatch? parsedLabelMatch = null;
+        if (cmd.LabelMatch is not null)
+        {
+            var match = LabelRuleValidation.ParseLabelMatch(cmd.LabelMatch, existing.LabelMatch);
+            if (!match.IsSuccess)
+                return Result<LabelRuleDto>.Failure(match.Errors[0]);
+
+            parsedLabelMatch = match.Value;
+        }
+
         var effectiveApplyMode = parsedMode ?? existing.ApplyMode;
+        var effectiveLabelMatch = parsedLabelMatch ?? existing.LabelMatch;
+        var effectiveLabel = cmd.Label ?? existing.Label;
+
+        // Sair do modo Remover sem enviar LabelMatch limpa o alvo: um padrao
+        // (prefixo/regex) nao tem sentido nos modos aditivos/Manual. Enviar um
+        // LabelMatch nao-Exact de forma explicita continua sendo erro de validacao.
+        if (effectiveApplyMode != AgentLabelApplyMode.Remove && parsedLabelMatch is null)
+            effectiveLabelMatch = AgentLabelLabelMatch.Exact;
+
+        var targetValidation = await LabelRuleValidation.ValidateTargetAsync(
+            svc, effectiveApplyMode, effectiveLabelMatch, effectiveLabel, existing.Id, ct);
+        if (!targetValidation.IsSuccess)
+            return Result<LabelRuleDto>.Failure(targetValidation.Errors[0]);
+
         if (cmd.ExpressionJson is not null)
         {
             // Modo Manual nao tem expressao avaliavel (ver CreateLabelRuleCommandHandler).
@@ -251,6 +384,7 @@ public sealed class UpdateLabelRuleCommandHandler(ILabelService svc, ICustomFiel
         if (cmd.Description is not null) existing.Description = cmd.Description;
         if (cmd.IsEnabled.HasValue) existing.IsEnabled = cmd.IsEnabled.Value;
         if (parsedMode.HasValue) existing.ApplyMode = parsedMode.Value;
+        existing.LabelMatch = effectiveLabelMatch;
         existing.UpdatedBy = cmd.UpdatedBy;
         existing.UpdatedAt = DateTime.UtcNow;
 
@@ -320,6 +454,13 @@ public sealed class ImportLabelRulesCommandHandler(ILabelService svc, ICustomFie
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
         var actor = string.IsNullOrWhiteSpace(cmd.Actor) ? "system" : cmd.Actor!;
+
+        // Protegidas carregadas UMA vez; o conflito com regras aditivas nao e checado no
+        // import em lote (uma consulta por regra seria caro e o arquivo pode se auto-conflitar).
+        var protectedLabels = (await svc.GetProtectedLabelsAsync(ct))
+            .Select(item => item.Label)
+            .ToList();
+
         var errors = new List<string>();
         var pending = new List<AgentLabelRule>();
         var created = 0;
@@ -346,6 +487,21 @@ public sealed class ImportLabelRulesCommandHandler(ILabelService svc, ICustomFie
             if (!applyMode.IsSuccess)
             {
                 errors.Add($"Regra #{index + 1}: {applyMode.Errors[0].Message}");
+                continue;
+            }
+
+            var labelMatch = LabelRuleValidation.ParseLabelMatch(imported.LabelMatch, AgentLabelLabelMatch.Exact);
+            if (!labelMatch.IsSuccess)
+            {
+                errors.Add($"Regra #{index + 1}: {labelMatch.Errors[0].Message}");
+                continue;
+            }
+
+            var targetValidation = LabelRuleValidation.ValidateLabelTarget(
+                applyMode.Value, labelMatch.Value, imported.Label, protectedLabels, []);
+            if (!targetValidation.IsSuccess)
+            {
+                errors.Add($"Regra #{index + 1}: {targetValidation.Errors[0].Message}");
                 continue;
             }
 
@@ -377,6 +533,7 @@ public sealed class ImportLabelRulesCommandHandler(ILabelService svc, ICustomFie
                 current.Description = imported.Description;
                 current.IsEnabled = imported.IsEnabled;
                 current.ApplyMode = applyMode.Value;
+                current.LabelMatch = labelMatch.Value;
                 current.ExpressionJson = expressionJson;
                 current.UpdatedBy = actor;
                 current.UpdatedAt = DateTime.UtcNow;
@@ -393,6 +550,7 @@ public sealed class ImportLabelRulesCommandHandler(ILabelService svc, ICustomFie
                 Description = imported.Description,
                 IsEnabled = imported.IsEnabled,
                 ApplyMode = applyMode.Value,
+                LabelMatch = labelMatch.Value,
                 ExpressionJson = expressionJson,
                 CreatedBy = actor,
                 UpdatedBy = actor,

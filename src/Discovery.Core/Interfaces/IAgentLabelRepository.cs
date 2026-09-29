@@ -1,5 +1,6 @@
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 
 namespace Discovery.Core.Interfaces;
 
@@ -33,8 +34,11 @@ public interface IAgentLabelRepository
 
     /// <summary>Labels distintas com a contagem de agentes de cada uma.</summary>
     Task<IReadOnlyList<AgentLabelUsageDto>> GetLabelUsageAsync(int limit, CancellationToken ct = default);
-    /// <summary>Labels distintas, limitadas (evita payload ilimitado em frotas grandes).</summary>
-    Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default);
+    /// <summary>
+    /// Labels distintas, limitadas. <paramref name="sourceType"/> filtra por origem
+    /// (ex.: Manual para alimentar o seletor de vinculacao manual do agente).
+    /// </summary>
+    Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, AgentLabelSourceType? sourceType, CancellationToken ct = default);
     Task<AgentLabel?> GetByIdAsync(Guid id);
 
     /// <summary>Registra (idempotente) que o usuario removeu manualmente esta label automatica.</summary>
@@ -51,6 +55,15 @@ public interface IAgentLabelRepository
 
     /// <summary>Historico de aplicacao/remocao de labels do agente, mais recente primeiro.</summary>
     Task<IReadOnlyList<AgentLabelChangeLogDto>> GetChangeLogAsync(Guid agentId, int limit, CancellationToken ct = default);
+
+    /// <summary>Labels protegidas (whitelist do modo Remover).</summary>
+    Task<IReadOnlyList<AgentLabelProtectedLabel>> GetProtectedLabelsAsync(CancellationToken ct = default);
+
+    /// <summary>Adiciona uma label protegida (idempotente por nome).</summary>
+    Task<AgentLabelProtectedLabel> AddProtectedLabelAsync(AgentLabelProtectedLabel protectedLabel, CancellationToken ct = default);
+
+    /// <summary>Remove uma label protegida; false quando nao existe.</summary>
+    Task<bool> RemoveProtectedLabelAsync(Guid id, CancellationToken ct = default);
     Task<AgentLabel> AddAsync(AgentLabel label);
     Task DeleteAsync(Guid id);
 }

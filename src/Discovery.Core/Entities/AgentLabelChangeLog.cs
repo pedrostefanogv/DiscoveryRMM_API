@@ -16,6 +16,13 @@ public class AgentLabelChangeLog
     public string Action { get; set; } = string.Empty;
     /// <summary>Motivo da avaliacao (ex.: periodic-reconciliation, custom-field-value-updated:agent:...).</summary>
     public string? Reason { get; set; }
+
+    /// <summary>
+    /// Regra que produziu/removeu a label, quando identificavel. Sem isto o historico
+    /// nao explica oscilacoes (aplicada/removida em sequencia) — nao da para saber qual
+    /// regra causou cada mudanca.
+    /// </summary>
+    public Guid? RuleId { get; set; }
     public string? Actor { get; set; }
     public DateTime OccurredAt { get; set; }
 }

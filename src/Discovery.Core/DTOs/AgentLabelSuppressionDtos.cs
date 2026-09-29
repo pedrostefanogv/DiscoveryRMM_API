@@ -18,6 +18,17 @@ public class AgentLabelSuppressionDto
 }
 
 /// <summary>
+/// Label protegida: nenhuma regra no modo Remover pode apaga-la.
+/// </summary>
+public class AgentLabelProtectedLabelDto
+{
+    public Guid Id { get; set; }
+    public string Label { get; set; } = string.Empty;
+    public string? CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+/// <summary>
 /// Item do historico de aplicacao/remocao de labels de um agente. Os dados ja eram
 /// gravados em agent_label_change_logs, mas nao havia endpoint nem tela para consulta-los.
 /// </summary>
@@ -32,5 +43,9 @@ public class AgentLabelChangeLogDto
     public string Action { get; set; } = string.Empty;
     public string? Reason { get; set; }
     public string? Actor { get; set; }
+
+    /// <summary>Regra que causou a mudanca, quando identificavel.</summary>
+    public Guid? RuleId { get; set; }
+    public string? RuleName { get; set; }
     public DateTime OccurredAt { get; set; }
 }

@@ -207,7 +207,7 @@ public class AgentLabelRuleQueryHandlerTests
         public Task<IReadOnlyList<AgentLabel>> GetByAgentIdsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<AgentLabel>>([]);
 
-        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default)
+        public Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, AgentLabelSourceType? sourceType, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<string>>([]);
 
         public Task<AgentLabel?> GetByIdAsync(Guid id, CancellationToken ct = default)
@@ -260,6 +260,20 @@ public class AgentLabelRuleQueryHandlerTests
 
         public Task<IReadOnlyList<LabelRuleVersionDto>> GetRuleVersionsAsync(Guid ruleId, int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<LabelRuleVersionDto>>([]);
+
+        public Task<IReadOnlyList<AgentLabelProtectedLabelDto>> GetProtectedLabelsAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AgentLabelProtectedLabelDto>>([]);
+
+        public Task<AgentLabelProtectedLabelDto> AddProtectedLabelAsync(string label, string? createdBy, CancellationToken ct = default)
+            => Task.FromResult(new AgentLabelProtectedLabelDto
+            {
+                Id = Guid.NewGuid(),
+                Label = label,
+                CreatedBy = createdBy,
+                CreatedAt = DateTime.UtcNow
+            });
+
+        public Task<bool> RemoveProtectedLabelAsync(Guid id, CancellationToken ct = default) => Task.FromResult(true);
 
         public Task DeleteRuleAsync(Guid id, CancellationToken ct = default)
             => Task.CompletedTask;

@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.DTOs;
+using Discovery.Core.Enums;
 
 namespace Discovery.Core.Cqrs.AgentLabels.Queries;
 
@@ -8,12 +9,15 @@ public sealed record ListAgentLabelsQuery(Guid? AgentId) : IQuery<Result<IReadOn
 public sealed record ListLabelRulesQuery(bool IncludeDisabled = true) : IQuery<Result<IReadOnlyList<LabelRuleDto>>>;
 public sealed record GetLabelRuleByIdQuery(Guid Id) : IQuery<Result<LabelRuleDto>>;
 
+/// <summary>Labels protegidas (whitelist do modo Remover).</summary>
+public sealed record GetProtectedLabelsQuery : IQuery<Result<IReadOnlyList<AgentLabelProtectedLabelDto>>>;
+
 /// <summary>Versoes de uma regra (auditoria de configuracao).</summary>
 public sealed record GetLabelRuleVersionsQuery(Guid RuleId, int Limit = 20) : IQuery<Result<IReadOnlyList<LabelRuleVersionDto>>>;
 
 /// <summary>Exporta todas as regras em formato portavel (JSON).</summary>
 public sealed record ExportLabelRulesQuery : IQuery<Result<IReadOnlyList<AgentLabelRuleExportDto>>>;
-public sealed record GetDistinctLabelsQuery(int Limit = 500) : IQuery<Result<IReadOnlyList<string>>>;
+public sealed record GetDistinctLabelsQuery(int Limit = 500, AgentLabelSourceType? SourceType = null) : IQuery<Result<IReadOnlyList<string>>>;
 
 /// <summary>Labels com contagem de agentes (alimenta o filtro da lista de agentes).</summary>
 public sealed record GetLabelUsageQuery(int Limit = 200) : IQuery<Result<IReadOnlyList<AgentLabelUsageDto>>>;

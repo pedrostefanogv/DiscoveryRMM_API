@@ -38,7 +38,9 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         Guid RuleId,
         string Label,
         AgentLabelApplyMode ApplyMode,
-        AgentLabelRuleExpressionNodeDto Expression);
+        AgentLabelRuleExpressionNodeDto Expression,
+        /// <summary>Matcher do alvo — preenchido apenas no modo Remove.</summary>
+        LabelRemovalMatcher? RemovalMatcher = null);
 
     private readonly record struct CustomFieldEntry(string ValueJson, CustomFieldDataType DataType);
 
@@ -47,7 +49,12 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         Guid AgentId,
         string Label,
         AgentLabelSourceType SourceType,
-        string Action);
+        string Action,
+        /// <summary>Regra que causou a mudanca (quando identificavel).</summary>
+        Guid? RuleId = null);
+
+    /// <summary>Matcher de remocao ativo + a regra que o produziu (atribuicao na auditoria).</summary>
+    private readonly record struct RemovalMatcherRule(Guid RuleId, LabelRemovalMatcher Matcher);
 
     public AgentAutoLabelingService(
         DiscoveryDbContext db,
@@ -335,28 +342,46 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 request.Expression, agent, hardware, software, customFieldValues, disks, null, "root", failedConditions);
         }
 
-        var automaticLabels = await _db.AgentLabels
+        var labels = await _db.AgentLabels
             .AsNoTracking()
-            .Where(label => label.AgentId == request.AgentId && label.SourceType == AgentLabelSourceType.Automatic)
-            .Select(label => label.Label)
-            .OrderBy(label => label)
+            .Where(label => label.AgentId == request.AgentId)
+            .Select(label => new { label.Label, label.SourceType })
+            .OrderBy(item => item.Label)
             .ToListAsync(cancellationToken);
+
+        var automaticLabels = labels
+            .Where(item => item.SourceType == AgentLabelSourceType.Automatic)
+            .Select(item => item.Label)
+            .ToList();
+
+        var manualLabels = labels
+            .Where(item => item.SourceType == AgentLabelSourceType.Manual)
+            .Select(item => item.Label)
+            .ToList();
 
         var hasLabel = !string.IsNullOrWhiteSpace(request.Label)
             && automaticLabels.Contains(request.Label, StringComparer.OrdinalIgnoreCase);
+
+        var removableLabels = ComputeRemovableLabels(
+            request.ApplyMode, request.LabelMatch, request.Label, matched, manualLabels);
 
         return new AgentLabelRuleDryRunResponse
         {
             AgentId = request.AgentId,
             Matched = matched,
             Label = request.Label,
-            WouldAddLabel = matched && !string.IsNullOrWhiteSpace(request.Label) && !hasLabel,
-            WouldRemoveLabel =
-                !matched
-                && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
+            WouldAddLabel = matched
+                && request.ApplyMode is AgentLabelApplyMode.ApplyOnly or AgentLabelApplyMode.ApplyAndRemove
                 && !string.IsNullOrWhiteSpace(request.Label)
-                && hasLabel,
+                && !hasLabel,
+            WouldRemoveLabel = removableLabels.Count > 0
+                || (!matched
+                    && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
+                    && !string.IsNullOrWhiteSpace(request.Label)
+                    && hasLabel),
             CurrentAutomaticLabels = automaticLabels,
+            CurrentManualLabels = manualLabels,
+            RemovableLabels = removableLabels,
             FailedConditions = failedConditions
         };
     }
@@ -399,15 +424,13 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             ? await LoadCustomFieldValuesForAgentsAsync(agents, cancellationToken)
             : new Dictionary<Guid, IReadOnlyDictionary<Guid, CustomFieldEntry>>();
 
-        var automaticLabelsByAgent = (await _db.AgentLabels
+        var labelsByAgent = (await _db.AgentLabels
                 .AsNoTracking()
-                .Where(label => ids.Contains(label.AgentId) && label.SourceType == AgentLabelSourceType.Automatic)
-                .Select(label => new { label.AgentId, label.Label })
+                .Where(label => ids.Contains(label.AgentId))
+                .Select(label => new { label.AgentId, label.Label, label.SourceType })
                 .ToListAsync(cancellationToken))
             .GroupBy(item => item.AgentId)
-            .ToDictionary(
-                group => group.Key,
-                group => (IReadOnlyList<string>)group.Select(item => item.Label).OrderBy(label => label).ToList());
+            .ToDictionary(group => group.Key, group => group.ToList());
 
         var normalizedLabel = string.IsNullOrWhiteSpace(request.Label) ? null : request.Label.Trim();
         var results = new List<AgentLabelRuleDryRunResponse>(agents.Count);
@@ -422,9 +445,23 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             var matched = EvaluateNode(
                 request.Expression, agent, hardware, software ?? [], customFieldValues, disks);
 
-            var currentLabels = automaticLabelsByAgent.TryGetValue(agent.Id, out var labels) ? labels : [];
+            var agentLabels = labelsByAgent.TryGetValue(agent.Id, out var labels) ? labels : [];
+            var currentLabels = agentLabels
+                .Where(item => item.SourceType == AgentLabelSourceType.Automatic)
+                .Select(item => item.Label)
+                .OrderBy(label => label)
+                .ToList();
+            var manualLabels = agentLabels
+                .Where(item => item.SourceType == AgentLabelSourceType.Manual)
+                .Select(item => item.Label)
+                .OrderBy(label => label)
+                .ToList();
+
             var hasLabel = normalizedLabel is not null
                 && currentLabels.Contains(normalizedLabel, StringComparer.OrdinalIgnoreCase);
+
+            var removableLabels = ComputeRemovableLabels(
+                request.ApplyMode, request.LabelMatch, request.Label, matched, manualLabels);
 
             var failedConditions = new List<string>();
             if (!matched)
@@ -438,12 +475,18 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 AgentId = agent.Id,
                 Matched = matched,
                 Label = request.Label,
-                WouldAddLabel = matched && normalizedLabel is not null && !hasLabel,
-                WouldRemoveLabel = !matched
-                    && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
+                WouldAddLabel = matched
+                    && request.ApplyMode is AgentLabelApplyMode.ApplyOnly or AgentLabelApplyMode.ApplyAndRemove
                     && normalizedLabel is not null
-                    && hasLabel,
+                    && !hasLabel,
+                WouldRemoveLabel = removableLabels.Count > 0
+                    || (!matched
+                        && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
+                        && normalizedLabel is not null
+                        && hasLabel),
                 CurrentAutomaticLabels = currentLabels,
+                CurrentManualLabels = manualLabels,
+                RemovableLabels = removableLabels,
                 FailedConditions = failedConditions
             });
         }
@@ -573,15 +616,13 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             ? await LoadCustomFieldValuesForAgentsAsync(agents, cancellationToken)
             : new Dictionary<Guid, IReadOnlyDictionary<Guid, CustomFieldEntry>>();
 
-        var automaticLabelsByAgent = (await _db.AgentLabels
+        var labelsByAgent = (await _db.AgentLabels
                 .AsNoTracking()
-                .Where(label => agentIds.Contains(label.AgentId) && label.SourceType == AgentLabelSourceType.Automatic)
-                .Select(label => new { label.AgentId, label.Label })
+                .Where(label => agentIds.Contains(label.AgentId))
+                .Select(label => new { label.AgentId, label.Label, label.SourceType })
                 .ToListAsync(cancellationToken))
             .GroupBy(item => item.AgentId)
-            .ToDictionary(
-                group => group.Key,
-                group => (IReadOnlyList<string>)group.Select(item => item.Label).ToList());
+            .ToDictionary(group => group.Key, group => group.ToList());
 
         var normalizedLabel = string.IsNullOrWhiteSpace(request.Label) ? null : request.Label.Trim();
         var samples = new List<AgentLabelRuleImpactSample>(agents.Count);
@@ -599,15 +640,33 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             var isMatch = EvaluateNode(
                 request.Expression, agent, hardware, software ?? [], customFieldValues, disks);
 
-            var currentLabels = automaticLabelsByAgent.TryGetValue(agent.Id, out var labels) ? labels : [];
+            var agentLabels = labelsByAgent.TryGetValue(agent.Id, out var labels) ? labels : [];
+            var currentLabels = agentLabels
+                .Where(item => item.SourceType == AgentLabelSourceType.Automatic)
+                .Select(item => item.Label)
+                .OrderBy(label => label)
+                .ToList();
+            var manualLabels = agentLabels
+                .Where(item => item.SourceType == AgentLabelSourceType.Manual)
+                .Select(item => item.Label)
+                .OrderBy(label => label)
+                .ToList();
+
             var hasLabel = normalizedLabel is not null
                 && currentLabels.Contains(normalizedLabel, StringComparer.OrdinalIgnoreCase);
 
-            var add = isMatch && normalizedLabel is not null && !hasLabel;
-            var remove = !isMatch
-                && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
+            var removableLabels = ComputeRemovableLabels(
+                request.ApplyMode, request.LabelMatch, request.Label, isMatch, manualLabels);
+
+            var add = isMatch
+                && request.ApplyMode is AgentLabelApplyMode.ApplyOnly or AgentLabelApplyMode.ApplyAndRemove
                 && normalizedLabel is not null
-                && hasLabel;
+                && !hasLabel;
+            var remove = removableLabels.Count > 0
+                || (!isMatch
+                    && request.ApplyMode == AgentLabelApplyMode.ApplyAndRemove
+                    && normalizedLabel is not null
+                    && hasLabel);
 
             if (isMatch) matched++;
             if (add) wouldAdd++;
@@ -621,7 +680,9 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 Matched = isMatch,
                 WouldAddLabel = add,
                 WouldRemoveLabel = remove,
-                CurrentAutomaticLabels = currentLabels
+                CurrentAutomaticLabels = currentLabels,
+                CurrentManualLabels = manualLabels,
+                RemovableLabels = removableLabels
             });
         }
 
@@ -681,21 +742,29 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 LabelingMetrics.AgentsEvaluated.Add(agents.Count);
                 return;
             }
-            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+            catch (DbUpdateException ex) when (PostgresErrors.IsUniqueViolation(ex) || ex is DbUpdateConcurrencyException)
             {
-                LabelingMetrics.UniqueConflicts.Add(1);
+                // Unicidade: outro avaliador inseriu o mesmo match/label. Concorrencia: outro
+                // avaliador JA removeu a label que este lote tentou remover (EF espera 1 linha
+                // afetada e lanca DbUpdateConcurrencyException). Nos dois casos o segundo passe
+                // converge porque o core recarrega o estado do banco.
+                if (ex is DbUpdateConcurrencyException)
+                    LabelingMetrics.ConcurrencyConflicts.Add(1);
+                else
+                    LabelingMetrics.UniqueConflicts.Add(1);
+
                 DetachTrackedEntries();
 
                 if (attempt < maxAttempts)
                 {
-                    _logger.LogWarning(ex, "Conflito de unicidade ao gravar labels do lote; recarregando o estado e re-tentando.");
+                    _logger.LogWarning(ex, "Conflito ao gravar labels do lote; recarregando o estado e re-tentando.");
                     continue;
                 }
 
                 // Duas tentativas nao bastaram (escrita muito concorrente). Descarta o lote
                 // em vez de derrubar a passagem inteira; a reconciliacao periodica corrige.
                 // LogError (e nao Warning) para ser alertavel: labels podem ficar defasadas.
-                _logger.LogError(ex, "Conflito de unicidade persistente ao gravar labels do lote; lote descartado. Metricas: agent_labeling.unique_conflicts.");
+                _logger.LogError(ex, "Conflito persistente ao gravar labels do lote; lote descartado. Metricas: agent_labeling.unique_conflicts / agent_labeling.concurrency_conflicts.");
                 return;
             }
         }
@@ -786,6 +855,13 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 .ToListAsync(cancellationToken))
             .ToHashSet();
 
+        // Whitelist do modo Remover: uma consulta por lote (tabela pequena).
+        var protectedLabelNames = (await _db.AgentLabelProtectedLabels
+                .AsNoTracking()
+                .Select(protectedLabel => protectedLabel.Label)
+                .ToListAsync(cancellationToken))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var now = DateTime.UtcNow;
         var changes = new List<AgentLabelChange>();
 
@@ -818,6 +894,9 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             //    diretamente faria a label sobreviver a esta execucao.
             var effectiveLabelsByRule = new Dictionary<Guid, string>();
 
+            // Matchers de remocao ATIVOS nesta avaliacao (regras Remove que casaram).
+            var removalMatchers = new List<RemovalMatcherRule>();
+
             foreach (var rule in rules)
             {
                 var matched = EvaluateNode(rule.Expression, agent, hardware, softwareList, customFieldValues, disks);
@@ -846,6 +925,16 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                             existing.Label = rule.Label;
                     }
 
+                    if (rule.ApplyMode == AgentLabelApplyMode.Remove)
+                    {
+                        // Nao produz label: o alvo vira um matcher de remocao. Regra que
+                        // foi desabilitada entre a preparacao e a gravacao nao remove nada.
+                        if (rule.RemovalMatcher is not null && enabledRuleIds.Contains(rule.RuleId))
+                            removalMatchers.Add(new RemovalMatcherRule(rule.RuleId, rule.RemovalMatcher));
+
+                        continue;
+                    }
+
                     effectiveLabelsByRule[rule.RuleId] = rule.Label;
                     currentlyMatchingLabels.Add(rule.Label);
                     continue;
@@ -854,15 +943,16 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 if (!hasExistingMatch)
                     continue;
 
-                if (rule.ApplyMode == AgentLabelApplyMode.ApplyAndRemove)
-                {
-                    // Nao entra no mapa: a label deve sair nesta execucao.
-                    _db.AgentLabelRuleMatches.Remove(existing!);
-                }
-                else
+                if (rule.ApplyMode == AgentLabelApplyMode.ApplyOnly)
                 {
                     // ApplyOnly preserva o match antigo (semantica de "nao remover").
                     effectiveLabelsByRule[rule.RuleId] = existing!.Label;
+                }
+                else
+                {
+                    // ApplyAndRemove e Remove: a condicao deixou de valer — limpa o match
+                    // (no modo Remove nao ha label a retirar; o alvo e sempre manual).
+                    _db.AgentLabelRuleMatches.Remove(existing!);
                 }
             }
 
@@ -876,6 +966,9 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                     ? suppressions
                     : new Dictionary<string, AgentLabelSuppression>(StringComparer.OrdinalIgnoreCase),
                 currentlyMatchingLabels,
+                removalMatchers,
+                protectedLabelNames,
+                existingMatches,
                 now,
                 changes);
         }
@@ -888,6 +981,8 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         {
             LabelingMetrics.LabelsAdded.Add(changes.Count(change => change.Action == "Added"));
             LabelingMetrics.LabelsRemoved.Add(changes.Count(change => change.Action == "Removed"));
+            LabelingMetrics.ManualLabelsRemoved.Add(changes.Count(change =>
+                change.Action == "Removed" && change.SourceType == AgentLabelSourceType.Manual));
             await RecordLabelChangesAsync(changes, reason, actor, cancellationToken);
         }
 
@@ -908,6 +1003,9 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         IReadOnlyList<AgentLabel> existingLabels,
         IReadOnlyDictionary<string, AgentLabelSuppression> suppressions,
         IReadOnlySet<string> currentlyMatchingLabels,
+        IReadOnlyCollection<RemovalMatcherRule> removalMatchers,
+        IReadOnlySet<string> protectedLabels,
+        IReadOnlyDictionary<Guid, AgentLabelRuleMatch> existingMatches,
         DateTime now,
         List<AgentLabelChange> changes)
     {
@@ -928,6 +1026,26 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         var presentNames = existingLabels
             .Select(label => label.Label)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Atribuicao da regra na auditoria: labels ADICIONADAS vem do mapa efetivo
+        // (ruleId -> label); labels REMOVIDAS automaticas vem do match que existia antes
+        // da avaliacao. Sem isso o historico nao explica oscilacoes aplicar/remover.
+        var ruleIdByLabel = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in effectiveLabelsByRule)
+        {
+            if (!enabledRuleIds.Contains(entry.Key) || string.IsNullOrWhiteSpace(entry.Value))
+                continue;
+
+            ruleIdByLabel.TryAdd(entry.Value, entry.Key);
+        }
+
+        foreach (var match in existingMatches.Values)
+        {
+            if (string.IsNullOrWhiteSpace(match.Label))
+                continue;
+
+            ruleIdByLabel.TryAdd(match.Label, match.RuleId);
+        }
 
         // A supressao vale apenas para o EPISODIO ATUAL da condicao: quando a condicao
         // deixa de ser verdadeira, a supressao e liberada e um novo match futuro volta a
@@ -964,18 +1082,52 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 UpdatedAt = now
             });
             presentNames.Add(label);
-            changes.Add(new AgentLabelChange(agentId, label, AgentLabelSourceType.Automatic, "Added"));
+            changes.Add(new AgentLabelChange(
+                agentId,
+                label,
+                AgentLabelSourceType.Automatic,
+                "Added",
+                ruleIdByLabel.TryGetValue(label, out var addedByRule) ? addedByRule : null));
         }
 
         // Remove apenas as labels AUTOMATICAS que deixaram de ser produzidas.
-        // Labels manuais nunca sao removidas pelo motor.
         foreach (var label in existingAutomatic)
         {
             if (shouldKeep.Contains(label.Label))
                 continue;
 
             _db.AgentLabels.Remove(label);
-            changes.Add(new AgentLabelChange(agentId, label.Label, AgentLabelSourceType.Automatic, "Removed"));
+            changes.Add(new AgentLabelChange(
+                agentId,
+                label.Label,
+                AgentLabelSourceType.Automatic,
+                "Removed",
+                ruleIdByLabel.TryGetValue(label.Label, out var removedByRule) ? removedByRule : null));
+        }
+
+        // Modo Remove: apaga labels MANUAIS que casem com o alvo de uma regra cuja
+        // condicao e verdadeira. Precedencias: aditiva vence (shouldKeep) e label
+        // protegida vence (whitelist). Remocao e irreversivel e se repete enquanto a
+        // condicao valer — o usuario re-adiciona e a proxima reconciliacao remove de novo.
+        if (removalMatchers.Count == 0)
+            return;
+
+        foreach (var label in existingLabels.Where(item => item.SourceType == AgentLabelSourceType.Manual))
+        {
+            if (shouldKeep.Contains(label.Label) || protectedLabels.Contains(label.Label))
+                continue;
+
+            var matchedBy = removalMatchers.FirstOrDefault(entry => entry.Matcher.Matches(label.Label));
+            if (matchedBy.Matcher is null)
+                continue;
+
+            _db.AgentLabels.Remove(label);
+            changes.Add(new AgentLabelChange(
+                agentId,
+                label.Label,
+                AgentLabelSourceType.Manual,
+                "Removed",
+                matchedBy.RuleId));
         }
     }
 
@@ -1001,7 +1153,28 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 continue;
             }
 
-            prepared.Add(new PreparedRule(rule.Id, rule.Label, rule.ApplyMode, expression));
+            // No modo Remove o alvo e um matcher (exato/prefixo/regex) compilado UMA vez
+            // por passagem. Padrao invalido e ignorado com log (a validacao de escrita ja
+            // rejeita, isto e defesa em profundidade).
+            LabelRemovalMatcher? removalMatcher = null;
+            if (rule.ApplyMode == AgentLabelApplyMode.Remove)
+            {
+                var shortPrefix = rule.LabelMatch == AgentLabelLabelMatch.Prefix
+                    && rule.Label.Trim().Length < 2;
+
+                if (shortPrefix
+                    || !LabelRemovalMatcher.TryCreate(rule.Label, rule.LabelMatch, out removalMatcher)
+                    || removalMatcher is null)
+                {
+                    // Defesa em profundidade: a validacao de escrita ja rejeita, mas um dado
+                    // legado/editado direto no banco nao pode virar "apaga tudo".
+                    _logger.LogWarning(
+                        "Agent label rule {RuleId} has an invalid remove target and was skipped.", rule.Id);
+                    continue;
+                }
+            }
+
+            prepared.Add(new PreparedRule(rule.Id, rule.Label, rule.ApplyMode, expression, removalMatcher));
         }
 
         return prepared;
@@ -1061,6 +1234,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         string? Description,
         bool IsEnabled,
         int ApplyMode,
+        int LabelMatch,
         string ExpressionJson,
         string? CreatedBy,
         string? UpdatedBy,
@@ -1069,7 +1243,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
     {
         public static EnabledRuleCacheEntry From(AgentLabelRule rule) => new(
             rule.Id, rule.Name, rule.Label, rule.Description, rule.IsEnabled,
-            (int)rule.ApplyMode, rule.ExpressionJson, rule.CreatedBy, rule.UpdatedBy,
+            (int)rule.ApplyMode, (int)rule.LabelMatch, rule.ExpressionJson, rule.CreatedBy, rule.UpdatedBy,
             rule.CreatedAt, rule.UpdatedAt);
 
         public AgentLabelRule ToEntity() => new()
@@ -1080,6 +1254,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
             Description = Description,
             IsEnabled = IsEnabled,
             ApplyMode = (AgentLabelApplyMode)ApplyMode,
+            LabelMatch = (AgentLabelLabelMatch)LabelMatch,
             ExpressionJson = ExpressionJson,
             CreatedBy = CreatedBy,
             UpdatedBy = UpdatedBy,
@@ -1228,6 +1403,7 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
                 Action = change.Action,
                 Reason = reason,
                 Actor = actor ?? "system",
+                RuleId = change.RuleId,
                 OccurredAt = DateTime.UtcNow
             }));
 
@@ -1457,9 +1633,25 @@ public class AgentAutoLabelingService : IAgentAutoLabelingService
         return $"{path}: {field} {op} \"{value}\"";
     }
 
-    /// <summary>Violacao de indice unico do Postgres (corrida entre avaliadores).</summary>
-    private static bool IsUniqueViolation(DbUpdateException ex)
-        => ex.InnerException is PostgresException pg && pg.SqlState == PostgresErrorCodes.UniqueViolation;
+    /// <summary>
+    /// Labels manuais que uma regra no modo Remove apagaria deste agente. Vazio para os
+    /// demais modos ou quando a condicao nao casa.
+    /// </summary>
+    private static IReadOnlyList<string> ComputeRemovableLabels(
+        AgentLabelApplyMode applyMode,
+        AgentLabelLabelMatch labelMatch,
+        string? label,
+        bool matched,
+        IReadOnlyList<string> manualLabels)
+    {
+        if (applyMode != AgentLabelApplyMode.Remove || !matched || manualLabels.Count == 0)
+            return [];
+
+        if (!LabelRemovalMatcher.TryCreate(label ?? string.Empty, labelMatch, out var matcher) || matcher is null)
+            return [];
+
+        return manualLabels.Where(matcher.Matches).ToList();
+    }
 
     private static bool EvaluateText(string? current, AgentLabelComparisonOperator op, string expected)
     {

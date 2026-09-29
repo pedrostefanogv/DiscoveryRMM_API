@@ -17,6 +17,7 @@ public class AgentLabelRuleVersion
     public string? Description { get; set; }
     public bool IsEnabled { get; set; }
     public AgentLabelApplyMode ApplyMode { get; set; }
+    public AgentLabelLabelMatch LabelMatch { get; set; }
     public string ExpressionJson { get; set; } = string.Empty;
     public string? ChangedBy { get; set; }
     public DateTime ChangedAt { get; set; }

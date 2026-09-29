@@ -1,4 +1,5 @@
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -69,15 +70,18 @@ public class AgentLabelRepository : IAgentLabelRepository
         return (total, agents);
     }
 
-    public async Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> GetDistinctLabelsAsync(int limit, AgentLabelSourceType? sourceType, CancellationToken ct = default)
     {
         var safeLimit = Math.Clamp(limit, 1, 1000);
 
-        return await _db.AgentLabels
-            .AsNoTracking()
-            .Select(l => l.Label)
+        var query = _db.AgentLabels.AsNoTracking();
+        if (sourceType.HasValue)
+            query = query.Where(label => label.SourceType == sourceType.Value);
+
+        return await query
+            .Select(label => label.Label)
             .Distinct()
-            .OrderBy(l => l)
+            .OrderBy(label => label)
             .Take(safeLimit)
             .ToListAsync(ct);
     }
@@ -235,9 +239,25 @@ public class AgentLabelRepository : IAgentLabelRepository
                 log.Action,
                 log.Reason,
                 log.Actor,
+                log.RuleId,
                 log.OccurredAt
             })
             .ToListAsync(ct);
+
+        // Resolve o nome da regra para o historico ser auto-explicativo (ex.: oscilacoes).
+        var ruleIds = rows
+            .Where(log => log.RuleId.HasValue)
+            .Select(log => log.RuleId!.Value)
+            .Distinct()
+            .ToList();
+
+        var ruleNames = ruleIds.Count == 0
+            ? new Dictionary<Guid, string>()
+            : await _db.AgentLabelRules
+                .AsNoTracking()
+                .Where(rule => ruleIds.Contains(rule.Id))
+                .Select(rule => new { rule.Id, rule.Name })
+                .ToDictionaryAsync(rule => rule.Id, rule => rule.Name, ct);
 
         return rows.Select(log => new AgentLabelChangeLogDto
         {
@@ -248,6 +268,10 @@ public class AgentLabelRepository : IAgentLabelRepository
             Action = log.Action,
             Reason = log.Reason,
             Actor = log.Actor,
+            RuleId = log.RuleId,
+            RuleName = log.RuleId.HasValue && ruleNames.TryGetValue(log.RuleId.Value, out var name)
+                ? name
+                : null,
             OccurredAt = log.OccurredAt
         }).ToList();
     }
@@ -264,6 +288,34 @@ public class AgentLabelRepository : IAgentLabelRepository
         _db.AgentLabelSuppressions.Remove(suppression);
         await _db.SaveChangesAsync(ct);
         return agentId;
+    }
+
+    public async Task<IReadOnlyList<AgentLabelProtectedLabel>> GetProtectedLabelsAsync(CancellationToken ct = default)
+    {
+        return await _db.AgentLabelProtectedLabels
+            .AsNoTracking()
+            .OrderBy(item => item.Label)
+            .ToListAsync(ct);
+    }
+
+    public async Task<AgentLabelProtectedLabel> AddProtectedLabelAsync(AgentLabelProtectedLabel protectedLabel, CancellationToken ct = default)
+    {
+        _db.AgentLabelProtectedLabels.Add(protectedLabel);
+        await _db.SaveChangesAsync(ct);
+        return protectedLabel;
+    }
+
+    public async Task<bool> RemoveProtectedLabelAsync(Guid id, CancellationToken ct = default)
+    {
+        var existing = await _db.AgentLabelProtectedLabels
+            .FirstOrDefaultAsync(item => item.Id == id, ct);
+
+        if (existing is null)
+            return false;
+
+        _db.AgentLabelProtectedLabels.Remove(existing);
+        await _db.SaveChangesAsync(ct);
+        return true;
     }
 
     public async Task DeleteAsync(Guid id)

@@ -10,6 +10,12 @@ public class AgentLabelRule
     public string? Description { get; set; }
     public bool IsEnabled { get; set; } = true;
     public AgentLabelApplyMode ApplyMode { get; set; } = AgentLabelApplyMode.ApplyAndRemove;
+
+    /// <summary>
+    /// Como <see cref="Label"/> casa com as labels do agente. Vale apenas no modo
+    /// <see cref="AgentLabelApplyMode.Remove"/> (nos demais deve ser Exact).
+    /// </summary>
+    public AgentLabelLabelMatch LabelMatch { get; set; } = AgentLabelLabelMatch.Exact;
     public string ExpressionJson { get; set; } = string.Empty;
     public string? CreatedBy { get; set; }
     public string? UpdatedBy { get; set; }

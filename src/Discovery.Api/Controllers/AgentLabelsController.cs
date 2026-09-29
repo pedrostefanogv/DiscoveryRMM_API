@@ -2,6 +2,7 @@ using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.Cqrs.AgentLabels.Queries;
 using Discovery.Core.DTOs;
+using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
@@ -182,9 +183,11 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
 
     [HttpGet("distinct")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetDistinct([FromQuery] int limit = 500)
+    public async Task<IActionResult> GetDistinct(
+        [FromQuery] int limit = 500,
+        [FromQuery] AgentLabelSourceType? sourceType = null)
     {
-        var result = await mediator.Send(new GetDistinctLabelsQuery(limit));
+        var result = await mediator.Send(new GetDistinctLabelsQuery(limit, sourceType));
         return result.ToActionResult();
     }
 
@@ -218,7 +221,8 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
             request.IsEnabled,
             request.ApplyMode.ToString(),
             AgentLabelExpressionJson.Serialize(request.Expression),
-            Actor());
+            Actor(),
+            request.LabelMatch.ToString());
 
         var result = await mediator.Send(cmd);
         return result.Match<IActionResult>(
@@ -240,7 +244,8 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
             request.IsEnabled,
             request.ApplyMode.ToString(),
             AgentLabelExpressionJson.Serialize(request.Expression),
-            Actor());
+            Actor(),
+            request.LabelMatch.ToString());
 
         var result = await mediator.Send(cmd);
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
@@ -261,6 +266,39 @@ public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue repr
     {
         var result = await mediator.Send(new GetLabelRuleVersionsQuery(id, limit));
         return result.ToActionResult();
+    }
+
+    /// <summary>Lista as labels protegidas (nenhuma regra Remove pode apaga-las).</summary>
+    [HttpGet("protected-labels")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetProtectedLabels()
+    {
+        var result = await mediator.Send(new GetProtectedLabelsQuery());
+        return result.ToActionResult();
+    }
+
+    /// <summary>Adiciona uma label protegida (idempotente por nome).</summary>
+    [HttpPost("protected-labels")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> AddProtectedLabel([FromBody] AddProtectedLabelCommand cmd)
+    {
+        var result = await mediator.Send(cmd with { CreatedBy = Actor() });
+        return result.Match<IActionResult>(
+            success: dto => Created("", dto),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    /// <summary>Remove uma label da whitelist do modo Remover.</summary>
+    [HttpDelete("protected-labels/{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    public async Task<IActionResult> RemoveProtectedLabel(Guid id)
+    {
+        var result = await mediator.Send(new RemoveProtectedLabelCommand(id));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     /// <summary>Exporta todas as regras em JSON portavel (backup / promocao entre ambientes).</summary>

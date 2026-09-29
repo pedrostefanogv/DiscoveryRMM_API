@@ -9,10 +9,16 @@ public sealed record ReprocessLabelsCommand(string? Actor = null) : ICommand<Res
 
 /// <summary>Libera uma supressao de label; a label volta a ser aplicada na reconciliacao.</summary>
 public sealed record ReleaseAgentLabelSuppressionCommand(Guid SuppressionId) : ICommand<Result<VoidResult>>;
-public sealed record CreateLabelRuleCommand(string Name, string Label, string? Description, bool IsEnabled, string ApplyMode, string ExpressionJson, string? CreatedBy) : ICommand<Result<LabelRuleDto>>;
-public sealed record UpdateLabelRuleCommand(Guid Id, string? Name, string? Label, string? Description, bool? IsEnabled, string? ApplyMode, string? ExpressionJson, string? UpdatedBy) : ICommand<Result<LabelRuleDto>>;
+public sealed record CreateLabelRuleCommand(string Name, string Label, string? Description, bool IsEnabled, string ApplyMode, string ExpressionJson, string? CreatedBy, string? LabelMatch = null) : ICommand<Result<LabelRuleDto>>;
+public sealed record UpdateLabelRuleCommand(Guid Id, string? Name, string? Label, string? Description, bool? IsEnabled, string? ApplyMode, string? ExpressionJson, string? UpdatedBy, string? LabelMatch = null) : ICommand<Result<LabelRuleDto>>;
 public sealed record DeleteLabelRuleCommand(Guid Id) : ICommand<Result<VoidResult>>;
 public sealed record ImportLabelRulesCommand(AgentLabelRuleImportRequest Request, string? Actor) : ICommand<Result<AgentLabelRuleImportResultDto>>;
+
+/// <summary>Adiciona uma label a whitelist do modo Remover.</summary>
+public sealed record AddProtectedLabelCommand(string Label, string? CreatedBy) : ICommand<Result<AgentLabelProtectedLabelDto>>;
+
+/// <summary>Remove uma label da whitelist do modo Remover.</summary>
+public sealed record RemoveProtectedLabelCommand(Guid Id) : ICommand<Result<VoidResult>>;
 
 public sealed record AgentLabelDto(Guid Id, Guid AgentId, string Label, string SourceType, DateTime CreatedAt);
 /// <summary>
@@ -20,4 +26,4 @@ public sealed record AgentLabelDto(Guid Id, Guid AgentId, string Label, string S
 /// JSON) para casar com o contrato consumido pelo front — o wire antigo
 /// devolvia `expressionJson` e o front lia `expression`, exibindo a regra vazia.
 /// </summary>
-public sealed record LabelRuleDto(Guid Id, string Name, string Label, string? Description, bool IsEnabled, string ApplyMode, AgentLabelRuleExpressionNodeDto Expression, string? CreatedBy, DateTime CreatedAt, DateTime UpdatedAt);
+public sealed record LabelRuleDto(Guid Id, string Name, string Label, string? Description, bool IsEnabled, string ApplyMode, string LabelMatch, AgentLabelRuleExpressionNodeDto Expression, string? CreatedBy, DateTime CreatedAt, DateTime UpdatedAt);

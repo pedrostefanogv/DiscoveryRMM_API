@@ -66,6 +66,7 @@ public class AgentLabelRuleContractTests
             null,
             true,
             "ApplyOnly",
+            "Exact",
             new AgentLabelRuleExpressionNodeDto
             {
                 NodeType = AgentLabelNodeType.Group,
