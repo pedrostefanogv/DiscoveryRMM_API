@@ -26,7 +26,7 @@ public sealed class GetGlobalSummaryQueryHandler(IDashboardService svc)
         new DashboardCommandsSummaryDto(d.Commands.Total, d.Commands.Pending, d.Commands.Sent, d.Commands.Running, d.Commands.Completed, d.Commands.Failed, d.Commands.SuccessRate),
         new DashboardTicketsSummaryDto(d.Tickets.Total, d.Tickets.Open, d.Tickets.Closed, d.Tickets.SlaBreachedOpen),
         new DashboardLogsSummaryDto(d.Logs.Total, d.Logs.Error, d.Logs.Warn, d.Logs.Info),
-        new DashboardAutomationSummaryDto(d.Automation.Total, d.Automation.Dispatched, d.Automation.Acknowledged, d.Automation.Completed, d.Automation.Failed, d.Automation.SuccessRate),
+        new DashboardAutomationSummaryDto(d.Automation.Total, d.Automation.Dispatched, d.Automation.Acknowledged, d.Automation.Completed, d.Automation.Failed, d.Automation.Cancelled, d.Automation.SuccessRate),
         d.GeneratedAtUtc);
 }
 

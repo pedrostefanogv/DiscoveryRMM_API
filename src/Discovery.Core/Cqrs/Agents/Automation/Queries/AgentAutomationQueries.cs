@@ -14,4 +14,6 @@ public sealed record GetAutomationExecutionsQuery(
     AutomationExecutionStatus? Status = null,
     AutomationExecutionSourceType? SourceType = null,
     Guid? TaskId = null,
-    Guid? ScriptId = null) : IQuery<Result<IReadOnlyList<AutomationExecutionDto>>>;
+    Guid? ScriptId = null,
+    /// <summary>Correlation do lote (identifica todas as execuções de uma operação em massa).</summary>
+    string? CorrelationId = null) : IQuery<Result<IReadOnlyList<AutomationExecutionDto>>>;

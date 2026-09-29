@@ -25,7 +25,8 @@ public interface IAutomationExecutionReportRepository
         AutomationExecutionStatus? status = null,
         AutomationExecutionSourceType? sourceType = null,
         Guid? taskId = null,
-        Guid? scriptId = null);
+        Guid? scriptId = null,
+        string? correlationId = null);
     Task<IReadOnlyList<AutomationExecutionReport>> GetByTaskIdAsync(Guid taskId, int limit = 100);
     Task UpdateAckAsync(Guid commandId, Guid? taskId, Guid? scriptId, string? ackMetadataJson, DateTime acknowledgedAt, string? correlationId);
     Task UpdateResultAsync(Guid commandId, Guid? taskId, Guid? scriptId, bool success, int? exitCode, string? errorMessage, string? resultMetadataJson, DateTime resultReceivedAt, string? correlationId);

@@ -65,4 +65,5 @@ public record DashboardAutomationSummaryDto(
     int Acknowledged,
     int Completed,
     int Failed,
+    int Cancelled,
     double SuccessRate);

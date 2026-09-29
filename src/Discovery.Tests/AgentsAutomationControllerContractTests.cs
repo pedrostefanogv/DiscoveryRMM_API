@@ -1,6 +1,7 @@
 using Discovery.Api.Controllers;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Automation.Commands;
+using Discovery.Core.Cqrs.Agents.Automation.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -79,6 +80,33 @@ public class AgentsAutomationControllerContractTests
         await controller.RunAutomationTaskNow(AgentId, TaskId);
 
         Assert.That(((RunAutomationTaskCommand)mediator.LastRequest!).CorrelationId, Is.Null);
+    }
+
+    [Test]
+    public async Task GetExecutions_MapsFiltersIncludingBatchCorrelation()
+    {
+        var mediator = new CapturingMediator
+        {
+            Responder = _ => Result<IReadOnlyList<AutomationExecutionDto>>.Success([])
+        };
+        var controller = BuildController(mediator, correlationId: null);
+
+        await controller.GetAutomationExecutionHistory(
+            AgentId,
+            limit: 25,
+            status: AutomationExecutionStatus.Failed,
+            sourceType: AutomationExecutionSourceType.RunNow,
+            taskId: TaskId,
+            scriptId: null,
+            correlationId: "lote-1");
+
+        var query = (GetAutomationExecutionsQuery)mediator.LastRequest!;
+        Assert.That(query.AgentId, Is.EqualTo(AgentId));
+        Assert.That(query.Limit, Is.EqualTo(25));
+        Assert.That(query.Status, Is.EqualTo(AutomationExecutionStatus.Failed));
+        Assert.That(query.SourceType, Is.EqualTo(AutomationExecutionSourceType.RunNow));
+        Assert.That(query.TaskId, Is.EqualTo(TaskId));
+        Assert.That(query.CorrelationId, Is.EqualTo("lote-1"));
     }
 
     [Test]

@@ -90,7 +90,8 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
         AutomationExecutionStatus? status = null,
         AutomationExecutionSourceType? sourceType = null,
         Guid? taskId = null,
-        Guid? scriptId = null)
+        Guid? scriptId = null,
+        string? correlationId = null)
     {
         var safeLimit = Math.Clamp(limit, 1, 500);
         var query = _db.AutomationExecutionReports
@@ -105,6 +106,8 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
             query = query.Where(x => x.TaskId == taskId.Value);
         if (scriptId.HasValue)
             query = query.Where(x => x.ScriptId == scriptId.Value);
+        if (!string.IsNullOrWhiteSpace(correlationId))
+            query = query.Where(x => x.CorrelationId == correlationId);
 
         return await query
             .OrderByDescending(x => x.CreatedAt)

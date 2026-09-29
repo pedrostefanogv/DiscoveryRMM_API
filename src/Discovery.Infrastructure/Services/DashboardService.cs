@@ -163,6 +163,7 @@ public class DashboardService : IDashboardService
         var automationAcknowledged = GetAutomationCount(automationCounts, AutomationExecutionStatus.Acknowledged);
         var automationCompleted = GetAutomationCount(automationCounts, AutomationExecutionStatus.Completed);
         var automationFailed = GetAutomationCount(automationCounts, AutomationExecutionStatus.Failed);
+        var automationCancelled = GetAutomationCount(automationCounts, AutomationExecutionStatus.Cancelled);
         var automationTotal = automationCounts.Values.Sum();
         var automationSuccessRate = CalculateSuccessRate(automationCompleted, automationFailed);
 
@@ -223,6 +224,7 @@ public class DashboardService : IDashboardService
                 Acknowledged: automationAcknowledged,
                 Completed: automationCompleted,
                 Failed: automationFailed,
+                Cancelled: automationCancelled,
                 SuccessRate: automationSuccessRate),
             GeneratedAtUtc: now);
     }

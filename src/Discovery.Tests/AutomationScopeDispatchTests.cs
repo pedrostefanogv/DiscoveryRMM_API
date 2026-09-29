@@ -222,7 +222,8 @@ public class AutomationScopeDispatchTests
             AutomationExecutionStatus? status = null,
             AutomationExecutionSourceType? sourceType = null,
             Guid? taskId = null,
-            Guid? scriptId = null) => throw new NotSupportedException();
+            Guid? scriptId = null,
+            string? correlationId = null) => throw new NotSupportedException();
         public Task<IReadOnlyList<AutomationExecutionReport>> GetByTaskIdAsync(Guid taskId, int limit = 100) => throw new NotSupportedException();
         public Task UpdateAckAsync(Guid commandId, Guid? taskId, Guid? scriptId, string? ackMetadataJson, DateTime acknowledgedAt, string? correlationId) => throw new NotSupportedException();
         public Task UpdateResultAsync(Guid commandId, Guid? taskId, Guid? scriptId, bool success, int? exitCode, string? errorMessage, string? resultMetadataJson, DateTime resultReceivedAt, string? correlationId) => throw new NotSupportedException();

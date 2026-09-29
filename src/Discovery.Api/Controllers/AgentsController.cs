@@ -489,10 +489,11 @@ public class AgentsController : ControllerBase
         [FromQuery] AutomationExecutionStatus? status = null,
         [FromQuery] AutomationExecutionSourceType? sourceType = null,
         [FromQuery] Guid? taskId = null,
-        [FromQuery] Guid? scriptId = null)
+        [FromQuery] Guid? scriptId = null,
+        [FromQuery] string? correlationId = null)
     {
         var result = await _mediator.Send(new GetAutomationExecutionsQuery(
-            id, limit, status, sourceType, taskId, scriptId));
+            id, limit, status, sourceType, taskId, scriptId, correlationId));
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());

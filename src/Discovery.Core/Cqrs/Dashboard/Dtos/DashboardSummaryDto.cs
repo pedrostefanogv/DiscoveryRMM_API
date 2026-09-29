@@ -22,4 +22,12 @@ public sealed record DashboardAgentsSummaryDto(int Total, int Online, int Offlin
 public sealed record DashboardCommandsSummaryDto(int Total, int Pending, int Sent, int Running, int Completed, int Failed, double SuccessRate);
 public sealed record DashboardTicketsSummaryDto(int Total, int Open, int Closed, int SlaBreachedOpen);
 public sealed record DashboardLogsSummaryDto(int Total, int Error, int Warn, int Info);
-public sealed record DashboardAutomationSummaryDto(int Total, int Dispatched, int Acknowledged, int Completed, int Failed, double SuccessRate);
+public sealed record DashboardAutomationSummaryDto(
+    int Total,
+    int Dispatched,
+    int Acknowledged,
+    int Completed,
+    int Failed,
+    /// <summary>Canceladas pelo operador — contam no Total, fora da taxa de sucesso.</summary>
+    int Cancelled,
+    double SuccessRate);

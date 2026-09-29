@@ -20,7 +20,7 @@ public sealed class GetAutomationExecutionsQueryHandler(
             return Result<IReadOnlyList<AutomationExecutionDto>>.Failure(Error.NotFound("Agent not found."));
 
         var items = await reportRepo.GetByAgentIdAsync(
-            q.AgentId, q.Limit, q.Status, q.SourceType, q.TaskId, q.ScriptId);
+            q.AgentId, q.Limit, q.Status, q.SourceType, q.TaskId, q.ScriptId, q.CorrelationId);
 
         // Nomes para a coluna Task/Script da página de operações (que antes só
         // mostrava GUIDs). Duas consultas em lote — a página faz polling de 3s
