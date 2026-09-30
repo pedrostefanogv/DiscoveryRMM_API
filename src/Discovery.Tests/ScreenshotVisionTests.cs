@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Discovery.Api.Controllers;
+using Discovery.Core.DTOs;
 using Discovery.Infrastructure.Services;
 
 namespace Discovery.Tests;
@@ -88,6 +89,21 @@ public class ScreenshotVisionTests
             Is.EqualTo("{\"ok\":true,\"count\":3}"));
         Assert.That(AiChatHelpers.CompactToolResultForPersistence("texto cru"), Is.EqualTo("texto cru"));
         Assert.That(AiChatHelpers.CompactToolResultForPersistence(string.Empty), Is.EqualTo(string.Empty));
+    }
+
+    // ── Guard de visão do modelo ────────────────────────────────────────────
+
+    [Test]
+    public void ResolveScreenshotImagesAllowed_HonoursSettingAndCapabilities()
+    {
+        static AiModelInfo Model(params string[] caps) => new(
+            "m", "m", null, null, caps.ToList(), [], [], [], null, null, null, false, false, false, null, null);
+
+        Assert.That(AiChatHelpers.ResolveScreenshotImagesAllowed(false, Model("vision")), Is.False);
+        Assert.That(AiChatHelpers.ResolveScreenshotImagesAllowed(true, null), Is.True);
+        Assert.That(AiChatHelpers.ResolveScreenshotImagesAllowed(true, Model()), Is.True);
+        Assert.That(AiChatHelpers.ResolveScreenshotImagesAllowed(true, Model("chat", "tools")), Is.False);
+        Assert.That(AiChatHelpers.ResolveScreenshotImagesAllowed(true, Model("chat", "VISION")), Is.True);
     }
 
     // ── Truncamento do tool result no controller ────────────────────────────

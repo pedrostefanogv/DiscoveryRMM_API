@@ -1,6 +1,8 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.CustomFields.Commands;
 using Discovery.Core.Cqrs.CustomFields.Queries;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,6 +15,7 @@ namespace Discovery.Api.Controllers;
 public class CustomFieldsController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] CustomFieldScopeType? scopeType = null, [FromQuery] bool includeInactive = false)
     {
         var result = await mediator.Send(new ListCustomFieldsQuery(scopeType, includeInactive));
@@ -20,6 +23,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetCustomFieldByIdQuery(id));
@@ -27,6 +31,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("values/{scopeType}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
     public async Task<IActionResult> GetValues(
         CustomFieldScopeType scopeType,
         [FromQuery] Guid? entityId = null,
@@ -39,6 +44,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateCustomFieldCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -46,6 +52,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCustomFieldCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -53,6 +60,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("values/{definitionId:guid}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
     public async Task<IActionResult> UpsertValue(Guid definitionId, [FromBody] UpsertCustomFieldValueCommand cmd)
     {
         var result = await mediator.Send(cmd with { DefinitionId = definitionId });
@@ -60,6 +68,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Delete)]
     public async Task<IActionResult> Deactivate(Guid id)
     {
         var result = await mediator.Send(new DeactivateCustomFieldCommand(id));

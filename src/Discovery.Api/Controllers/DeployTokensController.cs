@@ -1,6 +1,8 @@
 using System.ComponentModel.DataAnnotations;
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.DeployTokens.Commands;
 using Discovery.Core.Cqrs.DeployTokens.Queries;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -31,6 +33,7 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpGet]
+    [RequirePermission(ResourceType.Deployment, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] Guid clientId, [FromQuery] Guid siteId)
     {
         var result = await _mediator.Send(new ListDeployTokensQuery(clientId, siteId));
@@ -38,6 +41,7 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Deployment, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateDeployTokenCommand cmd)
     {
         var result = await _mediator.Send(cmd);
@@ -52,6 +56,7 @@ public class DeployTokensController : ControllerBase
     /// installerType: "online" = bootstrap mínimo (.exe), "offline" = ZIP portátil com binário + config.
     /// </summary>
     [HttpPost("create-and-download")]
+    [RequirePermission(ResourceType.Deployment, ActionType.Create)]
     [RequestSizeLimit(500_000_000)]
     public async Task<IActionResult> CreateAndDownload([FromBody] CreateDeployTokenAndDownloadCommand cmd, CancellationToken ct)
     {
@@ -64,6 +69,7 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Deployment, ActionType.Delete)]
     public async Task<IActionResult> Revoke(Guid id)
     {
         var result = await _mediator.Send(new RevokeDeployTokenCommand(id));
@@ -73,6 +79,7 @@ public class DeployTokensController : ControllerBase
     /// <summary>
     /// Downloads the installer for a deploy token.
     /// installerType: "online" = bootstrap (minimal) installer, "offline" = portable ZIP package.
+    /// Autenticado pelo próprio token (rota pública por design).
     /// </summary>
     [HttpPost("download-installer")]
     public async Task<IActionResult> DownloadInstaller([FromBody] DownloadInstallerRequest request, CancellationToken ct)
@@ -116,6 +123,7 @@ public class DeployTokensController : ControllerBase
     /// <summary>
     /// Returns available installer options for a given deploy token.
     /// Used by the frontend to determine which installer types are available.
+    /// Autenticado pelo próprio token (rota pública por design).
     /// </summary>
     [HttpPost("installer-options")]
     public async Task<IActionResult> GetInstallerOptions([FromBody] DownloadInstallerRequest request)

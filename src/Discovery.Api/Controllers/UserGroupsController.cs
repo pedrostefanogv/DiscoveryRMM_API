@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.UserGroups.Commands;
 using Discovery.Core.Cqrs.UserGroups.Queries;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class UserGroupsController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
     public async Task<IActionResult> GetAll()
     {
         var result = await mediator.Send(new ListUserGroupsQuery());
@@ -19,6 +22,7 @@ public class UserGroupsController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetUserGroupByIdQuery(id));
@@ -30,6 +34,7 @@ public class UserGroupsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Users, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateUserGroupCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -39,6 +44,7 @@ public class UserGroupsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserGroupCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -50,6 +56,7 @@ public class UserGroupsController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var result = await mediator.Send(new DeleteUserGroupCommand(id));

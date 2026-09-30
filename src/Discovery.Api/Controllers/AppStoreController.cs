@@ -1,7 +1,9 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.AppStore.Commands;
 using Discovery.Core.Cqrs.AppStore.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services;
 using MediatR;
@@ -21,6 +23,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>Search/browse catalog by installation type (0=Winget, 1=Chocolatey, 2=Custom).</summary>
     [HttpGet]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> Search(
         [FromQuery] int installationType = 0,
         [FromQuery] string? search = null,
@@ -35,6 +38,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>List catalog with pagination by cursor.</summary>
     [HttpGet("catalog")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> GetCatalog(
         [FromQuery] int installationType = 0,
         [FromQuery] string? search = null,
@@ -48,6 +52,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>Get a single package by ID and installation type.</summary>
     [HttpGet("catalog/{packageId}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> GetPackageById(
         string packageId,
         [FromQuery] int installationType = 0)
@@ -64,6 +69,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>Create or update a custom package (InstallationType=Custom).</summary>
     [HttpPost("custom")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomPackage([FromBody] UpsertCustomAppPackageCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -81,6 +87,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
     /// Consulte o progresso/resultado via GET sync/status. Custom (2) é manual.
     /// </summary>
     [HttpPost("sync")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
     public IActionResult SyncCatalog(
         [FromServices] AppCatalogBackgroundSyncService backgroundSync,
         [FromQuery] int installationType = 0)
@@ -102,6 +109,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
     /// persistida no ServerConfiguration (manual ou automática via Quartz).
     /// </summary>
     [HttpGet("sync/status")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> GetSyncStatus(
         [FromServices] AppCatalogBackgroundSyncService backgroundSync,
         [FromServices] IAppCatalogSyncStatusStore statusStore,
@@ -135,6 +143,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>Get approved/effective apps for a scope.</summary>
     [HttpGet("effective")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> GetEffective(
         [FromQuery] Guid? clientId = null,
         [FromQuery] Guid? siteId = null,
@@ -152,6 +161,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>List approval rules by scope and installation type.</summary>
     [HttpGet("approvals")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> GetApprovals(
         [FromQuery] int? scopeType = null,
         [FromQuery] Guid? scopeId = null,
@@ -164,6 +174,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>Create/update an approval rule.</summary>
     [HttpPost("approvals")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
     public async Task<IActionResult> UpsertApproval([FromBody] UpsertAppApprovalRuleCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -174,6 +185,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>Delete an approval rule.</summary>
     [HttpDelete("approvals/{ruleId:guid}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
     public async Task<IActionResult> DeleteApproval(
         Guid ruleId,
         [FromQuery] string? reason = null,
@@ -192,6 +204,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>Audit history for approval changes.</summary>
     [HttpGet("approvals/audit")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> GetApprovalAudit(
         [FromQuery] int? installationType = null,
         [FromQuery] string? packageId = null,
@@ -217,6 +230,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>Get diff for a single package across scope hierarchy.</summary>
     [HttpGet("diff/{packageId}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> GetPackageDiff(
         string packageId,
         [FromQuery] int installationType = 0,
@@ -230,6 +244,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
 
     /// <summary>Get effective diffs across a scope.</summary>
     [HttpGet("diff/effective")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
     public async Task<IActionResult> GetEffectiveDiffs(
         [FromQuery] int scopeType = 0,
         [FromQuery] Guid? scopeId = null,

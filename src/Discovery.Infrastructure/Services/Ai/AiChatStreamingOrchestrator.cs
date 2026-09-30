@@ -29,6 +29,9 @@ public class AiChatStreamingOrchestrator
     private readonly AiChatQuickReply _quickReply;
     private readonly IAiTokenBudgetResolver _tokenBudgetResolver;
     private readonly IMemoryCache _memoryCache;
+    // Catálogo de modelos: usado só para saber se o modelo configurado aceita
+    // imagens (capacidade "vision") antes de enviar prints de tela.
+    private readonly IAiModelCatalogService _modelCatalog;
 
     public AiChatStreamingOrchestrator(
         IAiChatSessionRepository sessionRepository,
@@ -42,7 +45,8 @@ public class AiChatStreamingOrchestrator
         AiChatToolOrchestrator toolOrchestrator,
         AiChatQuickReply quickReply,
         IAiTokenBudgetResolver tokenBudgetResolver,
-        IMemoryCache memoryCache)
+        IMemoryCache memoryCache,
+        IAiModelCatalogService modelCatalog)
     {
         _sessionRepository = sessionRepository;
         _messageRepository = messageRepository;
@@ -56,6 +60,34 @@ public class AiChatStreamingOrchestrator
         _quickReply = quickReply;
         _tokenBudgetResolver = tokenBudgetResolver;
         _memoryCache = memoryCache;
+        _modelCatalog = modelCatalog;
+    }
+
+    /// <summary>
+    /// Verifica se o modelo configurado aceita imagens. O catálogo (cache de
+    /// 60 min) só é consultado quando existe imagem para enviar; qualquer falha
+    /// mantém o comportamento anterior (envia) — nunca bloquear a captura por
+    /// indisponibilidade do catálogo.
+    /// </summary>
+    private async Task<bool> ShouldSendScreenshotImagesAsync(
+        AIIntegrationSettings settings, Guid clientId, Guid siteId, CancellationToken ct)
+    {
+        if (!settings.SendScreenshotImages) return false;
+        var model = settings.ChatModel;
+        if (string.IsNullOrWhiteSpace(model)) return true;
+        try
+        {
+            var info = await _modelCatalog.GetModelAsync(
+                clientId == Guid.Empty ? null : clientId,
+                siteId == Guid.Empty ? null : siteId,
+                model, ct);
+            return AiChatHelpers.ResolveScreenshotImagesAllowed(true, info);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Falha ao resolver capacidade de visão do modelo {Model}; mantendo envio de imagens", model);
+            return true;
+        }
     }
 
     /// <summary>
@@ -194,7 +226,18 @@ public class AiChatStreamingOrchestrator
             llmMessages = AiChatToolOrchestrator.BuildLlmMessagesFromHistory(history);
             if (!string.IsNullOrWhiteSpace(systemNote))
                 llmMessages.Add(new LlmMessage("system", systemNote));
-            llmMessages.Add(BuildUserMessageWithImages(message, images));
+            // Guard de visão: só envia a imagem se o modelo aceitar (setting +
+            // capacidade declarada no catálogo). Sem visão, o LLM recebe a
+            // mensagem de texto e uma nota para avisar o usuário.
+            var sendScreenshotImages = images is { Count: > 0 } &&
+                await ShouldSendScreenshotImagesAsync(aiSettings, scopeClientId, scopeSiteId, ct);
+            if (images is { Count: > 0 } && !sendScreenshotImages)
+            {
+                llmMessages.Add(new LlmMessage("system",
+                    "[SISTEMA] O usuário anexou uma imagem, mas o modelo configurado não tem visão (ou o envio de prints está desabilitado). " +
+                    "Avise o usuário que a imagem não pôde ser analisada e peça uma descrição em texto do que aparece na tela."));
+            }
+            llmMessages.Add(BuildUserMessageWithImages(message, sendScreenshotImages ? images : null));
             setupOk = true;
         }
         catch (Exception ex)
@@ -614,6 +657,19 @@ public class AiChatStreamingOrchestrator
             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir mensagem do usuário no multi-round", traceId); }
         }
 
+        // Guard de visão: detectado uma única vez por request (o conteúdo dos
+        // tool results já está em memória) e aplicado a todos os prints do round.
+        var hasScreenshotResult = toolResults is { Count: > 0 } &&
+            toolResults.Any(tr => tr.Result.Contains("\"image_base64\"", StringComparison.Ordinal));
+        var sendScreenshotImages = hasScreenshotResult &&
+            await ShouldSendScreenshotImagesAsync(aiSettings, session.ClientId, session.SiteId, ct);
+        if (hasScreenshotResult && !sendScreenshotImages)
+        {
+            llmMessages.Add(new LlmMessage("system",
+                "[SISTEMA] Uma captura de tela foi executada, mas o modelo atual não tem visão (ou o envio de prints está desabilitado). " +
+                "Explique ao usuário que a imagem não pôde ser analisada e ofereça alternativas (ex.: descrever o erro em texto)."));
+        }
+
         if (toolResults is { Count: > 0 })
         {
             // B1: valida cada toolResult contra as tool calls pendentes emitidas
@@ -657,7 +713,9 @@ public class AiChatStreamingOrchestrator
                 // Captura de tela: o tool result pode conter a imagem (data URL).
                 // Injeta uma mensagem user multimodal APÓS o tool message — é o
                 // formato aceito por OpenAI/OpenRouter para visão em tool calls.
-                var imageParts = AiChatHelpers.BuildImagePartsFromToolResult(wrapped, tr.Name);
+                var imageParts = sendScreenshotImages
+                    ? AiChatHelpers.BuildImagePartsFromToolResult(wrapped, tr.Name)
+                    : null;
                 if (imageParts is not null)
                 {
                     toolImageMessages.Add(new LlmMessage(

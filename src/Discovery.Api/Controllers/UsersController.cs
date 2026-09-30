@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Users.Commands;
 using Discovery.Core.Cqrs.Users.Queries;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class UsersController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] string? cursor = null, [FromQuery] int limit = 50)
     {
         var result = await mediator.Send(new ListUsersQuery(cursor, limit));
@@ -19,6 +22,7 @@ public class UsersController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetUserByIdQuery(id));
@@ -30,6 +34,7 @@ public class UsersController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Users, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateUserCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -39,6 +44,7 @@ public class UsersController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateUserCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -50,6 +56,7 @@ public class UsersController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var result = await mediator.Send(new DeleteUserCommand(id));

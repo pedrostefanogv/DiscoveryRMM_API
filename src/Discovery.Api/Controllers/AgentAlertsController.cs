@@ -19,6 +19,7 @@ public class AgentAlertsController(
     ISiteRepository siteRepository) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetAll(
         [FromQuery] string? status, [FromQuery] string? scopeType,
         [FromQuery] Guid? scopeClientId, [FromQuery] Guid? scopeSiteId,
@@ -31,6 +32,7 @@ public class AgentAlertsController(
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var r = await mediator.Send(new GetAlertByIdQuery(id));
@@ -38,6 +40,7 @@ public class AgentAlertsController(
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Agents, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateAlertCommand cmd)
     {
         var r = await mediator.Send(cmd);
@@ -45,6 +48,7 @@ public class AgentAlertsController(
     }
 
     [HttpPost("{id:guid}/dispatch")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> Dispatch(Guid id)
     {
         var r = await mediator.Send(new DispatchAlertCommand(id));
@@ -52,6 +56,7 @@ public class AgentAlertsController(
     }
 
     [HttpPost("{id:guid}/create-ticket")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
     public async Task<IActionResult> CreateTicket(Guid id, [FromBody] CreateTicketFromAlertCommand cmd)
     {
         var r = await mediator.Send(cmd with { AlertId = id });
@@ -59,6 +64,7 @@ public class AgentAlertsController(
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
     public async Task<IActionResult> Cancel(Guid id)
     {
         var r = await mediator.Send(new CancelAlertCommand(id));

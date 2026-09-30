@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Discovery.Core.DTOs;
 using Discovery.Core.ValueObjects;
 
 namespace Discovery.Infrastructure.Services;
@@ -84,6 +85,23 @@ internal static class AiChatHelpers
     }
 
     // ── Imagens / captura de tela assistida ────────────────────────────────
+
+    /// <summary>
+    /// Decide se imagens de captura de tela podem ser enviadas ao LLM.
+    ///
+    ///   - setting desligado → nunca envia (privacidade/custo);
+    ///   - modelo sem informação no catálogo → mantém o comportamento (envia);
+    ///   - modelo com capacidades declaradas e SEM "vision" → não envia
+    ///     (um payload image_url geraria 400 no provedor).
+    /// </summary>
+    public static bool ResolveScreenshotImagesAllowed(bool settingEnabled, AiModelInfo? modelInfo)
+    {
+        if (!settingEnabled) return false;
+        if (modelInfo?.Capabilities is not { Count: > 0 } capabilities) return true;
+        return capabilities.Any(c =>
+            string.Equals(c, "vision", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(c, "image", StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>Máximo de imagens aceitas em uma única mensagem.</summary>
     public const int MaxImagesPerMessage = 3;

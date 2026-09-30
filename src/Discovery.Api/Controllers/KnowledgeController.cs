@@ -1,6 +1,8 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Knowledge.Commands;
 using Discovery.Core.Cqrs.Knowledge.Queries;
 using Discovery.Core.DTOs;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,6 +15,7 @@ namespace Discovery.Api.Controllers;
 public class KnowledgeController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? clientId = null,
         [FromQuery] Guid? siteId = null,
@@ -35,6 +38,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("search")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] int maxResults = 10, [FromQuery] Guid? departmentId = null, [FromQuery] string mode = "hybrid")
     {
         // mode: semantic | keyword | hybrid (híbrido = semântico com fallback keyword).
@@ -48,6 +52,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     /// Endpoint consumido pelo console web — antes não existia (404).
     /// </summary>
     [HttpPost("chat-search")]
+    [RequirePermission(ResourceType.AiChat, ActionType.View)]
     public async Task<IActionResult> ChatSearch([FromBody] KbSearchRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new SearchKbSuggestionsQuery(request), ct);
@@ -57,6 +62,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetKnowledgeArticleByIdQuery(id));
@@ -64,6 +70,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateArticleRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new CreateKnowledgeArticleCommand(
@@ -75,6 +82,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateArticleRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new UpdateKnowledgeArticleCommand(
@@ -83,6 +91,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var result = await mediator.Send(new DeleteKnowledgeArticleCommand(id), ct);
@@ -90,6 +99,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("{id:guid}/publish")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<IActionResult> Publish(Guid id, [FromBody] PublishArticleRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new PublishKnowledgeArticleCommand(id, request.Status, request.LastEditedBy, request.ChangeSummary), ct);
@@ -97,6 +107,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("{id:guid}/unpublish")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<IActionResult> Unpublish(Guid id, [FromQuery] string? lastEditedBy = null, CancellationToken ct = default)
     {
         var result = await mediator.Send(new UnpublishKnowledgeArticleCommand(id, lastEditedBy), ct);
@@ -104,6 +115,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}/versions")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<IActionResult> GetVersions(Guid id, CancellationToken ct)
     {
         var result = await mediator.Send(new GetKnowledgeArticleVersionsQuery(id), ct);
@@ -113,6 +125,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     // ── Sub-páginas internas do artigo (estilo Notion) ──────────────
 
     [HttpGet("{id:guid}/pages")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<IActionResult> GetPages(Guid id, CancellationToken ct)
     {
         var result = await mediator.Send(new GetArticlePagesQuery(id), ct);
@@ -120,6 +133,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}/pages/{pageId:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<IActionResult> GetPage(Guid id, Guid pageId, CancellationToken ct)
     {
         var result = await mediator.Send(new GetArticlePageQuery(id, pageId), ct);
@@ -127,6 +141,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("{id:guid}/pages")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<IActionResult> CreatePage(Guid id, [FromBody] CreateArticlePageRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new CreateArticlePageCommand(
@@ -137,6 +152,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}/pages/{pageId:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<IActionResult> UpdatePage(Guid id, Guid pageId, [FromBody] UpdateArticlePageRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new UpdateArticlePageCommand(
@@ -145,6 +161,7 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}/pages/{pageId:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
     public async Task<IActionResult> DeletePage(Guid id, Guid pageId, CancellationToken ct)
     {
         var result = await mediator.Send(new DeleteArticlePageCommand(id, pageId), ct);

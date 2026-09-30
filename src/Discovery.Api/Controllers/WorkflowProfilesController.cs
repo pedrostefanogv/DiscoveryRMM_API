@@ -14,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class WorkflowProfilesController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Workflow, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null, [FromQuery] bool includeGlobal = true)
     {
         var result = await mediator.Send(new ListWorkflowProfilesQuery(clientId, includeGlobal));
@@ -21,6 +22,7 @@ public class WorkflowProfilesController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Workflow, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetWorkflowProfileByIdQuery(id));

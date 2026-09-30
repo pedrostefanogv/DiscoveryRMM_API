@@ -1,6 +1,8 @@
 using System.Net;
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.AgentUpdates.Commands;
 using Discovery.Core.Cqrs.AgentUpdates.Queries;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -12,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class AgentUpdatesController(IMediator mediator) : ControllerBase
 {
     [HttpGet("build/current")]
+    [RequirePermission(ResourceType.Deployment, ActionType.View)]
     public async Task<IActionResult> GetCurrentBuild([FromQuery] string? platform, [FromQuery] string? architecture, [FromQuery] string? artifactType, CancellationToken ct)
     {
         var r = await mediator.Send(new GetCurrentAgentBuildQuery(platform, architecture, artifactType), ct);
@@ -23,6 +26,7 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     /// Accepts multipart/form-data with metadata fields and the binary file.
     /// </summary>
     [HttpPost("build/refresh")]
+    [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
     [RequestSizeLimit(500_000_000)]
     public async Task<IActionResult> RefreshBuild(
         [FromForm] RefreshAgentBuildFormRequest request,
@@ -50,6 +54,8 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     /// - Direct loopback connections (scripts running on the server) are allowed without authentication.
     /// - Authenticated admin users calling through the frontend/proxy are also allowed.
     /// - Unauthenticated requests from non-loopback IPs are rejected.
+    ///
+    /// Não usa [RequirePermission] de propósito: o fluxo de script em localhost é anônimo.
     /// </summary>
     [HttpPost("build/rebuild")]
     [AllowAnonymous]
@@ -92,6 +98,7 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("agents/{agentId:guid}/events")]
+    [RequirePermission(ResourceType.Deployment, ActionType.View)]
     public async Task<IActionResult> GetAgentEvents(Guid agentId, [FromQuery] int limit = 100, CancellationToken ct = default)
     {
         var r = await mediator.Send(new ListAgentUpdateEventsQuery(agentId, limit), ct);
@@ -99,6 +106,7 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("agents/{agentId:guid}/force-update")]
+    [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
     public async Task<IActionResult> ForceUpdate(
         Guid agentId,
         [FromBody] ForceAgentUpdateCommand? cmd = null,

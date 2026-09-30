@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Roles.Commands;
 using Discovery.Core.Cqrs.Roles.Queries;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class RolesController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
     public async Task<IActionResult> GetAll()
     {
         var result = await mediator.Send(new ListRolesQuery());
@@ -19,6 +22,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetRoleByIdQuery(id));
@@ -30,6 +34,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Users, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateRoleCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -39,6 +44,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateRoleCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -50,6 +56,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Delete)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var result = await mediator.Send(new DeleteRoleCommand(id));

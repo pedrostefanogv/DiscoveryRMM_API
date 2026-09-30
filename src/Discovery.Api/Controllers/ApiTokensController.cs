@@ -1,5 +1,7 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.ApiTokens.Commands;
 using Discovery.Core.Cqrs.ApiTokens.Queries;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class ApiTokensController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] Guid userId)
     {
         var result = await mediator.Send(new ListApiTokensQuery(userId));
@@ -19,6 +22,7 @@ public class ApiTokensController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Users, ActionType.Create)]
     public async Task<IActionResult> Create([FromBody] CreateApiTokenCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -26,6 +30,7 @@ public class ApiTokensController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Delete)]
     public async Task<IActionResult> Revoke(Guid id, [FromQuery] Guid userId)
     {
         var result = await mediator.Send(new RevokeApiTokenCommand(id, userId));

@@ -173,6 +173,15 @@ public class AIIntegrationSettings
     /// <summary>Habilita detecção de PII/secrets na saída do LLM (guardrails).</summary>
     public bool OutputGuardrailsEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Envia imagens (prints de tela capturados pelo agent) ao LLM como conteúdo
+    /// multimodal. Default true. Mesmo habilitado, o envio é suprimido quando o
+    /// catálogo indica que o modelo configurado NÃO tem capacidade "vision"
+    /// (evita erro 400 do provedor); nesse caso o LLM recebe apenas o resumo
+    /// textual do print.
+    /// </summary>
+    public bool SendScreenshotImages { get; set; } = true;
+
     // --- Constantes de provider ---
 
     public const string ProviderOpenAi = "openai";

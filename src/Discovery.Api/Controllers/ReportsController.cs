@@ -1,4 +1,6 @@
+using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Reports.Queries;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,6 +14,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
 {
     // --- Executions ---
     [HttpGet]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new ListReportsQuery(clientId));
@@ -19,6 +22,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{executionId:guid}")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public async Task<IActionResult> GetById(Guid executionId, [FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new GetReportExecutionQuery(executionId, clientId));
@@ -27,6 +31,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
 
     // --- Dataset Catalog ---
     [HttpGet("datasets")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public async Task<IActionResult> GetDatasetCatalog()
     {
         var result = await mediator.Send(new GetReportDatasetCatalogQuery());
@@ -35,6 +40,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
 
     // --- Templates ---
     [HttpGet("templates")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public async Task<IActionResult> ListTemplates([FromQuery] Guid? clientId = null, [FromQuery] bool? isActive = true)
     {
         var result = await mediator.Send(new ListReportTemplatesQuery(clientId, isActive));
@@ -42,6 +48,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("templates/{id:guid}")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public async Task<IActionResult> GetTemplateById(Guid id, [FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new GetReportTemplateByIdQuery(id, clientId));
@@ -53,6 +60,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("templates")]
+    [RequirePermission(ResourceType.Reports, ActionType.Create)]
     public async Task<IActionResult> CreateTemplate([FromBody] CreateReportTemplateCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -62,6 +70,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("templates/{id:guid}")]
+    [RequirePermission(ResourceType.Reports, ActionType.Edit)]
     public async Task<IActionResult> UpdateTemplate(Guid id, [FromBody] UpdateReportTemplateCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -73,6 +82,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("templates/{id:guid}")]
+    [RequirePermission(ResourceType.Reports, ActionType.Delete)]
     public async Task<IActionResult> DeleteTemplate(Guid id, [FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new DeleteReportTemplateCommand(id, clientId));
@@ -85,6 +95,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
 
     // --- Run ---
     [HttpGet("executions")]
+    [RequirePermission(ResourceType.Reports, ActionType.View)]
     public async Task<IActionResult> ListExecutions([FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new ListReportsQuery(clientId));
@@ -92,6 +103,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("run")]
+    [RequirePermission(ResourceType.Reports, ActionType.Execute)]
     public async Task<IActionResult> RunNow([FromBody] RunReportNowCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -104,6 +116,7 @@ public class ReportsController(IMediator mediator) : ControllerBase
 
     // --- Preview ---
     [HttpPost("preview")]
+    [RequirePermission(ResourceType.Reports, ActionType.Execute)]
     public async Task<IActionResult> Preview([FromBody] PreviewReportCommand cmd)
     {
         var result = await mediator.Send(cmd);

@@ -14,6 +14,7 @@ namespace Discovery.Api.Controllers;
 public class WorkflowController(IMediator mediator) : ControllerBase
 {
     [HttpGet("states")]
+    [RequirePermission(ResourceType.Workflow, ActionType.View)]
     public async Task<IActionResult> GetStates([FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new ListWorkflowStatesQuery(clientId));
@@ -21,6 +22,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("states/{id:guid}")]
+    [RequirePermission(ResourceType.Workflow, ActionType.View)]
     public async Task<IActionResult> GetStateById(Guid id)
     {
         var result = await mediator.Send(new GetWorkflowStateByIdQuery(id));
@@ -52,6 +54,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("transitions")]
+    [RequirePermission(ResourceType.Workflow, ActionType.View)]
     public async Task<IActionResult> GetTransitions([FromQuery] Guid? clientId = null)
     {
         var result = await mediator.Send(new ListWorkflowTransitionsQuery(clientId));
@@ -63,6 +66,7 @@ public class WorkflowController(IMediator mediator) : ControllerBase
     /// destinos válidos a partir da origem escolhida.
     /// </summary>
     [HttpGet("transitions/from/{fromStateId:guid}")]
+    [RequirePermission(ResourceType.Workflow, ActionType.View)]
     public async Task<IActionResult> GetTransitionsFrom(Guid fromStateId, [FromQuery] Guid? clientId = null)
     {
         var transitions = await mediator.Send(new ListWorkflowTransitionsQuery(clientId), CancellationToken.None);
