@@ -100,6 +100,22 @@ public class AiChatStreamingOrchestrator
         }
     }
 
+    /// <summary>
+    /// Constrói a mensagem do usuário com partes multimodais quando há imagens
+    /// anexadas (prints do chat). Sem imagens, comportamento anterior (string).
+    /// </summary>
+    private static LlmMessage BuildUserMessageWithImages(string message, List<string>? images)
+    {
+        var imageParts = AiChatHelpers.BuildImagePartsFromDataUrls(images);
+        if (imageParts is null)
+        {
+            return new LlmMessage("user", message);
+        }
+        var parts = new List<LlmContentPart> { new("text", Text: message) };
+        parts.AddRange(imageParts);
+        return new LlmMessage("user", message, ContentParts: parts);
+    }
+
     /// <summary>Trunca um texto para log sem depender de helpers externos.</summary>
     private static string Shorten(string? value, int max)
         => string.IsNullOrEmpty(value) ? string.Empty : (value.Length <= max ? value : value[..max] + "...");
@@ -109,6 +125,7 @@ public class AiChatStreamingOrchestrator
         Func<Guid, CancellationToken, Task<AIIntegrationSettings>> resolveAiSettings,
         Guid? departmentId = null,
         string? systemNote = null,
+        List<string>? images = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
@@ -177,7 +194,7 @@ public class AiChatStreamingOrchestrator
             llmMessages = AiChatToolOrchestrator.BuildLlmMessagesFromHistory(history);
             if (!string.IsNullOrWhiteSpace(systemNote))
                 llmMessages.Add(new LlmMessage("system", systemNote));
-            llmMessages.Add(new LlmMessage("user", message));
+            llmMessages.Add(BuildUserMessageWithImages(message, images));
             setupOk = true;
         }
         catch (Exception ex)
@@ -199,7 +216,9 @@ public class AiChatStreamingOrchestrator
         // responde mensagens triviais; mensagens com contexto real vão ao LLM.
         // B15: passa o histórico real — "oi" no meio de uma conversa técnica
         // não deve receber a saudação em cache.
-        var quickReplyMatch = AiChatQuickReply.TryGetReply(message, history: history);
+        // Com imagens anexadas, NUNCA usar quick-reply: a resposta em cache não
+        // olha a imagem e o usuário receberia algo genérico.
+        var quickReplyMatch = images is { Count: > 0 } ? null : AiChatQuickReply.TryGetReply(message, history: history);
         if (quickReplyMatch != null)
         {
             await _quickReply.PersistAsync(session.Id, message, quickReplyMatch, nextSeq, startTime, traceId, aiSettings, stopwatch, ct);
@@ -613,6 +632,10 @@ public class AiChatStreamingOrchestrator
             var pendingNames = new HashSet<string>(pendingCalls?.Select(c => c.Name) ?? [], StringComparer.OrdinalIgnoreCase);
 
             var toolMsgs = new List<AiChatMessage>();
+            // Imagens de captura de tela são adicionadas DEPOIS de todos os tool
+            // messages: intercalar mensagens user entre tool messages pode ser
+            // rejeitado por provedores OpenAI-compatible.
+            var toolImageMessages = new List<LlmMessage>();
             foreach (var tr in toolResults)
             {
                 // "a2ui_action" é a sentinela de interação com surfaces (não é
@@ -631,8 +654,27 @@ public class AiChatStreamingOrchestrator
                 // anterior foi persistido com tc.Id; o prefixo "agent_" quebrava
                 // o pareamento tool_call/tool_message em OpenAI/DeepSeek.
                 llmMessages.Add(new LlmMessage("tool", wrapped, tr.CallId, tr.Name));
-                toolMsgs.Add(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "tool", Content = wrapped, ToolCallId = tr.CallId, ToolName = tr.Name, CreatedAt = DateTime.UtcNow, TraceId = traceId });
+                // Captura de tela: o tool result pode conter a imagem (data URL).
+                // Injeta uma mensagem user multimodal APÓS o tool message — é o
+                // formato aceito por OpenAI/OpenRouter para visão em tool calls.
+                var imageParts = AiChatHelpers.BuildImagePartsFromToolResult(wrapped, tr.Name);
+                if (imageParts is not null)
+                {
+                    toolImageMessages.Add(new LlmMessage(
+                        "user",
+                        $"Imagem capturada pela ferramenta {tr.Name} para análise visual.",
+                        ContentParts: imageParts));
+                }
+                // Não persistir o base64 da imagem no banco: o LLM já recebeu a
+                // imagem na mensagem multimodal deste round. Guardar o base64 em
+                // ai_chat_messages inflaria a tabela em MBs por captura e o
+                // histórico reconstruído nas próximas rodadas não precisa dela.
+                var persistedResult = imageParts is not null
+                    ? AiChatHelpers.CompactToolResultForPersistence(wrapped)
+                    : wrapped;
+                toolMsgs.Add(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "tool", Content = persistedResult, ToolCallId = tr.CallId, ToolName = tr.Name, CreatedAt = DateTime.UtcNow, TraceId = traceId });
             }
+            llmMessages.AddRange(toolImageMessages);
             try { await _messageRepository.CreateBatchAsync(toolMsgs, ct); }
             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir tool results", traceId); }
         }
@@ -643,8 +685,11 @@ public class AiChatStreamingOrchestrator
         // B13: usa a última mensagem do usuário do histórico (o 1º toolResult
         // pode ser ruído e degradava o contexto do prompt).
         var lastUserMessage = history.LastOrDefault(m => m.Role == "user")?.Content;
+        // O seed do prompt (RAG/embedding) nunca pode ser um tool result com
+        // base64 de imagem: Shorten limita o custo e evita embutir MBs.
+        var promptSeed = message ?? lastUserMessage ?? Shorten(toolResults?.FirstOrDefault()?.Result, 2000) ?? "";
         var (systemPrompt, _) = await _promptBuilder.BuildAsync(agent, session,
-            message ?? lastUserMessage ?? toolResults?.FirstOrDefault()?.Result ?? "", aiSettings, departmentId, ct);
+            promptSeed, aiSettings, departmentId, ct);
 
         var availableTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(session.ClientId, session.SiteId, agentId, ct)

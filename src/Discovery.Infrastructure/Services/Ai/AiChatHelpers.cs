@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Discovery.Core.ValueObjects;
 
 namespace Discovery.Infrastructure.Services;
@@ -80,5 +81,107 @@ internal static class AiChatHelpers
         // recebia um stream vazio.
         if (ms <= 0) return 120_000;
         return Math.Max(ms, 120_000);
+    }
+
+    // ── Imagens / captura de tela assistida ────────────────────────────────
+
+    /// <summary>Máximo de imagens aceitas em uma única mensagem.</summary>
+    public const int MaxImagesPerMessage = 3;
+
+    /// <summary>
+    /// Teto do payload base64 de cada imagem (≈3 MB binários). Prints maiores
+    /// são descartados pelo agente antes do envio; aqui é a última defesa.
+    /// </summary>
+    public const int MaxImageBase64Chars = 4 * 1024 * 1024; // 4 MiB (alinhado ao agent)
+
+    /// <summary>
+    /// Extrai partes multimodais do resultado JSON de uma tool de captura de
+    /// tela. Contrato do agent: {"image_base64":"...","mime":"image/png",
+    /// "note":"..."}. Retorna null quando não há imagem válida (o tool result
+    /// textual continua sendo a única informação, compatível com modelos sem
+    /// visão).
+    /// </summary>
+    public static List<Discovery.Core.Interfaces.LlmContentPart>? BuildImagePartsFromToolResult(
+        string toolResult, string toolName)
+    {
+        if (string.IsNullOrWhiteSpace(toolResult)) return null;
+        if (!toolResult.Contains("image_base64", StringComparison.Ordinal)) return null;
+        var trimmed = toolResult.TrimStart();
+        if (trimmed.Length == 0 || trimmed[0] != '{') return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(toolResult);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (!root.TryGetProperty("image_base64", out var b64) || b64.ValueKind != JsonValueKind.String) return null;
+            var data = b64.GetString();
+            if (string.IsNullOrEmpty(data) || data.Length > MaxImageBase64Chars) return null;
+            var mime = root.TryGetProperty("mime", out var m) && m.ValueKind == JsonValueKind.String
+                ? m.GetString() : "image/png";
+            var note = root.TryGetProperty("note", out var n) && n.ValueKind == JsonValueKind.String
+                ? n.GetString() : null;
+            var text = string.IsNullOrWhiteSpace(note)
+                ? $"Imagem capturada pela ferramenta {toolName}."
+                : note!;
+            return new List<Discovery.Core.Interfaces.LlmContentPart>
+            {
+                new("text", Text: text),
+                new("image_url", ImageUrl: $"data:{mime};base64,{data}")
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Remove o base64 da imagem de um tool result antes de persistir no
+    /// histórico do chat: o LLM já recebeu a imagem na mensagem multimodal do
+    /// round atual e guardar MBs de base64 em ai_chat_messages infla a tabela e
+    /// não agrega contexto nas rodadas seguintes. Metadados (mime, note, window)
+    /// são preservados e um marcador documenta a omissão.
+    /// </summary>
+    public static string CompactToolResultForPersistence(string toolResult)
+    {
+        if (string.IsNullOrEmpty(toolResult) || !toolResult.Contains("\"image_base64\"", StringComparison.Ordinal))
+        {
+            return toolResult;
+        }
+        try
+        {
+            if (JsonNode.Parse(toolResult) is not JsonObject obj) return toolResult;
+            if (obj["image_base64"] is not JsonValue value) return toolResult;
+            if (!value.TryGetValue<string>(out var raw)) return toolResult;
+            // Sem </>: o encoder padrão do System.Text.Json escaparia os
+            // delimitadores e o marcador ficaria ilegível no histórico.
+            obj["image_base64"] = $"[omitido: {raw.Length} chars base64]";
+            obj["image_omitted"] = true;
+            return obj.ToJsonString();
+        }
+        catch (JsonException)
+        {
+            return toolResult;
+        }
+    }
+
+    /// <summary>
+    /// Converte data URLs anexadas pelo usuário (campo "images" do request de
+    /// chat) em partes multimodais. Ignora entradas inválidas/grandes.
+    /// </summary>
+    public static List<Discovery.Core.Interfaces.LlmContentPart>? BuildImagePartsFromDataUrls(
+        IEnumerable<string>? images)
+    {
+        if (images is null) return null;
+        var parts = new List<Discovery.Core.Interfaces.LlmContentPart>();
+        foreach (var image in images)
+        {
+            if (parts.Count >= MaxImagesPerMessage) break;
+            var value = image?.Trim();
+            if (string.IsNullOrEmpty(value) || value.Length > MaxImageBase64Chars) continue;
+            if (!value.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)) continue;
+            parts.Add(new Discovery.Core.Interfaces.LlmContentPart("image_url", ImageUrl: value));
+        }
+        return parts.Count > 0 ? parts : null;
     }
 }

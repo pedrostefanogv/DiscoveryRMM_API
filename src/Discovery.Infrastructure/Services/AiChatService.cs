@@ -286,9 +286,9 @@ public class AiChatService : IAiChatService
     // StreamAsync — delega para AiChatStreamingOrchestrator
     // ══════════════════════════════════════════════════════════════════════════
 
-    public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(Guid agentId, string message, Guid? sessionId, Guid? departmentId = null, string? systemNote = null, [EnumeratorCancellation] CancellationToken ct = default)
+    public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(Guid agentId, string message, Guid? sessionId, Guid? departmentId = null, string? systemNote = null, List<string>? images = null, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var chunk in _streamingOrchestrator.StreamAsync(agentId, message, sessionId, ResolveAiSettingsAsync, departmentId, systemNote, ct))
+        await foreach (var chunk in _streamingOrchestrator.StreamAsync(agentId, message, sessionId, ResolveAiSettingsAsync, departmentId, systemNote, images, ct))
             yield return chunk;
     }
 

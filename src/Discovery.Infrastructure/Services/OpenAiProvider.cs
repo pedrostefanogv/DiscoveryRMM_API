@@ -251,7 +251,7 @@ public class OpenAiProvider : ILlmProvider
                     openAiMessages.Add(new
                     {
                         role = msg.Role,
-                        content = msg.Content
+                        content = MessageContent(msg)
                     });
                 }
             }
@@ -544,7 +544,7 @@ public class OpenAiProvider : ILlmProvider
             }
             else
             {
-                openAiMessages.Add(new { role = msg.Role, content = msg.Content });
+                openAiMessages.Add(new { role = msg.Role, content = MessageContent(msg) });
             }
         }
 
@@ -803,6 +803,22 @@ public class OpenAiProvider : ILlmProvider
     private static Uri BuildRequestUri(string baseUrl)
         => new(baseUrl.TrimEnd('/') + "/chat/completions");
 
+    // Multimodal: quando a mensagem tem partes de conteúdo (texto + imagem),
+    // "content" vira um ARRAY no formato OpenAI vision. Sem partes, mantém
+    // string (compatibilidade total com o comportamento anterior).
+    private static object MessageContent(LlmMessage msg)
+    {
+        if (msg.ContentParts is not { Count: > 0 })
+        {
+            return msg.Content;
+        }
+        return msg.ContentParts
+            .Select(p => p.Type == "image_url"
+                ? (object)new { type = "image_url", image_url = new { url = p.ImageUrl } }
+                : new { type = "text", text = p.Text ?? string.Empty })
+            .ToList();
+    }
+
     // A8: serialização comum de mensagens (role=tool e assistant.tool_calls) —
     // compartilhada por CompleteAsync, StreamAsync e StreamWithToolsAsync.
     private static List<object> BuildOpenAiMessages(string systemPrompt, List<LlmMessage> messages)
@@ -834,7 +850,7 @@ public class OpenAiProvider : ILlmProvider
             }
             else
             {
-                openAiMessages.Add(new { role = msg.Role, content = msg.Content });
+                openAiMessages.Add(new { role = msg.Role, content = MessageContent(msg) });
             }
         }
         return openAiMessages;

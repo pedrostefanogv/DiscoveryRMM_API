@@ -72,12 +72,17 @@ public interface IAiChatService
     /// Responde via SSE streaming — emite chunks incrementais enquanto o LLM gera tokens.
     /// Suporta tool calls (loop de MCP tools) e RAG departamental.
     /// </summary>
+    /// <param name="images">
+    /// Data URLs (data:image/...) anexadas pelo usuário a esta mensagem (ex.:
+    /// print de tela). São enviadas ao LLM como conteúdo multimodal.
+    /// </param>
     IAsyncEnumerable<AiChatStreamChunk> StreamAsync(
         Guid agentId,
         string message,
         Guid? sessionId,
         Guid? departmentId = null,
         string? systemNote = null,
+        List<string>? images = null,
         CancellationToken ct = default);
 
     /// <summary>

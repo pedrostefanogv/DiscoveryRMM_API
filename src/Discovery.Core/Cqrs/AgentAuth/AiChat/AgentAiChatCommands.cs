@@ -25,7 +25,10 @@ public sealed record ChatStreamCommand(
     Guid? DepartmentId,
     string? ClientIp,
     string? SystemNote,
-    string? Mode);
+    string? Mode,
+    // Data URLs (data:image/...) anexadas pelo usuário (print de tela).
+    // Opcional — agentes/servidores antigos simplesmente não enviam o campo.
+    List<string>? Images = null);
 
 /// <summary>
 /// Resultado de uma tool executada pelo agent no fluxo multi-round.

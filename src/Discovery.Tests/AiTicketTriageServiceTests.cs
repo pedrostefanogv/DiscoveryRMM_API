@@ -576,7 +576,7 @@ public class AiTicketTriageServiceTests
 
         public abstract Task<LlmResponse> ProcessTicketPromptJsonAsync(string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature, string? responseFormat, Guid? departmentId = null, CancellationToken ct = default);
 
-        public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(Guid agentId, string message, Guid? sessionId, Guid? departmentId = null, string? systemNote = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(Guid agentId, string message, Guid? sessionId, Guid? departmentId = null, string? systemNote = null, List<string>? images = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
             await Task.CompletedTask;
             yield break;

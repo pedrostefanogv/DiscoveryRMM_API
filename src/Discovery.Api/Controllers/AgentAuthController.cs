@@ -692,7 +692,7 @@ public class AgentAuthController : ControllerBase
             else
             {
                 stream = _aiChat.StreamAsync(agentId, cmd.Message ?? string.Empty,
-                    sessionGuid, cmd.DepartmentId, cmd.SystemNote, ct);
+                    sessionGuid, cmd.DepartmentId, cmd.SystemNote, cmd.Images, ct);
             };
 
             await foreach (var chunk in stream)
@@ -832,16 +832,28 @@ public class AgentAuthController : ControllerBase
     private const int MaxToolResultLength = 32 * 1024;
 
     /// <summary>
+    /// Teto específico para capturas de tela: o resultado carrega a imagem em
+    /// base64 (contrato "image_base64") e precisa sobreviver INTACTO para a
+    /// visão do LLM. Limitado a ~6 MB de base64 por captura (o agent já limita
+    /// o lado maior da imagem a 1600 px, então o normal fica bem abaixo).
+    /// </summary>
+    private const int MaxScreenshotToolResultLength = 6 * 1024 * 1024;
+
+    /// <summary>
     /// Trunca o resultado de uma tool para MaxToolResultLength. Tenta fechar
     /// estruturas JSON abertas; se o resultado truncado não for JSON válido,
     /// devolve texto cru com marcador (nunca JSON quebrado).
     /// </summary>
-    private static string TruncateToolResult(string toolName, string? result)
+    internal static string TruncateToolResult(string toolName, string? result)
     {
         var r = result ?? string.Empty;
-        if (r.Length <= MaxToolResultLength) return r;
+        // Captura de tela: o teto padrão (32 KB) destruiria a imagem em base64.
+        var maxLength = toolName == "capture_screenshot" || r.Contains("\"image_base64\"", StringComparison.Ordinal)
+            ? MaxScreenshotToolResultLength
+            : MaxToolResultLength;
+        if (r.Length <= maxLength) return r;
 
-        var cut = r[..MaxToolResultLength];
+        var cut = r[..maxLength];
         var trimmed = cut.TrimEnd(' ', '\t', '\r', '\n', ',');
 
         // Fecha estruturas JSON abertas (contagem de delimitadores fora de strings).

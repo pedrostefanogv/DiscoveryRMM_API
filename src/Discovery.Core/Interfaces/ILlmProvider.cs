@@ -34,7 +34,17 @@ public record LlmMessage(
     string Content,
     string? ToolCallId = null,
     string? ToolName = null,
-    List<LlmAssistantToolCall>? ToolCalls = null);
+    List<LlmAssistantToolCall>? ToolCalls = null,
+    // Partes multimodais (texto/imagem). Quando preenchido, o provider
+    // serializa "content" como ARRAY de partes (formato OpenAI vision) em vez
+    // de string. Usado para enviar prints de tela ao LLM (captura assistida).
+    List<LlmContentPart>? ContentParts = null);
+
+/// <summary>
+/// Parte de conteúdo multimodal no formato OpenAI. Type = "text" (Text) ou
+/// "image_url" (ImageUrl, aceita data URL "data:image/png;base64,...").
+/// </summary>
+public record LlmContentPart(string Type, string? Text = null, string? ImageUrl = null);
 
 /// <summary>
 /// Representa um tool call emitido pelo assistant (para serialização no histórico).
