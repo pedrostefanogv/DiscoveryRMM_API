@@ -110,7 +110,9 @@ internal static class AiChatHelpers
     /// Teto do payload base64 de cada imagem (≈3 MB binários). Prints maiores
     /// são descartados pelo agente antes do envio; aqui é a última defesa.
     /// </summary>
-    public const int MaxImageBase64Chars = 4 * 1024 * 1024; // 4 MiB (alinhado ao agent)
+    // 6 MiB: as capturas agora saem em PNG lossless até ~2,9 MB (texto legível),
+    // o que dá ~3,9 MB em base64. Alinhado ao teto do agent.
+    public const int MaxImageBase64Chars = 6 * 1024 * 1024;
 
     /// <summary>
     /// Extrai partes multimodais do resultado JSON de uma tool de captura de
