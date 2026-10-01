@@ -837,7 +837,7 @@ public class AgentAuthController : ControllerBase
     /// visão do LLM. Limitado a ~6 MB de base64 por captura (o agent já limita
     /// o lado maior da imagem a 1600 px, então o normal fica bem abaixo).
     /// </summary>
-    private const int MaxScreenshotToolResultLength = 6 * 1024 * 1024;
+    private const int MaxScreenshotToolResultLength = 8 * 1024 * 1024;
 
     /// <summary>
     /// Trunca o resultado de uma tool para MaxToolResultLength. Tenta fechar

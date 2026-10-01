@@ -706,16 +706,25 @@ public class AiChatStreamingOrchestrator
                 }
 
                 var wrapped = AiChatToolOrchestrator.WrapAgentToolError(tr.Result, tr.Name);
-                // B2: usa o CallId ORIGINAL do tool call — o assistant do round
-                // anterior foi persistido com tc.Id; o prefixo "agent_" quebrava
-                // o pareamento tool_call/tool_message em OpenAI/DeepSeek.
-                llmMessages.Add(new LlmMessage("tool", wrapped, tr.CallId, tr.Name));
                 // Captura de tela: o tool result pode conter a imagem (data URL).
                 // Injeta uma mensagem user multimodal APÓS o tool message — é o
                 // formato aceito por OpenAI/OpenRouter para visão em tool calls.
                 var imageParts = sendScreenshotImages
                     ? AiChatHelpers.BuildImagePartsFromToolResult(wrapped, tr.Name)
                     : null;
+                // CRÍTICO (turno real de 2026-10-01 12:01Z): quando a imagem vai
+                // na mensagem multimodal, o CONTEÚDO da tool message NÃO pode
+                // repetir o base64 — isso dobrava o payload enviado ao provedor
+                // (~840 KB em 2 capturas) e provocava
+                // "Provider stream error: Request could not be processed".
+                // O texto compactado preserva metadados (mime/note/window).
+                var toolMessageContent = imageParts is not null
+                    ? AiChatHelpers.CompactToolResultForPersistence(wrapped)
+                    : wrapped;
+                // B2: usa o CallId ORIGINAL do tool call — o assistant do round
+                // anterior foi persistido com tc.Id; o prefixo "agent_" quebrava
+                // o pareamento tool_call/tool_message em OpenAI/DeepSeek.
+                llmMessages.Add(new LlmMessage("tool", toolMessageContent, tr.CallId, tr.Name));
                 if (imageParts is not null)
                 {
                     toolImageMessages.Add(new LlmMessage(
@@ -723,14 +732,9 @@ public class AiChatStreamingOrchestrator
                         $"Imagem capturada pela ferramenta {tr.Name} para análise visual.",
                         ContentParts: imageParts));
                 }
-                // Não persistir o base64 da imagem no banco: o LLM já recebeu a
-                // imagem na mensagem multimodal deste round. Guardar o base64 em
-                // ai_chat_messages inflaria a tabela em MBs por captura e o
-                // histórico reconstruído nas próximas rodadas não precisa dela.
-                var persistedResult = imageParts is not null
-                    ? AiChatHelpers.CompactToolResultForPersistence(wrapped)
-                    : wrapped;
-                toolMsgs.Add(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "tool", Content = persistedResult, ToolCallId = tr.CallId, ToolName = tr.Name, CreatedAt = DateTime.UtcNow, TraceId = traceId });
+                // Persistência usa o mesmo conteúdo compactado (sem base64),
+                // evitando MBs por captura em ai_chat_messages.
+                toolMsgs.Add(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "tool", Content = toolMessageContent, ToolCallId = tr.CallId, ToolName = tr.Name, CreatedAt = DateTime.UtcNow, TraceId = traceId });
             }
             llmMessages.AddRange(toolImageMessages);
             try { await _messageRepository.CreateBatchAsync(toolMsgs, ct); }
