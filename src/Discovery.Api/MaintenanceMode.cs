@@ -140,7 +140,9 @@ internal static class MaintenanceMode
         if (!options.RecoverAdmin)
             return 0;
 
-        using var scope = services.CreateScope();
+        // Escopo assíncrono: o grafo resolve serviços IAsyncDisposable (ex.: NatsAgentMessaging,
+        // alcançável via ILogRepository/ILoggingService); Dispose() síncrono lança.
+        await using var scope = services.CreateAsyncScope();
         var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
         var mfaKeys = scope.ServiceProvider.GetRequiredService<IUserMfaKeyRepository>();
         var sessions = scope.ServiceProvider.GetRequiredService<IUserSessionRepository>();

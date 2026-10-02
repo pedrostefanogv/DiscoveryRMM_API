@@ -68,7 +68,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
     private async Task RunSubscriptionAsync(CancellationToken ct)
     {
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = _scopeFactory.CreateAsyncScope();
         var configurationService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
         var serverConfig = await configurationService.GetServerConfigAsync();
 
@@ -101,7 +101,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         {
             try
             {
-                using var msgScope = _scopeFactory.CreateScope();
+                await using var msgScope = _scopeFactory.CreateAsyncScope();
                 var agentAuthService = msgScope.ServiceProvider.GetRequiredService<IAgentAuthService>();
                 var jwtService = msgScope.ServiceProvider.GetRequiredService<IJwtService>();
                 var permissionService = msgScope.ServiceProvider.GetRequiredService<IPermissionService>();

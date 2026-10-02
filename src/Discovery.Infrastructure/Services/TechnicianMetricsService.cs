@@ -4,6 +4,7 @@ using Discovery.Core.Configuration;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Serialization;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -135,7 +136,7 @@ public class TechnicianMetricsService(
 
     // ── Ciclo periódico ──────────────────────────────────────────────────
 
-    public async Task<MetricsRefreshResult> RefreshDueAsync(CancellationToken ct = default)
+    public async Task<MetricsRefreshResult> RefreshDueAsync(CancellationToken ct = default, bool force = false)
     {
         var stopwatch = Stopwatch.StartNew();
         var now = DateTime.UtcNow;
@@ -168,7 +169,9 @@ public class TechnicianMetricsService(
             if (!metricsSettings.Enabled) continue;
 
             // Vencimento por escopo: o tick do job é a granularidade mínima.
-            if (stateByScope.TryGetValue(scopeId, out var state)
+            // force (acionamento manual) ignora o intervalo.
+            if (!force
+                && stateByScope.TryGetValue(scopeId, out var state)
                 && now - state.LastRunAt < TimeSpan.FromMinutes(metricsSettings.IntervalMinutes))
             {
                 continue;
@@ -181,7 +184,9 @@ public class TechnicianMetricsService(
 
             var cutoff = now.AddMinutes(-metricsSettings.StaleThresholdMinutes);
             var due = userIds
-                .Where(id => !snapshotTimes.TryGetValue(id, out var computedAt) || computedAt < cutoff)
+                .Where(id => force
+                    || !snapshotTimes.TryGetValue(id, out var computedAt)
+                    || computedAt < cutoff)
                 .OrderBy(id => snapshotTimes.TryGetValue(id, out var computedAt) ? computedAt : DateTime.MinValue)
                 .ThenBy(id => id)
                 .ToList();
@@ -485,7 +490,8 @@ public class TechnicianMetricsService(
         Guid scopeId, int updated, int pending, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        var payload = JsonSerializer.Serialize(new { updated, pending, type = ProcessingScopeTypes.TechnicianMetrics });
+        var payload = JsonSerializer.Serialize(
+            new { updated, pending, type = ProcessingScopeTypes.TechnicianMetrics }, PersistedJson.Options);
 
         if (stateByScope.TryGetValue(scopeId, out var state))
         {

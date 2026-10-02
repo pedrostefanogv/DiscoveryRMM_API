@@ -39,8 +39,8 @@ public class TechnicianMetricsAggregationRepository(
                              AND closed_at >= created_at
                              AND created_at >= @since)                                 AS p90_resolution_minutes,
                COUNT(*) FILTER (WHERE sla_breached AND created_at >= @since)          AS sla_breached,
-               AVG(rating)::float8
-                   FILTER (WHERE rating IS NOT NULL AND created_at >= @since)         AS csat_average,
+               (AVG(rating)
+                   FILTER (WHERE rating IS NOT NULL AND created_at >= @since))::float8 AS csat_average,
                COUNT(rating) FILTER (WHERE created_at >= @since)                      AS csat_rated_count
         FROM tickets
         WHERE deleted_at IS NULL

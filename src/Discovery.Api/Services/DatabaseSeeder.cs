@@ -11,7 +11,7 @@ public static class DatabaseSeeder
 {
     public static async Task SeedAsync(IServiceProvider services)
     {
-        using var scope = services.CreateScope();
+        await using var scope = services.CreateAsyncScope();
         var repo = scope.ServiceProvider.GetRequiredService<IWorkflowRepository>();
 
         var existing = await repo.GetStatesAsync(null);

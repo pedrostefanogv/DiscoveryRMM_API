@@ -26,7 +26,13 @@ public static class JobExecutionHistoryStore
 
     public static List<JobExecutionRecord> GetHistory(JobKey key)
     {
-        return _store.TryGetValue(key, out var list) ? [.. list] : [];
+        if (!_store.TryGetValue(key, out var list))
+            return [];
+
+        // Leitura concorrente com Record(): enumerar a List fora do lock pode
+        // lançar InvalidOperationException (coleção modificada) durante o snapshot.
+        lock (list)
+            return [.. list];
     }
 }
 

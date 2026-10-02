@@ -338,7 +338,12 @@ public sealed class DashboardEventContractNormalizer
             return true;
         }
 
-        if (dataMap is not null && dataMap.TryGetValue(fieldName, out var dataTenantId))
+        // data.<campo> explicitamente null equivale a ausente (mesma semântica já
+        // aplicada ao root): eventos sem escopo (ex.: tenant.unscoped.dashboard.events)
+        // publicam clientId null e não devem gerar violação de contrato.
+        if (dataMap is not null
+            && dataMap.TryGetValue(fieldName, out var dataTenantId)
+            && dataTenantId.ValueKind != JsonValueKind.Null)
         {
             if (!TryReadGuid(dataTenantId, out var parsedDataId))
             {

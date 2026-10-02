@@ -43,7 +43,11 @@ public sealed class AiTicketAssignmentJob : IJob
 
         try
         {
-            var result = await triage.ProcessDueAsync(ct);
+            // ?force=true no acionamento manual: ignora o vencimento do escopo.
+            var force = context.MergedJobDataMap.ContainsKey("force")
+                && context.MergedJobDataMap.GetBoolean("force");
+
+            var result = await triage.ProcessDueAsync(ct, force);
             context.Result = result;
 
             if (result.ScopesProcessed > 0 || result.Triaged > 0 || result.Swept > 0)

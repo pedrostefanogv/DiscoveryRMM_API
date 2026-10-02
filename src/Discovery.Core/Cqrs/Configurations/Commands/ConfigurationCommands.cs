@@ -32,6 +32,10 @@ public sealed record ServerConfigurationImportResult(
     int Version);
 
 public sealed record TestObjectStorageCommand : ICommand<Result<object>>;
-public sealed record TestNatsConnectionCommand(string Url, string User, string Password) : ICommand<Result<NatsConnectionTestResult>>;
+/// <summary>
+/// Teste de conexão NATS. <c>User</c>/<c>Password</c> são opcionais: quando
+/// omitidos, o handler usa as credenciais configuradas no servidor.
+/// </summary>
+public sealed record TestNatsConnectionCommand(string Url, string? User, string? Password) : ICommand<Result<NatsConnectionTestResult>>;
 
 public sealed record NatsConnectionTestResult(bool Ok, IReadOnlyList<string> Errors);

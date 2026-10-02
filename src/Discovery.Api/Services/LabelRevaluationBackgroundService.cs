@@ -83,7 +83,7 @@ public sealed class LabelRevaluationBackgroundService : BackgroundService, ILabe
 
             try
             {
-                using var scope = _serviceProvider.CreateScope();
+                await using var scope = _serviceProvider.CreateAsyncScope();
                 var service = scope.ServiceProvider.GetRequiredService<IAgentAutoLabelingService>();
 
                 if (!await service.HasEnabledRulesAsync(stoppingToken))

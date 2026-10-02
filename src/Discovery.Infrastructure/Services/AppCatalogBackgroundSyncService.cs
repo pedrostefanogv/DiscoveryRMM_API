@@ -73,7 +73,8 @@ public class AppCatalogBackgroundSyncService
         try
         {
             // Cria scope próprio: o sync service e repositórios são scoped.
-            using var scope = _serviceProvider.CreateScope();
+            // Escopo assíncrono: Dispose() síncrono falha se o grafo tiver IAsyncDisposable.
+            await using var scope = _serviceProvider.CreateAsyncScope();
             var syncService = scope.ServiceProvider.GetRequiredService<IAppCatalogSyncService>();
             var statusStore = scope.ServiceProvider.GetRequiredService<IAppCatalogSyncStatusStore>();
             var result = await syncService.SyncCatalogAsync(installationType, cts.Token);
@@ -107,7 +108,8 @@ public class AppCatalogBackgroundSyncService
 
             try
             {
-                using var scope = _serviceProvider.CreateScope();
+                // Escopo assíncrono: Dispose() síncrono falha se o grafo tiver IAsyncDisposable.
+            await using var scope = _serviceProvider.CreateAsyncScope();
                 var statusStore = scope.ServiceProvider.GetRequiredService<IAppCatalogSyncStatusStore>();
                 await statusStore.SaveResultAsync(installationType, failedResult, CancellationToken.None);
             }

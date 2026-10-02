@@ -118,6 +118,30 @@ public class DashboardEventContractNormalizerTests
         Assert.That(normalized, Is.Not.Null);
     }
 
+    [Test]
+    public void ShouldAcceptExplicitNullClientIdInData()
+    {
+        var normalizer = CreateNormalizer(mode: "strict");
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            eventType = "LogCreated",
+            timestampUtc = "2026-05-05T10:00:00Z",
+            data = new
+            {
+                clientId = (Guid?)null,
+                agentId = Guid.NewGuid(),
+                message = "evento sem escopo de cliente"
+            }
+        });
+
+        var ok = normalizer.TryNormalize(payload, "nats", out var normalized);
+
+        Assert.That(ok, Is.True, "clientId null em data é 'sem escopo', não violação");
+        Assert.That(normalized, Is.Not.Null);
+        Assert.That(normalized!.ClientId, Is.Null);
+    }
+
     private static DashboardEventContractNormalizer CreateNormalizer(string mode)
     {
         var options = Options.Create(new RealtimeContractOptions

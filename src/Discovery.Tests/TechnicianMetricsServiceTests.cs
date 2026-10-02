@@ -218,6 +218,34 @@ public class TechnicianMetricsServiceTests
     }
 
     [Test]
+    public async Task RefreshDueAsync_WithForce_RecalculatesBeforeTheInterval()
+    {
+        await using var db = CreateDb();
+        var clientA = Guid.NewGuid();
+        var (userA, _) = await SeedMemberAsync(db, clientA);
+        db.Tickets.Add(NewTicket(userA, DateTime.UtcNow.AddDays(-1), null, clientId: clientA));
+        await db.SaveChangesAsync();
+
+        var settings = new BackgroundProcessingSettings();
+        settings.Metrics.IntervalMinutes = 10;
+        settings.Metrics.StaleThresholdMinutes = 15;
+        settings.Metrics.BatchSize = 5;
+        settings.Metrics.MaxBatchesPerRun = 2;
+
+        var service = BuildService(db, settings);
+
+        var first = await service.RefreshDueAsync();
+        Assert.That(first.UsersUpdated, Is.EqualTo(1));
+
+        var skipped = await service.RefreshDueAsync();
+        Assert.That(skipped.UsersUpdated, Is.EqualTo(0), "sem force o escopo ainda não venceu");
+
+        var forced = await service.RefreshDueAsync(force: true);
+        Assert.That(forced.ScopesProcessed, Is.EqualTo(1));
+        Assert.That(forced.UsersUpdated, Is.EqualTo(1), "force recalcula mesmo com snapshot fresco");
+    }
+
+    [Test]
     public async Task RefreshDueAsync_SkipsDisabledClientScope()
     {
         await using var db = CreateDb();

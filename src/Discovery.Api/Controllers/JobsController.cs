@@ -83,17 +83,20 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     /// </summary>
     [HttpPost("{jobGroup}/{jobName}/trigger")]
     [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
-    public async Task<IActionResult> TriggerJob(string jobGroup, string jobName, CancellationToken ct)
+    public async Task<IActionResult> TriggerJob(
+        string jobGroup, string jobName, [FromQuery] bool force, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var key = new JobKey(jobName, jobGroup);
+        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.CheckExists, ct);
 
-        if (!await scheduler.CheckExists(key, ct))
+        if (key is null)
             return NotFound(new { error = $"Job '{jobGroup}.{jobName}' not found." });
 
-        await scheduler.TriggerJob(key, ct);
+        // force=true: os ciclos de métricas/triagem ignoram o vencimento do escopo
+        // e (métricas) a validade do snapshot neste disparo.
+        await scheduler.TriggerJob(key, new JobDataMap { ["force"] = force }, ct);
 
-        return Ok(new { message = $"Job '{jobGroup}.{jobName}' triggered.", triggeredAtUtc = DateTime.UtcNow });
+        return Ok(new { message = $"Job '{jobGroup}.{jobName}' triggered.", force, triggeredAtUtc = DateTime.UtcNow });
     }
 
     // ── Pause / Resume ─────────────────────────────────────────────────────
@@ -106,9 +109,9 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     public async Task<IActionResult> PauseJob(string jobGroup, string jobName, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var key = new JobKey(jobName, jobGroup);
+        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.CheckExists, ct);
 
-        if (!await scheduler.CheckExists(key, ct))
+        if (key is null)
             return NotFound(new { error = $"Job '{jobGroup}.{jobName}' not found." });
 
         await scheduler.PauseJob(key, ct);
@@ -124,9 +127,9 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     public async Task<IActionResult> ResumeJob(string jobGroup, string jobName, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var key = new JobKey(jobName, jobGroup);
+        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.CheckExists, ct);
 
-        if (!await scheduler.CheckExists(key, ct))
+        if (key is null)
             return NotFound(new { error = $"Job '{jobGroup}.{jobName}' not found." });
 
         await scheduler.ResumeJob(key, ct);
@@ -170,9 +173,9 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     public async Task<IActionResult> GetJobDetail(string jobGroup, string jobName, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var key = new JobKey(jobName, jobGroup);
+        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.CheckExists, ct);
 
-        if (!await scheduler.CheckExists(key, ct))
+        if (key is null)
             return NotFound(new { error = $"Job '{jobGroup}.{jobName}' not found." });
 
         var detail = await scheduler.GetJobDetail(key, ct);
@@ -209,5 +212,33 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
             }),
             executionHistory = history
         });
+    }
+
+    // ── Job key resolution ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Resolve o <see cref="JobKey"/> a partir do nome usado pela configuração/UI.
+    ///
+    /// Os jobs são agendados com <c>ScheduleJob&lt;T&gt;</c> do
+    /// Quartz.Extensions.DependencyInjection, que deriva a identidade do job a
+    /// partir da identidade do trigger. O contrato atual usa o MESMO nome para
+    /// job e trigger (ex.: "technician-metrics-refresh"), alinhado ao nome
+    /// exposto pela configuração em /status.
+    ///
+    /// O fallback "{nome}-trigger" é mantido por compatibilidade: releases
+    /// anteriores registravam o trigger com esse sufixo e o JobKey herdava o
+    /// sufixo (era a causa do 404 no acionamento manual).
+    /// </summary>
+    internal static async Task<JobKey?> ResolveJobKeyAsync(
+        string jobGroup, string jobName,
+        Func<JobKey, CancellationToken, Task<bool>> exists,
+        CancellationToken ct)
+    {
+        var direct = new JobKey(jobName, jobGroup);
+        if (await exists(direct, ct))
+            return direct;
+
+        var suffixed = new JobKey($"{jobName}-trigger", jobGroup);
+        return await exists(suffixed, ct) ? suffixed : null;
     }
 }

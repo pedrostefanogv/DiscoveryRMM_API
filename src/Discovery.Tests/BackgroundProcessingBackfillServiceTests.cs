@@ -110,6 +110,46 @@ public class BackgroundProcessingBackfillServiceTests
         Assert.That(failed.LastError, Does.Contain("falha simulada"));
     }
 
+    [Test]
+    public async Task Request_PersistsCamelCasePayload_ThatTheUiCanRead()
+    {
+        await using var db = CreateDb();
+        var service = BuildService(db, new FakeMetrics());
+
+        await service.RequestAsync(null, false, "admin", CancellationToken.None);
+
+        var row = await db.ProcessingScopeStates.AsNoTracking()
+            .SingleAsync(s => s.ScopeType == BackgroundProcessingBackfillService.BackfillScopeType);
+
+        Assert.That(row.LastResultJson, Does.Contain("\"status\""));
+        Assert.That(row.LastResultJson, Does.Contain("\"requestedAt\""));
+        Assert.That(row.LastResultJson, Does.Not.Contain("\"Status\""));
+    }
+
+    [Test]
+    public async Task GetState_StillReadsLegacyPascalCasePayload()
+    {
+        await using var db = CreateDb();
+        var service = BuildService(db, new FakeMetrics());
+
+        await service.RequestAsync(null, false, "admin", CancellationToken.None);
+
+        // A entidade já está rastreada pelo RequestAsync: atualiza a instância
+        // rastreada em vez de reanexar outra (evita "já rastreada" no EF).
+        var row = await db.ProcessingScopeStates
+            .SingleAsync(s => s.ScopeType == BackgroundProcessingBackfillService.BackfillScopeType);
+        row.LastResultJson = "{\"Status\":\"failed\",\"Total\":5,\"Processed\":2,\"LastError\":\"boom\"}";
+        await db.SaveChangesAsync();
+
+        var state = await service.GetStateAsync(null, CancellationToken.None);
+
+        Assert.That(state, Is.Not.Null);
+        Assert.That(state!.Status, Is.EqualTo(BackgroundProcessingBackfillService.StatusFailed));
+        Assert.That(state.Total, Is.EqualTo(5));
+        Assert.That(state.Processed, Is.EqualTo(2));
+        Assert.That(state.LastError, Is.EqualTo("boom"));
+    }
+
     private sealed class FakeMetrics : ITechnicianMetricsService
     {
         public int Processed { get; set; }
@@ -142,7 +182,7 @@ public class BackgroundProcessingBackfillServiceTests
             IReadOnlyCollection<Guid>? userIds = null, Guid? departmentId = null, CancellationToken ct = default)
             => throw new NotSupportedException();
 
-        public Task<MetricsRefreshResult> RefreshDueAsync(CancellationToken ct = default)
+        public Task<MetricsRefreshResult> RefreshDueAsync(CancellationToken ct = default, bool force = false)
             => throw new NotSupportedException();
     }
 

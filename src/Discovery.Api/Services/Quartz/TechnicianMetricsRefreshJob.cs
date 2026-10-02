@@ -39,7 +39,12 @@ public sealed class TechnicianMetricsRefreshJob : IJob
 
         try
         {
-            var result = await metrics.RefreshDueAsync(ct);
+            // ?force=true no acionamento manual: recalcula agora, ignorando o
+            // vencimento do escopo e a validade do snapshot.
+            var force = context.MergedJobDataMap.ContainsKey("force")
+                && context.MergedJobDataMap.GetBoolean("force");
+
+            var result = await metrics.RefreshDueAsync(ct, force);
             context.Result = result;
 
             if (result.ScopesProcessed > 0 || result.UsersUpdated > 0)

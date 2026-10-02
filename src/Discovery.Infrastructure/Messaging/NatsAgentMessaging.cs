@@ -92,7 +92,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     {
         try
         {
-            using var scope = _scopeFactory.CreateScope();
+            // Escopo assíncrono: IAutomationExecutionReportRepository depende de IAgentMessaging,
+            // registrado como scoped; Dispose() síncrono lança InvalidOperationException.
+            await using var scope = _scopeFactory.CreateAsyncScope();
             var reportRepo = scope.ServiceProvider.GetRequiredService<IAutomationExecutionReportRepository>();
             await reportRepo.UpdateResultFromCommandAsync(
                 result.CommandId,

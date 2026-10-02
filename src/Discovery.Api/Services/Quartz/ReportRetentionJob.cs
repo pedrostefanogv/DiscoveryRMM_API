@@ -26,7 +26,7 @@ public sealed class ReportRetentionJob : IJob
         var ct = context.CancellationToken;
 
         var fallback = optionsMonitor.CurrentValue;
-        using var scope = scopeFactory.CreateScope();
+        await using var scope = scopeFactory.CreateAsyncScope();
 
         var serverRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
         var server = await serverRepo.GetOrCreateDefaultAsync();

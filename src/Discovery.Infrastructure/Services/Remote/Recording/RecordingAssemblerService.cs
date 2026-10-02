@@ -58,7 +58,8 @@ public class RecordingAssemblerService : BackgroundService
 
     private async Task ProcessCompletedRecordingsAsync(CancellationToken ct)
     {
-        using var scope = _services.CreateScope();
+        // Escopo assíncrono: o grafo pode resolver serviços IAsyncDisposable (messaging).
+        await using var scope = _services.CreateAsyncScope();
         var repo = scope.ServiceProvider.GetRequiredService<IRemoteSessionRepository>();
 
         // Busca gravações com status "recording" cujas sessões já foram encerradas
@@ -83,7 +84,8 @@ public class RecordingAssemblerService : BackgroundService
         var retention = _options.Recording.Retention;
         var cutoff = DateTime.UtcNow.AddDays(-retention.MaxDays);
 
-        using var scope = _services.CreateScope();
+        // Escopo assíncrono: o grafo pode resolver serviços IAsyncDisposable (messaging).
+        await using var scope = _services.CreateAsyncScope();
         var cleanup = scope.ServiceProvider.GetRequiredService<IRecordingStorageCleanupService>();
         var removed = await cleanup.CleanupExpiredAsync(cutoff, ct);
 

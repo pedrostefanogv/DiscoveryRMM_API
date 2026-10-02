@@ -791,7 +791,8 @@ public class CustomFieldService : ICustomFieldService
             // TUDO roda dentro do escopo novo — inclusive o pre-check. Antes o servico
             // scoped da requisicao era usado aqui e podia ja estar descartado quando a
             // continuacao do fire-and-forget executava (falha engolida pelo catch).
-            using var scope = _scopeFactory.CreateScope();
+            // Escopo assíncrono: Dispose() síncrono falha se o grafo tiver IAsyncDisposable.
+            await using var scope = _scopeFactory.CreateAsyncScope();
             var service = scope.ServiceProvider.GetRequiredService<IAgentAutoLabelingService>();
             var db = scope.ServiceProvider.GetRequiredService<DiscoveryDbContext>();
 

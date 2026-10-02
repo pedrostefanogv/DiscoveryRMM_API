@@ -12,6 +12,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using MediatR;
+using Microsoft.Extensions.Configuration;
 
 namespace Discovery.Infrastructure.Cqrs.Configurations;
 
@@ -160,12 +161,24 @@ public sealed class TestObjectStorageCommandHandler(IObjectStorageProviderFactor
         => Result<object>.Success(await factory.TestConnectionAsync(ct));
 }
 
-public sealed class TestNatsConnectionCommandHandler(INatsConnectionValidator validator)
+public sealed class TestNatsConnectionCommandHandler(
+    INatsConnectionValidator validator,
+    IConfiguration configuration)
     : IRequestHandler<TestNatsConnectionCommand, Result<NatsConnectionTestResult>>
 {
     public async Task<Result<NatsConnectionTestResult>> Handle(TestNatsConnectionCommand cmd, CancellationToken ct)
     {
-        var (ok, errors) = await validator.ValidateConnectionAsync(cmd.Url, cmd.User, cmd.Password, ct);
+        // Sem credenciais explícitas, testa com as do servidor: é o cenário da
+        // tela ("testar o NATS configurado") e o NATS de produção usa auth callout,
+        // então uma conexão anônima sempre falharia.
+        var user = string.IsNullOrWhiteSpace(cmd.User)
+            ? configuration.GetValue<string>("Nats:AuthUser")
+            : cmd.User;
+        var password = string.IsNullOrWhiteSpace(cmd.Password)
+            ? configuration.GetValue<string>("Nats:AuthPassword")
+            : cmd.Password;
+
+        var (ok, errors) = await validator.ValidateConnectionAsync(cmd.Url, user, password, ct);
         return Result<NatsConnectionTestResult>.Success(new NatsConnectionTestResult(ok, errors));
     }
 }

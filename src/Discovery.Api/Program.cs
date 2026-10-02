@@ -322,7 +322,7 @@ app.Logger.LogInformation(
 if (hasMaintenanceMode)
 {
     // Run migrations first so that recover-admin can bind users to roles/groups
-    using (var migrationScope = app.Services.CreateScope())
+    await using (var migrationScope = app.Services.CreateAsyncScope())
     {
         var runner = migrationScope.ServiceProvider.GetRequiredService<IMigrationRunner>();
         runner.MigrateUp();
@@ -337,7 +337,7 @@ if (hasMaintenanceMode)
 var runMigrationsOnStartup = builder.Configuration.GetValue("Migrations:RunOnStartup", true);
 if (runMigrationsOnStartup)
 {
-    using (var scope = app.Services.CreateScope())
+    await using (var scope = app.Services.CreateAsyncScope())
     {
         var runner = scope.ServiceProvider.GetRequiredService<IMigrationRunner>();
         runner.MigrateUp();

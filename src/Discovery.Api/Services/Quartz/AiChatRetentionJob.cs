@@ -24,7 +24,7 @@ public sealed class AiChatRetentionJob : IJob
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<AiChatRetentionJob>();
 
-        using var scope = scopeFactory.CreateScope();
+        await using var scope = scopeFactory.CreateAsyncScope();
         var sessionRepo = scope.ServiceProvider.GetRequiredService<IAiChatSessionRepository>();
         var loggingService = scope.ServiceProvider.GetRequiredService<ILoggingService>();
         var ct = context.CancellationToken;

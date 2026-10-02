@@ -21,31 +21,31 @@ public static class QuartzServiceCollectionExtensions
 
             // ── Log Purge: daily at 3 AM ────────────────────────────────
             q.ScheduleJob<LogPurgeJob>(trigger => trigger
-                .WithIdentity($"{LogPurgeJob.Key.Name}-trigger", LogPurgeJob.Key.Group)
+                .WithIdentity(LogPurgeJob.Key.Name, LogPurgeJob.Key.Group)
                 .WithCronSchedule("0 0 3 * * ?")
                 .WithDescription("Purge old log entries"));
 
             // ── Report Retention: daily at 4 AM ──────────────────────────
             q.ScheduleJob<ReportRetentionJob>(trigger => trigger
-                .WithIdentity($"{ReportRetentionJob.Key.Name}-trigger", ReportRetentionJob.Key.Group)
+                .WithIdentity(ReportRetentionJob.Key.Name, ReportRetentionJob.Key.Group)
                 .WithCronSchedule("0 0 4 * * ?")
                 .WithDescription("Purge old report executions and files"));
 
             // ── AI Chat Retention: daily at 2 AM ─────────────────────────
             q.ScheduleJob<AiChatRetentionJob>(trigger => trigger
-                .WithIdentity($"{AiChatRetentionJob.Key.Name}-trigger", AiChatRetentionJob.Key.Group)
+                .WithIdentity(AiChatRetentionJob.Key.Name, AiChatRetentionJob.Key.Group)
                 .WithCronSchedule("0 0 2 * * ?")
                 .WithDescription("Soft/hard delete expired AI chat sessions"));
 
             // ── P2P Maintenance: every 15 minutes ────────────────────────
             q.ScheduleJob<P2pMaintenanceJob>(trigger => trigger
-                .WithIdentity($"{P2pMaintenanceJob.Key.Name}-trigger", P2pMaintenanceJob.Key.Group)
+                .WithIdentity(P2pMaintenanceJob.Key.Name, P2pMaintenanceJob.Key.Group)
                 .WithSimpleSchedule(s => s.WithIntervalInMinutes(15).RepeatForever())
                 .WithDescription("Clean stale P2P presence and recalculate seed plans"));
 
             // ── Knowledge Embedding: every 30 seconds ────────────────────
             q.ScheduleJob<KnowledgeEmbeddingJob>(trigger => trigger
-                .WithIdentity($"{KnowledgeEmbeddingJob.Key.Name}-trigger", KnowledgeEmbeddingJob.Key.Group)
+                .WithIdentity(KnowledgeEmbeddingJob.Key.Name, KnowledgeEmbeddingJob.Key.Group)
                 .WithSimpleSchedule(s => s.WithIntervalInSeconds(30).RepeatForever())
                 .WithDescription("Re-chunk articles, generate embeddings in batch, process LISTEN/NOTIFY queue"));
 
@@ -60,7 +60,7 @@ public static class QuartzServiceCollectionExtensions
                 var answerEmbeddingStartupDelaySeconds = Math.Max(0, configuration.GetValue<int?>("BackgroundJobs:TicketAnswerEmbedding:StartupDelaySeconds") ?? 20);
 
                 q.ScheduleJob<TicketAnswerEmbeddingJob>(trigger => trigger
-                    .WithIdentity($"{TicketAnswerEmbeddingJob.Key.Name}-trigger", TicketAnswerEmbeddingJob.Key.Group)
+                    .WithIdentity(TicketAnswerEmbeddingJob.Key.Name, TicketAnswerEmbeddingJob.Key.Group)
                     .StartAt(DateTimeOffset.UtcNow.AddSeconds(answerEmbeddingStartupDelaySeconds))
                     .WithSimpleSchedule(s => s.WithIntervalInSeconds(answerEmbeddingIntervalSeconds).RepeatForever())
                     .WithDescription($"Generate ticket answer embeddings {answerEmbeddingStartupDelaySeconds}s after startup, then every {answerEmbeddingIntervalSeconds}s"));
@@ -74,7 +74,7 @@ public static class QuartzServiceCollectionExtensions
             {
                 var wingetCron = $"0 0 0 */{wingetIntervalDays} * ?";
                 q.ScheduleJob<WingetCatalogSyncJob>(trigger => trigger
-                    .WithIdentity($"{WingetCatalogSyncJob.Key.Name}-trigger", WingetCatalogSyncJob.Key.Group)
+                    .WithIdentity(WingetCatalogSyncJob.Key.Name, WingetCatalogSyncJob.Key.Group)
                     .WithCronSchedule(wingetCron)
                     .WithDescription($"Sync Winget package catalog every {wingetIntervalDays} day(s) at midnight"));
             }
@@ -91,7 +91,7 @@ public static class QuartzServiceCollectionExtensions
             if (manifestsEnabled && !manifestsSource.Equals("feed", StringComparison.OrdinalIgnoreCase))
             {
                 q.ScheduleJob<WingetManifestsSyncJob>(trigger => trigger
-                    .WithIdentity($"{WingetManifestsSyncJob.Key.Name}-trigger", WingetManifestsSyncJob.Key.Group)
+                    .WithIdentity(WingetManifestsSyncJob.Key.Name, WingetManifestsSyncJob.Key.Group)
                     .StartAt(DateTimeOffset.UtcNow.AddMinutes(manifestsStartupDelayMin))
                     .WithSimpleSchedule(s => s.WithIntervalInMinutes(manifestsIntervalMin).RepeatForever())
                     .WithDescription($"Sync Winget catalog from manifests clone {manifestsStartupDelayMin} min after startup, then every {manifestsIntervalMin} minute(s)"));
@@ -99,43 +99,43 @@ public static class QuartzServiceCollectionExtensions
 
             // ── Alert Scheduler: every 30 seconds ─────────────────────
             q.ScheduleJob<AlertSchedulerJob>(trigger => trigger
-                .WithIdentity($"{AlertSchedulerJob.Key.Name}-trigger", AlertSchedulerJob.Key.Group)
+                .WithIdentity(AlertSchedulerJob.Key.Name, AlertSchedulerJob.Key.Group)
                 .WithSimpleSchedule(s => s.WithIntervalInSeconds(30).RepeatForever())
                 .WithDescription("Dispatch pending scheduled alerts and expire stale ones"));
 
             // ── SLA Monitoring: every 5 minutes ────────────────────────
             q.ScheduleJob<SlaMonitoringJob>(trigger => trigger
-                .WithIdentity($"{SlaMonitoringJob.Key.Name}-trigger", SlaMonitoringJob.Key.Group)
+                .WithIdentity(SlaMonitoringJob.Key.Name, SlaMonitoringJob.Key.Group)
                 .WithSimpleSchedule(s => s.WithIntervalInMinutes(5).RepeatForever())
                 .WithDescription("Check SLA for open tickets and trigger escalations"));
 
             // ── Report Generation: every 15 seconds ────────────────────
             q.ScheduleJob<ReportGenerationJob>(trigger => trigger
-                .WithIdentity($"{ReportGenerationJob.Key.Name}-trigger", ReportGenerationJob.Key.Group)
+                .WithIdentity(ReportGenerationJob.Key.Name, ReportGenerationJob.Key.Group)
                 .WithSimpleSchedule(s => s.WithIntervalInSeconds(15).RepeatForever())
                 .WithDescription("Process pending report executions"));
 
             // ── Report Schedule Dispatch: every 60 seconds ────────────
             q.ScheduleJob<ReportScheduleDispatchJob>(trigger => trigger
-                .WithIdentity($"{ReportScheduleDispatchJob.Key.Name}-trigger", ReportScheduleDispatchJob.Key.Group)
+                .WithIdentity(ReportScheduleDispatchJob.Key.Name, ReportScheduleDispatchJob.Key.Group)
                 .WithSimpleSchedule(s => s.WithIntervalInSeconds(60).RepeatForever())
                 .WithDescription("Dispatch due scheduled report generations"));
 
             // ── Data Retention: daily at 3:30 AM ──────────────────────
             q.ScheduleJob<DataRetentionJob>(trigger => trigger
-                .WithIdentity($"{DataRetentionJob.Key.Name}-trigger", DataRetentionJob.Key.Group)
+                .WithIdentity(DataRetentionJob.Key.Name, DataRetentionJob.Key.Group)
                 .WithCronSchedule("0 30 3 * * ?")
                 .WithDescription("Purge old sessions, tokens, notifications, commands, telemetry"));
 
             // ── Database Maintenance: weekly Sunday 3 AM ───────────────
             q.ScheduleJob<DatabaseMaintenanceJob>(trigger => trigger
-                .WithIdentity($"{DatabaseMaintenanceJob.Key.Name}-trigger", DatabaseMaintenanceJob.Key.Group)
+                .WithIdentity(DatabaseMaintenanceJob.Key.Name, DatabaseMaintenanceJob.Key.Group)
                 .WithCronSchedule("0 0 3 ? * SUN")
                 .WithDescription("VACUUM, REINDEX, ANALYZE on configured tables"));
 
             // ── Agent Labeling Reconciliation: every 10 minutes ────────
             q.ScheduleJob<AgentLabelingReconciliationJob>(trigger => trigger
-                .WithIdentity($"{AgentLabelingReconciliationJob.Key.Name}-trigger", AgentLabelingReconciliationJob.Key.Group)
+                .WithIdentity(AgentLabelingReconciliationJob.Key.Name, AgentLabelingReconciliationJob.Key.Group)
                 .WithSimpleSchedule(s => s.WithIntervalInMinutes(10).RepeatForever())
                 .WithDescription("Reconcile agent labels with auto-labeling rules"));
 
@@ -149,7 +149,7 @@ public static class QuartzServiceCollectionExtensions
                 var aiAssignmentStartupDelaySeconds = Math.Max(0, configuration.GetValue<int?>("BackgroundJobs:AiTicketAssignment:StartupDelaySeconds") ?? 20);
 
                 q.ScheduleJob<AiTicketAssignmentJob>(trigger => trigger
-                    .WithIdentity($"{AiTicketAssignmentJob.Key.Name}-trigger", AiTicketAssignmentJob.Key.Group)
+                    .WithIdentity(AiTicketAssignmentJob.Key.Name, AiTicketAssignmentJob.Key.Group)
                     .StartAt(DateTimeOffset.UtcNow.AddSeconds(aiAssignmentStartupDelaySeconds))
                     .WithSimpleSchedule(s => s.WithIntervalInSeconds(aiAssignmentIntervalSeconds).RepeatForever())
                     .WithDescription("Processa a fila da triagem por IA e aplica o fallback de chamados sem responsável"));
@@ -165,7 +165,7 @@ public static class QuartzServiceCollectionExtensions
                 var metricsStartupDelaySeconds = Math.Max(0, configuration.GetValue<int?>("BackgroundJobs:TechnicianMetrics:StartupDelaySeconds") ?? 60);
 
                 q.ScheduleJob<TechnicianMetricsRefreshJob>(trigger => trigger
-                    .WithIdentity($"{TechnicianMetricsRefreshJob.Key.Name}-trigger", TechnicianMetricsRefreshJob.Key.Group)
+                    .WithIdentity(TechnicianMetricsRefreshJob.Key.Name, TechnicianMetricsRefreshJob.Key.Group)
                     .StartAt(DateTimeOffset.UtcNow.AddSeconds(metricsStartupDelaySeconds))
                     .WithSimpleSchedule(s => s.WithIntervalInSeconds(metricsTickSeconds).RepeatForever())
                     .WithDescription("Atualiza, por escopo de cliente vencido, os snapshots de métricas usados pela triagem por IA"));
@@ -178,7 +178,7 @@ public static class QuartzServiceCollectionExtensions
                 var learningHour = Math.Clamp(configuration.GetValue<int?>("BackgroundJobs:AiAssignmentLearning:HourUtc") ?? 4, 0, 23);
 
                 q.ScheduleJob<AiAssignmentLearningJob>(trigger => trigger
-                    .WithIdentity($"{AiAssignmentLearningJob.Key.Name}-trigger", AiAssignmentLearningJob.Key.Group)
+                    .WithIdentity(AiAssignmentLearningJob.Key.Name, AiAssignmentLearningJob.Key.Group)
                     .WithCronSchedule($"0 30 {learningHour} * * ?")
                     .WithDescription("Ciclo de aprendizado da triagem por IA (competências e pesos)"));
             }
@@ -190,7 +190,7 @@ public static class QuartzServiceCollectionExtensions
                 var backfillIntervalSeconds = Math.Max(10, configuration.GetValue<int?>("BackgroundJobs:TechnicianMetricsBackfill:IntervalSeconds") ?? 30);
 
                 q.ScheduleJob<TechnicianMetricsBackfillJob>(trigger => trigger
-                    .WithIdentity($"{TechnicianMetricsBackfillJob.Key.Name}-trigger", TechnicianMetricsBackfillJob.Key.Group)
+                    .WithIdentity(TechnicianMetricsBackfillJob.Key.Name, TechnicianMetricsBackfillJob.Key.Group)
                     .WithSimpleSchedule(s => s.WithIntervalInSeconds(backfillIntervalSeconds).RepeatForever())
                     .WithDescription("Processa em lotes o backfill (recálculo forçado) dos snapshots de métricas"));
             }
@@ -202,7 +202,7 @@ public static class QuartzServiceCollectionExtensions
                 var scheduleSyncIntervalSeconds = Math.Max(30, configuration.GetValue<int?>("BackgroundJobs:BackgroundProcessingScheduleSync:IntervalSeconds") ?? 120);
 
                 q.ScheduleJob<BackgroundProcessingScheduleSyncJob>(trigger => trigger
-                    .WithIdentity($"{BackgroundProcessingScheduleSyncJob.Key.Name}-trigger", BackgroundProcessingScheduleSyncJob.Key.Group)
+                    .WithIdentity(BackgroundProcessingScheduleSyncJob.Key.Name, BackgroundProcessingScheduleSyncJob.Key.Group)
                     .WithSimpleSchedule(s => s.WithIntervalInSeconds(scheduleSyncIntervalSeconds).RepeatForever())
                     .WithDescription("Sincroniza o tick dos processamentos em segundo plano com a configuração global"));
             }

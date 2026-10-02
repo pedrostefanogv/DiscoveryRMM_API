@@ -163,7 +163,8 @@ public sealed class AdaptiveQualityService : BackgroundService
 
     private async Task ApplyQualityChangeAsync(Guid sessionId, QualityProfile quality, CancellationToken ct)
     {
-        using var scope = _scopeFactory.CreateScope();
+        // Escopo assíncrono: IAgentMessaging é scoped e implementa IAsyncDisposable.
+        await using var scope = _scopeFactory.CreateAsyncScope();
         var sessionManager = scope.ServiceProvider.GetRequiredService<IRemoteSessionManager>();
         var commandRepo = scope.ServiceProvider.GetRequiredService<ICommandRepository>();
         var messaging = scope.ServiceProvider.GetRequiredService<IAgentMessaging>();

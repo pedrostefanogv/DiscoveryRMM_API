@@ -76,6 +76,11 @@ publish_api() {
   sudo -u discovery-api dotnet publish "$DISCOVERY_API_SOURCE/src/Discovery.Api/Discovery.Api.csproj" \
     -c Release -r "$DISCOVERY_DOTNET_RUNTIME" --self-contained false -o "$release_dir" /p:UseAppHost=true
 
+  # O appsettings*.json pubicado e removido de proposito (config vem do
+  # discovery.env). Consequencia: o publisher do generate_discovery_env precisa
+  # emitir as chaves operacionais de logging/HostOptions, senao o EF loga todo
+  # SQL em Information e BackgroundServiceExceptionBehavior volta ao default
+  # (StopHost). Ver o heredoc de generate_discovery_env.
   sudo -u discovery-api rm -f "$release_dir"/appsettings*.json || true
   # Valida o binario ANTES de trocar o symlink: falha de publish parcial nao
   # pode deixar `current` apontando para uma release quebrada.
@@ -246,6 +251,16 @@ write_environment_file() {
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
 ASPNETCORE_URLS=http://127.0.0.1:8080
+# ── Operacional (o publish remove o appsettings*.json da release) ──────────
+# Sem HostOptions o default e StopHost: excecao nao tratada em BackgroundService
+# derruba a API. Sem Logging__LogLevel__Microsoft=Warning o EF registra todo SQL
+# em Information e o journal fica inutilizavel.
+# (Nomes de categoria com ponto nao entram aqui: systemd EnvironmentFile so
+#  aceita nomes validos; "Microsoft" cobre Microsoft.* por prefixo.)
+HostOptions__BackgroundServiceExceptionBehavior=Ignore
+Logging__LogLevel__Default=Information
+Logging__LogLevel__Microsoft=Warning
+Logging__LogLevel__FluentMigrator=Warning
 OPENAPI__ENABLED=$( [[ "${OPENAPI_ENABLED:-0}" == "1" ]] && echo true || echo false )
 OpenApi__Scalar__Enabled=$( [[ "${OPENAPI_SCALAR_ENABLED:-$OPENAPI_ENABLED}" == "1" ]] && echo true || echo false )
 ConnectionStrings__DefaultConnection=Host=127.0.0.1;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}

@@ -401,6 +401,48 @@ public class AiTicketTriageServiceTests
         Assert.That(queue.MarkedDone, Has.Count.EqualTo(1), "nada novo foi processado");
     }
 
+    [Test]
+    public async Task ProcessDueAsync_WithForce_ProcessesBeforeItsInterval()
+    {
+        var (db, ticket, department, top, _) = await SeedAsync(AiAssignmentMode.AutoAssign);
+        await using var _db = db;
+
+        var queue = new FakeQueue();
+        queue.Pending.Add(new AiAssignmentQueueItem
+        {
+            Id = Guid.NewGuid(),
+            TicketId = ticket.Id,
+            DepartmentId = department.Id,
+            Status = AiAssignmentQueueStatus.Pending,
+            Attempts = 0,
+            AvailableAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var service = BuildService(db, new FakeAiChat(top.Id, 0.9), queue);
+
+        await service.ProcessDueAsync();
+
+        queue.Pending.Add(new AiAssignmentQueueItem
+        {
+            Id = Guid.NewGuid(),
+            TicketId = ticket.Id,
+            DepartmentId = department.Id,
+            Status = AiAssignmentQueueStatus.Pending,
+            Attempts = 0,
+            AvailableAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var skipped = await service.ProcessDueAsync();
+        Assert.That(skipped.ScopesProcessed, Is.EqualTo(0), "sem force o escopo ainda não venceu");
+
+        var forced = await service.ProcessDueAsync(force: true);
+        Assert.That(forced.ScopesProcessed, Is.EqualTo(1), "force ignora o intervalo do escopo");
+    }
+
     // ── Fakes ────────────────────────────────────────────────────────────
 
     private sealed class StaticMetrics : ITechnicianMetricsService
@@ -417,7 +459,7 @@ public class AiTicketTriageServiceTests
             IReadOnlyCollection<Guid>? userIds = null, Guid? departmentId = null, CancellationToken ct = default)
             => Task.FromResult(0);
 
-        public Task<MetricsRefreshResult> RefreshDueAsync(CancellationToken ct = default)
+        public Task<MetricsRefreshResult> RefreshDueAsync(CancellationToken ct = default, bool force = false)
             => Task.FromResult(new MetricsRefreshResult(0, 0, 0, new Dictionary<Guid, int>(), 0));
 
         public Task<MetricsBackfillProgress> RefreshForcedAsync(

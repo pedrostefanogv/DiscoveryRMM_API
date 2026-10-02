@@ -212,7 +212,8 @@ public class ConfigurationsController(
     [RequirePermission(ResourceType.ServerConfig, ActionType.Execute)]
     public async Task<IActionResult> TestNats([FromBody] NatsConnectionTestRequest req, CancellationToken ct)
     {
-        var result = await mediator.Send(new TestNatsConnectionCommand(req.Url, req.User, req.Password), ct);
+        var result = await mediator.Send(
+            new TestNatsConnectionCommand(req.Url ?? string.Empty, req.User, req.Password), ct);
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
@@ -526,6 +527,11 @@ public class ConfigurationsController(
     }
 }
 
-public record NatsConnectionTestRequest(string Url, string User, string Password);
+/// <summary>
+/// Payload do teste de NATS. Todos os campos são opcionais: a tela envia apenas
+/// a URL e as credenciais ficam no servidor. Sem isso o model binding devolvia
+/// 400 ("The User/Password field is required") antes de chegar ao validador.
+/// </summary>
+public record NatsConnectionTestRequest(string? Url, string? User, string? Password);
 public record LockImpactRequest(string[] Fields);
 public record ServerImportRequest(Dictionary<string, object> Settings, bool DryRun);

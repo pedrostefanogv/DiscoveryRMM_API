@@ -2,6 +2,7 @@ using System.Text.Json;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Serialization;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -33,7 +34,9 @@ public class BackgroundProcessingBackfillService(
     public const string StatusFailed = "failed";
     public const string StatusCancelled = "cancelled";
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    // Opções compartilhadas: camelCase ao gravar + leitura case-insensitive
+    // (linhas antigas em PascalCase continuam válidas).
+    private static readonly JsonSerializerOptions JsonOptions = PersistedJson.Options;
 
     public async Task<BackgroundBackfillStateDto> RequestAsync(
         Guid? clientId, bool purgeOrphans, string? requestedBy, CancellationToken ct = default)
@@ -171,7 +174,7 @@ public class BackgroundProcessingBackfillService(
         ProcessingScopeState? row, Guid scopeId, BackfillPayload payload, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        var json = JsonSerializer.Serialize(payload);
+        var json = JsonSerializer.Serialize(payload, JsonOptions);
 
         if (row is null)
         {

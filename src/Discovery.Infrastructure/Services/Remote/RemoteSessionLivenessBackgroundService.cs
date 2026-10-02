@@ -76,7 +76,9 @@ public class RemoteSessionLivenessBackgroundService : BackgroundService
 
     private async Task SweepAsync(CancellationToken ct)
     {
-        using var scope = _services.CreateScope();
+        // CreateAsyncScope: o container resolve serviços IAsyncDisposable
+        // (ex.: NatsAgentMessaging); Dispose() síncrono lançaria InvalidOperationException.
+        await using var scope = _services.CreateAsyncScope();
         var repo = scope.ServiceProvider.GetRequiredService<IRemoteSessionRepository>();
         var auditService = scope.ServiceProvider.GetRequiredService<RemoteSessionAuditService>();
         var dispatcher = scope.ServiceProvider.GetRequiredService<IAgentCommandDispatcher>();

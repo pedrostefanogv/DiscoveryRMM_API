@@ -29,5 +29,9 @@ public interface IAiTicketTriageService
     /// (IntervalSeconds), a cota por cliente (fairness) e, no fim, aplica o
     /// fallback determinístico nos chamados que continuam sem responsável.
     /// </summary>
-    Task<TriageCycleResult> ProcessDueAsync(CancellationToken ct = default);
+    /// <param name="force">
+    /// Acionamento manual: ignora o vencimento (IntervalSeconds) do escopo neste
+    /// disparo. O tick agendado mantém o comportamento normal.
+    /// </param>
+    Task<TriageCycleResult> ProcessDueAsync(CancellationToken ct = default, bool force = false);
 }

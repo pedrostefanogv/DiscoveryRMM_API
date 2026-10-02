@@ -5,6 +5,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Serialization;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Services.Ai;
 using Microsoft.EntityFrameworkCore;
@@ -118,7 +119,7 @@ public class AiTicketTriageService(
 
     // ── Ciclo periódico por cliente ──────────────────────────────────────
 
-    public async Task<TriageCycleResult> ProcessDueAsync(CancellationToken ct = default)
+    public async Task<TriageCycleResult> ProcessDueAsync(CancellationToken ct = default, bool force = false)
     {
         var stopwatch = Stopwatch.StartNew();
 
@@ -149,7 +150,9 @@ public class AiTicketTriageService(
             if (!settings.Enabled) continue;
 
             // Vencimento por cliente: o tick do job é a granularidade mínima.
-            if (stateByScope.TryGetValue(scopeId, out var state)
+            // force (acionamento manual) ignora o intervalo.
+            if (!force
+                && stateByScope.TryGetValue(scopeId, out var state)
                 && DateTime.UtcNow - state.LastRunAt < TimeSpan.FromSeconds(settings.IntervalSeconds))
             {
                 continue;
@@ -331,7 +334,7 @@ public class AiTicketTriageService(
             triaged = triagedCount,
             swept = sweptCount,
             type = ProcessingScopeTypes.TicketTriage
-        });
+        }, PersistedJson.Options);
 
         if (stateByScope.TryGetValue(scopeId, out var state))
         {

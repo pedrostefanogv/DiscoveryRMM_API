@@ -12,7 +12,9 @@ public sealed class QuartzBackgroundProcessingScheduler(ISchedulerFactory schedu
         CancellationToken ct = default)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var triggerKey = new TriggerKey($"{jobName}-trigger", jobGroup);
+        // Job e trigger compartilham o mesmo nome (o JobKey do ScheduleJob<T>
+        // é derivado da identidade do trigger) — ver QuartzServiceCollectionExtensions.
+        var triggerKey = new TriggerKey(jobName, jobGroup);
 
         var trigger = TriggerBuilder.Create()
             .WithIdentity(triggerKey)
@@ -32,7 +34,7 @@ public sealed class QuartzBackgroundProcessingScheduler(ISchedulerFactory schedu
         string jobName, string jobGroup, CancellationToken ct = default)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var trigger = await scheduler.GetTrigger(new TriggerKey($"{jobName}-trigger", jobGroup), ct);
+        var trigger = await scheduler.GetTrigger(new TriggerKey(jobName, jobGroup), ct);
         return trigger?.GetNextFireTimeUtc();
     }
 }

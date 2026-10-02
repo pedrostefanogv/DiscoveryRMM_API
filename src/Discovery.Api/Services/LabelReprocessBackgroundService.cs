@@ -199,7 +199,7 @@ public sealed class LabelReprocessBackgroundService : BackgroundService, ILabelR
 
         try
         {
-            using var scope = _serviceProvider.CreateScope();
+            await using var scope = _serviceProvider.CreateAsyncScope();
             var service = scope.ServiceProvider.GetRequiredService<IAgentAutoLabelingService>();
 
             var progress = new Progress<AgentLabelReprocessProgress>(report =>

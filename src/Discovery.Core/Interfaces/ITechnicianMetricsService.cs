@@ -33,7 +33,12 @@ public interface ITechnicianMetricsService
     /// Ciclo periódico: percorre os escopos de cliente vencidos e atualiza até
     /// BatchSize usuários por lote, respeitando MaxBatchesPerRun e MaxRunSeconds.
     /// </summary>
-    Task<MetricsRefreshResult> RefreshDueAsync(CancellationToken ct = default);
+    /// <summary>
+    /// Ciclo periódico. Com <paramref name="force"/> = true (acionamento manual)
+    /// o ciclo ignora o vencimento do escopo E a validade do snapshot, recalculando
+    /// os alvos agora — o tick agendado mantém o comportamento normal.
+    /// </summary>
+    Task<MetricsRefreshResult> RefreshDueAsync(CancellationToken ct = default, bool force = false);
 
     /// <summary>
     /// Backfill: recálculo FORÇADO (ignora intervalo e vencimento) da janela
