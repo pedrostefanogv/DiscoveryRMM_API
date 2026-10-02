@@ -86,10 +86,62 @@ public class AiChatToolOrchestrator
 
     // ── Agent Tool Registration & Cache ──────────────────────────────────────
 
+    /// <summary>
+    /// Provedores OpenAI/OpenRouter exigem nomes de tool no padrão
+    /// ^[a-zA-Z0-9_-]{1,64}$. Um nome fora dele derruba o TURNO INTEIRO com
+    /// "Provider stream error: Invalid 'tools[0].function.name'" — foi o que
+    /// aconteceu com memory/list, memory/create e memory/delete (o usuário via a
+    /// mensagem "ir depois" porque o turno com o print falhava e era repetido).
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex ProviderSafeToolNamePattern =
+        new("^[a-zA-Z0-9_-]{1,64}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Valida o nome da tool contra o padrão exigido pelos provedores.</summary>
+    public static bool IsProviderSafeToolName(string? name)
+        => !string.IsNullOrWhiteSpace(name) && ProviderSafeToolNamePattern.IsMatch(name!);
+
+    /// <summary>
+    /// Mescla as tools da base de conhecimento com as do agent removendo nomes
+    /// repetidos: nome duplicado no payload do provedor é ambíguo (e provedores
+    /// OpenAI recusam função repetida). Preserva a ordem e o primeiro vence — as
+    /// tools da base de conhecimento têm prioridade sobre as do agent.
+    /// </summary>
+    public static List<LlmTool> MergeDistinctTools(IEnumerable<LlmTool>? primary, IEnumerable<LlmTool>? extra)
+    {
+        var merged = new List<LlmTool>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddAll(IEnumerable<LlmTool>? source)
+        {
+            if (source is null) return;
+            foreach (var tool in source)
+            {
+                if (tool is null || string.IsNullOrWhiteSpace(tool.Name)) continue;
+                if (!seen.Add(tool.Name)) continue;
+                merged.Add(tool);
+            }
+        }
+
+        AddAll(primary);
+        AddAll(extra);
+        return merged;
+    }
+
     public async Task RegisterAgentToolsAsync(Guid agentId, Guid siteId,
         List<AgentToolRegistration> tools, CancellationToken ct = default)
     {
-        var llmTools = tools.Select(t =>
+        // Nome inválido não pode mais derrubar o chat: a tool é ignorada (e o
+        // erro fica explícito no log) em vez de ir para o provedor.
+        var invalidNames = tools.Where(t => !IsProviderSafeToolName(t.Name))
+            .Select(t => t.Name ?? "<null>").ToList();
+        if (invalidNames.Count > 0)
+        {
+            _logger.LogError(
+                "[AgentTools] {Count} tool(s) ignoradas por nome inválido para o provedor (^[a-zA-Z0-9_-]{{1,64}}$): {Names}. Corrija no agente — um nome inválido derruba o turno inteiro.",
+                invalidNames.Count, string.Join(", ", invalidNames));
+        }
+
+        var llmTools = tools.Where(t => IsProviderSafeToolName(t.Name)).Select(t =>
         {
             object schema;
             try

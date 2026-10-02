@@ -288,14 +288,17 @@ public class AiChatStreamingOrchestrator
         // B16-r2: erro estruturado do provider (objeto "error" no stream do LLM).
         string? providerError = null;
 
-        var availableTools = aiSettings.KnowledgeBaseEnabled
+        var kbTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, ct) : [];
 
         var agentTools = _toolOrchestrator.GetCachedAgentTools(agentId);
+        // Dedupe por nome: KB + agent podem colidir e função repetida no payload do
+        // provedor é ambígua (a OpenAI recusa).
+        var availableTools = AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools);
         if (agentTools is { Count: > 0 })
         {
-            availableTools.AddRange(agentTools);
-            _logger.LogDebug("[{TraceId}] StreamAsync: {Count} agent tools mescladas", traceId, agentTools.Count);
+            _logger.LogDebug("[{TraceId}] StreamAsync: {Count} agent tools mescladas ({Total} no total após dedupe)",
+                traceId, agentTools.Count, availableTools.Count);
         }
 
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
@@ -753,11 +756,11 @@ public class AiChatStreamingOrchestrator
         var (systemPrompt, _) = await _promptBuilder.BuildAsync(agent, session,
             promptSeed, aiSettings, departmentId, ct);
 
-        var availableTools = aiSettings.KnowledgeBaseEnabled
+        var kbTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(session.ClientId, session.SiteId, agentId, ct)
             : new List<LlmTool>();
         var agentTools = _toolOrchestrator.GetCachedAgentTools(agentId);
-        if (agentTools is { Count: > 0 }) availableTools.AddRange(agentTools);
+        var availableTools = AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools);
 
         var maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
 

@@ -430,13 +430,13 @@ public class AiChatService : IAiChatService
 
     private async Task<List<LlmTool>> BuildAvailableToolsAsync(Guid scopeClientId, Guid scopeSiteId, Guid agentId, AIIntegrationSettings aiSettings, CancellationToken ct)
     {
-        var tools = aiSettings.KnowledgeBaseEnabled
+        var kbTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, ct)
             : [];
 
         var agentTools = _toolOrchestrator.GetCachedAgentTools(agentId);
-        if (agentTools is { Count: > 0 }) tools.AddRange(agentTools);
-        return tools;
+        // Dedupe por nome (KB + agent): função repetida no payload é ambígua.
+        return AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools);
     }
 
     private async Task<int> CalculateConversationTokens(Guid sessionId, CancellationToken ct)
