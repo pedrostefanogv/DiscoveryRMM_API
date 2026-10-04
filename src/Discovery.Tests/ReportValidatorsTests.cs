@@ -36,24 +36,24 @@ public class ReportValidatorsTests
     }
 
     [Test]
-    public void CreateTemplate_WhenPdfIsDefaultFormat_MapsPdf()
+    public void CreateTemplate_WhenCsvIsDefaultFormat_MapsCsv()
     {
         var repo = new FakeReportTemplateRepository();
         var handler = new CreateReportTemplateCommandHandler(repo);
 
         var result = handler.Handle(new CreateReportTemplateCommand(
             ClientId: null,
-            Name: "Template pdf",
+            Name: "Template csv",
             Description: null,
             Instructions: null,
             ExecutionSchemaJson: null,
             DatasetType: (int)ReportDatasetType.AgentHardware,
-            DefaultFormat: (int)ReportFormat.Pdf,
+            DefaultFormat: (int)ReportFormat.Csv,
             LayoutJson: "{}",
             FiltersJson: null), CancellationToken.None).GetAwaiter().GetResult();
 
         Assert.That(result.IsSuccess, Is.True);
-        Assert.That(result.Value!.DefaultFormat, Is.EqualTo((int)ReportFormat.Pdf));
+        Assert.That(result.Value!.DefaultFormat, Is.EqualTo((int)ReportFormat.Csv));
     }
 
     private sealed class FakeReportTemplateRepository : IReportTemplateRepository
@@ -74,6 +74,12 @@ public class ReportValidatorsTests
 
         public Task<bool> DeleteAsync(Guid id, Guid? clientId = null)
             => Task.FromResult(true);
+
+        public Task<int> DeleteHistoryOlderThanAsync(DateTime cutoff)
+            => Task.FromResult(0);
+
+        public Task<IReadOnlyList<ReportTemplate>> GetBuiltInAsync(ReportDatasetType? datasetType = null)
+            => Task.FromResult<IReadOnlyList<ReportTemplate>>(Array.Empty<ReportTemplate>());
     }
 }
 

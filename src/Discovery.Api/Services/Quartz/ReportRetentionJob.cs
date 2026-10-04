@@ -38,6 +38,7 @@ public sealed class ReportRetentionJob : IJob
         var fileCutoff = DateTime.UtcNow.AddDays(-fileRetentionDays);
 
         var reportRepo = scope.ServiceProvider.GetRequiredService<IReportExecutionRepository>();
+        var templateRepo = scope.ServiceProvider.GetRequiredService<IReportTemplateRepository>();
         var storageFactory = scope.ServiceProvider.GetRequiredService<IObjectStorageProviderFactory>();
         var storageValidationErrors = await storageFactory.ValidateConfigurationAsync();
         if (storageValidationErrors.Count > 0)
@@ -46,37 +47,58 @@ public sealed class ReportRetentionJob : IJob
             return;
         }
 
-        var dbDeleted = 0;
-        var dbExpired = await reportRepo.GetExpiredAsync(dbCutoff, 1000);
-        if (dbExpired.Count > 0)
-        {
-            dbDeleted = await reportRepo.DeleteByIdsAsync(dbExpired.Select(e => e.Id).ToList());
-        }
-        logger.LogInformation("Report retention: purged {Count} DB records older than {Days}d.", dbDeleted, dbRetentionDays);
+        // Busca UMA vez, com o menor corte, e so depois remove do banco.
+        // Antes as linhas eram apagadas primeiro e a segunda consulta (por
+        // fileCutoff) voltava vazia quando os dois prazos eram iguais — os
+        // arquivos nunca eram removidos do storage (objetos orfaos para sempre).
+        var candidateCutoff = fileCutoff <= dbCutoff ? fileCutoff : dbCutoff;
+        var candidates = await reportRepo.GetExpiredAsync(candidateCutoff, 1000);
+        var storage = storageFactory.CreateObjectStorageService();
 
         var filesDeleted = 0;
         var filesFailed = 0;
-        var oldFiles = await reportRepo.GetExpiredAsync(fileCutoff, 1000);
-        var storage = storageFactory.CreateObjectStorageService();
-        foreach (var file in oldFiles)
-        {
-            if (string.IsNullOrWhiteSpace(file.StorageObjectKey))
-                continue;
+        var idsToDelete = new List<Guid>(candidates.Count);
 
-            try
+        foreach (var execution in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var rowExpired = execution.CreatedAt <= dbCutoff;
+            var fileExpired = execution.CreatedAt <= fileCutoff;
+            var fileRemoved = !fileExpired || string.IsNullOrWhiteSpace(execution.StorageObjectKey);
+
+            if (fileExpired && !string.IsNullOrWhiteSpace(execution.StorageObjectKey))
             {
-                await storage.DeleteAsync(file.StorageObjectKey, ct);
-                filesDeleted++;
+                try
+                {
+                    await storage.DeleteAsync(execution.StorageObjectKey, ct);
+                    filesDeleted++;
+                    fileRemoved = true;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to delete report file {Key}", execution.StorageObjectKey);
+                    filesFailed++;
+                }
             }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to delete report file {Key}", file.StorageObjectKey);
-                filesFailed++;
-            }
+
+            // Mantem a linha quando o arquivo ainda nao foi removido para a
+            // proxima execucao tentar de novo (evita orfao sem rastro).
+            if (rowExpired && fileRemoved)
+                idsToDelete.Add(execution.Id);
         }
 
-        logger.LogInformation("Report retention: deleted {FileCount} files, {Failed} failures.", filesDeleted, filesFailed);
-        context.Result = new { dbDeleted, filesDeleted, filesFailed };
+        var dbDeleted = idsToDelete.Count > 0 ? await reportRepo.DeleteByIdsAsync(idsToDelete) : 0;
+
+        // Historico de template tambem e limpo: sem isso a tabela cresce para sempre.
+        var historyRetentionDays = options.TemplateHistoryRetentionDays > 0 ? options.TemplateHistoryRetentionDays : 365;
+        var historyCutoff = DateTime.UtcNow.AddDays(-historyRetentionDays);
+        var historyDeleted = await templateRepo.DeleteHistoryOlderThanAsync(historyCutoff);
+
+        logger.LogInformation(
+            "Report retention: purged {Count} DB records (>={DbDays}d), deleted {FileCount} files (>={FileDays}d), {Failed} failures, purged {HistoryCount} template history rows (>={HistoryDays}d).",
+            dbDeleted, dbRetentionDays, filesDeleted, fileRetentionDays, filesFailed, historyDeleted, historyRetentionDays);
+        context.Result = new { dbDeleted, filesDeleted, filesFailed, historyDeleted };
     }
 
     private static ReportingOptions ResolveEffectiveOptions(string? settingsJson, ReportingOptions fallback)

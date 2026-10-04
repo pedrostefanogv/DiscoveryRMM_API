@@ -1,17 +1,45 @@
-﻿using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Reports.Queries;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Services;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Reports;
 
 // existing
-public sealed class ListReportsQueryHandler : IRequestHandler<ListReportsQuery, Result<IReadOnlyList<ReportDto>>>
+public sealed class ListReportsQueryHandler(IReportExecutionRepository executions)
+    : IRequestHandler<ListReportsQuery, Result<IReadOnlyList<ReportExecutionDto>>>
 {
-    public Task<Result<IReadOnlyList<ReportDto>>> Handle(ListReportsQuery q, CancellationToken ct) => Task.FromResult(Result<IReadOnlyList<ReportDto>>.Success(Array.Empty<ReportDto>()));
+    public async Task<Result<IReadOnlyList<ReportExecutionDto>>> Handle(ListReportsQuery q, CancellationToken ct)
+    {
+        var items = q.ForcedClientIds is { Count: > 0 }
+            ? await executions.GetRecentByClientIdsAsync(q.ForcedClientIds, q.Limit)
+            : await executions.GetRecentByClientAsync(q.ClientId, q.Limit);
+        return Result<IReadOnlyList<ReportExecutionDto>>.Success(items.Select(MapExecution).ToList());
+    }
+
+    internal static ReportExecutionDto MapExecution(ReportExecution execution) => new(
+        execution.Id,
+        execution.TemplateId,
+        execution.ClientId,
+        (int)execution.Format,
+        execution.FiltersJson,
+        (int)execution.Status,
+        execution.StorageObjectKey,
+        execution.StorageContentType,
+        execution.StorageSizeBytes,
+        execution.RowCount,
+        execution.ErrorMessage,
+        execution.ExecutionTimeMs,
+        execution.CreatedAt,
+        execution.StartedAt,
+        execution.FinishedAt,
+        execution.CreatedBy,
+        execution.ScheduleId);
 }
 
 // new — dataset catalog
@@ -22,9 +50,17 @@ public sealed class GetReportDatasetCatalogQueryHandler(IReportDatasetCatalogPro
         => Task.FromResult(Result<IReadOnlyList<ReportDatasetCatalogItemDto>>.Success(provider.GetAll()));
 }
 
-public sealed class GetReportExecutionQueryHandler : IRequestHandler<GetReportExecutionQuery, Result<ReportDto>>
+public sealed class GetReportExecutionQueryHandler(IReportExecutionRepository executions)
+    : IRequestHandler<GetReportExecutionQuery, Result<ReportExecutionDto>>
 {
-    public Task<Result<ReportDto>> Handle(GetReportExecutionQuery q, CancellationToken ct) => Task.FromResult(Result<ReportDto>.Failure(Error.NotFound($"Report {q.ExecutionId} not found")));
+    public async Task<Result<ReportExecutionDto>> Handle(GetReportExecutionQuery q, CancellationToken ct)
+    {
+        var execution = await executions.GetByIdAsync(q.ExecutionId, q.ClientId);
+        if (execution is null)
+            return Result<ReportExecutionDto>.Failure(Error.NotFound($"Report {q.ExecutionId} not found"));
+
+        return Result<ReportExecutionDto>.Success(ListReportsQueryHandler.MapExecution(execution));
+    }
 }
 
 // new — templates list
@@ -33,7 +69,12 @@ public sealed class ListReportTemplatesQueryHandler(IReportTemplateRepository re
 {
     public async Task<Result<IReadOnlyList<ReportTemplateDto>>> Handle(ListReportTemplatesQuery q, CancellationToken ct)
     {
-        var templates = await repo.GetAllAsync(q.ClientId, null, q.IsActive);
+        // DatasetType invalido e ignorado em vez de vazar um enum indefinido.
+        var datasetType = q.DatasetType.HasValue && Enum.IsDefined(typeof(ReportDatasetType), q.DatasetType.Value)
+            ? (ReportDatasetType)q.DatasetType.Value
+            : (ReportDatasetType?)null;
+
+        var templates = await repo.GetAllAsync(q.ClientId, datasetType, q.IsActive);
         var items = templates.Select(Map).ToList().AsReadOnly();
         return Result<IReadOnlyList<ReportTemplateDto>>.Success(items);
     }
@@ -41,7 +82,8 @@ public sealed class ListReportTemplatesQueryHandler(IReportTemplateRepository re
     private static ReportTemplateDto Map(ReportTemplate t) => new(
         t.Id, t.ClientId, t.Name, t.Description, t.Instructions,
         (int)t.DatasetType, (int)t.DefaultFormat, t.IsActive, t.IsBuiltIn,
-        t.Version, t.CreatedAt, t.UpdatedAt);
+        t.Version, t.CreatedAt, t.UpdatedAt,
+        t.LayoutJson, t.FiltersJson, t.ExecutionSchemaJson, t.CreatedBy, t.UpdatedBy);
 }
 
 // new — template by id
@@ -56,7 +98,8 @@ public sealed class GetReportTemplateByIdQueryHandler(IReportTemplateRepository 
         return Result<ReportTemplateDto>.Success(new ReportTemplateDto(
             t.Id, t.ClientId, t.Name, t.Description, t.Instructions,
             (int)t.DatasetType, (int)t.DefaultFormat, t.IsActive, t.IsBuiltIn,
-            t.Version, t.CreatedAt, t.UpdatedAt));
+            t.Version, t.CreatedAt, t.UpdatedAt,
+            t.LayoutJson, t.FiltersJson, t.ExecutionSchemaJson, t.CreatedBy, t.UpdatedBy));
     }
 }
 
@@ -66,6 +109,20 @@ public sealed class CreateReportTemplateCommandHandler(IReportTemplateRepository
 {
     public async Task<Result<ReportTemplateDto>> Handle(CreateReportTemplateCommand cmd, CancellationToken ct)
     {
+        if (!Enum.IsDefined(typeof(ReportDatasetType), cmd.DatasetType))
+            return Result<ReportTemplateDto>.Failure(Error.Validation(
+                "datasetType",
+                $"DatasetType {cmd.DatasetType} is not supported."));
+
+        if (!Enum.IsDefined(typeof(ReportFormat), cmd.DefaultFormat))
+            return Result<ReportTemplateDto>.Failure(Error.Validation(
+                "defaultFormat",
+                $"DefaultFormat {cmd.DefaultFormat} is not supported. Supported formats: {string.Join(", ", Enum.GetNames<ReportFormat>())}."));
+
+        var createLayoutErrors = ReportLayoutValidator.ValidateJson(cmd.LayoutJson ?? "{}");
+        if (createLayoutErrors.Count > 0)
+            return Result<ReportTemplateDto>.Failure(Error.Validation("layoutJson", string.Join(" ", createLayoutErrors)));
+
         var template = new ReportTemplate
         {
             Id = Guid.NewGuid(),
@@ -82,7 +139,9 @@ public sealed class CreateReportTemplateCommandHandler(IReportTemplateRepository
             IsBuiltIn = false,
             Version = 1,
             CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
+            UpdatedAt = DateTime.UtcNow,
+            CreatedBy = cmd.CreatedBy,
+            UpdatedBy = cmd.CreatedBy
         };
 
         var created = await repo.CreateAsync(template);
@@ -90,7 +149,8 @@ public sealed class CreateReportTemplateCommandHandler(IReportTemplateRepository
             created.Id, created.ClientId, created.Name, created.Description,
             created.Instructions, (int)created.DatasetType, (int)created.DefaultFormat,
             created.IsActive, created.IsBuiltIn, created.Version,
-            created.CreatedAt, created.UpdatedAt));
+            created.CreatedAt, created.UpdatedAt,
+            created.LayoutJson, created.FiltersJson, created.ExecutionSchemaJson, created.CreatedBy, created.UpdatedBy));
     }
 }
 
@@ -104,6 +164,28 @@ public sealed class UpdateReportTemplateCommandHandler(IReportTemplateRepository
         if (t is null)
             return Result<ReportTemplateDto>.Failure(Error.NotFound($"ReportTemplate {cmd.Id} not found"));
 
+        if (t.IsBuiltIn)
+            return Result<ReportTemplateDto>.Failure(Error.Validation(
+                "isBuiltIn",
+                "Templates embutidos nao podem ser editados. Instale uma copia pela biblioteca."));
+
+        if (cmd.LayoutJson is not null)
+        {
+            var layoutErrors = ReportLayoutValidator.ValidateJson(cmd.LayoutJson);
+            if (layoutErrors.Count > 0)
+                return Result<ReportTemplateDto>.Failure(Error.Validation("layoutJson", string.Join(" ", layoutErrors)));
+        }
+
+        if (cmd.DatasetType.HasValue && !Enum.IsDefined(typeof(ReportDatasetType), cmd.DatasetType.Value))
+            return Result<ReportTemplateDto>.Failure(Error.Validation(
+                "datasetType",
+                $"DatasetType {cmd.DatasetType.Value} is not supported."));
+
+        if (cmd.DefaultFormat.HasValue && !Enum.IsDefined(typeof(ReportFormat), cmd.DefaultFormat.Value))
+            return Result<ReportTemplateDto>.Failure(Error.Validation(
+                "defaultFormat",
+                $"DefaultFormat {cmd.DefaultFormat.Value} is not supported. Supported formats: {string.Join(", ", Enum.GetNames<ReportFormat>())}."));
+
         if (cmd.Name is not null) t.Name = cmd.Name;
         if (cmd.Description is not null) t.Description = cmd.Description;
         if (cmd.Instructions is not null) t.Instructions = cmd.Instructions;
@@ -114,13 +196,16 @@ public sealed class UpdateReportTemplateCommandHandler(IReportTemplateRepository
         if (cmd.FiltersJson is not null) t.FiltersJson = cmd.FiltersJson;
         if (cmd.IsActive.HasValue) t.IsActive = cmd.IsActive.Value;
         t.UpdatedAt = DateTime.UtcNow;
-        t.Version++;
+        t.UpdatedBy = cmd.UpdatedBy;
+        // A versao e incrementada pelo repositorio (current.Version += 1).
+        // Incrementar aqui tambem fazia a versao pular de 2 em 2.
 
         await repo.UpdateAsync(t);
         return Result<ReportTemplateDto>.Success(new ReportTemplateDto(
             t.Id, t.ClientId, t.Name, t.Description, t.Instructions,
             (int)t.DatasetType, (int)t.DefaultFormat, t.IsActive, t.IsBuiltIn,
-            t.Version, t.CreatedAt, t.UpdatedAt));
+            t.Version, t.CreatedAt, t.UpdatedAt,
+            t.LayoutJson, t.FiltersJson, t.ExecutionSchemaJson, t.CreatedBy, t.UpdatedBy));
     }
 }
 
@@ -130,6 +215,15 @@ public sealed class DeleteReportTemplateCommandHandler(IReportTemplateRepository
 {
     public async Task<Result<VoidResult>> Handle(DeleteReportTemplateCommand cmd, CancellationToken ct)
     {
+        var template = await repo.GetByIdAsync(cmd.Id, cmd.ClientId);
+        if (template is null)
+            return Result<VoidResult>.Failure(Error.NotFound($"ReportTemplate {cmd.Id} not found"));
+
+        if (template.IsBuiltIn)
+            return Result<VoidResult>.Failure(Error.Validation(
+                "isBuiltIn",
+                "Templates embutidos nao podem ser excluidos. Instale uma copia pela biblioteca."));
+
         var deleted = await repo.DeleteAsync(cmd.Id, cmd.ClientId);
         if (!deleted)
             return Result<VoidResult>.Failure(Error.NotFound($"ReportTemplate {cmd.Id} not found"));
@@ -139,13 +233,20 @@ public sealed class DeleteReportTemplateCommandHandler(IReportTemplateRepository
 
 // new — run report now
 public sealed class RunReportNowCommandHandler(IReportService reportService, IReportTemplateRepository templateRepo, IReportExecutionRepository execRepo)
-    : IRequestHandler<RunReportNowCommand, Result<ReportDto>>
+    : IRequestHandler<RunReportNowCommand, Result<RunReportResultDto>>
 {
-    public async Task<Result<ReportDto>> Handle(RunReportNowCommand cmd, CancellationToken ct)
+    public async Task<Result<RunReportResultDto>> Handle(RunReportNowCommand cmd, CancellationToken ct)
     {
+        // Um formato fora do enum (ex.: o antigo 1 = Pdf) nao tem renderer e
+        // so falharia depois de criar a execucao. Valida antes.
+        if (!Enum.IsDefined(typeof(ReportFormat), cmd.Format))
+            return Result<RunReportResultDto>.Failure(Error.Validation(
+                "format",
+                $"Format {cmd.Format} is not supported. Supported formats: {string.Join(", ", Enum.GetNames<ReportFormat>())}."));
+
         var template = await templateRepo.GetByIdAsync(cmd.TemplateId, cmd.ClientId);
         if (template is null)
-            return Result<ReportDto>.Failure(Error.NotFound($"ReportTemplate {cmd.TemplateId} not found"));
+            return Result<RunReportResultDto>.Failure(Error.NotFound($"ReportTemplate {cmd.TemplateId} not found"));
 
         var execution = new ReportExecution
         {
@@ -156,15 +257,32 @@ public sealed class RunReportNowCommandHandler(IReportService reportService, IRe
             FiltersJson = cmd.FiltersJson,
             Status = ReportExecutionStatus.Pending,
             CreatedAt = DateTime.UtcNow,
-            ScheduleId = cmd.ScheduleId
+            ScheduleId = cmd.ScheduleId,
+            CreatedBy = cmd.CreatedBy
         };
 
         execution = await execRepo.CreateAsync(execution);
-        execution = await reportService.ProcessExecutionAsync(execution.Id, cmd.ClientId, ct);
+        execution = await reportService.ProcessExecutionAsync(
+            execution.Id,
+            cmd.ClientId,
+            ct,
+            new ReportQueryScope(cmd.ClientId, cmd.SiteId));
 
-        return Result<ReportDto>.Success(new ReportDto(
-            execution.Id, template.Name, execution.Status.ToString(),
-            execution.Format.ToString(), execution.CreatedAt, execution.FinishedAt));
+        var downloadPath = cmd.ClientId.HasValue && cmd.ClientId.Value != Guid.Empty
+            ? $"/api/v1/reports/executions/{execution.Id}/download?clientId={cmd.ClientId}"
+            : $"/api/v1/reports/executions/{execution.Id}/download";
+
+        return Result<RunReportResultDto>.Success(new RunReportResultDto(
+            ExecutionId: execution.Id,
+            Status: (int)execution.Status,
+            Format: (int)execution.Format,
+            RowCount: execution.RowCount,
+            ResultSizeBytes: execution.StorageSizeBytes,
+            ContentType: execution.StorageContentType,
+            DownloadPath: downloadPath,
+            TemplateName: template.Name,
+            CreatedAt: execution.CreatedAt,
+            FinishedAt: execution.FinishedAt));
     }
 }
 
@@ -180,11 +298,18 @@ public sealed class PreviewReportCommandHandler(
         if (template is null)
             return Result<ReportPreviewResultDto>.Failure(Error.NotFound("ReportTemplate not found"));
 
+        // O preview devolve HTML para o navegador: o layout precisa ser validado
+        // aqui tambem (nao apenas na gravacao), pois o layout inline vem do corpo.
+        var layoutErrors = ReportLayoutValidator.ValidateJson(template.LayoutJson);
+        if (layoutErrors.Count > 0)
+            return Result<ReportPreviewResultDto>.Failure(Error.Validation("layoutJson", string.Join(" ", layoutErrors)));
+
         var isHtml = string.Equals(cmd.PreviewMode, "html", StringComparison.OrdinalIgnoreCase);
 
         if (isHtml)
         {
-            var htmlResult = await reportService.PreviewHtmlAsync(template, cmd.FiltersJson, ct);
+            var htmlResult = await reportService.PreviewHtmlAsync(
+                template, cmd.FiltersJson, ct, new ReportQueryScope(cmd.ClientId, cmd.SiteId));
             return Result<ReportPreviewResultDto>.Success(new ReportPreviewResultDto(
                 Mode: "html",
                 ContentType: "text/html; charset=utf-8",
@@ -197,13 +322,14 @@ public sealed class PreviewReportCommandHandler(
         }
 
         var format = ResolveFormat(cmd.Format) ?? template.DefaultFormat;
-        var result = await reportService.PreviewAsync(template, format, cmd.FiltersJson, ct);
+        var result = await reportService.PreviewAsync(
+            template, format, cmd.FiltersJson, ct, new ReportQueryScope(cmd.ClientId, cmd.SiteId));
         var contentType = format switch
         {
             ReportFormat.Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ReportFormat.Csv => "text/csv",
-            ReportFormat.Markdown => "text/markdown",
-            _ => "application/pdf"
+            ReportFormat.Csv => "text/csv; charset=utf-8",
+            ReportFormat.Markdown => "text/markdown; charset=utf-8",
+            _ => "application/octet-stream"
         };
 
         return Result<ReportPreviewResultDto>.Success(new ReportPreviewResultDto(
@@ -235,7 +361,7 @@ public sealed class PreviewReportCommandHandler(
             Id = Guid.NewGuid(),
             Name = input.Name ?? "Preview",
             DatasetType = datasetType.Value,
-            DefaultFormat = ReportFormat.Pdf,
+            DefaultFormat = ReportFormat.Markdown,
             LayoutJson = input.LayoutJson ?? "{}",
             FiltersJson = input.FiltersJson,
             IsActive = true,
@@ -252,12 +378,13 @@ public sealed class PreviewReportCommandHandler(
         if (string.IsNullOrWhiteSpace(raw))
             return null;
 
-        // Número (ex: "4")
-        if (int.TryParse(raw, out var numeric) && Enum.IsDefined(typeof(ReportDatasetType), numeric))
-            return (ReportDatasetType)numeric;
+        // Número (ex: "4"). Se for numérico e não existir no enum, NÃO tenta
+        // Enum.TryParse: ele aceita "999" e devolve um valor indefinido.
+        if (int.TryParse(raw, out var numeric))
+            return Enum.IsDefined(typeof(ReportDatasetType), numeric) ? (ReportDatasetType)numeric : null;
 
         // Nome do enum (ex: "AgentHardware")
-        if (Enum.TryParse<ReportDatasetType>(raw, ignoreCase: true, out var parsed))
+        if (Enum.TryParse<ReportDatasetType>(raw, ignoreCase: true, out var parsed) && Enum.IsDefined(typeof(ReportDatasetType), parsed))
             return parsed;
 
         // camelCase (ex: "agentHardware") → PascalCase
@@ -276,15 +403,16 @@ public sealed class PreviewReportCommandHandler(
         if (string.IsNullOrWhiteSpace(raw))
             return null;
 
-        // Número (ex: "1" = Pdf)
-        if (int.TryParse(raw, out var numeric) && Enum.IsDefined(typeof(ReportFormat), numeric))
-            return (ReportFormat)numeric;
+        // Número (ex: "0" = Xlsx, "2" = Csv, "3" = Markdown). Numérico fora do
+        // enum não deve cair no Enum.TryParse (que aceitaria "999").
+        if (int.TryParse(raw, out var numeric))
+            return Enum.IsDefined(typeof(ReportFormat), numeric) ? (ReportFormat)numeric : null;
 
-        // Nome do enum (ex: "Pdf")
-        if (Enum.TryParse<ReportFormat>(raw, ignoreCase: true, out var parsed))
+        // Nome do enum (ex: "Markdown")
+        if (Enum.TryParse<ReportFormat>(raw, ignoreCase: true, out var parsed) && Enum.IsDefined(typeof(ReportFormat), parsed))
             return parsed;
 
-        // camelCase (ex: "pdf") → PascalCase
+        // camelCase (ex: "markdown") → PascalCase
         var pascal = char.ToUpperInvariant(raw[0]) + raw[1..];
         if (Enum.TryParse<ReportFormat>(pascal, ignoreCase: true, out var parsedPascal))
             return parsedPascal;

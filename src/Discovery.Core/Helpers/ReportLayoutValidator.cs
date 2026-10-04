@@ -29,6 +29,13 @@ public static partial class ReportLayoutValidator
     private static readonly HashSet<string> AllowedChartAggregates = new(StringComparer.OrdinalIgnoreCase) { "count", "countDistinct", "sum", "avg", "min", "max", "compliancePercent" };
     private static readonly HashSet<string> AllowedBucketByIntervals = new(StringComparer.OrdinalIgnoreCase) { "hour", "day", "week", "month" };
 
+    public static int GetMaxLayoutJsonLength() => MaxLayoutJsonLength;
+    public static int GetMaxTopLevelColumns() => MaxTopLevelColumns;
+    public static int GetMaxSections() => MaxSections;
+    public static int GetMaxColumnsPerSection() => MaxColumnsPerSection;
+    public static int GetMaxSummaries() => MaxSummaries;
+    public static int GetMaxGroupDetails() => MaxGroupDetails;
+
     public static IReadOnlyCollection<string> GetSupportedOrientations() => AllowedOrientations.ToArray();
     public static IReadOnlyCollection<string> GetSupportedColumnFormats() => AllowedColumnFormats.ToArray();
     public static IReadOnlyCollection<string> GetSupportedSummaryAggregates() => AllowedAggregates.ToArray();

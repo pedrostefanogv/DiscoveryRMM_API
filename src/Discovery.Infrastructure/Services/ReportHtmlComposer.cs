@@ -396,7 +396,10 @@ public class ReportHtmlComposer : IReportHtmlComposer
                 var style = ResolveConditionalCellStyle(column.ConditionalFormat, value);
                 var icon = ResolveConditionalIcon(column.ConditionalFormat, value);
                 var displayValue = string.IsNullOrWhiteSpace(icon) ? formattedValue : $"{icon} {formattedValue}";
-                var styleAttr = string.IsNullOrWhiteSpace(style) ? "" : $" style=\"{style}\"";
+                // styleAttr e construido a partir de cores do LayoutJson. Como o
+                // layout pode nao ter passado pelo ReportLayoutValidator, o valor e
+                // escapado para nao permitir quebra do atributo (XSS por atributo).
+                var styleAttr = string.IsNullOrWhiteSpace(style) ? "" : $" style=\"{HtmlAttributeEscape(style)}\"";
                 return $"<td{styleAttr}>{HtmlEscape(displayValue)}</td>";
             });
             return $"<tr>{string.Join(string.Empty, cells)}</tr>";
@@ -734,10 +737,25 @@ public class ReportHtmlComposer : IReportHtmlComposer
         foreach (var value in values)
         {
             if (!string.IsNullOrWhiteSpace(value))
-                return value;
+                return SanitizeCssValue(value);
         }
 
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Remove caracteres que permitiriam escapar do bloco &lt;style&gt;. O LayoutJson
+    /// pode nao ter passado pelo ReportLayoutValidator, entao nenhum valor vindo
+    /// dele pode ser injetado cru em CSS.
+    /// </summary>
+    private static string SanitizeCssValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        return value
+            .Replace("<", string.Empty, StringComparison.Ordinal)
+            .Replace(">", string.Empty, StringComparison.Ordinal);
     }
 
     private static string ResolveAlternateRowBackground(ReportLayoutStyleDefinition style)
@@ -978,13 +996,14 @@ public class ReportHtmlComposer : IReportHtmlComposer
         foreach (var chart in layout.Charts)
         {
             var chartTitle = string.IsNullOrWhiteSpace(chart.Title) ? (chart.Type ?? "Chart") : chart.Title;
-            var chartUrl = BuildQuickChartUrl(chart, data.Rows);
-            if (string.IsNullOrWhiteSpace(chartUrl))
+            var chartSvg = BuildChartSvg(chart, data.Rows);
+            if (string.IsNullOrWhiteSpace(chartSvg))
                 continue;
 
             charts.AppendLine("<div class=\"report-chart\">");
             charts.AppendLine($"<div class=\"report-chart-title\">{HtmlEscape(chartTitle)}</div>");
-            charts.AppendLine($"<img src=\"{HtmlAttributeEscape(chartUrl)}\" alt=\"{HtmlAttributeEscape(chartTitle)}\" style=\"max-width:100%;height:auto;\" />");
+            // SVG inline: auto-contido, sem requisicao a servico externo.
+            charts.AppendLine(chartSvg);
             charts.AppendLine("</div>");
         }
 
@@ -998,99 +1017,37 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
-    private static string? BuildQuickChartUrl(ReportLayoutChartDefinition chart, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
+    /// <summary>
+    /// Gera o grafico como SVG inline. Antes era uma URL do quickchart.io com os
+    /// dados do cliente embutidos na query string — o que enviava hostnames,
+    /// sistemas operacionais e nomes de clientes para um terceiro a cada
+    /// visualizacao/impressao, alem de nao funcionar offline/air-gapped.
+    /// </summary>
+    private static string? BuildChartSvg(ReportLayoutChartDefinition chart, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
     {
         if (string.IsNullOrWhiteSpace(chart.Type))
             return null;
 
-        var w = Math.Clamp(chart.Width, 200, 1200);
-        var h = Math.Clamp(chart.Height, 150, 800);
+        var w = Math.Clamp(chart.Width, 240, 1600);
+        var h = Math.Clamp(chart.Height, 160, 1000);
+        var title = string.IsNullOrWhiteSpace(chart.Title) ? "Dados" : chart.Title!;
 
-        var chartConfig = chart.Type.ToLowerInvariant() switch
+        if (string.Equals(chart.Type, "gauge", StringComparison.OrdinalIgnoreCase))
         {
-            "gauge" => BuildGaugeConfig(chart, rows),
-            _ => BuildStandardChartConfig(chart, rows)
-        };
+            var gaugeValue = ComputeGaugeValue(chart, rows);
+            if (gaugeValue is null && chart.Thresholds is null)
+                return null;
 
-        if (chartConfig is null)
-            return null;
-
-        var encoded = Uri.EscapeDataString(chartConfig);
-        return $"https://quickchart.io/chart?c={encoded}&w={w}&h={h}";
-    }
-
-    private static string? BuildStandardChartConfig(ReportLayoutChartDefinition chart, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
-    {
-        var chartType = chart.Type?.ToLowerInvariant() switch
-        {
-            "horizontalbar" => "horizontalBar",
-            "pie" => "pie",
-            "doughnut" => "doughnut",
-            "line" => "line",
-            "stackedbar" => "bar",
-            _ => "bar"
-        };
+            return ReportChartSvgRenderer.RenderGauge(title, Convert.ToDouble(gaugeValue ?? 0), w, h);
+        }
 
         var aggregate = string.IsNullOrWhiteSpace(chart.Aggregate) ? "count" : chart.Aggregate.ToLowerInvariant();
         var limit = chart.Limit > 0 ? chart.Limit : 15;
-
         var series = BuildChartDataSeries(rows, chart.GroupField, chart.ValueField, aggregate, limit, chart.BucketBy);
         if (series.Labels.Count == 0)
             return null;
 
-        var labelsJson = System.Text.Json.JsonSerializer.Serialize(series.Labels);
-        var dataJson = System.Text.Json.JsonSerializer.Serialize(series.Values);
-        var title = chart.Title ?? "Dados";
-
-        var stackedOption = chartType == "bar" && string.Equals(chart.Type, "stackedbar", StringComparison.OrdinalIgnoreCase)
-            ? ", \"stacked\": true"
-            : "";
-
-        return $$"""
-            {
-                "type": "{{chartType}}",
-                "data": {
-                    "labels": {{labelsJson}},
-                    "datasets": [{
-                        "label": "{{title}}",
-                        "data": {{dataJson}}{{stackedOption}}
-                    }]
-                },
-                "options": {
-                    "plugins": {
-                        "title": { "display": true, "text": "{{title}}" },
-                        "legend": { "display": false }
-                    }
-                }
-            }
-            """;
-    }
-
-    private static string? BuildGaugeConfig(ReportLayoutChartDefinition chart, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
-    {
-        var rawValue = ComputeGaugeValue(chart, rows);
-        if (rawValue is null && chart.Thresholds is null)
-            return null;
-
-        var gaugeValue = rawValue ?? 0;
-        var needleColor = GetGaugeNeedleColor(chart.Thresholds, Convert.ToDouble(gaugeValue));
-
-        return $$"""
-            {
-                "type": "radialGauge",
-                "data": {
-                    "datasets": [{
-                        "data": [{{gaugeValue}}],
-                        "backgroundColor": ["{{needleColor}}"]
-                    }]
-                },
-                "options": {
-                    "plugins": { "title": { "display": true, "text": "{{chart.Title ?? ""}}" } },
-                    "needle": { "radiusPercentage": 2, "widthPercentage": 3.2, "lengthPercentage": 80, "color": "rgba(0,0,0,0.7)" },
-                    "valueLabel": { "display": true, "formatter": "{value}%" }
-                }
-            }
-            """;
+        return ReportChartSvgRenderer.Render(chart.Type, series.Labels, series.Values, title, w, h);
     }
 
     private static object? ComputeGaugeValue(ReportLayoutChartDefinition chart, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
@@ -1291,7 +1248,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
 
     private static string CssStringLiteral(string? value)
     {
-        var escaped = (value ?? string.Empty)
+        var escaped = SanitizeCssValue(value)
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
         return $"\"{escaped}\"";

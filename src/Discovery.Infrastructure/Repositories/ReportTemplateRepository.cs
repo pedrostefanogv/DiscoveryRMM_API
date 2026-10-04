@@ -109,6 +109,27 @@ public class ReportTemplateRepository : IReportTemplateRepository
         return true;
     }
 
+    public async Task<IReadOnlyList<ReportTemplate>> GetBuiltInAsync(ReportDatasetType? datasetType = null)
+    {
+        var query = _db.ReportTemplates
+            .AsNoTracking()
+            .Where(template => template.IsBuiltIn);
+
+        if (datasetType.HasValue)
+            query = query.Where(template => template.DatasetType == datasetType.Value);
+
+        return await query
+            .OrderBy(template => template.Name)
+            .ToListAsync();
+    }
+
+    public async Task<int> DeleteHistoryOlderThanAsync(DateTime cutoff)
+    {
+        return await _db.ReportTemplateHistories
+            .Where(history => history.ChangedAt <= cutoff)
+            .ExecuteDeleteAsync();
+    }
+
     private static ReportTemplateHistory BuildHistorySnapshot(ReportTemplate template, string changeType, int version)
     {
         var snapshot = JsonSerializer.Serialize(new

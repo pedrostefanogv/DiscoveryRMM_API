@@ -12,7 +12,7 @@ public class ReportSchedule
     public Guid Id { get; set; }
     public Guid TemplateId { get; set; }
     public Guid? ClientId { get; set; }
-    public ReportFormat Format { get; set; } = ReportFormat.Pdf;
+    public ReportFormat Format { get; set; } = ReportFormat.Markdown;
     public string? FiltersJson { get; set; }
     public string? ScheduleLabel { get; set; }
 

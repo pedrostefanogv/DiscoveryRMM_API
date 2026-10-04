@@ -14,7 +14,7 @@ public interface IReportDatasetCatalogProvider
 
 public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
 {
-    private static readonly string[] AllFormats = ["xlsx", "pdf", "csv", "markdown"];
+    private static readonly string[] AllFormats = ["xlsx", "csv", "markdown"];
 
     private static readonly string[] JoinAgent = ["agentId"];
     private static readonly string[] JoinAgentClientSite = ["agentId", "clientId", "siteId"];

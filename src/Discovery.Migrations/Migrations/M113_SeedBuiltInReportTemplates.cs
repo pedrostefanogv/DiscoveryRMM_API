@@ -13,7 +13,7 @@ public class M113_SeedBuiltInReportTemplates : Migration
     {
         InsertTemplate(0, "Inventário Completo de Hardware",
             "Inventário completo de hardware por agente: SO, CPU, RAM, GPU, discos, BIOS.",
-            null, 4, "Pdf", 4, GetHardwareInventoryLayout(), null);
+            null, 4, "Markdown", 4, GetHardwareInventoryLayout(), null);
 
         InsertTemplate(1, "Inventário de Software por Máquina",
             "Softwares instalados por máquina: nome, versão, fabricante, última verificação.",
@@ -21,7 +21,7 @@ public class M113_SeedBuiltInReportTemplates : Migration
 
         InsertTemplate(2, "Máquinas por Faixa de RAM",
             "Agentes agrupados por capacidade de RAM (4GB-, 4-8GB, 8-16GB, 16-32GB, 32GB+).",
-            null, 4, "Pdf", 4, GetMachinesByRamLayout(), null);
+            null, 4, "Markdown", 4, GetMachinesByRamLayout(), null);
 
         InsertTemplate(3, "Resumo de Uso de Discos",
             "Resumo de discos por agente: quantidade, espaço total e livre.",
@@ -29,15 +29,15 @@ public class M113_SeedBuiltInReportTemplates : Migration
 
         InsertTemplate(4, "Distribuição de Sistemas Operacionais",
             "Distribuição de sistemas operacionais no parque (Windows 10, 11, Server, Linux).",
-            null, 4, "Pdf", 5, GetOsDistributionLayout(), null);
+            null, 4, "Markdown", 5, GetOsDistributionLayout(), null);
 
         InsertTemplate(5, "Hardware + Aplicativos Instalados",
             "Multi-source: hardware do agente com todos os softwares instalados correlacionados.",
-            null, 5, "Pdf", 5, GetHardwareWithSoftwareLayout(), null);
+            null, 5, "Markdown", 5, GetHardwareWithSoftwareLayout(), null);
 
         InsertTemplate(6, "Auditoria de Softwares Vulneráveis",
             "Softwares potencialmente inseguros ou desatualizados (Java, Flash, VNC, TeamViewer, etc).",
-            null, 0, "Pdf", 0, GetVulnerabilityAuditLayout(), "{\"softwareName\":\"Java|Flash|Adobe|VNC|TeamViewer|Putty|WinRAR|7-Zip|Notepad++\"}");
+            null, 0, "Markdown", 0, GetVulnerabilityAuditLayout(), "{\"softwareName\":\"Java|Flash|Adobe|VNC|TeamViewer|Putty|WinRAR|7-Zip|Notepad++\"}");
 
         InsertTemplate(7, "Máquinas sem Antivírus Detectado",
             "Agentes sem software de antivírus identificado no inventário.",
@@ -49,15 +49,15 @@ public class M113_SeedBuiltInReportTemplates : Migration
 
         InsertTemplate(9, "Relatório de SLA de Tickets",
             "Tickets com métricas de SLA: compliance, violações, tempo médio de resolução.",
-            null, 3, "Pdf", 3, GetTicketSLALayout(), null);
+            null, 3, "Markdown", 3, GetTicketSLALayout(), null);
 
         InsertTemplate(10, "Tickets por Prioridade",
             "Resumo de tickets agrupados por prioridade com contagem e SLA status.",
-            null, 3, "Pdf", 3, GetTicketsByPriorityLayout(), null);
+            null, 3, "Markdown", 3, GetTicketsByPriorityLayout(), null);
 
         InsertTemplate(11, "Agentes Sem Comunicação",
             "Agentes offline há mais de 24h, agrupados por cliente.",
-            null, 5, "Pdf", 5, GetOfflineAgentsLayout(), null);
+            null, 5, "Markdown", 5, GetOfflineAgentsLayout(), null);
 
         InsertTemplate(12, "Agentes por Label/Tag",
             "Agentes agrupados por labels automáticas configuradas.",
@@ -69,7 +69,7 @@ public class M113_SeedBuiltInReportTemplates : Migration
 
         InsertTemplate(14, "Contagem de Agentes por Cliente",
             "Resumo executivo: total de agentes e RAM por cliente.",
-            null, 4, "Pdf", 4, GetAgentCountByClientLayout(), null);
+            null, 4, "Markdown", 4, GetAgentCountByClientLayout(), null);
 
         InsertTemplate(15, "Contagem de Licenças de Software",
             "Software inventory agregado: quantas instalações de cada software.",
@@ -77,7 +77,7 @@ public class M113_SeedBuiltInReportTemplates : Migration
 
         InsertTemplate(16, "Resumo Executivo do Parque",
             "Visão executiva consolidada: máquinas, SO, RAM total, núcleos por cliente/site.",
-            null, 4, "Pdf", 4, GetExecutiveSummaryLayout(), null);
+            null, 4, "Markdown", 4, GetExecutiveSummaryLayout(), null);
     }
 
     public override void Down()
@@ -101,7 +101,7 @@ public class M113_SeedBuiltInReportTemplates : Migration
                 instructions = (string?)null,
                 execution_schema_json = (string?)null,
                 dataset_type = datasetType,
-                default_format = defaultFormat == "Pdf" ? 1 : defaultFormat == "Csv" ? 2 : defaultFormat == "Markdown" ? 3 : 0,
+                default_format = defaultFormat == "Csv" ? 2 : defaultFormat == "Markdown" ? 3 : 0,
                 layout_json = layoutJson,
                 filters_json = templateFiltersJson ?? (object)DBNull.Value,
                 is_active = true,

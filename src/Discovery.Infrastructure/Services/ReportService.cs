@@ -7,6 +7,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -24,8 +25,10 @@ public class ReportService : IReportService
     private readonly IMemoryCache _cache;
     private readonly ReportingOptions _options;
     
-    // Cache key pattern for report results
-    private const string CacheKeyFormat = "report-exec:{0}";
+    // Cache key pattern for report results. O escopo do cliente faz parte da
+    // chave: sem isso uma execucao cacheada por um cliente podia ser devolvida
+    // (inclusive com URL de download) para uma requisicao de outro cliente.
+    private const string CacheKeyFormat = "report-exec:{0}:{1}";
 
     public ReportService(
         IReportExecutionRepository executionRepository,
@@ -54,7 +57,7 @@ public class ReportService : IReportService
         _renderers = renderers.ToDictionary(renderer => renderer.Format);
     }
 
-    public async Task<ReportExecution> ProcessExecutionAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default)
+    public async Task<ReportExecution> ProcessExecutionAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default, ReportQueryScope? scope = null)
     {
         var effectiveOptions = await GetEffectiveReportingOptionsAsync();
 
@@ -75,7 +78,7 @@ public class ReportService : IReportService
             if (execution.Status != ReportExecutionStatus.Pending)
             {
                 // Return cached result if already processed
-                var cacheKey = string.Format(CacheKeyFormat, executionId);
+                var cacheKey = BuildExecutionCacheKey(executionId, clientId);
                 if (_cache.TryGetValue(cacheKey, out ReportExecution? cached))
                     return cached!;
                 return execution;
@@ -86,12 +89,24 @@ public class ReportService : IReportService
             _logger.LogInformation("Report execution {ExecutionId} started (timeout: {TimeoutSeconds}s)", 
                 executionId, effectiveOptions.ProcessingTimeoutSeconds);
             
-            await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Running);
+            // Claim atomico: com mais de uma replica da API, apenas a instancia
+            // que conseguir mudar Pending -> Running processa esta execucao.
+            if (!await _executionRepository.TryClaimPendingAsync(executionId, clientId))
+            {
+                _logger.LogInformation(
+                    "Report execution {ExecutionId} was already claimed by another worker; skipping.",
+                    executionId);
+
+                var claimedElsewhere = await _executionRepository.GetByIdAsync(executionId, clientId);
+                return claimedElsewhere ?? execution;
+            }
 
             var template = await _templateRepository.GetByIdAsync(execution.TemplateId, null)
                 ?? throw new InvalidOperationException($"Template {execution.TemplateId} not found.");
 
-            var data = await _datasetQueryService.QueryAsync(template, execution.FiltersJson, timeoutCts.Token);
+            // O escopo efetivo (execucao/usuario) sobrescreve o FiltersJson.
+            var scopedFilters = ApplyQueryScope(execution.FiltersJson, execution.ClientId, scope);
+            var data = await _datasetQueryService.QueryAsync(template, scopedFilters, timeoutCts.Token);
             var document = await RenderDocumentAsync(template, execution.Format, data, timeoutCts.Token);
 
             var fileName = $"report-{executionId:N}.{document.FileExtension}";
@@ -125,7 +140,7 @@ public class ReportService : IReportService
                 ?? throw new InvalidOperationException($"Report execution {executionId} not found after processing.");
 
             // Cache for 1 hour to avoid repeated DB queries for downloads
-            _cache.Set(string.Format(CacheKeyFormat, executionId), completed, TimeSpan.FromHours(1));
+            _cache.Set(BuildExecutionCacheKey(executionId, clientId), completed, TimeSpan.FromHours(1));
 
             await _notificationService.PublishAsync(new NotificationPublishRequest(
                 EventType: "report.completed",
@@ -191,6 +206,15 @@ public class ReportService : IReportService
         var effectiveOptions = await GetEffectiveReportingOptionsAsync();
         var maxConcurrent = Math.Clamp(effectiveOptions.MaxConcurrentExecutions, 1, 16);
 
+        // Recupera execucoes presas em Running (processo morto no meio do
+        // trabalho). O corte usa o timeout de processamento + margem.
+        var staleBefore = DateTime.UtcNow.AddSeconds(-(effectiveOptions.ProcessingTimeoutSeconds + 60));
+        var requeued = await _executionRepository.RequeueStaleRunningAsync(staleBefore);
+        if (requeued > 0)
+        {
+            _logger.LogWarning("Requeued {Count} stale report execution(s) stuck in Running.", requeued);
+        }
+
         var pending = await _executionRepository.GetPendingAsync(maxItems);
         if (pending.Count == 0)
             return [];
@@ -208,44 +232,48 @@ public class ReportService : IReportService
             return sequentialResults;
         }
 
-        using var workerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using var semaphore = new SemaphoreSlim(maxConcurrent, maxConcurrent);
 
         var results = new ReportExecution?[pending.Count];
-        var tasks = pending.Select((execution, index) => ProcessPendingItemAsync(execution, index)).ToArray();
 
-        await Task.WhenAll(tasks);
-        return results.Where(result => result is not null).Select(result => result!).ToList();
-
-        async Task ProcessPendingItemAsync(ReportExecution execution, int index)
+        // Uma falha em uma execucao nao deve cancelar nem abortar as outras do
+        // lote. Antes o primeiro erro chamava workerCts.Cancel(), o
+        // Task.WhenAll lancava, o semaphore era descartado com itens ainda
+        // pendentes e esses itens estouravam ObjectDisposedException.
+        var tasks = pending.Select(async (execution, index) =>
         {
-            await semaphore.WaitAsync(workerCts.Token);
+            await semaphore.WaitAsync(cancellationToken);
             try
             {
-                workerCts.Token.ThrowIfCancellationRequested();
-                results[index] = await ProcessExecutionAsync(execution.Id, execution.ClientId, workerCts.Token);
+                cancellationToken.ThrowIfCancellationRequested();
+                results[index] = await ProcessExecutionAsync(execution.Id, execution.ClientId, cancellationToken);
             }
-            catch
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                workerCts.Cancel();
                 throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Report execution {ExecutionId} failed while processing the pending batch.", execution.Id);
             }
             finally
             {
                 semaphore.Release();
             }
-        }
+        }).ToArray();
 
+        await Task.WhenAll(tasks);
+        return results.Where(result => result is not null).Select(result => result!).ToList();
     }
 
-    public async Task<ReportPreviewResult> PreviewAsync(ReportTemplate template, ReportFormat format, string? filtersJson = null, CancellationToken cancellationToken = default)
+    public async Task<ReportPreviewResult> PreviewAsync(ReportTemplate template, ReportFormat format, string? filtersJson = null, CancellationToken cancellationToken = default, ReportQueryScope? scope = null)
     {
         var effectiveOptions = await GetEffectiveReportingOptionsAsync();
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveOptions.ProcessingTimeoutSeconds));
 
-        var data = await _datasetQueryService.QueryAsync(template, filtersJson, timeoutCts.Token);
+        var data = await _datasetQueryService.QueryAsync(template, ApplyQueryScope(filtersJson, null, scope), timeoutCts.Token);
         var document = await RenderDocumentAsync(template, format, data, timeoutCts.Token);
         var context = BuildRenderContext(template);
 
@@ -257,14 +285,14 @@ public class ReportService : IReportService
         };
     }
 
-    public async Task<ReportHtmlPreviewResult> PreviewHtmlAsync(ReportTemplate template, string? filtersJson = null, CancellationToken cancellationToken = default)
+    public async Task<ReportHtmlPreviewResult> PreviewHtmlAsync(ReportTemplate template, string? filtersJson = null, CancellationToken cancellationToken = default, ReportQueryScope? scope = null)
     {
         var effectiveOptions = await GetEffectiveReportingOptionsAsync();
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveOptions.ProcessingTimeoutSeconds));
 
-        var data = await _datasetQueryService.QueryAsync(template, filtersJson, timeoutCts.Token);
+        var data = await _datasetQueryService.QueryAsync(template, ApplyQueryScope(filtersJson, null, scope), timeoutCts.Token);
         var context = BuildRenderContext(template);
 
         return new ReportHtmlPreviewResult
@@ -277,10 +305,58 @@ public class ReportService : IReportService
 
     public async Task<string?> GetPresignedDownloadUrlAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default)
     {
-        var cacheKey = string.Format(CacheKeyFormat, executionId);
-        ReportExecution? execution = null;
+        var execution = await GetDownloadableExecutionAsync(executionId, clientId);
+        if (execution is null)
+            return null;
 
-        if (!_cache.TryGetValue(cacheKey, out execution))
+        var serverConfig = await _serverConfigurationRepository.GetOrCreateDefaultAsync();
+        var ttlHours = serverConfig.ObjectStorageUrlTtlHours > 0 ? serverConfig.ObjectStorageUrlTtlHours : 24;
+
+        var storageService = await _storageProviderFactory.CreateObjectStorageServiceAsync(cancellationToken);
+        var downloadUrl = await storageService.GetPresignedDownloadUrlAsync(execution.StorageObjectKey!, ttlHours, cancellationToken);
+
+        return downloadUrl;
+    }
+
+    public async Task<ReportDownloadResult?> GetDownloadAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default)
+    {
+        var execution = await GetDownloadableExecutionAsync(executionId, clientId);
+        if (execution is null)
+            return null;
+
+        var storageService = await _storageProviderFactory.CreateObjectStorageServiceAsync(cancellationToken);
+
+        // Faz o streaming pelo proprio servidor. Necessario porque o provedor
+        // local devolve uma URL "fake" (/api/v1/storage/download/...) que nao
+        // existe — o download ficava quebrado nesse modo.
+        var content = await storageService.DownloadAsync(execution.StorageObjectKey!, cancellationToken);
+
+        // Streams de storage remoto (ex.: resposta HTTP do MinIO) podem nao ser
+        // seekable, e o FileResult com enableRangeProcessing exige seek.
+        // Bufferiza apenas quando necessario.
+        if (!content.CanSeek)
+        {
+            var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            await content.DisposeAsync();
+            buffer.Position = 0;
+            content = buffer;
+        }
+
+        return new ReportDownloadResult
+        {
+            Content = content,
+            ContentType = string.IsNullOrWhiteSpace(execution.StorageContentType) ? "application/octet-stream" : execution.StorageContentType,
+            FileName = ResolveDownloadFileName(execution),
+            SizeBytes = execution.StorageSizeBytes
+        };
+    }
+
+    private async Task<ReportExecution?> GetDownloadableExecutionAsync(Guid executionId, Guid? clientId)
+    {
+        var cacheKey = BuildExecutionCacheKey(executionId, clientId);
+
+        if (!_cache.TryGetValue(cacheKey, out ReportExecution? execution))
         {
             execution = await _executionRepository.GetByIdAsync(executionId, clientId);
             if (execution is not null)
@@ -292,13 +368,72 @@ public class ReportService : IReportService
         if (execution is null || execution.Status != ReportExecutionStatus.Completed || string.IsNullOrWhiteSpace(execution.StorageObjectKey))
             return null;
 
-        var serverConfig = await _serverConfigurationRepository.GetOrCreateDefaultAsync();
-        var ttlHours = serverConfig.ObjectStorageUrlTtlHours > 0 ? serverConfig.ObjectStorageUrlTtlHours : 24;
+        return execution;
+    }
 
-        var storageService = await _storageProviderFactory.CreateObjectStorageServiceAsync(cancellationToken);
-        var downloadUrl = await storageService.GetPresignedDownloadUrlAsync(execution.StorageObjectKey, ttlHours, cancellationToken);
+    private static string BuildExecutionCacheKey(Guid executionId, Guid? clientId)
+        => string.Format(CacheKeyFormat, executionId, clientId?.ToString("N") ?? "global");
 
-        return downloadUrl;
+    private static string ResolveDownloadFileName(ReportExecution execution)
+    {
+        var objectKey = execution.StorageObjectKey;
+        if (!string.IsNullOrWhiteSpace(objectKey))
+        {
+            var lastSegment = objectKey.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+            if (!string.IsNullOrWhiteSpace(lastSegment))
+                return lastSegment;
+        }
+
+        return $"report-{execution.Id:N}.{ExtensionFor(execution.StorageContentType)}";
+    }
+
+    private static string ExtensionFor(string? contentType)
+    {
+        if (string.IsNullOrWhiteSpace(contentType)) return "bin";
+        if (contentType.Contains("spreadsheetml", StringComparison.OrdinalIgnoreCase)) return "xlsx";
+        if (contentType.Contains("csv", StringComparison.OrdinalIgnoreCase)) return "csv";
+        if (contentType.Contains("markdown", StringComparison.OrdinalIgnoreCase)) return "md";
+        if (contentType.Contains("pdf", StringComparison.OrdinalIgnoreCase)) return "pdf";
+        return "bin";
+    }
+
+    /// <summary>
+    /// Mescla o escopo efetivo no FiltersJson. O escopo (execucao/usuario) SEMPRE
+    /// prevalece sobre o que veio do cliente — e o que impede um relatorio de um
+    /// cliente conter dados de outros.
+    /// </summary>
+    private static string? ApplyQueryScope(string? filtersJson, Guid? executionClientId, ReportQueryScope? scope)
+    {
+        var clientId = executionClientId ?? scope?.ClientId;
+        var siteId = scope?.SiteId;
+
+        if (clientId is null && siteId is null)
+            return filtersJson;
+
+        JsonObject body;
+        if (string.IsNullOrWhiteSpace(filtersJson))
+        {
+            body = new JsonObject();
+        }
+        else
+        {
+            try
+            {
+                body = JsonNode.Parse(filtersJson) as JsonObject ?? new JsonObject();
+            }
+            catch (JsonException)
+            {
+                body = new JsonObject();
+            }
+        }
+
+        if (clientId is { } resolvedClient)
+            body["clientId"] = resolvedClient.ToString();
+
+        if (siteId is { } resolvedSite)
+            body["siteId"] = resolvedSite.ToString();
+
+        return body.ToJsonString();
     }
 
     private static string ComposeReportObjectKey(Guid? clientId, Guid executionId, string fileName)
@@ -342,7 +477,6 @@ public class ReportService : IReportService
 
             return new ReportingOptions
             {
-                EnablePdf = persisted.EnablePdf,
                 ProcessingTimeoutSeconds = persisted.ProcessingTimeoutSeconds > 0 ? persisted.ProcessingTimeoutSeconds : fallback.ProcessingTimeoutSeconds,
                 FileDownloadTimeoutSeconds = persisted.FileDownloadTimeoutSeconds > 0 ? persisted.FileDownloadTimeoutSeconds : fallback.FileDownloadTimeoutSeconds,
                 MaxConcurrentExecutions = persisted.MaxConcurrentExecutions > 0 ? persisted.MaxConcurrentExecutions : fallback.MaxConcurrentExecutions,

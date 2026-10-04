@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Discovery.Core.Entities;
@@ -14,6 +15,7 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
 {
     private const int DefaultLimit = 1000;
     private const int MaxLimit = 10000;
+    private const int HardLimit = 100_000;
 
     private readonly DiscoveryDbContext _db;
     private readonly IMemoryCache _cache;
@@ -88,7 +90,9 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             var mergedFiltersElement = ParseFilters(mergedFiltersJson);
             var clientId = GetGuid(mergedFiltersElement, "clientId");
 
-            var cacheKey = $"report_query:{source.DatasetType}:{clientId}:{mergedFiltersJson?.GetHashCode() ?? 0}";
+            // Chave com o JSON completo: GetHashCode() pode colidir (devolvendo o
+            // resultado de outro conjunto de filtros) e muda a cada processo.
+            var cacheKey = $"report_query:{source.DatasetType}:{clientId}:{mergedFiltersJson}";
             if (!_cache.TryGetValue(cacheKey, out ReportQueryResult? cachedResult))
             {
                 cachedResult = await QuerySingleDatasetAsync(source.DatasetType!.Value, clientId, mergedFiltersElement, cancellationToken);
@@ -892,6 +896,12 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             from lrm in matchesJoin.DefaultIfEmpty()
             join ag in _db.Agents.AsNoTracking() on lrm != null ? lrm.AgentId : Guid.Empty equals ag.Id into agentsJoin
             from ag in agentsJoin.DefaultIfEmpty()
+            // As regras nao tem client_id: o escopo vem do agente afetado -> site ->
+            // cliente. Sem esse join o dataset vazava regras e hostnames de TODOS
+            // os clientes, mesmo em execucao com ClientId definido.
+            join st in _db.Sites.AsNoTracking() on (ag != null ? ag.SiteId : Guid.Empty) equals st.Id into sitesJoin
+            from st in sitesJoin.DefaultIfEmpty()
+            where !clientId.HasValue || (st != null && st.ClientId == clientId.Value)
             group new { lr, ag } by new { lr.Id, lr.Name, lr.Label, lr.Description, lr.IsEnabled, lr.ExpressionJson, lr.CreatedAt } into g
             select new
             {
@@ -1747,15 +1757,19 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
 
     private static int GetLimit(JsonElement filters)
     {
+        // allRows nao pode virar Take(int.MaxValue): o EF remove o LIMIT e a
+        // consulta materializa tudo em memoria (pico/DoS). O teto duro mantem o
+        // comportamento "todos os registros" com um limite de seguranca.
         if (GetBool(filters, "allRows") is true)
-            return int.MaxValue;
+            return HardLimit;
 
         var value = GetInt(filters, "limit");
         if (value is null)
             return DefaultLimit;
 
+        // limit <= 0 e entrada invalida: usa o default, nao "sem limite".
         if (value.Value <= 0)
-            return int.MaxValue;
+            return DefaultLimit;
 
         return Math.Clamp(value.Value, 1, MaxLimit);
     }
@@ -1811,7 +1825,19 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
     private static DateTime? GetDateTime(JsonElement filters, string property)
     {
         var value = GetString(filters, property);
-        return DateTime.TryParse(value, out var dateTime) ? dateTime : null;
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        // Cultura invariante + UTC: DateTime com Kind=Unspecified estoura no
+        // Npgsql ao comparar com colunas timestamptz, e a cultura do servidor
+        // mudava a interpretacao de datas ambiguas.
+        return DateTime.TryParse(
+            value,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var dateTime)
+            ? dateTime
+            : null;
     }
 
     private static bool GetSortDescending(JsonElement filters, bool defaultValue)

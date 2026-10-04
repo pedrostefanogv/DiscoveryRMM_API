@@ -119,12 +119,6 @@ builder.Services.Configure<RemoteDebugOptions>(builder.Configuration.GetSection(
 // Scoped scope context (cache de escopo intra-request para queries filtradas)
 builder.Services.AddScoped<Discovery.Core.Interfaces.Auth.IScopeContext, Discovery.Infrastructure.Services.ScopeContext>();
 
-// PDF rendering using Playwright.NET (embedded, no external service required, zero vulnerabilities)
-if (builder.Configuration.GetValue<bool>("Reporting:EnablePdf"))
-{
-    builder.Services.AddScoped<IReportRenderer, PlaywrightPdfReportRenderer>();
-}
-
 // Factory resolve IObjectStorageService dynamically based on ServerConfiguration
 builder.Services.AddScoped<IObjectStorageService>(sp =>
     sp.GetRequiredService<IObjectStorageProviderFactory>().CreateObjectStorageService());

@@ -118,7 +118,7 @@ public class ServerConfiguration
 
     /// <summary>
     /// Configurações globais de reporting (JSON).
-    /// Exemplo: {"enablePdf":true,"processingTimeoutSeconds":300,...}
+    /// Exemplo: {"processingTimeoutSeconds":300,"maxConcurrentExecutions":2,...}
     /// </summary>
     public string ReportingSettingsJson { get; set; } = "{}";
 

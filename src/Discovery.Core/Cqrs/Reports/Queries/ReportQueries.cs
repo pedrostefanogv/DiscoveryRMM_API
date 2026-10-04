@@ -1,15 +1,64 @@
-﻿using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs;
 
 namespace Discovery.Core.Cqrs.Reports.Queries;
 
 // --- Report Executions ---
-public sealed record ListReportsQuery(Guid? ClientId) : IQuery<Result<IReadOnlyList<ReportDto>>>;
-public sealed record GetReportExecutionQuery(Guid ExecutionId, Guid? ClientId) : IQuery<Result<ReportDto>>;
+public sealed record ListReportsQuery(
+    Guid? ClientId,
+    int Limit = 50,
+    // Para usuarios sem acesso global: lista restrita aos clientes permitidos.
+    IReadOnlyList<Guid>? ForcedClientIds = null) : IQuery<Result<IReadOnlyList<ReportExecutionDto>>>;
+public sealed record GetReportExecutionQuery(Guid ExecutionId, Guid? ClientId) : IQuery<Result<ReportExecutionDto>>;
 
-public sealed record ReportDto(Guid Id, string TemplateName, string Status, string Format, DateTime CreatedAt, DateTime? CompletedAt);
+/// <summary>
+/// Resultado da execucao imediata (POST /reports/run).
+/// O nome <c>executionId</c> casa com o contrato consumido pela UI; antes a
+/// resposta devolvia <c>id</c> e a UI nao conseguia acompanhar nem baixar a
+/// execucao recem-criada.
+/// </summary>
+public sealed record RunReportResultDto(
+    Guid ExecutionId,
+    int Status,
+    int Format,
+    int? RowCount,
+    long? ResultSizeBytes,
+    string? ContentType,
+    string? DownloadPath,
+    string TemplateName,
+    DateTime CreatedAt,
+    DateTime? FinishedAt);
+
+/// <summary>
+/// Projecao completa de uma execucao de relatorio.
+/// Espelha o contrato consumido pela UI (ReportExecution): sem os campos de
+/// resultado o polling de status e o download nao funcionavam (a UI recebia
+/// apenas id/status/data).
+/// </summary>
+public sealed record ReportExecutionDto(
+    Guid Id,
+    Guid TemplateId,
+    Guid? ClientId,
+    int Format,
+    string? FiltersJson,
+    int Status,
+    string? ResultPath,
+    string? ResultContentType,
+    long? ResultSizeBytes,
+    int? RowCount,
+    string? ErrorMessage,
+    int? ExecutionTimeMs,
+    DateTime CreatedAt,
+    DateTime? StartedAt,
+    DateTime? FinishedAt,
+    string? CreatedBy,
+    Guid? ScheduleId);
 
 // --- Report Templates ---
-public sealed record ListReportTemplatesQuery(Guid? ClientId = null, bool? IsActive = true) : IQuery<Result<IReadOnlyList<ReportTemplateDto>>>;
+/// <summary>
+/// IsActive nulo = todos (inclui inativos); true = somente ativos. O default
+/// passou de true para null para que a UI consiga expressar "mostrar inativos".
+/// </summary>
+public sealed record ListReportTemplatesQuery(Guid? ClientId = null, bool? IsActive = null, int? DatasetType = null) : IQuery<Result<IReadOnlyList<ReportTemplateDto>>>;
 public sealed record GetReportTemplateByIdQuery(Guid Id, Guid? ClientId = null) : IQuery<Result<ReportTemplateDto>>;
 public sealed record CreateReportTemplateCommand(
     Guid? ClientId,
@@ -20,7 +69,9 @@ public sealed record CreateReportTemplateCommand(
     int DatasetType,
     int DefaultFormat,
     string? LayoutJson,
-    string? FiltersJson) : ICommand<Result<ReportTemplateDto>>;
+    string? FiltersJson,
+    // Preenchido pelo controller a partir do usuario autenticado (nunca do body).
+    string? CreatedBy = null) : ICommand<Result<ReportTemplateDto>>;
 public sealed record UpdateReportTemplateCommand(
     Guid Id,
     Guid? ClientId,
@@ -32,7 +83,9 @@ public sealed record UpdateReportTemplateCommand(
     int? DefaultFormat,
     string? LayoutJson,
     string? FiltersJson,
-    bool? IsActive) : ICommand<Result<ReportTemplateDto>>;
+    bool? IsActive,
+    // Preenchido pelo controller a partir do usuario autenticado (nunca do body).
+    string? UpdatedBy = null) : ICommand<Result<ReportTemplateDto>>;
 public sealed record DeleteReportTemplateCommand(Guid Id, Guid? ClientId = null) : ICommand<Result<VoidResult>>;
 
 public sealed record ReportTemplateDto(
@@ -47,7 +100,15 @@ public sealed record ReportTemplateDto(
     bool IsBuiltIn,
     int Version,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    // Necessarios para editar um template sem perder o conteudo configurado:
+    // sem eles a UI reconstroi o formulario com valores default e sobrescreve
+    // o layout/filtros originais.
+    string LayoutJson,
+    string? FiltersJson,
+    string? ExecutionSchemaJson,
+    string? CreatedBy,
+    string? UpdatedBy);
 
 // --- Report Run (RunNow) ---
 public sealed record RunReportNowCommand(
@@ -55,7 +116,10 @@ public sealed record RunReportNowCommand(
     int Format,
     string? FiltersJson = null,
     Guid? ClientId = null,
-    Guid? ScheduleId = null) : ICommand<Result<ReportDto>>;
+    Guid? ScheduleId = null,
+    // Preenchido pelo controller a partir do usuario autenticado (nunca do body).
+    string? CreatedBy = null,
+    Guid? SiteId = null) : ICommand<Result<RunReportResultDto>>;
 
 // --- Report Preview ---
 public sealed record ReportPreviewTemplateInput(
@@ -73,7 +137,10 @@ public sealed record PreviewReportCommand(
     string? FiltersJson = null,
     string? PreviewMode = "document",
     string? ResponseDisposition = "inline",
-    string? FileName = null) : ICommand<Result<ReportPreviewResultDto>>;
+    string? FileName = null,
+    // Preenchidos pelo controller a partir do escopo resolvido (nunca confiar no body).
+    Guid? ClientId = null,
+    Guid? SiteId = null) : ICommand<Result<ReportPreviewResultDto>>;
 
 public sealed record ReportPreviewResultDto(
     string Mode,

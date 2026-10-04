@@ -3,12 +3,6 @@ namespace Discovery.Core.Configuration;
 public class ReportingOptions
 {
     /// <summary>
-    /// Enable PDF export format using Playwright.NET (embedded, zero vulnerabilities).
-    /// When enabled, PDF rendering runs within the same API process using headless Chromium.
-    /// </summary>
-    public bool EnablePdf { get; set; } = false;
-
-    /// <summary>
     /// Timeout in seconds for report processing (data fetch + rendering + file write).
     /// Default: 300 seconds (5 minutes).
     /// </summary>
@@ -37,6 +31,12 @@ public class ReportingOptions
     /// Allowed values should match AllowedRetentionDays.
     /// </summary>
     public int FileRetentionDays { get; set; } = 90;
+
+    /// <summary>
+    /// Retention period in days for report template history snapshots.
+    /// Default: 365 days. The history table grows without a purge job.
+    /// </summary>
+    public int TemplateHistoryRetentionDays { get; set; } = 365;
 
     /// <summary>
     /// Allowed retention values for reports.

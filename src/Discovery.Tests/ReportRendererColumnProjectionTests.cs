@@ -40,15 +40,16 @@ public class ReportRendererColumnProjectionTests
         };
 
         var result = await renderer.RenderAsync(context, data);
-        var content = Encoding.UTF8.GetString(result.Content);
+        // O CSV agora comeca com BOM UTF-8 (Excel) e nao tem mais a linha "# titulo".
+        var content = Encoding.UTF8.GetString(result.Content).TrimStart('\uFEFF');
         var lines = content
           .Split('\n', StringSplitOptions.RemoveEmptyEntries)
           .Select(line => line.TrimEnd('\r'))
           .ToArray();
 
-        Assert.That(lines.Length, Is.GreaterThanOrEqualTo(3));
-        Assert.That(lines[1], Is.EqualTo("\"Agente\",\"Sistema Operacional\""));
-        Assert.That(lines[2], Is.EqualTo("\"PC-01\",\"Windows 11\""));
+        Assert.That(lines.Length, Is.GreaterThanOrEqualTo(2));
+        Assert.That(lines[0], Is.EqualTo("\"Agente\",\"Sistema Operacional\""));
+        Assert.That(lines[1], Is.EqualTo("\"PC-01\",\"Windows 11\""));
         Assert.That(content, Does.Not.Contain("softwareName"));
         Assert.That(content, Does.Not.Contain("publisher"));
     }
@@ -93,15 +94,15 @@ public class ReportRendererColumnProjectionTests
         };
 
         var result = await renderer.RenderAsync(context, data);
-        var content = Encoding.UTF8.GetString(result.Content);
+        var content = Encoding.UTF8.GetString(result.Content).TrimStart('\uFEFF');
         var lines = content
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.TrimEnd('\r'))
             .ToArray();
 
-        Assert.That(lines.Length, Is.GreaterThanOrEqualTo(3));
-        Assert.That(lines[1], Is.EqualTo("\"Agente\",\"Sistema Operacional\""));
-        Assert.That(lines[2], Is.EqualTo("\"PC-01\",\"Windows 11\""));
+        Assert.That(lines.Length, Is.GreaterThanOrEqualTo(2));
+        Assert.That(lines[0], Is.EqualTo("\"Agente\",\"Sistema Operacional\""));
+        Assert.That(lines[1], Is.EqualTo("\"PC-01\",\"Windows 11\""));
         Assert.That(content, Does.Not.Contain("\"Software\""));
     }
 

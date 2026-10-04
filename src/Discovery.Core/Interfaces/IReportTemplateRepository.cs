@@ -11,4 +11,13 @@ public interface IReportTemplateRepository
     Task<IReadOnlyList<ReportTemplateHistory>> GetHistoryAsync(Guid templateId, int limit = 50);
     Task UpdateAsync(ReportTemplate template);
     Task<bool> DeleteAsync(Guid id, Guid? clientId = null);
+
+    /// <summary>
+    /// Remove snapshots de historico mais antigos que o corte. Sem retencao, a
+    /// tabela report_template_history cresce indefinidamente.
+    /// </summary>
+    Task<int> DeleteHistoryOlderThanAsync(DateTime cutoff);
+
+    /// <summary>Templates embutidos (biblioteca), opcionalmente por dataset.</summary>
+    Task<IReadOnlyList<ReportTemplate>> GetBuiltInAsync(ReportDatasetType? datasetType = null);
 }

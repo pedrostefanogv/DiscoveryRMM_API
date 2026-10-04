@@ -47,7 +47,12 @@ public class XlsxReportRenderer : IReportRenderer
                 var formatted = FormatCellValue(value, col.Format);
                 var cell = worksheet.Cell(rowNumber, columnIndex + 1);
 
-                if (value is DateTime dt)
+                // bytes/percent nao existem como formato nativo do Excel: grava o
+                // texto ja formatado. Demais formatos ficam como valor nativo
+                // (numeros continuam numeros para permitir soma/ordenacao).
+                if (UsesTextualFormat(col.Format))
+                    cell.Value = formatted;
+                else if (value is DateTime dt)
                     cell.Value = dt;
                 else if (value is DateTimeOffset dto)
                     cell.Value = dto.DateTime;
@@ -82,12 +87,23 @@ public class XlsxReportRenderer : IReportRenderer
             rowNumber++;
         }
 
-        // Auto-fit but cap column width
-        worksheet.Columns().AdjustToContents();
-        for (var colIndex = 1; colIndex <= columns.Count; colIndex++)
+        // Largura calculada a partir de uma amostra. AdjustToContents() mede
+        // TODAS as celulas e fica caro (CPU/memoria) em inventarios grandes.
+        const int widthSampleRows = 200;
+        var lastDataRow = rowNumber - 1;
+        var lastSampledRow = Math.Min(lastDataRow, headerRow + widthSampleRows);
+
+        for (var colIndex = 0; colIndex < columns.Count; colIndex++)
         {
-            if (worksheet.Column(colIndex).Width > 60)
-                worksheet.Column(colIndex).Width = 60;
+            var maxLength = columns[colIndex].Header?.Length ?? 0;
+            for (var sampleRow = headerRow + 1; sampleRow <= lastSampledRow; sampleRow++)
+            {
+                var text = worksheet.Cell(sampleRow, colIndex + 1).GetFormattedString();
+                if (text.Length > maxLength)
+                    maxLength = text.Length;
+            }
+
+            worksheet.Column(colIndex + 1).Width = Math.Clamp(maxLength + 2, 10, 60);
         }
 
         using var stream = new MemoryStream();
@@ -100,6 +116,10 @@ public class XlsxReportRenderer : IReportRenderer
             FileExtension = "xlsx"
         });
     }
+
+    private static bool UsesTextualFormat(string? format)
+        => string.Equals(format, "bytes", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(format, "percent", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatCellValue(object? value, string? format)
     {

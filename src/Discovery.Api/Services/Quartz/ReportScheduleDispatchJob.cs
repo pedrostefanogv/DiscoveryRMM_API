@@ -45,6 +45,22 @@ public sealed class ReportScheduleDispatchJob : IJob
             {
                 ct.ThrowIfCancellationRequested();
 
+                // Cron invalido produziria NextTriggerAt nulo para sempre — e como
+                // "nulo" era tratado como vencido, o agendamento disparava a cada
+                // tick (60 s) criando execucoes sem parar. Desativa e avisa.
+                var nextTrigger = ComputeNextTriggerUtc(schedule.CronExpression, utcNow);
+                if (nextTrigger is null)
+                {
+                    logger.LogWarning(
+                        "Report schedule {ScheduleId} ({Label}) has an invalid cron '{Cron}'. Deactivating.",
+                        schedule.Id, schedule.ScheduleLabel, schedule.CronExpression);
+
+                    schedule.IsActive = false;
+                    schedule.NextTriggerAt = null;
+                    await scheduleRepo.UpdateAsync(schedule);
+                    continue;
+                }
+
                 // Resolve dynamic filters (e.g. <now-24h>)
                 var resolvedFilters = ReportParameterResolver.ResolveFiltersJson(schedule.FiltersJson, utcNow);
 
@@ -62,8 +78,7 @@ public sealed class ReportScheduleDispatchJob : IJob
 
                 await executionRepo.CreateAsync(execution);
 
-                // Compute next trigger time from cron expression
-                var nextTrigger = ComputeNextTriggerUtc(schedule.CronExpression, utcNow);
+                // nextTrigger ja foi validado no inicio do loop.
                 schedule.LastTriggeredAt = utcNow;
                 schedule.NextTriggerAt = nextTrigger;
                 await scheduleRepo.UpdateAsync(schedule);
@@ -76,7 +91,7 @@ public sealed class ReportScheduleDispatchJob : IJob
                 if (!string.IsNullOrWhiteSpace(schedule.DeliveryMode) &&
                     !string.Equals(schedule.DeliveryMode, "storage", StringComparison.OrdinalIgnoreCase))
                 {
-                    _ = notificationService.PublishAsync(new NotificationPublishRequest(
+                    await notificationService.PublishAsync(new NotificationPublishRequest(
                         EventType: "report.schedule.triggered",
                         Topic: "report-delivery",
                         Title: $"Relatorio agendado: {schedule.ScheduleLabel ?? "Scheduled Report"}",

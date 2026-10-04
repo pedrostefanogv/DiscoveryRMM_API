@@ -189,7 +189,14 @@ public class MarkdownReportRenderer : IReportRenderer
 
         for (var pageIndex = 0; pageIndex < totalPages; pageIndex++)
         {
-            var chunk = rows.Skip(pageIndex * safeRowsPerPage).Take(safeRowsPerPage).ToList();
+            // Fatiamento por indice: Skip/Take dentro do loop era O(n^2) em
+            // relatorios com muitos registros/paginas.
+            var start = pageIndex * safeRowsPerPage;
+            var pageSize = Math.Min(safeRowsPerPage, rows.Count - start);
+            var chunk = new List<IReadOnlyDictionary<string, object?>>(pageSize);
+            for (var i = 0; i < pageSize; i++)
+                chunk.Add(rows[start + i]);
+
             if (totalPages > 1)
             {
                 sb.AppendLine($"_Pagina {pageIndex + 1} de {totalPages}_");

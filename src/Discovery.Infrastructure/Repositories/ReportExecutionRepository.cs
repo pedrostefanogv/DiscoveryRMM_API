@@ -48,6 +48,21 @@ public class ReportExecutionRepository : IReportExecutionRepository
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<ReportExecution>> GetRecentByClientIdsAsync(IReadOnlyCollection<Guid> clientIds, int limit = 50)
+    {
+        if (clientIds.Count == 0)
+            return [];
+
+        var safeLimit = Math.Clamp(limit, 1, 200);
+
+        return await _db.ReportExecutions
+            .AsNoTracking()
+            .Where(execution => execution.ClientId != null && clientIds.Contains(execution.ClientId.Value))
+            .OrderByDescending(execution => execution.CreatedAt)
+            .Take(safeLimit)
+            .ToListAsync();
+    }
+
     public async Task<IReadOnlyList<ReportExecution>> GetPendingAsync(int limit = 20)
     {
         var safeLimit = Math.Clamp(limit, 1, 200);
@@ -82,6 +97,48 @@ public class ReportExecutionRepository : IReportExecutionRepository
             .ExecuteDeleteAsync();
 
         return deleted;
+    }
+
+    public async Task<bool> TryClaimPendingAsync(Guid id, Guid? clientId = null)
+    {
+        var claimedAt = DateTime.UtcNow;
+        var claimed = await _db.ReportExecutions
+            .Where(execution => execution.Id == id)
+            .Where(execution => !clientId.HasValue || execution.ClientId == clientId.Value)
+            .Where(execution => execution.Status == ReportExecutionStatus.Pending)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(execution => execution.Status, ReportExecutionStatus.Running)
+                .SetProperty(execution => execution.StartedAt, claimedAt)
+                .SetProperty(execution => execution.ErrorMessage, (string?)null));
+
+        return claimed == 1;
+    }
+
+    public async Task<int> RequeueStaleRunningAsync(DateTime startedBefore, int limit = 100)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 1000);
+
+        // ExecuteUpdate nao aceita ORDER BY/LIMIT de forma portavel: seleciona os
+        // ids primeiro e depois atualiza.
+        var staleIds = await _db.ReportExecutions
+            .AsNoTracking()
+            .Where(execution => execution.Status == ReportExecutionStatus.Running)
+            .Where(execution => execution.StartedAt != null && execution.StartedAt <= startedBefore)
+            .OrderBy(execution => execution.StartedAt)
+            .Take(safeLimit)
+            .Select(execution => execution.Id)
+            .ToListAsync();
+
+        if (staleIds.Count == 0)
+            return 0;
+
+        return await _db.ReportExecutions
+            .Where(execution => staleIds.Contains(execution.Id))
+            .Where(execution => execution.Status == ReportExecutionStatus.Running)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(execution => execution.Status, ReportExecutionStatus.Pending)
+                .SetProperty(execution => execution.StartedAt, (DateTime?)null)
+                .SetProperty(execution => execution.ErrorMessage, (string?)null));
     }
 
     public async Task UpdateStatusAsync(Guid id, Guid? clientId, ReportExecutionStatus status, string? errorMessage = null)
