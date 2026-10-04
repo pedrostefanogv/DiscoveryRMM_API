@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 
@@ -462,136 +463,10 @@ public class ReportHtmlComposer : IReportHtmlComposer
             """;
     }
 
+    // As agregacoes ficam em ReportAggregateCalculator (Core) para os tres
+    // renderers compartilharem a mesma semantica.
     private static object? ComputeSummaryValue(ReportLayoutSummaryDefinition summary, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
-    {
-        if (string.Equals(summary.Aggregate, "count", StringComparison.OrdinalIgnoreCase))
-            return rows.Count;
-        if (string.IsNullOrWhiteSpace(summary.Field))
-            return null;
-
-        if (string.Equals(summary.Aggregate, "countDistinct", StringComparison.OrdinalIgnoreCase))
-        {
-            return rows.Where(row => row.TryGetValue(summary.Field, out var value) && value is not null)
-                .Select(row => row[summary.Field]?.ToString())
-                .Where(value => !string.IsNullOrWhiteSpace(value))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count();
-        }
-
-        if (string.Equals(summary.Aggregate, "sum", StringComparison.OrdinalIgnoreCase))
-        {
-            decimal sum = 0;
-            foreach (var row in rows)
-            {
-                if (!row.TryGetValue(summary.Field, out var value) || value is null)
-                    continue;
-                if (TryConvertToDecimal(value, out var decimalValue))
-                    sum += decimalValue;
-            }
-            return sum;
-        }
-
-        if (string.Equals(summary.Aggregate, "avg", StringComparison.OrdinalIgnoreCase))
-        {
-            decimal sum = 0;
-            int count = 0;
-            foreach (var row in rows)
-            {
-                if (!row.TryGetValue(summary.Field, out var value) || value is null)
-                    continue;
-                if (TryConvertToDecimal(value, out var decimalValue)) { sum += decimalValue; count++; }
-            }
-            return count > 0 ? sum / count : null;
-        }
-
-        if (string.Equals(summary.Aggregate, "min", StringComparison.OrdinalIgnoreCase))
-        {
-            decimal? min = null;
-            foreach (var row in rows)
-            {
-                if (!row.TryGetValue(summary.Field, out var value) || value is null)
-                    continue;
-                if (TryConvertToDecimal(value, out var decimalValue) && (min is null || decimalValue < min))
-                    min = decimalValue;
-            }
-            return min;
-        }
-
-        if (string.Equals(summary.Aggregate, "max", StringComparison.OrdinalIgnoreCase))
-        {
-            decimal? max = null;
-            foreach (var row in rows)
-            {
-                if (!row.TryGetValue(summary.Field, out var value) || value is null)
-                    continue;
-                if (TryConvertToDecimal(value, out var decimalValue) && (max is null || decimalValue > max))
-                    max = decimalValue;
-            }
-            return max;
-        }
-
-        if (string.Equals(summary.Aggregate, "countIf", StringComparison.OrdinalIgnoreCase))
-        {
-            if (summary.Condition is null)
-                return rows.Count(r => r.TryGetValue(summary.Field, out var v) && v is bool b && b);
-            return rows.Count(row => EvaluateConditionAgainstSummary(row, summary.Field!, summary.Condition.Value));
-        }
-
-        if (string.Equals(summary.Aggregate, "sumIf", StringComparison.OrdinalIgnoreCase))
-        {
-            decimal sumIf = 0;
-            foreach (var row in rows)
-            {
-                if (summary.Condition is { } conditionValue && EvaluateConditionAgainstSummary(row, summary.Field!, conditionValue))
-                {
-                    if (row.TryGetValue(summary.Field, out var v) && v is not null && TryConvertToDecimal(v, out var dv))
-                        sumIf += dv;
-                }
-            }
-            return sumIf;
-        }
-
-        if (string.Equals(summary.Aggregate, "compliancePercent", StringComparison.OrdinalIgnoreCase))
-        {
-            var total = rows.Count;
-            if (total == 0) return 0m;
-            var compliant = rows.Count(r =>
-            {
-                if (!r.TryGetValue(summary.Field, out var v)) return true;
-                return v is not bool b || !b;
-            });
-            return Math.Round((decimal)compliant / total * 100, 1);
-        }
-
-        return null;
-    }
-
-    private static bool EvaluateConditionAgainstSummary(IReadOnlyDictionary<string, object?> row, string field, JsonElement condition)
-    {
-        if (condition.ValueKind != JsonValueKind.Object)
-            return false;
-
-        // Try "eq" condition
-        if (condition.TryGetProperty("eq", out var eqValue))
-        {
-            row.TryGetValue(field, out var rowValue);
-            var expected = eqValue.ValueKind switch
-            {
-                JsonValueKind.True => "true",
-                JsonValueKind.False => "false",
-                JsonValueKind.String => eqValue.GetString() ?? "",
-                _ => eqValue.ToString()
-            };
-            var actual = rowValue switch
-            {
-                bool b => b.ToString().ToLowerInvariant(),
-                _ => rowValue?.ToString() ?? ""
-            };
-            return string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return false;
-    }
+        => ReportAggregateCalculator.Compute(summary.Aggregate, summary.Field, summary.Condition, rows);
 
     private static string? ResolveConditionalCellStyle(ReportLayoutConditionalFormat? conditionalFormat, object? value)
     {

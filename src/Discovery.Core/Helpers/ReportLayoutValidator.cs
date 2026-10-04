@@ -20,7 +20,10 @@ public static partial class ReportLayoutValidator
     private const int MaxLogoUrlLength = 8_192;
     private const int MaxDataUrlLength = 32_768;
     private static readonly HashSet<string> AllowedOrientations = new(StringComparer.OrdinalIgnoreCase) { "portrait", "landscape" };
-    private static readonly HashSet<string> AllowedColumnFormats = new(StringComparer.OrdinalIgnoreCase) { "text", "date", "datetime", "number", "boolean" };
+    // "bytes" e "percent" sao suportados pelos renderers (Markdown/HTML/XLSX) e
+    // usados pelos templates embutidos: sem eles o validador reprovava os
+    // proprios templates de fabrica no preview/create/update.
+    private static readonly HashSet<string> AllowedColumnFormats = new(StringComparer.OrdinalIgnoreCase) { "text", "date", "datetime", "number", "boolean", "bytes", "percent" };
     private static readonly HashSet<string> AllowedAggregates = new(StringComparer.OrdinalIgnoreCase) { "count", "countDistinct", "sum", "avg", "min", "max", "countIf", "sumIf", "first", "last", "median", "percentile90", "compliancePercent" };
     private static readonly HashSet<string> AllowedJoinTypes = new(StringComparer.OrdinalIgnoreCase) { "left", "inner" };
     private static readonly HashSet<string> AllowedWatermarkFits = new(StringComparer.OrdinalIgnoreCase) { "contain", "cover" };

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 
@@ -310,71 +311,11 @@ public class MarkdownReportRenderer : IReportRenderer
         return sb.ToString();
     }
 
+    // Mesmo calculador do HTML/XLSX: antes o Markdown implementava apenas 6 das
+    // 13 agregacoes aceitas pelo validador (median/percentile90/first/last
+    // apareciam como "-").
     private static object? ComputeSummaryValue(ReportLayoutSummaryDefinition summary, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
-    {
-        if (string.Equals(summary.Aggregate, "count", StringComparison.OrdinalIgnoreCase))
-            return rows.Count;
-
-        if (string.IsNullOrWhiteSpace(summary.Field))
-            return null;
-
-        if (string.Equals(summary.Aggregate, "countDistinct", StringComparison.OrdinalIgnoreCase))
-        {
-            return rows
-                .Where(r => r.TryGetValue(summary.Field, out var v) && v is not null)
-                .Select(r => r[summary.Field]?.ToString())
-                .Where(v => !string.IsNullOrWhiteSpace(v))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count();
-        }
-
-        if (string.Equals(summary.Aggregate, "sum", StringComparison.OrdinalIgnoreCase))
-        {
-            decimal sum = 0;
-            foreach (var row in rows)
-            {
-                if (!row.TryGetValue(summary.Field, out var v) || v is null) continue;
-                if (TryConvertToDecimal(v, out var d)) sum += d;
-            }
-            return sum;
-        }
-
-        if (string.Equals(summary.Aggregate, "avg", StringComparison.OrdinalIgnoreCase))
-        {
-            decimal sum = 0;
-            int count = 0;
-            foreach (var row in rows)
-            {
-                if (!row.TryGetValue(summary.Field, out var v) || v is null) continue;
-                if (TryConvertToDecimal(v, out var d)) { sum += d; count++; }
-            }
-            return count > 0 ? sum / count : null;
-        }
-
-        if (string.Equals(summary.Aggregate, "min", StringComparison.OrdinalIgnoreCase))
-        {
-            decimal? min = null;
-            foreach (var row in rows)
-            {
-                if (!row.TryGetValue(summary.Field, out var v) || v is null) continue;
-                if (TryConvertToDecimal(v, out var d) && (min is null || d < min)) min = d;
-            }
-            return min;
-        }
-
-        if (string.Equals(summary.Aggregate, "max", StringComparison.OrdinalIgnoreCase))
-        {
-            decimal? max = null;
-            foreach (var row in rows)
-            {
-                if (!row.TryGetValue(summary.Field, out var v) || v is null) continue;
-                if (TryConvertToDecimal(v, out var d) && (max is null || d > max)) max = d;
-            }
-            return max;
-        }
-
-        return null;
-    }
+        => ReportAggregateCalculator.Compute(summary.Aggregate, summary.Field, summary.Condition, rows);
 
     private static IReadOnlyList<ReportLayoutColumn> ResolveColumns(ReportLayoutDefinition layout, ReportQueryResult data)
     {
