@@ -75,21 +75,21 @@ public sealed class CreateReportScheduleCommandHandler(
         if (cmd.Frequency is < 0 or > 2)
             return Result<ReportScheduleDto>.Failure(Error.Validation("frequency", "Frequencia invalida (0=diario, 1=semanal, 2=mensal)."));
 
-        if (!Enum.IsDefined(typeof(ReportFormat), cmd.Format))
-            return Result<ReportScheduleDto>.Failure(Error.Validation(
-                "format",
-                $"Format {cmd.Format} is not supported. Supported formats: {string.Join(", ", Enum.GetNames<ReportFormat>())}."));
-
         var template = await templates.GetByIdAsync(cmd.TemplateId, cmd.ClientId);
         if (template is null)
             return Result<ReportScheduleDto>.Failure(Error.NotFound($"ReportTemplate {cmd.TemplateId} not found"));
+
+        // Formato: o pedido; se ausente/invalido, o padrao do template; senao Markdown.
+        var scheduledFormat = ReportFormatResolver.Resolve(cmd.Format)
+            ?? ReportFormatResolver.Resolve(template.DefaultFormat)
+            ?? ReportFormat.Markdown;
 
         var now = DateTime.UtcNow;
         var schedule = new ReportSchedule
         {
             TemplateId = cmd.TemplateId,
             ClientId = cmd.ClientId ?? template.ClientId,
-            Format = (ReportFormat)cmd.Format,
+            Format = scheduledFormat,
             FiltersJson = cmd.FiltersJson,
             ScheduleLabel = string.IsNullOrWhiteSpace(cmd.Name) ? template.Name : cmd.Name,
             CronExpression = ReportScheduleCalculator.BuildCron(cmd.Frequency, cmd.DayOfWeek, cmd.DayOfMonth, cmd.HourUtc, cmd.MinuteUtc),
@@ -125,13 +125,14 @@ public sealed class UpdateReportScheduleCommandHandler(IReportScheduleRepository
         if (cmd.Frequency.HasValue && cmd.Frequency.Value is < 0 or > 2)
             return Result<ReportScheduleDto>.Failure(Error.Validation("frequency", "Frequencia invalida (0=diario, 1=semanal, 2=mensal)."));
 
-        if (cmd.Format.HasValue && !Enum.IsDefined(typeof(ReportFormat), cmd.Format.Value))
+        var resolvedFormat = cmd.Format is null ? (ReportFormat?)null : ReportFormatResolver.Resolve(cmd.Format);
+        if (cmd.Format is not null && resolvedFormat is null)
             return Result<ReportScheduleDto>.Failure(Error.Validation(
                 "format",
-                $"Format {cmd.Format.Value} is not supported. Supported formats: {string.Join(", ", Enum.GetNames<ReportFormat>())}."));
+                $"Format {cmd.Format} is not supported. Supported formats: {ReportFormatResolver.SupportedList()}."));
 
         if (cmd.Name is not null) schedule.ScheduleLabel = cmd.Name;
-        if (cmd.Format.HasValue) schedule.Format = (ReportFormat)cmd.Format.Value;
+        if (resolvedFormat.HasValue) schedule.Format = resolvedFormat.Value;
         if (cmd.FiltersJson is not null) schedule.FiltersJson = cmd.FiltersJson;
         if (cmd.Recipients is not null) schedule.Recipients = ListReportSchedulesQueryHandler.JoinRecipients(cmd.Recipients);
         if (cmd.IsActive.HasValue) schedule.IsActive = cmd.IsActive.Value;

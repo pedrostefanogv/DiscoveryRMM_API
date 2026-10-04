@@ -750,115 +750,11 @@ public class ReportHtmlComposer : IReportHtmlComposer
 
     // Computed Fields
 
+    // Campos calculados ficam em ReportComputedFieldEvaluator (Core) para valerem
+    // em TODOS os formatos — antes so o HTML os aplicava e Markdown/XLSX/CSV
+    // exibiam a coluna calculada vazia.
     private static IReadOnlyList<IReadOnlyDictionary<string, object?>> BuildComputedRows(ReportLayoutDefinition layout, IReadOnlyList<IReadOnlyDictionary<string, object?>> rows)
-    {
-        if (layout.ComputedFields is not { Count: > 0 })
-            return rows;
-
-        var result = new List<IReadOnlyDictionary<string, object?>>(rows.Count);
-        foreach (var row in rows)
-        {
-            var enriched = new Dictionary<string, object?>(row, StringComparer.OrdinalIgnoreCase);
-            foreach (var computed in layout.ComputedFields)
-            {
-                if (string.IsNullOrWhiteSpace(computed.Name) || string.IsNullOrWhiteSpace(computed.Expression))
-                    continue;
-                enriched[computed.Name] = EvaluateComputedExpression(computed.Expression, row);
-            }
-            result.Add(enriched);
-        }
-        return result;
-    }
-
-    private static object? EvaluateComputedExpression(string expression, IReadOnlyDictionary<string, object?> row)
-    {
-        try
-        {
-            var resolved = new StringBuilder(expression);
-            foreach (var key in row.Keys.OrderByDescending(k => k.Length))
-            {
-                if (!row.TryGetValue(key, out var val) || val is null)
-                    continue;
-                resolved.Replace(key, FormatNumericLiteral(val));
-            }
-
-            var resolvedExpr = resolved.ToString();
-
-            var divMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^\s*([0-9.]+)\s*/\s*([0-9.]+)\s*$");
-            if (divMatch.Success && decimal.TryParse(divMatch.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var d1)
-                && decimal.TryParse(divMatch.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var d2) && d2 != 0)
-                return Math.Round(d1 / d2, 2);
-
-            var subMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^\s*([0-9.]+)\s*-\s*([0-9.]+)\s*$");
-            if (subMatch.Success && decimal.TryParse(subMatch.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var s1)
-                && decimal.TryParse(subMatch.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var s2))
-                return s1 - s2;
-
-            var mulMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^\s*([0-9.]+)\s*\*\s*([0-9.]+)\s*$");
-            if (mulMatch.Success && decimal.TryParse(mulMatch.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var m1)
-                && decimal.TryParse(mulMatch.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var m2))
-                return Math.Round(m1 * m2, 2);
-
-            var addMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^\s*([0-9.]+)\s*\+\s*([0-9.]+)\s*$");
-            if (addMatch.Success && decimal.TryParse(addMatch.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var a1)
-                && decimal.TryParse(addMatch.Groups[2].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var a2))
-                return a1 + a2;
-
-            var ternaryMatch = System.Text.RegularExpressions.Regex.Match(resolvedExpr, @"^(.+?)\s*\?\s*(.+?)\s*:\s*(.+)$");
-            if (ternaryMatch.Success)
-            {
-                var cond = ternaryMatch.Groups[1].Value.Trim();
-                var trueVal = ternaryMatch.Groups[2].Value.Trim();
-                var falseVal = ternaryMatch.Groups[3].Value.Trim();
-                return EvaluateTernaryCondition(cond, row) ? trueVal.Trim('\'', '"') : falseVal.Trim('\'', '"');
-            }
-
-            return resolvedExpr;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static bool EvaluateTernaryCondition(string condition, IReadOnlyDictionary<string, object?> row)
-    {
-        var neMatch = System.Text.RegularExpressions.Regex.Match(condition, @"(\w+)\s*!=\s*null", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        if (neMatch.Success)
-        {
-            var fieldName = neMatch.Groups[1].Value;
-            return row.TryGetValue(fieldName, out var val) && val is not null;
-        }
-
-        var eqMatch = System.Text.RegularExpressions.Regex.Match(condition, @"(\w+)\s*==\s*(.+)");
-        if (eqMatch.Success)
-        {
-            var fieldName = eqMatch.Groups[1].Value;
-            var expected = eqMatch.Groups[2].Value.Trim().Trim('\'', '"');
-            row.TryGetValue(fieldName, out var val);
-            var strVal = val switch
-            {
-                bool b => b.ToString().ToLowerInvariant(),
-                _ => val?.ToString() ?? ""
-            };
-            return string.Equals(strVal, expected, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return false;
-    }
-
-    private static string FormatNumericLiteral(object value)
-    {
-        return value switch
-        {
-            decimal d => d.ToString(CultureInfo.InvariantCulture),
-            double d => d.ToString(CultureInfo.InvariantCulture),
-            float f => f.ToString(CultureInfo.InvariantCulture),
-            int i => i.ToString(CultureInfo.InvariantCulture),
-            long l => l.ToString(CultureInfo.InvariantCulture),
-            _ => value.ToString() ?? "0"
-        };
-    }
+        => ReportComputedFieldEvaluator.Enrich(layout, rows);
 
     // Charts (QuickChart.io integration)
 

@@ -466,10 +466,10 @@ public static partial class ReportLayoutValidator
             return;
 
         if (!string.IsNullOrWhiteSpace(coverPage.Title) && coverPage.Title.Length > MaxTitleLength)
-            errors.Add("coverPage.title exceeds maximum length of {MaxTitleLength}.");
+            errors.Add($"coverPage.title exceeds maximum length of {MaxTitleLength}.");
 
         if (!string.IsNullOrWhiteSpace(coverPage.Subtitle) && coverPage.Subtitle.Length > MaxSubtitleLength)
-            errors.Add("coverPage.subtitle exceeds maximum length of {MaxSubtitleLength}.");
+            errors.Add($"coverPage.subtitle exceeds maximum length of {MaxSubtitleLength}.");
 
         ValidateLogo(coverPage.LogoUrl, "coverPage.logoUrl", errors);
     }
@@ -493,7 +493,7 @@ public static partial class ReportLayoutValidator
             return;
 
         if (!string.IsNullOrWhiteSpace(toc.Title) && toc.Title.Length > MaxTitleLength)
-            errors.Add("tableOfContents.title exceeds maximum length of {MaxTitleLength}.");
+            errors.Add($"tableOfContents.title exceeds maximum length of {MaxTitleLength}.");
 
         if (toc.MaxLevel is < 1 or > 3)
             errors.Add("tableOfContents.maxLevel must be between 1 and 3.");

@@ -1,6 +1,7 @@
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Caching.Memory;
@@ -171,14 +172,33 @@ public class ReportService : IReportService
         {
             _logger.LogError(ex, "Report execution {ExecutionId} timed out after {TimeoutSeconds}s", 
                 executionId, effectiveOptions.ProcessingTimeoutSeconds);
-            await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Failed, 
-                $"Report processing timed out after {effectiveOptions.ProcessingTimeoutSeconds} seconds");
+
+            try
+            {
+                await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Failed, 
+                    $"Report processing timed out after {effectiveOptions.ProcessingTimeoutSeconds} seconds");
+            }
+            catch (Exception statusEx)
+            {
+                // Nao deixar a falha ao gravar o status mascarar a causa original.
+                _logger.LogError(statusEx, "Failed to mark report execution {ExecutionId} as Failed (timeout).", executionId);
+            }
+
             throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to process report execution {ExecutionId}", executionId);
-            await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Failed, ex.Message);
+
+            try
+            {
+                await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Failed, ex.Message);
+            }
+            catch (Exception statusEx)
+            {
+                // Nao deixar a falha ao gravar o status mascarar a causa original.
+                _logger.LogError(statusEx, "Failed to mark report execution {ExecutionId} as Failed.", executionId);
+            }
 
             await _notificationService.PublishAsync(new NotificationPublishRequest(
                 EventType: "report.failed",
@@ -459,7 +479,16 @@ public class ReportService : IReportService
                 format, template.Id);
         }
 
-        return renderer.RenderAsync(BuildRenderContext(template), data, cancellationToken);
+        // Campos calculados valem para TODOS os formatos (antes so o composer HTML
+        // aplicava; Markdown/XLSX/CSV saiam com a coluna calculada vazia).
+        var layout = ReportLayoutDefinitionParser.ParseOrDefault(template.LayoutJson);
+        var enrichedRows = ReportComputedFieldEvaluator.Enrich(layout, data.Rows);
+
+        var enrichedData = ReferenceEquals(enrichedRows, data.Rows)
+            ? data
+            : new ReportQueryResult { Columns = data.Columns, Rows = enrichedRows };
+
+        return renderer.RenderAsync(BuildRenderContext(template), enrichedData, cancellationToken);
     }
 
     private static ReportRenderContext BuildRenderContext(ReportTemplate template)

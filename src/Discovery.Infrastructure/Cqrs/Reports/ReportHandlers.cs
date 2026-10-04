@@ -240,12 +240,14 @@ public sealed class RunReportNowCommandHandler(IReportService reportService, IRe
     /// nao rodaram a migracao M194 ele nao pode bloquear a geracao — cai para o
     /// formato do template (ou Markdown). Demais valores invalidos seguem 400.
     /// </summary>
-    private static ReportFormat? ResolveRequestedFormat(int requested, ReportFormat templateDefault)
+    private static ReportFormat? ResolveRequestedFormat(object? requested, ReportFormat templateDefault)
     {
-        if (Enum.IsDefined(typeof(ReportFormat), requested))
-            return (ReportFormat)requested;
+        var resolved = ReportFormatResolver.Resolve(requested);
+        if (resolved is not null)
+            return resolved;
 
-        if (requested == 1)
+        // 1/"Pdf" era o formato extinto: nao bloquear a geracao por dado legado.
+        if (ReportFormatResolver.IsLegacyPdf(requested))
             return Enum.IsDefined(typeof(ReportFormat), templateDefault) ? templateDefault : ReportFormat.Markdown;
 
         return null;
@@ -426,28 +428,6 @@ public sealed class PreviewReportCommandHandler(
         return null;
     }
 
-    // Resolve o formato de relatório a partir de um valor flexível (int, nome do
-    // enum ou camelCase), seguindo o mesmo padrão do ResolveDatasetType.
-    private static ReportFormat? ResolveFormat(object? format)
-    {
-        var raw = format?.ToString();
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
-
-        // Número (ex: "0" = Xlsx, "2" = Csv, "3" = Markdown). Numérico fora do
-        // enum não deve cair no Enum.TryParse (que aceitaria "999").
-        if (int.TryParse(raw, out var numeric))
-            return Enum.IsDefined(typeof(ReportFormat), numeric) ? (ReportFormat)numeric : null;
-
-        // Nome do enum (ex: "Markdown")
-        if (Enum.TryParse<ReportFormat>(raw, ignoreCase: true, out var parsed) && Enum.IsDefined(typeof(ReportFormat), parsed))
-            return parsed;
-
-        // camelCase (ex: "markdown") → PascalCase
-        var pascal = char.ToUpperInvariant(raw[0]) + raw[1..];
-        if (Enum.TryParse<ReportFormat>(pascal, ignoreCase: true, out var parsedPascal))
-            return parsedPascal;
-
-        return null;
-    }
+    // Resolucao compartilhada: ReportFormatResolver (Core).
+    private static ReportFormat? ResolveFormat(object? format) => ReportFormatResolver.Resolve(format);
 }

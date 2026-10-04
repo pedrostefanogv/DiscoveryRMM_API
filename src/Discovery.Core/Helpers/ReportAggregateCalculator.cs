@@ -20,6 +20,11 @@ public static class ReportAggregateCalculator
     {
         var op = aggregate?.Trim().ToLowerInvariant();
 
+        // Paridade com o comportamento anterior: toda agregacao exceto "count"
+        // exige campo; sem campo o resumo e "-" (null) e nao 0.
+        if (!string.Equals(op, "count", StringComparison.Ordinal) && string.IsNullOrWhiteSpace(field))
+            return null;
+
         return op switch
         {
             "count" => rows.Count,
@@ -269,10 +274,6 @@ public static class ReportAggregateCalculator
             case float f: decimalValue = Convert.ToDecimal(f); return true;
             case int i: decimalValue = i; return true;
             case long l: decimalValue = l; return true;
-            case short s: decimalValue = s; return true;
-            case byte b: decimalValue = b; return true;
-            case string text when decimal.TryParse(text, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsed):
-                decimalValue = parsed; return true;
             default: decimalValue = 0; return false;
         }
     }

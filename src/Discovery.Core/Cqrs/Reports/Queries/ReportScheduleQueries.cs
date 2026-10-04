@@ -36,7 +36,9 @@ public sealed record CreateReportScheduleCommand(
     int? DayOfMonth,
     int HourUtc,
     int MinuteUtc,
-    int Format,
+    // Aceita numero do enum, nome ("Markdown") ou camelCase — a UI historicamente
+    // manda string; o comando resolvia para int e o binding falhava com 400.
+    object? Format = null,
     string? FiltersJson = null,
     IReadOnlyList<string>? Recipients = null,
     bool IsActive = true,
@@ -51,7 +53,7 @@ public sealed record UpdateReportScheduleCommand(
     int? DayOfMonth = null,
     int? HourUtc = null,
     int? MinuteUtc = null,
-    int? Format = null,
+    object? Format = null,
     string? FiltersJson = null,
     IReadOnlyList<string>? Recipients = null,
     bool? IsActive = null,
