@@ -34,6 +34,16 @@ public class ReportsController(
     private ObjectResult AccessDenied(string? message)
         => StatusCode(StatusCodes.Status403Forbidden, new { message = message ?? "Acesso negado." });
 
+    /// <summary>Percent-encoding para caber em header ASCII e ser decodificado no cliente.</summary>
+    private static string EncodeHeaderValue(string? value)
+        => string.IsNullOrWhiteSpace(value) ? string.Empty : Uri.EscapeDataString(value);
+
+    /// <summary>Remove caracteres fora do ASCII imprimivel (headers nao aceitam).</summary>
+    private static string ToAsciiHeaderValue(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : new string(value.Where(character => character >= 0x20 && character < 0x7F).ToArray());
+
     /// <summary>ClientId efetivo: global respeita a escolha; demais usam o escopo resolvido.</summary>
     private static Guid? EffectiveClientId(ReportScopeResolution scope, Guid? requestedClientId)
         => scope.IsGlobal ? requestedClientId : scope.ClientId;
@@ -396,12 +406,17 @@ public class ReportsController(
         return result.Match<IActionResult>(
             success: dto =>
             {
-                Response.Headers["X-Report-RowCount"] = dto.RowCount?.ToString();
-                Response.Headers["X-Report-Title"] = dto.Title;
-                Response.Headers["X-Report-Format"] = dto.Format;
+                // Headers HTTP sao ASCII/ISO-8859-1. Titulos de relatorio tem
+                // acentos ("Novo Relatorio" com o-acento) e o Kestrel derruba a
+                // resposta com "Invalid non-ASCII or control character in header"
+                // — que o middleware converte em 400. Percent-encoding mantem o
+                // valor recuperavel pelo cliente em um canal ASCII.
+                Response.Headers["X-Report-RowCount"] = dto.RowCount?.ToString() ?? string.Empty;
+                Response.Headers["X-Report-Title"] = EncodeHeaderValue(dto.Title);
+                Response.Headers["X-Report-Format"] = ToAsciiHeaderValue(dto.Format);
                 Response.Headers["X-Report-Preview"] = "true";
                 if (!string.IsNullOrWhiteSpace(dto.Disposition))
-                    Response.Headers["Content-Disposition"] = dto.Disposition;
+                    Response.Headers["Content-Disposition"] = ToAsciiHeaderValue(dto.Disposition);
 
                 if (!string.IsNullOrWhiteSpace(dto.Html))
                     return Content(dto.Html, dto.ContentType);

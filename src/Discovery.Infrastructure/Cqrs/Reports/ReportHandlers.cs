@@ -235,25 +235,40 @@ public sealed class DeleteReportTemplateCommandHandler(IReportTemplateRepository
 public sealed class RunReportNowCommandHandler(IReportService reportService, IReportTemplateRepository templateRepo, IReportExecutionRepository execRepo)
     : IRequestHandler<RunReportNowCommand, Result<RunReportResultDto>>
 {
+    /// <summary>
+    /// Resolve o formato pedido. O valor 1 era o extinto Pdf: em bases que ainda
+    /// nao rodaram a migracao M194 ele nao pode bloquear a geracao — cai para o
+    /// formato do template (ou Markdown). Demais valores invalidos seguem 400.
+    /// </summary>
+    private static ReportFormat? ResolveRequestedFormat(int requested, ReportFormat templateDefault)
+    {
+        if (Enum.IsDefined(typeof(ReportFormat), requested))
+            return (ReportFormat)requested;
+
+        if (requested == 1)
+            return Enum.IsDefined(typeof(ReportFormat), templateDefault) ? templateDefault : ReportFormat.Markdown;
+
+        return null;
+    }
+
     public async Task<Result<RunReportResultDto>> Handle(RunReportNowCommand cmd, CancellationToken ct)
     {
-        // Um formato fora do enum (ex.: o antigo 1 = Pdf) nao tem renderer e
-        // so falharia depois de criar a execucao. Valida antes.
-        if (!Enum.IsDefined(typeof(ReportFormat), cmd.Format))
-            return Result<RunReportResultDto>.Failure(Error.Validation(
-                "format",
-                $"Format {cmd.Format} is not supported. Supported formats: {string.Join(", ", Enum.GetNames<ReportFormat>())}."));
-
         var template = await templateRepo.GetByIdAsync(cmd.TemplateId, cmd.ClientId);
         if (template is null)
             return Result<RunReportResultDto>.Failure(Error.NotFound($"ReportTemplate {cmd.TemplateId} not found"));
+
+        var resolvedFormat = ResolveRequestedFormat(cmd.Format, template.DefaultFormat);
+        if (resolvedFormat is null)
+            return Result<RunReportResultDto>.Failure(Error.Validation(
+                "format",
+                $"Format {cmd.Format} is not supported. Supported formats: {string.Join(", ", Enum.GetNames<ReportFormat>())}."));
 
         var execution = new ReportExecution
         {
             Id = Guid.NewGuid(),
             TemplateId = cmd.TemplateId,
             ClientId = cmd.ClientId,
-            Format = (ReportFormat)cmd.Format,
+            Format = resolvedFormat.Value,
             FiltersJson = cmd.FiltersJson,
             Status = ReportExecutionStatus.Pending,
             CreatedAt = DateTime.UtcNow,
@@ -262,11 +277,26 @@ public sealed class RunReportNowCommandHandler(IReportService reportService, IRe
         };
 
         execution = await execRepo.CreateAsync(execution);
-        execution = await reportService.ProcessExecutionAsync(
-            execution.Id,
-            cmd.ClientId,
-            ct,
-            new ReportQueryScope(cmd.ClientId, cmd.SiteId));
+        try
+        {
+            execution = await reportService.ProcessExecutionAsync(
+                execution.Id,
+                cmd.ClientId,
+                ct,
+                new ReportQueryScope(cmd.ClientId, cmd.SiteId));
+        }
+        catch (OperationCanceledException)
+        {
+            return Result<RunReportResultDto>.Failure(Error.Validation(
+                "report",
+                "A geracao do relatorio excedeu o tempo limite. Consulte a execucao para detalhes."));
+        }
+        catch (Exception ex)
+        {
+            // A execucao ja foi marcada como Failed e a notificacao publicada em
+            // ProcessExecutionAsync. Devolver a causa real evita um 500 opaco.
+            return Result<RunReportResultDto>.Failure(Error.Validation("report", ex.Message));
+        }
 
         var downloadPath = cmd.ClientId.HasValue && cmd.ClientId.Value != Guid.Empty
             ? $"/api/v1/reports/executions/{execution.Id}/download?clientId={cmd.ClientId}"
@@ -321,7 +351,8 @@ public sealed class PreviewReportCommandHandler(
                 Html: htmlResult.Html));
         }
 
-        var format = ResolveFormat(cmd.Format) ?? template.DefaultFormat;
+        var format = ResolveFormat(cmd.Format)
+            ?? (Enum.IsDefined(typeof(ReportFormat), template.DefaultFormat) ? template.DefaultFormat : ReportFormat.Markdown);
         var result = await reportService.PreviewAsync(
             template, format, cmd.FiltersJson, ct, new ReportQueryScope(cmd.ClientId, cmd.SiteId));
         var contentType = format switch

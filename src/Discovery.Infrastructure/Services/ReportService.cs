@@ -447,7 +447,17 @@ public class ReportService : IReportService
     private Task<ReportDocument> RenderDocumentAsync(ReportTemplate template, ReportFormat format, ReportQueryResult data, CancellationToken cancellationToken)
     {
         if (!_renderers.TryGetValue(format, out var renderer))
-            throw new InvalidOperationException($"Format {format} is not enabled. Supported formats: {string.Join(", ", _renderers.Keys)}.");
+        {
+            // Ultimo recurso: formatos legados (ex.: o extinto Pdf = 1) ou nao
+            // registrados nao podem derrubar a geracao com 500. Cai para Markdown
+            // e registra a substituicao; a migracao M194 corrige os dados.
+            if (!_renderers.TryGetValue(ReportFormat.Markdown, out renderer))
+                throw new InvalidOperationException($"Format {format} is not enabled. Supported formats: {string.Join(", ", _renderers.Keys)}.");
+
+            _logger.LogWarning(
+                "Report format {Format} has no renderer registered; falling back to Markdown for template {TemplateId}.",
+                format, template.Id);
+        }
 
         return renderer.RenderAsync(BuildRenderContext(template), data, cancellationToken);
     }
