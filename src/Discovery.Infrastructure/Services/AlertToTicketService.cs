@@ -1,5 +1,6 @@
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Logging;
@@ -114,7 +115,7 @@ public class AlertToTicketService : IAlertToTicketService
             }
         }
 
-        var ticket = await _ticketRepo.CreateAsync(new Ticket
+        var ticket = new Ticket
         {
             Id = Guid.NewGuid(),
             ClientId = request.ClientId,
@@ -132,7 +133,10 @@ public class AlertToTicketService : IAlertToTicketService
             FirstResponseSlaStartedAt = frtStartedAt,
             CreatedAt = now,
             UpdatedAt = now
-        });
+        };
+        // Estado inicial que pausa o SLA já nasce em hold.
+        SlaHold.Apply(ticket, false, initialState.PausesSla, now);
+        await _ticketRepo.CreateAsync(ticket);
 
         // Chamados de alerta/evento passam pela MESMA auto-atribuição dos demais
         // (round-robin / menos abertos / fila da triagem por IA).

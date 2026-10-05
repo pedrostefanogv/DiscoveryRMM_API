@@ -1,5 +1,6 @@
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
@@ -444,37 +445,18 @@ public class SlaService : ISlaService
     /// disso (nem para o percentual exibido, nem para fins estatísticos). A
     /// reabertura zera o ClosedAt e o relógio volta a andar.
     /// </summary>
-    internal static DateTime GetSlaClockNow(Ticket ticket)
-    {
-        if (ticket.ClosedAt is not { } closedAt) return DateTime.UtcNow;
-
-        return closedAt.Kind == DateTimeKind.Utc
-            ? closedAt
-            : DateTime.SpecifyKind(closedAt, DateTimeKind.Utc);
-    }
+    internal static DateTime GetSlaClockNow(Ticket ticket) => SlaHold.GetClockNow(ticket);
 
     /// <summary>
     /// Retorna a expiração efetiva do SLA, adicionando o tempo pausado acumulado.
     /// </summary>
-    public DateTime? GetEffectiveSlaExpiry(Ticket ticket)
-    {
-        if (!ticket.SlaExpiresAt.HasValue) return null;
+    public DateTime? GetEffectiveSlaExpiry(Ticket ticket) => SlaHold.GetEffectiveSlaExpiry(ticket);
 
-        var totalPausedSeconds = ticket.SlaPausedSeconds;
-
-        // Se ainda está em pausa, somar o tempo corrente. Se o chamado foi
-        // encerrado, a pausa é contada somente até o fechamento (senão o tempo
-        // pausado continuaria crescendo indefinidamente em chamados fechados).
-        if (ticket.SlaHoldStartedAt.HasValue)
-        {
-            var heldFor = (GetSlaClockNow(ticket) - ticket.SlaHoldStartedAt.Value).TotalSeconds;
-            if (heldFor > 0) totalPausedSeconds += (int)heldFor;
-        }
-
-        // Garante que o retorno seja UTC (o banco agora armazena timestamptz)
-        var expiry = ticket.SlaExpiresAt.Value.AddSeconds(totalPausedSeconds);
-        return expiry.Kind == DateTimeKind.Utc ? expiry : DateTime.SpecifyKind(expiry, DateTimeKind.Utc);
-    }
+    /// <summary>
+    /// Retorna a expiração efetiva do SLA de primeira resposta (FRT),
+    /// adicionando o tempo pausado acumulado — espelha <see cref="GetEffectiveSlaExpiry"/>.
+    /// </summary>
+    public DateTime? GetEffectiveFrtExpiry(Ticket ticket) => SlaHold.GetEffectiveFrtExpiry(ticket);
 
     public async Task<(int HoursRemaining, double PercentUsed, bool Breached)> GetSlaStatusAsync(Guid ticketId)
     {
@@ -529,14 +511,15 @@ public class SlaService : ISlaService
         if (!ticket.SlaFirstResponseExpiresAt.HasValue)
             return (0, 0, false, false);
 
+        // Pausa do SLA (estados PausesSla) também estende o prazo do FRT.
+        var expiry = GetEffectiveFrtExpiry(ticket)!.Value;
+
         // FRT já foi alcançado
         if (ticket.FirstRespondedAt.HasValue)
         {
-            var achieved = ticket.FirstRespondedAt.Value <= ticket.SlaFirstResponseExpiresAt.Value;
+            var achieved = ticket.FirstRespondedAt.Value <= expiry;
             return (0, 100, !achieved, achieved);
         }
-
-        var expiry = ticket.SlaFirstResponseExpiresAt.Value;
         // Chamado encerrado sem primeira resposta: congela o FRT no fechamento.
         var now = GetSlaClockNow(ticket);
         var calendar = await ResolveCalendarAsync(ticket);

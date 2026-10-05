@@ -487,6 +487,63 @@ public class SlaServiceTests
         Assert.That(context.Calendar, Is.Null);
     }
 
+    [Test]
+    public async Task GetEffectiveFrtExpiry_AddsAccumulatedPause()
+    {
+        await using var fixture = await CreateFixtureAsync(slaHours: 8, frtHours: 4);
+
+        var ticket = fixture.Ticket;
+        var originalExpiry = DateTime.UtcNow.AddHours(1);
+        ticket.SlaFirstResponseExpiresAt = originalExpiry;
+        ticket.SlaPausedSeconds = 1800; // 30 min
+        fixture.Db.Tickets.Update(ticket);
+        await fixture.Db.SaveChangesAsync();
+
+        var effective = fixture.SlaService.GetEffectiveFrtExpiry(ticket);
+
+        Assert.That(effective, Is.Not.Null);
+        Assert.That(effective!.Value, Is.EqualTo(originalExpiry.AddMinutes(30)).Within(TimeSpan.FromSeconds(5)));
+    }
+
+    [Test]
+    public async Task GetFrtStatusAsync_ResponseAfterOriginalExpiry_WithinPause_Achieved()
+    {
+        await using var fixture = await CreateFixtureAsync(slaHours: 8, frtHours: 4);
+
+        var ticket = fixture.Ticket;
+        var originalExpiry = DateTime.UtcNow.AddMinutes(-10);
+        ticket.SlaFirstResponseExpiresAt = originalExpiry;
+        ticket.SlaPausedSeconds = 1800; // estende o prazo em 30 min
+        // Respondeu 5 min após o prazo ORIGINAL, mas dentro do prazo efetivo.
+        ticket.FirstRespondedAt = originalExpiry.AddMinutes(5);
+        fixture.Db.Tickets.Update(ticket);
+        await fixture.Db.SaveChangesAsync();
+
+        var (_, _, breached, achieved) = await fixture.SlaService.GetFrtStatusAsync(ticket.Id);
+
+        Assert.That(achieved, Is.True, "a pausa deve estender o prazo do FRT");
+        Assert.That(breached, Is.False);
+    }
+
+    [Test]
+    public async Task GetFrtStatusAsync_NotResponded_UsesEffectiveExpiryForBreach()
+    {
+        await using var fixture = await CreateFixtureAsync(slaHours: 8, frtHours: 4);
+
+        var ticket = fixture.Ticket;
+        var originalExpiry = DateTime.UtcNow.AddMinutes(-10);
+        ticket.SlaFirstResponseExpiresAt = originalExpiry;
+        ticket.SlaPausedSeconds = 1800; // prazo efetivo ainda no futuro
+        fixture.Db.Tickets.Update(ticket);
+        await fixture.Db.SaveChangesAsync();
+
+        var (hoursRemaining, _, breached, achieved) = await fixture.SlaService.GetFrtStatusAsync(ticket.Id);
+
+        Assert.That(breached, Is.False);
+        Assert.That(achieved, Is.False);
+        Assert.That(hoursRemaining, Is.GreaterThan(0));
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private static SlaCalendar BuildCalendar(string tz) => new()

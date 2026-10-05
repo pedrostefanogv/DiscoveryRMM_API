@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -148,7 +149,7 @@ public sealed class DatabaseSanitizationService(
 
         var samples = new List<string>();
         var skipped = 0;
-        var repairable = new List<(Guid TicketId, Guid OldStateId, Guid NewStateId, string NewStateName)>();
+        var repairable = new List<(Guid TicketId, Guid OldStateId, Guid NewStateId, string NewStateName, WorkflowState Initial)>();
 
         foreach (var candidate in candidates)
         {
@@ -166,7 +167,7 @@ public sealed class DatabaseSanitizationService(
                 continue;
             }
 
-            repairable.Add((candidate.Id, candidate.WorkflowStateId, initial.Id, initial.Name));
+            repairable.Add((candidate.Id, candidate.WorkflowStateId, initial.Id, initial.Name, initial));
         }
 
         if (dryRun || repairable.Count == 0)
@@ -176,10 +177,14 @@ public sealed class DatabaseSanitizationService(
         var tickets = await db.Tickets.Where(t => ids.Contains(t.Id)).ToListAsync(ct);
         var byTicket = repairable.ToDictionary(r => r.TicketId);
 
+        var now = DateTime.UtcNow;
         foreach (var ticket in tickets)
         {
-            ticket.WorkflowStateId = byTicket[ticket.Id].NewStateId;
-            ticket.UpdatedAt = DateTime.UtcNow;
+            var repair = byTicket[ticket.Id];
+            ticket.WorkflowStateId = repair.NewStateId;
+            // O estado inicial pode pausar o SLA: ao reparar, inicia/mantém o hold.
+            SlaHold.ApplyStateChange(ticket, oldState: null, repair.Initial, now);
+            ticket.UpdatedAt = now;
         }
         await db.SaveChangesAsync(ct);
 

@@ -502,14 +502,15 @@ public class AutoTicketServiceTests
         public Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds)
             => Task.CompletedTask;
 
-        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds)
+        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSecondsDelta, bool updateSlaHold)
         {
             if (_tickets.TryGetValue(id, out var ticket))
             {
                 ticket.WorkflowStateId = workflowStateId;
                 ticket.ClosedAt = closedAt;
-                ticket.SlaHoldStartedAt = slaHoldStartedAt;
-                ticket.SlaPausedSeconds = slaPausedSeconds;
+                ticket.SlaPausedSeconds += slaPausedSecondsDelta;
+                if (updateSlaHold)
+                    ticket.SlaHoldStartedAt = slaHoldStartedAt;
             }
 
             return Task.CompletedTask;
@@ -576,6 +577,12 @@ public class AutoTicketServiceTests
         public Task DeleteStateAsync(Guid id)
             => Task.CompletedTask;
 
+        public Task<bool> HasInitialStateAsync(Guid? clientId, Guid? excludeId = null)
+            => Task.FromResult(false);
+
+        public Task<int> CountTicketsInStateAsync(Guid stateId)
+            => Task.FromResult(0);
+
         public Task<IEnumerable<WorkflowTransition>> GetTransitionsAsync(Guid? clientId = null)
             => Task.FromResult<IEnumerable<WorkflowTransition>>([]);
 
@@ -584,6 +591,9 @@ public class AutoTicketServiceTests
 
         public Task<bool> IsTransitionValidAsync(Guid fromStateId, Guid toStateId, Guid? clientId = null)
             => Task.FromResult(true);
+
+        public Task<bool> TransitionExistsAsync(Guid fromStateId, Guid toStateId, Guid? clientId)
+            => Task.FromResult(false);
 
         public Task<WorkflowTransition> CreateTransitionAsync(WorkflowTransition transition)
             => Task.FromResult(transition);

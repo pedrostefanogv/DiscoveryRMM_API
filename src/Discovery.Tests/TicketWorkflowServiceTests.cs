@@ -280,15 +280,21 @@ public class TicketWorkflowServiceTests
             return Task.CompletedTask;
         }
 
-        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds)
+        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSecondsDelta, bool updateSlaHold)
         {
             // Espelha o repositório real: a transição persiste estado + fechamento
-            // (um único ExecuteUpdate); não há mais UpdateWorkflowStateAsync separado.
-            if (_ticket is not null) _ticket.WorkflowStateId = workflowStateId;
-            // Espelha o repositório real: a transição persiste o fechamento
-            // junto com o estado (um único ExecuteUpdate).
-            if (_ticket is not null && closedAt.HasValue) _ticket.ClosedAt = closedAt;
-            UpdateSlaHoldAsync(id, slaHoldStartedAt, slaPausedSeconds);
+            // (um único ExecuteUpdate) e SOMA o delta de pausa.
+            if (_ticket is not null)
+            {
+                _ticket.WorkflowStateId = workflowStateId;
+                if (closedAt.HasValue) _ticket.ClosedAt = closedAt;
+                _ticket.SlaPausedSeconds += slaPausedSecondsDelta;
+                if (updateSlaHold) _ticket.SlaHoldStartedAt = slaHoldStartedAt;
+
+                // Campos públicos usados pelas asserções espelham o persistido.
+                SlaHoldStartedAt = _ticket.SlaHoldStartedAt;
+                SlaPausedSeconds = _ticket.SlaPausedSeconds;
+            }
             return Task.CompletedTask;
         }
 
@@ -334,12 +340,16 @@ public class TicketWorkflowServiceTests
         public Task<WorkflowState> CreateStateAsync(WorkflowState state) => throw new NotImplementedException();
         public Task UpdateStateAsync(WorkflowState state) => throw new NotImplementedException();
         public Task DeleteStateAsync(Guid id) => throw new NotImplementedException();
+        public Task<bool> HasInitialStateAsync(Guid? clientId, Guid? excludeId = null) => Task.FromResult(false);
+        public Task<int> CountTicketsInStateAsync(Guid stateId) => Task.FromResult(0);
         public Task<IEnumerable<WorkflowTransition>> GetTransitionsAsync(Guid? clientId = null) =>
             Task.FromResult<IEnumerable<WorkflowTransition>>(Array.Empty<WorkflowTransition>());
         public Task<IEnumerable<WorkflowTransition>> GetTransitionsFromStateAsync(Guid fromStateId, Guid? clientId = null) =>
             Task.FromResult<IEnumerable<WorkflowTransition>>(Array.Empty<WorkflowTransition>());
         public Task<bool> IsTransitionValidAsync(Guid fromStateId, Guid toStateId, Guid? clientId = null) =>
             Task.FromResult(_isValid);
+        public Task<bool> TransitionExistsAsync(Guid fromStateId, Guid toStateId, Guid? clientId) =>
+            Task.FromResult(false);
         public Task<WorkflowTransition> CreateTransitionAsync(WorkflowTransition transition) => throw new NotImplementedException();
         public Task DeleteTransitionAsync(Guid id) => throw new NotImplementedException();
     }

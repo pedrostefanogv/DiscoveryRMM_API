@@ -41,6 +41,15 @@ public class WorkflowRepository : IWorkflowRepository
             .FirstOrDefaultAsync();
     }
 
+    public async Task<bool> HasInitialStateAsync(Guid? clientId, Guid? excludeId = null)
+    {
+        return await _db.WorkflowStates
+            .AsNoTracking()
+            .AnyAsync(state => state.IsInitial
+                && state.ClientId == clientId
+                && (excludeId == null || state.Id != excludeId));
+    }
+
     public async Task<WorkflowState> CreateStateAsync(WorkflowState state)
     {
         state.Id = IdGenerator.NewId();
@@ -62,15 +71,55 @@ public class WorkflowRepository : IWorkflowRepository
         existingState.IsInitial = state.IsInitial;
         existingState.IsFinal = state.IsFinal;
         existingState.SortOrder = state.SortOrder;
+        // PausesSla ficou de fora deste mapeamento: o toggle "pausar SLA" era
+        // aceito pela API e devolvido no DTO, mas nunca chegava ao banco.
+        existingState.PausesSla = state.PausesSla;
 
         await _db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// Remove o estado e os dados que o referenciam (transições de/para ele e
+    /// regras de alerta vinculadas), dentro de uma transação. Não remove
+    /// chamados: o handler bloqueia a exclusão quando existem chamados no estado.
+    /// </summary>
     public async Task DeleteStateAsync(Guid id)
     {
-        await _db.WorkflowStates
-            .Where(state => state.Id == id)
-            .ExecuteDeleteAsync();
+        // Transação explícita no provedor relacional (produção). O InMemory não
+        // suporta transações e o SaveChanges já é atômico, então é dispensada.
+        var tx = _db.Database.IsRelational()
+            ? await _db.Database.BeginTransactionAsync()
+            : null;
+        try
+        {
+            var transitions = await _db.WorkflowTransitions
+                .Where(transition => transition.FromStateId == id || transition.ToStateId == id)
+                .ToListAsync();
+            _db.WorkflowTransitions.RemoveRange(transitions);
+
+            var alertRules = await _db.TicketAlertRules
+                .Where(rule => rule.WorkflowStateId == id)
+                .ToListAsync();
+            _db.TicketAlertRules.RemoveRange(alertRules);
+
+            var state = await _db.WorkflowStates.SingleOrDefaultAsync(existing => existing.Id == id);
+            if (state is not null)
+                _db.WorkflowStates.Remove(state);
+
+            await _db.SaveChangesAsync();
+            if (tx is not null) await tx.CommitAsync();
+        }
+        finally
+        {
+            if (tx is not null) await tx.DisposeAsync();
+        }
+    }
+
+    public async Task<int> CountTicketsInStateAsync(Guid stateId)
+    {
+        return await _db.Tickets
+            .AsNoTracking()
+            .CountAsync(ticket => ticket.DeletedAt == null && ticket.WorkflowStateId == stateId);
     }
 
     // --- Transitions ---
@@ -93,6 +142,15 @@ public class WorkflowRepository : IWorkflowRepository
     }
 
     public async Task<bool> IsTransitionValidAsync(Guid fromStateId, Guid toStateId, Guid? clientId = null)
+    {
+        return await _db.WorkflowTransitions
+            .AsNoTracking()
+            .AnyAsync(transition => transition.FromStateId == fromStateId
+                && transition.ToStateId == toStateId
+                && (transition.ClientId == null || transition.ClientId == clientId));
+    }
+
+    public async Task<bool> TransitionExistsAsync(Guid fromStateId, Guid toStateId, Guid? clientId)
     {
         return await _db.WorkflowTransitions
             .AsNoTracking()

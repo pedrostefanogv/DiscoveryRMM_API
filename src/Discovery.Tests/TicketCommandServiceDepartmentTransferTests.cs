@@ -322,7 +322,7 @@ public class TicketCommandServiceDepartmentTransferTests
                 .Where(t => t.DepartmentId == departmentId && t.WorkflowProfileId is null && !t.ClosedAt.HasValue)
                 .ToList());
         public Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds) => Task.CompletedTask;
-        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds) => Task.CompletedTask;
+        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSecondsDelta, bool updateSlaHold) => Task.CompletedTask;
         public Task UpdateFirstRespondedAtAsync(Guid id, DateTime firstRespondedAt) => Task.CompletedTask;
         public Task<TicketKpiResult> GetKpiAsync(Guid? clientId, Guid? departmentId, DateTime? since) =>
             Task.FromResult(EmptyKpi());

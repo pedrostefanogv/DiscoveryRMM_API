@@ -266,6 +266,7 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             return (false, null);
 
         var previousClosedAt = reopenableTicket.ClosedAt.Value;
+        var now = DateTime.UtcNow;
 
         // Reabertura deve limpar os marcadores de SLA (senão o ticket reaberto
         // continua aparecendo como "SLA violado").
@@ -274,6 +275,8 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         reopenableTicket.SlaBreached = false;
         reopenableTicket.SlaPausedSeconds = 0;
         reopenableTicket.SlaHoldStartedAt = null;
+        // Reabertura entra no estado inicial: inicia pausa se ele pausar o SLA.
+        SlaHold.ApplyStateChange(reopenableTicket, oldState: null, initialState, now);
         // Zera expirações antigas: sem isso o SlaMonitoringJob volta a marcar
         // o ticket reaberto como violado a cada 5 minutos.
         reopenableTicket.SlaExpiresAt = null;

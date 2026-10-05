@@ -75,7 +75,7 @@ public sealed class TicketQueryService : ITicketQueryService
         var items = await query.OrderByDescending(t => t.CreatedAt).ThenByDescending(t => t.Id).Take(limit + 1)
             .Select(t => new TicketListItemDto(t.Id, t.ClientId, t.SiteId, t.Title, t.Priority,
                 t.WorkflowStateId, t.AssignedToUserId, t.SlaBreached, t.CreatedAt, t.ClosedAt, t.TemplateId, t.TemplateName,
-                t.DepartmentId))
+                t.DepartmentId, t.SlaHoldStartedAt != null))
             .ToListAsync(ct);
 
         var hm = items.Count > limit;

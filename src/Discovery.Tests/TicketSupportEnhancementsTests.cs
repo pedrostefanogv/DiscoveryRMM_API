@@ -197,6 +197,36 @@ public class TicketSupportEnhancementsTests
     }
 
     [Test]
+    public async Task Reopen_InitialStatePausesSla_StartsHold()
+    {
+        await using var db = CreateDb();
+        var client = new Client { Id = Guid.NewGuid(), Name = "Cliente", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        // Estado inicial que pausa o SLA (ex.: "Aguardando cliente").
+        var waiting = new WorkflowState { Id = Guid.NewGuid(), Name = "Aguardando", IsInitial = true, PausesSla = true, SortOrder = 1 };
+        var closed = new WorkflowState { Id = Guid.NewGuid(), Name = "Closed", IsFinal = true, SortOrder = 9 };
+        var ticket = NewTicket(client.Id, closed.Id);
+        ticket.ClosedAt = DateTime.UtcNow;
+        db.AddRange(client, waiting, closed, ticket);
+        await db.SaveChangesAsync();
+
+        var handler = new ReopenTicketCommandHandler(
+            new TicketRepository(db, new NoopAgentMessaging()),
+            new WorkflowRepository(db),
+            BuildSlaService(db),
+            BuildActivityLog(db),
+            new NoopNotificationService(),
+            NullLogger<ReopenTicketCommandHandler>.Instance);
+
+        var result = await handler.Handle(new ReopenTicketCommand(ticket.Id, "cliente voltou", null), default);
+
+        Assert.That(result.IsSuccess, Is.True);
+        var reloaded = await db.Tickets.AsNoTracking().FirstAsync(t => t.Id == ticket.Id);
+        Assert.That(reloaded.WorkflowStateId, Is.EqualTo(waiting.Id));
+        Assert.That(reloaded.SlaHoldStartedAt, Is.Not.Null, "estado inicial com PausesSla=true deve iniciar o hold");
+        Assert.That(reloaded.SlaPausedSeconds, Is.EqualTo(0));
+    }
+
+    [Test]
     public async Task ListRelations_ShouldResolveOtherTicketTitleAndStatus()
     {
         await using var db = CreateDb();

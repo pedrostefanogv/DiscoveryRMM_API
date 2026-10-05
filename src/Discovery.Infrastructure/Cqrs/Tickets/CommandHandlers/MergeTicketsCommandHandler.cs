@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Tickets.Commands;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using MediatR;
@@ -73,6 +74,8 @@ public sealed class MergeTicketsCommandHandler(
             if (finalStateId.HasValue)
                 source.WorkflowStateId = finalStateId.Value;
             source.ClosedAt = DateTime.UtcNow;
+            // Fechar a origem encerra qualquer pausa de SLA em aberto.
+            SlaHold.Apply(source, source.SlaHoldStartedAt.HasValue, willBeOnHold: false, mergedAt);
             source.UpdatedAt = mergedAt;
             if (!source.Description.StartsWith("**MERGED", StringComparison.Ordinal))
                 source.Description = $"**MERGED into {target.Id}**\n\n{source.Description}";

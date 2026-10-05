@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Tickets.Commands;
 using Discovery.Core.Cqrs.Tickets.Dtos;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services;
 using MediatR;
@@ -30,8 +31,8 @@ public sealed class ReopenTicketCommandHandler(
             return Result<TicketDetailDto>.Failure(
                 Error.Validation("TicketId", "Somente chamados encerrados podem ser reabertos."));
 
-        var initial = states.Where(s => s.IsInitial).OrderBy(s => s.SortOrder).FirstOrDefault()
-            ?? await workflowRepo.GetInitialStateAsync(ticket.ClientId);
+        // Resolução unificada do estado inicial (mesma regra do create/sanitização).
+        var initial = await workflowRepo.GetInitialStateAsync(ticket.ClientId);
         if (initial is null)
             return Result<TicketDetailDto>.Failure(
                 Error.Validation("WorkflowState", "Nenhum estado inicial configurado para o workflow do cliente."));
@@ -42,6 +43,8 @@ public sealed class ReopenTicketCommandHandler(
         ticket.SlaBreached = false;
         ticket.SlaHoldStartedAt = null;
         ticket.SlaPausedSeconds = 0;
+        // Reabrir entra no estado inicial: se ele pausa o SLA, inicia o hold agora.
+        SlaHold.ApplyStateChange(ticket, current, initial, reopenedAt);
         ticket.UpdatedAt = reopenedAt;
 
         // Reabrir invalida a avaliação anterior (CSAT do fechamento antigo).

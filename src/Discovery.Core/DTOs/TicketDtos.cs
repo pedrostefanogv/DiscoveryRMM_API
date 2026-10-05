@@ -62,7 +62,9 @@ public record TicketKpiResult(
     double AvgResolutionHours,
     double AvgAgeOpenHours,
     IReadOnlyList<TicketKpiByAssignee> ByAssignee,
-    IReadOnlyList<TicketKpiByDepartment> ByDepartment
+    IReadOnlyList<TicketKpiByDepartment> ByDepartment,
+    /// <summary>Distribuição por estado de workflow (mesma base/ACL do KPI).</summary>
+    IReadOnlyList<TicketKpiByState>? ByState = null
 );
 
 public record TicketKpiByAssignee(
@@ -75,6 +77,11 @@ public record TicketKpiByDepartment(
     Guid? DepartmentId,
     int Open,
     int Breached
+);
+
+public record TicketKpiByState(
+    Guid? WorkflowStateId,
+    int Count
 );
 
 // ─── Fase 4 ──────────────────────────────────────────────────────────────────

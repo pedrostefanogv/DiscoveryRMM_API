@@ -629,6 +629,8 @@ public class TicketsController(
             firstResponseSla = new
             {
                 slaFirstResponseExpiresAt = ticket?.SlaFirstResponseExpiresAt,
+                // Aditivo: expiração efetiva do FRT já com a pausa de SLA somada.
+                effectiveSlaFirstResponseExpiresAt = ticket is null ? null : Discovery.Core.Helpers.SlaHold.GetEffectiveFrtExpiry(ticket),
                 firstRespondedAt = ticket?.FirstRespondedAt,
                 hoursRemaining = (double)frtHours,
                 percentUsed = frtPercent,

@@ -1,5 +1,6 @@
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -107,28 +108,21 @@ public class TicketWorkflowService : ITicketWorkflowService
         // ClosedAt
         DateTime? closedAt = newState?.IsFinal == true ? DateTime.UtcNow : null;
 
-        // --- SLA Hold: pausar/retomar ---
-        var wasOnHold = oldState?.PausesSla == true;
-        var willBeOnHold = newState?.PausesSla == true;
+        // --- SLA Hold: pausar/retomar (regra central em SlaHold) ---
+        // Aplica na entidade carregada e persiste apenas o DELTA de pausa via
+        // ExecuteUpdate (SlaPausedSeconds + delta), para não sobrescrever pausas
+        // acumuladas por outra transição concorrente.
+        var now = DateTime.UtcNow;
+        var pausedBefore = ticket.SlaPausedSeconds;
+        var holdBefore = ticket.SlaHoldStartedAt;
 
-        // Transição + SLA-hold em UM único ExecuteUpdate (elimina a corrida entre
-        // transição e close/reabertura — lost update).
-        if (!wasOnHold && willBeOnHold)
-        {
-            await _ticketRepo.UpdateWorkflowStateWithSlaHoldAsync(
-                ticketId, targetStateId, closedAt, DateTime.UtcNow, ticket.SlaPausedSeconds);
-        }
-        else if (wasOnHold && !willBeOnHold && ticket.SlaHoldStartedAt.HasValue)
-        {
-            var addedSeconds = (int)(DateTime.UtcNow - ticket.SlaHoldStartedAt.Value).TotalSeconds;
-            await _ticketRepo.UpdateWorkflowStateWithSlaHoldAsync(
-                ticketId, targetStateId, closedAt, null, ticket.SlaPausedSeconds + addedSeconds);
-        }
-        else
-        {
-            await _ticketRepo.UpdateWorkflowStateWithSlaHoldAsync(
-                ticketId, targetStateId, closedAt, ticket.SlaHoldStartedAt, ticket.SlaPausedSeconds);
-        }
+        SlaHold.ApplyStateChange(ticket, oldState, newState!, now);
+
+        var pausedDelta = ticket.SlaPausedSeconds - pausedBefore;
+        var updateHold = ticket.SlaHoldStartedAt != holdBefore;
+
+        await _ticketRepo.UpdateWorkflowStateWithSlaHoldAsync(
+            ticketId, targetStateId, closedAt, ticket.SlaHoldStartedAt, pausedDelta, updateHold);
 
         // Log da mudança (usa a origem efetiva, já reparada se era órfã).
         await _activityLogService.LogStateChangeAsync(ticketId, changedByUserId, fromStateId, targetStateId);

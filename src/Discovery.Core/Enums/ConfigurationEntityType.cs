@@ -16,5 +16,11 @@ public enum ConfigurationEntityType
     SlaCalendarHoliday = 4,
 
     /// <summary>Regra de escalonamento de SLA.</summary>
-    TicketEscalationRule = 5
+    TicketEscalationRule = 5,
+
+    /// <summary>Estado de workflow de chamados.</summary>
+    WorkflowState = 6,
+
+    /// <summary>Transição entre estados de workflow.</summary>
+    WorkflowTransition = 7
 }

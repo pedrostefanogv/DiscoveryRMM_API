@@ -172,17 +172,32 @@ public class TicketRepository : ITicketRepository
 
     /// <summary>
     /// Transição de estado + ajuste de SLA-hold em UM único ExecuteUpdate:
-    /// elimina a corrida entre transição e close/reabertura.
+    /// elimina a corrida entre transição e close/reabertura. A pausa é SOMADA no
+    /// banco (delta), então transições concorrentes não se sobrescrevem.
     /// </summary>
-    public async Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds)
+    public async Task UpdateWorkflowStateWithSlaHoldAsync(
+        Guid id, Guid workflowStateId, DateTime? closedAt,
+        DateTime? slaHoldStartedAt, int slaPausedSecondsDelta, bool updateSlaHold)
     {
+        if (updateSlaHold)
+        {
+            await _db.Tickets
+                .Where(t => t.Id == id)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(t => t.WorkflowStateId, workflowStateId)
+                    .SetProperty(t => t.ClosedAt, closedAt)
+                    .SetProperty(t => t.SlaPausedSeconds, t => t.SlaPausedSeconds + slaPausedSecondsDelta)
+                    .SetProperty(t => t.SlaHoldStartedAt, slaHoldStartedAt)
+                    .SetProperty(t => t.UpdatedAt, DateTime.UtcNow));
+            return;
+        }
+
         await _db.Tickets
             .Where(t => t.Id == id)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(t => t.WorkflowStateId, workflowStateId)
                 .SetProperty(t => t.ClosedAt, closedAt)
-                .SetProperty(t => t.SlaHoldStartedAt, slaHoldStartedAt)
-                .SetProperty(t => t.SlaPausedSeconds, slaPausedSeconds)
+                .SetProperty(t => t.SlaPausedSeconds, t => t.SlaPausedSeconds + slaPausedSecondsDelta)
                 .SetProperty(t => t.UpdatedAt, DateTime.UtcNow));
     }
 
@@ -385,7 +400,9 @@ public class TicketRepository : ITicketRepository
         // SLA warning: open, não breached, expires dentro de 2h
         var slaWarningThreshold = now.AddHours(2);
 
-        // FRT achievements
+        // FRT achievements: a pausa do SLA também estende o prazo do FRT, então
+        // os candidatos são avaliados em memória com a expiração efetiva
+        // (relógio congelado no fechamento, igual a GetSlaClockNow).
         var frtQuery = baseQuery.Where(t => t.FirstRespondedAt.HasValue && t.SlaFirstResponseExpiresAt.HasValue);
 
         // DbContext NÃO é thread-safe: as contagens são executadas sequencialmente.
@@ -397,8 +414,17 @@ public class TicketRepository : ITicketRepository
         var onHold = await openQuery.CountAsync(t => t.SlaHoldStartedAt.HasValue);
         var slaWarning = await openQuery.CountAsync(t =>
             !t.SlaBreached && t.SlaExpiresAt.HasValue && t.SlaExpiresAt.Value <= slaWarningThreshold);
-        var frtAchievedCount = await frtQuery.CountAsync(t => t.FirstRespondedAt!.Value <= t.SlaFirstResponseExpiresAt!.Value);
-        var frtTotalCount = await frtQuery.CountAsync();
+        var frtCandidates = await frtQuery
+            .Select(t => new { t.FirstRespondedAt, t.SlaFirstResponseExpiresAt, t.SlaPausedSeconds, t.SlaHoldStartedAt, t.ClosedAt })
+            .ToListAsync();
+        var frtTotalCount = frtCandidates.Count;
+        var frtAchievedCount = frtCandidates.Count(t =>
+        {
+            var clockNow = SlaHold.GetClockNow(t.ClosedAt);
+            var effectiveExpiry = SlaHold.GetEffectiveExpiry(
+                t.SlaFirstResponseExpiresAt, t.SlaPausedSeconds, t.SlaHoldStartedAt, clockNow);
+            return effectiveExpiry.HasValue && t.FirstRespondedAt!.Value <= effectiveExpiry.Value;
+        });
 
         // LOTE 2: ToListAsync — sequencial para evitar concorrência no DbContext
         // (DbContext não é thread-safe; serializamos após o WhenAll acima)
@@ -432,6 +458,14 @@ public class TicketRepository : ITicketRepository
             .Select(g => new TicketKpiByDepartment(g.DepartmentId, g.Open, g.Breached))
             .ToList();
 
+        // Distribuição por estado usando a MESMA base/ACL do KPI.
+        var byState = (await baseQuery
+            .GroupBy(t => t.WorkflowStateId)
+            .Select(g => new { WorkflowStateId = g.Key, Count = g.Count() })
+            .ToListAsync())
+            .Select(g => new TicketKpiByState(g.WorkflowStateId, g.Count))
+            .ToList();
+
         var frtAchievementRate = frtTotalCount > 0 ? (frtAchievedCount / (double)frtTotalCount) * 100.0 : 0.0;
 
         return new TicketKpiResult(
@@ -444,7 +478,8 @@ public class TicketRepository : ITicketRepository
             AvgResolutionHours: Math.Round(avgResolution, 2),
             AvgAgeOpenHours: Math.Round(avgAgeOpen, 2),
             ByAssignee: byAssignee,
-            ByDepartment: byDepartment
+            ByDepartment: byDepartment,
+            ByState: byState
         );
     }
 

@@ -40,7 +40,7 @@ public interface ITicketRepository
     /// Persiste a transição de estado e o ajuste de SLA-hold ATOMICAMENTE
     /// (um único ExecuteUpdate), eliminando a corrida com close/reabertura.
     /// </summary>
-    Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds);
+    Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSecondsDelta, bool updateSlaHold);
 
     /// <summary>Registra o momento da primeira resposta do atribuído.</summary>
     Task UpdateFirstRespondedAtAsync(Guid id, DateTime firstRespondedAt);

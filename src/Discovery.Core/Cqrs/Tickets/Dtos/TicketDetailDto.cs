@@ -63,7 +63,9 @@ public sealed record TicketListItemDto(
     Guid? TemplateId = null,
     string? TemplateName = null,
     /// <summary>Departamento atual (usado pelo modal "Transferir / Atribuir" da lista).</summary>
-    Guid? DepartmentId = null
+    Guid? DepartmentId = null,
+    /// <summary>SLA em pausa (hold) no momento da listagem.</summary>
+    bool OnHold = false
 );
 
 /// <summary>

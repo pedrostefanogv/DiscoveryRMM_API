@@ -5,6 +5,7 @@ using Discovery.Core.Cqrs.Tickets.Dtos;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using MediatR;
@@ -437,6 +438,8 @@ public sealed class CloseAndRateMyTicketHandler(
         // Idempotente para reenvios: fecha de novo não reescreve a data original
         // de fechamento (que define a ordem "aguardando avaliação").
         ticket.ClosedAt ??= DateTime.UtcNow;
+        // Fechamento pelo agente encerra o hold, acumulando a pausa corrente.
+        SlaHold.Apply(ticket, ticket.SlaHoldStartedAt.HasValue, willBeOnHold: false, DateTime.UtcNow);
         ticket.UpdatedAt = DateTime.UtcNow;
         await ticketRepo.UpdateAsync(ticket);
 

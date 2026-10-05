@@ -218,11 +218,15 @@ public class DatabaseSanitizationServiceTests
         public Task<WorkflowState> CreateStateAsync(WorkflowState state) => throw new NotImplementedException();
         public Task UpdateStateAsync(WorkflowState state) => throw new NotImplementedException();
         public Task DeleteStateAsync(Guid id) => throw new NotImplementedException();
+        public Task<bool> HasInitialStateAsync(Guid? clientId, Guid? excludeId = null) => Task.FromResult(false);
+        public Task<int> CountTicketsInStateAsync(Guid stateId) => Task.FromResult(0);
         public Task<IEnumerable<WorkflowTransition>> GetTransitionsAsync(Guid? clientId = null) =>
             Task.FromResult<IEnumerable<WorkflowTransition>>(Array.Empty<WorkflowTransition>());
         public Task<IEnumerable<WorkflowTransition>> GetTransitionsFromStateAsync(Guid fromStateId, Guid? clientId = null) =>
             Task.FromResult<IEnumerable<WorkflowTransition>>(Array.Empty<WorkflowTransition>());
         public Task<bool> IsTransitionValidAsync(Guid fromStateId, Guid toStateId, Guid? clientId = null) =>
+            Task.FromResult(false);
+        public Task<bool> TransitionExistsAsync(Guid fromStateId, Guid toStateId, Guid? clientId) =>
             Task.FromResult(false);
         public Task<WorkflowTransition> CreateTransitionAsync(WorkflowTransition transition) => throw new NotImplementedException();
         public Task DeleteTransitionAsync(Guid id) => throw new NotImplementedException();

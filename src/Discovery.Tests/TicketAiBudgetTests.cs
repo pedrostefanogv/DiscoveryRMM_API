@@ -207,7 +207,7 @@ public class TicketAiBudgetTests
         public Task<List<Ticket>> GetOpenTicketsWithSlaAsync(int limit = 2000) => throw new NotSupportedException();
         public Task<List<Ticket>> GetOpenWithoutProfileByDepartmentAsync(Guid departmentId, int limit = 500) => throw new NotSupportedException();
         public Task UpdateSlaHoldAsync(Guid id, DateTime? slaHoldStartedAt, int slaPausedSeconds) => throw new NotSupportedException();
-        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSeconds) => throw new NotSupportedException();
+        public Task UpdateWorkflowStateWithSlaHoldAsync(Guid id, Guid workflowStateId, DateTime? closedAt, DateTime? slaHoldStartedAt, int slaPausedSecondsDelta, bool updateSlaHold) => throw new NotSupportedException();
         public Task UpdateFirstRespondedAtAsync(Guid id, DateTime firstRespondedAt) => throw new NotSupportedException();
         public Task<TicketKpiResult> GetKpiAsync(Guid? clientId, Guid? departmentId, DateTime? since) => throw new NotSupportedException();
         public Task<TicketKpiResult> GetKpiAsync(TicketFilterQuery filter) => throw new NotSupportedException();

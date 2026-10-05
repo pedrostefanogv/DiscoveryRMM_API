@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs.Tickets.Dtos;
 using Discovery.Core.Cqrs.Tickets.Events;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Identity;
 using MediatR;
@@ -140,6 +141,9 @@ public sealed class TicketCommandService : ITicketCommandService
                 // Perfil inexistente/inválido: não bloqueia a criação do chamado.
             }
         }
+
+        // Estado inicial que pausa o SLA já nasce em hold.
+        SlaHold.Apply(ticket, false, initialState.PausesSla, now);
 
         await _repo.CreateAsync(ticket);
 
