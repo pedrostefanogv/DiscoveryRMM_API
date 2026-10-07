@@ -56,6 +56,7 @@ internal static class ServiceCollectionExtensions
         {
             typeof(IReportRenderer),
             typeof(ISyncPingDispatchQueue),
+            typeof(IWebPushDispatchQueue),
             typeof(IObjectStorageService),
             typeof(ILlmProvider),
             typeof(IJwtService),

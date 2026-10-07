@@ -26,6 +26,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.HttpOverrides;
 using Scalar.AspNetCore;
 
+// CLI local: gera o par VAPID do Web Push e encerra (sem subir o host).
+if (VapidKeyCli.TryRun(args))
+    return;
+
 var hasMaintenanceMode = MaintenanceMode.TryParse(args, out var maintenanceOptions, out var parseError);
 if (hasMaintenanceMode && !string.IsNullOrWhiteSpace(parseError))
 {
@@ -142,6 +146,14 @@ builder.Services.AddHttpClient("AiChat", client =>
 
 // Generic HttpClient for other services
 builder.Services.AddHttpClient();
+
+// Web Push: o HttpClient padrao tem timeout de 100s, alto demais para um envio
+// best-effort contra FCM/Mozilla/Apple/WNS.
+builder.Services.AddHttpClient(WebPushSender.WebPushHttpClientName, client =>
+{
+    var seconds = builder.Configuration.GetValue<int?>("Push:HttpTimeoutSeconds") ?? 10;
+    client.Timeout = TimeSpan.FromSeconds(Math.Clamp(seconds, 2, 60));
+});
 builder.Services.AddDiscoveryOpenTelemetry(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<IAgentTlsCertificateProbe, AgentTlsCertificateProbe>();
 var isDevelopment = builder.Environment.IsDevelopment();
@@ -169,6 +181,12 @@ builder.Services.Configure<AutoTicketOptions>(
     builder.Configuration.GetSection(AutoTicketOptions.SectionName));
 builder.Services.Configure<SecretEncryptionOptions>(
     builder.Configuration.GetSection(SecretEncryptionOptions.SectionName));
+
+// Web Push (notificacoes do navegador). Chaves VAPID devem vir de secret/vars
+// de ambiente em producao (Push__VapidPrivateKey); em Development um par
+// transitorio e gerado quando ausente.
+builder.Services.Configure<PushOptions>(
+    builder.Configuration.GetSection(PushOptions.SectionName));
 
 // P2p Discovery options (mantido para outras opções)
 builder.Services.Configure<P2pOptions>(

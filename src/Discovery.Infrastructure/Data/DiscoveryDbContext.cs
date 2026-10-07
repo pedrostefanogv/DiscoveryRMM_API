@@ -41,6 +41,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<ReportExecution> ReportExecutions => Set<ReportExecution>();
     public DbSet<ReportSchedule> ReportSchedules => Set<ReportSchedule>();
     public DbSet<AppNotification> AppNotifications => Set<AppNotification>();
+    public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
 
     // AI Chat & MCP
     public DbSet<AiChatSession> AiChatSessions => Set<AiChatSession>();

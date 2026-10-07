@@ -128,5 +128,22 @@ public partial class DiscoveryDbContext
             entity.Property(c => c.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(c => c.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });
+
+        modelBuilder.Entity<PushSubscription>(entity =>
+        {
+            entity.ToTable("push_subscriptions");
+            entity.HasKey(s => s.Id);
+            entity.HasIndex(s => s.UserId).HasDatabaseName("ix_push_subscriptions_user");
+            entity.HasIndex(s => s.Endpoint).IsUnique().HasDatabaseName("ux_push_subscriptions_endpoint");
+
+            entity.Property(s => s.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(s => s.UserId).HasColumnName("user_id");
+            entity.Property(s => s.Endpoint).HasColumnName("endpoint").HasMaxLength(1000);
+            entity.Property(s => s.P256dh).HasColumnName("p256dh").HasMaxLength(255);
+            entity.Property(s => s.Auth).HasColumnName("auth").HasMaxLength(255);
+            entity.Property(s => s.UserAgent).HasColumnName("user_agent").HasMaxLength(400);
+            entity.Property(s => s.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(s => s.LastSeenAt).HasColumnName("last_seen_at").HasColumnType("timestamptz");
+        });
     }
 }

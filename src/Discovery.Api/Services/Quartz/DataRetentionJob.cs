@@ -16,6 +16,7 @@ namespace Discovery.Api.Services.Quartz;
 /// - Expired/revoked user sessions
 /// - Expired API tokens (with grace period)
 /// - Read notifications (unread are never purged)
+/// - Stale Web Push subscriptions (navegador sem atividade)
 /// - Old completed/failed agent commands
 /// - Stale sync ping deliveries
 /// - Old P2P telemetry
@@ -80,6 +81,15 @@ public sealed class DataRetentionJob : IJob
         if (notifsDeleted > 0)
             logger.LogInformation("DataRetention: deleted {Count} read notifications.", notifsDeleted);
         results["notifications"] = notifsDeleted;
+
+        // 3b. Inscricoes de Web Push sem atividade (browser trocado/desinstalado).
+        var pushCutoff = now.AddDays(-settings.PushSubscriptionRetentionDays);
+        var pushDeleted = await db.PushSubscriptions
+            .Where(s => s.LastSeenAt < pushCutoff)
+            .ExecuteDeleteAsync(ct);
+        if (pushDeleted > 0)
+            logger.LogInformation("DataRetention: deleted {Count} stale push subscriptions.", pushDeleted);
+        results["pushSubscriptions"] = pushDeleted;
 
         // 4. Completed/failed agent commands
         var cmdCutoff = now.AddDays(-settings.AgentCommandRetentionDays);

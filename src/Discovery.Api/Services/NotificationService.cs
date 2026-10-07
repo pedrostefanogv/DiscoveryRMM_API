@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Api.Services;
@@ -11,6 +12,7 @@ public class NotificationService : INotificationService
     private readonly IAgentCommandDispatcher _commandDispatcher;
     private readonly IRedisService _redis;
     private readonly INotificationChannelDispatcher _channelDispatcher;
+    private readonly IWebPushDispatchQueue _webPushQueue;
     private readonly ILogger<NotificationService> _logger;
 
     private const string BroadcastChannel = "notifications:broadcast";
@@ -24,12 +26,14 @@ public class NotificationService : INotificationService
         IAgentCommandDispatcher commandDispatcher,
         IRedisService redis,
         INotificationChannelDispatcher channelDispatcher,
+        IWebPushDispatchQueue webPushQueue,
         ILogger<NotificationService> logger)
     {
         _repository = repository;
         _commandDispatcher = commandDispatcher;
         _redis = redis;
         _channelDispatcher = channelDispatcher;
+        _webPushQueue = webPushQueue;
         _logger = logger;
     }
 
@@ -79,7 +83,39 @@ public class NotificationService : INotificationService
         // Multicanal (webhook/e-mail) — best-effort, nunca quebra o fluxo principal.
         await _channelDispatcher.DispatchAsync(request, cancellationToken);
 
+        // Web Push (notificacao do navegador) — so quando ha destinatario usuario.
+        // Cobre automaticamente SLA, chamados, relatorios e IA, pois todos publicam aqui.
+        // Vai para uma FILA em memoria: o provedor de push nunca bloqueia este metodo
+        // (que roda no request e nos jobs de SLA).
+        if (created.RecipientUserId.HasValue)
+            await EnqueueWebPushAsync(created, cancellationToken);
+
         return created;
+    }
+
+    private async Task EnqueueWebPushAsync(AppNotification notification, CancellationToken cancellationToken)
+    {
+        if (!notification.RecipientUserId.HasValue)
+            return;
+
+        try
+        {
+            await _webPushQueue.EnqueueAsync(
+                notification.RecipientUserId.Value,
+                new WebPushMessage(
+                    Title: notification.Title,
+                    Body: notification.Message,
+                    Severity: notification.Severity.ToString(),
+                    Topic: notification.Topic,
+                    EventType: notification.EventType,
+                    NotificationId: notification.Id,
+                    Url: NotificationDeepLink.Build(notification.PayloadJson)),
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao enfileirar Web Push da notificacao {NotificationId}", notification.Id);
+        }
     }
 
     private async Task DispatchAgentNotificationCommandAsync(AppNotification notification, CancellationToken cancellationToken)

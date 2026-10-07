@@ -16,6 +16,15 @@ public class RetentionSettings
     /// <summary>Days to keep read notifications. Unread notifications are never purged. Default: 60.</summary>
     public int NotificationRetentionDays { get; set; } = 60;
 
+    /// <summary>
+    /// Dias sem atividade antes de descartar uma inscricao de Web Push.
+    /// Default: 120. O provedor so sinaliza inscricao morta (HTTP 410) quando
+    /// tentamos enviar; usuarios que nunca mais recebem notificacoes deixariam
+    /// linhas orfas para sempre. Usuarios ativos renovam "last_seen_at" a cada
+    /// carga do console.
+    /// </summary>
+    public int PushSubscriptionRetentionDays { get; set; } = 120;
+
     /// <summary>Days to keep completed/failed agent commands. Default: 30.</summary>
     public int AgentCommandRetentionDays { get; set; } = 30;
 
