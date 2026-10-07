@@ -983,6 +983,48 @@ run_db_migrations() {
 
 # ── NATS env update helpers ────────────────────────────────────────────────
 
+# Garante que o par VAPID existe no discovery.env NO CAMINHO DE UPDATE.
+# `write_environment_file` so roda no install; sem esta funcao, um servidor que
+# faca apenas update nunca geraria as chaves e o Web Push ficaria inativo.
+# Preserva o par existente — regenerar invalidaria as inscricoes de navegador.
+ensure_vapid_environment_file() {
+  local env_file="/etc/discovery-api/discovery.env"
+  if ! sudo test -f "$env_file"; then
+    warn "Arquivo $env_file nao encontrado. Pulando configuracao de Web Push."
+    return 0
+  fi
+
+  # Mesma resolucao do install: ambiente > discovery.env > par novo.
+  local fallback_domain=""
+  fallback_domain="$(resolve_fido2_server_domain 2>/dev/null || true)"
+  resolve_vapid_push_config "$fallback_domain"
+
+  if [[ -z "$PUSH_VAPID_PUBLIC_KEY" || -z "$PUSH_VAPID_PRIVATE_KEY" ]]; then
+    return 0
+  fi
+
+  local tmp_file; tmp_file="$(mktemp)"
+
+  # Reescreve APENAS o bloco do Web Push; o resto do arquivo e preservado.
+  # (mesmo padrao dos demais update_*_environment_file)
+  set +e
+  sudo awk '!/^Push__Enabled=/ && !/^Push__VapidPublicKey=/ && !/^Push__VapidPrivateKey=/ && !/^Push__VapidSubject=/' \
+    "$env_file" > "$tmp_file" 2>/dev/null
+  set -e
+
+  cat >> "$tmp_file" <<EOF
+# ── Web Push (notificacoes do navegador) ───────────────────────────────────
+Push__Enabled=$( [[ "${PUSH_ENABLED:-1}" == "1" ]] && echo true || echo false )
+Push__VapidPublicKey=${PUSH_VAPID_PUBLIC_KEY}
+Push__VapidPrivateKey=${PUSH_VAPID_PRIVATE_KEY}
+Push__VapidSubject=${PUSH_VAPID_SUBJECT}
+EOF
+
+  sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
+  rm -f "$tmp_file"
+  log "Variaveis de Web Push atualizadas no $env_file"
+}
+
 update_remote_access_environment_file() {
   local env_file="/etc/discovery-api/discovery.env"
   if ! sudo test -f "$env_file"; then

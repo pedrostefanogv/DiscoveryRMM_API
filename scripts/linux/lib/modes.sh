@@ -71,6 +71,8 @@ update_api() {
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   publish_api
   update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
+  # Gera o par VAPID na primeira vez (o install escreve o env, o update nao).
+  ensure_vapid_environment_file || warn "Falha ao garantir o par VAPID (nao-bloqueante)"
   # M-fix (413 homologacao): o nginx config e REGENERADO por padrao no update —
   # o template do repo evolui (client_max_body_size, upstream keepalive, TLS) e
   # o config implantado ficava para tras (builds antigos sem 413 fix). O config
@@ -190,6 +192,8 @@ update_all_components() {
   ensure_wails_toolchain
   publish_api
   update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
+  # Gera o par VAPID na primeira vez (o install escreve o env, o update nao).
+  ensure_vapid_environment_file || warn "Falha ao garantir o par VAPID (nao-bloqueante)"
   publish_site
   # M-fix: nginx regenerado por padrao (mesmo contrato do update_api; opt-out =0).
   if [[ "${DISCOVERY_REFRESH_INFRA_CONFIG:-1}" != "0" ]]; then
