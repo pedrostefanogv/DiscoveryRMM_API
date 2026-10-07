@@ -86,7 +86,7 @@ public class CustomFieldService : ICustomFieldService
                 cancellationToken);
 
         if (existing is not null)
-            throw new InvalidOperationException("A custom field with the same name already exists for this scope.");
+            throw new InvalidOperationException("Já existe um custom field com essa chave neste escopo.");
 
         var now = DateTime.UtcNow;
         var definition = new CustomFieldDefinition
@@ -145,7 +145,7 @@ public class CustomFieldService : ICustomFieldService
                 cancellationToken);
 
         if (duplicateExists)
-            throw new InvalidOperationException("A custom field with the same name already exists for this scope.");
+            throw new InvalidOperationException("Já existe um custom field com essa chave neste escopo.");
 
         definition.Name = normalizedName;
         definition.Label = input.Label.Trim();
@@ -455,10 +455,10 @@ public class CustomFieldService : ICustomFieldService
 
         var definition = await _db.CustomFieldDefinitions
             .SingleOrDefaultAsync(item => item.Id == input.DefinitionId, cancellationToken)
-            ?? throw new InvalidOperationException("Custom field definition was not found.");
+            ?? throw new InvalidOperationException("Definição de custom field não encontrada.");
 
         if (!definition.IsActive)
-            throw new InvalidOperationException("Custom field definition is not active.");
+            throw new InvalidOperationException("A definição de custom field não está ativa.");
 
         // Escopo do valor tem de casar com o da definição — com uma exceção: os
         // campos do DEPARTAMENTO são gravados no chamado com escopo Ticket
@@ -485,7 +485,7 @@ public class CustomFieldService : ICustomFieldService
             }
 
             if (!ticketMatchesDepartment)
-                throw new InvalidOperationException("Custom field scope does not match the definition scope.");
+                throw new InvalidOperationException("O escopo do valor não corresponde ao escopo da definição.");
         }
 
         var valueJson = NormalizeJson(input.ValueJson);
@@ -550,10 +550,10 @@ public class CustomFieldService : ICustomFieldService
         CancellationToken cancellationToken = default)
     {
         var agent = await _agentRepository.GetByIdAsync(agentId)
-            ?? throw new InvalidOperationException("Agent not found.");
+            ?? throw new InvalidOperationException("Agente não encontrado.");
 
         var site = await _siteRepository.GetByIdAsync(agent.SiteId)
-            ?? throw new InvalidOperationException("Site not found for agent.");
+            ?? throw new InvalidOperationException("Site do agente não encontrado.");
 
         var definitions = await _db.CustomFieldDefinitions
             .AsNoTracking()
@@ -600,14 +600,14 @@ public class CustomFieldService : ICustomFieldService
     {
         var definition = await ResolveAgentDefinitionAsync(input.DefinitionId, input.Name, cancellationToken);
         if (!definition.AllowAgentWrite)
-            throw new InvalidOperationException("This custom field does not allow writes from agents.");
+            throw new InvalidOperationException("Este custom field não permite escrita por agentes.");
 
         if (!await HasExecutionAccessAsync(definition, input.TaskId, input.ScriptId, requireWrite: true, cancellationToken))
-            throw new InvalidOperationException("Agent is not allowed to write this custom field in the current execution context.");
+            throw new InvalidOperationException("O agente não pode escrever este custom field no contexto de execução atual.");
 
         // Rate limiting: max MaxAgentWritesPerMinute writes per agent per minute
         if (!TryAcquireAgentWriteWindow(agentId))
-            throw new InvalidOperationException("Agent write rate limit exceeded. Max 30 writes per minute.");
+            throw new InvalidOperationException("Limite de escrita do agente excedido. Máximo de 30 gravações por minuto.");
 
         await AuditAgentWriteAsync(agentId, definition.Name, input.ValueJson, input.TaskId, input.ScriptId, cancellationToken);
 
@@ -641,13 +641,13 @@ public class CustomFieldService : ICustomFieldService
         }
 
         if (definition is null)
-            throw new InvalidOperationException("Custom field definition was not found.");
+            throw new InvalidOperationException("Definição de custom field não encontrada.");
 
         if (!definition.IsActive)
-            throw new InvalidOperationException("Custom field definition is not active.");
+            throw new InvalidOperationException("A definição de custom field não está ativa.");
 
         if (definition.ScopeType != CustomFieldScopeType.Agent)
-            throw new InvalidOperationException("Only agent scoped custom fields can be collected by an agent.");
+            throw new InvalidOperationException("Somente custom fields com escopo de agente podem ser coletados por um agente.");
 
         return definition;
     }
@@ -757,7 +757,7 @@ public class CustomFieldService : ICustomFieldService
             CustomFieldScopeType.Client => BuildEntityKey(CustomFieldScopeType.Client, clientId),
             CustomFieldScopeType.Site => BuildEntityKey(CustomFieldScopeType.Site, siteId),
             CustomFieldScopeType.Agent => BuildEntityKey(CustomFieldScopeType.Agent, agentId),
-            _ => throw new InvalidOperationException("Invalid custom field scope type.")
+            _ => throw new InvalidOperationException("Tipo de escopo de custom field inválido.")
         };
     }
 
@@ -766,13 +766,13 @@ public class CustomFieldService : ICustomFieldService
         if (scopeType == CustomFieldScopeType.Server)
         {
             if (entityId.HasValue)
-                throw new InvalidOperationException("Server scoped custom field values do not accept entityId.");
+                throw new InvalidOperationException("Valores de custom field com escopo de servidor não aceitam entityId.");
 
             return;
         }
 
         if (!entityId.HasValue)
-            throw new InvalidOperationException("entityId is required for client, site and agent scopes.");
+            throw new InvalidOperationException("entityId é obrigatório para os escopos de cliente, site e agente.");
     }
 
     /// <summary>
@@ -856,42 +856,42 @@ public class CustomFieldService : ICustomFieldService
     private static void ValidateDefinitionInput(UpsertCustomFieldDefinitionInput input)
     {
         if (string.IsNullOrWhiteSpace(input.Name))
-            throw new InvalidOperationException("Field name is required.");
+            throw new InvalidOperationException("A chave do campo é obrigatória.");
 
         if (string.IsNullOrWhiteSpace(input.Label))
-            throw new InvalidOperationException("Field label is required.");
+            throw new InvalidOperationException("O título do campo é obrigatório.");
 
         if (input.MinLength.HasValue && input.MinLength.Value < 0)
-            throw new InvalidOperationException("minLength cannot be negative.");
+            throw new InvalidOperationException("minLength não pode ser negativo.");
 
         if (input.MaxLength.HasValue && input.MaxLength.Value < 0)
-            throw new InvalidOperationException("maxLength cannot be negative.");
+            throw new InvalidOperationException("maxLength não pode ser negativo.");
 
         if (input.MinLength.HasValue && input.MaxLength.HasValue && input.MinLength.Value > input.MaxLength.Value)
-            throw new InvalidOperationException("minLength cannot be greater than maxLength.");
+            throw new InvalidOperationException("minLength não pode ser maior que maxLength.");
 
         if (input.MinValue.HasValue && input.MaxValue.HasValue && input.MinValue.Value > input.MaxValue.Value)
-            throw new InvalidOperationException("minValue cannot be greater than maxValue.");
+            throw new InvalidOperationException("minValue não pode ser maior que maxValue.");
 
         if (input.RuntimeAccessMode == CustomFieldRuntimeAccessMode.RestrictedTaskScript)
         {
             var hasBindings = input.AccessBindings is { Count: > 0 }
                 && input.AccessBindings.Any(binding => binding.TaskId.HasValue || binding.ScriptId.HasValue);
             if (!hasBindings)
-                throw new InvalidOperationException("RestrictedTaskScript mode requires at least one task/script binding.");
+                throw new InvalidOperationException("O modo RestrictedTaskScript exige ao menos um vínculo de tarefa/script.");
         }
 
         if (input.AllowAgentWrite && input.ScopeType != CustomFieldScopeType.Agent)
-            throw new InvalidOperationException("Only agent scoped custom fields can enable allowAgentWrite.");
+            throw new InvalidOperationException("Somente custom fields com escopo de agente podem habilitar allowAgentWrite.");
 
         if ((input.DataType == CustomFieldDataType.Dropdown || input.DataType == CustomFieldDataType.ListBox)
             && (input.Options is null || input.Options.Count == 0))
         {
-            throw new InvalidOperationException("Dropdown and ListBox custom fields require options.");
+            throw new InvalidOperationException("Custom fields do tipo Dropdown e ListBox exigem opções.");
         }
 
         if (input.Options is { Count: > 0 } && input.Options.Any(option => string.IsNullOrWhiteSpace(option)))
-            throw new InvalidOperationException("Custom field options cannot contain empty values.");
+            throw new InvalidOperationException("As opções do custom field não podem conter valores vazios.");
 
         if (!string.IsNullOrWhiteSpace(input.ValidationRegex))
         {
@@ -901,7 +901,7 @@ public class CustomFieldService : ICustomFieldService
             }
             catch (RegexMatchTimeoutException)
             {
-                throw new InvalidOperationException("ValidationRegex is too complex and timed out during validation.");
+                throw new InvalidOperationException("O ValidationRegex é muito complexo e excedeu o tempo durante a validação.");
             }
         }
     }
@@ -909,8 +909,8 @@ public class CustomFieldService : ICustomFieldService
     private static string NormalizeFieldName(string name)
     {
         var normalized = name.Trim().ToLowerInvariant();
-        if (!Regex.IsMatch(normalized, "^[a-z0-9_\\-]+$", RegexOptions.CultureInvariant))
-            throw new InvalidOperationException("Field name can only contain lowercase letters, numbers, underscore and hyphen.");
+        if (!Regex.IsMatch(normalized, "^(?=.*[a-z0-9])[a-z0-9_\\-]+$", RegexOptions.CultureInvariant))
+            throw new InvalidOperationException("A chave do campo só pode conter letras minúsculas, números, underscore e hífen, com ao menos uma letra ou número.");
 
         return normalized;
     }
@@ -940,7 +940,7 @@ public class CustomFieldService : ICustomFieldService
     private static string NormalizeJson(string rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson))
-            throw new InvalidOperationException("ValueJson is required.");
+            throw new InvalidOperationException("ValueJson é obrigatório.");
 
         try
         {
@@ -949,7 +949,7 @@ public class CustomFieldService : ICustomFieldService
         }
         catch (JsonException ex)
         {
-            throw new InvalidOperationException("ValueJson must be valid JSON.", ex);
+            throw new InvalidOperationException("ValueJson deve ser um JSON válido.", ex);
         }
     }
 
@@ -961,7 +961,7 @@ public class CustomFieldService : ICustomFieldService
         if (value.ValueKind == JsonValueKind.Null)
         {
             if (definition.IsRequired)
-                throw new InvalidOperationException("Custom field value is required.");
+                throw new InvalidOperationException("O valor do custom field é obrigatório.");
 
             return;
         }
@@ -979,7 +979,7 @@ public class CustomFieldService : ICustomFieldService
                 break;
             case CustomFieldDataType.Boolean:
                 if (value.ValueKind != JsonValueKind.True && value.ValueKind != JsonValueKind.False)
-                    throw new InvalidOperationException("Custom field expects a boolean value.");
+                    throw new InvalidOperationException("O custom field espera um valor booleano.");
                 break;
             case CustomFieldDataType.Date:
                 ValidateDate(definition, value, requireDateOnly: true);
@@ -994,32 +994,32 @@ public class CustomFieldService : ICustomFieldService
                 ValidateListBox(definition, value);
                 break;
             default:
-                throw new InvalidOperationException("Unsupported custom field data type.");
+                throw new InvalidOperationException("Tipo de dado de custom field não suportado.");
         }
     }
 
     private static void ValidateText(CustomFieldDefinition definition, JsonElement value)
     {
         if (value.ValueKind != JsonValueKind.String)
-            throw new InvalidOperationException("Custom field expects a string value.");
+            throw new InvalidOperationException("O custom field espera um valor de texto.");
 
         var stringValue = value.GetString() ?? string.Empty;
         if (definition.MinLength.HasValue && stringValue.Length < definition.MinLength.Value)
-            throw new InvalidOperationException("Custom field value is shorter than minLength.");
+            throw new InvalidOperationException("O valor do custom field é menor que minLength.");
 
         if (definition.MaxLength.HasValue && stringValue.Length > definition.MaxLength.Value)
-            throw new InvalidOperationException("Custom field value is longer than maxLength.");
+            throw new InvalidOperationException("O valor do custom field é maior que maxLength.");
 
         if (!string.IsNullOrWhiteSpace(definition.ValidationRegex))
         {
             try
             {
                 if (!Regex.IsMatch(stringValue, definition.ValidationRegex, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
-                    throw new InvalidOperationException("Custom field value does not match validation regex.");
+                    throw new InvalidOperationException("O valor do custom field não corresponde ao regex de validação.");
             }
             catch (RegexMatchTimeoutException)
             {
-                throw new InvalidOperationException("Custom field validation regex timed out. The value could not be validated.");
+                throw new InvalidOperationException("A validação por regex do custom field excedeu o tempo. O valor não pôde ser validado.");
             }
         }
     }
@@ -1027,66 +1027,66 @@ public class CustomFieldService : ICustomFieldService
     private static void ValidateInteger(CustomFieldDefinition definition, JsonElement value)
     {
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out var number))
-            throw new InvalidOperationException("Custom field expects an integer value.");
+            throw new InvalidOperationException("O custom field espera um número inteiro.");
 
         if (definition.MinValue.HasValue && number < (double)definition.MinValue.Value)
-            throw new InvalidOperationException("Custom field value is lower than minValue.");
+            throw new InvalidOperationException("O valor do custom field é menor que minValue.");
 
         if (definition.MaxValue.HasValue && number > (double)definition.MaxValue.Value)
-            throw new InvalidOperationException("Custom field value is greater than maxValue.");
+            throw new InvalidOperationException("O valor do custom field é maior que maxValue.");
     }
 
     private static void ValidateDecimal(CustomFieldDefinition definition, JsonElement value)
     {
         if (value.ValueKind != JsonValueKind.Number || !value.TryGetDecimal(out var number))
-            throw new InvalidOperationException("Custom field expects a decimal value.");
+            throw new InvalidOperationException("O custom field espera um número decimal.");
 
         if (definition.MinValue.HasValue && number < definition.MinValue.Value)
-            throw new InvalidOperationException("Custom field value is lower than minValue.");
+            throw new InvalidOperationException("O valor do custom field é menor que minValue.");
 
         if (definition.MaxValue.HasValue && number > definition.MaxValue.Value)
-            throw new InvalidOperationException("Custom field value is greater than maxValue.");
+            throw new InvalidOperationException("O valor do custom field é maior que maxValue.");
     }
 
     private static void ValidateDate(CustomFieldDefinition definition, JsonElement value, bool requireDateOnly)
     {
         _ = definition;
         if (value.ValueKind != JsonValueKind.String)
-            throw new InvalidOperationException("Custom field expects a date string value.");
+            throw new InvalidOperationException("O custom field espera uma data em texto.");
 
         var stringValue = value.GetString();
         if (!DateTime.TryParse(stringValue, out var parsed))
-            throw new InvalidOperationException("Custom field contains an invalid date value.");
+            throw new InvalidOperationException("O custom field contém uma data inválida.");
 
         if (requireDateOnly && parsed.TimeOfDay != TimeSpan.Zero)
-            throw new InvalidOperationException("Custom field expects a date-only value.");
+            throw new InvalidOperationException("O custom field espera uma data sem hora.");
     }
 
     private static void ValidateDropdown(CustomFieldDefinition definition, JsonElement value)
     {
         if (value.ValueKind != JsonValueKind.String)
-            throw new InvalidOperationException("Dropdown custom field expects a string value.");
+            throw new InvalidOperationException("O custom field Dropdown espera um valor de texto.");
 
         var stringValue = value.GetString() ?? string.Empty;
         var options = ParseOptions(definition.OptionsJson);
         if (!options.Contains(stringValue, StringComparer.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Custom field value is not a valid dropdown option.");
+            throw new InvalidOperationException("O valor do custom field não é uma opção válida do dropdown.");
     }
 
     private static void ValidateListBox(CustomFieldDefinition definition, JsonElement value)
     {
         if (value.ValueKind != JsonValueKind.Array)
-            throw new InvalidOperationException("ListBox custom field expects an array of strings.");
+            throw new InvalidOperationException("O custom field ListBox espera uma lista de textos.");
 
         var options = ParseOptions(definition.OptionsJson);
         foreach (var item in value.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.String)
-                throw new InvalidOperationException("ListBox custom field array items must be strings.");
+                throw new InvalidOperationException("Os itens do array do custom field ListBox devem ser texto.");
 
             var option = item.GetString() ?? string.Empty;
             if (!options.Contains(option, StringComparer.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Custom field value contains an invalid list option.");
+                throw new InvalidOperationException("O valor do custom field contém uma opção inválida da lista.");
         }
     }
 

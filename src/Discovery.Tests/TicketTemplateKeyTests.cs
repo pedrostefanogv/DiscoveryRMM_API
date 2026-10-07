@@ -40,6 +40,10 @@ public class TicketTemplateKeyTests
             Assert.That(e3, Is.Not.Null, "chave curta demais deve ser recusada");
             Assert.That(TicketTemplateKey.Resolve("!!!", out var e4), Is.Empty);
             Assert.That(e4, Is.Not.Null);
+
+            // "__" tem o tamanho mínimo mas não identifica nada (sem alfanumérico).
+            Assert.That(TicketTemplateKey.Resolve("__", out var e5), Is.Empty);
+            Assert.That(e5, Is.Not.Null);
         });
     }
 

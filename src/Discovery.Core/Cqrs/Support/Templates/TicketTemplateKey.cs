@@ -13,7 +13,8 @@ public static class TicketTemplateKey
 {
     public const int MaxLength = 80;
 
-    private static readonly Regex ValidPattern = new("^[a-z0-9_]{2,80}$", RegexOptions.Compiled);
+    // O lookahead exige ao menos um alfanumérico: "__" ou "--" não identificam nada.
+    private static readonly Regex ValidPattern = new("^(?=.*[a-z0-9])[a-z0-9_]{2,80}$", RegexOptions.Compiled);
     private static readonly Regex NonSlugChars = new("[^a-z0-9]+", RegexOptions.Compiled);
 
     /// <summary>Normaliza a chave (trim + minúsculas).</summary>
@@ -49,7 +50,7 @@ public static class TicketTemplateKey
         var slug = Slugify(raw);
         if (IsValid(slug)) return slug;
 
-        error = "A chave do template deve ter de 2 a 80 caracteres usando apenas letras minúsculas, números e _ (ex.: criacao_de_login).";
+        error = "A chave do template deve ter de 2 a 80 caracteres usando apenas letras minúsculas, números e _ e conter ao menos uma letra ou número (ex.: criacao_de_login).";
         return string.Empty;
     }
 }

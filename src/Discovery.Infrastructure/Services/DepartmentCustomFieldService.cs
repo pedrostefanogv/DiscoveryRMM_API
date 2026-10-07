@@ -62,7 +62,7 @@ public class DepartmentCustomFieldService : IDepartmentCustomFieldService
             .AnyAsync(d => d.DepartmentId == departmentId && d.Name == normalizedName, cancellationToken);
 
         if (exists)
-            throw new InvalidOperationException($"Já existe um campo com o nome '{input.Name}' neste departamento.");
+            throw new InvalidOperationException($"Já existe um campo com a chave '{input.Name}' neste departamento.");
 
         var now = DateTime.UtcNow;
         var definition = new CustomFieldDefinition
@@ -127,7 +127,7 @@ public class DepartmentCustomFieldService : IDepartmentCustomFieldService
             .AnyAsync(d => d.Id != fieldId && d.DepartmentId == departmentId && d.Name == normalizedName, cancellationToken);
 
         if (duplicateExists)
-            throw new InvalidOperationException($"Já existe um campo com o nome '{input.Name}' neste departamento.");
+            throw new InvalidOperationException($"Já existe um campo com a chave '{input.Name}' neste departamento.");
 
         definition.Name = normalizedName;
         definition.Label = input.Label.Trim();
@@ -353,10 +353,10 @@ public class DepartmentCustomFieldService : IDepartmentCustomFieldService
     private static void ValidateInput(CreateDepartmentCustomFieldInput input)
     {
         if (string.IsNullOrWhiteSpace(input.Name))
-            throw new InvalidOperationException("O nome do campo é obrigatório.");
+            throw new InvalidOperationException("A chave do campo é obrigatória.");
 
         if (string.IsNullOrWhiteSpace(input.Label))
-            throw new InvalidOperationException("O label do campo é obrigatório.");
+            throw new InvalidOperationException("O título do campo é obrigatório.");
 
         if (input.MinLength.HasValue && input.MinLength.Value < 0)
             throw new InvalidOperationException("minLength não pode ser negativo.");
@@ -402,8 +402,8 @@ public class DepartmentCustomFieldService : IDepartmentCustomFieldService
     private static string NormalizeFieldName(string name)
     {
         var normalized = name.Trim().ToLowerInvariant();
-        if (!Regex.IsMatch(normalized, "^[a-z0-9_\\-]+$", RegexOptions.CultureInvariant))
-            throw new InvalidOperationException("O nome do campo só pode conter letras minúsculas, números, underscore e hífen.");
+        if (!Regex.IsMatch(normalized, "^(?=.*[a-z0-9])[a-z0-9_\\-]+$", RegexOptions.CultureInvariant))
+            throw new InvalidOperationException("A chave do campo só pode conter letras minúsculas, números, underscore e hífen, com ao menos uma letra ou número.");
 
         return normalized;
     }

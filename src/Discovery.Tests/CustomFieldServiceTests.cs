@@ -311,7 +311,7 @@ public class CustomFieldServiceTests
                     null),
                 CancellationToken.None),
             Throws.TypeOf<InvalidOperationException>()
-                .With.Message.EqualTo("Agent is not allowed to write this custom field in the current execution context."));
+                .With.Message.EqualTo("O agente não pode escrever este custom field no contexto de execução atual."));
     }
 
     [Test]
@@ -396,7 +396,7 @@ public class CustomFieldServiceTests
             async () => await fixture.Service.UpsertValueAsync(new UpsertCustomFieldValueInput(
                 otherDefinition.Id, CustomFieldScopeType.Ticket, ticket.Id, "\"x\"", null)),
             Throws.TypeOf<InvalidOperationException>()
-                .With.Message.EqualTo("Custom field scope does not match the definition scope."));
+                .With.Message.EqualTo("O escopo do valor não corresponde ao escopo da definição."));
     }
 
     [Test]
@@ -422,7 +422,7 @@ public class CustomFieldServiceTests
             async () => await fixture.Service.UpsertValueAsync(new UpsertCustomFieldValueInput(
                 requiredDefinition.Id, CustomFieldScopeType.Ticket, ticket.Id, "null", null)),
             Throws.TypeOf<InvalidOperationException>()
-                .With.Message.EqualTo("Custom field value is required."));
+                .With.Message.EqualTo("O valor do custom field é obrigatório."));
     }
 
     [Test]

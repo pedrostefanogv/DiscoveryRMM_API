@@ -17,6 +17,11 @@ namespace Discovery.Infrastructure.Cqrs.CustomFieldTemplates;
 /// </summary>
 internal static class CustomFieldTemplateMapping
 {
+    /// <summary>Chave do modelo: minúsculas, [a-z0-9_-] e ao menos um alfanumérico.</summary>
+    private static readonly Regex ValidNamePattern = new("^(?=.*[a-z0-9])[a-z0-9_-]{2,80}$", RegexOptions.Compiled);
+
+    public static string NormalizeName(string? value) => (value ?? string.Empty).Trim().ToLowerInvariant();
+
     public static UpsertCustomFieldTemplateInput ToInput(CreateCustomFieldTemplateCommand cmd) => new(
         cmd.ClientId, cmd.DepartmentId, cmd.Name, cmd.Label, cmd.Description,
         cmd.DataType, cmd.Options, cmd.ValidationRegex, cmd.InputMask,
@@ -60,10 +65,13 @@ internal static class CustomFieldTemplateMapping
 
     public static Error? Validate(UpsertCustomFieldTemplateInput input)
     {
-        if (string.IsNullOrWhiteSpace(input.Name) || input.Name.Trim().Length < 2)
-            return Error.Validation("Name", "Nome do modelo é obrigatório (mínimo 2 caracteres).");
+        var name = NormalizeName(input.Name);
+        if (name.Length < 2)
+            return Error.Validation("Name", "A chave do modelo é obrigatória (mínimo 2 caracteres).");
+        if (!ValidNamePattern.IsMatch(name))
+            return Error.Validation("Name", "A chave do modelo deve ter de 2 a 80 caracteres usando apenas letras minúsculas, números, _ e - e conter ao menos uma letra ou número (ex.: texto_curto).");
         if (string.IsNullOrWhiteSpace(input.Label))
-            return Error.Validation("Label", "Rótulo do modelo é obrigatório.");
+            return Error.Validation("Label", "O título do modelo é obrigatório.");
 
         var needsOptions = input.DataType is CustomFieldDataType.Dropdown or CustomFieldDataType.ListBox;
         if (needsOptions && (input.Options is null || input.Options.All(o => string.IsNullOrWhiteSpace(o))))
@@ -89,7 +97,7 @@ internal static class CustomFieldTemplateMapping
     {
         t.ClientId = input.ClientId;
         t.DepartmentId = input.DepartmentId;
-        t.Name = input.Name.Trim();
+        t.Name = NormalizeName(input.Name);
         t.Label = input.Label.Trim();
         t.Description = string.IsNullOrWhiteSpace(input.Description) ? null : input.Description.Trim();
         t.DataType = input.DataType;
@@ -116,7 +124,7 @@ public sealed class CreateCustomFieldTemplateCommandHandler(DiscoveryDbContext d
         var validation = CustomFieldTemplateMapping.Validate(input);
         if (validation is not null) return Result<CustomFieldTemplateDto>.Failure(validation);
 
-        var name = input.Name.Trim();
+        var name = CustomFieldTemplateMapping.NormalizeName(input.Name);
         var duplicate = await db.CustomFieldTemplates.AnyAsync(
             t => t.Name == name && t.ClientId == input.ClientId && t.DepartmentId == input.DepartmentId, ct);
         if (duplicate)
@@ -151,7 +159,7 @@ public sealed class UpdateCustomFieldTemplateCommandHandler(DiscoveryDbContext d
         if (template.IsBuiltIn && input.DataType != template.DataType)
             return Result<CustomFieldTemplateDto>.Failure(Error.Validation("DataType", "Não é possível alterar o tipo de um modelo built-in."));
 
-        var name = input.Name.Trim();
+        var name = CustomFieldTemplateMapping.NormalizeName(input.Name);
         var duplicate = await db.CustomFieldTemplates.AnyAsync(
             t => t.Id != cmd.Id && t.Name == name && t.ClientId == input.ClientId && t.DepartmentId == input.DepartmentId, ct);
         if (duplicate)

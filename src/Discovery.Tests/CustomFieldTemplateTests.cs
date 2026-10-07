@@ -40,6 +40,8 @@ public class CustomFieldTemplateTests
     public void Validate_ShouldRejectMissingNameAndOptions()
     {
         Assert.That(CustomFieldTemplateMapping.Validate(Input(name: "")), Is.Not.Null);
+        Assert.That(CustomFieldTemplateMapping.Validate(Input(name: "__")), Is.Not.Null);
+        Assert.That(CustomFieldTemplateMapping.Validate(Input(name: "texto-curto")), Is.Null);
         Assert.That(CustomFieldTemplateMapping.Validate(Input(label: " ")), Is.Not.Null);
         Assert.That(
             CustomFieldTemplateMapping.Validate(Input(dataType: CustomFieldDataType.Dropdown, options: null)),
