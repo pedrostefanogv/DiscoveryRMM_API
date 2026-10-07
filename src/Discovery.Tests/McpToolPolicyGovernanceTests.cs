@@ -148,14 +148,45 @@ public class McpToolPolicyGovernanceTests
         await db.SaveChangesAsync();
 
         var repo = new McpToolPolicyRepository(db);
-        await repo.EnsureGlobalPoliciesAsync(McpToolSources.Agent, new[] { "existente", "nova_tool" });
-        await repo.EnsureGlobalPoliciesAsync(McpToolSources.Agent, new[] { "existente", "nova_tool" });
+        var registrations = new (string Name, string? Description)[]
+        {
+            ("existente", "Ferramenta existente registrada pelo agente."),
+            ("nova_tool", "Descrição da nova tool."),
+        };
+        await repo.EnsureGlobalPoliciesAsync(McpToolSources.Agent, registrations);
+        await repo.EnsureGlobalPoliciesAsync(McpToolSources.Agent, registrations);
 
         var rows = await repo.GetScopePoliciesAsync(null, null, null);
         Assert.That(rows, Has.Count.EqualTo(2));
         Assert.That(rows.Single(p => p.ToolName == "existente").IsEnabled, Is.False,
             "não pode reativar uma tool desabilitada pelo operador");
+        Assert.That(rows.Single(p => p.ToolName == "existente").Description,
+            Is.EqualTo("Ferramenta existente registrada pelo agente."),
+            "a descrição registrada preenche a linha que ainda não tinha uma");
         Assert.That(rows.Single(p => p.ToolName == "nova_tool").Source, Is.EqualTo(McpToolSources.Agent));
+        Assert.That(rows.Single(p => p.ToolName == "nova_tool").TimeoutSeconds, Is.EqualTo(120),
+            "novas tools de agente nascem com o timeout padrão maior (120s)");
+    }
+
+    [Test]
+    public async Task EnsureGlobalPolicies_TruncatesOverlongDescriptions()
+    {
+        await using var db = NewDb();
+        var repo = new McpToolPolicyRepository(db);
+
+        // create_ticket enriquecido passa de 2.3k caracteres e a coluna é
+        // varchar(4000). O provider InMemory não valida tamanho, então a guarda
+        // que importa é a truncagem: sem ela o Postgres derruba o lote inteiro
+        // do auto-registro (EF persiste tudo em uma transação).
+        await repo.EnsureGlobalPoliciesAsync(
+            McpToolSources.Agent,
+            new (string Name, string? Description)[] { ("create_ticket", new string('x', 5000)) });
+
+        var row = (await repo.GetScopePoliciesAsync(null, null, null))
+            .Single(p => p.ToolName == "create_ticket");
+
+        Assert.That(row.Description, Is.Not.Null);
+        Assert.That(row.Description!.Length, Is.LessThanOrEqualTo(4000));
     }
 
     [Test]
@@ -225,7 +256,9 @@ public class McpToolPolicyGovernanceTests
     public async Task Catalog_IncludesAgentToolsRegisteredAsGlobalPolicies()
     {
         await using var db = NewDb();
-        await new McpToolPolicyRepository(db).EnsureGlobalPoliciesAsync(McpToolSources.Agent, new[] { "service_control" });
+        await new McpToolPolicyRepository(db).EnsureGlobalPoliciesAsync(
+            McpToolSources.Agent,
+            new (string Name, string? Description)[] { ("service_control", "Controla serviços do Windows.") });
 
         var governance = new McpToolGovernance(new McpToolPolicyRepository(db), new FakeExecutor());
         var catalog = await governance.GetCatalogAsync(new McpToolScope(null, null, null));
@@ -233,6 +266,52 @@ public class McpToolPolicyGovernanceTests
         var tool = catalog.Tools.Single(t => t.Name == "service_control");
         Assert.That(tool.Source, Is.EqualTo(McpToolSources.Agent));
         Assert.That(tool.IsEnabled, Is.True);
+        Assert.That(tool.Description, Is.EqualTo("Controla serviços do Windows."),
+            "a descrição registrada pelo agente é exibida no catálogo com escopo global");
+    }
+
+    [Test]
+    public async Task Catalog_ExposesCategoryWhenToUseAndTimeoutRecommendations()
+    {
+        await using var db = NewDb();
+        var governance = new McpToolGovernance(new McpToolPolicyRepository(db), new FakeExecutor());
+
+        var catalog = await governance.GetCatalogAsync(new McpToolScope(null, null, null));
+
+        // Sem política local, o catálogo mostra a recomendação da plataforma
+        // (30s para busca na KB) em vez do antigo padrão cego de 10s.
+        var kb = catalog.Tools.Single(t => t.Name == "knowledge_search");
+        Assert.That(kb.Category, Is.EqualTo("Base de conhecimento"));
+        Assert.That(kb.WhenToUse, Is.Not.Null.And.Not.Empty);
+        Assert.That(kb.RecommendedTimeoutSeconds, Is.EqualTo(30));
+        Assert.That(kb.TimeoutApplies, Is.True);
+
+        // Tool do agente conhecida: recomendação específica da carga (90s).
+        var inv = catalog.Tools.Single(t => t.Name == "get_inventory");
+        Assert.That(inv.RecommendedTimeoutSeconds, Is.EqualTo(90));
+        Assert.That(inv.Category, Is.EqualTo("Inventário"));
+    }
+
+    [Test]
+    public async Task Catalog_MarksInteractiveToolsAsTimeoutNotApplicable()
+    {
+        await using var db = NewDb();
+        db.Add(new McpToolPolicy
+        {
+            Id = Guid.NewGuid(),
+            ToolName = "ask_user",
+            Source = McpToolSources.Agent,
+            IsEnabled = true,
+        });
+        await db.SaveChangesAsync();
+
+        var governance = new McpToolGovernance(new McpToolPolicyRepository(db), new FakeExecutor());
+        var catalog = await governance.GetCatalogAsync(new McpToolScope(null, null, null));
+
+        var ask = catalog.Tools.Single(t => t.Name == "ask_user");
+        Assert.That(ask.TimeoutApplies, Is.False,
+            "ask_user aguarda o usuário: o timeout configurado é ignorado em runtime");
+        Assert.That(ask.Category, Is.EqualTo("Interação"));
     }
 
     [Test]

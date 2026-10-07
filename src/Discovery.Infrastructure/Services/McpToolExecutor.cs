@@ -162,7 +162,9 @@ public class McpToolExecutor : IMcpToolExecutor
                 departmentId, sessionId, ct);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(policy.TimeoutSeconds));
+            // Timeout <= 0 = sem limite (a tool fica só sob o cancelamento do turno).
+            if (policy.TimeoutSeconds > 0)
+                cts.CancelAfter(TimeSpan.FromSeconds(policy.TimeoutSeconds));
 
             var result = await handler(context);
             return result;
@@ -227,7 +229,7 @@ public class McpToolExecutor : IMcpToolExecutor
 
         "time.current" => "Retorna data/hora atual em UTC e horário local (America/Sao_Paulo), além do timestamp Unix. Útil para cálculos de SLA, verificação de prazos e contexto temporal. NÃO requer parâmetros — basta invocar a função. NÃO use para agendar tarefas ou definir alarmes.",
 
-        "memory.search" => "Pesquisa informações salvas em conversas anteriores com este usuário/máquina (memória persistente). Use no INÍCIO de cada conversa para reconhecer o perfil do usuário, preferências e problemas anteriores. O parâmetro 'query' é OBRIGATÓRIO (ex: 'preferências do usuário', 'problemas anteriores com impressora'). NÃO use para buscar artigos da base de conhecimento — para isso use 'knowledge_search'.",
+        "memory.search" => "Pesquisa no histórico PERSISTENTE das conversas ANTERIORES desta máquina (servidor) e devolve trechos de mensagens que contenham os termos. Use no INÍCIO de uma conversa NOVA para recordar o contexto, preferências e problemas já tratados neste computador. O parâmetro 'query' é OBRIGATÓRIO e deve conter palavras-chave do relato (ex: 'impressora', 'VPN', 'lentidão', 'senha'). A busca IGNORA a conversa atual — o histórico dela já está no contexto. NÃO use para buscar artigos da base de conhecimento (use 'knowledge_search') nem confunda com 'memory_list'/'memory_create': essas gravam ANOTAÇÕES LOCAIS no computador do usuário; esta lê o histórico de conversas no servidor.",
 
         "sequential_thinking" => "Executa raciocínio estruturado multi-step para diagnosticar problemas complexos de TI. Use APENAS quando o problema exigir análise em etapas (ex: diagnosticar por que um computador está lento considerando CPU, memória, disco e rede). O parâmetro 'thought' é OBRIGATÓRIO e deve conter o raciocínio do passo atual. NÃO use para perguntas simples ou respostas diretas — apenas para diagnósticos que exigem múltiplas camadas de análise.",
 
@@ -304,59 +306,92 @@ public class McpToolExecutor : IMcpToolExecutor
         return Task.FromResult(JsonSerializer.Serialize(result));
     }
 
+    /// <summary>
+    /// Memória persistente: busca o termo nas conversas ANTERIORES da mesma
+    /// máquina (agent_id), excluindo a sessão atual.
+    ///
+    /// Antes esta tool procurava apenas nas 50 mensagens mais recentes da PRÓPRIA
+    /// sessão — exatamente o histórico que o LLM já tem no contexto. Com isso ela
+    /// (a) nunca cumpria a promessa do prompt ("recordar problemas anteriores
+    /// desta máquina") em conversas novas e (b) colidia com as tools de memória do
+    /// agente (memory_list/memory_create/memory_delete, anotações locais),
+    /// confundindo o modelo com dois conceitos de "memória" para o mesmo nome.
+    /// </summary>
     private async Task<string> HandleMemorySearchAsync(McpToolCallContext ctx)
     {
+        // Extração tolerante: o LLM às vezes manda tipo errado ("query": 123,
+        // "max_results": "5"). GetString()/GetInt32() sem checar ValueKind
+        // lançava InvalidOperationException ANTES do try e virava erro interno.
         var query = ctx.Arguments.RootElement.TryGetProperty("query", out var qProp)
+                    && qProp.ValueKind == JsonValueKind.String
             ? qProp.GetString() ?? string.Empty
             : string.Empty;
+
         var maxResults = ctx.Arguments.RootElement.TryGetProperty("max_results", out var mrProp)
-            ? mrProp.GetInt32()
+                         && mrProp.ValueKind == JsonValueKind.Number
+                         && mrProp.TryGetInt32(out var parsedMax)
+            ? parsedMax
             : 5;
 
-        if (!ctx.SessionId.HasValue)
+        if (string.IsNullOrWhiteSpace(query))
         {
             return JsonSerializer.Serialize(new
             {
                 results = Array.Empty<object>(),
-                message = "SessionId não disponível para busca em memória."
+                total = 0,
+                message = "Informe 'query' com as palavras-chave a recordar (ex: 'impressora', 'VPN')."
+            });
+        }
+
+        if (!ctx.AgentId.HasValue)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                results = Array.Empty<object>(),
+                total = 0,
+                message = "Memória de conversas disponível apenas no contexto de uma máquina (agentId)."
             });
         }
 
         try
         {
-            var messages = await _messageRepo.GetRecentBySessionAsync(
-                ctx.SessionId.Value,
-                limit: 50,
+            var matches = await _messageRepo.SearchByAgentAsync(
+                ctx.AgentId.Value,
+                query,
+                maxResults,
+                excludeSessionId: ctx.SessionId,
                 ct: ctx.CancellationToken);
 
-            var matches = messages
-                .Where(m => !string.IsNullOrWhiteSpace(m.Content) &&
-                            m.Content.Contains(query, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(m => m.SequenceNumber)
-                .Take(maxResults)
-                .Select(m => new
+            var results = matches.Select(m =>
+            {
+                // Coluna content pode ser NULL em linhas antigas; sem a guarda o
+                // Select estoura NRE e a tool devolve erro genérico.
+                var text = m.Content ?? string.Empty;
+                return new
                 {
                     role = m.Role,
-                    content = m.Content.Length > 500 ? m.Content[..500] + "..." : m.Content,
-                    sequence = m.SequenceNumber,
+                    content = text.Length > 500 ? text[..500] + "..." : text,
+                    session_id = m.SessionId,
                     created_at = m.CreatedAt.ToString("O")
-                })
-                .ToList();
+                };
+            }).ToList();
 
             return JsonSerializer.Serialize(new
             {
-                results = matches,
-                total = matches.Count,
-                query
+                results,
+                total = results.Count,
+                query,
+                scope = "conversas anteriores desta máquina"
             });
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Erro ao buscar memória para SessionId={SessionId}", ctx.SessionId);
+            _logger.LogWarning(ex, "Erro ao buscar memória persistente para AgentId={AgentId}", ctx.AgentId);
             return JsonSerializer.Serialize(new
             {
                 results = Array.Empty<object>(),
-                error = "Erro ao buscar na memória da conversa."
+                total = 0,
+                error = "Erro ao buscar no histórico de conversas."
             });
         }
     }

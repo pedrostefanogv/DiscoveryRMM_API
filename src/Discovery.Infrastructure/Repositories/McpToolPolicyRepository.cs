@@ -146,42 +146,63 @@ public class McpToolPolicyRepository : IMcpToolPolicyRepository
     }
 
     public async Task EnsureGlobalPoliciesAsync(
-        string source, IEnumerable<string> toolNames, CancellationToken ct = default)
+        string source,
+        IEnumerable<(string Name, string? Description)> tools,
+        CancellationToken ct = default)
     {
         var normalizedSource = McpToolSources.Normalize(source);
-        var names = toolNames
-            .Where(n => !string.IsNullOrWhiteSpace(n))
-            .Select(n => n.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        var registrations = tools
+            .Where(t => !string.IsNullOrWhiteSpace(t.Name))
+            .Select(t => (
+                Name: t.Name.Trim(),
+                Description: Truncate(t.Description, MaxDescriptionLength)))
+            .GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
             .ToList();
 
-        if (names.Count == 0)
+        if (registrations.Count == 0)
             return;
 
         var existing = await _db.Set<McpToolPolicy>()
             .Where(p => p.ClientId == null && p.SiteId == null && p.AgentId == null)
-            .Select(p => p.ToolName)
             .ToListAsync(ct);
 
-        var existingSet = new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
-        var toCreate = names.Where(n => !existingSet.Contains(n)).ToList();
-        if (toCreate.Count == 0)
-            return;
-
         var now = DateTime.UtcNow;
-        foreach (var name in toCreate)
+        var added = false;
+
+        foreach (var reg in registrations)
         {
-            _db.Set<McpToolPolicy>().Add(new McpToolPolicy
+            var row = existing.FirstOrDefault(p =>
+                string.Equals(p.ToolName, reg.Name, StringComparison.OrdinalIgnoreCase));
+
+            if (row is null)
             {
-                Id = Guid.NewGuid(),
-                ToolName = name,
-                Source = normalizedSource,
-                IsEnabled = true,
-                MaxCallsPerMinute = normalizedSource == McpToolSources.Agent ? 10 : 5,
-                TimeoutSeconds = normalizedSource == McpToolSources.Agent ? 60 : 10,
-                CreatedAt = now,
-            });
+                _db.Set<McpToolPolicy>().Add(new McpToolPolicy
+                {
+                    Id = Guid.NewGuid(),
+                    ToolName = reg.Name,
+                    Source = normalizedSource,
+                    IsEnabled = true,
+                    Description = reg.Description,
+                    MaxCallsPerMinute = normalizedSource == McpToolSources.Agent ? 10 : 5,
+                    TimeoutSeconds = normalizedSource == McpToolSources.Agent ? 120 : 30,
+                    CreatedAt = now,
+                });
+                added = true;
+                continue;
+            }
+
+            // Não sobrescreve configuração do operador; só completa a descrição
+            // quando o agente passou a informá-la e a linha ainda não tinha.
+            if (string.IsNullOrWhiteSpace(row.Description) && reg.Description is not null)
+            {
+                row.Description = reg.Description;
+                row.UpdatedAt = now;
+            }
         }
+
+        if (!added && !_db.ChangeTracker.HasChanges())
+            return;
 
         try
         {
@@ -256,6 +277,23 @@ public class McpToolPolicyRepository : IMcpToolPolicyRepository
         return policy is { Locked: true } ? policy : null;
     }
 
+    /// <summary>Limite da coluna mcp_tool_policies.description (varchar 4000).</summary>
+    internal const int MaxDescriptionLength = 4000;
+
+    /// <summary>
+    /// Normaliza a descrição para o tamanho da coluna. Sem isso, uma descrição
+    /// maior (create_ticket enriquecido tem ~2.3k) faz o SaveChanges estourar e
+    /// derrubar o lote inteiro de policies/descrições do auto-registro.
+    /// </summary>
+    private static string? Truncate(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxLength ? trimmed : trimmed[..maxLength];
+    }
+
     /// <summary>Copia os campos configuráveis de uma política para outra.</summary>
     private static void ApplyValues(McpToolPolicy target, McpToolPolicy source)
     {
@@ -266,6 +304,10 @@ public class McpToolPolicyRepository : IMcpToolPolicyRepository
         target.Source = source.Source;
         if (!string.IsNullOrWhiteSpace(source.ArgumentSchemaJson))
             target.ArgumentSchemaJson = source.ArgumentSchemaJson;
+        // A descrição vem do registro do agente, não do formulário de política:
+        // não pode ser apagada por um Save da tela de governança.
+        if (!string.IsNullOrWhiteSpace(source.Description))
+            target.Description = Truncate(source.Description, MaxDescriptionLength);
         target.UpdatedAt = DateTime.UtcNow;
     }
 

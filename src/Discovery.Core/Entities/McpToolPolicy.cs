@@ -13,8 +13,22 @@ public class McpToolPolicy
     public string ToolName { get; set; } = string.Empty;
     public bool IsEnabled { get; set; } = true;
     public string? ArgumentSchemaJson { get; set; }
+
+    /// <summary>
+    /// Descrição da tool exibida na tela de governança. Para tools de agente é a
+    /// descrição registrada no startup (persistida aqui para que o catálogo
+    /// explique cada ferramenta mesmo em escopo global, sem depender do cache do
+    /// agente). Para tools de servidor a descrição vem do executor.
+    /// </summary>
+    public string? Description { get; set; }
     public int MaxCallsPerMinute { get; set; } = 5;
-    public int TimeoutSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// Timeout da execução em segundos (0 = sem limite). O padrão do modelo
+    /// acompanha o fallback do servidor (30s) — tools específicas recebem
+    /// recomendações próprias via <c>McpToolCatalogMetadata</c>.
+    /// </summary>
+    public int TimeoutSeconds { get; set; } = 30;
 
     /// <summary>
     /// Origem da tool: "server" (handler no McpToolExecutor) ou "agent"

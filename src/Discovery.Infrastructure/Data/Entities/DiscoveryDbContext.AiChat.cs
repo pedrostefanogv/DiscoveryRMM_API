@@ -84,6 +84,7 @@ public partial class DiscoveryDbContext
             entity.Property(p => p.Source).HasColumnName("source").HasMaxLength(16).IsRequired();
             entity.Property(p => p.Locked).HasColumnName("locked");
             entity.Property(p => p.ArgumentSchemaJson).HasColumnName("argument_schema_json");
+            entity.Property(p => p.Description).HasColumnName("description").HasMaxLength(4000);
             entity.Property(p => p.MaxCallsPerMinute).HasColumnName("max_calls_per_minute");
             entity.Property(p => p.TimeoutSeconds).HasColumnName("timeout_seconds");
             entity.Property(p => p.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");

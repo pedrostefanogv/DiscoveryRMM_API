@@ -54,6 +54,14 @@ public class McpToolGovernance : IMcpToolGovernance
         var effective = await _policies.GetEffectivePoliciesAsync(scope.ClientId, scope.SiteId, scope.AgentId, ct);
         var local = await _policies.GetScopePoliciesAsync(scope.ClientId, scope.SiteId, scope.AgentId, ct);
         var effectiveByName = effective.ToDictionary(p => p.ToolName, StringComparer.OrdinalIgnoreCase);
+
+        // Descrições registradas pelo agente ficam nas policies globais. Uma
+        // sobrescrita de cliente/site/agente não guarda descrição, então o texto
+        // dela é recuperado daqui para a tela nunca mostrar o genérico.
+        var globalDescriptions = (await _policies.GetScopePoliciesAsync(null, null, null, ct))
+            .Where(p => !string.IsNullOrWhiteSpace(p.Description))
+            .GroupBy(p => p.ToolName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Description!, StringComparer.OrdinalIgnoreCase);
         var localNames = new HashSet<string>(local.Select(p => p.ToolName), StringComparer.OrdinalIgnoreCase);
         var serverByName = _executor.GetServerCatalog()
             .ToDictionary(t => t.Name, t => t.Description, StringComparer.OrdinalIgnoreCase);
@@ -72,22 +80,26 @@ public class McpToolGovernance : IMcpToolGovernance
         foreach (var name in names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
             effectiveByName.TryGetValue(name, out var policy);
-            var source = policy?.Source
-                         ?? (serverByName.ContainsKey(name) ? McpToolSources.Server : McpToolSources.Agent);
+            var source = McpToolSources.Normalize(policy?.Source
+                         ?? (serverByName.ContainsKey(name) ? McpToolSources.Server : McpToolSources.Agent));
             var defaults = DefaultsFor(source);
+            var metadata = McpToolCatalogMetadata.For(name, source);
 
             items.Add(new McpToolCatalogItem(
                 Name: name,
-                Source: McpToolSources.Normalize(source),
-                Description: serverByName.TryGetValue(name, out var desc)
-                    ? desc
-                    : $"Ferramenta do agente executada na máquina do cliente ({name}).",
+                Source: source,
+                Description: ResolveDescription(name, source, serverByName, policy, globalDescriptions),
                 IsEnabled: policy?.IsEnabled ?? true,
                 OverriddenHere: localNames.Contains(name),
                 Locked: policy?.Locked ?? false,
                 MaxCallsPerMinute: policy?.MaxCallsPerMinute ?? defaults.Max,
-                TimeoutSeconds: policy?.TimeoutSeconds ?? defaults.Timeout,
-                LowerScopeOverrides: lowerScopeCounts.GetValueOrDefault(name)));
+                TimeoutSeconds: policy?.TimeoutSeconds
+                               ?? (metadata.TimeoutApplies ? metadata.RecommendedTimeoutSeconds : defaults.Timeout),
+                LowerScopeOverrides: lowerScopeCounts.GetValueOrDefault(name),
+                Category: metadata.Category,
+                WhenToUse: metadata.WhenToUse,
+                RecommendedTimeoutSeconds: metadata.RecommendedTimeoutSeconds,
+                TimeoutApplies: metadata.TimeoutApplies));
         }
 
         return new McpToolCatalog(scope, items);
@@ -126,6 +138,9 @@ public class McpToolGovernance : IMcpToolGovernance
             Source = source,
             IsEnabled = request.IsEnabled,
             Locked = request.Locked,
+            // Herda a descrição registrada pelo agente para que a sobrescrita no
+            // escopo não perca a explicação da ferramenta.
+            Description = inherited?.Description,
             MaxCallsPerMinute = request.MaxCallsPerMinute is > 0 ? request.MaxCallsPerMinute.Value : defaults.Max,
             TimeoutSeconds = request.TimeoutSeconds is > 0 ? request.TimeoutSeconds.Value : defaults.Timeout,
         }, ct);
@@ -189,8 +204,41 @@ public class McpToolGovernance : IMcpToolGovernance
         }
     }
 
+    /// <summary>
+    /// Descrição exibida na tela: tools de servidor usam o texto curado do
+    /// executor; tools de agente usam a descrição registrada pelo agente
+    /// (persistida em mcp_tool_policies.description) e só caem no texto genérico
+    /// quando ela não existe.
+    /// </summary>
+    private static string ResolveDescription(
+        string name,
+        string source,
+        IReadOnlyDictionary<string, string> serverByName,
+        McpToolPolicy? policy,
+        IReadOnlyDictionary<string, string> globalDescriptions)
+    {
+        if (serverByName.TryGetValue(name, out var serverDesc) && !string.IsNullOrWhiteSpace(serverDesc))
+            return serverDesc;
+
+        if (!string.IsNullOrWhiteSpace(policy?.Description))
+            return policy!.Description!;
+
+        if (globalDescriptions.TryGetValue(name, out var globalDesc) && !string.IsNullOrWhiteSpace(globalDesc))
+            return globalDesc;
+
+        return string.Equals(source, McpToolSources.Agent, StringComparison.OrdinalIgnoreCase)
+            ? $"Ferramenta do agente executada na máquina do cliente ({name})."
+            : $"Executa a tool '{name}'.";
+    }
+
+    /// <summary>
+    /// Padrões usados quando não há política no escopo: rate limit por origem e
+    /// timeout de fallback. O timeout de fallback do agente subiu de 60s para
+    /// 120s porque operações comuns (winget, inventário, updates) estouram 60s;
+    /// tools específicas recebem recomendações próprias (McpToolCatalogMetadata).
+    /// </summary>
     private static (int Max, int Timeout) DefaultsFor(string source) =>
         string.Equals(source, McpToolSources.Agent, StringComparison.OrdinalIgnoreCase)
-            ? (10, 60)
-            : (5, 10);
+            ? (10, 120)
+            : (5, 30);
 }

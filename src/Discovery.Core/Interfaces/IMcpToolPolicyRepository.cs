@@ -53,10 +53,14 @@ public interface IMcpToolPolicyRepository
     /// <summary>
     /// Garante que exista uma policy global (is_enabled=true) para cada tool
     /// informada — usado no auto-registro das tools do agente. Não altera
-    /// policies existentes (inclusive desabilitadas pelo operador).
+    /// policies existentes (inclusive desabilitadas pelo operador); a descrição
+    /// só é preenchida quando a linha ainda não tem uma. Aceita a descrição
+    /// registrada pelo agente para que o catálogo explique cada ferramenta.
     /// </summary>
     Task EnsureGlobalPoliciesAsync(
-        string source, IEnumerable<string> toolNames, CancellationToken ct = default);
+        string source,
+        IEnumerable<(string Name, string? Description)> tools,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Conta quantas sobrescritas existem em escopos MAIS específicos que o

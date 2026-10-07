@@ -25,7 +25,16 @@ public record McpToolCatalogItem(
     bool Locked,
     int MaxCallsPerMinute,
     int TimeoutSeconds,
-    int LowerScopeOverrides);
+    int LowerScopeOverrides,
+    // Agrupamento exibido/filtrável na tela (ex.: Software, Rede).
+    string Category,
+    // Orientação curta de "quando usar" (o que a tool faz e em que contexto).
+    string? WhenToUse,
+    // Timeout sugerido pela plataforma (não obriga o operador).
+    int RecommendedTimeoutSeconds,
+    // false quando a tool aguarda interação do usuário (ask_user,
+    // capture_screenshot, read_file) e o timeout não é aplicado em runtime.
+    bool TimeoutApplies);
 
 /// <summary>Catálogo completo de ferramentas visíveis no escopo.</summary>
 public record McpToolCatalog(McpToolScope Scope, IReadOnlyList<McpToolCatalogItem> Tools);

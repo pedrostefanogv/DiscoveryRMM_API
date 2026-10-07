@@ -174,7 +174,9 @@ public class AiChatToolOrchestrator
         try
         {
             await _policyRepository.EnsureGlobalPoliciesAsync(
-                McpToolSources.Agent, llmTools.Select(t => t.Name), ct);
+                McpToolSources.Agent,
+                llmTools.Select(t => (t.Name, (string?)t.Description)),
+                ct);
         }
         catch (Exception ex)
         {

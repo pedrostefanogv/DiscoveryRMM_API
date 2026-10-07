@@ -35,6 +35,31 @@ public class AiChatMessageRepository : IAiChatMessageRepository
             .ToListAsync(ct);
     }
 
+    public async Task<List<AiChatMessage>> SearchByAgentAsync(
+        Guid agentId, string query, int limit, Guid? excludeSessionId = null, CancellationToken ct = default)
+    {
+        var term = (query ?? string.Empty).Trim();
+        if (term.Length == 0)
+            return new List<AiChatMessage>();
+        if (term.Length > 200)
+            term = term[..200];
+
+        var safeLimit = Math.Clamp(limit, 1, 20);
+        // Busca case-insensitive com lower() (traduz para lower(content) LIKE ...
+        // no Postgres e funciona no provider InMemory dos testes).
+        var lowered = term.ToLowerInvariant();
+
+        return await _db.AiChatMessages
+            .AsNoTracking()
+            .Where(m => m.Role == "user" || m.Role == "assistant")
+            .Where(m => m.Session.AgentId == agentId && m.Session.DeletedAt == null)
+            .Where(m => !excludeSessionId.HasValue || m.SessionId != excludeSessionId.Value)
+            .Where(m => m.Content.ToLower().Contains(lowered))
+            .OrderByDescending(m => m.CreatedAt)
+            .Take(safeLimit)
+            .ToListAsync(ct);
+    }
+
     public async Task CreateBatchAsync(IReadOnlyList<AiChatMessage> messages, CancellationToken ct = default)
     {
         foreach (var message in messages)
