@@ -17,6 +17,7 @@ public class JwtService : IJwtService
 {
     private const string ClaimMfaPending = "mfa_pending";
     private const string ClaimMfaSetup = "mfa_setup";
+    private const string ClaimStepUp = "step_up";
 
     private readonly RsaSecurityKey _signingKey;
     private readonly RsaSecurityKey _validationKey;
@@ -26,6 +27,7 @@ public class JwtService : IJwtService
     private readonly int _refreshTokenDays;
     private readonly int _mfaTokenMinutes;
     private readonly int _mfaSetupTokenMinutes;
+    private readonly int _stepUpTokenMinutes;
 
     public JwtService(IConfiguration configuration, IHostEnvironment environment)
     {
@@ -36,6 +38,7 @@ public class JwtService : IJwtService
         _refreshTokenDays = section.GetValue<int>("RefreshTokenExpirationDays", 7);
         _mfaTokenMinutes = section.GetValue<int>("MfaTokenExpirationMinutes", 3);
         _mfaSetupTokenMinutes = section.GetValue<int>("MfaSetupTokenExpirationMinutes", 10);
+        _stepUpTokenMinutes = section.GetValue<int>("StepUpTokenExpirationMinutes", 5);
 
         var privateKeyPath = section.GetValue<string>("PrivateKeyPath");
         var publicKeyPath = section.GetValue<string>("PublicKeyPath");
@@ -114,6 +117,7 @@ public class JwtService : IJwtService
         var claims = new List<Claim>
         {
             new(JwtRegisteredClaimNames.Sub, userId.ToString()),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
             new(ClaimMfaPending, "true")
         };
         return BuildToken(claims, TimeSpan.FromMinutes(_mfaTokenMinutes));
@@ -127,6 +131,16 @@ public class JwtService : IJwtService
             new(ClaimMfaSetup, "true")
         };
         return BuildToken(claims, TimeSpan.FromMinutes(_mfaSetupTokenMinutes));
+    }
+
+    public string GenerateStepUpToken(Guid userId)
+    {
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, userId.ToString()),
+            new(ClaimStepUp, "true")
+        };
+        return BuildToken(claims, TimeSpan.FromMinutes(_stepUpTokenMinutes));
     }
 
     public (byte[] tokenBytes, string tokenBase64, string tokenHash) GenerateRefreshToken()
@@ -145,23 +159,6 @@ public class JwtService : IJwtService
         try
         {
             return handler.ValidateToken(token, parameters, out _);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    public Guid? ExtractUserIdUnsafe(string token)
-    {
-        var handler = new JwtSecurityTokenHandler();
-        var parameters = BuildValidationParameters(validateLifetime: false);
-        try
-        {
-            var principal = handler.ValidateToken(token, parameters, out _);
-            var sub = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
-                      ?? principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            return Guid.TryParse(sub, out var id) ? id : null;
         }
         catch
         {
@@ -196,6 +193,12 @@ public class JwtService : IJwtService
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = _validationKey,
             ValidateLifetime = validateLifetime,
+            // Restrições explícitas (defesa em profundidade): sem elas, algoritmos
+            // aceitos ficam implícitos e um token não assinado poderia passar caso a
+            // chave de validação fosse configurada de forma incorreta.
+            RequireSignedTokens = true,
+            RequireExpirationTime = true,
+            ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
             ClockSkew = TimeSpan.FromSeconds(30)
         };
     }

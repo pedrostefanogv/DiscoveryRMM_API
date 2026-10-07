@@ -50,32 +50,25 @@ public class ChangePasswordDto
     public string NewPassword { get; set; } = string.Empty;
 }
 
-public class UserDto
+/// <summary>
+/// Estado de segurança administrativo do usuário: lockout de senha e de MFA e
+/// obrigações de troca. Exposto apenas em GET /api/v1/users/{id}/security-state,
+/// restrito a Users.Edit (antes os contadores vazavam no UserDto geral).
+/// </summary>
+public class UserSecurityStateDto
 {
     public Guid Id { get; set; }
-    public string Login { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public string FullName { get; set; } = string.Empty;
     public bool IsActive { get; set; }
     public bool MfaRequired { get; set; }
     public bool MfaConfigured { get; set; }
-    public DateTime CreatedAt { get; set; }
+    public bool MustChangePassword { get; set; }
+    public bool MustChangeProfile { get; set; }
+    public int FailedLoginAttempts { get; set; }
+    public DateTime? LockoutUntil { get; set; }
+    public int MfaFailedAttempts { get; set; }
+    public DateTime? MfaLockoutUntil { get; set; }
     public DateTime? LastLoginAt { get; set; }
-    public IEnumerable<UserGroupSummaryDto> Groups { get; set; } = [];
 }
 
-public class UserSummaryDto
-{
-    public Guid Id { get; set; }
-    public string Login { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public string FullName { get; set; } = string.Empty;
-    public bool IsActive { get; set; }
-    public bool MfaConfigured { get; set; }
-}
-
-public class UserGroupSummaryDto
-{
-    public Guid Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-}
+// UserDto/UserSummaryDto/UserGroupSummaryDto foram removidos: eram duplicatas sem
+// nenhuma referência (o contrato real vive em Discovery.Core.Cqrs.Users.Commands).

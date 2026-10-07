@@ -29,6 +29,10 @@ public static class ResultExtensions
                     "Validation" => new BadRequestObjectResult(new { errors = errorList }),
                     "Unauthorized" => new UnauthorizedObjectResult(new { errors = errorList }),
                     "Forbidden" => new ObjectResult(new { errors = errorList }) { StatusCode = 403 },
+                    "TooManyRequests" => new ObjectResult(new { errors = errorList })
+                    {
+                        StatusCode = StatusCodes.Status429TooManyRequests
+                    },
                     _ => new BadRequestObjectResult(new { errors = errorList })
                 };
             });

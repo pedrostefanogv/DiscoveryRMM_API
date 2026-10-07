@@ -48,3 +48,27 @@ public class AddGroupMemberDto
 {
     public Guid UserId { get; set; }
 }
+
+/// <summary>
+/// Membro de um grupo com dados de exibição. <see cref="AssignmentId"/> é o identificador
+/// estável do vínculo usado como chave na UI (para membership a PK é (user_id, group_id),
+/// então expomos o user_id).
+/// </summary>
+public class GroupMemberDto
+{
+    public string AssignmentId { get; set; } = string.Empty;
+    public Guid UserId { get; set; }
+    public string? Login { get; set; }
+    public string? Email { get; set; }
+    public string? FullName { get; set; }
+    public bool? IsActive { get; set; }
+    public DateTime? AddedAt { get; set; }
+}
+
+/// <summary>Corpo de POST /api/v1/user-groups/{id}/roles.</summary>
+public class AddGroupRoleDto
+{
+    public Guid RoleId { get; set; }
+    public ScopeLevel ScopeLevel { get; set; } = ScopeLevel.Global;
+    public Guid? ScopeId { get; set; }
+}

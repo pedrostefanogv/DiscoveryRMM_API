@@ -1,4 +1,5 @@
 using Discovery.Core.Cqrs.TicketAi.Commands;
+using Microsoft.Extensions.Logging.Abstractions;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -59,7 +60,8 @@ public class TicketAiBudgetTests
 
         var chat = new CapturingAiChat();
         var handler = new TicketAiSummarizeCommandHandler(
-            new FakeTicketRepository(ticket), chat, db, new FixedBudget(700, 200));
+            new FakeTicketRepository(ticket), chat, db, new FixedBudget(700, 200),
+            NullLogger<TicketAiSummarizeCommandHandler>.Instance);
 
         var result = await handler.Handle(new TicketAiSummarizeCommand(ticket.Id), CancellationToken.None);
 
@@ -81,7 +83,8 @@ public class TicketAiBudgetTests
         await db.SaveChangesAsync();
 
         var handler = new TicketAiSummarizeCommandHandler(
-            new FakeTicketRepository(ticket), new CapturingAiChat(), db, new FixedBudget(700, 200));
+            new FakeTicketRepository(ticket), new CapturingAiChat(), db, new FixedBudget(700, 200),
+            NullLogger<TicketAiSummarizeCommandHandler>.Instance);
 
         var result = await handler.Handle(new TicketAiSummarizeCommand(ticket.Id), CancellationToken.None);
 
@@ -109,7 +112,8 @@ public class TicketAiBudgetTests
         await db.SaveChangesAsync();
 
         var handler = new TicketAiSummarizeCommandHandler(
-            new FakeTicketRepository(ticket), new CapturingAiChat(), db, new BlockedBudget());
+            new FakeTicketRepository(ticket), new CapturingAiChat(), db, new BlockedBudget(),
+            NullLogger<TicketAiSummarizeCommandHandler>.Instance);
 
         var result = await handler.Handle(new TicketAiSummarizeCommand(ticket.Id), CancellationToken.None);
 

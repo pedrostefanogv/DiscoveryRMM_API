@@ -32,6 +32,7 @@ public class MfaController(IMediator mediator) : ControllerBase
     [HttpPost("fido2/register/begin")]
     [AllowAnonymous]
     [RequireMfaSetupOrFullSession]
+    [RequireMfaStepUp]
     public async Task<IActionResult> BeginFido2Registration()
     {
         if (HttpContext.Items["UserId"] is not Guid userId)
@@ -52,6 +53,7 @@ public class MfaController(IMediator mediator) : ControllerBase
     [HttpPost("fido2/register/complete")]
     [AllowAnonymous]
     [RequireMfaSetupOrFullSession]
+    [RequireMfaStepUp]
     public async Task<IActionResult> CompleteFido2Registration([FromBody] CompleteFido2RegistrationDto dto)
     {
         if (HttpContext.Items["UserId"] is not Guid userId)
@@ -69,9 +71,46 @@ public class MfaController(IMediator mediator) : ControllerBase
     }
 
     /// <summary>
+    /// Inicia o registro de uma credencial TOTP (contrato documentado em
+    /// PERMISSIONS_MATRIX.md; o console já chamava este endpoint e recebia 404).
+    /// Requer token mfa_setup ou sessão completa.
+    /// </summary>
+    [HttpPost("totp/register/begin")]
+    [AllowAnonymous]
+    [RequireMfaSetupOrFullSession]
+    [RequireMfaStepUp]
+    public async Task<IActionResult> BeginTotpRegistration()
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "Not authenticated." });
+
+        var result = await mediator.Send(new BeginTotpRegistrationQuery(userId));
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Conclui o registro do TOTP: valida o código contra o segredo informado, persiste o
+    /// segredo protegido e devolve os códigos de backup (uso único).
+    /// </summary>
+    [HttpPost("totp/register/complete")]
+    [AllowAnonymous]
+    [RequireMfaSetupOrFullSession]
+    [RequireMfaStepUp]
+    public async Task<IActionResult> CompleteTotpRegistration([FromBody] CompleteTotpRegistrationDto dto)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "Not authenticated." });
+
+        var cmd = new CompleteTotpRegistrationCommand(userId, dto.SecretBase32, dto.VerificationCode, dto.KeyName);
+        var result = await mediator.Send(cmd);
+        return result.ToActionResult();
+    }
+
+    /// <summary>
     /// Renomeia uma chave MFA do usuário autenticado.
     /// </summary>
     [HttpPatch("keys/{keyId:guid}/name")]
+    [RequireMfaStepUp]
     public async Task<IActionResult> RenameKey(Guid keyId, [FromBody] RegisterMfaKeyNameDto dto)
     {
         if (HttpContext.Items["UserId"] is not Guid userId)
@@ -91,6 +130,7 @@ public class MfaController(IMediator mediator) : ControllerBase
     /// Remove (desativa) uma chave MFA do usuário autenticado.
     /// </summary>
     [HttpDelete("keys/{keyId:guid}")]
+    [RequireMfaStepUp]
     public async Task<IActionResult> DeleteKey(Guid keyId)
     {
         if (HttpContext.Items["UserId"] is not Guid userId)

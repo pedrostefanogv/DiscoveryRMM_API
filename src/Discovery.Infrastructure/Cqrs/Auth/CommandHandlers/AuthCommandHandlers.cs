@@ -2,13 +2,16 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Auth.Commands;
 using Discovery.Core.Cqrs.Auth.Queries;
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Auth.CommandHandlers;
 
 public sealed class ResetUserPasswordCommandHandler(
-    IUserPasswordManagementService passwordManagement
+    IUserPasswordManagementService passwordManagement,
+    IUserSessionRepository sessions,
+    IUserRepository users
 ) : IRequestHandler<ResetUserPasswordCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(ResetUserPasswordCommand cmd, CancellationToken ct)
@@ -16,6 +19,20 @@ public sealed class ResetUserPasswordCommandHandler(
         try
         {
             await passwordManagement.ResetPasswordAsync(cmd.UserId, cmd.NewPassword, cmd.RequestedBy, ct);
+
+            // Senha definida por um administrador é temporária: força a troca no próximo
+            // login (o serviço de reset deixa MustChangePassword=false por design).
+            if (await users.GetByIdAsync(cmd.UserId) is { } target)
+            {
+                target.MustChangePassword = true;
+                await users.UpdateAsync(target);
+            }
+
+            // Sessões antigas continuariam válidas após o reset administrativo (o access
+            // token é stateless e o refresh seguiria funcionando). Revogar força o uso da
+            // senha nova em todos os dispositivos.
+            await sessions.RevokeAllByUserIdAsync(cmd.UserId);
+
             return Result<VoidResult>.Success(VoidResult.Value);
         }
         catch (KeyNotFoundException)
@@ -30,7 +47,8 @@ public sealed class ResetUserPasswordCommandHandler(
 }
 
 public sealed class ChangeUserPasswordCommandHandler(
-    IUserPasswordManagementService passwordManagement
+    IUserPasswordManagementService passwordManagement,
+    IUserSessionRepository sessions
 ) : IRequestHandler<ChangeUserPasswordCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(ChangeUserPasswordCommand cmd, CancellationToken ct)
@@ -38,6 +56,18 @@ public sealed class ChangeUserPasswordCommandHandler(
         try
         {
             await passwordManagement.ChangePasswordAsync(cmd.UserId, cmd.CurrentPassword, cmd.NewPassword, ct);
+
+            // Trocar a senha invalida as outras sessões (um token roubado deixa de valer),
+            // preservando a sessão que fez a troca para não deslogar o próprio usuário.
+            Guid? currentSessionId = Guid.TryParse(cmd.CurrentSessionId, out var parsed) ? parsed : null;
+            foreach (var session in await sessions.GetActiveByUserIdAsync(cmd.UserId))
+            {
+                if (currentSessionId.HasValue && session.Id == currentSessionId.Value)
+                    continue;
+
+                await sessions.RevokeAsync(session.Id);
+            }
+
             return Result<VoidResult>.Success(VoidResult.Value);
         }
         catch (KeyNotFoundException)
@@ -85,24 +115,5 @@ public sealed class LogoutCommandHandler(
 
         await sessionRepo.RevokeAsync(session.Id);
         return Result<VoidResult>.Success(VoidResult.Value);
-    }
-}
-
-public sealed class ValidateOtpCommandHandler(
-) : IRequestHandler<ValidateOtpCommand, Result<ValidateOtpResult>>
-{
-    public async Task<Result<ValidateOtpResult>> Handle(ValidateOtpCommand cmd, CancellationToken ct)
-    {
-        // OTP validation: o comando contém apenas o código digitado pelo usuário (6 dígitos).
-        // O secret TOTP está armazenado em UserMfaKey.OtpSecretEncrypted e precisa ser
-        // desencriptado antes da validação, o que requer IUserMfaKeyRepository + ISecretProtector.
-        // A orquestração completa (buscar chave TOTP do usuário, desencriptar, validar código)
-        // deve ser feita no MfaController (a ser migrado na Fase 3.3).
-        //
-        // CORREÇÃO DO BUG: o código antigo passava `cmd.OtpCode` como secret:
-        //   otpService.ValidateTotp(cmd.OtpCode, cmd.OtpCode) — isso sempre falharia.
-        // Agora o handler indica que o fluxo requer orquestração completa do controller.
-        return Result<ValidateOtpResult>.Failure(
-            Error.Validation("OtpCode", "OTP validation requires full user context. Use MfaController orchestration."));
     }
 }

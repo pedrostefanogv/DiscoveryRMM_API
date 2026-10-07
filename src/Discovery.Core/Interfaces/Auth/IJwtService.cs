@@ -13,12 +13,18 @@ public interface IJwtService
     /// <summary>Gera um token temporário de MFA setup (10 min). Claim: mfa_setup=true.</summary>
     string GenerateMfaSetupToken(Guid userId);
 
+    /// <summary>
+    /// Gera um token de step-up (5 min, claim step_up=true) usado para autorizar
+    /// operações sensíveis da própria conta, como adicionar/remover chaves MFA.
+    /// </summary>
+    string GenerateStepUpToken(Guid userId);
+
     /// <summary>Gera refresh token como bytes aleatórios; retorna (tokenBytes, tokenBase64, hash).</summary>
     (byte[] tokenBytes, string tokenBase64, string tokenHash) GenerateRefreshToken();
 
     /// <summary>Valida e retorna claims de qualquer JWT emitido pelo serviço.</summary>
     ClaimsPrincipal? ValidateToken(string token);
 
-    /// <summary>Extrai o userId do claim "sub" sem validar expiração (para refresh flow).</summary>
-    Guid? ExtractUserIdUnsafe(string token);
+    // ExtractUserIdUnsafe foi removido: validava a assinatura mas ignorava a expiração e
+    // não possuía nenhum consumidor no código (footgun de segurança).
 }

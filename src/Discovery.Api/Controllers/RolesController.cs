@@ -1,6 +1,7 @@
 using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Roles.Commands;
 using Discovery.Core.Cqrs.Roles.Queries;
+using Discovery.Core.DTOs.Roles;
 using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -18,6 +19,18 @@ public class RolesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> GetAll()
     {
         var result = await mediator.Send(new ListRolesQuery());
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Catálogo de permissões. A restrição guid de {id:guid} já evita conflito de rota
+    /// com /roles/permissions; a ordem é apenas legibilidade.
+    /// </summary>
+    [HttpGet("permissions")]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
+    public async Task<IActionResult> GetPermissionsCatalog()
+    {
+        var result = await mediator.Send(new ListPermissionsCatalogQuery());
         return result.ToActionResult();
     }
 
@@ -48,11 +61,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateRoleCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+        return result.ToActionResult();
     }
 
     [HttpDelete("{id:guid}")]
@@ -65,5 +74,31 @@ public class RolesController(IMediator mediator) : ControllerBase
             failure: errors => errors[0].Code == "NotFound"
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    // ── Permissões da role ───────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/permissions")]
+    [RequirePermission(ResourceType.Users, ActionType.View)]
+    public async Task<IActionResult> GetRolePermissions(Guid id)
+    {
+        var result = await mediator.Send(new ListRolePermissionsQuery(id));
+        return result.ToActionResult();
+    }
+
+    [HttpPost("{id:guid}/permissions")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> AddRolePermission(Guid id, [FromBody] AssignPermissionToRoleDto dto)
+    {
+        var result = await mediator.Send(new AddRolePermissionCommand(id, dto.PermissionId));
+        return result.ToActionResult();
+    }
+
+    [HttpDelete("{id:guid}/permissions/{permissionId:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> RemoveRolePermission(Guid id, Guid permissionId)
+    {
+        var result = await mediator.Send(new RemoveRolePermissionCommand(id, permissionId));
+        return result.ToActionResult();
     }
 }

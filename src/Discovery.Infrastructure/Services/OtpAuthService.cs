@@ -42,6 +42,34 @@ public class OtpAuthService : IOtpService
         }
     }
 
+    public bool TryValidateTotp(string secretBase32, string code, long? minStepExclusive, out long matchedStep)
+    {
+        matchedStep = 0;
+
+        if (string.IsNullOrEmpty(secretBase32) || string.IsNullOrEmpty(code))
+            return false;
+
+        try
+        {
+            var key = Base32Encoding.ToBytes(secretBase32);
+            var totp = new Totp(key);
+
+            if (!totp.VerifyTotp(DateTime.UtcNow, code, out var step, new VerificationWindow(2, 2)))
+                return false;
+
+            // Replay: o mesmo código (ou um código mais antigo) já foi consumido.
+            if (minStepExclusive.HasValue && step <= minStepExclusive.Value)
+                return false;
+
+            matchedStep = step;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public (IEnumerable<string> plaintextCodes, IEnumerable<string> hashedCodes) GenerateBackupCodes(int count = 8)
     {
         var plaintextCodes = new List<string>();

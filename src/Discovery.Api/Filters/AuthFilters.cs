@@ -45,6 +45,18 @@ internal class RequireUserAuthFilter : IAsyncActionFilter
             return;
         }
 
+        // Token de step-up é de propósito único (gerenciar credenciais MFA) e NÃO deve
+        // valer como token de sessão: sem esta guarda ele abriria toda a API por 5 min.
+        if (items["StepUp"] is true)
+        {
+            context.Result = new UnauthorizedObjectResult(new
+            {
+                code = "step_up_token_not_allowed",
+                message = "Token de confirmação não autoriza esta operação. Use a sessão normal."
+            });
+            return;
+        }
+
         await next();
     }
 }
@@ -117,6 +129,54 @@ internal class RequireMfaSetupOrFullSessionFilter : IAsyncActionFilter
         }
 
         await next();
+    }
+}
+
+/// <summary>
+/// Exige step-up (reautenticação recente por senha) para operações sensíveis da própria
+/// conta — hoje, gerenciar chaves MFA. Um token de sessão roubado não basta para
+/// cadastrar uma credencial nova. O fluxo de onboarding (claim mfa_setup) é liberado,
+/// pois o usuário acabou de se autenticar com a senha para cadastrar a primeira chave.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+public class RequireMfaStepUpAttribute : Attribute, IFilterFactory
+{
+    public bool IsReusable => false;
+
+    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
+        => new RequireMfaStepUpFilter();
+}
+
+internal class RequireMfaStepUpFilter : IAsyncActionFilter
+{
+    public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
+    {
+        var items = context.HttpContext.Items;
+
+        if (items["UserId"] is not Guid)
+        {
+            context.Result = new UnauthorizedObjectResult(new
+            {
+                code = "auth_required",
+                message = "Autenticação necessária."
+            });
+            return;
+        }
+
+        if (items["MfaSetup"] is true || items["StepUp"] is true)
+        {
+            await next();
+            return;
+        }
+
+        context.Result = new ObjectResult(new
+        {
+            code = "mfa_step_up_required",
+            message = "Confirme sua senha para gerenciar as chaves de autenticação."
+        })
+        {
+            StatusCode = StatusCodes.Status403Forbidden
+        };
     }
 }
 

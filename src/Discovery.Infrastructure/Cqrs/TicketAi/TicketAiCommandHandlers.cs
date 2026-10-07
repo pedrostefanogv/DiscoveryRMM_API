@@ -6,6 +6,7 @@ using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Services.Ai;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Cqrs.TicketAi;
 
@@ -24,7 +25,8 @@ public abstract class TicketAiHandlerBase(
     ITicketRepository ticketRepo,
     IAiChatService aiChat,
     DiscoveryDbContext db,
-    IAiTokenBudgetResolver budgetResolver)
+    IAiTokenBudgetResolver budgetResolver,
+    ILogger logger)
 {
     protected const int DefaultMaxTokens = 1024;
     protected const double DefaultTemperature = 0.3;
@@ -77,7 +79,9 @@ public abstract class TicketAiHandlerBase(
         }
         catch (InvalidOperationException ex)
         {
-            return Result<T>.Failure(Error.Internal(ex.Message));
+            // Antes a ex.Message (interna) era devolvida ao cliente; agora só é logada.
+            logger.LogWarning(ex, "Ticket AI: falha ao processar o prompt do chamado {TicketId}.", ticketId);
+            return Result<T>.Failure(Error.Internal("Não foi possível processar a solicitação de IA."));
         }
     }
 
@@ -90,8 +94,9 @@ public abstract class TicketAiHandlerBase(
 }
 
 public sealed class TicketAiTriageCommandHandler(
-    ITicketRepository ticketRepo, IAiChatService aiChat, DiscoveryDbContext db, IAiTokenBudgetResolver budgetResolver)
-    : TicketAiHandlerBase(ticketRepo, aiChat, db, budgetResolver), IRequestHandler<TicketAiTriageCommand, Result<TicketAiTriageResult>>
+    ITicketRepository ticketRepo, IAiChatService aiChat, DiscoveryDbContext db, IAiTokenBudgetResolver budgetResolver,
+    ILogger<TicketAiTriageCommandHandler> logger)
+    : TicketAiHandlerBase(ticketRepo, aiChat, db, budgetResolver, logger), IRequestHandler<TicketAiTriageCommand, Result<TicketAiTriageResult>>
 {
     public async Task<Result<TicketAiTriageResult>> Handle(TicketAiTriageCommand cmd, CancellationToken ct)
     {
@@ -103,8 +108,9 @@ public sealed class TicketAiTriageCommandHandler(
 }
 
 public sealed class TicketAiSummarizeCommandHandler(
-    ITicketRepository ticketRepo, IAiChatService aiChat, DiscoveryDbContext db, IAiTokenBudgetResolver budgetResolver)
-    : TicketAiHandlerBase(ticketRepo, aiChat, db, budgetResolver), IRequestHandler<TicketAiSummarizeCommand, Result<TicketAiSummaryResult>>
+    ITicketRepository ticketRepo, IAiChatService aiChat, DiscoveryDbContext db, IAiTokenBudgetResolver budgetResolver,
+    ILogger<TicketAiSummarizeCommandHandler> logger)
+    : TicketAiHandlerBase(ticketRepo, aiChat, db, budgetResolver, logger), IRequestHandler<TicketAiSummarizeCommand, Result<TicketAiSummaryResult>>
 {
     public async Task<Result<TicketAiSummaryResult>> Handle(TicketAiSummarizeCommand cmd, CancellationToken ct)
     {
@@ -116,8 +122,9 @@ public sealed class TicketAiSummarizeCommandHandler(
 }
 
 public sealed class TicketAiSuggestReplyCommandHandler(
-    ITicketRepository ticketRepo, IAiChatService aiChat, DiscoveryDbContext db, IAiTokenBudgetResolver budgetResolver)
-    : TicketAiHandlerBase(ticketRepo, aiChat, db, budgetResolver), IRequestHandler<TicketAiSuggestReplyCommand, Result<TicketAiSuggestedReplyResult>>
+    ITicketRepository ticketRepo, IAiChatService aiChat, DiscoveryDbContext db, IAiTokenBudgetResolver budgetResolver,
+    ILogger<TicketAiSuggestReplyCommandHandler> logger)
+    : TicketAiHandlerBase(ticketRepo, aiChat, db, budgetResolver, logger), IRequestHandler<TicketAiSuggestReplyCommand, Result<TicketAiSuggestedReplyResult>>
 {
     public async Task<Result<TicketAiSuggestedReplyResult>> Handle(TicketAiSuggestReplyCommand cmd, CancellationToken ct)
     {
@@ -129,8 +136,9 @@ public sealed class TicketAiSuggestReplyCommandHandler(
 }
 
 public sealed class TicketAiDraftKbArticleCommandHandler(
-    ITicketRepository ticketRepo, IAiChatService aiChat, DiscoveryDbContext db, IAiTokenBudgetResolver budgetResolver)
-    : TicketAiHandlerBase(ticketRepo, aiChat, db, budgetResolver), IRequestHandler<TicketAiDraftKbArticleCommand, Result<TicketAiDraftKbResult>>
+    ITicketRepository ticketRepo, IAiChatService aiChat, DiscoveryDbContext db, IAiTokenBudgetResolver budgetResolver,
+    ILogger<TicketAiDraftKbArticleCommandHandler> logger)
+    : TicketAiHandlerBase(ticketRepo, aiChat, db, budgetResolver, logger), IRequestHandler<TicketAiDraftKbArticleCommand, Result<TicketAiDraftKbResult>>
 {
     public async Task<Result<TicketAiDraftKbResult>> Handle(TicketAiDraftKbArticleCommand cmd, CancellationToken ct)
     {

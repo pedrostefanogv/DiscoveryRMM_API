@@ -80,6 +80,15 @@ public class UserGroupRepository : IUserGroupRepository
             .Select(m => m.UserId)
             .ToListAsync();
 
+    public async Task<IEnumerable<UserGroupMembership>> GetMembershipsAsync(Guid groupId)
+        => await _db.UserGroupMemberships.AsNoTracking()
+            .Where(m => m.GroupId == groupId)
+            .ToListAsync();
+
+    public Task<UserGroupMembership?> GetMembershipAsync(Guid groupId, Guid userId)
+        => _db.UserGroupMemberships.AsNoTracking()
+            .SingleOrDefaultAsync(m => m.GroupId == groupId && m.UserId == userId);
+
     public async Task<IEnumerable<Guid>> GetGroupIdsForUserAsync(Guid userId)
         => await _db.UserGroupMemberships
             .Where(m => m.UserId == userId)
@@ -100,10 +109,17 @@ public class UserGroupRepository : IUserGroupRepository
 
     public async Task<IReadOnlyList<Discovery.Core.DTOs.Identity.RoleAssignmentWithPermissions>> GetRolesWithPermissionsForUserAsync(Guid userId)
     {
+        // Grupos e roles inativos deixam de conceder permissões (contrato do console web:
+        // a role pode ser desativada sem ser excluída). Antes, o filtro não existia e uma
+        // role "inativa" continuava autorizando todas as ações.
+        var activeGroupIds = _db.UserGroups.Where(g => g.IsActive).Select(g => g.Id);
+
         var flat = await _db.UserGroupMemberships
-            .Where(m => m.UserId == userId)
+            .Where(m => m.UserId == userId && activeGroupIds.Contains(m.GroupId))
             .Join(_db.UserGroupRoles, m => m.GroupId, r => r.GroupId, (m, r) => r)
-            .Join(_db.RolePermissions, r => r.RoleId, rp => rp.RoleId, (r, rp) => new { Assignment = r, PermissionId = rp.PermissionId })
+            .Join(_db.Roles, r => r.RoleId, role => role.Id, (r, role) => new { Assignment = r, Role = role })
+            .Where(x => x.Role.IsActive)
+            .Join(_db.RolePermissions, x => x.Assignment.RoleId, rp => rp.RoleId, (x, rp) => new { x.Assignment, PermissionId = rp.PermissionId })
             .Join(_db.Permissions, x => x.PermissionId, p => p.Id, (x, p) => new { x.Assignment, Permission = p })
             .AsNoTracking()
             .ToListAsync();

@@ -41,6 +41,12 @@ public class UserMfaKey
     /// <summary>Hashes dos códigos de backup (Argon2id). Null se não configurado.</summary>
     public string[]? BackupCodeHashes { get; set; }
 
+    /// <summary>
+    /// Último passo TOTP (contador de 30s) consumido com sucesso. Impede que o mesmo
+    /// código seja reutilizado dentro da janela de tolerância (anti-replay).
+    /// </summary>
+    public long? LastUsedStep { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime? LastUsedAt { get; set; }
 }

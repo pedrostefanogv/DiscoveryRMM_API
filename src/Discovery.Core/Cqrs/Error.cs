@@ -45,5 +45,12 @@ public sealed record Error
     public static Error Internal(string message)
         => new("Internal", message);
 
+    /// <summary>
+    /// Bloqueio temporário por excesso de tentativas (ex.: lockout de MFA). Mapeado
+    /// para HTTP 429 — diferente de 401, que o console interpreta como token inválido.
+    /// </summary>
+    public static Error TooManyRequests(string message)
+        => new("TooManyRequests", message);
+
     public override string ToString() => $"{Code}: {Message}";
 }

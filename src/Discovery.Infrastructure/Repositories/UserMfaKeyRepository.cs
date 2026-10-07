@@ -50,6 +50,22 @@ public class UserMfaKeyRepository : IUserMfaKeyRepository
         return rows > 0;
     }
 
+    public async Task<bool> SetLastUsedStepAsync(Guid keyId, long step)
+    {
+        var rows = await _db.UserMfaKeys
+            .Where(k => k.Id == keyId)
+            .ExecuteUpdateAsync(s => s.SetProperty(k => k.LastUsedStep, step));
+        return rows > 0;
+    }
+
+    public async Task<bool> UpdateBackupCodeHashesAsync(Guid keyId, string[] hashes)
+    {
+        var rows = await _db.UserMfaKeys
+            .Where(k => k.Id == keyId)
+            .ExecuteUpdateAsync(s => s.SetProperty(k => k.BackupCodeHashes, hashes));
+        return rows > 0;
+    }
+
     public async Task<bool> DeactivateAsync(Guid keyId, Guid userId)
     {
         var rows = await _db.UserMfaKeys

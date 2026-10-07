@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs.Auth.Commands;
 using Discovery.Core.Cqrs.Auth.Queries;
 using Discovery.Core.DTOs.Auth;
 using Discovery.Core.DTOs.Mfa;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Api.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -11,9 +12,10 @@ namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/auth")]
-public class AuthController(IMediator mediator) : ControllerBase
+public class AuthController(IMediator mediator, IUserAuthService userAuth) : ControllerBase
 {
     private readonly IMediator _mediator = mediator;
+    private readonly IUserAuthService _userAuth = userAuth;
 
     private IActionResult UnauthorizedAuth(string message, string code = "auth_failed")
         => Unauthorized(new { code, message });
@@ -55,13 +57,37 @@ public class AuthController(IMediator mediator) : ControllerBase
     }
 
     /// <summary>
+    /// Reautenticação (step-up) por senha: devolve um token de curta duração exigido em
+    /// operações sensíveis da própria conta, como cadastrar/remover chaves MFA.
+    /// </summary>
+    [HttpPost("step-up")]
+    [RequireUserAuth]
+    public async Task<IActionResult> StepUp([FromBody] StepUpRequestDto dto)
+    {
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return UnauthorizedAuth("Autenticação necessária.", "auth_required");
+
+        try
+        {
+            var result = await _userAuth.CreateStepUpTokenAsync(userId, dto.Password ?? string.Empty);
+            return Ok(result);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return UnauthorizedAuth(ex.Message, "step_up_failed");
+        }
+    }
+
+    /// <summary>
     /// Renova o par de tokens usando o refresh token.
     /// </summary>
     [HttpPost("refresh")]
     [AllowAnonymous]
     public async Task<IActionResult> Refresh([FromBody] RefreshTokenRequestDto dto)
     {
-        var result = await _mediator.Send(new RefreshTokenQuery(dto.RefreshToken));
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var ua = HttpContext.Request.Headers.UserAgent.ToString();
+        var result = await _mediator.Send(new RefreshTokenQuery(dto.RefreshToken, ip, ua));
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "Unauthorized"
@@ -113,7 +139,8 @@ public class AuthController(IMediator mediator) : ControllerBase
         var userId = (Guid)HttpContext.Items["UserId"]!;
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var ua = HttpContext.Request.Headers.UserAgent.ToString();
-        var cmd = new CompleteFido2AssertionCommand(userId, dto.AssertionResponseJson, ip, ua);
+        var cmd = new CompleteFido2AssertionCommand(
+            userId, dto.AssertionResponseJson, ip, ua, HttpContext.Items["MfaTokenId"] as string);
         var result = await _mediator.Send(cmd);
         return result.Match<IActionResult>(
             success: Ok,
@@ -121,6 +148,9 @@ public class AuthController(IMediator mediator) : ControllerBase
             {
                 "Forbidden" => ForbiddenAuth(errors[0].Message, "mfa_method_mismatch"),
                 "Unauthorized" => UnauthorizedAuth(errors[0].Message, "mfa_invalid"),
+                "TooManyRequests" => StatusCode(
+                    StatusCodes.Status429TooManyRequests,
+                    new { code = "mfa_locked", message = errors[0].Message }),
                 _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
             });
     }
@@ -138,7 +168,8 @@ public class AuthController(IMediator mediator) : ControllerBase
         var userId = (Guid)HttpContext.Items["UserId"]!;
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var ua = HttpContext.Request.Headers.UserAgent.ToString();
-        var cmd = new CompleteOtpAssertionCommand(userId, dto.Code, ip, ua);
+        var cmd = new CompleteOtpAssertionCommand(
+            userId, dto.Code, ip, ua, HttpContext.Items["MfaTokenId"] as string);
         var result = await _mediator.Send(cmd);
         return result.Match<IActionResult>(
             success: Ok,
@@ -146,6 +177,9 @@ public class AuthController(IMediator mediator) : ControllerBase
             {
                 "Forbidden" => ForbiddenAuth(errors[0].Message, "mfa_method_mismatch"),
                 "Unauthorized" => UnauthorizedAuth(errors[0].Message, "otp_invalid"),
+                "TooManyRequests" => StatusCode(
+                    StatusCodes.Status429TooManyRequests,
+                    new { code = "mfa_locked", message = errors[0].Message }),
                 _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
             });
     }

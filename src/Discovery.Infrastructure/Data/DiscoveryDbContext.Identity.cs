@@ -31,6 +31,8 @@ public partial class DiscoveryDbContext
             e.Property(u => u.LastLoginAt).HasColumnName("last_login_at").HasColumnType("timestamptz");
             e.Property(u => u.FailedLoginAttempts).HasColumnName("failed_login_attempts");
             e.Property(u => u.LockoutUntil).HasColumnName("lockout_until").HasColumnType("timestamptz");
+            e.Property(u => u.MfaFailedAttempts).HasColumnName("mfa_failed_attempts");
+            e.Property(u => u.MfaLockoutUntil).HasColumnName("mfa_lockout_until").HasColumnType("timestamptz");
             e.HasIndex(u => u.Login).IsUnique().HasDatabaseName("ix_users_login");
             e.HasIndex(u => u.Email).IsUnique().HasDatabaseName("ix_users_email");
         });
@@ -66,6 +68,7 @@ public partial class DiscoveryDbContext
             e.Property(r => r.Type).HasColumnName("type").HasConversion<string>();
             e.Property(r => r.IsSystem).HasColumnName("is_system");
             e.Property(r => r.MfaRequirement).HasColumnName("mfa_requirement").HasConversion<string>();
+            e.Property(r => r.IsActive).HasColumnName("is_active");
             e.Property(r => r.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(r => r.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });
@@ -117,6 +120,7 @@ public partial class DiscoveryDbContext
             e.Property(k => k.UserHandleBase64).HasColumnName("user_handle_base64").HasMaxLength(128);
             e.Property(k => k.OtpSecretEncrypted).HasColumnName("otp_secret_encrypted").HasMaxLength(512);
             e.Property(k => k.BackupCodeHashes).HasColumnName("backup_code_hashes").HasColumnType("text[]");
+            e.Property(k => k.LastUsedStep).HasColumnName("last_used_step");
             e.Property(k => k.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(k => k.LastUsedAt).HasColumnName("last_used_at").HasColumnType("timestamptz");
         });

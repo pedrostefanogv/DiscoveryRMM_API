@@ -52,9 +52,16 @@ public static class RateLimitingServiceCollectionExtensions
                 var ip = ResolveClientIp(httpContext);
                 var path = httpContext.Request.Path;
 
+                // Trocas/resets de senha usam o bucket de autenticação (20/min por IP) em vez
+                // do bucket genérico (240/min): são operações sensíveis e sujeitas a brute force.
+                var isPasswordMutation = path.Value is not null
+                    && (path.Value.Contains("/change-password", StringComparison.OrdinalIgnoreCase)
+                        || path.Value.Contains("/force-password-reset", StringComparison.OrdinalIgnoreCase));
+
                 if (path.StartsWithSegments("/api/v1/auth", StringComparison.OrdinalIgnoreCase)
                     || path.StartsWithSegments("/api/v1/agent-install", StringComparison.OrdinalIgnoreCase)
-                    || path.StartsWithSegments("/api/v1/mfa", StringComparison.OrdinalIgnoreCase))
+                    || path.StartsWithSegments("/api/v1/mfa", StringComparison.OrdinalIgnoreCase)
+                    || isPasswordMutation)
                 {
                     return RateLimitPartition.GetFixedWindowLimiter(
                         partitionKey: $"auth:{ip}",

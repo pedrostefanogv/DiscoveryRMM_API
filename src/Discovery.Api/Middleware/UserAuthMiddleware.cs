@@ -78,10 +78,18 @@ public class UserAuthMiddleware
                     context.Items["MfaPending"] = principal.FindFirstValue("mfa_pending") == "true";
                     context.Items["MfaSetup"] = principal.FindFirstValue("mfa_setup") == "true";
                     context.Items["MfaVerified"] = principal.FindFirstValue("mfa_verified") == "true";
+                    context.Items["StepUp"] = principal.FindFirstValue("step_up") == "true";
 
                     var jti = principal.FindFirstValue("jti");
                     if (!string.IsNullOrEmpty(jti))
-                        context.Items["SessionId"] = jti;
+                    {
+                        // Token de sessão usa o jti como SessionId; o token de pendência de MFA
+                        // também tem jti, mas ele identifica o desafio (controle de uso único).
+                        if (context.Items["MfaPending"] is true)
+                            context.Items["MfaTokenId"] = jti;
+                        else
+                            context.Items["SessionId"] = jti;
+                    }
 
                     _logger.LogDebug(
                         "UserAuthMiddleware: JWT validado. UserId={UserId}, " +

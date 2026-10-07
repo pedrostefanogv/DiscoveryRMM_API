@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using System.Security.Claims;
 using Discovery.Core.DTOs.Auth;
 using Discovery.Core.Entities.Identity;
@@ -8,6 +9,7 @@ using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Core.Helpers;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -27,9 +29,19 @@ public class UserAuthService : IUserAuthService
     private readonly IRoleRepository _roles;
     private readonly IUserMfaKeyRepository _mfaKeys;
     private readonly IAuthAuditLogRepository _auditLog;
+    private readonly IMemoryCache _cache;
     private readonly ILogger<UserAuthService> _logger;
     private readonly int _accessTokenSeconds;
     private readonly int _refreshTokenDays;
+
+    /// <summary>
+    /// Contador de reuso de refresh token dentro do grace period. Um pico indica ou
+    /// renovação concorrente legítima (múltiplas abas) ou tentativa de reuso de token
+    /// roubado — antes isso só existia como linha de log.
+    /// </summary>
+    private static readonly Meter AuthMeter = new("Discovery.Auth");
+    private static readonly Counter<long> RefreshGraceReuseCounter =
+        AuthMeter.CreateCounter<long>("auth_refresh_grace_reuse_total");
 
     public UserAuthService(
         IUserRepository users,
@@ -40,6 +52,7 @@ public class UserAuthService : IUserAuthService
         IRoleRepository roles,
         IUserMfaKeyRepository mfaKeys,
         IAuthAuditLogRepository auditLog,
+        IMemoryCache cache,
         IConfiguration configuration,
         ILogger<UserAuthService> logger)
     {
@@ -51,6 +64,7 @@ public class UserAuthService : IUserAuthService
         _roles = roles;
         _mfaKeys = mfaKeys;
         _auditLog = auditLog;
+        _cache = cache;
         _logger = logger;
         _accessTokenSeconds = configuration.GetValue<int>("Authentication:Jwt:AccessTokenExpirationMinutes", 30) * 60;
         _refreshTokenDays = configuration.GetValue<int>("Authentication:Jwt:RefreshTokenExpirationDays", 7);
@@ -255,13 +269,24 @@ public class UserAuthService : IUserAuthService
         if (!_passwordService.VerifyPassword(dto.CurrentPassword, user.PasswordSalt, user.PasswordHash))
             throw new UnauthorizedAccessException("Senha atual inválida.");
 
-        if (!string.Equals(user.Login, dto.NewLogin, StringComparison.OrdinalIgnoreCase) &&
-            await _users.ExistsByLoginAsync(dto.NewLogin))
-            throw new InvalidOperationException("Login já em uso.");
+        // O perfil só é validado/alterado quando o onboarding exigiu troca de perfil
+        // (MustChangeProfile). No reset administrativo de senha o usuário é obrigado a
+        // trocar apenas a senha e não deve re-digitar login/e-mail/nome.
+        if (user.MustChangeProfile)
+        {
+            if (string.IsNullOrWhiteSpace(dto.NewLogin)
+                || string.IsNullOrWhiteSpace(dto.NewEmail)
+                || string.IsNullOrWhiteSpace(dto.NewFullName))
+                throw new InvalidOperationException("Informe login, e-mail e nome completo.");
 
-        if (!string.Equals(user.Email, dto.NewEmail, StringComparison.OrdinalIgnoreCase) &&
-            await _users.ExistsByEmailAsync(dto.NewEmail))
-            throw new InvalidOperationException("E-mail já em uso.");
+            if (!string.Equals(user.Login, dto.NewLogin, StringComparison.OrdinalIgnoreCase) &&
+                await _users.ExistsByLoginAsync(dto.NewLogin))
+                throw new InvalidOperationException("Login já em uso.");
+
+            if (!string.Equals(user.Email, dto.NewEmail, StringComparison.OrdinalIgnoreCase) &&
+                await _users.ExistsByEmailAsync(dto.NewEmail))
+                throw new InvalidOperationException("E-mail já em uso.");
+        }
 
         var (isValid, reason) = _passwordService.ValidatePolicy(dto.NewPassword);
         if (!isValid)
@@ -270,9 +295,13 @@ public class UserAuthService : IUserAuthService
         var salt = _passwordService.GenerateSalt();
         var hash = _passwordService.HashPassword(dto.NewPassword, salt);
 
-        user.Login = dto.NewLogin.Trim();
-        user.Email = dto.NewEmail.Trim();
-        user.FullName = dto.NewFullName.Trim();
+        if (user.MustChangeProfile)
+        {
+            user.Login = dto.NewLogin.Trim();
+            user.Email = dto.NewEmail.Trim();
+            user.FullName = dto.NewFullName.Trim();
+        }
+
         user.PasswordSalt = salt;
         user.PasswordHash = hash;
         user.MustChangePassword = false;
@@ -293,11 +322,14 @@ public class UserAuthService : IUserAuthService
             MustChangePassword = user.MustChangePassword,
             MustChangeProfile = user.MustChangeProfile,
             MfaRequired = user.MfaRequired,
-            MfaConfigured = user.MfaConfigured
+            MfaConfigured = user.MfaConfigured,
+            Login = user.Login,
+            Email = user.Email,
+            FullName = user.FullName
         };
     }
 
-    public async Task<TokenPairDto> RefreshAsync(string refreshToken)
+    public async Task<TokenPairDto> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null)
     {
         // Validação: token vazio ou nulo
         if (string.IsNullOrWhiteSpace(refreshToken))
@@ -350,6 +382,7 @@ public class UserAuthService : IUserAuthService
         bool isWithinGrace = session.IsRevoked && session.IsWithinRefreshGracePeriod;
         if (isWithinGrace)
         {
+            RefreshGraceReuseCounter.Add(1);
             _logger.LogInformation(
                 "[Refresh] Sessão {SessionId} já revogada mas dentro do grace period — reutilizando (UserId={UserId})",
                 session.Id, session.UserId);
@@ -373,12 +406,37 @@ public class UserAuthService : IUserAuthService
             await _sessions.RevokeWithGracePeriodAsync(session.Id, TimeSpan.FromMinutes(5));
         }
 
-        return await IssueFullSessionAsync(session.UserId, session.MfaVerified, null, null);
+        // Preserva a origem da requisição na auditoria da nova sessão (antes gravava null).
+        return await IssueFullSessionAsync(session.UserId, session.MfaVerified, ipAddress, userAgent);
     }
 
     public async Task LogoutAsync(Guid sessionId)
     {
         await _sessions.RevokeAsync(sessionId);
+    }
+
+    public async Task<StepUpTokenDto> CreateStepUpTokenAsync(Guid userId, string password)
+    {
+        var user = await _users.GetByIdAsync(userId)
+            ?? throw new UnauthorizedAccessException("Usuário não encontrado.");
+
+        if (!user.IsActive)
+            throw new UnauthorizedAccessException("Conta desativada.");
+
+        if (string.IsNullOrEmpty(password)
+            || !_passwordService.VerifyPassword(password, user.PasswordSalt, user.PasswordHash))
+        {
+            await LogAuthEventAsync(userId, "step_up_failed", false, "invalid_password", null, null);
+            throw new UnauthorizedAccessException("Senha incorreta.");
+        }
+
+        await LogAuthEventAsync(userId, "step_up_granted", true, null, null, null);
+
+        return new StepUpTokenDto
+        {
+            StepUpToken = _jwtService.GenerateStepUpToken(userId),
+            ExpiresInSeconds = 5 * 60
+        };
     }
 
     public async Task<TokenPairDto> IssueFullSessionAsync(
@@ -394,7 +452,15 @@ public class UserAuthService : IUserAuthService
         // (notas, custom fields, tickets, etc.) possa ser resolvido da identidade
         // autenticada e não de campos enviados pelo cliente.
         var loginClaim = await ResolveUsernameClaimAsync(userId);
-        var extraClaims = loginClaim is not null ? new[] { loginClaim } : null;
+
+        var extraClaims = new List<Claim>();
+        if (loginClaim is not null)
+            extraClaims.Add(loginClaim);
+
+        // Claims de autorização: sem elas o console web não tinha como aplicar os gates
+        // de permissão (authorization.ts caía em "allow by default" e liberava tudo).
+        extraClaims.AddRange(await BuildAuthorizationClaimsAsync(userId));
+
         var accessToken = _jwtService.GenerateAccessToken(userId, sessionId, extraClaims);
 
         var accessHash = Convert.ToBase64String(
@@ -428,6 +494,82 @@ public class UserAuthService : IUserAuthService
 
     private static bool HasKeyType(IEnumerable<UserMfaKey> keys, MfaKeyType type)
         => keys.Any(k => k.IsActive && k.KeyType == type);
+
+    private const string PermissionClaimType = "permissions";
+    private const string RoleClaimType = "roles";
+
+    /// <summary>
+    /// Resolve as permissões efetivas ("Recurso.Ação") e os nomes das roles do usuário para
+    /// o access token. Em caso de falha emite claims vazias (fail-closed): é preferível um
+    /// usuário sem menu por alguns minutos do que um cliente autorizando tudo.
+    /// </summary>
+    private async Task<IReadOnlyList<Claim>> BuildAuthorizationClaimsAsync(Guid userId)
+    {
+        // Cache curto: o login/refresh não precisa recarregar permissões a cada renovação
+        // (eram 3 queries por refresh). Alterações de permissão passam a valer em <= 60s,
+        // bem abaixo da vida do access token.
+        var cacheKey = $"authz-claims:{userId:N}";
+        if (_cache.TryGetValue(cacheKey, out IReadOnlyList<Claim>? cached) && cached is not null)
+            return cached;
+
+        try
+        {
+            var assignments = await _userGroups.GetRolesWithPermissionsForUserAsync(userId);
+            var totalActions = Enum.GetValues<ActionType>().Length;
+
+            var permissions = new List<string>();
+            foreach (var group in assignments
+                         .SelectMany(a => a.Permissions)
+                         .DistinctBy(p => (p.ResourceType, p.ActionType))
+                         .GroupBy(p => p.ResourceType))
+            {
+                var actions = group.Select(p => p.ActionType).Distinct().ToList();
+
+                // Compressão: recurso com todas as ações vira "Recurso.*" — reduz o tamanho
+                // do access token (um Admin cheio chega a ~80 permissões).
+                if (actions.Count >= totalActions)
+                    permissions.Add($"{group.Key}.*");
+                else
+                    permissions.AddRange(actions.Select(action => $"{group.Key}.{action}"));
+            }
+
+            permissions.Sort(StringComparer.Ordinal);
+
+            var roleIds = (await _userGroups.GetRolesForUserAsync(userId))
+                .Select(a => a.RoleId)
+                .Distinct()
+                .ToList();
+
+            var roleNames = roleIds.Count == 0
+                ? []
+                : (await _roles.GetByIdsAsync(roleIds))
+                    .Select(r => r.Name)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+            IReadOnlyList<Claim> claims =
+            [
+                new Claim(PermissionClaimType, string.Join(' ', permissions)),
+                new Claim(RoleClaimType, string.Join(' ', roleNames))
+            ];
+
+            _cache.Set(cacheKey, claims, TimeSpan.FromSeconds(60));
+            return claims;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Falha ao resolver permissões/roles do usuário {UserId}; emitindo claims vazias.", userId);
+
+            return
+            [
+                new Claim(PermissionClaimType, string.Empty),
+                new Claim(RoleClaimType, string.Empty)
+            ];
+        }
+    }
 
     /// <summary>
     /// Resolve o username (login) de um usuário para incluir como claim no access token.
@@ -499,8 +641,13 @@ public class UserAuthService : IUserAuthService
     {
         var user = await _users.GetByIdAsync(userId)
             ?? throw new InvalidOperationException("Usuário não encontrado.");
+
+        // Libera os dois bloqueios: senha e segundo fator. Antes só o de senha era
+        // limpo, então "desbloquear" podia manter o usuário travado no MFA.
         user.FailedLoginAttempts = 0;
         user.LockoutUntil = null;
+        user.MfaFailedAttempts = 0;
+        user.MfaLockoutUntil = null;
         user.UpdatedAt = DateTime.UtcNow;
         await _users.UpdateAsync(user);
     }

@@ -4,13 +4,15 @@ using Discovery.Core.DTOs.Auth;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Security;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Cqrs.Auth.QueryHandlers;
 
 public sealed class BeginFido2AssertionQueryHandler(
     IFido2Service fido2Service,
     IUserMfaKeyRepository mfaKeyRepo,
-    IUserAuthService authService
+    IUserAuthService authService,
+    ILogger<BeginFido2AssertionQueryHandler> logger
 ) : IRequestHandler<BeginFido2AssertionQuery, Result<BeginFido2AssertionResult>>
 {
     public async Task<Result<BeginFido2AssertionResult>> Handle(BeginFido2AssertionQuery q, CancellationToken ct)
@@ -27,13 +29,16 @@ public sealed class BeginFido2AssertionQueryHandler(
         }
         catch (Exception ex)
         {
-            return Result<BeginFido2AssertionResult>.Failure(Error.Internal(ex.Message));
+            logger.LogError(ex, "Falha ao iniciar a asserção FIDO2 do usuário {UserId}", q.UserId);
+            return Result<BeginFido2AssertionResult>.Failure(
+                Error.Internal("Não foi possível iniciar a validação da chave de segurança."));
         }
     }
 }
 
 public sealed class GetFirstAccessStatusQueryHandler(
-    IUserAuthService authService
+    IUserAuthService authService,
+    ILogger<GetFirstAccessStatusQueryHandler> logger
 ) : IRequestHandler<GetFirstAccessStatusQuery, Result<FirstAccessStatusDto>>
 {
     public async Task<Result<FirstAccessStatusDto>> Handle(GetFirstAccessStatusQuery q, CancellationToken ct)
@@ -45,7 +50,9 @@ public sealed class GetFirstAccessStatusQueryHandler(
         }
         catch (Exception ex)
         {
-            return Result<FirstAccessStatusDto>.Failure(Error.Internal(ex.Message));
+            logger.LogError(ex, "Falha ao obter o status de primeiro acesso do usuário {UserId}", q.UserId);
+            return Result<FirstAccessStatusDto>.Failure(
+                Error.Internal("Não foi possível obter o status do primeiro acesso."));
         }
     }
 }

@@ -45,7 +45,7 @@ public sealed class RefreshTokenQueryHandler(
     {
         try
         {
-            var pair = await userAuthService.RefreshAsync(q.RefreshToken);
+            var pair = await userAuthService.RefreshAsync(q.RefreshToken, q.IpAddress, q.UserAgent);
             return Result<RefreshResultDto>.Success(new RefreshResultDto(pair.AccessToken, pair.RefreshToken, DateTime.UtcNow.AddSeconds(pair.ExpiresInSeconds)));
         }
         catch (UnauthorizedAccessException ex)

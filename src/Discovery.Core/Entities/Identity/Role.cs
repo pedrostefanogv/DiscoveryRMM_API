@@ -15,6 +15,9 @@ public class Role
     /// <summary>Política de 2FA exigida para usuários vinculados à role.</summary>
     public RoleMfaRequirement MfaRequirement { get; set; } = RoleMfaRequirement.None;
 
+    /// <summary>Roles inativas não concedem permissões, mas permanecem para histórico.</summary>
+    public bool IsActive { get; set; } = true;
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

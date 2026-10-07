@@ -10,6 +10,12 @@ public interface IUserMfaKeyRepository
     Task<UserMfaKey> CreateAsync(UserMfaKey key);
     Task<bool> UpdateSignCountAsync(Guid keyId, uint newSignCount);
     Task<bool> UpdateLastUsedAsync(Guid keyId);
+
+    /// <summary>Marca o passo TOTP consumido (anti-replay do mesmo código).</summary>
+    Task<bool> SetLastUsedStepAsync(Guid keyId, long step);
+
+    /// <summary>Atualiza os hashes dos códigos de backup (consumo de uso único).</summary>
+    Task<bool> UpdateBackupCodeHashesAsync(Guid keyId, string[] hashes);
     Task<bool> DeactivateAsync(Guid keyId, Guid userId);
     Task<int> DeactivateAllByUserIdAsync(Guid userId);
     Task<int> CountActiveByUserIdAsync(Guid userId);

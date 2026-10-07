@@ -16,7 +16,11 @@ public sealed record LoginResultDto(
     bool MustChangeProfile = false,
     bool SessionEstablished = false
 );
-public sealed record RefreshTokenQuery(string RefreshToken) : IQuery<Result<RefreshResultDto>>;
+public sealed record RefreshTokenQuery(
+    string RefreshToken,
+    string? IpAddress = null,
+    string? UserAgent = null
+) : IQuery<Result<RefreshResultDto>>;
 public sealed record RefreshResultDto(string AccessToken, string RefreshToken, DateTime ExpiresAt);
 public sealed record LogoutCommand(string RefreshToken) : ICommand<Result<VoidResult>>;
 public sealed record ListUsersQuery(string? SearchTerm, string? Cursor, int Limit = 50) : IQuery<Result<ListUsersResult>>;

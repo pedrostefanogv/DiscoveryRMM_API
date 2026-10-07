@@ -12,6 +12,13 @@ public interface IOtpService
     /// <summary>Valida um código TOTP de 6 dígitos. Janela de ±1 step (30s).</summary>
     bool ValidateTotp(string secretBase32, string code);
 
+    /// <summary>
+    /// Valida um código TOTP e retorna o passo consumido. Quando
+    /// <paramref name="minStepExclusive"/> é informado, códigos pertencentes a passos
+    /// já usados (menores ou iguais) são rejeitados — proteção contra replay.
+    /// </summary>
+    bool TryValidateTotp(string secretBase32, string code, long? minStepExclusive, out long matchedStep);
+
     /// <summary>Gera N códigos de backup de uso único. Retorna (plaintext, hashes).</summary>
     (IEnumerable<string> plaintextCodes, IEnumerable<string> hashedCodes) GenerateBackupCodes(int count = 8);
 

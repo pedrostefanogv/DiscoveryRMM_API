@@ -15,10 +15,17 @@ public interface IUserAuthService
     /// Troca um refresh token válido por um novo par access+refresh.
     /// Rotação automática (refresh token anterior é invalidado).
     /// </summary>
-    Task<TokenPairDto> RefreshAsync(string refreshToken);
+    Task<TokenPairDto> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
 
     /// <summary>Revoga a sessão identificada pelo sessionId.</summary>
     Task LogoutAsync(Guid sessionId);
+
+    /// <summary>
+    /// Reautentica o usuário por senha e devolve um token de step-up de curta duração
+    /// (exigido em operações sensíveis, como gerenciar chaves MFA).
+    /// Lança UnauthorizedAccessException se a senha estiver incorreta.
+    /// </summary>
+    Task<StepUpTokenDto> CreateStepUpTokenAsync(Guid userId, string password);
 
     /// <summary>
     /// Emite access+refresh tokens completos após MFA verificado.

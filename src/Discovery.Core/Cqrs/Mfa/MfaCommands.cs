@@ -13,6 +13,18 @@ public sealed record CompleteFido2RegistrationCommand(
 
 public sealed record CompleteFido2RegistrationResult(Guid KeyId, string Message);
 
+public sealed record BeginTotpRegistrationQuery(Guid UserId) : IQuery<Result<BeginTotpRegistrationResult>>;
+public sealed record BeginTotpRegistrationResult(string SecretBase32, string QrCodeUri, string Message);
+
+public sealed record CompleteTotpRegistrationCommand(
+    Guid UserId,
+    string SecretBase32,
+    string VerificationCode,
+    string KeyName
+) : ICommand<Result<CompleteTotpRegistrationResult>>;
+
+public sealed record CompleteTotpRegistrationResult(string Message, IReadOnlyList<string> BackupCodes);
+
 public sealed record RenameMfaKeyCommand(
     Guid KeyId,
     Guid UserId,

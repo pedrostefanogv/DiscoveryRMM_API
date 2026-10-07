@@ -17,19 +17,12 @@ public sealed record ResetUserPasswordCommand(
 public sealed record ChangeUserPasswordCommand(
     Guid UserId,
     string CurrentPassword,
-    string NewPassword
+    string NewPassword,
+    /// <summary>Sessão atual (claim jti) — preservada; as demais são revogadas.</summary>
+    string? CurrentSessionId = null
 ) : ICommand<Result<VoidResult>>;
 
-/// <summary>
-/// Command to validate OTP token.
-/// </summary>
-public sealed record ValidateOtpCommand(
-    Guid UserId,
-    string OtpCode
-) : ICommand<Result<ValidateOtpResult>>;
-
-public sealed record ValidateOtpResult(
-    bool IsValid,
-    string? Token
-);
+// ValidateOtpCommand/ValidateOtpResult foram removidos: o handler era um stub que
+// sempre falhava ("requires full user context") e nada o consumia — o fluxo real de
+// OTP vive em CompleteOtpAssertionCommandHandler.
 

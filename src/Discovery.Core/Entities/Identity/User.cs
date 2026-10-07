@@ -34,4 +34,14 @@ public class User
 
     /// <summary>Se preenchido, a conta está bloqueada até esta data/hora (lockout temporário).</summary>
     public DateTime? LockoutUntil { get; set; }
+
+    /// <summary>
+    /// Contador de tentativas de MFA (OTP/FIDO2) falhas consecutivas. Mantido separado de
+    /// <see cref="FailedLoginAttempts"/> para que a força bruta no segundo fator não seja
+    /// mascarada por um lockout de senha (e vice-versa).
+    /// </summary>
+    public int MfaFailedAttempts { get; set; } = 0;
+
+    /// <summary>Se preenchido, o segundo fator está bloqueado até esta data/hora.</summary>
+    public DateTime? MfaLockoutUntil { get; set; }
 }

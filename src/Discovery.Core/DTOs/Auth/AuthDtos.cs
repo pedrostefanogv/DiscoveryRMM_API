@@ -65,6 +65,14 @@ public class FirstAccessStatusDto
     public bool MustChangeProfile { get; set; }
     public bool MfaRequired { get; set; }
     public bool MfaConfigured { get; set; }
+
+    /// <summary>
+    /// Perfil atual — permite que a tela de primeiro acesso exiba os dados já cadastrados
+    /// (e não obrigue o usuário a re-digitá-los quando só a senha precisa mudar).
+    /// </summary>
+    public string Login { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string FullName { get; set; } = string.Empty;
 }
 
 public class TokenPairDto
@@ -77,4 +85,19 @@ public class TokenPairDto
 public class RefreshTokenRequestDto
 {
     public string RefreshToken { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Corpo de POST /api/v1/auth/step-up: reautenticação por senha para operações
+/// sensíveis da própria conta (gerenciar chaves MFA).
+/// </summary>
+public class StepUpRequestDto
+{
+    public string Password { get; set; } = string.Empty;
+}
+
+public class StepUpTokenDto
+{
+    public string StepUpToken { get; set; } = string.Empty;
+    public int ExpiresInSeconds { get; set; }
 }

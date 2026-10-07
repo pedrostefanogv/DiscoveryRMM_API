@@ -7,14 +7,18 @@ public sealed record CompleteFido2AssertionCommand(
     Guid UserId,
     string AssertionResponseJson,
     string? IpAddress,
-    string? UserAgent
+    string? UserAgent,
+    /// <summary>jti do token mfa_pending; usado para garantir uso único do desafio.</summary>
+    string? MfaTokenId = null
 ) : ICommand<Result<TokenPairDto>>;
 
 public sealed record CompleteOtpAssertionCommand(
     Guid UserId,
     string Code,
     string? IpAddress,
-    string? UserAgent
+    string? UserAgent,
+    /// <summary>jti do token mfa_pending; usado para garantir uso único do desafio.</summary>
+    string? MfaTokenId = null
 ) : ICommand<Result<TokenPairDto>>;
 
 public sealed record CompleteFirstAccessCommand(

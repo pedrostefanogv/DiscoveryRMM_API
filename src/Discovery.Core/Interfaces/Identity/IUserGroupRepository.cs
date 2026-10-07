@@ -14,6 +14,12 @@ public interface IUserGroupRepository
     Task AddMemberAsync(Guid groupId, Guid userId);
     Task RemoveMemberAsync(Guid groupId, Guid userId);
     Task<IEnumerable<Guid>> GetMemberIdsAsync(Guid groupId);
+
+    /// <summary>Vínculos (com data de entrada) para compor a listagem de membros do grupo.</summary>
+    Task<IEnumerable<UserGroupMembership>> GetMembershipsAsync(Guid groupId);
+
+    /// <summary>Vínculo específico (para devolver a data de entrada real ao adicionar membro).</summary>
+    Task<UserGroupMembership?> GetMembershipAsync(Guid groupId, Guid userId);
     Task<IEnumerable<Guid>> GetGroupIdsForUserAsync(Guid userId);
 
     // Role assignments

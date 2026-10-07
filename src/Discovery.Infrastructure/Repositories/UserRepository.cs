@@ -14,6 +14,16 @@ public class UserRepository : IUserRepository
     public Task<User?> GetByIdAsync(Guid id)
         => _db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Id == id);
 
+    public async Task<IReadOnlyList<User>> GetByIdsAsync(IEnumerable<Guid> ids)
+    {
+        var idList = ids.Distinct().ToList();
+        if (idList.Count == 0) return [];
+
+        return await _db.Users.AsNoTracking()
+            .Where(u => idList.Contains(u.Id))
+            .ToListAsync();
+    }
+
     public Task<User?> GetByLoginAsync(string login)
         => _db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Login == login);
 
@@ -92,6 +102,28 @@ public class UserRepository : IUserRepository
     {
         var rows = await _db.Users.Where(u => u.Id == userId)
             .ExecuteUpdateAsync(s => s.SetProperty(u => u.LastLoginAt, at));
+        return rows > 0;
+    }
+
+    public async Task<bool> SetMfaFailureStateAsync(Guid userId, int failedAttempts, DateTime? lockoutUntil)
+    {
+        var now = DateTime.UtcNow;
+        var rows = await _db.Users.Where(u => u.Id == userId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(u => u.MfaFailedAttempts, failedAttempts)
+                .SetProperty(u => u.MfaLockoutUntil, lockoutUntil)
+                .SetProperty(u => u.UpdatedAt, now));
+        return rows > 0;
+    }
+
+    public async Task<bool> ResetMfaFailureStateAsync(Guid userId)
+    {
+        var now = DateTime.UtcNow;
+        var rows = await _db.Users.Where(u => u.Id == userId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(u => u.MfaFailedAttempts, 0)
+                .SetProperty(u => u.MfaLockoutUntil, (DateTime?)null)
+                .SetProperty(u => u.UpdatedAt, now));
         return rows > 0;
     }
 
