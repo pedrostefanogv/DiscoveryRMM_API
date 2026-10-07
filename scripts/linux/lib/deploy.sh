@@ -175,6 +175,176 @@ build_fanout_subject_lines() {
   printf '%s' "$out"
 }
 
+# ── Web Push (VAPID) ───────────────────────────────────────────────────────
+# O par VAPID identifica o servidor perante os provedores de push e NAO pode ser
+# regenerado a cada update: trocar as chaves invalida todas as inscricoes de
+# navegador existentes. Por isso a resolucao preserva o que ja existe.
+
+# Gera um par VAPID P-256 com openssl (dependencia ja garantida pelo instalador).
+# Saida: "<publica> <privada>" em base64url sem padding (formato do VAPID).
+# Retorna 1 (sem escrever nada) se o formato nao for o esperado — o chamador
+# segue com Web Push inativo em vez de gravar uma chave invalida.
+generate_vapid_keys() {
+  local tmp_dir key_pem text pub_b64 priv_b64 priv_hex_der priv_hex_text
+  tmp_dir="$(mktemp -d)"
+  key_pem="$tmp_dir/vapid.pem"
+
+  if ! openssl ecparam -name prime256v1 -genkey -noout -out "$key_pem" >/dev/null 2>&1; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  # Publica: ultimos 65 bytes do SubjectPublicKeyInfo = ponto nao comprimido.
+  if ! openssl ec -in "$key_pem" -pubout -outform DER > "$tmp_dir/pub.der" 2>/dev/null; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  # Privada (SEC1): 5 bytes de cabecalho + 32 bytes do escalar D.
+  if ! openssl ec -in "$key_pem" -outform DER > "$tmp_dir/priv.der" 2>/dev/null; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  if ! text="$(openssl ec -in "$key_pem" -text -noout 2>/dev/null)"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  pub_b64=""
+  priv_b64=""
+  priv_hex_der=""
+  priv_hex_text=""
+
+  # Cada passo e guardado explicitamente: o contrato "retorna 1 em falha" nao
+  # pode depender da supressao de errexit dentro de `if ! f="$(...)"`, que
+  # varia conforme o contexto em que a funcao e chamada.
+  if ! pub_b64="$(tail -c 65 "$tmp_dir/pub.der" | openssl base64 -A | tr '+/' '-_' | tr -d '=')"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  if ! priv_b64="$(dd if="$tmp_dir/priv.der" bs=1 skip=7 count=32 2>/dev/null | openssl base64 -A | tr '+/' '-_' | tr -d '=')"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  # Confere a extracao por offset contra o texto do openssl: se divergir, o
+  # layout do DER mudou e e melhor nao gravar chave nenhuma.
+  if ! priv_hex_der="$(dd if="$tmp_dir/priv.der" bs=1 skip=7 count=32 2>/dev/null | od -An -v -tx1 | tr -d ' \n')"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  if ! priv_hex_text="$(printf '%s\n' "$text" | awk '/^priv:/{f=1;next} /^pub:/{f=0} f' | tr -cd '0-9a-fA-F' | tr 'A-F' 'a-f')"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  rm -rf "$tmp_dir"
+
+  if [[ -z "$priv_hex_text" || "$priv_hex_der" != "$priv_hex_text" ]]; then
+    warn "Nao foi possivel validar o par VAPID gerado (layout do openssl inesperado)."
+    return 1
+  fi
+
+  if [[ ${#pub_b64} -ne 87 || ${#priv_b64} -ne 43 ]]; then
+    warn "Par VAPID gerado fora do formato base64url esperado."
+    return 1
+  fi
+
+  printf '%s %s' "$pub_b64" "$priv_b64"
+}
+
+# Valida o formato de uma chave VAPID em base64url: a publica tem 87 chars
+# (65 bytes) e a privada 43 (32 bytes), apenas [A-Za-z0-9_-].
+is_vapid_key() {
+  local value="${1:-}"
+  local expected="${2:-0}"
+
+  [[ "$expected" =~ ^[0-9]+$ ]] || return 1
+  [[ ${#value} -eq $expected ]] || return 1
+  [[ "$value" =~ ^[A-Za-z0-9_-]+$ ]]
+}
+
+# Resolve o que sera gravado no discovery.env, nesta prioridade:
+#   1) ambiente do instalador (--config/export): PUSH_VAPID_PUBLIC_KEY, _PRIVATE_KEY, _SUBJECT;
+#   2) valor ja gravado em discovery.env (update PRESERVA);
+#   3) par novo (primeira instalacao).
+# Le o arquivo ANTES do tee truncar, pelo mesmo motivo do DISCOVERY_APPLY_SYSTEM_UPDATES.
+resolve_vapid_push_config() {
+  local fallback_domain="${1:-}"
+  local env_file="/etc/discovery-api/discovery.env"
+  local existing_public="" existing_private="" existing_subject=""
+
+  if sudo test -f "$env_file" 2>/dev/null; then
+    existing_public="$(sudo awk -F= '/^Push__VapidPublicKey=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+    existing_private="$(sudo awk -F= '/^Push__VapidPrivateKey=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+    existing_subject="$(sudo awk -F= '/^Push__VapidSubject=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+  fi
+
+  # Base64url nao contem espaco: limpar evita que um CR ou espaco colado
+  # (discovery-install.env editado no Windows) corrompa o discovery.env.
+  local env_public env_private
+  env_public="$(printf '%s' "${PUSH_VAPID_PUBLIC_KEY:-}" | tr -d '[:space:]')"
+  env_private="$(printf '%s' "${PUSH_VAPID_PRIVATE_KEY:-}" | tr -d '[:space:]')"
+  existing_public="$(printf '%s' "$existing_public" | tr -d '[:space:]')"
+  existing_private="$(printf '%s' "$existing_private" | tr -d '[:space:]')"
+
+  PUSH_VAPID_SUBJECT="$(printf '%s' "${PUSH_VAPID_SUBJECT:-$existing_subject}" | tr -d '\r\n')"
+  if [[ -z "$PUSH_VAPID_SUBJECT" ]]; then
+    [[ -n "$fallback_domain" ]] || fallback_domain="localhost"
+    PUSH_VAPID_SUBJECT="mailto:suporte@$fallback_domain"
+  fi
+
+  # O par e UMA unidade: juntar metade do ambiente com metade do arquivo
+  # geraria uma chave inconsistente — o provedor recusaria o envio e o console
+  # apareceria como "Ativo" sem entregar nada.
+  local pair_public="" pair_private="" pair_source=""
+  if [[ -n "$env_public" || -n "$env_private" ]]; then
+    if is_vapid_key "$env_public" 87 && is_vapid_key "$env_private" 43; then
+      pair_public="$env_public"
+      pair_private="$env_private"
+      pair_source="ambiente do instalador"
+    elif [[ -n "$env_public" && -n "$env_private" ]]; then
+      warn "PUSH_VAPID_PUBLIC_KEY/PRIVATE_KEY fora do formato base64url esperado; override ignorado."
+    else
+      warn "PUSH_VAPID_PUBLIC_KEY e PUSH_VAPID_PRIVATE_KEY devem ser definidas JUNTAS; override parcial ignorado."
+    fi
+  fi
+
+  if [[ -z "$pair_public" && -n "$existing_public" && -n "$existing_private" ]]; then
+    if is_vapid_key "$existing_public" 87 && is_vapid_key "$existing_private" 43; then
+      pair_public="$existing_public"
+      pair_private="$existing_private"
+      pair_source="discovery.env"
+    else
+      warn "Par VAPID gravado em discovery.env esta invalido; sera regenerado."
+    fi
+  fi
+
+  if [[ -n "$pair_public" && -n "$pair_private" ]]; then
+    PUSH_VAPID_PUBLIC_KEY="$pair_public"
+    PUSH_VAPID_PRIVATE_KEY="$pair_private"
+    log "Web Push: par VAPID preservado ($pair_source) — inscricoes de navegador mantidas."
+    return 0
+  fi
+
+  local generated=""
+  if ! generated="$(generate_vapid_keys)"; then
+    warn "Web Push ficara inativo: nao foi possivel gerar o par VAPID automaticamente."
+    warn "Defina PUSH_VAPID_PUBLIC_KEY/PUSH_VAPID_PRIVATE_KEY no discovery-install.env e rode o update."
+    PUSH_VAPID_PUBLIC_KEY=""
+    PUSH_VAPID_PRIVATE_KEY=""
+    return 0
+  fi
+
+  PUSH_VAPID_PUBLIC_KEY="${generated%% *}"
+  PUSH_VAPID_PRIVATE_KEY="${generated##* }"
+  log "Web Push: novo par VAPID gerado e gravado no discovery.env."
+  warn "Guarde copia de /etc/discovery-api/discovery.env: perder o par VAPID obriga os usuarios a reativar as notificacoes."
+}
+
 write_environment_file() {
   log "Escrevendo arquivo de ambiente da API"
 
@@ -248,6 +418,18 @@ write_environment_file() {
   fi
   case "${apply_system_updates_value:-0}" in 0|1) ;; *) apply_system_updates_value="0" ;; esac
 
+  # Web Push: resolve/preserva o par VAPID ANTES do tee truncar o arquivo —
+  # sem isso um update perderia as chaves e todas as inscricoes de navegador
+  # deixariam de valer (o provedor passaria a responder 401/403).
+  resolve_vapid_push_config "${fido2_server_domain:-}"
+
+  # Backup do env anterior ANTES de sobrescrever: o arquivo agora guarda o par
+  # VAPID, entao "backup de tudo junto" precisa incluir as chaves. A retencao no
+  # fim da funcao mantem apenas os DISCOVERY_KEEP_ENV_BACKUPS mais recentes.
+  if sudo test -f /etc/discovery-api/discovery.env; then
+    sudo cp -f /etc/discovery-api/discovery.env "/etc/discovery-api/discovery.env.bak-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+  fi
+
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
 ASPNETCORE_URLS=http://127.0.0.1:8080
@@ -263,6 +445,15 @@ Logging__LogLevel__Microsoft=Warning
 Logging__LogLevel__FluentMigrator=Warning
 OPENAPI__ENABLED=$( [[ "${OPENAPI_ENABLED:-0}" == "1" ]] && echo true || echo false )
 OpenApi__Scalar__Enabled=$( [[ "${OPENAPI_SCALAR_ENABLED:-$OPENAPI_ENABLED}" == "1" ]] && echo true || echo false )
+# ── Web Push (notificacoes do navegador) ───────────────────────────────────
+# O par VAPID e gerado na primeira instalacao e PRESERVADO nos updates: trocar
+# as chaves invalida todas as inscricoes de navegador existentes. Para usar um
+# par proprio, defina PUSH_VAPID_PUBLIC_KEY / PUSH_VAPID_PRIVATE_KEY (e
+# opcionalmente PUSH_VAPID_SUBJECT) no discovery-install.env ou no ambiente.
+Push__Enabled=$( [[ "${PUSH_ENABLED:-1}" == "1" ]] && echo true || echo false )
+Push__VapidPublicKey=${PUSH_VAPID_PUBLIC_KEY}
+Push__VapidPrivateKey=${PUSH_VAPID_PRIVATE_KEY}
+Push__VapidSubject=${PUSH_VAPID_SUBJECT}
 ConnectionStrings__DefaultConnection=Host=127.0.0.1;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
 # Credenciais ficam em Nats__AuthUser/Nats__AuthPassword (abaixo) — nunca na URL:
 # caracteres especiais da senha quebrariam o parser de URI.
