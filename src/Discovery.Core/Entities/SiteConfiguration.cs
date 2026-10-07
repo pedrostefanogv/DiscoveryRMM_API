@@ -56,9 +56,6 @@ public class SiteConfiguration
     /// <summary>Intervalo de inventário específico do site (horas)</summary>
     public int? InventoryIntervalHours { get; set; }
 
-    /// <summary>Configurações de atualização automática específicas do site</summary>
-    public string? AutoUpdateSettingsJson { get; set; }
-
     /// <summary>Configurações de self-update do agent específicas do site</summary>
     public string? AgentUpdatePolicyJson { get; set; }
 

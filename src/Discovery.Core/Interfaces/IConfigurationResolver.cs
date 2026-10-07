@@ -37,11 +37,6 @@ public interface IConfigurationResolver
     Task<T?> GetConfigurationObjectAsync<T>(string objectType) where T : class;
     
     /// <summary>
-    /// Obtem as configurações de auto-update efetivas para um nível.
-    /// </summary>
-    Task<AutoUpdateSettings> GetAutoUpdateSettingsAsync(string level, Guid? targetId = null);
-    
-    /// <summary>
     /// Obtem as configurações de branding efetivas.
     /// </summary>
     Task<BrandingSettings> GetBrandingSettingsAsync();

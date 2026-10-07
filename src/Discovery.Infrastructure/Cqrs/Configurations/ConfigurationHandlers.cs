@@ -316,7 +316,6 @@ public sealed class GetConfigurationMetadataQueryHandler(
         var key = propertyName switch
         {
             nameof(ServerConfiguration.AIIntegrationSettingsJson) => "AIIntegration",
-            nameof(ServerConfiguration.AutoUpdateSettingsJson) => "AutoUpdate",
             nameof(ServerConfiguration.AgentUpdatePolicyJson) => "AgentUpdate",
             nameof(ServerConfiguration.BackgroundProcessingSettingsJson) => "BackgroundProcessing",
             _ => propertyName
@@ -487,6 +486,16 @@ public sealed class ExportServerConfigurationQueryHandler(IConfigurationService 
 public sealed class ImportServerConfigurationCommandHandler(IConfigurationService config)
     : IRequestHandler<ImportServerConfigurationCommand, Result<ServerConfigurationImportResult>>
 {
+    /// <summary>
+    /// Campos que existiram e foram removidos do produto. Exports antigos ainda os
+    /// trazem; devem ser ignorados em silêncio em vez de virarem erro de "campo
+    /// não reconhecido" e quebrarem a restauração de um backup.
+    /// </summary>
+    private static readonly HashSet<string> RemovedFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AutoUpdateSettingsJson",
+    };
+
     public async Task<Result<ServerConfigurationImportResult>> Handle(
         ImportServerConfigurationCommand cmd,
         CancellationToken ct)
@@ -497,6 +506,9 @@ public sealed class ImportServerConfigurationCommandHandler(IConfigurationServic
             if (string.IsNullOrWhiteSpace(key)) continue;
             // Import nunca altera segredos write-only.
             if (key.Equals(nameof(ServerConfiguration.ObjectStorageSecretKey), StringComparison.OrdinalIgnoreCase))
+                continue;
+            // Campo removido do produto: backup antigo, ignora.
+            if (RemovedFields.Contains(key))
                 continue;
             updates[key] = value;
         }

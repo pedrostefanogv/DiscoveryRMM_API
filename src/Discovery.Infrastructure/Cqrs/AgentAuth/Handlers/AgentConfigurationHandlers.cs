@@ -68,7 +68,6 @@ public sealed class GetAgentConfigurationHandler(
             ["inventoryIntervalHours"] = siteConfig?.InventoryIntervalHours ?? clientConfig?.InventoryIntervalHours ?? serverConfig.InventoryIntervalHours,
 
             // Update policies (JSON strings)
-            ["autoUpdateSettings"] = TryDeserializeJson(siteConfig?.AutoUpdateSettingsJson ?? clientConfig?.AutoUpdateSettingsJson ?? serverConfig.AutoUpdateSettingsJson),
             ["agentUpdatePolicy"] = TryDeserializeJson(clientConfig?.AgentUpdatePolicyJson ?? serverConfig.AgentUpdatePolicyJson),
 
             // Branding & notification

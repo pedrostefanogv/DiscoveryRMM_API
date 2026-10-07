@@ -5,7 +5,7 @@ namespace Discovery.Core.ValueObjects;
 
 /// <summary>
 /// Política efetiva para self-update do binário do agent.
-/// É separada de AutoUpdateSettings, que continua representando atualização de apps/software.
+/// Cobre apenas o self-update do binário do agent (atualização de apps/software é manual).
 /// </summary>
 public class AgentUpdatePolicy
 {

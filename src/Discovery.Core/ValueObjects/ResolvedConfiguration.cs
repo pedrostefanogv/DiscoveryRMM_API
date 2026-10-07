@@ -36,7 +36,6 @@ public class ResolvedConfiguration
 
     // ============ Updates automáticos ============
 
-    public AutoUpdateSettings AutoUpdate { get; set; } = new();
     public AgentUpdatePolicy AgentUpdate { get; set; } = new();
 
     // ============ IA ============

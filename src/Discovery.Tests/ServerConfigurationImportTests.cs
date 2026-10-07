@@ -54,6 +54,35 @@ public class ServerConfigurationImportTests
     }
 
     [Test]
+    public async Task Import_ignora_campos_removidos_do_produto()
+    {
+        // Backups antigos ainda trazem autoUpdateSettingsJson. O campo saiu do
+        // produto, então deve ser ignorado em silêncio — não pode virar
+        // "campo desconhecido" e quebrar a restauração de um backup.
+        var service = new FakeConfigurationService();
+        var handler = new ImportServerConfigurationCommandHandler(service);
+
+        var result = await handler.Handle(
+            new ImportServerConfigurationCommand(
+                new Dictionary<string, object>
+                {
+                    ["discoveryEnabled"] = true,
+                    ["autoUpdateSettingsJson"] = "{\"enabled\":true}",
+                    ["AutoUpdateSettingsJson"] = "{\"enabled\":false}"
+                },
+                DryRun: false,
+                ChangedBy: "tester"),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.UnknownFields, Is.Empty);
+        Assert.That(result.Value!.AppliedFields, Does.Not.Contain("autoUpdateSettingsJson"));
+        Assert.That(service.PatchCalls, Has.Count.EqualTo(1));
+        Assert.That(service.PatchCalls[0].ContainsKey("autoUpdateSettingsJson"), Is.False);
+        Assert.That(service.PatchCalls[0].ContainsKey("discoveryEnabled"), Is.True);
+    }
+
+    [Test]
     public async Task Import_AppliesKnownFieldsAndNeverSecrets()
     {
         var service = new FakeConfigurationService();

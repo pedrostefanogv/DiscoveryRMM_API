@@ -46,7 +46,6 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
         existingConfig.AppStorePolicy = config.AppStorePolicy;
         existingConfig.AIIntegrationSettingsJson = config.AIIntegrationSettingsJson;
         existingConfig.InventoryIntervalHours = config.InventoryIntervalHours;
-        existingConfig.AutoUpdateSettingsJson = config.AutoUpdateSettingsJson;
         existingConfig.AgentUpdatePolicyJson = config.AgentUpdatePolicyJson;
         existingConfig.AgentHeartbeatIntervalSeconds = config.AgentHeartbeatIntervalSeconds;
         existingConfig.AgentOnlineGraceSeconds = config.AgentOnlineGraceSeconds;

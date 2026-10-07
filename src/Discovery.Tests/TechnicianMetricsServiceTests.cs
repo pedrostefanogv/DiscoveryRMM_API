@@ -538,7 +538,6 @@ public class TechnicianMetricsServiceTests
         public Task<SiteConfiguration?> GetSiteAsync(Guid siteId) => throw new NotSupportedException();
         public Task<T?> GetEffectiveValueAsync<T>(string level, string key, Guid? targetId = null) => throw new NotSupportedException();
         public Task<T?> GetConfigurationObjectAsync<T>(string objectType) where T : class => throw new NotSupportedException();
-        public Task<AutoUpdateSettings> GetAutoUpdateSettingsAsync(string level, Guid? targetId = null) => throw new NotSupportedException();
         public Task<BrandingSettings> GetBrandingSettingsAsync() => throw new NotSupportedException();
         public Task<AIIntegrationSettings> GetAISettingsAsync() => throw new NotSupportedException();
         public Task<ResolvedConfiguration> ResolveForSiteAsync(Guid siteId) => throw new NotSupportedException();

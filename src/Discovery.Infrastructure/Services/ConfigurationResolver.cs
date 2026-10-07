@@ -114,7 +114,6 @@ public class ConfigurationResolver : IConfigurationResolver
         {
             "branding" or "brandingsettings" => server.BrandingSettingsJson,
             "ai" or "aiintegration" or "aiintegrationsettings" => server.AIIntegrationSettingsJson,
-            "autoupdate" or "autoupdatesettings" => server.AutoUpdateSettingsJson,
             "agentupdate" or "agentupdatepolicy" => server.AgentUpdatePolicyJson,
             _ => null
         };
@@ -132,36 +131,6 @@ public class ConfigurationResolver : IConfigurationResolver
             return value;
         }
         catch { return Activator.CreateInstance<T>(); }
-    }
-
-    public async Task<AutoUpdateSettings> GetAutoUpdateSettingsAsync(string level, Guid? targetId = null)
-    {
-        var server = await GetServerAsync();
-        var serverSettings = DeserializeOrDefault<AutoUpdateSettings>(server.AutoUpdateSettingsJson);
-
-        if (level.Equals("Server", StringComparison.OrdinalIgnoreCase) || targetId is null)
-            return serverSettings;
-
-        if (level.Equals("Client", StringComparison.OrdinalIgnoreCase) && targetId.HasValue)
-        {
-            var client = await _clientRepo.GetByClientIdAsync(targetId.Value);
-            if (!string.IsNullOrWhiteSpace(client?.AutoUpdateSettingsJson))
-                return DeserializeOrDefault<AutoUpdateSettings>(client.AutoUpdateSettingsJson!);
-            return serverSettings;
-        }
-
-        if (level.Equals("Site", StringComparison.OrdinalIgnoreCase) && targetId.HasValue)
-        {
-            var site = await _siteRepo.GetBySiteIdAsync(targetId.Value);
-            if (!string.IsNullOrWhiteSpace(site?.AutoUpdateSettingsJson))
-                return DeserializeOrDefault<AutoUpdateSettings>(site.AutoUpdateSettingsJson!);
-            var client = site is not null ? await _clientRepo.GetByClientIdAsync(site.ClientId) : null;
-            if (!string.IsNullOrWhiteSpace(client?.AutoUpdateSettingsJson))
-                return DeserializeOrDefault<AutoUpdateSettings>(client!.AutoUpdateSettingsJson!);
-            return serverSettings;
-        }
-
-        return serverSettings;
     }
 
     public async Task<BrandingSettings> GetBrandingSettingsAsync()
@@ -241,8 +210,6 @@ public class ConfigurationResolver : IConfigurationResolver
         var heartbeat = ResolveValue("AgentHeartbeatIntervalSeconds", blocked, (int?)null, client?.AgentHeartbeatIntervalSeconds, server.AgentHeartbeatIntervalSeconds);
         var onlineGrace = ResolveValue("AgentOnlineGraceSeconds", blocked, site?.AgentOnlineGraceSeconds, client?.AgentOnlineGraceSeconds, server.AgentOnlineGraceSeconds);
 
-        var autoUpdate = ResolveAutoUpdate(site?.AutoUpdateSettingsJson, client?.AutoUpdateSettingsJson, server.AutoUpdateSettingsJson);
-        var autoUpdateSource = ResolveObjectSource("AutoUpdateSettingsJson", blocked, site?.AutoUpdateSettingsJson, client?.AutoUpdateSettingsJson);
         var agentUpdate = ResolveAgentUpdate(site?.AgentUpdatePolicyJson, client?.AgentUpdatePolicyJson, server.AgentUpdatePolicyJson);
         var agentUpdateSource = ResolveObjectSource("AgentUpdatePolicyJson", blocked, site?.AgentUpdatePolicyJson, client?.AgentUpdatePolicyJson);
 
@@ -272,7 +239,6 @@ public class ConfigurationResolver : IConfigurationResolver
             InventoryIntervalHours = inventory.Value,
             AgentHeartbeatIntervalSeconds = heartbeat.Value,
             AgentOnlineGraceSeconds = onlineGrace.Value,
-            AutoUpdate = autoUpdate,
             AgentUpdate = agentUpdate,
             AIIntegration = ai,
             BackgroundProcessing = backgroundProcessing,
@@ -291,7 +257,6 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["InventoryIntervalHours"] = (int)inventory.Source;
         resolved.Inheritance["AgentHeartbeatIntervalSeconds"] = (int)heartbeat.Source;
         resolved.Inheritance["AgentOnlineGraceSeconds"] = (int)onlineGrace.Source;
-        resolved.Inheritance["AutoUpdate"] = (int)autoUpdateSource;
         resolved.Inheritance["AgentUpdate"] = (int)agentUpdateSource;
         resolved.Inheritance["AIIntegration"] = (int)aiSource;
         resolved.Inheritance["BackgroundProcessing"] = (int)backgroundSource;
@@ -331,15 +296,6 @@ public class ConfigurationResolver : IConfigurationResolver
 
         var client = await _clientRepo.GetByClientIdAsync(clientId.Value);
         return ResolveBackgroundProcessing(client?.BackgroundProcessingSettingsJson, server.BackgroundProcessingSettingsJson);
-    }
-
-    private static AutoUpdateSettings ResolveAutoUpdate(string? siteJson, string? clientJson, string serverJson)
-    {
-        if (!string.IsNullOrWhiteSpace(siteJson))
-            return DeserializeOrDefault<AutoUpdateSettings>(siteJson);
-        if (!string.IsNullOrWhiteSpace(clientJson))
-            return DeserializeOrDefault<AutoUpdateSettings>(clientJson);
-        return DeserializeOrDefault<AutoUpdateSettings>(serverJson);
     }
 
     private static AgentUpdatePolicy ResolveAgentUpdate(string? siteJson, string? clientJson, string serverJson)

@@ -65,9 +65,6 @@ public class ClientConfiguration
     /// <summary>Intervalo de atualização de inventário (horas)</summary>
     public int? InventoryIntervalHours { get; set; }
 
-    /// <summary>Configurações de atualização automática de software</summary>
-    public string? AutoUpdateSettingsJson { get; set; }
-
     /// <summary>Configurações de self-update do agent para este cliente</summary>
     public string? AgentUpdatePolicyJson { get; set; }
 

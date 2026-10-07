@@ -41,7 +41,7 @@ public interface IConfigurationService
     Task<(bool IsValid, string[] Errors)> ValidateAsync(object config);
     
     /// <summary>
-    /// Valida json de um objeto complexo (ex: AutoUpdateSettings).
+    /// Valida json de um objeto complexo (ex: AgentUpdatePolicy).
     /// </summary>
     Task<(bool IsValid, string[] Errors)> ValidateJsonAsync(string objectType, string json);
 }

@@ -14,7 +14,6 @@ public static class ConfigurationFieldCatalog
         "ZeroTouchEnabled",
         "AppStorePolicy",
         "InventoryIntervalHours",
-        "AutoUpdateSettingsJson",
         "AgentUpdatePolicyJson",
         "AIIntegrationSettingsJson",
         "TicketAttachmentSettingsJson",

@@ -60,9 +60,6 @@ public class ServerConfiguration
     /// <summary>Intervalo padrão de inventário (horas)</summary>
     public int InventoryIntervalHours { get; set; } = 24;
 
-    /// <summary>Configurações padrão de atualização automática</summary>
-    public string AutoUpdateSettingsJson { get; set; } = string.Empty;
-
     /// <summary>Configurações padrão de self-update do agent.</summary>
     public string AgentUpdatePolicyJson { get; set; } = string.Empty;
 
