@@ -18,6 +18,7 @@ public class AiChatToolOrchestrator
 {
     private readonly IMemoryCache _cache;
     private readonly IMcpToolExecutor _mcpToolExecutor;
+    private readonly IMcpToolPolicyRepository _policyRepository;
     private readonly ILogger<AiChatService> _logger;
 
     private static readonly Regex XmlToolCallRegex = new(
@@ -40,13 +41,10 @@ public class AiChatToolOrchestrator
         ["knowledgesearch"] = "knowledge_search",
         ["searchknowledge"] = "knowledge_search",
         ["kbsearch"] = "knowledge_search",
-        ["filesystemread"] = "filesystem.read_file",
-        ["readfile"] = "filesystem.read_file",
         ["timecurrent"] = "time.current",
         ["gettime"] = "time.current",
         ["memorysearch"] = "memory.search",
         ["sequentialthinking"] = "sequential_thinking",
-        ["postgresquery"] = "postgres.query",
     };
 
     // ── Fonte única de verdade para hints de "argumentos vazios" ─────────────
@@ -77,10 +75,15 @@ public class AiChatToolOrchestrator
     public static string GetEmptyArgHintAscii(string toolName)
         => EmptyArgHintsAscii.TryGetValue(toolName, out var hint) ? hint : EmptyArgHintDefaultAscii;
 
-    public AiChatToolOrchestrator(IMemoryCache cache, IMcpToolExecutor mcpToolExecutor, ILogger<AiChatService> logger)
+    public AiChatToolOrchestrator(
+        IMemoryCache cache,
+        IMcpToolExecutor mcpToolExecutor,
+        IMcpToolPolicyRepository policyRepository,
+        ILogger<AiChatService> logger)
     {
         _cache = cache;
         _mcpToolExecutor = mcpToolExecutor;
+        _policyRepository = policyRepository;
         _logger = logger;
     }
 
@@ -164,7 +167,19 @@ public class AiChatToolOrchestrator
         var cacheKey = $"agent_tools_{agentId}";
         _cache.Set(cacheKey, llmTools, AiChatConstants.AgentToolsCacheTtl);
         _logger.LogInformation("[AgentTools] {Count} tools registradas para AgentId={AgentId}", llmTools.Count, agentId);
-        await Task.CompletedTask;
+
+        // Governança: garante uma política GLOBAL para cada tool do agente para
+        // que ela apareça na tela de settings e possa ser habilitada/desabilitada
+        // por cliente/site/agente. Não sobrescreve políticas já existentes.
+        try
+        {
+            await _policyRepository.EnsureGlobalPoliciesAsync(
+                McpToolSources.Agent, llmTools.Select(t => t.Name), ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[AgentTools] Falha ao garantir policies globais das tools do agente (AgentId={AgentId})", agentId);
+        }
     }
 
     public List<LlmTool>? GetCachedAgentTools(Guid agentId)
@@ -172,6 +187,44 @@ public class AiChatToolOrchestrator
         var cacheKey = $"agent_tools_{agentId}";
         return _cache.TryGetValue(cacheKey, out List<LlmTool>? tools) ? tools : null;
     }
+
+    /// <summary>
+    /// Tools do agente JÁ filtradas pelas políticas de escopo (enable/disable).
+    /// A ausência de política significa "habilitada" (herança); uma política com
+    /// IsEnabled=false no escopo (ou herdada de um nível superior) remove a tool
+    /// da lista enviada ao LLM. Locked num nível superior impede a sobrescrita.
+    /// </summary>
+    public async Task<List<LlmTool>?> GetAgentToolsForScopeAsync(
+        Guid agentId, Guid? clientId, Guid? siteId, CancellationToken ct = default)
+    {
+        var cached = GetCachedAgentTools(agentId);
+        if (cached is null || cached.Count == 0)
+            return cached;
+
+        var policies = await _policyRepository.GetEffectivePoliciesAsync(clientId, siteId, agentId, ct);
+        var disabled = policies
+            .Where(p => !p.IsEnabled)
+            .Select(p => p.ToolName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (disabled.Count == 0)
+            return cached;
+
+        var filtered = cached.Where(t => !disabled.Contains(t.Name)).ToList();
+        if (filtered.Count != cached.Count)
+        {
+            _logger.LogInformation(
+                "[AgentTools] {Removed} tool(s) do agente removidas por política de escopo (AgentId={AgentId})",
+                cached.Count - filtered.Count, agentId);
+        }
+
+        return filtered;
+    }
+
+    /// <summary>Políticas efetivas dos escopos (usada para rate limit e timeout).</summary>
+    public Task<IReadOnlyList<McpToolPolicy>> GetEffectivePoliciesAsync(
+        Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct = default) =>
+        _policyRepository.GetEffectivePoliciesAsync(clientId, siteId, agentId, ct);
 
     // ── Schema Enrichment ────────────────────────────────────────────────────
 

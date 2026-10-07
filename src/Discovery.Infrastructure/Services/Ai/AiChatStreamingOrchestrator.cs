@@ -23,6 +23,7 @@ public class AiChatStreamingOrchestrator
     private readonly ISiteRepository _siteRepository;
     private readonly ILlmProvider _llmProvider;
     private readonly IMcpToolExecutor _mcpToolExecutor;
+    private readonly IMcpToolGovernance _governance;
     private readonly ILogger<AiChatService> _logger;
     private readonly AiChatSystemPromptBuilder _promptBuilder;
     private readonly AiChatToolOrchestrator _toolOrchestrator;
@@ -40,6 +41,7 @@ public class AiChatStreamingOrchestrator
         ISiteRepository siteRepository,
         ILlmProvider llmProvider,
         IMcpToolExecutor mcpToolExecutor,
+        IMcpToolGovernance governance,
         ILogger<AiChatService> logger,
         AiChatSystemPromptBuilder promptBuilder,
         AiChatToolOrchestrator toolOrchestrator,
@@ -54,6 +56,7 @@ public class AiChatStreamingOrchestrator
         _siteRepository = siteRepository;
         _llmProvider = llmProvider;
         _mcpToolExecutor = mcpToolExecutor;
+        _governance = governance;
         _logger = logger;
         _promptBuilder = promptBuilder;
         _toolOrchestrator = toolOrchestrator;
@@ -101,6 +104,47 @@ public class AiChatStreamingOrchestrator
     /// </summary>
     public static bool IsTextToken(LlmStreamEvent evt)
         => evt.Type == "token" && !string.IsNullOrEmpty(evt.Content);
+
+    /// <summary>
+    /// Mapa tool→timeout (segundos) das tools do agente habilitadas, enviado ao
+    /// agente no evento round_end para que ele aplique o timeout da política na
+    /// execução local (o servidor não executa tools do agente).
+    /// </summary>
+    private static Dictionary<string, int> BuildToolTimeouts(
+        IReadOnlyList<McpToolPolicy> policies, HashSet<string> agentToolNames)
+    {
+        var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in policies)
+        {
+            if (!agentToolNames.Contains(p.ToolName) || !p.IsEnabled || p.TimeoutSeconds <= 0)
+                continue;
+            map[p.ToolName] = p.TimeoutSeconds;
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Consome o rate limit da tool do agente. Retorna a mensagem de erro JSON a
+    /// devolver ao LLM quando o limite foi excedido, ou null quando permitido.
+    /// Tool sem política cadastrada não tem limite (comportamento herdado).
+    /// </summary>
+    private async Task<string?> CheckAgentToolRateLimitAsync(
+        string toolName, McpToolScope scope, IReadOnlyDictionary<string, McpToolPolicy> policies)
+    {
+        if (!policies.TryGetValue(toolName, out var policy))
+            return null;
+
+        if (await _governance.TryConsumeRateLimitAsync(toolName, scope, policy.MaxCallsPerMinute))
+            return null;
+
+        _logger.LogWarning("[MCP] Rate limit excedido para tool do agente {ToolName} (max {Max}/min, escopo {Level})",
+            toolName, policy.MaxCallsPerMinute, scope.Level);
+
+        return JsonSerializer.Serialize(new
+        {
+            error = $"Rate limit excedido para '{toolName}'. Máximo: {policy.MaxCallsPerMinute} chamadas por minuto. Aguarde antes de tentar novamente."
+        });
+    }
 
     /// <summary>
     /// B16: número de rejeições consecutivas de argumentos de uma tool do agent
@@ -291,7 +335,7 @@ public class AiChatStreamingOrchestrator
         var kbTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, ct) : [];
 
-        var agentTools = _toolOrchestrator.GetCachedAgentTools(agentId);
+        var agentTools = await _toolOrchestrator.GetAgentToolsForScopeAsync(agentId, scopeClientId, scopeSiteId, ct);
         // Dedupe por nome: KB + agent podem colidir e função repetida no payload do
         // provedor é ambígua (a OpenAI recusa).
         var availableTools = AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools);
@@ -302,6 +346,10 @@ public class AiChatStreamingOrchestrator
         }
 
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
+        // Governança: políticas efetivas (enable/disable, rate limit e timeout).
+        var agentToolPolicies = await _toolOrchestrator.GetEffectivePoliciesAsync(scopeClientId, scopeSiteId, agentId, ct);
+        var agentToolPolicyMap = agentToolPolicies.ToDictionary(p => p.ToolName, StringComparer.OrdinalIgnoreCase);
+        var agentToolTimeouts = BuildToolTimeouts(agentToolPolicies, agentToolCallNames);
         // B17: schema registrado por tool (validação de argumentos agnóstica de modelo).
         // GroupBy evita exceção de chave duplicada se o agent registrar nomes repetidos.
         var agentToolSchemas = agentTools?.GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
@@ -399,6 +447,14 @@ public class AiChatStreamingOrchestrator
                                     continue;
                                 }
 
+                                var rateError = await CheckAgentToolRateLimitAsync(
+                                    toolCall.Name, new McpToolScope(scopeClientId, scopeSiteId, agentId), agentToolPolicyMap);
+                                if (rateError is not null)
+                                {
+                                    llmMessages.Add(new LlmMessage("tool", rateError, toolCall.Id, toolCall.Name));
+                                    continue;
+                                }
+
                                 hasAgentToolCallPending = true;
                                 agentToolCallsPending.Add(new LlmAssistantToolCall(toolCall.Id, toolCall.Name, toolCall.ArgumentsJson));
                                 yield return new AiChatStreamChunk(Type: "tool_call",
@@ -464,7 +520,8 @@ public class AiChatStreamingOrchestrator
                                 await _messageRepository.CreateBatchAsync(msgs, ct);
                             }
                             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir user message do round 1", traceId); }
-                            yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
+                            yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id,
+                                ToolTimeouts: agentToolTimeouts.Count > 0 ? agentToolTimeouts : null);
                             yield break;
                         }
                     }
@@ -759,7 +816,7 @@ public class AiChatStreamingOrchestrator
         var kbTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(session.ClientId, session.SiteId, agentId, ct)
             : new List<LlmTool>();
-        var agentTools = _toolOrchestrator.GetCachedAgentTools(agentId);
+        var agentTools = await _toolOrchestrator.GetAgentToolsForScopeAsync(agentId, session.ClientId, session.SiteId, ct);
         var availableTools = AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools);
 
         var maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
@@ -795,6 +852,10 @@ public class AiChatStreamingOrchestrator
         // B16-r2: erro estruturado do provider (objeto "error" no stream do LLM).
         string? providerError = null;
         var agentToolCallNames = new HashSet<string>(agentTools?.Select(at => at.Name) ?? [], StringComparer.OrdinalIgnoreCase);
+        // Governança: políticas efetivas (enable/disable, rate limit e timeout).
+        var agentToolPolicies = await _toolOrchestrator.GetEffectivePoliciesAsync(session.ClientId, session.SiteId, agentId, ct);
+        var agentToolPolicyMap = agentToolPolicies.ToDictionary(p => p.ToolName, StringComparer.OrdinalIgnoreCase);
+        var agentToolTimeouts = BuildToolTimeouts(agentToolPolicies, agentToolCallNames);
         // B17: schema registrado por tool (validação de argumentos agnóstica de modelo).
         // GroupBy evita exceção de chave duplicada se o agent registrar nomes repetidos.
         var agentToolSchemas = agentTools?.GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
@@ -880,6 +941,14 @@ public class AiChatStreamingOrchestrator
                                     llmMessages.Add(new LlmMessage("tool", errorJson!, tc.Id, tc.Name));
                                     continue;
                                 }
+                                var rateError = await CheckAgentToolRateLimitAsync(
+                                    tc.Name, new McpToolScope(session.ClientId, session.SiteId, agentId), agentToolPolicyMap);
+                                if (rateError is not null)
+                                {
+                                    llmMessages.Add(new LlmMessage("tool", rateError, tc.Id, tc.Name));
+                                    continue;
+                                }
+
                                 hasAgentToolCall = true;
                                 yield return new AiChatStreamChunk(Type: "tool_call", ToolCallId: tc.Id, ToolName: tc.Name, ToolArgumentsDelta: tc.ArgumentsJson);
                             }
@@ -927,7 +996,8 @@ public class AiChatStreamingOrchestrator
                                 }, ct);
                             }
                             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir assistant no multi-round", traceId); }
-                            yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id);
+                            yield return new AiChatStreamChunk(Type: "round_end", SessionId: session.Id,
+                                ToolTimeouts: agentToolTimeouts.Count > 0 ? agentToolTimeouts : null);
                             yield break;
                         }
                     }

@@ -81,6 +81,8 @@ public partial class DiscoveryDbContext
             entity.Property(p => p.AgentId).HasColumnName("agent_id");
             entity.Property(p => p.ToolName).HasColumnName("tool_name").HasMaxLength(200).IsRequired();
             entity.Property(p => p.IsEnabled).HasColumnName("is_enabled");
+            entity.Property(p => p.Source).HasColumnName("source").HasMaxLength(16).IsRequired();
+            entity.Property(p => p.Locked).HasColumnName("locked");
             entity.Property(p => p.ArgumentSchemaJson).HasColumnName("argument_schema_json");
             entity.Property(p => p.MaxCallsPerMinute).HasColumnName("max_calls_per_minute");
             entity.Property(p => p.TimeoutSeconds).HasColumnName("timeout_seconds");

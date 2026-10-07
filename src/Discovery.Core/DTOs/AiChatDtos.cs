@@ -65,5 +65,11 @@ public record AiChatStreamChunk(
     string? ToolResult = null,
     string? A2uiJson = null,
     int? LoopRound = null,
-    int? LoopMaxRounds = null
+    int? LoopMaxRounds = null,
+    /// <summary>
+    /// Mapa tool→timeout (segundos) das tools do agente, derivado das políticas
+    /// de escopo. Enviado no evento "round_end" para o agente aplicar o timeout
+    /// na execução local (o servidor NÃO executa tools do agente).
+    /// </summary>
+    Dictionary<string, int>? ToolTimeouts = null
 );

@@ -42,6 +42,12 @@ public interface IMcpToolExecutor
         Guid? siteId,
         Guid? agentId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Catálogo das tools de SERVIDOR com handler registrado (nome + descrição).
+    /// Usado pela tela de governança para listar o que pode ser habilitado.
+    /// </summary>
+    IReadOnlyList<(string Name, string Description)> GetServerCatalog();
 }
 
 public record McpToolCallContext(
@@ -207,15 +213,17 @@ public class McpToolExecutor : IMcpToolExecutor
             Schema: schema);
     }
 
+    public IReadOnlyList<(string Name, string Description)> GetServerCatalog() =>
+        _handlers.Keys
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .Select(n => (n, GetToolDescription(n)))
+            .ToList();
+
     private static string GetToolDescription(string toolName) => toolName switch
     {
         "knowledge_search" => "Pesquisa artigos e procedimentos na base de conhecimento corporativa. Use quando o usuário perguntar sobre políticas, SOPs, sistemas internos, procedimentos de TI ou qualquer assunto documentado da empresa. O parâmetro 'query' é OBRIGATÓRIO e deve conter os termos de busca (ex: 'configurar VPN', 'política de senhas', 'instalar impressora HP'). NÃO use para perguntas genéricas de informática que não envolvam sistemas/procedimentos internos da empresa — para essas, responda com seu próprio conhecimento. Cada resultado traz 'internal_url' (discovery://knowledge/article/<id>) para abrir o artigo direto no app.",
 
         "knowledge_list" => "Lista os artigos PUBLICADOS da base de conhecimento acessíveis a esta máquina (id, título, categoria, escopo, tags, resumo e internal_url). Use SEMPRE que o usuário perguntar quais artigos/procedimentos existem, o que a base contém, ou quando precisar confirmar se há conteúdo sobre um assunto antes de dizer que não encontrou. NÃO exige parâmetros; opcionalmente filtre por 'category'. Para procurar o conteúdo de um assunto específico use knowledge_search. Cada item traz 'internal_url' (discovery://knowledge/article/<id>) para abrir o artigo direto no app.",
-
-        "filesystem.read_file" => "Lê o conteúdo de um arquivo do sistema de arquivos do computador do usuário. O parâmetro 'path' é OBRIGATÓRIO e deve ser o caminho absoluto do arquivo (ex: 'C:\\Users\\usuario\\Documents\\config.ini'). NÃO use para listar diretórios, escrever ou modificar arquivos — apenas leitura. Use com cautela e apenas sob demanda explícita do usuário.",
-
-        "postgres.query" => "Executa consultas SQL read-only (SELECT) na base de dados do Discovery RMM para gerar relatórios e análises ad-hoc. O parâmetro 'sql' é OBRIGATÓRIO. NÃO use para INSERT, UPDATE, DELETE ou qualquer operação de escrita — apenas SELECT. Use APENAS quando o usuário solicitar dados estruturados que não estão disponíveis via knowledge_search (ex: 'quantos chamados foram abertos este mês?', 'liste os computadores sem antivírus').",
 
         "time.current" => "Retorna data/hora atual em UTC e horário local (America/Sao_Paulo), além do timestamp Unix. Útil para cálculos de SLA, verificação de prazos e contexto temporal. NÃO requer parâmetros — basta invocar a função. NÃO use para agendar tarefas ou definir alarmes.",
 

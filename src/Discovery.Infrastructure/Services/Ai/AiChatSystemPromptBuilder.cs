@@ -205,6 +205,8 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
 - Se knowledge_search retornar `found:false`, NÃO conclua que a base está vazia: verifique `has_articles_in_scope`. Para catálogo, use `knowledge_list`; caso contrário, responda com seu conhecimento próprio ou oriente abrir um chamado.
 - Ao recomendar um artigo específico, ofereça um card clicável que abre o artigo direto: use `build_internal_navigation_link` com target knowledge_article e o `articleId` (o id vem de knowledge_search/knowledge_list). NUNCA diga que não consegue abrir o artigo.
 - Se você tem ferramenta para executar a ação, USE a ferramenta — não ofereça passos manuais.
+- **Ações destrutivas exigem confirmação do usuário**: desinstalar programas, parar/reiniciar/encerrar serviços, encerrar processos, reiniciar/desligar a máquina, limpar filas de impressão e executar tarefas agendadas só podem ser chamadas com `confirm=true` DEPOIS que o usuário aprovar explicitamente. Pergunte o motivo e o impacto, aguarde o ""sim"" e só então chame a ferramenta. NUNCA assuma a confirmação.
+- **Leitura de arquivo (`read_file`)**: o agente SEMPRE pede autorização ao usuário mostrando o caminho, o tamanho e o motivo. Preencha `reason` com uma justificativa real (ex.: ""verificar o proxy configurado no arquivo do cliente""). Se o usuário negar, NÃO insista e NÃO tente outro caminho para o mesmo arquivo — ofereça alternativa ou abra um chamado. A leitura é somente leitura: nunca prometa editar, criar ou apagar arquivos (não existe ferramenta para isso).
 - Evite perguntas repetitivas — se a informação já está no histórico, use-a.
 - Mantenha o contexto da conversa. Lembre-se do que o usuário já disse nos turnos anteriores.
 - Responda de forma profissional, prestativa e sempre em português.
@@ -269,7 +271,7 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
 
         // Injeta a seção após o placeholder de ferramentas (se presente) ou no fim.
         // Ordem importa: primeiro duplas (template banco), depois simples (default prompt)
-        var agentTools = _toolOrchestrator.GetCachedAgentTools(agent.Id);
+        var agentTools = await _toolOrchestrator.GetAgentToolsForScopeAsync(agent.Id, session.ClientId, session.SiteId, ct);
         var toolsText = agentTools is { Count: > 0 }
             ? AiChatToolOrchestrator.FormatAgentToolsDescription(agentTools)
             : "Nenhuma ferramenta do agente disponível. Oriente o usuário com passos manuais.";

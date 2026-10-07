@@ -56,6 +56,10 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.input",
             $"{natsSubject}.ack",
             $"{natsSubject}.term.in",
+            // Terminal remoto: consulta de autocompletar (viewer -> agent).
+            // O viewer publica completion.req e recebe completion.res; sem a
+            // permissao de PUB o NATS rejeita com -ERR e derruba o WebSocket.
+            $"{natsSubject}.completion.req",
             $"{natsSubject}.files.req",
             $"{natsSubject}.proxy.req",
             $"{natsSubject}.proc.req",
@@ -76,6 +80,10 @@ public sealed class GetSessionCredentialsQueryHandler(
             $"{natsSubject}.clipboard",
             $"{natsSubject}.term.out",
             $"{natsSubject}.term.ready",
+            // Terminal remoto: telemetria de 2s do agent (agent -> viewer).
+            $"{natsSubject}.stats",
+            // Terminal remoto: resposta de autocompletar (agent -> viewer).
+            $"{natsSubject}.completion.res",
             $"{natsSubject}.files.ready",
             $"{natsSubject}.files.resp",
             $"{natsSubject}.files.progress",

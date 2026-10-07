@@ -151,6 +151,7 @@ var backgroundServicesConfig = BackgroundServicesCollectionExtensions.ReadBackgr
 // AI Chat & MCP
 builder.Services.AddSingleton<ILlmProvider, OpenAiProvider>();
 builder.Services.AddScoped<IMcpToolExecutor, McpToolExecutor>();
+builder.Services.AddScoped<IMcpToolGovernance, McpToolGovernance>();
 builder.Services.AddScoped<IAiCostControlService, AiCostControlService>();
 // Sub-services internos do chat IA
 builder.Services.AddScoped<AiChatSettingsResolver>();
