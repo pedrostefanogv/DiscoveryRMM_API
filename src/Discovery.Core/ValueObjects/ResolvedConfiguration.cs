@@ -24,6 +24,7 @@ public class ResolvedConfiguration
 
     public bool ChatAIEnabled { get; set; }
     public bool KnowledgeBaseEnabled { get; set; }
+    public bool ZeroTouchEnabled { get; set; }
 
     // ============ Loja de aplicativos ============
 

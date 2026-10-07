@@ -24,6 +24,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
+            entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int>();
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AutoUpdateSettingsJson).HasColumnName("auto_update_settings_json");
@@ -77,6 +78,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
+            entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.BackgroundProcessingSettingsJson).HasColumnName("background_processing_settings_json").HasColumnType("jsonb");
@@ -110,6 +112,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
+            entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");

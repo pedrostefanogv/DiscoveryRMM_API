@@ -47,6 +47,7 @@ public sealed class GetAgentConfigurationHandler(
             ["chatAIEnabled"] = siteConfig?.ChatAIEnabled ?? clientConfig?.ChatAIEnabled ?? serverConfig.ChatAIEnabled,
             ["p2pFilesEnabled"] = siteConfig?.P2PFilesEnabled ?? clientConfig?.P2PFilesEnabled ?? serverConfig.P2PFilesEnabled,
             ["cloudBootstrapEnabled"] = clientConfig?.CloudBootstrapEnabled ?? serverConfig.CloudBootstrapEnabled,
+            ["zeroTouchEnabled"] = siteConfig?.ZeroTouchEnabled ?? clientConfig?.ZeroTouchEnabled ?? serverConfig.ZeroTouchEnabled,
 
             // App store
             ["appStoreEnabled"] = serverConfig.AppStorePolicy != Core.Enums.AppStorePolicyType.Disabled,

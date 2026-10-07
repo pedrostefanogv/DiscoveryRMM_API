@@ -32,6 +32,9 @@ public class SiteConfiguration
     /// <summary>Base de conhecimento habilitada (null = herda cliente/servidor)</summary>
     public bool? KnowledgeBaseEnabled { get; set; }
 
+    /// <summary>Zero-touch provisioning habilitado (null = herda cliente/servidor)</summary>
+    public bool? ZeroTouchEnabled { get; set; }
+
     // ============ Loja de aplicativos ============
 
     /// <summary>Política de acesso à loja de aplicativos (null = herda cliente/servidor)</summary>

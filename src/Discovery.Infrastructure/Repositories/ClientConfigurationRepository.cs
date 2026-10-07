@@ -42,6 +42,7 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
         existingConfig.SupportEnabled = config.SupportEnabled;
         existingConfig.ChatAIEnabled = config.ChatAIEnabled;
         existingConfig.KnowledgeBaseEnabled = config.KnowledgeBaseEnabled;
+        existingConfig.ZeroTouchEnabled = config.ZeroTouchEnabled;
         existingConfig.AppStorePolicy = config.AppStorePolicy;
         existingConfig.AIIntegrationSettingsJson = config.AIIntegrationSettingsJson;
         existingConfig.InventoryIntervalHours = config.InventoryIntervalHours;

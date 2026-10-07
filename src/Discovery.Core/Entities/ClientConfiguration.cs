@@ -34,6 +34,9 @@ public class ClientConfiguration
     /// <summary>Base de conhecimento habilitada (null = herda servidor)</summary>
     public bool? KnowledgeBaseEnabled { get; set; }
 
+    /// <summary>Zero-touch provisioning habilitado (null = herda servidor)</summary>
+    public bool? ZeroTouchEnabled { get; set; }
+
     // ============ Loja de aplicativos ============
 
     /// <summary>Política de acesso à loja de aplicativos (null = herda servidor)</summary>

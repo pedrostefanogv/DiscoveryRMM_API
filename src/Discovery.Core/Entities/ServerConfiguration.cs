@@ -36,6 +36,13 @@ public class ServerConfiguration
     /// <summary>Base de conhecimento habilitada</summary>
     public bool KnowledgeBaseEnabled { get; set; } = false;
 
+    /// <summary>
+    /// Zero-touch provisioning: permite que agents sem credenciais se registrem
+    /// sozinhos via P2P onboarding. Depende de DiscoveryEnabled para os agents se
+    /// encontrarem na rede. Default true para preservar o comportamento atual.
+    /// </summary>
+    public bool ZeroTouchEnabled { get; set; } = true;
+
     // ============ Loja de aplicativos ============
 
     /// <summary>Política de acesso à loja de aplicativos</summary>

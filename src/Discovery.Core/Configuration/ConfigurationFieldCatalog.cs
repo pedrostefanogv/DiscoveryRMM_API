@@ -11,6 +11,7 @@ public static class ConfigurationFieldCatalog
         "SupportEnabled",
         "ChatAIEnabled",
         "KnowledgeBaseEnabled",
+        "ZeroTouchEnabled",
         "AppStorePolicy",
         "InventoryIntervalHours",
         "AutoUpdateSettingsJson",

@@ -146,7 +146,6 @@ public class ConfigurationService : IConfigurationService
         var blockedFields = await GetGlobalBlockedFieldsAsync();
         EnsureNoBlockedOverrides(config, blockedFields, "Client");
 
-        NormalizeNullableBooleanDefaults(config);
 
         config.ClientId = clientId;
         config.CreatedBy = createdBy;
@@ -162,7 +161,6 @@ public class ConfigurationService : IConfigurationService
         var blockedFields = await GetGlobalBlockedFieldsAsync();
         EnsureNoBlockedOverrides(config, blockedFields, "Client");
 
-        NormalizeNullableBooleanDefaults(config);
 
         var existing = await _clientRepo.GetByClientIdAsync(clientId);
         if (existing is null)
@@ -215,7 +213,6 @@ public class ConfigurationService : IConfigurationService
             await _audit.LogChangeAsync("Client", config.Id, key, MaskForAudit(key, oldValue), MaskForAudit(key, converted?.ToString()), null, updatedBy);
         }
 
-        NormalizeNullableBooleanDefaults(config);
         ProtectSensitiveData(config);
 
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
@@ -255,10 +252,8 @@ public class ConfigurationService : IConfigurationService
             throw new InvalidOperationException($"Property '{propertyName}' is not inheritable (not nullable).");
 
         var oldValue = prop.GetValue(config)?.ToString();
-        if (Nullable.GetUnderlyingType(prop.PropertyType) == typeof(bool))
-            prop.SetValue(config, false);
-        else
-            prop.SetValue(config, null);
+        // null = herdar do nível superior (mesma semântica de EnsureAllowedPatchValue).
+        prop.SetValue(config, null);
         await _audit.LogChangeAsync("Client", config.Id, propertyName, oldValue, null, "Reset to inherit", resetBy);
         config.Version++;
         config.UpdatedBy = resetBy;
@@ -279,7 +274,6 @@ public class ConfigurationService : IConfigurationService
         var blockedFields = await GetBlockedFieldsForClientAsync(site.ClientId);
         EnsureNoBlockedOverrides(config, blockedFields, "Site");
 
-        NormalizeNullableBooleanDefaults(config);
 
         config.SiteId = siteId;
         config.ClientId = site.ClientId;
@@ -300,7 +294,6 @@ public class ConfigurationService : IConfigurationService
         var blockedFields = await GetBlockedFieldsForClientAsync(existing.ClientId);
         EnsureNoBlockedOverrides(config, blockedFields, "Site");
 
-        NormalizeNullableBooleanDefaults(config);
 
         config.Id = existing.Id;
         config.SiteId = siteId;
@@ -358,7 +351,6 @@ public class ConfigurationService : IConfigurationService
             await _audit.LogChangeAsync("Site", config.Id, key, MaskForAudit(key, oldValue), MaskForAudit(key, converted?.ToString()), null, updatedBy);
         }
 
-        NormalizeNullableBooleanDefaults(config);
         ProtectSensitiveData(config);
 
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
@@ -393,10 +385,8 @@ public class ConfigurationService : IConfigurationService
             throw new InvalidOperationException($"Property '{propertyName}' is not inheritable (not nullable).");
 
         var oldValue = prop.GetValue(config)?.ToString();
-        if (Nullable.GetUnderlyingType(prop.PropertyType) == typeof(bool))
-            prop.SetValue(config, false);
-        else
-            prop.SetValue(config, null);
+        // null = herdar do nível superior (mesma semântica de EnsureAllowedPatchValue).
+        prop.SetValue(config, null);
         await _audit.LogChangeAsync("Site", config.Id, propertyName, oldValue, null, "Reset to inherit", resetBy);
         config.Version++;
         config.UpdatedBy = resetBy;
@@ -606,19 +596,6 @@ public class ConfigurationService : IConfigurationService
 
     private static bool IsNullableProperty(Type propertyType)
         => !propertyType.IsValueType || Nullable.GetUnderlyingType(propertyType) is not null;
-
-    private static void NormalizeNullableBooleanDefaults(object target)
-    {
-        var props = target.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-        foreach (var prop in props)
-        {
-            if (Nullable.GetUnderlyingType(prop.PropertyType) != typeof(bool) || !prop.CanWrite)
-                continue;
-
-            if (prop.GetValue(target) is null)
-                prop.SetValue(target, false);
-        }
-    }
 
     private async Task<HashSet<string>> GetGlobalBlockedFieldsAsync()
     {

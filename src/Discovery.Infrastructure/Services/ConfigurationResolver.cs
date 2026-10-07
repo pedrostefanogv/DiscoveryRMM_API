@@ -235,6 +235,7 @@ public class ConfigurationResolver : IConfigurationResolver
         var support = ResolveValue("SupportEnabled", blocked, site?.SupportEnabled, client?.SupportEnabled, server.SupportEnabled);
         var chatAi = ResolveValue("ChatAIEnabled", blocked, site?.ChatAIEnabled, client?.ChatAIEnabled, server.ChatAIEnabled);
         var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, site?.KnowledgeBaseEnabled, client?.KnowledgeBaseEnabled, server.KnowledgeBaseEnabled);
+        var zeroTouch = ResolveValue("ZeroTouchEnabled", blocked, site?.ZeroTouchEnabled, client?.ZeroTouchEnabled, server.ZeroTouchEnabled);
         var appStore = ResolveValue("AppStorePolicy", blocked, site?.AppStorePolicy, client?.AppStorePolicy, server.AppStorePolicy);
         var inventory = ResolveValue("InventoryIntervalHours", blocked, site?.InventoryIntervalHours, client?.InventoryIntervalHours, server.InventoryIntervalHours);
         var heartbeat = ResolveValue("AgentHeartbeatIntervalSeconds", blocked, (int?)null, client?.AgentHeartbeatIntervalSeconds, server.AgentHeartbeatIntervalSeconds);
@@ -266,6 +267,7 @@ public class ConfigurationResolver : IConfigurationResolver
             SupportEnabled = support.Value,
             ChatAIEnabled = chatAi.Value,
             KnowledgeBaseEnabled = knowledge.Value,
+            ZeroTouchEnabled = zeroTouch.Value,
             AppStorePolicy = appStore.Value,
             InventoryIntervalHours = inventory.Value,
             AgentHeartbeatIntervalSeconds = heartbeat.Value,
@@ -284,6 +286,7 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["SupportEnabled"] = (int)support.Source;
         resolved.Inheritance["ChatAIEnabled"] = (int)chatAi.Source;
         resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;
+        resolved.Inheritance["ZeroTouchEnabled"] = (int)zeroTouch.Source;
         resolved.Inheritance["AppStorePolicy"] = (int)appStore.Source;
         resolved.Inheritance["InventoryIntervalHours"] = (int)inventory.Source;
         resolved.Inheritance["AgentHeartbeatIntervalSeconds"] = (int)heartbeat.Source;
