@@ -126,14 +126,70 @@ public class AiChatA2uiValidatorTests
     [Test]
     public void Validate_WhenIncrementalWithoutRoot_HasUnknownReference_IsPermissive()
     {
+        // Sem createSurface: a surface veio de uma resposta anterior, então não
+        // há como validar referências aqui.
         const string content = """
-{"version":"v0.9","createSurface":{"surfaceId":"s","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
 {"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"btn","component":"Button","child":"someLabel","action":{"event":{"name":"x","context":{}}}}]}}
 """;
 
         var (valid, _) = AiChatA2uiValidator.Validate(Lines(content));
 
-        Assert.That(valid, Has.Count.EqualTo(2));
+        Assert.That(valid, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void Validate_WhenCreatedSurfaceDefinesComponentsWithoutRoot_DropsSurface()
+    {
+        const string content = """
+{"version":"v0.9","createSurface":{"surfaceId":"s","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
+{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"title","component":"Text","text":"sem root"}]}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(valid, Is.Empty);
+        Assert.That(string.Join(" | ", errors), Does.Contain("sem o componente raiz"));
+    }
+
+    // createSurface sozinho é válido: a definição pode chegar em outro turno.
+    [Test]
+    public void Validate_WhenCreateSurfaceOnly_IsKept()
+    {
+        const string content = """
+{"version":"v0.9","createSurface":{"surfaceId":"s","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(errors, Is.Empty);
+        Assert.That(valid, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void Validate_WhenCreateSurfaceHasInlineComponents_DropsSurface()
+    {
+        const string content = """
+{"version":"v0.9","createSurface":{"surfaceId":"s","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json","components":[{"id":"root","component":"Column","children":["a"]},{"id":"a","component":"Text","text":"x"}]}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(valid, Is.Empty);
+        Assert.That(string.Join(" | ", errors), Does.Contain("createSurface não deve conter"));
+    }
+
+    [Test]
+    public void Validate_WhenUpdateComponentsIsEmpty_DropsSurface()
+    {
+        const string content = """
+{"version":"v0.9","createSurface":{"surfaceId":"s","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
+{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[]}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(valid, Is.Empty);
+        Assert.That(string.Join(" | ", errors), Does.Contain("sem componentes"));
     }
 
     [Test]

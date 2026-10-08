@@ -66,8 +66,38 @@ public static class AiChatA2uiValidator
                 invalidSurfaces.Add(p.SurfaceId);
                 foreach (var e in p.Errors)
                     errors.Add($"surface '{p.SurfaceId}': {e}");
-                continue;
             }
+        }
+
+        // Surface CRIADA nesta resposta precisa definir o componente raiz: sem
+        // 'root' o renderer não monta a árvore e a bolha fica em "loading".
+        // Updates incrementais (surface de resposta anterior) não passam por aqui.
+        var createdHere = new HashSet<string>(StringComparer.Ordinal);
+        var surfacesWithRoot = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var p in parsed)
+        {
+            if (p.CreatesSurface) createdHere.Add(p.SurfaceId);
+            if (p.FullDefinition) surfacesWithRoot.Add(p.SurfaceId);
+        }
+        var definesComponentsHere = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var p in parsed)
+        {
+            if (p.ComponentIds.Count > 0) definesComponentsHere.Add(p.SurfaceId);
+        }
+        foreach (var surfaceId in createdHere)
+        {
+            // Sem nenhuma mensagem de componentes nesta resposta, a definição
+            // pode vir depois (outro turno) — não é erro. Com componentes e sem
+            // root, o renderer deixaria a bolha em "loading" para sempre.
+            if (!definesComponentsHere.Contains(surfaceId)) continue;
+            if (surfacesWithRoot.Contains(surfaceId)) continue;
+            invalidSurfaces.Add(surfaceId);
+            errors.Add($"surface '{surfaceId}': definição sem o componente raiz 'root' (a superfície ficaria em loading)");
+        }
+
+        foreach (var p in parsed)
+        {
+            if (invalidSurfaces.Contains(p.SurfaceId)) continue;
 
             // Referências só são exigidas na mensagem de DEFINIÇÃO COMPLETA (a
             // que contém o root): updates incrementais podem referenciar
@@ -109,6 +139,16 @@ public static class AiChatA2uiValidator
             if (root.TryGetProperty("createSurface", out var create))
             {
                 p.SurfaceId = ReadSurfaceId(create, "createSurface", p);
+                p.CreatesSurface = true;
+                // O renderer IGNORA components dentro do createSurface; quando o
+                // modelo insiste nesse formato, a superfície nasce vazia (em
+                // "loading"). Melhor descartar a interface e manter o texto.
+                if (create.TryGetProperty("components", out var inlineComponents)
+                    && inlineComponents.ValueKind == JsonValueKind.Array
+                    && inlineComponents.GetArrayLength() > 0)
+                {
+                    p.Errors.Add("createSurface não deve conter 'components' (use uma mensagem updateComponents)");
+                }
             }
             else if (root.TryGetProperty("updateComponents", out var update))
             {
@@ -116,6 +156,13 @@ public static class AiChatA2uiValidator
                 if (!update.TryGetProperty("components", out var components) || components.ValueKind != JsonValueKind.Array)
                 {
                     p.Errors.Add("updateComponents sem array 'components'");
+                    return p;
+                }
+                if (components.GetArrayLength() == 0)
+                {
+                    // Superfície sem nenhum componente: sem o root o renderer
+                    // fica em "loading" para sempre (bolha vazia).
+                    p.Errors.Add("updateComponents sem componentes");
                     return p;
                 }
                 var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -286,6 +333,7 @@ public static class AiChatA2uiValidator
     {
         public string Json { get; init; } = "";
         public string SurfaceId { get; set; } = "";
+        public bool CreatesSurface { get; set; }
         public bool FullDefinition { get; set; }
         public List<string> ComponentIds { get; } = new();
         public List<string> References { get; } = new();
