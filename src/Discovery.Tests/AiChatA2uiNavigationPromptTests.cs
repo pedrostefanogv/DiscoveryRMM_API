@@ -100,6 +100,16 @@ public class AiChatA2uiNavigationPromptTests
     }
 
     [Test]
+    public void DefaultPrompt_RequiresActionButtonsSideBySideInARow()
+    {
+        var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent());
+
+        Assert.That(prompt, Does.Contain("BOTÕES LADO A LADO"));
+        Assert.That(prompt, Does.Contain("EMPILHADO"));
+        Assert.That(prompt, Does.Contain("{\"id\":\"nav\",\"component\":\"Row\",\"children\":[\"btn1\",\"btn2\",\"btn3\"]}"));
+    }
+
+    [Test]
     public void DefaultPrompt_WhenA2uiDisabled_ForbidsProtocolAndOmitsRecipes()
     {
         var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent(), a2uiEnabled: false);
