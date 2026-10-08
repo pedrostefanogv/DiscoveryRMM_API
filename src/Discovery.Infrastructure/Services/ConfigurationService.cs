@@ -104,6 +104,13 @@ public class ConfigurationService : IConfigurationService
             await _audit.LogChangeAsync("Server", config.Id, key, MaskForAudit(key, oldValue), MaskForAudit(key, converted?.ToString()), null, updatedBy);
         }
 
+        // Recusa o salvamento de um JSON de IA que não desserializa: um campo
+        // numérico limpo no formulário vira NaN no cliente e vira null no JSON, e
+        // DeserializeOrDefault() engole a exceção devolvendo o PADRÃO — todas as
+        // configurações de IA do servidor (inclusive a API Key) voltariam ao
+        // default sem nenhum aviso.
+        EnsureServerAiSettingsJsonDeserializable(config);
+
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
         config.UpdatedBy = updatedBy;
@@ -462,6 +469,31 @@ public class ConfigurationService : IConfigurationService
     /// campo efetivamente alterado no patch. Isso evita "lockout" por estado legado
     /// inválido armazenado (que o admin ainda precisa poder corrigir).
     /// </summary>
+    /// <summary>
+    /// Garante que o JSON de configurações de IA do SERVIDOR continua desserializável
+    /// antes de persistir (ver o motivo no chamador, PatchServerAsync). Vale só para o
+    /// servidor: client/site guardam um override com campos anuláveis e já passam por
+    /// SanitizeAiOverrideJson.
+    /// </summary>
+    private static void EnsureServerAiSettingsJsonDeserializable(ServerConfiguration config)
+    {
+        if (string.IsNullOrWhiteSpace(config.AIIntegrationSettingsJson))
+            return;
+
+        try
+        {
+            JsonSerializer.Deserialize<AIIntegrationSettings>(config.AIIntegrationSettingsJson, JsonSerializerOptions.Web);
+        }
+        catch (JsonException ex)
+        {
+            throw new ArgumentException(
+                "Configurações de IA inválidas: há campo numérico vazio ou fora de formato "
+                + "(temperatura, top-p, penalidades, tokens, rounds ou dimensões do vetor). "
+                + "Preencha os valores e salve novamente — o servidor recusou o salvamento para "
+                + "não redefinir as configurações de IA ao padrão. Detalhe: " + ex.Message);
+        }
+    }
+
     private async Task ValidateOrThrowAsync(object config, IReadOnlyCollection<string>? touchedKeys = null)
     {
         var (_, errors) = await ValidateAsync(config);

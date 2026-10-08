@@ -108,7 +108,14 @@ public record LlmStreamEvent(
     string Type,
     string? Content = null,
     List<LlmToolCall>? ToolCalls = null,
-    int? TokensUsed = null)
+    int? TokensUsed = null,
+    /// <summary>
+    /// finish_reason bruto do provider ("stop", "length", "tool_calls", ...).
+    /// "length" indica que a resposta foi CORTADA pelo teto de saída — o
+    /// orquestrador loga o aviso para não tratar JSON truncado como completo
+    /// (caso do card A2UI cortado em 2026-10-08 02:11Z).
+    /// </summary>
+    string? FinishReason = null)
 {
     public static LlmStreamEvent Error(string message) => new(Type: "error", Content: message);
 }

@@ -434,6 +434,10 @@ public class OpenAiProvider : ILlmProvider
         using var reader = new System.IO.StreamReader(stream, Encoding.UTF8);
 
         string? line;
+        // Detecção de stream TRUNCADO: sem [DONE] o enumerador terminaria como
+        // se a resposta estivesse completa (ver aviso ao final do método).
+        var streamTerminated = false;
+        var streamedChars = 0;
         while ((line = await reader.ReadLineAsync(requestToken)) != null)
         {
             requestToken.ThrowIfCancellationRequested();
@@ -450,7 +454,10 @@ public class OpenAiProvider : ILlmProvider
                 : line["data:".Length..];
 
             if (data == "[DONE]")
+            {
+                streamTerminated = true;
                 yield break;
+            }
 
             string? token = null;
             try
@@ -482,7 +489,21 @@ public class OpenAiProvider : ILlmProvider
             }
 
             if (!string.IsNullOrEmpty(token))
+            {
+                streamedChars += token.Length;
                 yield return token;
+            }
+        }
+
+        // Chegou aqui SEM [DONE]: o provider encerrou o stream no meio (queda de
+        // conexão/timeout/lote cortado). Antes isso era indistinguível de uma
+        // resposta completa — foi assim que um card A2UI chegou cortado dentro do
+        // JSON em 2026-10-08 02:11Z, sem nenhum erro nos logs.
+        if (!streamTerminated)
+        {
+            _logger.LogWarning(
+                "Stream do provider terminou SEM [DONE] — resposta possivelmente TRUNCADA ({Chars} chars, model={Model})",
+                streamedChars, options.Model);
         }
     }
 
@@ -604,6 +625,10 @@ public class OpenAiProvider : ILlmProvider
         // Acumuladores de tool calls (delta.tool_calls chega em chunks incrementais)
         var pendingToolCalls = new Dictionary<int, (string Id, string Name, StringBuilder Args)>();
 
+        // Detecção de stream TRUNCADO: sem [DONE]/finish_reason o enumerador
+        // terminaria como resposta completa (ver aviso no fim do método).
+        var streamTerminated = false;
+        var streamedChars = 0;
         string? line;
         while ((line = await reader.ReadLineAsync(requestToken)) != null)
         {
@@ -616,6 +641,7 @@ public class OpenAiProvider : ILlmProvider
                 : line["data:".Length..]; // A10: gateways que enviam "data:{json}" sem espaço
             if (data == "[DONE]")
             {
+                streamTerminated = true;
                 // A2: alguns providers terminam o stream com [DONE] SEM
                 // finish_reason=tool_calls — sem isso as tool calls acumuladas
                 // eram descartadas silenciosamente e o loop parava.
@@ -644,10 +670,34 @@ public class OpenAiProvider : ILlmProvider
 
             if (parsed is not null)
             {
+                if (parsed.Type == "token" && parsed.Content is not null)
+                    streamedChars += parsed.Content.Length;
                 yield return parsed;
                 if (parsed.Type is "tool_calls" or "done")
+                {
+                    streamTerminated = true;
+                    // finish_reason=length: o provider cortou a resposta no teto de
+                    // saída — é a assinatura de um payload (ex.: A2UI) truncado.
+                    if (string.Equals(parsed.FinishReason, "length", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning(
+                            "Provider encerrou por LIMITE DE SAÍDA (finish_reason=length) — resposta possivelmente TRUNCADA ({Chars} chars, model={Model})",
+                            streamedChars, model);
+                    }
                     yield break;
+                }
             }
+        }
+
+        // Chegou aqui SEM [DONE]/finish_reason: o provider encerrou o stream no
+        // meio. Antes isso era indistinguível de uma resposta completa — foi
+        // assim que o card A2UI de 2026-10-08 02:11Z chegou cortado dentro do
+        // JSON (409 chars, terminando em '{"id') sem nenhum erro nos logs.
+        if (!streamTerminated)
+        {
+            _logger.LogWarning(
+                "Stream do provider terminou SEM [DONE]/finish_reason — resposta possivelmente TRUNCADA ({Chars} chars, {Pending} tool call(s) pendente(s), model={Model})",
+                streamedChars, pendingToolCalls.Count, model);
         }
     }
 
@@ -751,9 +801,10 @@ public class OpenAiProvider : ILlmProvider
             {
                 var parsedToolCalls = pendingToolCalls.Values.Select(tc => new LlmToolCall(
                     tc.Id, tc.Name, tc.Args.ToString())).ToList();
-                return new LlmStreamEvent(Type: "tool_calls", ToolCalls: parsedToolCalls, TokensUsed: tokensUsed);
+                return new LlmStreamEvent(Type: "tool_calls", ToolCalls: parsedToolCalls, TokensUsed: tokensUsed,
+                    FinishReason: finishReason);
             }
-            return new LlmStreamEvent(Type: "done", TokensUsed: tokensUsed);
+            return new LlmStreamEvent(Type: "done", TokensUsed: tokensUsed, FinishReason: finishReason);
         }
 
         return null;
