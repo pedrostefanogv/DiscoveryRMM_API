@@ -357,20 +357,35 @@ public class AiChatStreamingOrchestrator
         bool hasAgentToolCallPending = false;
         var agentToolCallsPending = new List<LlmAssistantToolCall>();
         bool kbExhausted = false;
+        // Round do TURNO (não do request). Em StreamAsync é sempre o 1º round:
+        // as continuações de tool chain do agent chegam por StreamMultiRoundAsync,
+        // que lê esta chave da cache para continuar a contagem. Antes, o contador
+        // local (toolIterations) zerava a cada request e o heartbeat mostrava
+        // sempre "round 1" em tool chains MCP.
+        var turnRound = AiChatTurnRound.Resolve(_memoryCache, session.Id, hasToolResults: false);
+        // Quando o orçamento esgota antes de delegar a um agent, o round seguinte
+        // roda SEM tools para forçar a resposta final (não dá para confiar que o
+        // modelo deixará de pedir tools só com uma nota de sistema).
+        bool budgetExhausted = false;
 
         while (true)
         {
             // Heartbeat de progresso do agent loop — agent/frontend exibem "round X/Y".
             // Só é emitido quando há tools (sem tools o loop é single-pass e o
-            // heartbeat seria enganoso).
-            if (availableTools.Count > 0)
-                yield return new AiChatStreamChunk(Type: "loop_progress", LoopRound: toolIterations + 1, LoopMaxRounds: maxIterations);
+            // heartbeat seria enganoso). No round de síntese (budgetExhausted) o
+            // heartbeat é omitido de propósito: não há mais loop de tools.
+            if (availableTools.Count > 0 && !budgetExhausted)
+                yield return new AiChatStreamChunk(Type: "loop_progress", LoopRound: turnRound, LoopMaxRounds: maxIterations);
 
+            // budgetExhausted: nenhuma tool é oferecida no round de síntese — se
+            // ainda fossem oferecidas, o modelo poderia driblar o orçamento.
             // KB esgotada: remove knowledge_search das tools disponíveis deste round
             // (mais determinístico que confiar apenas na nota de sistema).
-            var roundTools = kbExhausted
-                ? availableTools.Where(t => t.Name != "knowledge_search").ToList()
-                : availableTools;
+            var roundTools = budgetExhausted
+                ? new List<LlmTool>()
+                : kbExhausted
+                    ? availableTools.Where(t => t.Name != "knowledge_search").ToList()
+                    : availableTools;
 
             var streamOptions = new LlmOptions(
                 MaxTokens: maxTokens,
@@ -457,8 +472,12 @@ public class AiChatStreamingOrchestrator
 
                                 hasAgentToolCallPending = true;
                                 agentToolCallsPending.Add(new LlmAssistantToolCall(toolCall.Id, toolCall.Name, toolCall.ArgumentsJson));
-                                yield return new AiChatStreamChunk(Type: "tool_call",
-                                    ToolCallId: toolCall.Id, ToolName: toolCall.Name, ToolArgumentsDelta: toolCall.ArgumentsJson);
+                                // Orçamento esgotado: NÃO emite o tool_call ao client. O
+                                // bloco pós-foreach troca a delegação por nota de síntese
+                                // e reinicia o round sem tools (ver budgetExhausted).
+                                if (!AiChatTurnRound.IsBudgetExhausted(turnRound, maxIterations))
+                                    yield return new AiChatStreamChunk(Type: "tool_call",
+                                        ToolCallId: toolCall.Id, ToolName: toolCall.Name, ToolArgumentsDelta: toolCall.ArgumentsJson);
                                 continue;
                             }
 
@@ -503,6 +522,31 @@ public class AiChatStreamingOrchestrator
 
                         if (hasAgentToolCallPending)
                         {
+                            // Orçamento do turno esgotado: o request iria delegar a tool
+                            // ao agent, mas o admin já configurou (ex.) 3 rounds e este é
+                            // o 3º. Antes o yield break abaixo ignorava MaxToolCallIterations
+                            // e quem limitava era o agent (20 rounds/10min). Aqui não se
+                            // emite tool_call/round_end nem se persiste round pendente:
+                            // injeta a nota de síntese e reinicia o round sem tools.
+                            if (AiChatTurnRound.IsBudgetExhausted(turnRound, maxIterations))
+                            {
+                                budgetExhausted = true;
+                                hasAgentToolCallPending = false;
+                                // A mensagem assistant com tool_calls já entrou em
+                                // llmMessages; como NÃO delegamos ao agent, fecha cada
+                                // chamada com um tool message sintético — sem isso o
+                                // round de síntese sem tools recebe 400 (tool_call sem
+                                // resposta) do provedor OpenAI-compatible.
+                                foreach (var pendingCall in agentToolCallsPending)
+                                    llmMessages.Add(new LlmMessage("tool", AiChatHelpers.AgentToolBudgetExhaustedResult, pendingCall.Id, pendingCall.Name));
+                                agentToolCallsPending.Clear();
+                                llmMessages.Add(new LlmMessage("system", AiChatHelpers.SynthesisBudgetNote));
+                                _logger.LogInformation(
+                                    "[{TraceId}] Orçamento de rounds do turno esgotado ({Round}/{Max}); sintetizando resposta sem tools em vez de delegar ao agent",
+                                    traceId, turnRound, maxIterations);
+                                // Sai do await foreach; o while reentra sem tools (budgetExhausted).
+                                break;
+                            }
                             // Registra round pendente para o watchdog (mesmo mecanismo
                             // do multi-round): se o agent não devolver ToolResults
                             // dentro do TTL, o próximo multi-round desta sessão
@@ -547,7 +591,10 @@ public class AiChatStreamingOrchestrator
                 yield break;
             }
 
-            if (!hasToolCalls || toolIterations >= maxIterations - 1) break;
+            // budgetExhausted: garante que o round sem tools aconteça mesmo que o
+            // orçamento local (toolIterations) já tenha sido atingido; o break
+            // natural ocorre depois, quando o round sem tools não pede tool.
+            if (!hasToolCalls || (!budgetExhausted && toolIterations >= maxIterations - 1)) break;
             toolIterations++;
         }
 
@@ -555,29 +602,25 @@ public class AiChatStreamingOrchestrator
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
-        // ── Sanitização de vazamentos de tool calls ──
-        // O LLM pode ter emitido tool calls como TEXTO (DSML, blocos ```json
-        // com invokes) em vez de function call nativa. Remove antes de seguir.
-        var (sanitizedContent, contentWasSanitized) = AiChatLeakSanitizer.Sanitize(fullContent);
+        // ── A2UI + sanitização de vazamentos (ordem única, ver AiChatOutputPipeline) ──
+        // A extração A2UI DEVE rodar antes da sanitização: o sanitizador apaga
+        // blocos ```a2ui como fallback e, se rodasse primeiro, o agent nunca
+        // receberia o chunk "a2ui" (a interface sumia do chat).
+        var (cleanContent, a2uiMessages, contentWasSanitized) = AiChatOutputPipeline.Process(fullContent);
         if (contentWasSanitized)
         {
             _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output ({OrigLen} -> {CleanLen} chars)",
-                traceId, fullContent.Length, sanitizedContent.Length);
-            fullContent = sanitizedContent;
+                traceId, fullContent.Length, cleanContent.Length);
         }
-
-        // ── A2UI: extrai mensagens A2UI do conteúdo do LLM e emite como chunks ──
-        // O LLM pode ter gerado interfaces A2UI em blocos ```a2ui. Extraímos e
-        // emitimos cada mensagem como um chunk "a2ui" para o agent repassar ao
-        // renderer. O texto restante (sem os blocos) segue o fluxo markdown.
-        var (cleanContent, a2uiMessages) = AiChatA2uiExtractor.Extract(fullContent);
         fullContent = cleanContent;
         foreach (var a2uiMsg in a2uiMessages)
         {
             yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
         }
 
-        var shouldTryXmlFallback = availableTools.Count == 0 || !hasToolCalls;
+        // budgetExhausted: não tenta o fallback de tool calls textuais (XML/DSML)
+        // — sem isso, o modelo driblaria o orçamento emitindo a tool como texto.
+        var shouldTryXmlFallback = !budgetExhausted && (availableTools.Count == 0 || !hasToolCalls);
         if (shouldTryXmlFallback)
         {
             var (cleanedContent, updatedNextSeq) = await _toolOrchestrator.ParseAndExecuteXmlToolCallsAsync(
@@ -595,7 +638,9 @@ public class AiChatStreamingOrchestrator
         // Faz até MaxSynthesisRetries chamadas SEM tools para garantir resposta.
         if (string.IsNullOrWhiteSpace(fullContent))
         {
-            if (hasToolCalls && toolIterations >= maxIterations - 1)
+            // budgetExhausted: a nota de síntese já foi injetada no caminho
+            // delegado — evita duplicá-la e dispara a síntese normal.
+            if (hasToolCalls && !budgetExhausted && toolIterations >= maxIterations - 1)
                 llmMessages.Add(new LlmMessage("system", AiChatHelpers.SynthesisBudgetNote));
             else
                 llmMessages.Add(new LlmMessage("user", AiChatHelpers.EmptyContentNote));
@@ -821,6 +866,16 @@ public class AiChatStreamingOrchestrator
 
         var maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
 
+        // Round do TURNO (não do request): ToolResults presentes = continuação de
+        // uma tool chain já iniciada (round anterior + 1); mensagem nova do usuário
+        // sem ToolResults = novo turno (= 1). A chave na cache sobrevive entre os
+        // requests do mesmo turno — antes o contador local zerava e o heartbeat
+        // mostrava sempre "round 1", e o orçamento configurado era ignorado no
+        // caminho delegado ao agent.
+        var turnRound = AiChatTurnRound.Resolve(_memoryCache, session.Id, toolResults is { Count: > 0 });
+        // Round de síntese forçada sem tools após o orçamento esgotar.
+        bool budgetExhausted = false;
+
         // ── Watchdog de round pendente ──
         // Se EXISTE registro de round delegado ao agent e este request NÃO
         // traz ToolResults (ex.: usuário mandou nova mensagem), o round nunca
@@ -866,12 +921,17 @@ public class AiChatStreamingOrchestrator
         while (true)
         {
             // Heartbeat de progresso do agent loop (só com tools disponíveis).
-            if (availableTools.Count > 0)
-                yield return new AiChatStreamChunk(Type: "loop_progress", LoopRound: toolIterations + 1, LoopMaxRounds: maxIterations);
+            // Omitido no round de síntese (budgetExhausted): não há mais loop.
+            if (availableTools.Count > 0 && !budgetExhausted)
+                yield return new AiChatStreamChunk(Type: "loop_progress", LoopRound: turnRound, LoopMaxRounds: maxIterations);
 
-            var roundTools = kbExhausted
-                ? availableTools.Where(t => t.Name != "knowledge_search").ToList()
-                : availableTools;
+            // budgetExhausted: round de síntese roda sem tools para impedir que o
+            // modelo peça outra tool e drible o orçamento configurado.
+            var roundTools = budgetExhausted
+                ? new List<LlmTool>()
+                : kbExhausted
+                    ? availableTools.Where(t => t.Name != "knowledge_search").ToList()
+                    : availableTools;
 
             var streamOptions = new LlmOptions(
                 AiChatHelpers.ClampMaxTokens(aiSettings), AiChatHelpers.ClampTemperature(aiSettings),
@@ -890,6 +950,9 @@ public class AiChatStreamingOrchestrator
 
             hasToolCalls = false;
             bool hasAgentToolCall = false;
+            // Calls do agent suprimidas por orçamento esgotado: fechadas com
+            // tool message sintético para o round de síntese não receber 400.
+            var agentToolCallsPending = new List<LlmAssistantToolCall>();
             providerError = null;
 
             if (roundTools.Count > 0)
@@ -950,7 +1013,12 @@ public class AiChatStreamingOrchestrator
                                 }
 
                                 hasAgentToolCall = true;
-                                yield return new AiChatStreamChunk(Type: "tool_call", ToolCallId: tc.Id, ToolName: tc.Name, ToolArgumentsDelta: tc.ArgumentsJson);
+                                agentToolCallsPending.Add(new LlmAssistantToolCall(tc.Id, tc.Name, tc.ArgumentsJson));
+                                // Orçamento esgotado: não emite o tool_call; o bloco
+                                // pós-foreach injeta a nota de síntese e reinicia o
+                                // round sem tools (ver budgetExhausted).
+                                if (!AiChatTurnRound.IsBudgetExhausted(turnRound, maxIterations))
+                                    yield return new AiChatStreamChunk(Type: "tool_call", ToolCallId: tc.Id, ToolName: tc.Name, ToolArgumentsDelta: tc.ArgumentsJson);
                             }
                             else
                             {
@@ -977,6 +1045,30 @@ public class AiChatStreamingOrchestrator
 
                         if (hasAgentToolCall)
                         {
+                            // Orçamento do turno esgotado: este request iria delegar
+                            // outra tool ao agent, mas o máximo configurado já foi
+                            // alcançado. Não emite round_end nem persiste round
+                            // pendente (antes o yield break ignorava totalmente o
+                            // MaxToolCallIterations). Injeta a nota de síntese e
+                            // reinicia o round sem tools.
+                            if (AiChatTurnRound.IsBudgetExhausted(turnRound, maxIterations))
+                            {
+                                budgetExhausted = true;
+                                hasAgentToolCall = false;
+                                // Fecha as tool_calls já presentes em llmMessages (a
+                                // delegação ao agent foi abortada) para o round de
+                                // síntese sem tools não receber 400 do provedor.
+                                foreach (var pendingCall in agentToolCallsPending)
+                                    llmMessages.Add(new LlmMessage("tool", AiChatHelpers.AgentToolBudgetExhaustedResult, pendingCall.Id, pendingCall.Name));
+                                llmMessages.Add(new LlmMessage("system", AiChatHelpers.SynthesisBudgetNote));
+                                _logger.LogInformation(
+                                    "[{TraceId}] Orçamento de rounds do turno esgotado ({Round}/{Max}); sintetizando resposta sem tools em vez de delegar ao agent",
+                                    traceId, turnRound, maxIterations);
+                                // Sai do await foreach: o while reentra com roundTools
+                                // vazio (sem chamada ao LLM aqui); a resposta final sai
+                                // da síntese forçada pós-loop.
+                                break;
+                            }
                             // Registra round pendente para o watchdog: se o agent não
                             // devolver ToolResults dentro do TTL, o próximo multi-round
                             // desta sessão injeta nota de expiração.
@@ -1005,7 +1097,11 @@ public class AiChatStreamingOrchestrator
                 }
             }
 
-            if (!hasToolCalls || toolIterations >= maxIterations - 1) break;
+            // budgetExhausted: garante que o while rode o round sem tools mesmo
+            // com o orçamento local atingido. No multi-round esse round NÃO faz
+            // chamada ao LLM (não existe else para roundTools vazio); ele só
+            // deixa o loop encerrar e a síntese forçada pós-loop responde.
+            if (!hasToolCalls || (!budgetExhausted && toolIterations >= maxIterations - 1)) break;
             toolIterations++;
         }
 
@@ -1022,30 +1118,34 @@ public class AiChatStreamingOrchestrator
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
-        // ── Sanitização de vazamentos de tool calls ──
+        // ── A2UI + sanitização de vazamentos (mesma ordem única do StreamAsync) ──
         // Roda ANTES da síntese forçada: se o conteúdo era só vazamento (DSML,
         // invokes textuais), a sanitização o esvazia e a síntese dispara com a
-        // nota correta — mesma ordem do StreamAsync.
-        var (sanitizedMultiContent, multiWasSanitized) = AiChatLeakSanitizer.Sanitize(fullContent);
+        // nota correta. A extração A2UI vem PRIMEIRO para o sanitizador não
+        // apagar o bloco ```a2ui antes de ele virar chunk "a2ui".
+        var (cleanMultiContent, a2uiMultiMessages, multiWasSanitized) = AiChatOutputPipeline.Process(fullContent);
         if (multiWasSanitized)
         {
             _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output multi-round ({OrigLen} -> {CleanLen} chars)",
-                traceId, fullContent.Length, sanitizedMultiContent.Length);
-            fullContent = sanitizedMultiContent;
+                traceId, fullContent.Length, cleanMultiContent.Length);
         }
-
-        // ── A2UI: extrai mensagens A2UI do conteúdo do LLM e emite como chunks ──
-        var (cleanMultiContent, a2uiMultiMessages) = AiChatA2uiExtractor.Extract(fullContent);
         fullContent = cleanMultiContent;
         foreach (var a2uiMsg in a2uiMultiMessages)
         {
             yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
         }
 
-        // ── Síntese forçada: conteúdo vazio → chamadas sem tools até obter resposta ──
-        if (string.IsNullOrWhiteSpace(fullContent))
+        // ── Síntese forçada: conteúdo vazio (ou orçamento estourado) → chamadas
+        // sem tools até obter resposta ──
+        // budgetExhausted entra na condição de propósito: aqui um round sem
+        // tools NÃO chama o LLM dentro do while, então a resposta final sai
+        // daqui. Se o modelo tivesse deixado texto residual depois do
+        // tool_calls suprimido, depender só de "conteúdo vazio" encerraria o
+        // turno sem resposta.
+        if (string.IsNullOrWhiteSpace(fullContent) || budgetExhausted)
         {
-            if (hasToolCalls && toolIterations >= maxIterations - 1)
+            // budgetExhausted: a nota já foi injetada no caminho delegado.
+            if (hasToolCalls && !budgetExhausted && toolIterations >= maxIterations - 1)
                 llmMessages.Add(new LlmMessage("system", AiChatHelpers.SynthesisBudgetNote));
             else
                 llmMessages.Add(new LlmMessage("user", AiChatHelpers.EmptyContentNote));

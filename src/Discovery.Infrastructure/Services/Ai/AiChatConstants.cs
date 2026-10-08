@@ -19,6 +19,16 @@ internal static class AiChatConstants
     // não devolver ToolResults dentro desse prazo, o próximo multi-round injeta
     // nota de expiração e conclui com resposta.
     public static readonly TimeSpan PendingRoundTtl = TimeSpan.FromSeconds(120);
+    // TTL do contador de round por TURNO (chave turn_round:{sessionId}).
+    // NÃO usar o prazo do round pendente (120s): entre dois requests do mesmo
+    // turno o AGENTE executa as tools, e uma cadeia real (winget/choco) passa
+    // de 2min com facilidade — com TTL curto a continuação encontrava a chave
+    // expirada, voltava para o round 1 e o MaxToolCallIterations era burlado
+    // justamente nas cadeias longas. O teto do loop do agente é 10min
+    // (maxMultiRoundTotal); 15min cobre o turno inteiro com folga. Um turno
+    // NOVO zera a contagem explicitamente (hasToolResults=false), então o
+    // prazo longo não contamina o turno seguinte.
+    public static readonly TimeSpan TurnRoundTtl = TimeSpan.FromMinutes(15);
     public const int DefaultMaxHistoryMessages = 20;
     public const int DefaultMaxKbContextTokens = 2000;
     public const int DefaultMaxTokens = 2048; // ~1500 palavras — evita corte em scripts, explicações longas e respostas técnicas

@@ -78,12 +78,15 @@ public static class McpToolCatalogMetadata
             ["get_inventory"] = new("Inventário",
                 "Use para hardware, SO, discos, rede, usuários, bateria, BitLocker e software instalado.",
                 90, true),
+            // A gravação em disco pede AUTORIZAÇÃO do usuário no chat
+            // (RequestFileWriteConsent no agente): é uma tool interativa, então
+            // o agente não aplica timeout (TimeoutApplies=false).
             ["export_inventory_markdown"] = new("Inventário",
-                "Use para gerar o relatório de inventário em Markdown.",
-                120, true),
+                "Use para gerar o relatório de inventário em Markdown. A gravação do arquivo exige autorização do usuário (pergunta exibida no chat).",
+                0, false),
             ["export_inventory_pdf"] = new("Inventário",
-                "Use para gerar o relatório de inventário em PDF.",
-                180, true),
+                "Use para gerar o relatório de inventário em PDF. A gravação do arquivo exige autorização do usuário (pergunta exibida no chat).",
+                0, false),
             ["get_agent_info"] = new("Inventário",
                 "Use ANTES de abrir chamado para enriquecer a descrição com dados da máquina.",
                 30, true),

@@ -50,6 +50,16 @@ internal static class AiChatHelpers
         "Informe o usuário que a ação não pôde ser concluída no momento, explique o que foi possível apurar " +
         "e sugira alternativas (ex.: tentar novamente mais tarde).";
 
+    /// <summary>
+    /// Resultado sintético que fecha as tool calls do agent quando o orçamento
+    /// do turno esgota e a ferramenta NÃO é delegada. Necessário porque a
+    /// mensagem assistant com tool_calls já entrou em llmMessages; provedores
+    /// OpenAI-compatible rejeitam tool_call sem tool message correspondente
+    /// (400), e a síntese seguinte roda sem tools.
+    /// </summary>
+    public const string AgentToolBudgetExhaustedResult =
+        "{\"budget_exhausted\":true,\"message\":\"Orçamento de iterações de ferramentas esgotado; a ferramenta não foi executada.\"}";
+
     /// <summary>Injetada quando o LLM não produziu conteúdo visível.</summary>
     public const string EmptyContentNote =
         "[SISTEMA] Você não forneceu uma resposta visível ao usuário. Forneça uma resposta direta e útil à última pergunta do usuário.";
