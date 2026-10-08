@@ -9,7 +9,7 @@
 
 | #   | Causa                                                                                                                                                           | Onde                                                                                                  |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| 1   | Orçamento de iterações baixo e clampado em 1–10 (`MaxToolCallIterations`, default 3 na config / 5 no constant). Loop esgota e quebra em silêncio.               | `AiChatStreamingOrchestrator.StreamAsync` / `StreamMultiRoundAsync`, `AiChatService.ProcessSyncAsync` |
+| 1   | Orçamento de iterações baixo (`MaxToolCallIterations`). **Atualização 2026-10-08:** default 10 no constant e no value object, faixa **3–20** (mínimo 3), e o valor passou a valer como **N execuções por turno** (o check era `round >= max` e valia N-1). | `AiChatStreamingOrchestrator.StreamAsync` / `StreamMultiRoundAsync`, `AiChatService.ProcessSyncAsync` |
 | 2   | Break silencioso por KB vazia (`consecutiveEmptyKbSearches >= 2`) sem avisar LLM/usuário.                                                                       | idem                                                                                                  |
 | 3   | Round delegado ao agent pode morrer no caminho: servidor faz `yield break` após `round_end` e depende do agent reenviar `ToolResults`. Sem timeout/recuperação. | fim do bloco `tool_calls`                                                                             |
 | 4   | Retry de conteúdo vazio fraco: só roda com `toolIterations > 0`, 1 tentativa, e não existe no fluxo sync.                                                       | `streamDone`                                                                                          |
@@ -18,7 +18,9 @@
 ## 2. Decisões de design (revisão 2026-08-31)
 
 1. **Um único setting**: reaproveitar `MaxToolCallIterations` (não criar setting
-   novo). Default passa a **10**, clamp ampliado para **1–20**.
+   novo). Default passa a **10**. **Revisão 2026-10-08:** faixa **3–20** (mínimo 3
+   para o turno não virar só pedido de autorização) e editável na UI
+   (Configuração do servidor › Integração com IA › Configuração Avançada).
 2. **Síntese forçada**: ao esgotar o orçamento com o LLM ainda querendo tools,
    injeta nota de sistema e faz chamada final **sem tools** (até 2 tentativas).
    Aplica também ao fluxo sync e ao caso `toolIterations == 0` com conteúdo vazio.
@@ -74,7 +76,8 @@
 
 ## 4c. Pendências futuras
 
-- Gerência da config `MaxToolCallIterations` na UI admin do servidor (setting já persiste — só expor).
+- ~~Gerência da config `MaxToolCallIterations` na UI admin do servidor~~ **feito em 2026-10-08** (`AiIntegrationCard`, tela `/settings/server`).
+- **Renovação com autorização (2026-10-08):** ao esgotar o orçamento com ação do agent pendente, o servidor NÃO sintetiza mais uma resposta final: guarda as ações (`budget_renewal:{sessionId}`, TTL 30 min), pede autorização ao usuário (`- Continuar` / `- Parar`) e, na resposta, abre um turno novo (= orçamento renovado com o mesmo valor) retomando as ações via `BuildBudgetRenewalResumeNote`. Os chunks `budget_exhausted`/`budget_renewed` alimentam o evento `chat:budget` no agent.
 - Bindings Wails regenerados não são necessários (evento via emitEvent, não binding).
 
 ## 5. Validação

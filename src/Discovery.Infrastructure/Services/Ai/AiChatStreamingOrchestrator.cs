@@ -594,7 +594,7 @@ public class AiChatStreamingOrchestrator
             // budgetExhausted: garante que o round sem tools aconteça mesmo que o
             // orçamento local (toolIterations) já tenha sido atingido; o break
             // natural ocorre depois, quando o round sem tools não pede tool.
-            if (!hasToolCalls || (!budgetExhausted && toolIterations >= maxIterations - 1)) break;
+            if (!hasToolCalls || (!budgetExhausted && toolIterations >= maxIterations)) break;
             toolIterations++;
         }
 
@@ -642,7 +642,7 @@ public class AiChatStreamingOrchestrator
         {
             // budgetExhausted: a nota de síntese já foi injetada no caminho
             // delegado — evita duplicá-la e dispara a síntese normal.
-            if (hasToolCalls && !budgetExhausted && toolIterations >= maxIterations - 1)
+            if (hasToolCalls && !budgetExhausted && toolIterations >= maxIterations)
                 llmMessages.Add(new LlmMessage("system", AiChatHelpers.SynthesisBudgetNote));
             else
                 llmMessages.Add(new LlmMessage("user", AiChatHelpers.EmptyContentNote));
@@ -874,9 +874,18 @@ public class AiChatStreamingOrchestrator
         // requests do mesmo turno — antes o contador local zerava e o heartbeat
         // mostrava sempre "round 1", e o orçamento configurado era ignorado no
         // caminho delegado ao agent.
-        var turnRound = AiChatTurnRound.Resolve(_memoryCache, session.Id, toolResults is { Count: > 0 });
+        // Correção 2026-10-08: clique em surface A2UI é TURNO NOVO, não
+        // continuação da tool chain anterior (ver AiChatTurnRound). Sem isso,
+        // cada clique herdava os rounds do turno anterior e, com orçamento baixo,
+        // o tool_call era abortado e a resposta sintetizada SEM tools — o
+        // upgrade_package clicado nunca chegava ao agent (caso YogaDNS 4/3).
+        var turnRound = AiChatTurnRound.Resolve(_memoryCache, session.Id,
+            AiChatTurnRound.ResolveContinuesTurn(toolResults?.Select(tr => tr.Name)));
         // Round de síntese forçada sem tools após o orçamento esgotar.
         bool budgetExhausted = false;
+        // true quando o orçamento estourou e o modelo vai PERGUNTAR ao usuário se
+        // pode continuar (renovação) em vez de sintetizar uma resposta final.
+        bool continuationRequested = false;
 
         // ── Watchdog de round pendente ──
         // Se EXISTE registro de round delegado ao agent e este request NÃO
@@ -895,6 +904,29 @@ public class AiChatStreamingOrchestrator
             {
                 llmMessages.Add(new LlmMessage("system", AiChatHelpers.AgentRoundExpiredNote));
                 _logger.LogWarning("[{TraceId}] Round pendente sem ToolResults para SessionId={SessionId} — nota de expiração injetada", traceId, session.Id);
+            }
+        }
+
+        // ── Renovação de orçamento (continuação autorizada pelo usuário) ──
+        // Um turno NOVO (mensagem do usuário, sem ToolResults) reinicia o contador
+        // de rounds — é assim que o orçamento é renovado com o MESMO
+        // MaxToolCallIterations configurado. Se havia ações pendentes porque o
+        // orçamento do turno anterior esgotou, injeta a instrução para retomá-las;
+        // sem isso o modelo responderia como se nada tivesse ficado para trás.
+        if (toolResults is not { Count: > 0 })
+        {
+            var renewalKey = AiChatConstants.BudgetRenewalKey(session.Id);
+            if (_memoryCache.TryGetValue(renewalKey, out List<string>? renewalPending) && renewalPending is not null)
+            {
+                _memoryCache.Remove(renewalKey);
+                llmMessages.Add(new LlmMessage("system", AiChatHelpers.BuildBudgetRenewalResumeNote(renewalPending)));
+                _logger.LogInformation(
+                    "[{TraceId}] Orçamento renovado: retomando {Count} ação(ões) pendente(s) após resposta do usuário",
+                    traceId, renewalPending.Count);
+                yield return new AiChatStreamChunk(
+                    Type: "budget_renewed",
+                    Content: "Orçamento de rounds renovado — retomando as ações pendentes.",
+                    LoopMaxRounds: maxIterations);
             }
         }
 
@@ -1049,26 +1081,69 @@ public class AiChatStreamingOrchestrator
                         {
                             // Orçamento do turno esgotado: este request iria delegar
                             // outra tool ao agent, mas o máximo configurado já foi
-                            // alcançado. Não emite round_end nem persiste round
-                            // pendente (antes o yield break ignorava totalmente o
-                            // MaxToolCallIterations). Injeta a nota de síntese e
-                            // reinicia o round sem tools.
+                            // alcançado. Em vez de sintetizar uma resposta final (o
+                            // usuário via "não consegui executar" sem erro real), o
+                            // modelo PERGUNTA se pode continuar e as ações abortadas
+                            // ficam registradas; a autorização abre um turno novo,
+                            // que reinicia o contador de rounds = orçamento renovado
+                            // com o MESMO MaxToolCallIterations.
                             if (AiChatTurnRound.IsBudgetExhausted(turnRound, maxIterations))
                             {
                                 budgetExhausted = true;
                                 hasAgentToolCall = false;
+                                // O check usa turnRound >= maxIterations: com max=1
+                                // NENHUMA tool é delegada, nem no round 1. Pedir
+                                // renovação nesse caso criaria um ciclo infinito de
+                                // "posso continuar?" sem executar nada — mantém a
+                                // síntese e o limite fica explícito.
+                                continuationRequested = maxIterations > 1;
+                                var pendingSummary = continuationRequested
+                                    ? AiChatHelpers.BuildPendingActionSummary(
+                                        agentToolCallsPending.Select(p => (p.Name, (string?)p.ArgumentsJson)))
+                                    : [];
+                                if (pendingSummary.Count > 0)
+                                {
+                                    _memoryCache.Set(
+                                        AiChatConstants.BudgetRenewalKey(session.Id),
+                                        pendingSummary,
+                                        AiChatConstants.BudgetRenewalTtl);
+                                }
                                 // Fecha as tool_calls já presentes em llmMessages (a
-                                // delegação ao agent foi abortada) para o round de
-                                // síntese sem tools não receber 400 do provedor.
+                                // delegação ao agent foi abortada) — sem isso o round
+                                // de síntese leva 400 do provedor. O resultado deixa
+                                // claro que NÃO houve falha: aguarda autorização.
+                                var closingResult = continuationRequested
+                                    ? AiChatHelpers.AgentToolBudgetAwaitingConsentResult
+                                    : AiChatHelpers.AgentToolBudgetExhaustedResult;
                                 foreach (var pendingCall in agentToolCallsPending)
-                                    llmMessages.Add(new LlmMessage("tool", AiChatHelpers.AgentToolBudgetExhaustedResult, pendingCall.Id, pendingCall.Name));
-                                llmMessages.Add(new LlmMessage("system", AiChatHelpers.SynthesisBudgetNote));
-                                _logger.LogInformation(
-                                    "[{TraceId}] Orçamento de rounds do turno esgotado ({Round}/{Max}); sintetizando resposta sem tools em vez de delegar ao agent",
-                                    traceId, turnRound, maxIterations);
+                                    llmMessages.Add(new LlmMessage("tool", closingResult, pendingCall.Id, pendingCall.Name));
+                                llmMessages.Add(new LlmMessage("system", continuationRequested
+                                    ? AiChatHelpers.AgentBudgetContinuationNote
+                                    : AiChatHelpers.SynthesisBudgetNote));
+                                if (continuationRequested)
+                                {
+                                    _logger.LogInformation(
+                                        "[{TraceId}] Orçamento de rounds do turno esgotado ({Round}/{Max}) com {Pending} ação(ões) pendente(s) — perguntando ao usuário se pode renovar",
+                                        traceId, turnRound, maxIterations, pendingSummary.Count);
+                                    // Evento dedicado: o agent mostra no chat "limite
+                                    // atingido — aguardando autorização" em vez de
+                                    // deixar o usuário sem explicação.
+                                    yield return new AiChatStreamChunk(
+                                        Type: "budget_exhausted",
+                                        Content: $"Limite de rounds de ferramentas atingido ({turnRound}/{maxIterations}). " +
+                                                 "As ações pendentes ainda NÃO foram executadas — aguardando sua autorização para continuar.",
+                                        LoopRound: turnRound,
+                                        LoopMaxRounds: maxIterations);
+                                }
+                                else
+                                {
+                                    _logger.LogWarning(
+                                        "[{TraceId}] Orçamento de rounds esgotado ({Round}/{Max}) e MaxToolCallIterations={Max} não permite delegar nenhuma tool — sintetizando sem tools; ajuste em Configuração do Servidor › Integração com IA",
+                                        traceId, turnRound, maxIterations, maxIterations);
+                                }
                                 // Sai do await foreach: o while reentra com roundTools
-                                // vazio (sem chamada ao LLM aqui); a resposta final sai
-                                // da síntese forçada pós-loop.
+                                // vazio (sem chamada ao LLM aqui); a pergunta ao
+                                // usuário sai do round de síntese pós-loop.
                                 break;
                             }
                             // Registra round pendente para o watchdog: se o agent não
@@ -1103,7 +1178,7 @@ public class AiChatStreamingOrchestrator
             // com o orçamento local atingido. No multi-round esse round NÃO faz
             // chamada ao LLM (não existe else para roundTools vazio); ele só
             // deixa o loop encerrar e a síntese forçada pós-loop responde.
-            if (!hasToolCalls || (!budgetExhausted && toolIterations >= maxIterations - 1)) break;
+            if (!hasToolCalls || (!budgetExhausted && toolIterations >= maxIterations)) break;
             toolIterations++;
         }
 
@@ -1146,17 +1221,32 @@ public class AiChatStreamingOrchestrator
         // daqui. Se o modelo tivesse deixado texto residual depois do
         // tool_calls suprimido, depender só de "conteúdo vazio" encerraria o
         // turno sem resposta.
-        if (string.IsNullOrWhiteSpace(fullContent) || budgetExhausted)
+        if (string.IsNullOrWhiteSpace(fullContent) || budgetExhausted || continuationRequested)
         {
             // budgetExhausted: a nota já foi injetada no caminho delegado.
-            if (hasToolCalls && !budgetExhausted && toolIterations >= maxIterations - 1)
+            if (continuationRequested)
+            {
+                // Conteúdo vazio: AgentBudgetContinuationNote (injetada no caminho
+                // delegado) já instrui a pergunta.
+                // Com texto JÁ emitido, o round de síntese não rodaria (o while
+                // abaixo exigia conteúdo vazio) e o usuário nunca veria a pergunta
+                // de autorização — injeta a variante que só acrescenta a pergunta.
+                if (!string.IsNullOrWhiteSpace(fullContent))
+                    llmMessages.Add(new LlmMessage("system", AiChatHelpers.AgentBudgetContinuationFollowUpNote));
+                // A nota de "resposta vazia" NÃO entra: ela empurra o modelo a
+                // responder qualquer coisa em vez de perguntar se pode renovar.
+            }
+            else if (hasToolCalls && !budgetExhausted && toolIterations >= maxIterations)
                 llmMessages.Add(new LlmMessage("system", AiChatHelpers.SynthesisBudgetNote));
             else
                 llmMessages.Add(new LlmMessage("user", AiChatHelpers.EmptyContentNote));
 
-            for (var attempt = 1; attempt <= AiChatConstants.MaxSynthesisRetries && string.IsNullOrWhiteSpace(fullContent); attempt++)
+            for (var attempt = 1; attempt <= AiChatConstants.MaxSynthesisRetries
+                 && (string.IsNullOrWhiteSpace(fullContent) || continuationRequested); attempt++)
             {
-                contentBuilder.Clear();
+                // Com texto já emitido NÃO limpa o buffer: a pergunta é acrescentada
+                // ao que o usuário já viu (limpar apagaria o turno).
+                if (string.IsNullOrWhiteSpace(fullContent)) contentBuilder.Clear();
                 var synthesisOptions = new LlmOptions(
                     maxTokens, AiChatHelpers.ClampTemperature(aiSettings),
                     string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
@@ -1178,6 +1268,8 @@ public class AiChatStreamingOrchestrator
                     anyTokenYielded = true;
                 }
                 fullContent = contentBuilder.ToString();
+                // A pergunta de autorização é uma única chamada: não repete em loop.
+                if (continuationRequested) break;
             }
         }
 

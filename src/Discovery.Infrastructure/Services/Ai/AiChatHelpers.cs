@@ -27,7 +27,8 @@ internal static class AiChatHelpers
     /// StreamMultiRoundAsync e ProcessSyncAsync.
     /// </summary>
     public static int ResolveMaxToolIterations(AIIntegrationSettings settings)
-        => settings.MaxToolCallIterations is >= 1 and <= AiChatConstants.MaxToolCallIterationsLimit
+        => settings.MaxToolCallIterations is >= AiChatConstants.MinToolCallIterations
+            and <= AiChatConstants.MaxToolCallIterationsLimit
             ? settings.MaxToolCallIterations
             : AiChatConstants.DefaultMaxToolCallIterations;
 
@@ -60,9 +61,84 @@ internal static class AiChatHelpers
     public const string AgentToolBudgetExhaustedResult =
         "{\"budget_exhausted\":true,\"message\":\"Orçamento de iterações de ferramentas esgotado; a ferramenta não foi executada.\"}";
 
+    /// <summary>
+    /// Injetada quando o orçamento de rounds do turno esgota e havia ação do agent
+    /// pendente. Antes o orquestrador sintetizava uma resposta final sem tools e o
+    /// usuário via "não consegui executar" (sem erro real). Agora o modelo PERGUNTA
+    /// se pode continuar: a autorização abre um turno novo e renova o orçamento.
+    /// </summary>
+    public const string AgentBudgetContinuationNote =
+        "[SISTEMA] O orçamento de rounds de ferramentas DESTE turno esgotou e havia ações pendentes que NÃO foram executadas. " +
+        "NÃO execute nem solicite ferramentas agora. Pergunte ao usuário, de forma curta e objetiva, se ele autoriza continuar a execução, " +
+        "diga o que ficou pendente e ofereça as opções EXATAMENTE neste formato, uma por linha: \"- Continuar\" e \"- Parar\". " +
+        "Se ele autorizar, a execução será retomada automaticamente no próximo turno.";
+
+    /// <summary>
+    /// Resultado sintético que fecha as tool calls abortadas pelo orçamento quando a
+    /// continuação será pedida ao usuário. Diferente de
+    /// <see cref="AgentToolBudgetExhaustedResult"/>: não é erro de execução, é
+    /// "pendente de autorização" — assim o modelo não informa falha ao usuário.
+    /// </summary>
+    public const string AgentToolBudgetAwaitingConsentResult =
+        "{\"budget_exhausted\":true,\"awaiting_user_consent\":true,\"message\":\"Ação ainda NÃO executada: orçamento de rounds do turno esgotado; aguardando autorização do usuário para continuar.\"}";
+
+    /// <summary>
+    /// Nota do turno seguinte à pergunta de continuação. Um turno novo reinicia o
+    /// contador de rounds (orçamento renovado com o mesmo MaxToolCallIterations);
+    /// esta nota faz o modelo retomar as ações que ficaram pendentes em vez de
+    /// responder como se nada tivesse acontecido.
+    /// </summary>
+    public static string BuildBudgetRenewalResumeNote(IEnumerable<string>? pendingActions)
+    {
+        var list = pendingActions?.Where(a => !string.IsNullOrWhiteSpace(a)).ToList() ?? [];
+        var pending = list.Count == 0 ? "(não identificadas)" : string.Join("; ", list);
+        return
+            "[SISTEMA] O usuário respondeu à pergunta sobre continuar a execução interrompida pelo orçamento de rounds. " +
+            $"Ações pendentes: {pending}. " +
+            "Se a resposta autorizar continuar (ex.: \"Continuar\", \"sim\", \"pode\"), retome AGORA exatamente essas ações, " +
+            "chamando as ferramentas correspondentes com os MESMOS argumentos — o orçamento deste turno está renovado. " +
+            "Cada ação continua sujeita à autorização de consentimento do usuário no agent. " +
+            "Se a resposta recusar, confirme o encerramento em uma frase e NÃO chame ferramentas. " +
+            "Se a mensagem do usuário for sobre OUTRO assunto (não é resposta à pergunta de continuação), ignore as ações pendentes e responda normalmente.";
+    }
+
+    /// <summary>
+    /// Variante de continuação usada quando o modelo JÁ havia emitido texto antes
+    /// do tool call abortado pelo orçamento: o round de síntese não roda nesse
+    /// caso (conteúdo não vazio), então a pergunta de autorização ficaria sem
+    /// aparecer. Pede só o acréscimo da pergunta, sem repetir o que já foi dito.
+    /// </summary>
+    public const string AgentBudgetContinuationFollowUpNote =
+        "[SISTEMA] As ações pendentes NÃO foram executadas porque o orçamento de rounds deste turno esgotou. " +
+        "Acrescente AGORA, em 1-2 linhas, a pergunta ao usuário pedindo autorização para continuar, " +
+        "com as opções EXATAMENTE neste formato, uma por linha: \"- Continuar\" e \"- Parar\". " +
+        "NÃO repita o que você já escreveu e NÃO solicite ferramentas.";
+
     /// <summary>Injetada quando o LLM não produziu conteúdo visível.</summary>
     public const string EmptyContentNote =
         "[SISTEMA] Você não forneceu uma resposta visível ao usuário. Forneça uma resposta direta e útil à última pergunta do usuário.";
+
+    /// <summary>
+    /// Resume as ações abortadas pelo orçamento para a nota de retomada, no formato
+    /// "nome {argumentos}". Os argumentos são truncados: a nota é instrução para o
+    /// LLM, não um despejo de payload. Respeita
+    /// <see cref="AiChatConstants.MaxBudgetRenewalPendingActions"/>.
+    /// </summary>
+    public static List<string> BuildPendingActionSummary(
+        IEnumerable<(string Name, string? ArgumentsJson)>? pending, int maxArgsChars = 200)
+    {
+        var list = new List<string>();
+        if (pending is null) return list;
+        foreach (var (name, argumentsJson) in pending)
+        {
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            if (list.Count >= AiChatConstants.MaxBudgetRenewalPendingActions) break;
+            var args = (argumentsJson ?? string.Empty).Trim();
+            if (args.Length > maxArgsChars) args = args[..maxArgsChars] + "…";
+            list.Add(string.IsNullOrEmpty(args) ? name : $"{name} {args}");
+        }
+        return list;
+    }
 
     public static string ExtractKbQuery(string argumentsJson)
     {

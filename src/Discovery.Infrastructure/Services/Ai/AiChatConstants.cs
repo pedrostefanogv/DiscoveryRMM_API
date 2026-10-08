@@ -12,6 +12,12 @@ internal static class AiChatConstants
     // loops curtos demais deixavam respostas cortadas exigindo "continue" manual.
     public const int DefaultMaxToolCallIterations = 10;
     public const int MaxToolCallIterationsLimit = 20;
+    // Mínimo configurável (tela › Configuração do servidor › Integração com IA).
+    // Abaixo disso o turno quase não executa ferramentas e a IA passa o tempo
+    // pedindo autorização para continuar — com 3 o valor já é útil e o
+    // off-by-one antigo (que fazia 1 significar "nenhuma execução") deixa de
+    // existir.
+    public const int MinToolCallIterations = 3;
     // Tentativas da chamada final de síntese (sem tools) quando o loop esgota
     // o orçamento ou o conteúdo vem vazio.
     public const int MaxSynthesisRetries = 2;
@@ -39,6 +45,23 @@ internal static class AiChatConstants
     // Teto usado quando o catálogo não conhece o modelo (id inválido, alias auto).
     public const int UnknownModelOutputCap = 4096;
     public const double DefaultTemperature = 0.3; // Determinístico para tool calling, comandos PowerShell e citações precisas
+
+    // ── Renovação de orçamento (autorização do usuário) ─────────────────────
+    // Quando o orçamento de rounds do turno esgota com uma ação do agent
+    // pendente, o orquestrador NÃO sintetiza mais uma resposta final em
+    // silêncio: ele pergunta ao usuário se pode continuar e guarda as ações
+    // abortadas na chave abaixo. A resposta do usuário abre um turno novo (o
+    // contador de rounds volta a 1) e o orçamento é renovado com o MESMO
+    // MaxToolCallIterations configurado.
+    //
+    // TTL generoso: o usuário pode demorar para responder à pergunta no chat.
+    public static readonly TimeSpan BudgetRenewalTtl = TimeSpan.FromMinutes(30);
+    public const string BudgetRenewalCachePrefix = "budget_renewal:";
+    // Teto de ações guardadas para retomada (a nota de sistema não pode virar um
+    // despejo de argumentos).
+    public const int MaxBudgetRenewalPendingActions = 10;
+
+    public static string BudgetRenewalKey(Guid sessionId) => $"{BudgetRenewalCachePrefix}{sessionId}";
 
     // Cache de tools registradas por agent (para multi-round com tools do agent)
     // TTL de 4h: balanceia cache contra mudanças de permissão/ferramentas sem necessidade de restart

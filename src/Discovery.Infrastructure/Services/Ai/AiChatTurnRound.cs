@@ -18,7 +18,41 @@ internal static class AiChatTurnRound
     /// <summary>Prefixo da chave de cache por sessão (mesmo padrão de pending_round:).</summary>
     public const string KeyPrefix = "turn_round:";
 
+    /// <summary>
+    /// Nome do toolResult sintético que representa um clique/input em uma surface
+    /// A2UI (ver AiChatStreamingOrchestrator: a ação chega como tool result com
+    /// Message nulo, porque o provedor exige ToolResults para o fluxo
+    /// multi-round).
+    /// </summary>
+    public const string A2uiActionToolName = "a2ui_action";
+
     public static string BuildKey(Guid sessionId) => $"{KeyPrefix}{sessionId}";
+
+    /// <summary>
+    /// Decide se um request com ToolResults é CONTINUAÇÃO da tool chain do turno
+    /// anterior (round + 1) ou um TURNO NOVO (round 1).
+    ///
+    /// Correção 2026-10-08 (caso YogaDNS): um clique em surface A2UI chega com
+    /// ToolResults, então era contado como continuação do turno anterior. Cada
+    /// clique somava rounds ao contador e, com MaxToolCallIterations baixo
+    /// (homologação = 3), o clique seguinte estourava o orçamento (4/3): o
+    /// tool_call que o LLM emitiu era ABORTADO ("sintetizando resposta sem
+    /// tools") e o programa nunca era atualizado — o usuário via "não consegui
+    /// executar" sem nenhum erro real.
+    ///
+    /// Um clique A2UI é, para o usuário, uma ação NOVA: só conta como
+    /// continuação quando há tool results reais (qualquer result que não seja
+    /// exclusivamente a sentinela a2ui_action).
+    /// </summary>
+    public static bool ResolveContinuesTurn(IEnumerable<string>? toolResultNames)
+    {
+        var names = toolResultNames?.ToList() ?? [];
+        if (names.Count == 0) return false;
+        return !names.All(IsA2uiAction);
+    }
+
+    private static bool IsA2uiAction(string name) =>
+        string.Equals(name, A2uiActionToolName, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Resolve o round atual do turno e renova o TTL da chave.
@@ -37,10 +71,15 @@ internal static class AiChatTurnRound
     }
 
     /// <summary>
-    /// Orçamento esgotado quando o round do turno alcança o máximo configurado.
-    /// Usado no caminho delegado, onde antes o yield break ignorava inteiramente
-    /// o MaxToolCallIterations definido pelo administrador.
+    /// Orçamento esgotado quando o round do turno ULTRAPASSA o máximo configurado.
+    ///
+    /// Correção 2026-10-08 (off-by-one): antes era <c>turnRound >= maxIterations</c>
+    /// e o tool_call só era emitido com <c>!IsBudgetExhausted</c>, então o valor
+    /// configurado valia como N-1 execuções (com 3 → 2; com 1 → nenhuma). Agora
+    /// <c>maxIterations = 3</c> significa até 3 rounds de ferramenta por turno, que
+    /// é o que o campo da tela promete. O mínimo configurável é 3
+    /// (<see cref="AiChatConstants.MinToolCallIterations"/>).
     /// </summary>
     public static bool IsBudgetExhausted(int turnRound, int maxIterations)
-        => turnRound >= maxIterations;
+        => turnRound > maxIterations;
 }

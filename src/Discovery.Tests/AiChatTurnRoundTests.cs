@@ -91,9 +91,11 @@ public class AiChatTurnRoundTests
     // ── Orçamento esgotado ───────────────────────────────────────────────────
 
     [Test]
-    public void IsBudgetExhausted_WhenRoundReachesMax_IsTrue()
+    public void IsBudgetExhausted_AtTheConfiguredLimit_StillAllowsExecution()
     {
-        Assert.That(AiChatTurnRound.IsBudgetExhausted(3, 3), Is.True);
+        // Correção 2026-10-08 (off-by-one): com 3 configurado o round 3 ainda
+        // delega — o valor passou a valer como N execuções (antes valia N-1).
+        Assert.That(AiChatTurnRound.IsBudgetExhausted(3, 3), Is.False);
     }
 
     [Test]
@@ -109,11 +111,68 @@ public class AiChatTurnRoundTests
     }
 
     [Test]
-    public void IsBudgetExhausted_WithSingleRoundBudget_IsTrueOnFirstRound()
+    public void IsBudgetExhausted_WithSingleRoundBudget_AllowsFirstRound()
     {
-        // maxIterations == 1: nenhuma delegação é permitida já no 1º round.
-        Assert.That(AiChatTurnRound.IsBudgetExhausted(1, 1), Is.True);
+        // Com 1 configurado (abaixo do mínimo da tela, mas possível via banco) o
+        // round 1 executa; o 2º é que estoura — antes o 1 já estourava e
+        // "1 round" significava NENHUMA ferramenta.
+        Assert.That(AiChatTurnRound.IsBudgetExhausted(1, 1), Is.False);
+        Assert.That(AiChatTurnRound.IsBudgetExhausted(2, 1), Is.True);
         Assert.That(AiChatTurnRound.IsBudgetExhausted(1, 2), Is.False);
+    }
+
+    // ── Clique em surface A2UI = TURNO NOVO (regressão YogaDNS 2026-10-08) ───
+
+    [Test]
+    public void ResolveContinuesTurn_EmptyOrNull_IsNewTurn()
+    {
+        Assert.That(AiChatTurnRound.ResolveContinuesTurn(null), Is.False);
+        Assert.That(AiChatTurnRound.ResolveContinuesTurn([]), Is.False);
+    }
+
+    [Test]
+    public void ResolveContinuesTurn_A2uiActionOnly_IsNewTurn()
+    {
+        Assert.That(AiChatTurnRound.ResolveContinuesTurn(["a2ui_action"]), Is.False);
+        // O servidor compara nomes de tool ignorando caixa (validação B1).
+        Assert.That(AiChatTurnRound.ResolveContinuesTurn(["A2UI_ACTION"]), Is.False);
+    }
+
+    [Test]
+    public void ResolveContinuesTurn_RealToolResults_IsContinuation()
+    {
+        Assert.That(AiChatTurnRound.ResolveContinuesTurn(["upgrade_package"]), Is.True);
+        // Resultado real + sentinela: o que importa é a tool chain real.
+        Assert.That(AiChatTurnRound.ResolveContinuesTurn(["a2ui_action", "upgrade_package"]), Is.True);
+    }
+
+    [Test]
+    public void Resolve_TwoA2uiClicksInARow_DoNotExhaustBudget()
+    {
+        // Cenário real de homologação (MaxToolCallIterations=3):
+        //   1º clique: rounds 1 (tool_call) e 2 (resultado real)
+        //   2º clique ANTES da correção: round 3/4 -> "Orçamento de rounds do
+        //   turno esgotado (4/3); sintetizando resposta sem tools" e o
+        //   upgrade_package clicado era abortado (YogaDNS não atualizou).
+        // Com a correção cada clique reinicia em round 1: o orçamento vale POR
+        // turno/clique, não acumula entre cliques.
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var sessionId = Guid.NewGuid();
+        const int maxIterations = 3;
+
+        var click1 = AiChatTurnRound.Resolve(cache, sessionId,
+            AiChatTurnRound.ResolveContinuesTurn(["a2ui_action"]));
+        Assert.That(click1, Is.EqualTo(1));
+
+        var chain = AiChatTurnRound.Resolve(cache, sessionId,
+            AiChatTurnRound.ResolveContinuesTurn(["upgrade_package"]));
+        Assert.That(chain, Is.EqualTo(2));
+        Assert.That(AiChatTurnRound.IsBudgetExhausted(chain, maxIterations), Is.False);
+
+        var click2 = AiChatTurnRound.Resolve(cache, sessionId,
+            AiChatTurnRound.ResolveContinuesTurn(["a2ui_action"]));
+        Assert.That(click2, Is.EqualTo(1));
+        Assert.That(AiChatTurnRound.IsBudgetExhausted(click2, maxIterations), Is.False);
     }
 
     // ── TTL ──────────────────────────────────────────────────────────────────
