@@ -253,4 +253,36 @@ public class AiChatA2uiValidatorTests
         var (valid, _) = AiChatA2uiValidator.Validate(Lines(content));
         Assert.That(valid, Is.Empty);
     }
+
+    /// <summary>
+    /// Payload de NAVEGAÇÃO (stepper/abas): só updateComponents, SEM createSurface,
+    /// com a árvore completa e todas as referências autocontidas. É exatamente o
+    /// formato que o fix do "Avançar" passou a exigir do modelo — se o validador
+    /// descartasse este formato, o card não mudaria de passo.
+    /// </summary>
+    [Test]
+    public void Validate_WhenNavigationUpdateOnly_FullTree_KeepsMessage()
+    {
+        const string content = """
+{"version":"v0.9","updateComponents":{"surfaceId":"stepper_demo","components":[{"id":"root","component":"Column","children":["etapa","btnLabel","btn"]},{"id":"etapa","component":"Text","text":"Etapa 2 de 3"},{"id":"btnLabel","component":"Text","text":"Voltar"},{"id":"btn","component":"Button","child":"btnLabel","action":{"event":{"name":"step_prev","context":{}}}}]}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(errors, Is.Empty);
+        Assert.That(valid, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void Validate_WhenNavigationUpdateOnly_MissingReference_DropsSurface()
+    {
+        const string content = """
+{"version":"v0.9","updateComponents":{"surfaceId":"stepper_demo","components":[{"id":"root","component":"Column","children":["etapa","fantasma"]},{"id":"etapa","component":"Text","text":"Etapa 2 de 3"}]}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(valid, Is.Empty);
+        Assert.That(string.Join(" | ", errors), Does.Contain("não existe na definição"));
+    }
 }
