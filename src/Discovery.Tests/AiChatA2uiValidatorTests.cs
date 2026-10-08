@@ -285,4 +285,37 @@ public class AiChatA2uiValidatorTests
         Assert.That(valid, Is.Empty);
         Assert.That(string.Join(" | ", errors), Does.Contain("não existe na definição"));
     }
+
+    /// <summary>
+    /// Armadilha verificada no renderer: context com chave 'path' é resolvido
+    /// como binding e a ação NÃO dispara (botão morto). O validador descarta a
+    /// surface inteira — o usuário vê o fallback em vez de um botão inerte.
+    /// </summary>
+    [Test]
+    public void Validate_WhenActionContextUsesPathKey_DropsSurface()
+    {
+        const string content = """
+{"version":"v0.9","createSurface":{"surfaceId":"s","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
+{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"root","component":"Column","children":["lbl","btn"]},{"id":"lbl","component":"Text","text":"Avançar"},{"id":"btn","component":"Button","child":"lbl","action":{"event":{"name":"step_next","context":{"path":"/etapa"}}}}]}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(valid, Is.Empty);
+        Assert.That(string.Join(" | ", errors), Does.Contain("usa a chave 'path'"));
+    }
+
+    [Test]
+    public void Validate_WhenLocalActionUsesTarget_KeepsMessages()
+    {
+        const string content = """
+{"version":"v0.9","createSurface":{"surfaceId":"wizard","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
+{"version":"v0.9","updateComponents":{"surfaceId":"wizard","components":[{"id":"root","component":"Column","children":["lbl","btn"]},{"id":"lbl","component":"Text","text":"Avançar"},{"id":"btn","component":"Button","child":"lbl","action":{"event":{"name":"ui.next","context":{"target":"/etapa","min":1,"max":3}}}}]}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(errors, Is.Empty);
+        Assert.That(valid, Has.Count.EqualTo(2));
+    }
 }

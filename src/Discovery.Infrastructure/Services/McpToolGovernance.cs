@@ -70,6 +70,9 @@ public class McpToolGovernance : IMcpToolGovernance
         names.UnionWith(serverByName.Keys);
         names.UnionWith(effectiveByName.Keys);
         names.UnionWith(localNames);
+        // Capacidades governáveis (ex.: A2UI) não têm handler, mas precisam
+        // aparecer na tela para poder ser ligadas/desligadas por escopo.
+        names.UnionWith(McpToolCatalogMetadata.GovernableCapabilities);
 
         // Contagem de sobrescritas em lote: uma passada para TODAS as tools
         // (antes era uma consulta por tool = N+1 no catálogo).
@@ -80,21 +83,27 @@ public class McpToolGovernance : IMcpToolGovernance
         foreach (var name in names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
             effectiveByName.TryGetValue(name, out var policy);
+            var isCapability = McpToolCatalogMetadata.GovernableCapabilities.Contains(name);
             var source = McpToolSources.Normalize(policy?.Source
-                         ?? (serverByName.ContainsKey(name) ? McpToolSources.Server : McpToolSources.Agent));
+                         ?? ((serverByName.ContainsKey(name) || isCapability) ? McpToolSources.Server : McpToolSources.Agent));
             var defaults = DefaultsFor(source);
             var metadata = McpToolCatalogMetadata.For(name, source);
 
             items.Add(new McpToolCatalogItem(
                 Name: name,
                 Source: source,
-                Description: ResolveDescription(name, source, serverByName, policy, globalDescriptions),
+                Description: McpToolCatalogMetadata.CapabilityDescription(name)
+                             ?? ResolveDescription(name, source, serverByName, policy, globalDescriptions),
                 IsEnabled: policy?.IsEnabled ?? true,
                 OverriddenHere: localNames.Contains(name),
                 Locked: policy?.Locked ?? false,
-                MaxCallsPerMinute: policy?.MaxCallsPerMinute ?? defaults.Max,
-                TimeoutSeconds: policy?.TimeoutSeconds
-                               ?? (metadata.TimeoutApplies ? metadata.RecommendedTimeoutSeconds : defaults.Timeout),
+                // Capacidade não executável: rate limit e timeout não existem —
+                // mostrar "10s" ou "60 chamadas/min" só confundiria o operador.
+                MaxCallsPerMinute: isCapability ? 0 : (policy?.MaxCallsPerMinute ?? defaults.Max),
+                TimeoutSeconds: isCapability
+                               ? 0
+                               : (policy?.TimeoutSeconds
+                                  ?? (metadata.TimeoutApplies ? metadata.RecommendedTimeoutSeconds : defaults.Timeout)),
                 LowerScopeOverrides: lowerScopeCounts.GetValueOrDefault(name),
                 Category: metadata.Category,
                 WhenToUse: metadata.WhenToUse,
@@ -121,9 +130,13 @@ public class McpToolGovernance : IMcpToolGovernance
         var inherited = effective.FirstOrDefault(p =>
             string.Equals(p.ToolName, toolName, StringComparison.OrdinalIgnoreCase));
 
+        // Capacidades governáveis (ex.: a2ui) não têm handler, mas são do
+        // SERVIDOR: sem este caso, o primeiro "salvar" gravava Source=agent e a
+        // tela passava a exibir a capacidade como ferramenta do agente.
+        var isCapability = McpToolCatalogMetadata.GovernableCapabilities.Contains(toolName);
         var source = inherited?.Source
-                     ?? (_executor.GetServerCatalog().Any(t =>
-                             string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase))
+                     ?? ((isCapability || _executor.GetServerCatalog().Any(t =>
+                             string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase)))
                          ? McpToolSources.Server
                          : McpToolSources.Agent);
 

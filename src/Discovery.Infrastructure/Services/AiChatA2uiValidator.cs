@@ -218,6 +218,26 @@ public static class AiChatA2uiValidator
         return id;
     }
 
+    /// <summary>
+    /// Armadilha do renderer (verificada empiricamente em 2026-10-08): um
+    /// `action.event.context` com a chave `path` é interpretado como um
+    /// DataBinding — o objeto INTEIRO é resolvido para o valor de /x e a ação é
+    /// descartada ("Invalid action payload"), deixando o botão morto. Melhor
+    /// descartar a surface e mostrar o fallback do que entregar um botão que não
+    /// faz nada.
+    /// </summary>
+    private static void CheckActionContextPathTrap(JsonElement component, string id, ParsedMessage p)
+    {
+        if (!component.TryGetProperty("action", out var action) || action.ValueKind != JsonValueKind.Object)
+            return;
+        if (!action.TryGetProperty("event", out var evt) || evt.ValueKind != JsonValueKind.Object)
+            return;
+        if (!evt.TryGetProperty("context", out var ctx) || ctx.ValueKind != JsonValueKind.Object)
+            return;
+        if (ctx.TryGetProperty("path", out _))
+            p.Errors.Add($"'{id}'.action.event.context usa a chave 'path' (o renderer trata o contexto como binding e a ação NÃO dispara — use 'target', 'campo' etc.)");
+    }
+
     private static void ReadComponent(JsonElement component, ParsedMessage p, HashSet<string> seen)
     {
         if (component.ValueKind != JsonValueKind.Object)
@@ -265,6 +285,8 @@ public static class AiChatA2uiValidator
             if (component.TryGetProperty(prop, out var refEl))
                 AddReference(refEl, prop, id, p);
         }
+
+        CheckActionContextPathTrap(component, id, p);
 
         if (component.TryGetProperty("children", out var childrenEl))
         {

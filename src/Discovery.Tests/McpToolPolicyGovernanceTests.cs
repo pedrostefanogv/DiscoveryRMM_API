@@ -456,5 +456,59 @@ public class McpToolPolicyGovernanceTests
             Task.FromResult(new List<LlmTool>());
 
         public IReadOnlyList<(string Name, string Description)> GetServerCatalog() => Catalog;
+
+        public Task<bool> IsToolEnabledAsync(
+            string toolName, Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct = default) =>
+            Task.FromResult(true);
+    }
+
+    // ── Capacidade governável (A2UI) ────────────────────────────────────────
+
+    [Test]
+    public async Task Catalog_ListsA2uiCapability_WithoutExposingItAsTool()
+    {
+        await using var db = NewDb();
+        var clientId = Guid.NewGuid();
+        var governance = new McpToolGovernance(new McpToolPolicyRepository(db), new FakeExecutor());
+
+        var catalog = await governance.GetCatalogAsync(new McpToolScope(clientId, null, null));
+        var item = catalog.Tools.SingleOrDefault(t => t.Name == McpToolCatalogMetadata.A2uiCapability);
+
+        Assert.That(item, Is.Not.Null, "a capacidade a2ui precisa aparecer na tela de governança");
+        Assert.That(item!.IsEnabled, Is.True, "sem política, herda habilitada");
+        Assert.That(item.Description, Does.Contain("Interface rica"));
+    }
+
+    [Test]
+    public async Task Catalog_DisablingA2uiOnClient_AppliesToScope()
+    {
+        await using var db = NewDb();
+        var clientId = Guid.NewGuid();
+        var governance = new McpToolGovernance(new McpToolPolicyRepository(db), new FakeExecutor());
+
+        await governance.SavePolicyAsync(
+            McpToolCatalogMetadata.A2uiCapability,
+            new SaveMcpToolPolicyRequest(clientId, null, null, IsEnabled: false,
+                MaxCallsPerMinute: null, TimeoutSeconds: null, Locked: false));
+
+        var catalog = await governance.GetCatalogAsync(new McpToolScope(clientId, null, null));
+        var capability = catalog.Tools.Single(t => t.Name == McpToolCatalogMetadata.A2uiCapability);
+
+        Assert.That(capability.IsEnabled, Is.False);
+        // Salvar não pode "rebaixar" a capacidade para ferramenta do agente nem
+        // inventar rate limit/timeout: ela não é executável.
+        Assert.That(capability.Source, Is.EqualTo(McpToolSources.Server));
+        Assert.That(capability.MaxCallsPerMinute, Is.EqualTo(0));
+        Assert.That(capability.TimeoutSeconds, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Capability_IsGovernedButNeverACallableTool()
+    {
+        Assert.That(McpToolCatalogMetadata.GovernableCapabilities, Does.Contain(McpToolCatalogMetadata.A2uiCapability));
+        Assert.That(McpToolCatalogMetadata.CapabilityDescription(McpToolCatalogMetadata.A2uiCapability), Is.Not.Null);
+        Assert.That(McpToolCatalogMetadata.CapabilityDescription("knowledge_search"), Is.Null);
+        // Sem handler, GetAvailableToolsAsync nunca expõe a capacidade ao LLM.
+        Assert.That(new FakeExecutor().GetServerCatalog().Any(t => t.Name == McpToolCatalogMetadata.A2uiCapability), Is.False);
     }
 }

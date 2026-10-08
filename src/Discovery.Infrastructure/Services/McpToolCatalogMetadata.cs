@@ -23,6 +23,26 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public static class McpToolCatalogMetadata
 {
+    /// <summary>
+    /// Capacidade de interface rica do chat (A2UI). NÃO é uma tool executável:
+    /// entra na governança só para poder ser ligada/desligada por escopo.
+    /// </summary>
+    public const string A2uiCapability = "a2ui";
+
+    /// <summary>
+    /// Capacidades governáveis: aparecem em /settings/mcp-tools com
+    /// enable/disable, herança e bloqueio, mas NUNCA são expostas ao LLM como
+    /// função — GetAvailableToolsAsync só devolve nomes com handler registrado.
+    /// </summary>
+    public static readonly IReadOnlySet<string> GovernableCapabilities =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { A2uiCapability };
+
+    /// <summary>Descrição da capacidade exibida na tela de governança.</summary>
+    public static string? CapabilityDescription(string name) =>
+        GovernableCapabilities.Contains(name)
+            ? "Interface rica (A2UI) no chat: cards, formulários, botões, dropdowns e listas gerados pela IA. Desligada, o assistente responde apenas em texto/markdown. Não é uma ferramenta executável — controla o que o assistente pode RENDERIZAR."
+            : null;
+
     /// <param name="Category">Agrupamento exibido na tela (ex.: Software, Rede).</param>
     /// <param name="WhenToUse">Orientação curta de "quando usar".</param>
     /// <param name="RecommendedTimeoutSeconds">Timeout sugerido; 0 = não se aplica.</param>
@@ -40,6 +60,11 @@ public static class McpToolCatalogMetadata
     private static readonly IReadOnlyDictionary<string, ToolMetadata> Known =
         new Dictionary<string, ToolMetadata>(StringComparer.OrdinalIgnoreCase)
         {
+            // ── Capacidades governáveis (não executáveis) ────────────────────
+            [A2uiCapability] = new("Interface do chat",
+                "Ligue/desligue as interfaces ricas (A2UI) geradas pela IA: cards, formulários, botões e dropdowns. Desligado, o chat responde só em texto.",
+                0, false),
+
             // ── Tools de SERVIDOR (executadas na API) ────────────────────────
             ["knowledge_search"] = new("Base de conhecimento",
                 "Use quando o usuário perguntar sobre políticas, procedimentos, sistemas internos ou assuntos documentados da empresa.",

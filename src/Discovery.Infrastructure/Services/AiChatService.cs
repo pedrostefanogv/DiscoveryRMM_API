@@ -128,7 +128,9 @@ public class AiChatService : IAiChatService
             var historyMessages = await _messageRepository.GetRecentBySessionAsync(session.Id, AiChatHelpers.ClampHistoryMessages(aiSettings), ct);
             var nextSeq = historyMessages.Any() ? historyMessages.Max(m => m.SequenceNumber) + 1 : 1;
 
-            var (systemPrompt, injectedArticleIds) = await _promptBuilder.BuildAsync(agent, session, message, aiSettings, departmentId, ct);
+            var a2uiEnabled = await _mcpToolExecutor.IsToolEnabledAsync(
+                McpToolCatalogMetadata.A2uiCapability, scopeClientId, scopeSiteId, agentId, ct);
+            var (systemPrompt, injectedArticleIds) = await _promptBuilder.BuildAsync(agent, session, message, aiSettings, departmentId, ct, a2uiEnabled);
             var llmMessages = AiChatToolOrchestrator.BuildLlmMessagesFromHistory(historyMessages);
             llmMessages.Add(new LlmMessage("user", message));
 
@@ -211,6 +213,13 @@ public class AiChatService : IAiChatService
                     traceId, safeContent.Length, cleanSync.Length);
             }
             safeContent = cleanSync;
+            if (!a2uiEnabled && a2uiSyncMessages.Count > 0)
+            {
+                // Capacidade desligada: o endpoint sync não devolve as mensagens
+                // A2UI ao agent (o texto visível já ficou sem o bloco).
+                _logger.LogWarning("[{TraceId}] A2UI desabilitada na governanca: {Count} mensagem(ns) descartada(s) no sync", traceId, a2uiSyncMessages.Count);
+                a2uiSyncMessages.Clear();
+            }
             if (string.IsNullOrWhiteSpace(safeContent))
             {
                 // Resposta que era SÓ a interface A2UI (sem texto): a mensagem

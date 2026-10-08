@@ -34,6 +34,28 @@ public class AiChatStreamingOrchestrator
     // imagens (capacidade "vision") antes de enviar prints de tela.
     private readonly IAiModelCatalogService _modelCatalog;
 
+    /// <summary>
+    /// Resolve se a capacidade A2UI está habilitada para o escopo (governança de
+    /// MCP tools, com herança). Ausência de política = HABILITADA, para não
+    /// desligar a interface em bases que ainda não têm a linha.
+    /// </summary>
+    private async Task<bool> IsA2uiEnabledAsync(
+        Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct)
+    {
+        try
+        {
+            return await _mcpToolExecutor.IsToolEnabledAsync(
+                McpToolCatalogMetadata.A2uiCapability, clientId, siteId, agentId, ct);
+        }
+        catch (Exception ex)
+        {
+            // Fail-open consciente: o gate é de RENDERIZAÇÃO (não de segurança) e
+            // uma falha de leitura da política não pode derrubar o chat.
+            _logger.LogWarning(ex, "Falha ao ler a politica da capacidade A2UI; assumindo HABILITADA");
+            return true;
+        }
+    }
+
     public AiChatStreamingOrchestrator(
         IAiChatSessionRepository sessionRepository,
         IAiChatMessageRepository messageRepository,
@@ -265,7 +287,8 @@ public class AiChatStreamingOrchestrator
                 AiChatHelpers.ClampHistoryMessages(aiSettings), ct);
             nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
 
-            (systemPrompt, _) = await _promptBuilder.BuildAsync(agent, session, message, aiSettings, departmentId, ct);
+            (systemPrompt, _) = await _promptBuilder.BuildAsync(agent, session, message, aiSettings, departmentId, ct,
+                await IsA2uiEnabledAsync(session.ClientId, session.SiteId, agentId, ct));
 
             llmMessages = AiChatToolOrchestrator.BuildLlmMessagesFromHistory(history);
             if (!string.IsNullOrWhiteSpace(systemNote))
@@ -617,9 +640,19 @@ public class AiChatStreamingOrchestrator
                 traceId, fullContent.Length, cleanContent.Length);
         }
         fullContent = cleanContent;
-        foreach (var a2uiMsg in a2uiMessages)
+        if (!await IsA2uiEnabledAsync(session.ClientId, session.SiteId, agentId, ct))
         {
-            yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
+            // Capacidade desligada na governança: o bloco já saiu do texto
+            // visível; aqui o chunk é descartado (defesa em profundidade).
+            if (a2uiMessages.Count > 0)
+                _logger.LogWarning("[{TraceId}] A2UI desabilitada na governanca: {Count} mensagem(ns) descartada(s)", traceId, a2uiMessages.Count);
+        }
+        else
+        {
+            foreach (var a2uiMsg in a2uiMessages)
+            {
+                yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
+            }
         }
 
         // budgetExhausted: não tenta o fallback de tool calls textuais (XML/DSML)
@@ -781,6 +814,20 @@ public class AiChatStreamingOrchestrator
                 "Explique ao usuário que a imagem não pôde ser analisada e ofereça alternativas (ex.: descrever o erro em texto)."));
         }
 
+        // Capacidade A2UI DESLIGADA + clique numa interface JÁ renderizada (de
+        // antes da mudança): o tool result sintético a2ui_action instrui o modelo
+        // a reemitir a surface, o que contraria a governança. A contra-ordem
+        // evita que o modelo gaste tokens (e prometa atualização que o servidor
+        // descarta).
+        if (toolResults is { Count: > 0 }
+            && toolResults.Any(tr => string.Equals(tr.Name, AiChatTurnRound.A2uiActionToolName, StringComparison.OrdinalIgnoreCase))
+            && !await IsA2uiEnabledAsync(session.ClientId, session.SiteId, agentId, ct))
+        {
+            llmMessages.Add(new LlmMessage("system",
+                "[SISTEMA] A interface A2UI está DESABILITADA nesta configuração (MCP tools). NÃO emita blocos a2ui nem prometa atualizar a interface: " +
+                "responda em texto/markdown e, se o clique pedia uma ação real (ex.: abrir pasta/app), execute a ferramenta correspondente normalmente."));
+        }
+
         if (toolResults is { Count: > 0 })
         {
             // B1: valida cada toolResult contra as tool calls pendentes emitidas
@@ -862,7 +909,8 @@ public class AiChatStreamingOrchestrator
         // base64 de imagem: Shorten limita o custo e evita embutir MBs.
         var promptSeed = message ?? lastUserMessage ?? Shorten(toolResults?.FirstOrDefault()?.Result, 2000) ?? "";
         var (systemPrompt, _) = await _promptBuilder.BuildAsync(agent, session,
-            promptSeed, aiSettings, departmentId, ct);
+            promptSeed, aiSettings, departmentId, ct,
+            await IsA2uiEnabledAsync(session.ClientId, session.SiteId, agentId, ct));
 
         var kbTools = aiSettings.KnowledgeBaseEnabled
             ? await _mcpToolExecutor.GetAvailableToolsAsync(session.ClientId, session.SiteId, agentId, ct)
@@ -1215,9 +1263,17 @@ public class AiChatStreamingOrchestrator
                 traceId, fullContent.Length, cleanMultiContent.Length);
         }
         fullContent = cleanMultiContent;
-        foreach (var a2uiMsg in a2uiMultiMessages)
+        if (!await IsA2uiEnabledAsync(session.ClientId, session.SiteId, agentId, ct))
         {
-            yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
+            if (a2uiMultiMessages.Count > 0)
+                _logger.LogWarning("[{TraceId}] A2UI desabilitada na governanca (multi-round): {Count} mensagem(ns) descartada(s)", traceId, a2uiMultiMessages.Count);
+        }
+        else
+        {
+            foreach (var a2uiMsg in a2uiMultiMessages)
+            {
+                yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
+            }
         }
 
         // ── Síntese forçada: conteúdo vazio (ou orçamento estourado) → chamadas

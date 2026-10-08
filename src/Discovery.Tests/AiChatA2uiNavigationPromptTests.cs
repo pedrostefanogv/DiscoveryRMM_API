@@ -76,4 +76,46 @@ public class AiChatA2uiNavigationPromptTests
         Assert.That(prompt, Does.Contain("NÃO USE"));
         Assert.That(prompt, Does.Contain("Material Symbols"));
     }
+
+    [Test]
+    public void DefaultPrompt_ExplainsLocalUiActionsAndThePathTrap()
+    {
+        var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent());
+
+        Assert.That(prompt, Does.Contain("INTERAÇÕES DENTRO DO CARD SEM VIRAR TURNO"));
+        Assert.That(prompt, Does.Contain("ui.next"));
+        Assert.That(prompt, Does.Contain("NUNCA use a chave"));
+    }
+
+    [Test]
+    public void DefaultPrompt_ExplainsOpenFolderAndOpenAppButtons()
+    {
+        var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent());
+
+        Assert.That(prompt, Does.Contain("ABRIR PASTA OU APLICATIVO COM UM BOTÃO DO CARD"));
+        Assert.That(prompt, Does.Contain("open_folder"));
+        Assert.That(prompt, Does.Contain("open_app"));
+        Assert.That(prompt, Does.Contain("downloads"));
+        Assert.That(prompt, Does.Contain("list_installed_apps"));
+    }
+
+    [Test]
+    public void DefaultPrompt_WhenA2uiDisabled_ForbidsProtocolAndOmitsRecipes()
+    {
+        var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent(), a2uiEnabled: false);
+
+        Assert.That(prompt, Does.Contain("DESATIVADAS NESTE ESCOPO"));
+        Assert.That(prompt, Does.Not.Contain("USO OPCIONAL E PARCIMONIOSO"));
+        Assert.That(prompt, Does.Not.Contain("ui.next"));
+        Assert.That(prompt, Does.Not.Contain("open_folder"));
+    }
+
+    [Test]
+    public void DefaultPrompt_WhenA2uiEnabled_PrefersInterfaceWhenApplicable()
+    {
+        var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent(), a2uiEnabled: true);
+
+        Assert.That(prompt, Does.Contain("PREFIRA a interface A2UI"));
+        Assert.That(prompt, Does.Contain("INTERFACES RICAS (A2UI) — USO OPCIONAL E PARCIMONIOSO"));
+    }
 }

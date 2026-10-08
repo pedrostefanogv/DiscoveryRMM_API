@@ -48,6 +48,18 @@ public interface IMcpToolExecutor
     /// Usado pela tela de governança para listar o que pode ser habilitado.
     /// </summary>
     IReadOnlyList<(string Name, string Description)> GetServerCatalog();
+
+    /// <summary>
+    /// Indica se a tool/capacidade está HABILITADA no escopo (herança incluída).
+    /// Ausência de política = habilitada (mesmo default da governança). Usado
+    /// para gate de CAPACIDADES que não são tools executáveis — hoje a A2UI.
+    /// </summary>
+    Task<bool> IsToolEnabledAsync(
+        string toolName,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        CancellationToken ct = default);
 }
 
 public record McpToolCallContext(
@@ -213,6 +225,19 @@ public class McpToolExecutor : IMcpToolExecutor
             Name: policy.ToolName,
             Description: GetToolDescription(policy.ToolName),
             Schema: schema);
+    }
+
+    public async Task<bool> IsToolEnabledAsync(
+        string toolName,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(toolName))
+            return true;
+        var policy = await _policyRepo.GetPolicyAsync(toolName, clientId, siteId, agentId, ct);
+        return policy?.IsEnabled ?? true;
     }
 
     public IReadOnlyList<(string Name, string Description)> GetServerCatalog() =>
