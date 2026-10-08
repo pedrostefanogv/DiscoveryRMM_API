@@ -202,4 +202,55 @@ public class AiChatA2uiValidatorTests
         Assert.That(validNull, Is.Empty);
         Assert.That(errorsNull, Is.Empty);
     }
+
+    /// <summary>
+    /// Select é componente PRÓPRIO do Discovery (dropdown real), registrado no
+    /// bundle (components/Select.js) sob o MESMO catalogId do basic. Se ele não
+    /// estiver em KnownComponents, o validador descarta a surface inteira e o
+    /// dropdown nunca aparece.
+    /// </summary>
+    [Test]
+    public void Validate_WhenSelectDropdown_KeepsMessages()
+    {
+        const string content = """
+{"version":"v0.9","createSurface":{"surfaceId":"printer_picker","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
+{"version":"v0.9","updateComponents":{"surfaceId":"printer_picker","components":[{"id":"root","component":"Column","children":["title","printer","applyLabel","apply"]},{"id":"title","component":"Text","text":"Impressora padrão","variant":"h3"},{"id":"printer","component":"Select","label":"Impressora","value":"","placeholder":"Escolha...","options":[{"label":"Microsoft Print to PDF","value":"pdf"},{"label":"OneNote (Desktop)","value":"onenote"}]},{"id":"applyLabel","component":"Text","text":"Aplicar"},{"id":"apply","component":"Button","child":"applyLabel","action":{"event":{"name":"printer_selected","context":{}}}}]}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(errors, Is.Empty);
+        Assert.That(valid, Has.Count.EqualTo(2));
+    }
+
+    /// <summary>
+    /// O schema do renderer é ESTRITO: Select/ChoicePicker sem 'options' e Text
+    /// sem 'text' nem são criados — o componente sumia do card sem aviso. O
+    /// validador descarta a surface e o usuário recebe o fallback.
+    /// </summary>
+    [Test]
+    public void Validate_WhenSelectWithoutOptions_DropsSurface()
+    {
+        const string content = """
+{"version":"v0.9","createSurface":{"surfaceId":"s","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
+{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"root","component":"Column","children":["sel"]},{"id":"sel","component":"Select","label":"Impressora"}]}}
+""";
+
+        var (valid, errors) = AiChatA2uiValidator.Validate(Lines(content));
+
+        Assert.That(valid, Is.Empty);
+        Assert.That(string.Join(" | ", errors), Does.Contain("propriedade obrigatória 'options'"));
+    }
+
+    [Test]
+    public void Validate_WhenTextWithoutText_DropsSurface()
+    {
+        const string content = """
+{"version":"v0.9","createSurface":{"surfaceId":"s","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
+{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"root","component":"Column","children":["t"]},{"id":"t","component":"Text","variant":"h3"}]}}
+""";
+
+        var (valid, _) = AiChatA2uiValidator.Validate(Lines(content));
+        Assert.That(valid, Is.Empty);
+    }
 }

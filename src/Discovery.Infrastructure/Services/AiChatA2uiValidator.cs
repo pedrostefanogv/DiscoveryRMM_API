@@ -22,11 +22,25 @@ public static class AiChatA2uiValidator
     {
         "Text", "Button", "TextField", "Row", "Column", "List", "Image", "Icon",
         "Video", "AudioPlayer", "Card", "Divider", "CheckBox", "Slider",
-        "DateTimeInput", "ChoicePicker", "Tabs", "Modal"
+        "DateTimeInput", "ChoicePicker", "Tabs", "Modal",
+        // Select = dropdown próprio do Discovery (components/Select.js no bundle
+        // A2UI). Não existe no basic v0.9; sem ele aqui o validador descartaria
+        // a surface inteira.
+        "Select"
     };
 
     // Propriedades que referenciam OUTRO componente por id.
     private static readonly string[] SingleReferenceProps = { "child", "trigger", "content" };
+
+    // Props SEM as quais o componente nem chega a ser criado (o schema zod do
+    // renderer é estrito): o componente simplesmente DESAPARECE do card, sem
+    // aviso. O validador não valida o schema inteiro — cobre só esses casos.
+    private static readonly Dictionary<string, string[]> RequiredProps = new(StringComparer.Ordinal)
+    {
+        ["Text"] = new[] { "text" },
+        ["ChoicePicker"] = new[] { "options" },
+        ["Select"] = new[] { "options" },
+    };
 
     /// <summary>
     /// Descarta surfaces inválidas. Devolve as mensagens válidas (mesma ordem) e
@@ -237,6 +251,14 @@ public static class AiChatA2uiValidator
         }
         if (!KnownComponents.Contains(type))
             p.Errors.Add($"componente '{id}' com tipo desconhecido '{type}'");
+        else if (RequiredProps.TryGetValue(type, out var required))
+        {
+            foreach (var prop in required)
+            {
+                if (!component.TryGetProperty(prop, out _))
+                    p.Errors.Add($"'{id}' ({type}) sem a propriedade obrigatória '{prop}' (o componente não seria renderizado)");
+            }
+        }
 
         foreach (var prop in SingleReferenceProps)
         {
