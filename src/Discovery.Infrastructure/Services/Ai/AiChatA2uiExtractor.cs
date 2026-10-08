@@ -36,6 +36,22 @@ public static class AiChatA2uiExtractor
     };
 
     /// <summary>
+    /// Teto de mensagens A2UI emitidas por resposta. O agent/renderer também
+    /// limita a 6 mensagens por turno; o teto no servidor evita que um LLM
+    /// "empolgado" inunde o SSE e o cliente (defesa em profundidade — o
+    /// descarte silencioso no cliente deixava o usuário sem saber por que
+    /// parte da interface não apareceu).
+    /// </summary>
+    public const int MaxA2uiMessagesPerResponse = 6;
+
+    /// <summary>
+    /// Tamanho máximo de uma linha de mensagem A2UI. Sem isso, uma linha
+    /// gigante (componentes/estilo colados) trafegava inteira no chunk "a2ui"
+    /// e no processamento do renderer.
+    /// </summary>
+    public const int MaxA2uiMessageBytes = 32 * 1024;
+
+    /// <summary>
     /// Tenta extrair mensagens A2UI do conteúdo. Retorna o conteúdo "limpo"
     /// (sem os blocos a2ui) e a lista de mensagens A2UI válidas.
     /// </summary>
@@ -87,17 +103,26 @@ public static class AiChatA2uiExtractor
                     continue; // C2: segunda surface descartada
                 }
                 if (hasCreate) surfaceEmitted = true;
-                messages.AddRange(blockMsgs);
+                foreach (var msg in blockMsgs)
+                {
+                    if (messages.Count >= MaxA2uiMessagesPerResponse)
+                        break;
+                    messages.Add(msg);
+                }
                 continue;
             }
             blockBuffer.Append(rawLine).Append('\n');
         }
 
-        // Bloco não fechado: processa o que sobrou
+        // Bloco não fechado: processa o que sobrou (mesmo teto)
         if (inA2uiBlock)
         {
             foreach (var msg in ParseBlock(blockBuffer.ToString()))
+            {
+                if (messages.Count >= MaxA2uiMessagesPerResponse)
+                    break;
                 messages.Add(msg);
+            }
         }
 
         return (clean.ToString().TrimEnd('\n'), messages);
@@ -109,6 +134,9 @@ public static class AiChatA2uiExtractor
         {
             var line = rawLine.Trim();
             if (line.Length == 0) continue;
+            // Linha gigante não é uma mensagem declarativa plausível; descartar
+            // protege o SSE e o renderer de payload anômalo.
+            if (Encoding.UTF8.GetByteCount(line) > MaxA2uiMessageBytes) continue;
             if (IsValidA2uiMessage(line))
                 yield return line;
         }
