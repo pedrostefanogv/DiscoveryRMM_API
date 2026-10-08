@@ -159,6 +159,19 @@ internal static class AiChatHelpers
     /// 60s fixo) já permitia. Valores configurados acima do piso são honrados.
     /// Retorna 0 quando não configurado, deixando o HttpClient usar seu default.
     /// </summary>
+    /// <summary>
+    /// Top-p válido (0,01–1,0). O provedor REJEITA top_p=0 (ou gera saída vazia);
+    /// como top-p e penalidades não tinham clamp, um valor salvo por outra UI ou
+    /// por edição direta do JSON chegava cru ao provedor e derrubava a chamada.
+    /// Fora da faixa cai no padrão neutro (1,0 = considera todo o vocabulário).
+    /// </summary>
+    public static double ClampTopP(AIIntegrationSettings settings)
+        => settings.TopP is >= 0.01 and <= 1.0 ? settings.TopP : 1.0;
+
+    /// <summary>Penalidade válida (-2,0 a 2,0). Fora da faixa cai em 0 (neutro).</summary>
+    public static double ClampPenalty(double value)
+        => value is >= -2.0 and <= 2.0 ? value : 0.0;
+
     public static int ClampAiTimeoutMs(AIIntegrationSettings settings)
     {
         var ms = settings.TimeoutMs;

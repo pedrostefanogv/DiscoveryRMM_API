@@ -150,7 +150,10 @@ public class AiChatService : IAiChatService
                 aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
                 SessionId: session.Id.ToString("D"),
                 TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
-                    TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty, PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed, ResponseFormat: aiSettings.ResponseFormat);
+                    TopP: AiChatHelpers.ClampTopP(aiSettings),
+                    FrequencyPenalty: AiChatHelpers.ClampPenalty(aiSettings.FrequencyPenalty),
+                    PresencePenalty: AiChatHelpers.ClampPenalty(aiSettings.PresencePenalty),
+                    Seed: aiSettings.Seed, ResponseFormat: aiSettings.ResponseFormat);
 
             LlmResponse llmResponse;
             var toolIterations = 0;
@@ -371,9 +374,9 @@ public class AiChatService : IAiChatService
             aiSettings.ApiKey,
             Provider: aiSettings.Provider,
             TimeoutMs: aiSettings.TimeoutMs,
-            TopP: aiSettings.TopP,
-            FrequencyPenalty: aiSettings.FrequencyPenalty,
-            PresencePenalty: aiSettings.PresencePenalty,
+            TopP: AiChatHelpers.ClampTopP(aiSettings),
+            FrequencyPenalty: AiChatHelpers.ClampPenalty(aiSettings.FrequencyPenalty),
+            PresencePenalty: AiChatHelpers.ClampPenalty(aiSettings.PresencePenalty),
             Seed: aiSettings.Seed,
             ResponseFormat: responseFormat ?? aiSettings.ResponseFormat,
             ReasoningEnabled: aiSettings.ReasoningEnabled,

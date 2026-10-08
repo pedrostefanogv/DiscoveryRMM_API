@@ -401,8 +401,10 @@ public class AiChatStreamingOrchestrator
                 SessionId: session!.Id.ToString("D"),
                 TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
                 // A7: amostragem configurável
-                TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
-                PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
+                TopP: AiChatHelpers.ClampTopP(aiSettings),
+                FrequencyPenalty: AiChatHelpers.ClampPenalty(aiSettings.FrequencyPenalty),
+                PresencePenalty: AiChatHelpers.ClampPenalty(aiSettings.PresencePenalty),
+                Seed: aiSettings.Seed,
                 ResponseFormat: aiSettings.ResponseFormat,
                 ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
 
@@ -660,8 +662,10 @@ public class AiChatStreamingOrchestrator
                     SessionId: session!.Id.ToString("D"),
                     TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
                 // A7: amostragem configurável
-                TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
-                PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
+                TopP: AiChatHelpers.ClampTopP(aiSettings),
+                FrequencyPenalty: AiChatHelpers.ClampPenalty(aiSettings.FrequencyPenalty),
+                PresencePenalty: AiChatHelpers.ClampPenalty(aiSettings.PresencePenalty),
+                Seed: aiSettings.Seed,
                 ResponseFormat: aiSettings.ResponseFormat,
                 ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
                 await foreach (var token in _llmProvider.StreamAsync(systemPrompt!, llmMessages, synthesisOptions, ct))
@@ -977,8 +981,10 @@ public class AiChatStreamingOrchestrator
                 SessionId: session.Id.ToString("D"),
                 TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
                 // A7: amostragem configurável
-                TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
-                PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
+                TopP: AiChatHelpers.ClampTopP(aiSettings),
+                FrequencyPenalty: AiChatHelpers.ClampPenalty(aiSettings.FrequencyPenalty),
+                PresencePenalty: AiChatHelpers.ClampPenalty(aiSettings.PresencePenalty),
+                Seed: aiSettings.Seed,
                 ResponseFormat: aiSettings.ResponseFormat,
                 ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
 
@@ -1257,8 +1263,10 @@ public class AiChatStreamingOrchestrator
                     SessionId: session.Id.ToString("D"),
                     TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
                 // A7: amostragem configurável
-                TopP: aiSettings.TopP, FrequencyPenalty: aiSettings.FrequencyPenalty,
-                PresencePenalty: aiSettings.PresencePenalty, Seed: aiSettings.Seed,
+                TopP: AiChatHelpers.ClampTopP(aiSettings),
+                FrequencyPenalty: AiChatHelpers.ClampPenalty(aiSettings.FrequencyPenalty),
+                PresencePenalty: AiChatHelpers.ClampPenalty(aiSettings.PresencePenalty),
+                Seed: aiSettings.Seed,
                 ResponseFormat: aiSettings.ResponseFormat,
                 ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
                 await foreach (var token in _llmProvider.StreamAsync(systemPrompt, llmMessages, synthesisOptions, ct))

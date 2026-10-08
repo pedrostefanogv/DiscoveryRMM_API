@@ -214,6 +214,27 @@ public class AiChatAgentLoopTests
         Assert.That(AiChatConstants.BudgetRenewalTtl, Is.GreaterThanOrEqualTo(TimeSpan.FromMinutes(30)));
     }
 
+    // ── Amostragem: top-p e penalidades sem clamp chegavam cruas ao provedor ──
+
+    [Test]
+    public void ClampTopP_RejectsZeroAndOutOfRange_AndKeepsValid()
+    {
+        Assert.That(AiChatHelpers.ClampTopP(new AIIntegrationSettings { TopP = 0 }), Is.EqualTo(1.0));
+        Assert.That(AiChatHelpers.ClampTopP(new AIIntegrationSettings { TopP = -1 }), Is.EqualTo(1.0));
+        Assert.That(AiChatHelpers.ClampTopP(new AIIntegrationSettings { TopP = 1.5 }), Is.EqualTo(1.0));
+        Assert.That(AiChatHelpers.ClampTopP(new AIIntegrationSettings { TopP = 0.9 }), Is.EqualTo(0.9));
+        Assert.That(AiChatHelpers.ClampTopP(new AIIntegrationSettings { TopP = 0.01 }), Is.EqualTo(0.01));
+    }
+
+    [Test]
+    public void ClampPenalty_KeepsRangeAndNeutralizesOutside()
+    {
+        Assert.That(AiChatHelpers.ClampPenalty(0.5), Is.EqualTo(0.5));
+        Assert.That(AiChatHelpers.ClampPenalty(-2), Is.EqualTo(-2));
+        Assert.That(AiChatHelpers.ClampPenalty(3), Is.EqualTo(0));
+        Assert.That(AiChatHelpers.ClampPenalty(-2.5), Is.EqualTo(0));
+    }
+
     // ── Constantes do loop ───────────────────────────────────────────────────
 
     [Test]
