@@ -9,12 +9,18 @@ public record AgentChatRequest(
 );
 
 // Resposta síncrona (curta)
+//
+// A2uiMessages: mensagens A2UI extraídas do texto do LLM (blocos ```a2ui).
+// O endpoint síncrono não tem SSE para emitir chunks "a2ui", então as mensagens
+// voltam neste campo para o agent repassar ao renderer (evento "chat:a2ui").
+// Vem nulo quando não há interface (compatível com agents antigos).
 public record AgentChatSyncResponse(
     Guid SessionId,
     string AssistantMessage,
     int TokensUsed,
     int ConversationTokensTotal,
-    int LatencyMs
+    int LatencyMs,
+    List<string>? A2uiMessages = null
 );
 
 // Request assíncrono (longa)

@@ -81,4 +81,29 @@ public class AiChatOutputPipelineTests
         Assert.That(messages, Is.Empty,
             "com a ordem invertida o bloco a2ui é removido pelo sanitizador e o A2UI se perde — é exatamente o bug corrigido");
     }
+
+    /// <summary>
+    /// Regressão do teste real (chat.db 2026-10-08 00:17Z): o modelo emitiu
+    /// `Button.child` com o rótulo e o renderer falhava com "Component not
+    /// found", mostrando "Não foi possível exibir a interface interativa".
+    /// O pipeline deve DESCARTAR a interface (o texto continua) e reportar o
+    /// motivo, em vez de enviar um card que o renderer rejeita.
+    /// </summary>
+    [Test]
+    public void Process_WhenInterfaceWouldFailInRenderer_DropsItAndReportsReason()
+    {
+        const string content =
+            "Claro! Aqui vai um exemplo simples de interface interativa:\n\n```a2ui\n" +
+            "{\"version\":\"v0.9\",\"createSurface\":{\"surfaceId\":\"exemplo_a2ui\",\"catalogId\":\"https://a2ui.org/specification/v0_9/basic_catalog.json\"}}\n" +
+            "{\"version\":\"v0.9\",\"updateComponents\":{\"surfaceId\":\"exemplo_a2ui\",\"components\":[{\"id\":\"root\",\"component\":\"Column\",\"children\":[\"titulo\",\"botao\"]},{\"id\":\"titulo\",\"component\":\"Text\",\"text\":\"Exemplo\"},{\"id\":\"botao\",\"component\":\"Button\",\"child\":\"Clique aqui\",\"action\":{\"event\":{\"name\":\"exemplo_clicado\",\"context\":{}}}}]}}\n" +
+            "```\n\nO que você está vendo acima é um card.";
+
+        var reasons = new List<string>();
+        var (clean, messages, _) = AiChatOutputPipeline.Process(content, reasons.Add);
+
+        Assert.That(messages, Is.Empty, "interface inválida não pode ser emitida");
+        Assert.That(reasons, Is.Not.Empty);
+        Assert.That(clean, Does.Not.Contain("```a2ui"));
+        Assert.That(clean, Does.Contain("O que você está vendo acima"));
+    }
 }

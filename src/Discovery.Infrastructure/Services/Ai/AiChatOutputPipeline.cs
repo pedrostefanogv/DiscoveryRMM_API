@@ -28,12 +28,24 @@ public static class AiChatOutputPipeline
     /// A2uiMessages: mensagens A2UI válidas, na ordem de emissão.
     /// LeaksRemoved: true quando a sanitização removeu algo.
     /// </returns>
-    public static (string CleanContent, List<string> A2uiMessages, bool LeaksRemoved) Process(string content)
+    public static (string CleanContent, List<string> A2uiMessages, bool LeaksRemoved) Process(
+        string content,
+        Action<string>? onInvalidA2ui = null)
     {
         // 1) Extrai A2UI PRIMEIRO: o sanitizador removeria o bloco como fallback.
-        var (contentWithoutInterface, a2uiMessages) = AiChatA2uiExtractor.Extract(content);
+        var (contentWithoutInterface, extracted) = AiChatA2uiExtractor.Extract(content);
 
-        // 2) Sanitiza o restante (DSML, invokes textuais, ações A2UI cruas).
+        // 2) Valida contra o catálogo do renderer. Interface inválida é descartada
+        //    por inteiro (o usuário lê o texto) em vez de renderizar e falhar com
+        //    "Não foi possível exibir a interface interativa gerada.".
+        var (a2uiMessages, invalidReasons) = AiChatA2uiValidator.Validate(extracted);
+        if (onInvalidA2ui != null)
+        {
+            foreach (var reason in invalidReasons)
+                onInvalidA2ui(reason);
+        }
+
+        // 3) Sanitiza o restante (DSML, invokes textuais, ações A2UI cruas).
         var (clean, leaksRemoved) = AiChatLeakSanitizer.Sanitize(contentWithoutInterface);
 
         return (clean, a2uiMessages, leaksRemoved);

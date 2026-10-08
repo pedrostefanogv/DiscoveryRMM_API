@@ -11,6 +11,15 @@ namespace Discovery.Infrastructure.Services;
 /// servidor, 60s no agente) — ferramentas como install_package/upgrade_all_packages
 /// levam minutos, enquanto time.current é instantânea. As recomendações aqui são
 /// SUGESTÕES: o operador continua livre para sobrescrever por escopo.
+///
+/// Autorização do usuário: as ações com efeito no computador passam por um
+/// gate de consentimento no agente (core/mcp.ToolConsentFor) ANTES de executar
+/// — install/uninstall/upgrade, service_control start/stop/restart,
+/// scheduled_task run, process_control kill, printer remove/cancel_job/
+/// restart_spooler/clear_queue, power_action e export_inventory_*. Quando a
+/// ação exige consentimento, o agente NÃO aplica o timeout configurado à
+/// espera (o usuário decide sem prazo); o timeout continua valendo para as
+/// ações de LEITURA da mesma tool (ex.: service_control list).
 /// </summary>
 public static class McpToolCatalogMetadata
 {

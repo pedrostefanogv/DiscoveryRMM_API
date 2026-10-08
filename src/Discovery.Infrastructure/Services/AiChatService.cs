@@ -193,18 +193,29 @@ public class AiChatService : IAiChatService
 
             var safeContent = AiChatGuardrails.ApplyOutputGuardrails(llmResponse.Content, aiSettings);
 
-            // Sanitização de vazamentos de tool calls: o LLM pode ter emitido
-            // tool calls como TEXTO (DSML, blocos ```json com invokes) em vez
-            // de function call nativa. Remove antes de devolver ao agent.
-            var (sanitizedContent, wasSanitized) = AiChatLeakSanitizer.Sanitize(safeContent);
-            if (wasSanitized)
+            // Extração A2UI + sanitização de vazamentos na MESMA ordem do
+            // streaming (AiChatOutputPipeline): o LLM pode ter emitido tool calls
+            // como TEXTO (DSML, blocos json com invokes) e/ou um bloco ```a2ui.
+            // Sem a extração aqui, a interface era removida pela sanitização e
+            // sumia em silêncio neste caminho (o endpoint sync não tem SSE para
+            // emitir chunks "a2ui").
+            var (cleanSync, a2uiSyncMessages, syncWasSanitized) = AiChatOutputPipeline.Process(
+                safeContent,
+                reason => _logger.LogWarning("[{TraceId}] A2UI descartada no sync (renderer rejeitaria): {Reason}", traceId, reason));
+            if (syncWasSanitized)
             {
                 _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output sync ({OrigLen} -> {CleanLen} chars)",
-                    traceId, safeContent.Length, sanitizedContent.Length);
-                safeContent = sanitizedContent;
+                    traceId, safeContent.Length, cleanSync.Length);
             }
+            safeContent = cleanSync;
             if (string.IsNullOrWhiteSpace(safeContent))
-                safeContent = "Não consegui concluir a ação solicitada. Tente reformular o pedido.";
+            {
+                // Resposta que era SÓ a interface A2UI (sem texto): a mensagem
+                // de falha seria enganosa ao lado de um card válido.
+                safeContent = a2uiSyncMessages.Count > 0
+                    ? "Interface gerada — veja o card abaixo."
+                    : "Não consegui concluir a ação solicitada. Tente reformular o pedido.";
+            }
 
             await _messageRepository.CreateBatchAsync([
                 new() { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq, Role = "user", Content = message, CreatedAt = startTime, TraceId = traceId },
@@ -214,7 +225,13 @@ public class AiChatService : IAiChatService
             var conversationTokens = await CalculateConversationTokens(session.Id, ct);
             await LogChatAsync(agentId, agent.SiteId, scopeClientId, session.Id, nextSeq, llmResponse, stopwatch, traceId, ct);
 
-            return new AgentChatSyncResponse(session.Id, safeContent, llmResponse.TokensUsed, conversationTokens, (int)stopwatch.ElapsedMilliseconds);
+            return new AgentChatSyncResponse(
+                session.Id,
+                safeContent,
+                llmResponse.TokensUsed,
+                conversationTokens,
+                (int)stopwatch.ElapsedMilliseconds,
+                a2uiSyncMessages.Count > 0 ? a2uiSyncMessages : null);
         }
         catch (Exception ex)
         {

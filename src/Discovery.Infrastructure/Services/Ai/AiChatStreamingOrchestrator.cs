@@ -606,7 +606,9 @@ public class AiChatStreamingOrchestrator
         // A extração A2UI DEVE rodar antes da sanitização: o sanitizador apaga
         // blocos ```a2ui como fallback e, se rodasse primeiro, o agent nunca
         // receberia o chunk "a2ui" (a interface sumia do chat).
-        var (cleanContent, a2uiMessages, contentWasSanitized) = AiChatOutputPipeline.Process(fullContent);
+        var (cleanContent, a2uiMessages, contentWasSanitized) = AiChatOutputPipeline.Process(
+            fullContent,
+            reason => _logger.LogWarning("[{TraceId}] A2UI descartada (renderer rejeitaria): {Reason}", traceId, reason));
         if (contentWasSanitized)
         {
             _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output ({OrigLen} -> {CleanLen} chars)",
@@ -1123,7 +1125,9 @@ public class AiChatStreamingOrchestrator
         // invokes textuais), a sanitização o esvazia e a síntese dispara com a
         // nota correta. A extração A2UI vem PRIMEIRO para o sanitizador não
         // apagar o bloco ```a2ui antes de ele virar chunk "a2ui".
-        var (cleanMultiContent, a2uiMultiMessages, multiWasSanitized) = AiChatOutputPipeline.Process(fullContent);
+        var (cleanMultiContent, a2uiMultiMessages, multiWasSanitized) = AiChatOutputPipeline.Process(
+            fullContent,
+            reason => _logger.LogWarning("[{TraceId}] A2UI descartada no multi-round (renderer rejeitaria): {Reason}", traceId, reason));
         if (multiWasSanitized)
         {
             _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output multi-round ({OrigLen} -> {CleanLen} chars)",
