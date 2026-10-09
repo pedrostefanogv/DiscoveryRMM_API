@@ -156,6 +156,7 @@ public class AgentTransferServiceTests
         public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<Agent>>([]);
         public Task ApproveZeroTouchAsync(Guid agentId) => Task.CompletedTask;
+        public Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId) => Task.CompletedTask;
         public Task TransferSiteAsync(Guid agentId, Guid newSiteId)
         {

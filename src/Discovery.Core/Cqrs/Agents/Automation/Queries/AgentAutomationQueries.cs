@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Automation.Commands;
+using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 
 namespace Discovery.Core.Cqrs.Agents.Automation.Queries;
@@ -17,3 +18,9 @@ public sealed record GetAutomationExecutionsQuery(
     Guid? ScriptId = null,
     /// <summary>Correlation do lote (identifica todas as execuções de uma operação em massa).</summary>
     string? CorrelationId = null) : IQuery<Result<IReadOnlyList<AutomationExecutionDto>>>;
+
+/// <summary>
+/// Prévia das políticas de automação APLICÁVEIS a um agente — o mesmo conjunto
+/// entregue no policy-sync, para verificação na aba "Políticas" do detalhe.
+/// </summary>
+public sealed record GetAgentAutomationPoliciesQuery(Guid AgentId) : IQuery<Result<AgentAutomationPolicyPreviewDto>>;

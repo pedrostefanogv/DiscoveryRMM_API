@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Automation.Commands;
 using Discovery.Core.Cqrs.Agents.Automation.Queries;
+using Discovery.Core.DTOs;
 using Discovery.Core.Interfaces;
 using MediatR;
 
@@ -51,5 +52,21 @@ public sealed class GetAutomationExecutionsQueryHandler(
             e.ScriptId.HasValue && scriptNames.TryGetValue(e.ScriptId.Value, out var scriptName) && !string.IsNullOrWhiteSpace(scriptName) ? scriptName : null)).ToList();
 
         return Result<IReadOnlyList<AutomationExecutionDto>>.Success(dtos);
+    }
+}
+
+public sealed class GetAgentAutomationPoliciesQueryHandler(
+    IAgentRepository agentRepo,
+    IAutomationTaskService taskService
+) : IRequestHandler<GetAgentAutomationPoliciesQuery, Result<AgentAutomationPolicyPreviewDto>>
+{
+    public async Task<Result<AgentAutomationPolicyPreviewDto>> Handle(GetAgentAutomationPoliciesQuery q, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<AgentAutomationPolicyPreviewDto>.Failure(Error.NotFound("Agent not found."));
+
+        var preview = await taskService.GetApplicablePoliciesForAgentAsync(q.AgentId, ct);
+        return Result<AgentAutomationPolicyPreviewDto>.Success(preview);
     }
 }

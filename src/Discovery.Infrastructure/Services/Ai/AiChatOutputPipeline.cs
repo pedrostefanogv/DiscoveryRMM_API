@@ -33,7 +33,10 @@ public static class AiChatOutputPipeline
         Action<string>? onInvalidA2ui = null)
     {
         // 1) Extrai A2UI PRIMEIRO: o sanitizador removeria o bloco como fallback.
-        var (contentWithoutInterface, extracted) = AiChatA2uiExtractor.Extract(content);
+        //    As linhas inválidas/reparadas também vão para o diagnóstico: o
+        //    extractor descartava tudo em silêncio e o usuário ficava preso em
+        //    "Loading surface..." sem nenhuma pista no log.
+        var (contentWithoutInterface, extracted) = AiChatA2uiExtractor.Extract(content, onInvalidA2ui);
 
         // 2) Valida contra o catálogo do renderer. Interface inválida é descartada
         //    por inteiro (o usuário lê o texto) em vez de renderizar e falhar com

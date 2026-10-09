@@ -30,6 +30,16 @@ public class Agent
     /// <summary>Hash combinado (TPM EK + SMBIOS UUID) usado para busca de recuperação.</summary>
     public string? FingerprintHash { get; set; }
 
+    // ── Policy-sync de automação (verificação na aba "Políticas") ─────────
+    /// <summary>
+    /// Fingerprint da policy de automação entregue ao agent no último sync. A
+    /// aba "Políticas" compara com o fingerprint atual para dizer se o agent
+    /// está atualizado.
+    /// </summary>
+    public string? LastPolicyFingerprint { get; set; }
+    /// <summary>Quando a policy vigente (LastPolicyFingerprint) foi entregue/confirmada.</summary>
+    public DateTime? LastPolicySyncAt { get; set; }
+
     public bool MaintenanceEnabled { get; set; }
     public string? MaintenanceReason { get; set; }
     public DateTime? MaintenanceChangedAt { get; set; }

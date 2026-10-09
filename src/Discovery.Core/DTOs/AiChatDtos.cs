@@ -55,6 +55,10 @@ public record AgentChatJobStatus(
 /// Type = "round_end"        → SessionId preenchido. Stream fecha, agent deve enviar próximo POST com ToolResults.
 /// Type = "loop_progress"    → LoopRound/LoopMaxRounds preenchidos. Progresso do agent loop (heartbeat informativo).
 /// Type = "a2ui"             → A2uiJson contém uma mensagem A2UI (createSurface/updateComponents/updateDataModel/deleteSurface).
+/// Type = "a2ui_incomplete"  → Content contém os surfaceIds que ficaram SEM definição
+///                              (createSurface sem updateComponents com "root") mesmo
+///                              após a reemissão. O agent repassa como "chat:a2ui_incomplete"
+///                              para a UI explicar por que o card não foi exibido.
 /// Type = "done"             → SessionId, TokensUsed e LatencyMs estão preenchidos.
 /// Type = "error"            → Error contém a mensagem de erro.
 /// </summary>

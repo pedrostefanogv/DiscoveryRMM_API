@@ -119,6 +119,31 @@ internal static class AiChatHelpers
         "[SISTEMA] Você não forneceu uma resposta visível ao usuário. Forneça uma resposta direta e útil à última pergunta do usuário.";
 
     /// <summary>
+    /// Injetada quando a resposta criou a surface A2UI mas não enviou a definição
+    /// (nenhuma mensagem updateComponents com o componente "root"). Sem ela o
+    /// renderer fica preso em "Loading surface..." e o usuário não vê o card.
+    /// O servidor pede UMA reemissão antes de encerrar o turno.
+    /// </summary>
+    public const string A2uiIncompleteDefinitionNote =
+        "[SISTEMA] A interface A2UI do turno anterior ficou INCOMPLETA: chegou o createSurface, mas nenhuma mensagem updateComponents com o componente de id \"root\" foi emitida. " +
+        "Reemita AGORA, em um ÚNICO bloco a2ui, uma mensagem updateComponents COMPLETA para a MESMA surfaceId (NÃO reemita createSurface), " +
+        "com o componente root e TODOS os demais componentes, cada child/children apontando para ids existentes. " +
+        "Mantenha CADA linha como JSON válido em uma única linha. Se não conseguir montar o JSON, responda apenas em texto.";
+
+    /// <summary>
+    /// Nota de reemissão com os surfaceIds que ficaram sem definição. Citar os
+    /// ids explicitamente (em vez de só "a MESMA surfaceId") evita que o modelo
+    /// invente outro id: no caminho de reparo o assistant anterior é reinserido
+    /// no contexto, mas o id explícito torna a instrução à prova de dúvida.
+    /// </summary>
+    public static string BuildA2uiIncompleteDefinitionNote(IReadOnlyCollection<string> surfaces)
+    {
+        if (surfaces == null || surfaces.Count == 0) return A2uiIncompleteDefinitionNote;
+        return A2uiIncompleteDefinitionNote +
+            " surfaceId(s) sem definição (use EXATAMENTE estes): " + string.Join(", ", surfaces) + ".";
+    }
+
+    /// <summary>
     /// Resume as ações abortadas pelo orçamento para a nota de retomada, no formato
     /// "nome {argumentos}". Os argumentos são truncados: a nota é instrução para o
     /// LLM, não um despejo de payload. Respeita

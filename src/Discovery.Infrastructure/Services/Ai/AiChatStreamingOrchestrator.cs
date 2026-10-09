@@ -218,6 +218,87 @@ public class AiChatStreamingOrchestrator
     private static string Shorten(string? value, int max)
         => string.IsNullOrEmpty(value) ? string.Empty : (value.Length <= max ? value : value[..max] + "...");
 
+    /// <summary>
+    /// Opções de LLM sem ferramentas, usadas nas chamadas de reparo/síntese fora
+    /// do loop de tools (mesmos parâmetros de amostragem da conversa).
+    /// </summary>
+    private static LlmOptions BuildNoToolsOptions(AIIntegrationSettings aiSettings, int maxTokens, Guid sessionId) =>
+        new(
+            maxTokens, AiChatHelpers.ClampTemperature(aiSettings),
+            string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
+            string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
+            string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,
+            false, null, aiSettings.Provider,
+            aiSettings.OpenRouterReferer, aiSettings.OpenRouterTitle, aiSettings.OpenRouterCategories,
+            SessionId: sessionId.ToString("D"),
+            TimeoutMs: AiChatHelpers.ClampAiTimeoutMs(aiSettings),
+            TopP: AiChatHelpers.ClampTopP(aiSettings),
+            FrequencyPenalty: AiChatHelpers.ClampPenalty(aiSettings.FrequencyPenalty),
+            PresencePenalty: AiChatHelpers.ClampPenalty(aiSettings.PresencePenalty),
+            Seed: aiSettings.Seed,
+            ResponseFormat: aiSettings.ResponseFormat,
+            ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
+
+    /// <summary>
+    /// M2 (revisão 2026-10-08): a resposta criou a surface A2UI mas não enviou a
+    /// definição (updateComponents com "root") — sem ela o renderer fica preso em
+    /// "Loading surface...". Pede UMA reemissão ao LLM, sem ferramentas e SEM
+    /// streamar os tokens (o texto do primeiro passe já foi exibido; duplicar a
+    /// prosa confundiria o usuário). Devolve o conteúdo bruto da reemissão, ou
+    /// vazio quando o provider falhou.
+    /// </summary>
+    internal async Task<(string Content, int TokensUsed)> TryReemitA2uiDefinitionAsync(
+        string systemPrompt,
+        List<LlmMessage> llmMessages,
+        AIIntegrationSettings aiSettings,
+        int maxTokens,
+        Guid sessionId,
+        string previousOutput,
+        IReadOnlyCollection<string> missingSurfaces,
+        CancellationToken ct)
+    {
+        try
+        {
+            // Sem devolver a própria saída ao modelo, ele não teria como saber o
+            // surfaceId nem os componentes que acabou de emitir: o assistant do
+            // stream direto NÃO entra em llmMessages (só é persistido no fim do
+            // turno). A reemissão viraria uma interface nova "no escuro".
+            if (!string.IsNullOrWhiteSpace(previousOutput))
+                llmMessages.Add(new LlmMessage("assistant", previousOutput));
+            llmMessages.Add(new LlmMessage("system", AiChatHelpers.BuildA2uiIncompleteDefinitionNote(missingSurfaces)));
+
+            var builder = new StringBuilder();
+            var tokensUsed = 0;
+            // StreamWithToolsAsync (SEM tools) em vez de StreamAsync: o evento
+            // "done" traz TokensUsed, então o custo da reemissão entra na
+            // telemetria do turno — o StreamAsync simples não reporta usage.
+            await foreach (var evt in _llmProvider.StreamWithToolsAsync(
+                systemPrompt, llmMessages, BuildNoToolsOptions(aiSettings, maxTokens, sessionId), ct))
+            {
+                if (string.Equals(evt.Type, "done", StringComparison.OrdinalIgnoreCase))
+                {
+                    tokensUsed = evt.TokensUsed ?? 0;
+                    continue;
+                }
+                if (string.Equals(evt.Type, "error", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning("[A2UI] Reemissão da definição retornou erro do provider: {Error}", evt.Content);
+                    return (string.Empty, tokensUsed);
+                }
+                if (!string.IsNullOrEmpty(evt.Content))
+                    builder.Append(evt.Content);
+            }
+            return (builder.ToString(), tokensUsed);
+        }
+        catch (Exception ex)
+        {
+            // A reemissão é best-effort: falhar aqui NÃO pode derrubar o turno
+            // (o texto do card que anunciava a interface já foi entregue).
+            _logger.LogWarning(ex, "[A2UI] Falha ao pedir a reemissão da definição da interface");
+            return (string.Empty, 0);
+        }
+    }
+
     public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(
         Guid agentId, string message, Guid? sessionId,
         Func<Guid, CancellationToken, Task<AIIntegrationSettings>> resolveAiSettings,
@@ -633,14 +714,15 @@ public class AiChatStreamingOrchestrator
         // receberia o chunk "a2ui" (a interface sumia do chat).
         var (cleanContent, a2uiMessages, contentWasSanitized) = AiChatOutputPipeline.Process(
             fullContent,
-            reason => _logger.LogWarning("[{TraceId}] A2UI descartada (renderer rejeitaria): {Reason}", traceId, reason));
+            reason => _logger.LogWarning("[{TraceId}] A2UI — {Reason}", traceId, reason));
         if (contentWasSanitized)
         {
             _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output ({OrigLen} -> {CleanLen} chars)",
                 traceId, fullContent.Length, cleanContent.Length);
         }
         fullContent = cleanContent;
-        if (!await IsA2uiEnabledAsync(session.ClientId, session.SiteId, agentId, ct))
+        var a2uiEnabled = await IsA2uiEnabledAsync(session.ClientId, session.SiteId, agentId, ct);
+        if (!a2uiEnabled)
         {
             // Capacidade desligada na governança: o bloco já saiu do texto
             // visível; aqui o chunk é descartado (defesa em profundidade).
@@ -649,6 +731,50 @@ public class AiChatStreamingOrchestrator
         }
         else
         {
+            // M2 (revisão 2026-10-08): createSurface sem a definição completa
+            // (updateComponents com "root") deixa a bolha em "Loading surface...".
+            // Em vez de encerrar o turno só com o aviso, pede UMA reemissão ao LLM
+            // e, se ela vier válida, entrega o card de verdade.
+            var missingDefinitions = AiChatA2uiExtractor.SurfacesMissingDefinition(a2uiMessages);
+            if (missingDefinitions.Count > 0)
+            {
+                _logger.LogWarning("[{TraceId}] A2UI sem definição para a(s) surface(s) {Surfaces} — solicitando reemissão ao LLM",
+                    traceId, string.Join(", ", missingDefinitions));
+                var (retryContent, retryTokens) = await TryReemitA2uiDefinitionAsync(
+                    systemPrompt!, llmMessages, aiSettings, maxTokens, session.Id,
+                    contentBuilder.ToString(), missingDefinitions, ct);
+                if (retryTokens > 0)
+                    totalTokens = (totalTokens ?? 0) + retryTokens;
+                if (!string.IsNullOrWhiteSpace(retryContent))
+                {
+                    var (retryClean, retryMessages, retrySanitized) = AiChatOutputPipeline.Process(
+                        retryContent,
+                        reason => _logger.LogWarning("[{TraceId}] A2UI (reemissão) — {Reason}", traceId, reason));
+                    if (retrySanitized)
+                    {
+                        _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos da reemissão A2UI ({OrigLen} -> {CleanLen} chars)",
+                            traceId, retryContent.Length, retryClean.Length);
+                    }
+                    // Só substitui quando a reemissão realmente trouxe a definição.
+                    if (retryMessages.Count > 0 && AiChatA2uiExtractor.SurfacesMissingDefinition(retryMessages).Count == 0)
+                    {
+                        a2uiMessages = retryMessages;
+                        // O texto do primeiro passe já foi exibido; só usa o da
+                        // reemissão quando o turno ficou sem nenhuma resposta.
+                        if (string.IsNullOrWhiteSpace(fullContent) && !string.IsNullOrWhiteSpace(retryClean))
+                            fullContent = retryClean;
+                    }
+                }
+            }
+            // Diagnóstico explícito para a UI: a surface continua sem definição
+            // mesmo depois da reemissão (JSON irrecuperável ou modelo insistiu no
+            // defeito). O agent repassa como "chat:a2ui_incomplete" e a bolha vazia
+            // vira uma mensagem clara em vez do genérico "Loading surface...".
+            var stillMissing = AiChatA2uiExtractor.SurfacesMissingDefinition(a2uiMessages);
+            if (stillMissing.Count > 0)
+            {
+                yield return new AiChatStreamChunk(Type: "a2ui_incomplete", Content: string.Join(", ", stillMissing));
+            }
             foreach (var a2uiMsg in a2uiMessages)
             {
                 yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
@@ -1256,7 +1382,7 @@ public class AiChatStreamingOrchestrator
         // apagar o bloco ```a2ui antes de ele virar chunk "a2ui".
         var (cleanMultiContent, a2uiMultiMessages, multiWasSanitized) = AiChatOutputPipeline.Process(
             fullContent,
-            reason => _logger.LogWarning("[{TraceId}] A2UI descartada no multi-round (renderer rejeitaria): {Reason}", traceId, reason));
+            reason => _logger.LogWarning("[{TraceId}] A2UI (multi-round) — {Reason}", traceId, reason));
         if (multiWasSanitized)
         {
             _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output multi-round ({OrigLen} -> {CleanLen} chars)",
@@ -1270,6 +1396,41 @@ public class AiChatStreamingOrchestrator
         }
         else
         {
+            // M2 (revisão 2026-10-08): mesma recuperação do round 1. Aqui o
+            // systemPrompt já foi montado no início do método, então a reemissão
+            // vale também para cards criados DEPOIS de uma tool round.
+            var multiMissing = AiChatA2uiExtractor.SurfacesMissingDefinition(a2uiMultiMessages);
+            if (multiMissing.Count > 0)
+            {
+                _logger.LogWarning("[{TraceId}] A2UI (multi-round) sem definição para a(s) surface(s) {Surfaces} — solicitando reemissão ao LLM",
+                    traceId, string.Join(", ", multiMissing));
+                var (retryContent, retryTokens) = await TryReemitA2uiDefinitionAsync(
+                    systemPrompt, llmMessages, aiSettings, maxTokens, session.Id,
+                    contentBuilder.ToString(), multiMissing, ct);
+                if (retryTokens > 0)
+                    totalTokens = (totalTokens ?? 0) + retryTokens;
+                if (!string.IsNullOrWhiteSpace(retryContent))
+                {
+                    var (retryClean, retryMessages, retrySanitized) = AiChatOutputPipeline.Process(
+                        retryContent,
+                        reason => _logger.LogWarning("[{TraceId}] A2UI (multi-round, reemissão) — {Reason}", traceId, reason));
+                    if (retrySanitized)
+                    {
+                        _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos da reemissão A2UI multi-round ({OrigLen} -> {CleanLen} chars)",
+                            traceId, retryContent.Length, retryClean.Length);
+                    }
+                    if (retryMessages.Count > 0 && AiChatA2uiExtractor.SurfacesMissingDefinition(retryMessages).Count == 0)
+                    {
+                        a2uiMultiMessages = retryMessages;
+                        if (string.IsNullOrWhiteSpace(fullContent) && !string.IsNullOrWhiteSpace(retryClean))
+                            fullContent = retryClean;
+                    }
+                }
+            }
+            // Diagnóstico explícito para a UI (mesmo contrato do round 1).
+            var stillMissingMulti = AiChatA2uiExtractor.SurfacesMissingDefinition(a2uiMultiMessages);
+            if (stillMissingMulti.Count > 0)
+                yield return new AiChatStreamChunk(Type: "a2ui_incomplete", Content: string.Join(", ", stillMissingMulti));
             foreach (var a2uiMsg in a2uiMultiMessages)
             {
                 yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);

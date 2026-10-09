@@ -35,6 +35,7 @@ public class AgentHardwareMergeTests
         public Task UpdateStatusAsync(Guid id, AgentStatus status, string? ip) => Task.CompletedTask;
         public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Agent>>([agent]);
         public Task ApproveZeroTouchAsync(Guid agentId) => Task.CompletedTask;
+        public Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId) => Task.CompletedTask;
         public Task TransferSiteAsync(Guid agentId, Guid newSiteId) => Task.CompletedTask;
         public Task DeleteAsync(Guid id) => Task.CompletedTask;

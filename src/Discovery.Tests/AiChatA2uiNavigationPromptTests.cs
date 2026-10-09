@@ -110,6 +110,71 @@ public class AiChatA2uiNavigationPromptTests
     }
 
     [Test]
+    public void DefaultPrompt_PrefersStatesPathOverDuplicatedStates()
+    {
+        // O exemplo antigo repetia o array de passos em CADA botão — foi esse
+        // payload gigante que o LLM fechou errado no wizard de papel atolado
+        // (2026-10-08). O prompt precisa ensinar a forma única (statesPath).
+        var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent());
+
+        Assert.That(prompt, Does.Contain("statesPath"));
+        Assert.That(prompt, Does.Contain("{\"version\":\"v0.9\",\"updateDataModel\":{\"surfaceId\":\"wizard_local\",\"path\":\"/passos\""));
+        Assert.That(prompt, Does.Not.Contain("\"states\":[{\"dica\":\"Passo 1"));
+    }
+
+    [Test]
+    public void DefaultPrompt_EveryA2uiExampleIsValidForTheServerPipeline()
+    {
+        // O prompt ENSINA pelo exemplo: um exemplo com JSON inválido, referência
+        // inexistente ou createSurface sem definição ensina o modelo a repetir o
+        // defeito. Aqui cada bloco a2ui do prompt passa pelo MESMO pipeline do
+        // servidor (extrator + validador).
+        var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent());
+
+        var blocks = new List<string>();
+        var buffer = new System.Text.StringBuilder();
+        var inside = false;
+        foreach (var rawLine in prompt.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (!inside && line.StartsWith("\u0060\u0060\u0060a2ui", StringComparison.Ordinal))
+            {
+                inside = true;
+                buffer.Clear();
+                continue;
+            }
+            if (inside && line.StartsWith("\u0060\u0060\u0060", StringComparison.Ordinal))
+            {
+                inside = false;
+                blocks.Add(buffer.ToString());
+                continue;
+            }
+            if (inside) buffer.AppendLine(rawLine);
+        }
+
+        Assert.That(blocks, Is.Not.Empty, "o prompt precisa conter exemplos a2ui");
+
+        var failures = new List<string>();
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            // Extract espera a cerca a2ui: o teste guardou só o MIOLO do bloco.
+            var wrapped = "\u0060\u0060\u0060a2ui\n" + blocks[i] + "\n\u0060\u0060\u0060\n";
+            var (_, messages) = AiChatA2uiExtractor.Extract(wrapped);
+            if (messages.Count == 0)
+            {
+                failures.Add($"bloco {i}: nenhuma mensagem A2UI extraída");
+                continue;
+            }
+            var (valid, errors) = AiChatA2uiValidator.Validate(messages);
+            if (errors.Count > 0) failures.Add($"bloco {i}: " + string.Join(" | ", errors));
+            if (AiChatA2uiExtractor.SurfacesMissingDefinition(valid).Count > 0)
+                failures.Add($"bloco {i}: createSurface sem updateComponents com 'root' (a bolha ficaria em Loading surface)");
+        }
+
+        Assert.That(failures, Is.Empty, string.Join("\n", failures));
+    }
+
+    [Test]
     public void DefaultPrompt_WhenA2uiDisabled_ForbidsProtocolAndOmitsRecipes()
     {
         var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent(), a2uiEnabled: false);

@@ -110,6 +110,22 @@ public class AgentsAutomationControllerContractTests
     }
 
     [Test]
+    public async Task GetPolicies_SendsQueryForAgent()
+    {
+        var mediator = new CapturingMediator
+        {
+            Responder = _ => Result<AgentAutomationPolicyPreviewDto>.Success(new AgentAutomationPolicyPreviewDto())
+        };
+        var controller = BuildController(mediator, correlationId: null);
+
+        await controller.GetAutomationPolicies(AgentId);
+
+        var query = mediator.LastRequest as GetAgentAutomationPoliciesQuery;
+        Assert.That(query, Is.Not.Null, "A action deve enviar GetAgentAutomationPoliciesQuery.");
+        Assert.That(query!.AgentId, Is.EqualTo(AgentId));
+    }
+
+    [Test]
     public async Task ForceSync_HeaderWinsOverBodyAndKeepsFlags()
     {
         var mediator = new CapturingMediator

@@ -206,7 +206,7 @@ public class AiChatService : IAiChatService
             // emitir chunks "a2ui").
             var (cleanSync, a2uiSyncMessages, syncWasSanitized) = AiChatOutputPipeline.Process(
                 safeContent,
-                reason => _logger.LogWarning("[{TraceId}] A2UI descartada no sync (renderer rejeitaria): {Reason}", traceId, reason));
+                reason => _logger.LogWarning("[{TraceId}] A2UI (sync) — {Reason}", traceId, reason));
             if (syncWasSanitized)
             {
                 _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos do output sync ({OrigLen} -> {CleanLen} chars)",
@@ -220,6 +220,48 @@ public class AiChatService : IAiChatService
                 _logger.LogWarning("[{TraceId}] A2UI desabilitada na governanca: {Count} mensagem(ns) descartada(s) no sync", traceId, a2uiSyncMessages.Count);
                 a2uiSyncMessages.Clear();
             }
+            // M2 (revisão 2026-10-08): o endpoint sync não tem SSE, mas o card
+            // também nasce vazio sem a definição (createSurface sem updateComponents
+            // com "root"). Mesma recuperação do streaming: UMA reemissão sem tools.
+            // Se a capacidade A2UI está desligada, a lista já foi limpa acima.
+            var syncMissing = AiChatA2uiExtractor.SurfacesMissingDefinition(a2uiSyncMessages);
+            if (syncMissing.Count > 0)
+            {
+                _logger.LogWarning("[{TraceId}] A2UI (sync) sem definição para a(s) surface(s) {Surfaces} — solicitando reemissão ao LLM",
+                    traceId, string.Join(", ", syncMissing));
+                if (!string.IsNullOrWhiteSpace(llmResponse.Content))
+                    llmMessages.Add(new LlmMessage("assistant", llmResponse.Content));
+                llmMessages.Add(new LlmMessage("system", AiChatHelpers.BuildA2uiIncompleteDefinitionNote(syncMissing)));
+                try
+                {
+                    var retry = await _llmProvider.CompleteAsync(systemPrompt, llmMessages,
+                        llmOptions with { EnableTools = false, Tools = null }, ct);
+                    if (retry.TokensUsed > 0)
+                    {
+                        if (aiSettings.CostControlEnabled)
+                            await _costControl.RecordUsageAsync(scopeClientId, scopeSiteId, retry.TokensUsed, ct);
+                        llmResponse = llmResponse with { TokensUsed = llmResponse.TokensUsed + retry.TokensUsed };
+                    }
+                    var (retryClean, retryMessages, retrySanitized) = AiChatOutputPipeline.Process(
+                        retry.Content ?? string.Empty,
+                        reason => _logger.LogWarning("[{TraceId}] A2UI (sync, reemissão) — {Reason}", traceId, reason));
+                    if (retrySanitized)
+                        _logger.LogInformation("[{TraceId}] Vazamentos de tool call removidos da reemissão A2UI sync", traceId);
+                    if (retryMessages.Count > 0 && AiChatA2uiExtractor.SurfacesMissingDefinition(retryMessages).Count == 0)
+                    {
+                        a2uiSyncMessages = retryMessages;
+                        if (string.IsNullOrWhiteSpace(safeContent) && !string.IsNullOrWhiteSpace(retryClean))
+                            safeContent = retryClean;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Best-effort: a falha da reemissão NÃO pode derrubar a resposta
+                    // síncrona que já está pronta.
+                    _logger.LogWarning(ex, "[{TraceId}] Falha ao pedir a reemissão A2UI no sync", traceId);
+                }
+            }
+
             if (string.IsNullOrWhiteSpace(safeContent))
             {
                 // Resposta que era SÓ a interface A2UI (sem texto): a mensagem

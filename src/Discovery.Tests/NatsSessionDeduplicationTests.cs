@@ -62,6 +62,7 @@ public class NatsSessionDeduplicationTests
         public Task UpdateStatusAsync(Guid id, AgentStatus status, string? ipAddress) => throw new NotImplementedException();
         public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task ApproveZeroTouchAsync(Guid agentId) => throw new NotImplementedException();
+        public Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default) => throw new NotImplementedException();
         public Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId) => throw new NotImplementedException();
         public Task TransferSiteAsync(Guid agentId, Guid newSiteId) => throw new NotImplementedException();
         public Task DeleteAsync(Guid id) => throw new NotImplementedException();

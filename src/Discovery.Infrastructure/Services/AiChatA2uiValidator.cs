@@ -29,6 +29,13 @@ public static class AiChatA2uiValidator
         "Select"
     };
 
+    /// <summary>
+    /// Nomes conhecidos pelo validador, expostos para o teste de paridade com o
+    /// catálogo embarcado no renderer (a2ui-bundle.js). Sem esse teste, um
+    /// componente novo no bundle e ausente aqui derruba a surface INTEIRA.
+    /// </summary>
+    public static IReadOnlyCollection<string> KnownComponentNames => KnownComponents;
+
     // Propriedades que referenciam OUTRO componente por id.
     private static readonly string[] SingleReferenceProps = { "child", "trigger", "content" };
 
@@ -220,11 +227,17 @@ public static class AiChatA2uiValidator
 
     /// <summary>
     /// Armadilha do renderer (verificada empiricamente em 2026-10-08): um
-    /// `action.event.context` com a chave `path` é interpretado como um
-    /// DataBinding — o objeto INTEIRO é resolvido para o valor de /x e a ação é
-    /// descartada ("Invalid action payload"), deixando o botão morto. Melhor
-    /// descartar a surface e mostrar o fallback do que entregar um botão que não
-    /// faz nada.
+    /// `action.event.context` com a chave `path` no NÍVEL DE CIMA é
+    /// interpretado como um DataBinding — o objeto INTEIRO é resolvido para o
+    /// valor de /x e, quando /x não existe, a chave some do context entregue
+    /// (o clique chega com `context: {}`). Melhor descartar a surface e mostrar
+    /// o fallback do que entregar um botão morto.
+    ///
+    /// O binding ANINHADO é intencional e permitido (o prompt ensina
+    /// `context:{"etapa":{"path":"/etapa"}}` para enviar o valor atual ao
+    /// agente). Ele é resolvido na hora do clique: se o caminho não tiver sido
+    /// populado por um `updateDataModel` do mesmo turno, a chave não aparece no
+    /// context — por isso o prompt exige ligar os campos ao data model.
     /// </summary>
     private static void CheckActionContextPathTrap(JsonElement component, string id, ParsedMessage p)
     {

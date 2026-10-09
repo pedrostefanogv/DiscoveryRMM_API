@@ -138,6 +138,13 @@ public partial class DiscoveryDbContext
             entity.HasIndex(agent => agent.FingerprintHash)
                 .HasDatabaseName("ix_agents_fingerprint_hash");
 
+            entity.Property(agent => agent.LastPolicyFingerprint)
+                .HasColumnName("last_policy_fingerprint")
+                .HasMaxLength(64);
+            entity.Property(agent => agent.LastPolicySyncAt)
+                .HasColumnName("last_policy_sync_at")
+                .HasColumnType("timestamptz");
+
             entity.Property(agent => agent.MaintenanceEnabled)
                 .HasColumnName("maintenance_enabled")
                 .HasDefaultValue(false);

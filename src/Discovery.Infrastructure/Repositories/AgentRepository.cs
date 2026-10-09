@@ -97,6 +97,8 @@ public class AgentRepository : IAgentRepository
         existingAgent.TpmEkHash = agent.TpmEkHash;
         existingAgent.SmbiosUuid = agent.SmbiosUuid;
         existingAgent.FingerprintHash = agent.FingerprintHash;
+        existingAgent.LastPolicyFingerprint = agent.LastPolicyFingerprint;
+        existingAgent.LastPolicySyncAt = agent.LastPolicySyncAt;
         existingAgent.DeletedAt = agent.DeletedAt;
         existingAgent.MaintenanceEnabled = agent.MaintenanceEnabled;
         existingAgent.MaintenanceReason = agent.MaintenanceReason;
@@ -105,6 +107,15 @@ public class AgentRepository : IAgentRepository
         existingAgent.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
+    }
+
+    public async Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default)
+    {
+        await _db.Agents
+            .Where(agent => agent.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(agent => agent.LastPolicyFingerprint, _ => fingerprint)
+                .SetProperty(agent => agent.LastPolicySyncAt, _ => syncedAt), ct);
     }
 
     public async Task ApproveZeroTouchAsync(Guid agentId)

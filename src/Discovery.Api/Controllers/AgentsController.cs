@@ -481,6 +481,23 @@ public class AgentsController : ControllerBase
             });
     }
 
+    /// <summary>
+    /// Políticas de automação aplicáveis ao agent (mesmo conjunto do
+    /// policy-sync). A aba "Políticas" do detalhe usa para conferir o que a
+    /// máquina recebe: escopo, gatilhos, tags, pacote/script e fingerprint.
+    /// </summary>
+    [HttpGet("{id:guid}/automation/policies")]
+    [RequirePermission(ResourceType.Automation, ActionType.View)]
+    public async Task<IActionResult> GetAutomationPolicies(Guid id, CancellationToken ct = default)
+    {
+        var result = await _mediator.Send(new GetAgentAutomationPoliciesQuery(id), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { error = errors[0].Message })
+                : BadRequest(new { error = errors[0].Message }));
+    }
+
     [HttpGet("{id:guid}/automation/executions")]
     [RequirePermission(ResourceType.Automation, ActionType.View)]
     public async Task<IActionResult> GetAutomationExecutionHistory(

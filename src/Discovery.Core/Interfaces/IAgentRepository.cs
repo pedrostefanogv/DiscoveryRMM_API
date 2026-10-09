@@ -14,6 +14,12 @@ public interface IAgentRepository
     Task<Agent> CreateAsync(Agent agent);
     Task UpdateAsync(Agent agent);
     Task UpdateStatusAsync(Guid id, Enums.AgentStatus status, string? ipAddress);
+
+    /// <summary>
+    /// Grava apenas o resultado do policy-sync de automação (fingerprint +
+    /// quando), sem reescrever a linha do agent. Chamado pelo sync do agent.
+    /// </summary>
+    Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default);
     Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default);
     Task ApproveZeroTouchAsync(Guid agentId);
     Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId);

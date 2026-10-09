@@ -470,6 +470,9 @@ public class AutomationTaskService : IAutomationTaskService
 
         var policyKey = BuildPolicyKey(applicable);
         var fingerprint = ComputeHash(policyKey);
+        // Registra o que o agent recebeu (nos dois ramos): é o que permite à aba
+        // "Políticas" dizer se ele está com a policy vigente.
+        await RememberDeliveredPolicyAsync(agent, fingerprint);
 
         if (!string.IsNullOrWhiteSpace(request.KnownPolicyFingerprint)
             && string.Equals(request.KnownPolicyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
@@ -494,13 +497,82 @@ public class AutomationTaskService : IAutomationTaskService
             };
         }
 
+        var taskDtos = await BuildTaskPolicyDtosAsync(applicable, request.IncludeScriptContent);
+
+        await _loggingService.LogInfoAsync(
+            LogType.Automation,
+            LogSource.Api,
+            "Automation policy sync delivered to agent.",
+            new
+            {
+                correlationId,
+                agentId,
+                fingerprint,
+                taskCount = taskDtos.Count,
+                includeScriptContent = request.IncludeScriptContent
+            },
+            agentId: agentId.ToString(),
+            siteId: site.Id.ToString(),
+            clientId: site.ClientId.ToString());
+
+        return new AgentAutomationPolicySyncResponse
+        {
+            UpToDate = false,
+            PolicyFingerprint = fingerprint,
+            GeneratedAt = DateTime.UtcNow,
+            TaskCount = taskDtos.Count,
+            Tasks = taskDtos,
+            PreloadPackages = BuildPreloadPackages(applicable)
+        };
+    }
+
+    /// <summary>
+    /// Registra no agent o fingerprint da policy entregue. Só escreve quando o
+    /// valor muda: o agent sincroniza a cada check-in e reescrever a linha
+    /// sempre amplificaria writes sem ganho — o fingerprint é a fonte da
+    /// verdade e o timestamp marca quando ESTA policy foi entregue.
+    /// </summary>
+    private async Task RememberDeliveredPolicyAsync(Agent agent, string fingerprint)
+    {
+        if (string.Equals(agent.LastPolicyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var syncedAt = DateTime.UtcNow;
+        agent.LastPolicyFingerprint = fingerprint;
+        agent.LastPolicySyncAt = syncedAt;
+        // Update direcionado (2 colunas) em vez de reescrever a linha inteira do
+        // agent — o sync acontece a cada check-in e não pode competir com outras
+        // atualizações do cadastro.
+        await _agentRepository.SetPolicySyncAsync(agent.Id, fingerprint, syncedAt);
+    }
+
+    /// <summary>
+    /// Monta os DTOs que o agent recebe (e que a UI de verificação mostra). É o
+    /// ponto ÚNICO de mapeamento: policy-sync e prévia usam exatamente a mesma
+    /// lista, então o que o operador vê na aba "Políticas" é o que o agent recebe.
+    /// </summary>
+    private async Task<List<AgentAutomationTaskPolicyDto>> BuildTaskPolicyDtosAsync(
+        IReadOnlyList<AutomationTaskDefinition> applicable,
+        bool includeScriptContent)
+    {
+        // Busca TODOS os scripts referenciados numa única consulta: antes era um
+        // GetByIdAsync por política (N+1) tanto no sync quanto na prévia.
+        var scriptIds = applicable
+            .Where(task => task.ActionType == AutomationTaskActionType.RunScript && task.ScriptId.HasValue)
+            .Select(task => task.ScriptId!.Value)
+            .Distinct()
+            .ToList();
+        IReadOnlyDictionary<Guid, AutomationScriptDefinition> scriptsById = scriptIds.Count > 0
+            ? await _scriptRepository.GetByIdsAsync(scriptIds, includeInactive: false)
+            : new Dictionary<Guid, AutomationScriptDefinition>();
+
         var taskDtos = new List<AgentAutomationTaskPolicyDto>(applicable.Count);
         foreach (var task in applicable)
         {
             AgentAutomationScriptRefDto? scriptRef = null;
             if (task.ActionType == AutomationTaskActionType.RunScript && task.ScriptId.HasValue)
             {
-                var script = await _scriptRepository.GetByIdAsync(task.ScriptId.Value, includeInactive: false);
+                scriptsById.TryGetValue(task.ScriptId.Value, out var script);
                 if (script is not null)
                 {
                     scriptRef = new AgentAutomationScriptRefDto
@@ -512,7 +584,7 @@ public class AutomationTaskService : IAutomationTaskService
                         ScriptType = script.ScriptType,
                         LastUpdatedAt = script.LastUpdatedAt,
                         ContentHashSha256 = ComputeHash(script.Content),
-                        Content = request.IncludeScriptContent ? script.Content : null,
+                        Content = includeScriptContent ? script.Content : null,
                         ParametersSchemaJson = script.ParametersSchemaJson,
                         MetadataJson = script.MetadataJson
                     };
@@ -547,27 +619,26 @@ public class AutomationTaskService : IAutomationTaskService
                 Script = scriptRef
             });
         }
+        return taskDtos;
+    }
 
-        await _loggingService.LogInfoAsync(
-            LogType.Automation,
-            LogSource.Api,
-            "Automation policy sync delivered to agent.",
-            new
-            {
-                correlationId,
-                agentId,
-                fingerprint,
-                taskCount = taskDtos.Count,
-                includeScriptContent = request.IncludeScriptContent
-            },
-            agentId: agentId.ToString(),
-            siteId: site.Id.ToString(),
-            clientId: site.ClientId.ToString());
+    public async Task<AgentAutomationPolicyPreviewDto> GetApplicablePoliciesForAgentAsync(
+        Guid agentId,
+        CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        var (agent, _, applicable) = await ResolveApplicablePolicyTasksAsync(agentId);
+        var taskDtos = await BuildTaskPolicyDtosAsync(applicable, includeScriptContent: false);
+        var fingerprint = ComputeHash(BuildPolicyKey(applicable));
 
-        return new AgentAutomationPolicySyncResponse
+        return new AgentAutomationPolicyPreviewDto
         {
-            UpToDate = false,
+            AgentId = agent.Id,
             PolicyFingerprint = fingerprint,
+            LastSyncedPolicyFingerprint = agent.LastPolicyFingerprint,
+            LastPolicySyncAt = agent.LastPolicySyncAt,
+            UpToDate = agent.LastPolicyFingerprint is not null
+                && string.Equals(agent.LastPolicyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase),
             GeneratedAt = DateTime.UtcNow,
             TaskCount = taskDtos.Count,
             Tasks = taskDtos,

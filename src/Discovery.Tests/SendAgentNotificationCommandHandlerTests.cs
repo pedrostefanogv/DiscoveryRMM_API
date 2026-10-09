@@ -160,6 +160,9 @@ public class SendAgentNotificationCommandHandlerTests
         public Task ApproveZeroTouchAsync(Guid agentId)
             => Task.CompletedTask;
 
+        public Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default)
+            => Task.CompletedTask;
+
         public Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId)
             => Task.CompletedTask;
 

@@ -36,6 +36,32 @@ public class AgentPreloadPackageDto
     public AutomationTaskActionType ActionType { get; set; }
 }
 
+/// <summary>
+/// Prévia das políticas de automação APLICÁVEIS a um agente — o MESMO conjunto
+/// que o agent recebe no policy-sync, exposto para verificação na UI (aba
+/// "Políticas" do detalhe do agente). Não inclui o conteúdo do script, apenas a
+/// referência (nome/versão/resumo), para não trafegar código ao navegador.
+/// </summary>
+public class AgentAutomationPolicyPreviewDto
+{
+    public Guid AgentId { get; set; }
+    /// <summary>Fingerprint do que se aplica AGORA ao agente.</summary>
+    public string PolicyFingerprint { get; set; } = string.Empty;
+    /// <summary>
+    /// Fingerprint entregue ao agent no último policy-sync registrado (null
+    /// quando ele ainda não recebeu nenhuma policy).
+    /// </summary>
+    public string? LastSyncedPolicyFingerprint { get; set; }
+    /// <summary>Quando a policy vigente foi entregue/confirmada pelo agent.</summary>
+    public DateTime? LastPolicySyncAt { get; set; }
+    /// <summary>True quando o último fingerprint entregue == o atual.</summary>
+    public bool UpToDate { get; set; }
+    public DateTime GeneratedAt { get; set; }
+    public int TaskCount { get; set; }
+    public IReadOnlyList<AgentAutomationTaskPolicyDto> Tasks { get; set; } = [];
+    public IReadOnlyList<AgentPreloadPackageDto> PreloadPackages { get; set; } = [];
+}
+
 public class AgentAutomationTaskPolicyDto
 {
     public Guid TaskId { get; set; }
