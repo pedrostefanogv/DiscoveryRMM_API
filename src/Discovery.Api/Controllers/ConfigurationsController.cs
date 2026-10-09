@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Discovery.Api.Filters;
+using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs.Configurations.Commands;
 using Discovery.Core.Cqrs.Configurations.Queries;
 using Discovery.Core.DTOs;
@@ -62,7 +63,7 @@ public class ConfigurationsController(
     {
         var server = (await mediator.Send(new GetServerConfigQuery())).Value;
         if (server is null)
-            return Ok(new ConfigurationMetadataResult(new(), []));
+            return Ok(new ConfigurationMetadataResult(new(), [], AgentHomeTabCatalog.ValidTabs.ToArray()));
 
         var result = await mediator.Send(new GetConfigurationMetadataQuery("Server", server.Id));
         return result.Match<IActionResult>(

@@ -153,6 +153,9 @@ public class ConfigurationService : IConfigurationService
         var blockedFields = await GetGlobalBlockedFieldsAsync();
         EnsureNoBlockedOverrides(config, blockedFields, "Client");
 
+        // O PUT (create/update completos) não passa pelo ValidateOrThrowAsync do
+        // PATCH; valida aqui os campos com regra própria que ele pode gravar.
+        await ValidateOrThrowAsync(config, [nameof(ClientConfiguration.AgentHomeTab)]);
 
         config.ClientId = clientId;
         config.CreatedBy = createdBy;
@@ -182,6 +185,7 @@ public class ConfigurationService : IConfigurationService
         config.Version = existing.Version + 1;
         config.UpdatedBy = updatedBy;
         ProtectSensitiveData(config);
+        await ValidateOrThrowAsync(config, [nameof(ClientConfiguration.AgentHomeTab)]);
         await _clientRepo.UpdateAsync(config);
 
         var addedLocks = GetAddedLocks(previousLocks, ParseLockedFields(config.LockedFieldsJson));
@@ -281,6 +285,9 @@ public class ConfigurationService : IConfigurationService
         var blockedFields = await GetBlockedFieldsForClientAsync(site.ClientId);
         EnsureNoBlockedOverrides(config, blockedFields, "Site");
 
+        // O PUT (create/update completos) não passa pelo ValidateOrThrowAsync do
+        // PATCH; valida aqui os campos com regra própria que ele pode gravar.
+        await ValidateOrThrowAsync(config, [nameof(SiteConfiguration.AgentHomeTab)]);
 
         config.SiteId = siteId;
         config.ClientId = site.ClientId;
@@ -310,6 +317,7 @@ public class ConfigurationService : IConfigurationService
         config.Version = existing.Version + 1;
         config.UpdatedBy = updatedBy;
         ProtectSensitiveData(config);
+        await ValidateOrThrowAsync(config, [nameof(SiteConfiguration.AgentHomeTab)]);
         await _siteRepo.UpdateAsync(config);
         _resolver.ClearCache();
         await _audit.LogChangeAsync("Site", config.Id, "*", null, null, "Full update", updatedBy);
@@ -414,6 +422,7 @@ public class ConfigurationService : IConfigurationService
         CheckRange(type, config, "ObjectStorageUrlTtlHours", 1, 168, errors);
         CheckRange(type, config, "NatsAgentJwtTtlMinutes", 15, 4320, errors);
         CheckRange(type, config, "NatsUserJwtTtlMinutes", 15, 4320, errors);
+        CheckAgentHomeTab(config, errors);
 
         if (config is ServerConfiguration serverConfiguration)
         {
@@ -441,6 +450,32 @@ public class ConfigurationService : IConfigurationService
         }
 
         return (errors.Count == 0, errors.ToArray());
+    }
+
+    /// <summary>
+    /// Valida a página inicial do agent (agentHomeTab). No servidor o valor é
+    /// obrigatório; em cliente/site vazio/nulo significa "herdar do nível acima".
+    /// </summary>
+    private static void CheckAgentHomeTab(object config, List<string> errors)
+    {
+        var prop = config.GetType().GetProperty("AgentHomeTab",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+        if (prop is null) return;
+
+        var raw = prop.GetValue(config) as string;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            if (config is ServerConfiguration)
+                errors.Add("AgentHomeTab cannot be empty.");
+            return;
+        }
+
+        if (!AgentHomeTabCatalog.IsValid(raw))
+        {
+            errors.Add(
+                $"AgentHomeTab inválido: '{raw}'. "
+                + $"Valores aceitos: {string.Join(", ", AgentHomeTabCatalog.ValidTabs)}.");
+        }
     }
 
     public Task<(bool IsValid, string[] Errors)> ValidateJsonAsync(string objectType, string json)

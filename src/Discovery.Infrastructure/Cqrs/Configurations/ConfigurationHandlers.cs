@@ -308,7 +308,12 @@ public sealed class GetConfigurationMetadataQueryHandler(
         blocked.UnionWith(clientLocks);
 
         return Result<ConfigurationMetadataResult>.Success(
-            new ConfigurationMetadataResult(fields, blocked.OrderBy(x => x).ToArray()));
+            new ConfigurationMetadataResult(
+                fields,
+                blocked.OrderBy(x => x).ToArray(),
+                // Contrato da página inicial do agent exposto ao console pela própria
+                // fonte de verdade (AgentHomeTabCatalog), evitando lista duplicada no site.
+                AgentHomeTabCatalog.ValidTabs.ToArray()));
     }
 
     private static int GetInheritanceSource(ResolvedConfiguration resolved, string propertyName)

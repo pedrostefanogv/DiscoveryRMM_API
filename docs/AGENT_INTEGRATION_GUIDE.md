@@ -129,6 +129,7 @@ X-Agent-ID: {agentId}
 	"recoveryEnabled": true,
 	"discoveryEnabled": true,
 	"p2pFilesEnabled": false,
+	"agentHomeTab": "support",
 	"siteId": "e5f6a7b8-...",
 	"clientId": "a1b2c3d4-...",
 	"natsServerHost": "nats.discoveryrmm.com",
@@ -143,6 +144,19 @@ X-Agent-ID: {agentId}
 	"natsTlsCertHash": null
 }
 ```
+
+**Página inicial do agent (`agentHomeTab`):**
+
+Configuração herdável (**servidor → cliente → site**; nulo/vazio no cliente/site
+herda o nível acima) que define qual aba o painel do agent abre ao iniciar.
+
+- Valores aceitos: `status`, `store`, `updates`, `chat`, `support`, `knowledge`.
+- Fonte de verdade: `AgentHomeTabCatalog` no servidor, também publicada em
+  `GET /api/v1/configurations/server/metadata` como `agentHomeTabOptions`.
+- Se a aba configurada estiver desabilitada para o agent (feature flag, ex.:
+  `supportEnabled=false`), o painel abre a aba **Status** (fallback).
+- O agent não mantém lista própria de abas: normaliza o id (trim/lowercase) e o
+  painel só ativa abas que conhece, caindo para Status em id desconhecido.
 
 ### 2.3 Bootstrap P2P
 

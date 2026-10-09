@@ -26,6 +26,13 @@ public class ResolvedConfiguration
     public bool KnowledgeBaseEnabled { get; set; }
     public bool ZeroTouchEnabled { get; set; }
 
+    /// <summary>
+    /// Aba inicial do agent já resolvida (servidor → cliente → site). Sempre um id
+    /// válido de <see cref="AgentHomeTabCatalog"/>; o agent cai para "status" se a
+    /// aba estiver desabilitada para ele.
+    /// </summary>
+    public string AgentHomeTab { get; set; } = AgentHomeTabCatalog.DefaultTab;
+
     // ============ Loja de aplicativos ============
 
     public AppStorePolicyType AppStorePolicy { get; set; }

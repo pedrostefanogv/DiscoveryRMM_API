@@ -1,3 +1,4 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Enums;
 
 namespace Discovery.Core.Entities;
@@ -31,6 +32,12 @@ public class SiteConfiguration
 
     /// <summary>Base de conhecimento habilitada (null = herda cliente/servidor)</summary>
     public bool? KnowledgeBaseEnabled { get; set; }
+
+    /// <summary>
+    /// Página inicial do agent para este site (null/vazio = herda cliente/servidor).
+    /// Ids aceitos em <see cref="AgentHomeTabCatalog"/>.
+    /// </summary>
+    public string? AgentHomeTab { get; set; }
 
     /// <summary>Zero-touch provisioning habilitado (null = herda cliente/servidor)</summary>
     public bool? ZeroTouchEnabled { get; set; }

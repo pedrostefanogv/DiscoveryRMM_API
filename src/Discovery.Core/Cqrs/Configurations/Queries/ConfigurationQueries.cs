@@ -61,6 +61,12 @@ public sealed record ConfigurationFieldMetadataResult(
     string? LockOwnerForSite);
 
 /// <summary>Resposta de metadados de edição de configuração.</summary>
+/// <param name="AgentHomeTabOptions">
+/// Valores aceitos para a página inicial do agent (agentHomeTab). Fonte de verdade
+/// no servidor (AgentHomeTabCatalog) para o console renderizar as opções sem
+/// duplicar o contrato.
+/// </param>
 public sealed record ConfigurationMetadataResult(
     Dictionary<string, ConfigurationFieldMetadataResult> Fields,
-    string[] BlockedFields);
+    string[] BlockedFields,
+    string[] AgentHomeTabOptions);

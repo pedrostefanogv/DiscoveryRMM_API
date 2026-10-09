@@ -47,6 +47,25 @@ public class ConfigurationServiceInheritanceTests
     }
 
     [Test]
+    public async Task Patch_de_cliente_persiste_override_de_background_processing()
+    {
+        await using var db = CreateDb();
+        var clientId = Guid.NewGuid();
+        db.ClientConfigurations.Add(new ClientConfiguration { Id = IdGenerator.NewId(), ClientId = clientId });
+        await db.SaveChangesAsync();
+
+        var service = BuildService(db);
+        await service.PatchClientAsync(clientId, new Dictionary<string, object>
+        {
+            ["BackgroundProcessingSettingsJson"] = "{\"triage\":{\"enabled\":false}}",
+        });
+
+        var saved = await db.ClientConfigurations.AsNoTracking().SingleAsync(c => c.ClientId == clientId);
+        Assert.That(saved.BackgroundProcessingSettingsJson, Is.EqualTo("{\"triage\":{\"enabled\":false}}"),
+            "o override por cliente é lido pelo ConfigurationResolver e não pode ser descartado no UpdateAsync");
+    }
+
+    [Test]
     public async Task Patch_preserva_false_explicito()
     {
         await using var db = CreateDb();

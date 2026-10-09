@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Não lançado]
 
 ### Added
+- 🏠 **Página inicial do agent (`agentHomeTab`)**: configuração herdável (servidor →
+  cliente → site) que define qual aba o painel do agent abre ao iniciar (status, loja,
+  atualizações, chat IA, suporte, base de conhecimento). Se a aba configurada estiver
+  desabilitada para o agent, ele cai para a aba de Status. Editável no console
+  (Servidor/Cliente/Site) e no simulador de configuração efetiva; respeita
+  `lockedFieldsJson` e expõe a origem no mapa de herança.
+- 🗃️ **Migração M205** (`M205_AddAgentHomeTab`): coluna `agent_home_tab` com default
+  `status` no servidor e nula em cliente/site (nula/vazia = herda).
+- 🔌 **`GET /api/v1/agent-auth/me/configuration`** passa a expor `agentHomeTab` resolvido.
+- 🧭 **Contrato publicado na metadata**: `GET /api/v1/configurations/server|clients|sites/.../metadata`
+  devolve `agentHomeTabOptions` (lista de ids aceitos) a partir do `AgentHomeTabCatalog`.
+  O console consome essa lista, então só existe uma fonte de verdade — sem lista de
+  valores duplicada no site.
+- ✅ **Testes**: NUnit (catálogo e lista exata de ids, validação, herança e persistência
+  client/site), Vitest (metadata → opções do editor, validação/parse) e Go (`agentconfig`:
+  flat + hierárquico + normalização).
 - 🤖 **Triagem por IA na auto-atribuição de chamados**: nova estratégia `AiTriage` por
   departamento (assignment_strategy = 3). O responsável é escolhido cruzando o conteúdo e
   a dificuldade do chamado com métricas históricas do atendente (carga, tempo de resolução,
@@ -32,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existentes mantêm as estratégias 0/1/2.
 - ✅ **Testes**: NUnit (scorer, extração de sinais, métricas por atendente, fluxos de decisão
   da triagem) e Vitest (card de decisão no detalhe do chamado).
+
+### Fixed
+- 🐛 **Override de background processing por cliente era descartado**: o
+  `ClientConfigurationRepository.UpdateAsync` copia campo a campo e não copiava
+  `BackgroundProcessingSettingsJson`, que é lido pelo `ConfigurationResolver`. O PATCH/PUT
+  do cliente perdia a alteração silenciosamente.
 
 ### Notes
 - A triagem exige a integração de IA habilitada (AIIntegration.Enabled + ChatAIEnabled +

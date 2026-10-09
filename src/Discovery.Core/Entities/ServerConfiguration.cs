@@ -1,3 +1,4 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Enums;
 using Discovery.Core.ValueObjects;
 using System.ComponentModel.DataAnnotations.Schema;
@@ -35,6 +36,14 @@ public class ServerConfiguration
 
     /// <summary>Base de conhecimento habilitada</summary>
     public bool KnowledgeBaseEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Página inicial do agent: id da aba que o painel abre ao iniciar
+    /// (ver <see cref="AgentHomeTabCatalog"/>). Global — pode ser sobrescrita por
+    /// cliente e por site; quando a aba está desabilitada para o agent, ele cai
+    /// para a aba de status.
+    /// </summary>
+    public string AgentHomeTab { get; set; } = AgentHomeTabCatalog.DefaultTab;
 
     /// <summary>
     /// Zero-touch provisioning: permite que agents sem credenciais se registrem

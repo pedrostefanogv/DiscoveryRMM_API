@@ -42,9 +42,13 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
         existingConfig.SupportEnabled = config.SupportEnabled;
         existingConfig.ChatAIEnabled = config.ChatAIEnabled;
         existingConfig.KnowledgeBaseEnabled = config.KnowledgeBaseEnabled;
+        existingConfig.AgentHomeTab = config.AgentHomeTab;
         existingConfig.ZeroTouchEnabled = config.ZeroTouchEnabled;
         existingConfig.AppStorePolicy = config.AppStorePolicy;
         existingConfig.AIIntegrationSettingsJson = config.AIIntegrationSettingsJson;
+        // Override de background processing por cliente: lido pelo
+        // ConfigurationResolver; sem esta cópia o PATCH/PUT era descartado.
+        existingConfig.BackgroundProcessingSettingsJson = config.BackgroundProcessingSettingsJson;
         existingConfig.InventoryIntervalHours = config.InventoryIntervalHours;
         existingConfig.AgentUpdatePolicyJson = config.AgentUpdatePolicyJson;
         existingConfig.AgentHeartbeatIntervalSeconds = config.AgentHeartbeatIntervalSeconds;

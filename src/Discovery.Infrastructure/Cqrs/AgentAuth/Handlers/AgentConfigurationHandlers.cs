@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Configuration;
 using Discovery.Core.DTOs;
@@ -45,6 +46,10 @@ public sealed class GetAgentConfigurationHandler(
             ["supportEnabled"] = siteConfig?.SupportEnabled ?? clientConfig?.SupportEnabled ?? serverConfig.SupportEnabled,
             ["knowledgeBaseEnabled"] = siteConfig?.KnowledgeBaseEnabled ?? clientConfig?.KnowledgeBaseEnabled ?? serverConfig.KnowledgeBaseEnabled,
             ["chatAIEnabled"] = siteConfig?.ChatAIEnabled ?? clientConfig?.ChatAIEnabled ?? serverConfig.ChatAIEnabled,
+
+            // Página inicial do agent (herdada; vazio cai para o default "status")
+            ["agentHomeTab"] = AgentHomeTabCatalog.Normalize(
+                FirstNonEmpty(siteConfig?.AgentHomeTab, clientConfig?.AgentHomeTab, serverConfig.AgentHomeTab)),
             ["p2pFilesEnabled"] = siteConfig?.P2PFilesEnabled ?? clientConfig?.P2PFilesEnabled ?? serverConfig.P2PFilesEnabled,
             ["cloudBootstrapEnabled"] = clientConfig?.CloudBootstrapEnabled ?? serverConfig.CloudBootstrapEnabled,
             ["zeroTouchEnabled"] = siteConfig?.ZeroTouchEnabled ?? clientConfig?.ZeroTouchEnabled ?? serverConfig.ZeroTouchEnabled,
@@ -94,6 +99,17 @@ public sealed class GetAgentConfigurationHandler(
         };
 
         return Result<object>.Success(effective);
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
     }
 
     private static object? TryDeserializeJson(string? json)
