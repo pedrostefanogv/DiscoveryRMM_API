@@ -223,4 +223,19 @@ public class AiChatA2uiExtractorTests
         Assert.That(diagnostics[^1], Does.Contain("omitidos"));
     }
 
+    [Test]
+    public void BuildIncompleteDiagnostic_ReportsSurfacesWithoutRootAndNullWhenComplete()
+    {
+        var messages = new List<string>
+        {
+            "{\"version\":\"v0.9\",\"createSurface\":{\"surfaceId\":\"w6\",\"catalogId\":\"basic\"}}",
+            "{\"version\":\"v0.9\",\"updateDataModel\":{\"surfaceId\":\"w6\",\"path\":\"/etapa\",\"value\":1}}",
+        };
+
+        Assert.That(AiChatA2uiExtractor.BuildIncompleteDiagnostic(messages), Is.EqualTo("w6"));
+
+        messages.Add("{\"version\":\"v0.9\",\"updateComponents\":{\"surfaceId\":\"w6\",\"components\":[{\"id\":\"root\",\"component\":\"Column\"}]}}");
+        Assert.That(AiChatA2uiExtractor.BuildIncompleteDiagnostic(messages), Is.Null);
+        Assert.That(AiChatA2uiExtractor.BuildIncompleteDiagnostic(null), Is.Null);
+    }
 }

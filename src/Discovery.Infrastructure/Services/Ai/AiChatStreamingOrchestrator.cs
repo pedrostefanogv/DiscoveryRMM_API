@@ -766,18 +766,16 @@ public class AiChatStreamingOrchestrator
                     }
                 }
             }
-            // Diagnóstico explícito para a UI: a surface continua sem definição
-            // mesmo depois da reemissão (JSON irrecuperável ou modelo insistiu no
-            // defeito). O agent repassa como "chat:a2ui_incomplete" e a bolha vazia
-            // vira uma mensagem clara em vez do genérico "Loading surface...".
-            var stillMissing = AiChatA2uiExtractor.SurfacesMissingDefinition(a2uiMessages);
-            if (stillMissing.Count > 0)
-            {
-                yield return new AiChatStreamChunk(Type: "a2ui_incomplete", Content: string.Join(", ", stillMissing));
-            }
             foreach (var a2uiMsg in a2uiMessages)
             {
                 yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
+            }
+            // Diagnóstico DEPOIS das mensagens: a UI já criou a bolha vazia, então
+            // consegue removê-la e explicar POR QUE o card não apareceu (o evento
+            // "chat:a2ui_incomplete" evita o aviso genérico do watchdog).
+            if (AiChatA2uiExtractor.BuildIncompleteDiagnostic(a2uiMessages) is { } stillMissing)
+            {
+                yield return new AiChatStreamChunk(Type: "a2ui_incomplete", Content: stillMissing);
             }
         }
 
@@ -1427,14 +1425,13 @@ public class AiChatStreamingOrchestrator
                     }
                 }
             }
-            // Diagnóstico explícito para a UI (mesmo contrato do round 1).
-            var stillMissingMulti = AiChatA2uiExtractor.SurfacesMissingDefinition(a2uiMultiMessages);
-            if (stillMissingMulti.Count > 0)
-                yield return new AiChatStreamChunk(Type: "a2ui_incomplete", Content: string.Join(", ", stillMissingMulti));
             foreach (var a2uiMsg in a2uiMultiMessages)
             {
                 yield return new AiChatStreamChunk(Type: "a2ui", A2uiJson: a2uiMsg);
             }
+            // Diagnóstico DEPOIS das mensagens (mesmo contrato do round 1).
+            if (AiChatA2uiExtractor.BuildIncompleteDiagnostic(a2uiMultiMessages) is { } stillMissingMulti)
+                yield return new AiChatStreamChunk(Type: "a2ui_incomplete", Content: stillMissingMulti);
         }
 
         // ── Síntese forçada: conteúdo vazio (ou orçamento estourado) → chamadas

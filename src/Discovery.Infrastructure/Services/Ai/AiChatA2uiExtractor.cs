@@ -208,6 +208,17 @@ public static class AiChatA2uiExtractor
         return missing;
     }
 
+    /// <summary>
+    /// Texto do diagnóstico de interface incompleta (chunk "a2ui_incomplete") ou
+    /// null quando toda surface criada tem definição. Centraliza a decisão para
+    /// os TRÊS caminhos de entrega (streaming round 1, multi-round e sync).
+    /// </summary>
+    public static string? BuildIncompleteDiagnostic(IReadOnlyList<string>? messages)
+    {
+        var missing = SurfacesMissingDefinition(messages);
+        return missing.Count == 0 ? null : string.Join(", ", missing);
+    }
+
     private static IEnumerable<A2uiLineInfo> ParseBlock(string block, Action<string> report)
     {
         foreach (var rawLine in block.Replace("\r\n", "\n").Split('\n'))
