@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Discovery.Core.DTOs;
@@ -169,7 +170,7 @@ public class AiModelCatalogService : IAiModelCatalogService
             var id = item.GetProperty("id").GetString() ?? "";
             var name = item.GetProperty("name").GetString() ?? id;
             var desc = item.TryGetProperty("description", out var d) ? d.GetString() : null;
-            var contextLen = item.TryGetProperty("context_length", out var cl) ? cl.GetInt32() : (int?)null;
+            var contextLen = ParseInt32(item, "context_length");
 
             var architecture = item.TryGetProperty("architecture", out var arch) ? arch : default;
             var inputMods = ParseStringArray(architecture, "input_modalities");
@@ -195,7 +196,7 @@ public class AiModelCatalogService : IAiModelCatalogService
                 OutputModalities: outputMods,
                 SupportedParameters: supportedParams,
                 ContextLength: contextLen,
-                MaxCompletionTokens: item.TryGetProperty("max_completion_tokens", out var mct) ? mct.GetInt32() : null,
+                MaxCompletionTokens: ParseInt32(item, "max_completion_tokens"),
                 Pricing: pricing,
                 IsFree: isFree,
                 IsRecommendedForChat: IsRecommendedForChat(id, capabilities, isFree),
@@ -309,19 +310,55 @@ public class AiModelCatalogService : IAiModelCatalogService
         return arr.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
     }
 
-    private static AiModelPricing? ParsePricing(JsonElement item)
+    internal static AiModelPricing? ParsePricing(JsonElement item)
     {
         if (!item.TryGetProperty("pricing", out var p) || p.ValueKind != JsonValueKind.Object)
             return null;
-        return new AiModelPricing(
-            PromptPerMillion: ParseDecimal(p, "prompt"),
-            CompletionPerMillion: ParseDecimal(p, "completion"),
-            ImagePerMillion: ParseDecimal(p, "image")
-        );
+        try
+        {
+            return new AiModelPricing(
+                PromptPerMillion: ParseDecimal(p, "prompt"),
+                CompletionPerMillion: ParseDecimal(p, "completion"),
+                ImagePerMillion: ParseDecimal(p, "image")
+            );
+        }
+        catch (InvalidOperationException)
+        {
+            // Um item fora do formato não pode derrubar o catálogo INTEIRO: sem
+            // catálogo, o guard de visão do chat fica cego (ver ParseDecimal).
+            return null;
+        }
     }
 
-    private static decimal? ParseDecimal(JsonElement parent, string propertyName) =>
-        parent.TryGetProperty(propertyName, out var v) && v.TryGetDecimal(out var d) ? d : null;
+    /// <summary>
+    /// Lê um decimal que a OpenRouter pode devolver como NUMBER (padrão) ou como
+    /// STRING (ex.: <c>"0.0000012"</c>). <c>JsonElement.TryGetDecimal</c> lança
+    /// <see cref="InvalidOperationException"/> quando o token é string — era isso
+    /// que abortava <c>FetchOpenRouterModelsAsync</c> e deixava o catálogo vazio.
+    /// Consequência: <c>ResolveScreenshotImagesAllowed(true, null)</c> devolvia
+    /// true e o servidor enviava prints para modelos roteados pelo
+    /// <c>openrouter/auto</c> sem visão — o provedor respondia
+    /// "Provider stream error: Request could not be processed".
+    /// </summary>
+    internal static decimal? ParseDecimal(JsonElement parent, string propertyName)
+    {
+        if (!parent.TryGetProperty(propertyName, out var v)) return null;
+        return v.ValueKind switch
+        {
+            JsonValueKind.Number => v.TryGetDecimal(out var n) ? n : null,
+            JsonValueKind.String => decimal.TryParse(v.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var s) ? s : null,
+            _ => null
+        };
+    }
+
+    /// <summary>Lê um inteiro que pode vir como número ou string (tolerante a nulos).</summary>
+    internal static int? ParseInt32(JsonElement parent, string propertyName)
+    {
+        if (!parent.TryGetProperty(propertyName, out var v)) return null;
+        if (v.ValueKind == JsonValueKind.Number) return v.TryGetInt32(out var n) ? n : null;
+        return v.ValueKind == JsonValueKind.String &&
+               int.TryParse(v.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var s) ? s : null;
+    }
 
     private static List<string> DetermineCapabilities(List<string> inputMods, List<string> outputMods, List<string> supportedParams)
     {

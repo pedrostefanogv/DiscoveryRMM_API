@@ -12,14 +12,22 @@ namespace Discovery.Tests;
 /// </summary>
 public class ScreenshotVisionTests
 {
-    private static string ValidToolResult() =>
-        JsonSerializer.Serialize(new Dictionary<string, object>
+    /// <summary>Bytes com assinatura PNG real (o guard exige cabeçalho conhecido).</summary>
+    private static byte[] ValidPngBytes() =>
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52];
+
+    private static string ValidToolResult()
+    {
+        var bytes = ValidPngBytes();
+        return JsonSerializer.Serialize(new Dictionary<string, object>
         {
             ["ok"] = true,
             ["mime"] = "image/png",
-            ["image_base64"] = Convert.ToBase64String(new byte[] { 1, 2, 3, 4 }),
+            ["image_base64"] = Convert.ToBase64String(bytes),
+            ["bytes"] = bytes.Length,
             ["note"] = "Print da janela Bloco de Notas"
         });
+    }
 
     [Test]
     public void BuildImagePartsFromToolResult_ExtractsTextAndImage()
@@ -55,6 +63,58 @@ public class ScreenshotVisionTests
         var json = "{\"mime\":\"image/png\",\"image_base64\":\"" + huge + "\"}";
 
         Assert.That(AiChatHelpers.BuildImagePartsFromToolResult(json, "capture_screenshot"), Is.Null);
+    }
+
+    // Regressão do erro real (2026-10-09): o agent truncava o tool result em
+    // 16 KB e cortava o base64. O provedor recusava o request inteiro com
+    // "Provider stream error: Request could not be processed". O servidor agora
+    // descarta o payload implausível e degrada para o caminho textual.
+    [Test]
+    public void BuildImagePartsFromToolResult_TruncatedBase64_ReturnsNull()
+    {
+        var full = ValidPngBytes();
+        var truncated = Convert.ToBase64String(full)[..8]; // 8 chars = 6 bytes
+        var json = JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["mime"] = "image/png",
+            ["bytes"] = full.Length, // tamanho REAL declarado pelo agent
+            ["image_base64"] = truncated
+        });
+
+        Assert.That(AiChatHelpers.BuildImagePartsFromToolResult(json, "capture_screenshot"), Is.Null);
+    }
+
+    [Test]
+    public void BuildImagePartsFromToolResult_Base64InvalidLength_ReturnsNull()
+    {
+        // Corte de 1 byte no base64 (len % 4 != 0): decodificação impossível.
+        var data = Convert.ToBase64String(ValidPngBytes());
+        var json = "{\"mime\":\"image/png\",\"image_base64\":\"" + data[..^1] + "\"}";
+
+        Assert.That(AiChatHelpers.BuildImagePartsFromToolResult(json, "capture_screenshot"), Is.Null);
+    }
+
+    [Test]
+    public void BuildImagePartsFromToolResult_UnknownSignature_ReturnsNull()
+    {
+        var notAnImage = Convert.ToBase64String("isto nao e uma imagem!"u8.ToArray());
+        var json = "{\"mime\":\"image/png\",\"image_base64\":\"" + notAnImage + "\"}";
+
+        Assert.That(AiChatHelpers.BuildImagePartsFromToolResult(json, "capture_screenshot"), Is.Null);
+    }
+
+    [Test]
+    public void BuildImagePartsFromToolResult_WithoutBytesField_StillExtracts()
+    {
+        var json = JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["mime"] = "image/png",
+            ["image_base64"] = Convert.ToBase64String(ValidPngBytes())
+        });
+
+        var parts = AiChatHelpers.BuildImagePartsFromToolResult(json, "capture_screenshot");
+
+        Assert.That(parts, Is.Not.Null, "sem o campo bytes a assinatura da imagem ja basta");
     }
 
     [Test]

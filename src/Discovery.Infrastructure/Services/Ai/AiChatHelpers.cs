@@ -260,6 +260,7 @@ internal static class AiChatHelpers
             if (!root.TryGetProperty("image_base64", out var b64) || b64.ValueKind != JsonValueKind.String) return null;
             var data = b64.GetString();
             if (string.IsNullOrEmpty(data) || data.Length > MaxImageBase64Chars) return null;
+            if (!IsPlausibleImagePayload(root, data)) return null;
             var mime = root.TryGetProperty("mime", out var m) && m.ValueKind == JsonValueKind.String
                 ? m.GetString() : "image/png";
             var note = root.TryGetProperty("note", out var n) && n.ValueKind == JsonValueKind.String
@@ -277,6 +278,65 @@ internal static class AiChatHelpers
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Sanidade do payload de imagem do agent antes de mandar ao provedor.
+    ///
+    /// Motivo (caso real 2026-10-09): o agent truncava o tool result em 16 KB e
+    /// cortava o base64 no meio. O provedor recusava o request INTEIRO com
+    /// "Provider stream error: Request could not be processed", derrubando o
+    /// turno. Aqui o payload truncado/corrompido é descartado e o turno segue
+    /// pelo caminho textual (o modelo explica que não conseguiu ver a imagem).
+    ///
+    /// Duas checagens, ambas baratas e sem decodificar a imagem toda:
+    ///  1. base64 estruturalmente válido (múltiplo de 4) e com assinatura de
+    ///     PNG/JPEG/WebP/GIF nos primeiros bytes;
+    ///  2. quando o contrato traz "bytes" (bytes reais do arquivo), o tamanho
+    ///     decodificado precisa bater — é o detector exato de truncamento.
+    /// </summary>
+    internal static bool IsPlausibleImagePayload(JsonElement root, string base64Data)
+    {
+        if (base64Data.Length < 8 || base64Data.Length % 4 != 0) return false;
+
+        // Tamanho decodificado exato (sem alocar): len/4*3 menos o padding.
+        var decodedLength = base64Data.Length / 4 * 3;
+        if (base64Data.EndsWith("==", StringComparison.Ordinal)) decodedLength -= 2;
+        else if (base64Data.EndsWith("=", StringComparison.Ordinal)) decodedLength -= 1;
+
+        if (root.TryGetProperty("bytes", out var bytesEl) &&
+            bytesEl.ValueKind == JsonValueKind.Number &&
+            bytesEl.TryGetInt64(out var declaredBytes) &&
+            declaredBytes > 0 &&
+            declaredBytes != decodedLength)
+        {
+            return false;
+        }
+
+        try
+        {
+            var head = Convert.FromBase64String(base64Data[..8]);
+            return IsKnownImageSignature(head);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Assinatura dos formatos de imagem aceitos no contrato de visão.</summary>
+    private static bool IsKnownImageSignature(byte[] head)
+    {
+        if (head.Length < 4) return false;
+        // PNG: 89 50 4E 47
+        if (head[0] == 0x89 && head[1] == 0x50 && head[2] == 0x4E && head[3] == 0x47) return true;
+        // JPEG: FF D8 FF
+        if (head[0] == 0xFF && head[1] == 0xD8 && head[2] == 0xFF) return true;
+        // WebP: "RIFF" .... "WEBP"
+        if (head[0] == (byte)'R' && head[1] == (byte)'I' && head[2] == (byte)'F' && head[3] == (byte)'F') return true;
+        // GIF: "GIF8"
+        if (head[0] == (byte)'G' && head[1] == (byte)'I' && head[2] == (byte)'F' && head[3] == (byte)'8') return true;
+        return false;
     }
 
     /// <summary>
