@@ -30,6 +30,7 @@ public static class CommandTypeWireMapper
             CommandType.ScheduledTask => "scheduledtask",
             CommandType.SoftwareUpdate => "softwareupdate",
             CommandType.SoftwareUninstall => "softwareuninstall",
+            CommandType.DecommissionAgent => "decommissionagent",
             _ => commandType.ToString().ToLowerInvariant()
         };
     }
@@ -52,6 +53,7 @@ public static class CommandTypeWireMapper
             or CommandType.StartupItem
             or CommandType.ScheduledTask
             or CommandType.SoftwareUpdate
-            or CommandType.SoftwareUninstall;
+            or CommandType.SoftwareUninstall
+            or CommandType.DecommissionAgent;
     }
 }

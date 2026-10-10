@@ -259,6 +259,44 @@ public class SpecialCommandPayloadValidatorTests
     }
 
     [Test]
+    public void Decommission_ShouldAcceptEmptyPayloadAndNormalizeAuditFields()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var ok = validator.TryNormalize(CommandType.DecommissionAgent, "{}", out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.That(json.RootElement.TryGetProperty("requestedBy", out _), Is.False);
+        Assert.That(json.RootElement.TryGetProperty("reason", out _), Is.False);
+    }
+
+    [Test]
+    public void Decommission_ShouldKeepAndTrimProvidedFields()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "requestedBy": "  console  ",
+              "reason": "trash"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.DecommissionAgent, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.RootElement.GetProperty("requestedBy").GetString(), Is.EqualTo("console"));
+            Assert.That(json.RootElement.GetProperty("reason").GetString(), Is.EqualTo("trash"));
+        });
+    }
+
+    [Test]
     public void PsadtAlert_ModalWithWaitForUser_ShouldOmitTimeout()
     {
         var validator = new SpecialCommandPayloadValidator();

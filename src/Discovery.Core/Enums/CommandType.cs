@@ -30,5 +30,9 @@ public enum CommandType
     // Desinstalação de software instalado a partir do inventário. O agent
     // resolve a estratégia: gerenciador de pacotes → MSI (ProductCode) →
     // UninstallString do registro.
-    SoftwareUninstall = 21
+    SoftwareUninstall = 21,
+    // Descomissionamento remoto: o agent se desinstala da máquina (uninstaller
+    // NSIS silencioso). Disparado ao mover o agente para a lixeira quando ele
+    // está online — a remoção local é irreversível.
+    DecommissionAgent = 22
 }

@@ -176,6 +176,7 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.ScheduledTask => TryNormalizeScheduledTask(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.SoftwareUpdate => TryNormalizeSoftwareUpdate(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.SoftwareUninstall => TryNormalizeSoftwareUninstall(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.DecommissionAgent => TryNormalizeDecommission(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }
@@ -1110,6 +1111,40 @@ public sealed class SpecialCommandPayloadValidator
             ["serial"] = OptionalString("serial"),
             ["installSource"] = OptionalString("installSource")
         };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    /// <summary>
+    /// Normaliza o comando de descomissionamento remoto. O payload pode ser
+    /// vazio (a origem é o próprio painel); "requestedBy"/"reason" são campos
+    /// de auditoria opcionais e são descartados quando vazios.
+    /// </summary>
+    private static bool TryNormalizeDecommission(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        string? OptionalString(string property)
+        {
+            if (!payload.TryGetProperty(property, out var element) || element.ValueKind == JsonValueKind.Null)
+                return null;
+            if (!TryReadString(element, out var value))
+                return null;
+            return value.Trim() is { Length: > 0 } trimmed ? trimmed : null;
+        }
+
+        // QuandoWritingNull não é honrado para valores de dicionário — os
+        // campos opcionais só entram quando realmente têm conteúdo.
+        var normalized = new Dictionary<string, object?>();
+        if (OptionalString("requestedBy") is { } requestedBy)
+            normalized["requestedBy"] = requestedBy;
+        if (OptionalString("reason") is { } reason)
+            normalized["reason"] = reason;
 
         normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
         return true;

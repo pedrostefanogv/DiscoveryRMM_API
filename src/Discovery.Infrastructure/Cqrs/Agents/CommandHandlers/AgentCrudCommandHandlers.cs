@@ -115,11 +115,69 @@ public sealed class UpdateAgentCommandHandler(
     }
 }
 
+/// <summary>
+/// Envio do comando de descomissionamento remoto (o agent se desinstala da
+/// máquina). Compartilhado entre a lixeira (soft delete) e a exclusão
+/// definitiva (purge).
+/// </summary>
+internal static class AgentDecommissionDispatch
+{
+    /// <summary>
+    /// Envia o comando quando o agente está online. Best-effort: uma falha de
+    /// dispatch não pode impedir a exclusão no painel — o pior caso é o agente
+    /// continuar instalado na máquina (comportamento anterior a esta feature).
+    /// </summary>
+    internal static async Task TryDispatchAsync(
+        IAgentCommandDispatcher dispatcher,
+        ILogger logger,
+        Agent agent,
+        string reason,
+        CancellationToken ct)
+    {
+        if (agent.Status != AgentStatus.Online)
+        {
+            logger.LogInformation(
+                "Agente {AgentId} não está online ({Status}) — comando de descomissionamento não enviado ({Reason}).",
+                agent.Id,
+                agent.Status,
+                reason);
+            return;
+        }
+
+        // Auditoria: quem pediu e por qual caminho (trash/purge).
+        var payload = JsonSerializer.Serialize(new { requestedBy = "console", reason });
+
+        var command = new AgentCommand
+        {
+            AgentId = agent.Id,
+            CommandType = CommandType.DecommissionAgent,
+            Payload = payload
+        };
+
+        try
+        {
+            await dispatcher.DispatchAsync(command, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A conexão NATS pode estar momentaneamente indisponível. O agente
+            // não recebe o comando, mas a lixeira continua sendo aplicada.
+            logger.LogWarning(
+                ex,
+                "Falha ao enviar o comando de descomissionamento para o agente {AgentId} ({Reason}).",
+                agent.Id,
+                reason);
+        }
+    }
+}
+
 public sealed class DeleteAgentCommandHandler(
     IAgentRepository agentRepo,
     IAgentAuthService authService,
+    IAgentCommandDispatcher dispatcher,
     IRedisService redis,
-    ISiteRepository siteRepo
+    ISiteRepository siteRepo,
+    ILogger<DeleteAgentCommandHandler> logger
 ) : IRequestHandler<DeleteAgentCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteAgentCommand cmd, CancellationToken ct)
@@ -127,6 +185,11 @@ public sealed class DeleteAgentCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.Id);
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        // O comando sai ANTES da revogação dos tokens: a conexão NATS já
+        // estabelecida não é derrubada pela revogação, e os caminhos REST
+        // (polling de comandos/resultado) continuam autenticados por um instante.
+        await AgentDecommissionDispatch.TryDispatchAsync(dispatcher, logger, agent, "trash", ct);
 
         await authService.RevokeAllTokensAsync(cmd.Id);
         await agentRepo.DeleteAsync(cmd.Id);
@@ -143,6 +206,7 @@ public sealed class DeleteAgentCommandHandler(
 public sealed class PurgeAgentCommandHandler(
     DiscoveryDbContext db,
     IAgentPurgeService purgeService,
+    IAgentCommandDispatcher dispatcher,
     IRedisService redis,
     ISiteRepository siteRepo,
     ILogger<PurgeAgentCommandHandler> logger
@@ -172,6 +236,11 @@ public sealed class PurgeAgentCommandHandler(
                 return Result<VoidResult>.Failure(Error.Conflict(
                     $"Agente vinculado a {linkedTickets} chamado(s). Confirme a exclusão definitiva para continuar."));
         }
+
+        // Exclusão definitiva também limpa a máquina quando o agente está
+        // online. Precisa vir ANTES do purge: AgentPurgeService apaga as linhas
+        // de agent_commands (o publish NATS já aconteceu, mas o registro some).
+        await AgentDecommissionDispatch.TryDispatchAsync(dispatcher, logger, agent, "purge", ct);
 
         try
         {

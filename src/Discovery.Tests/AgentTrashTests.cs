@@ -183,7 +183,7 @@ public class AgentTrashTests
         await db.SaveChangesAsync();
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopCommandDispatcher(), new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
         var result = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.False);
@@ -202,7 +202,7 @@ public class AgentTrashTests
         await db.SaveChangesAsync();
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopCommandDispatcher(), new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
 
         var withoutForce = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
         Assert.That(withoutForce.IsSuccess, Is.False);
@@ -226,11 +226,38 @@ public class AgentTrashTests
         await db.SaveChangesAsync();
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopCommandDispatcher(), new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
         var result = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
         Assert.That(purge.Calls, Is.EqualTo(1));
+    }
+
+    /// <summary>
+    /// Exclusão definitiva também manda o agente se desinstalar quando ele
+    /// ainda está online (a lixeira pode ter sido aplicada com o agente online).
+    /// </summary>
+    [Test]
+    public async Task Purge_OnlineTrashedAgent_DispatchesDecommission()
+    {
+        using var db = CreateDbContext();
+        await SeedBaseAsync(db);
+        var agent = NewAgent("EXCLUIDO-ONLINE", DateTime.UtcNow);
+        agent.Status = AgentStatus.Online;
+        db.Agents.Add(agent);
+        await db.SaveChangesAsync();
+
+        var purge = new FakePurgeService();
+        var dispatcher = new NoopCommandDispatcher();
+        var handler = new PurgeAgentCommandHandler(db, purge, dispatcher, new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
+
+        var result = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(purge.Calls, Is.EqualTo(1));
+        Assert.That(dispatcher.Dispatched, Has.Count.EqualTo(1));
+        Assert.That(dispatcher.Dispatched[0].CommandType, Is.EqualTo(CommandType.DecommissionAgent));
+        Assert.That(dispatcher.Dispatched[0].AgentId, Is.EqualTo(agent.Id));
     }
 
     [Test]
@@ -240,7 +267,7 @@ public class AgentTrashTests
         await SeedBaseAsync(db);
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopCommandDispatcher(), new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
         var result = await handler.Handle(new PurgeAgentCommand(Guid.NewGuid()), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.False);
@@ -401,6 +428,19 @@ public class AgentTrashTests
             Calls++;
             LastAgentId = agentId;
             return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>Registra os comandos despachados sem tentar entregar (purge).</summary>
+    private sealed class NoopCommandDispatcher : IAgentCommandDispatcher
+    {
+        public List<AgentCommand> Dispatched { get; } = [];
+
+        public Task<AgentCommand> DispatchAsync(AgentCommand command, CancellationToken cancellationToken = default)
+        {
+            command.Id = Guid.NewGuid();
+            Dispatched.Add(command);
+            return Task.FromResult(command);
         }
     }
 
