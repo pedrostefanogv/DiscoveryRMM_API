@@ -118,6 +118,12 @@ public class AutomationScriptRepository : IAutomationScriptRepository
         if (existing is null)
             return;
 
+        // Whitelist deliberada: só o que é copiado é persistido (GetByIdAsync usa
+        // AsNoTracking, então a entidade chega DESTACADA). ClientId NÃO é copiado
+        // de propósito — o contrato de update de script não expõe mudança de
+        // cliente. Se isso mudar, inclua o campo aqui: a omissão é silenciosa (foi
+        // assim com NotificationMode nas automation tasks).
+
         existing.Name = script.Name;
         existing.Summary = script.Summary;
         existing.ScriptType = script.ScriptType;
