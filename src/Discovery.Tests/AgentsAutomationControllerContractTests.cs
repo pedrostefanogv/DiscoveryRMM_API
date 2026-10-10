@@ -2,6 +2,7 @@ using Discovery.Api.Controllers;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Automation.Commands;
 using Discovery.Core.Cqrs.Agents.Automation.Queries;
+using Discovery.Core.Cqrs.Agents.Crud.Commands;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -11,6 +12,7 @@ using Discovery.Core.Interfaces.Auth;
 using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
 
 namespace Discovery.Tests;
@@ -161,13 +163,65 @@ public class AgentsAutomationControllerContractTests
         Assert.That(((ForceAutomationSyncCommand)mediator.LastRequest!).CorrelationId, Is.EqualTo("corr-body"));
     }
 
+    // -------------------------------------------------------------------------
+    // Descomissionamento remoto: o pedido só sai DEPOIS do soft delete, em uma
+    // transação separada (efeito irreversível não pode preceder o commit).
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public async Task Delete_AfterSuccessfulTrash_RequestsDecommissionAfterTrash()
+    {
+        var mediator = new CapturingMediator
+        {
+            Responder = _ => Result<VoidResult>.Success(VoidResult.Value)
+        };
+        var controller = BuildController(mediator, correlationId: null);
+
+        await controller.Delete(AgentId);
+
+        Assert.That(mediator.Requests, Has.Count.EqualTo(2));
+        Assert.That(mediator.Requests[0], Is.TypeOf<DeleteAgentCommand>());
+        Assert.That(mediator.Requests[1], Is.TypeOf<RequestAgentDecommissionCommand>());
+    }
+
+    [Test]
+    public async Task Delete_WhenTrashFails_DoesNotRequestDecommission()
+    {
+        var mediator = new CapturingMediator
+        {
+            Responder = _ => Result<VoidResult>.Failure(Error.NotFound("Agent not found."))
+        };
+        var controller = BuildController(mediator, correlationId: null);
+
+        var action = await controller.Delete(AgentId);
+
+        Assert.That(action, Is.InstanceOf<NotFoundObjectResult>());
+        Assert.That(mediator.Requests, Has.Count.EqualTo(1));
+        Assert.That(mediator.Requests[0], Is.TypeOf<DeleteAgentCommand>());
+    }
+
+    [Test]
+    public async Task DeletePermanent_DoesNotRequestDecommission()
+    {
+        var mediator = new CapturingMediator
+        {
+            Responder = _ => Result<VoidResult>.Success(VoidResult.Value)
+        };
+        var controller = BuildController(mediator, correlationId: null);
+
+        await controller.Delete(AgentId, force: false, permanent: true);
+
+        Assert.That(mediator.Requests, Has.Count.EqualTo(1));
+        Assert.That(mediator.Requests[0], Is.TypeOf<PurgeAgentCommand>());
+    }
+
     private static AgentsController BuildController(IMediator mediator, string? correlationId)
     {
         var httpContext = new DefaultHttpContext();
         if (correlationId is not null)
             httpContext.Request.Headers["X-Correlation-Id"] = correlationId;
 
-        return new AgentsController(mediator, new NoopNoteService(), new NoopScopeContext())
+        return new AgentsController(mediator, new NoopNoteService(), new NoopScopeContext(), NullLogger<AgentsController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext }
         };
@@ -195,11 +249,16 @@ public class AgentsAutomationControllerContractTests
     private sealed class CapturingMediator : IMediator
     {
         public object? LastRequest { get; private set; }
+
+        /// <summary>Todos os requests enviados, na ordem (para checar pós-commit).</summary>
+        public List<object> Requests { get; } = [];
+
         public Func<object, object>? Responder { get; set; }
 
         public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
         {
             LastRequest = request;
+            Requests.Add(request!);
             var response = Responder?.Invoke(request!);
             return Task.FromResult((TResponse)(response ?? default(TResponse))!);
         }
@@ -207,12 +266,14 @@ public class AgentsAutomationControllerContractTests
         public Task Send<TRequest>(TRequest request, CancellationToken cancellationToken = default) where TRequest : IRequest
         {
             LastRequest = request;
+            Requests.Add(request!);
             return Task.CompletedTask;
         }
 
         public Task<object?> Send(object request, CancellationToken cancellationToken = default)
         {
             LastRequest = request;
+            Requests.Add(request!);
             return Task.FromResult<object?>(null);
         }
 

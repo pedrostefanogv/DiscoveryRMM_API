@@ -23,6 +23,7 @@ using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Api.Controllers;
 
@@ -33,12 +34,18 @@ public class AgentsController : ControllerBase
     private readonly IMediator _mediator;
     private readonly INoteService _noteService;
     private readonly IScopeContext _scopeContext;
+    private readonly ILogger<AgentsController> _logger;
 
-    public AgentsController(IMediator mediator, INoteService noteService, IScopeContext scopeContext)
+    public AgentsController(
+        IMediator mediator,
+        INoteService noteService,
+        IScopeContext scopeContext,
+        ILogger<AgentsController> logger)
     {
         _mediator = mediator;
         _noteService = noteService;
         _scopeContext = scopeContext;
+        _logger = logger;
     }
 
     /// <summary>Username do usuário autenticado (ou fallback).</summary>
@@ -138,11 +145,33 @@ public class AgentsController : ControllerBase
     /// </summary>
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.Delete)]
-    public async Task<IActionResult> Delete(Guid id, [FromQuery] bool force = false, [FromQuery] bool permanent = false)
+    public async Task<IActionResult> Delete(Guid id, [FromQuery] bool force = false, [FromQuery] bool permanent = false, CancellationToken ct = default)
     {
         var result = permanent
-            ? await _mediator.Send(new PurgeAgentCommand(id, force))
-            : await _mediator.Send(new DeleteAgentCommand(id));
+            ? await _mediator.Send(new PurgeAgentCommand(id, force), ct)
+            : await _mediator.Send(new DeleteAgentCommand(id), ct);
+
+        // Pós-commit e best-effort: o comando de descomissionamento é um efeito
+        // IRREVERSÍVEL (o PC se desinstala) e por isso NÃO pode sair dentro da
+        // transação do soft delete — se algo falhasse depois do publish, o
+        // rollback desfaria a lixeira e o agente continuaria ativo no painel já
+        // removido da máquina. Aqui a exclusão já está commitada.
+        //
+        // A exclusão definitiva (purge) não pede de novo: ela exige que o agente
+        // já esteja na lixeira, e o pedido foi feito ao movê-lo para lá (enviar
+        // antes do purge poderia desinstalar o PC mesmo com o purge rejeitado
+        // por chamados vinculados).
+        if (!permanent && result.IsSuccess)
+        {
+            try
+            {
+                await _mediator.Send(new RequestAgentDecommissionCommand(id), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Falha ao solicitar o descomissionamento remoto do agente {AgentId}.", id);
+            }
+        }
 
         return result.Match<IActionResult>(
             success: _ => NoContent(),

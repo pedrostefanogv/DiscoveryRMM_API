@@ -174,10 +174,8 @@ internal static class AgentDecommissionDispatch
 public sealed class DeleteAgentCommandHandler(
     IAgentRepository agentRepo,
     IAgentAuthService authService,
-    IAgentCommandDispatcher dispatcher,
     IRedisService redis,
-    ISiteRepository siteRepo,
-    ILogger<DeleteAgentCommandHandler> logger
+    ISiteRepository siteRepo
 ) : IRequestHandler<DeleteAgentCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteAgentCommand cmd, CancellationToken ct)
@@ -186,14 +184,39 @@ public sealed class DeleteAgentCommandHandler(
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
 
-        // O comando sai ANTES da revogação dos tokens: a conexão NATS já
-        // estabelecida não é derrubada pela revogação, e os caminhos REST
-        // (polling de comandos/resultado) continuam autenticados por um instante.
-        await AgentDecommissionDispatch.TryDispatchAsync(dispatcher, logger, agent, "trash", ct);
-
         await authService.RevokeAllTokensAsync(cmd.Id);
         await agentRepo.DeleteAsync(cmd.Id);
         await CreateAgentCommandHandler.InvalidateCachesAsync(redis, siteRepo, agent.SiteId, null, cmd.Id);
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
+/// <summary>
+/// Efeito pós-commit do soft delete: pede ao agente que se desinstale da
+/// máquina. Fica FORA de <see cref="DeleteAgentCommand"/> de propósito — o
+/// TransactionBehavior envolve todo ICommand numa transação e faz rollback se
+/// qualquer coisa falhar depois; um publish NATS antecipado desinstalaria o PC
+/// mesmo com a exclusão desfeita.
+/// </summary>
+public sealed class RequestAgentDecommissionCommandHandler(
+    DiscoveryDbContext db,
+    IAgentCommandDispatcher dispatcher,
+    ILogger<RequestAgentDecommissionCommandHandler> logger
+) : IRequestHandler<RequestAgentDecommissionCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(RequestAgentDecommissionCommand cmd, CancellationToken ct)
+    {
+        // IgnoreQueryFilters: o agente acabou de ir para a lixeira (DeletedAt
+        // preenchido) e o status Online dele é justamente o que decide o envio.
+        var agent = await db.Agents
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .SingleOrDefaultAsync(a => a.Id == cmd.AgentId, ct);
+
+        if (agent is null)
+            return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        await AgentDecommissionDispatch.TryDispatchAsync(dispatcher, logger, agent, cmd.Reason, ct);
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }
@@ -206,7 +229,6 @@ public sealed class DeleteAgentCommandHandler(
 public sealed class PurgeAgentCommandHandler(
     DiscoveryDbContext db,
     IAgentPurgeService purgeService,
-    IAgentCommandDispatcher dispatcher,
     IRedisService redis,
     ISiteRepository siteRepo,
     ILogger<PurgeAgentCommandHandler> logger
@@ -236,11 +258,6 @@ public sealed class PurgeAgentCommandHandler(
                 return Result<VoidResult>.Failure(Error.Conflict(
                     $"Agente vinculado a {linkedTickets} chamado(s). Confirme a exclusão definitiva para continuar."));
         }
-
-        // Exclusão definitiva também limpa a máquina quando o agente está
-        // online. Precisa vir ANTES do purge: AgentPurgeService apaga as linhas
-        // de agent_commands (o publish NATS já aconteceu, mas o registro some).
-        await AgentDecommissionDispatch.TryDispatchAsync(dispatcher, logger, agent, "purge", ct);
 
         try
         {

@@ -10,6 +10,14 @@ public sealed record DeleteAgentCommand(Guid Id) : ICommand<Result<VoidResult>>;
 /// <summary>Exclusão definitiva (hard delete) de um agente que já está na lixeira.</summary>
 public sealed record PurgeAgentCommand(Guid Id, bool Force = false) : ICommand<Result<VoidResult>>;
 
+/// <summary>
+/// Pede a descomissionamento remoto do agente (ele se desinstala da máquina).
+/// É disparado pelo controller <b>depois</b> do commit do soft delete/purge:
+/// o publish NATS é um efeito irreversível e não pode preceder a transação
+/// (TransactionBehavior faz rollback de tudo se algo falhar após o publish).
+/// </summary>
+public sealed record RequestAgentDecommissionCommand(Guid AgentId, string Reason = "trash") : ICommand<Result<VoidResult>>;
+
 /// <summary>Tira o agente da lixeira (limpa <c>DeletedAt</c>).</summary>
 public sealed record RestoreAgentCommand(Guid Id) : ICommand<Result<VoidResult>>;
 
