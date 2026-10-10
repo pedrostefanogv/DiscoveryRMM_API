@@ -35,6 +35,7 @@ public class AgentAuthController : ControllerBase
     private readonly IDepartmentRepository _departmentRepo;
     private readonly IWorkflowProfileRepository _workflowProfileRepo;
     private readonly IDepartmentCustomFieldService _departmentCustomFieldService;
+    private readonly ITicketFormSchemaService _ticketFormSchemaService;
     private readonly IP2pService _p2pService;
     private readonly ILogger<AgentAuthController> _logger;
 
@@ -47,6 +48,7 @@ public class AgentAuthController : ControllerBase
         IDepartmentRepository departmentRepo,
         IWorkflowProfileRepository workflowProfileRepo,
         IDepartmentCustomFieldService departmentCustomFieldService,
+        ITicketFormSchemaService ticketFormSchemaService,
         IP2pService p2pService,
         ILogger<AgentAuthController> logger)
     {
@@ -58,6 +60,7 @@ public class AgentAuthController : ControllerBase
         _departmentRepo = departmentRepo;
         _workflowProfileRepo = workflowProfileRepo;
         _departmentCustomFieldService = departmentCustomFieldService;
+        _ticketFormSchemaService = ticketFormSchemaService;
         _p2pService = p2pService;
         _logger = logger;
     }
@@ -423,6 +426,37 @@ public class AgentAuthController : ControllerBase
             f.MinValue,
             f.MaxValue,
         }));
+    }
+
+    /// <summary>
+    /// Schema do formulário de abertura de chamado do agent para um
+    /// departamento (campos com opções: categoria e prioridade). O agent não tem
+    /// lista fixa: renderiza exatamente o que este endpoint devolve, e as
+    /// opções variam conforme os modelos e o histórico do departamento. Por isso
+    /// o agent só chama este endpoint depois que o departamento é escolhido.
+    /// </summary>
+    [HttpGet("me/tickets/departments/{departmentId:guid}/form-schema")]
+    public async Task<IActionResult> GetMyDepartmentFormSchema(Guid departmentId)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (agent, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        Guid? clientId = null;
+        if (agent!.SiteId != Guid.Empty)
+        {
+            var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+            clientId = site?.ClientId;
+        }
+
+        // Mesma regra de escopo dos campos do departamento: departamento do
+        // próprio cliente ou global. Não revela existência de terceiros.
+        var department = await _departmentRepo.GetByIdAsync(departmentId);
+        if (department is null || (department.ClientId.HasValue && department.ClientId.Value != clientId))
+            return NotFound(new { error = "Departamento não encontrado para este agente." });
+
+        var schema = await _ticketFormSchemaService.GetForDepartmentAsync(departmentId, clientId);
+        return Ok(schema);
     }
 
     [HttpPost("me/tickets/{ticketId:guid}/close")]
