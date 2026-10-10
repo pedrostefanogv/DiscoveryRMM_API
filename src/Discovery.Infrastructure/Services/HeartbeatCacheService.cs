@@ -214,12 +214,21 @@ public class HeartbeatCacheService : IHeartbeatCacheService
             var keys = await _redis.GetKeysByPrefixAsync(KeyPrefix, maxResults: 100000);
             foreach (var key in keys)
             {
+                // Respeita o cancelamento: a varredura pode envolver centenas/milhares
+                // de GETs e consumidores com orçamento curto (ex.: busca universal)
+                // precisam poder abortá-la e seguir com resultados parciais.
+                ct.ThrowIfCancellationRequested();
+
                 var json = await _redis.GetAsync(key);
                 if (string.IsNullOrWhiteSpace(json)) continue;
 
                 var entry = JsonSerializer.Deserialize<HeartbeatCacheEntry>(json, JsonOptions);
                 if (entry is not null) results.Add(entry);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Orçamento esgotado — devolve o que já foi lido.
         }
         catch (Exception ex)
         {

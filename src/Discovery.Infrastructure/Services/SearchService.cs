@@ -23,18 +23,29 @@ public class SearchService : ISearchService
     private const int SearchTimeoutMs = 5000;
     private const int MaxResultsDefault = 10;
 
+    // Cache curtíssimo do mapa "agentId -> usuário logado ao vivo". Evita varrer
+    // o keyspace de heartbeat do Redis a cada tecla digitada na busca global.
+    private const int LiveLoggedUserCacheTtlSeconds = 15;
+    private const string LiveLoggedUserCacheKey = "search:live-logged-users:v1";
+    // Orçamento próprio do cruzamento ao vivo. O timeout da busca (5s) é
+    // compartilhado por 7 grupos sequenciais; este refinamento não pode consumi-lo.
+    private const int LiveLoggedUserBudgetMs = 1500;
+
     private readonly DiscoveryDbContext _db;
     private readonly IScopeContext _scopeContext;
     private readonly IRedisService _redisService;
+    private readonly IHeartbeatCacheService _heartbeatCache;
 
     public SearchService(
         DiscoveryDbContext db,
         IScopeContext scopeContext,
-        IRedisService redisService)
+        IRedisService redisService,
+        IHeartbeatCacheService heartbeatCache)
     {
         _db = db;
         _scopeContext = scopeContext;
         _redisService = redisService;
+        _heartbeatCache = heartbeatCache;
     }
 
     public async Task<UniversalSearchResult> SearchAsync(
@@ -140,15 +151,10 @@ public class SearchService : ISearchService
         // Aplica filtro de escopo via join com sites
         if (!access.HasGlobalAccess)
         {
-            var allowedClientIds = access.AllowedClientIds.ToHashSet();
-            var allowedSiteIds = access.AllowedSiteIds.ToHashSet();
-            if (allowedClientIds.Count == 0 && allowedSiteIds.Count == 0)
+            if (access.AllowedClientIds.Count == 0 && access.AllowedSiteIds.Count == 0)
                 return null;
 
-            agents = from agent in agents
-                     join site in _db.Sites.AsNoTracking() on agent.SiteId equals site.Id
-                     where allowedClientIds.Contains(site.ClientId) || allowedSiteIds.Contains(agent.SiteId)
-                     select agent;
+            agents = ApplyAgentScope(agents, access);
         }
 
         var results = await agents
@@ -156,6 +162,58 @@ public class SearchService : ISearchService
             .Take(maxResults)
             .Select(a => new { a.Id, a.Hostname, a.DisplayName, a.SiteId, a.OperatingSystem, a.LoggedUser })
             .ToListAsync(ct);
+
+        // ── Cruzamento com o usuário logado AO VIVO (heartbeat no Redis) ────
+        // agents.logged_user guarda apenas o "último conhecido" e só é reescrito
+        // no sync de inventário (até 6h). O heartbeat sabe quem está logado
+        // AGORA — é o valor que o card do agent exibe. Sem este cruzamento a
+        // busca só acharia o agent no próximo inventário, ou nunca para um
+        // agent recém-logado com o inventário antigo já sincronizado.
+        var liveUsers = new Dictionary<Guid, string>();
+        // O cruzamento só roda quando o banco NÃO preencheu a página: o ganho é
+        // exatamente nos casos em que o "último conhecido" está vazio/desatualizado
+        // (a queixa original). Em frota grande a varredura de heartbeat tem custo,
+        // ainda que limitada pelo orçamento próprio e pelo cache curto.
+        if (results.Count < maxResults)
+        {
+            var liveMap = await GetLiveLoggedUserMapAsync(ct);
+            if (liveMap.Count > 0)
+            {
+                var foundIds = results.Select(r => r.Id).ToHashSet();
+                var liveIds = liveMap
+                    .Where(pair => !foundIds.Contains(pair.Key)
+                                   && pair.Value.Contains(query, StringComparison.OrdinalIgnoreCase))
+                    .Select(pair => pair.Key)
+                    .ToList();
+
+                if (liveIds.Count > 0)
+                {
+                    var liveAgents = _db.Agents
+                        .AsNoTracking()
+                        .Where(a => a.DeletedAt == null && liveIds.Contains(a.Id));
+                    if (!access.HasGlobalAccess)
+                        liveAgents = ApplyAgentScope(liveAgents, access);
+
+                    var liveRows = await liveAgents
+                        .OrderBy(a => a.Hostname)
+                        .Take(maxResults)
+                        .Select(a => new { a.Id, a.Hostname, a.DisplayName, a.SiteId, a.OperatingSystem, a.LoggedUser })
+                        .ToListAsync(ct);
+
+                    if (liveRows.Count > 0)
+                    {
+                        results.AddRange(liveRows);
+                        results = results.OrderBy(r => r.Hostname).Take(maxResults).ToList();
+                    }
+                }
+
+                foreach (var row in results)
+                {
+                    if (liveMap.TryGetValue(row.Id, out var liveUser) && !string.IsNullOrWhiteSpace(liveUser))
+                        liveUsers[row.Id] = liveUser;
+                }
+            }
+        }
 
         if (results.Count == 0) return null;
 
@@ -181,14 +239,19 @@ public class SearchService : ISearchService
         {
             var site = siteMap.GetValueOrDefault(r.SiteId);
             var client = site is not null ? clientMap.GetValueOrDefault(site.ClientId) : null;
+            // Prefere o usuário AO VIVO (heartbeat) ao "último conhecido" do DB,
+            // para o resultado da busca bater com o que o card do agent exibe.
+            var loggedUser = liveUsers.TryGetValue(r.Id, out var liveUser) && !string.IsNullOrWhiteSpace(liveUser)
+                ? liveUser
+                : r.LoggedUser;
             return new SearchResultItem(
                 Id: r.Id,
                 Title: r.DisplayName ?? r.Hostname,
                 Subtitle: r.OperatingSystem,
                 // Mostra o usuário logado quando a busca casou por ele.
-                Description: string.IsNullOrWhiteSpace(r.LoggedUser)
+                Description: string.IsNullOrWhiteSpace(loggedUser)
                     ? r.Hostname
-                    : $"{r.Hostname} · {r.LoggedUser}",
+                    : $"{r.Hostname} · {loggedUser}",
                 EntityType: "agent",
                 ClientId: client?.Id,
                 ClientName: client?.Name,
@@ -199,6 +262,85 @@ public class SearchService : ISearchService
         }).ToList();
 
         return new SearchResultGroup("agents", "Agentes", "monitor", items);
+    }
+
+    /// <summary>
+    /// Restringe a consulta de agentes ao escopo do usuário (Global → Client →
+    /// Site) via join com <c>sites</c>. Use somente quando
+    /// <see cref="UserScopeAccess.HasGlobalAccess"/> for falso.
+    /// </summary>
+    private IQueryable<Agent> ApplyAgentScope(IQueryable<Agent> agents, UserScopeAccess access)
+    {
+        var allowedClientIds = access.AllowedClientIds.ToHashSet();
+        var allowedSiteIds = access.AllowedSiteIds.ToHashSet();
+        return from agent in agents
+               join site in _db.Sites.AsNoTracking() on agent.SiteId equals site.Id
+               where allowedClientIds.Contains(site.ClientId) || allowedSiteIds.Contains(agent.SiteId)
+               select agent;
+    }
+
+    /// <summary>
+    /// Mapa <c>agentId → usuário logado AO VIVO</c> a partir do cache de
+    /// heartbeat (Redis). Usa um cache curto em Redis para não varrer o keyspace
+    /// de heartbeat a cada tecla digitada. Best-effort: qualquer falha de Redis
+    /// degrada para "sem usuário ao vivo", nunca quebra a busca.
+    /// </summary>
+    private async Task<Dictionary<Guid, string>> GetLiveLoggedUserMapAsync(CancellationToken ct)
+    {
+        try
+        {
+            var cached = await _redisService.GetAsync(LiveLoggedUserCacheKey);
+            if (!string.IsNullOrWhiteSpace(cached))
+            {
+                var parsed = JsonSerializer.Deserialize<Dictionary<Guid, string>>(cached, JsonOptions);
+                if (parsed is not null)
+                    return parsed;
+            }
+        }
+        catch
+        {
+            // cache indisponível — segue para a leitura direta do heartbeat
+        }
+
+        var map = new Dictionary<Guid, string>();
+        var scanCompleted = false;
+        try
+        {
+            using var liveCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            liveCts.CancelAfter(LiveLoggedUserBudgetMs);
+
+            var entries = await _heartbeatCache.GetActiveHeartbeatsAsync(liveCts.Token);
+            foreach (var entry in entries)
+            {
+                if (!string.IsNullOrWhiteSpace(entry.LoggedUser))
+                    map[entry.AgentId] = entry.LoggedUser;
+            }
+
+            scanCompleted = !liveCts.IsCancellationRequested;
+        }
+        catch
+        {
+            return map;
+        }
+
+        // Varredura parcial não é cacheada: envenenaria o cache curto com um mapa
+        // incompleto e a busca perderia agentes recém-logados por até o TTL.
+        if (!scanCompleted)
+            return map;
+
+        try
+        {
+            await _redisService.SetAsync(
+                LiveLoggedUserCacheKey,
+                JsonSerializer.Serialize(map, JsonOptions),
+                LiveLoggedUserCacheTtlSeconds);
+        }
+        catch
+        {
+            // cache best-effort
+        }
+
+        return map;
     }
 
     private async Task<SearchResultGroup?> SearchClientsAsync(

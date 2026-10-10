@@ -92,6 +92,11 @@ public class AgentRepository : IAgentRepository
         existingAgent.CommitHash = agent.CommitHash;
         existingAgent.LastIpAddress = agent.LastIpAddress;
         existingAgent.MacAddress = agent.MacAddress;
+        // LoggedUser: sem esta linha o handler de hardware/inventário calculava o
+        // usuário (envelope explícito ou inventoryRaw.loggedInUsers) mas o update
+        // o descartava — agents.logged_user ficava sempre vazio e a busca global
+        // nunca encontrava o agent pelo usuário digitado.
+        existingAgent.LoggedUser = agent.LoggedUser;
         existingAgent.LastSeenAt = agent.LastSeenAt;
         existingAgent.ZeroTouchPending = agent.ZeroTouchPending;
         existingAgent.TpmEkHash = agent.TpmEkHash;
