@@ -243,6 +243,14 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         existing.TriggerOnAgentCheckIn = task.TriggerOnAgentCheckIn;
         existing.ScheduleCron = task.ScheduleCron;
         existing.RequiresApproval = task.RequiresApproval;
+        // NotificationMode/ToastTiming TÊM de estar nesta lista: GetByIdAsync usa
+        // AsNoTracking, então a entidade que o serviço muta chega aqui DESTACADA e
+        // só o que é copiado explicitamente é persistido. Sem estas duas linhas o
+        // modo escolhido na UI era descartado em silêncio — a tarefa continuava em
+        // "Prompt PSADT" e o agente seguia exibindo o Welcome, mesmo com o PUT
+        // respondendo sucesso (só RequiresApproval mudava).
+        existing.NotificationMode = task.NotificationMode;
+        existing.ToastTiming = task.ToastTiming;
         existing.AllowDefer = task.AllowDefer;
         existing.CloseProcessesJson = task.CloseProcessesJson;
         existing.UserPromptTimeoutSeconds = task.UserPromptTimeoutSeconds;
