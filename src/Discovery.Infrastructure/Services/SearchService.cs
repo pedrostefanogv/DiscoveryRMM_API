@@ -257,7 +257,10 @@ public class SearchService : ISearchService
                 ClientName: client?.Name,
                 SiteId: r.SiteId,
                 SiteName: site?.Name,
-                Url: $"/agents/{r.Id}"
+                Url: $"/agents/{r.Id}",
+                // Campo dedicado: a listagem da busca mostra o usuário logado ao
+                // lado de cliente · site (mesmo valor do card do agent).
+                LoggedUser: string.IsNullOrWhiteSpace(loggedUser) ? null : loggedUser
             );
         }).ToList();
 

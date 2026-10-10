@@ -31,4 +31,5 @@ public record SearchResultItem(
     string? ClientName,
     Guid? SiteId,
     string? SiteName,
-    string? Url);            // URL relativa para navegação no frontend
+    string? Url,             // URL relativa para navegação no frontend
+    string? LoggedUser = null); // usuário logado na máquina — apenas resultados de agente
