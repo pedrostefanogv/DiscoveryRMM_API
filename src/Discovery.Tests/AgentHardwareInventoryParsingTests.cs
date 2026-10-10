@@ -91,6 +91,53 @@ public class AgentHardwareInventoryParsingTests
         Assert.That(components.OpenSockets.Count, Is.EqualTo(HardwareInventoryParser.MaxOpenSockets));
     }
 
+    [Test]
+    public void TryExtractPrimaryLoggedUser_PrefersActiveSession()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            loggedInUsers = new object[]
+            {
+                new { user = @"CORP\desconectado", type = "disconnected", tty = "rdp-tcp#3" },
+                new { user = @"CORP\pedro", type = "active", tty = "console" },
+            }
+        });
+
+        var user = HardwareInventoryParser.TryExtractPrimaryLoggedUser(json);
+
+        Assert.That(user, Is.EqualTo(@"CORP\pedro"));
+    }
+
+    [Test]
+    public void TryExtractPrimaryLoggedUser_FallsBackToFirstUser()
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            loggedInUsers = new object[]
+            {
+                new { user = " CORP\\ana ", type = "console" },
+                new { user = @"CORP\suporte", type = "rdp" },
+            }
+        });
+
+        var user = HardwareInventoryParser.TryExtractPrimaryLoggedUser(json);
+
+        Assert.That(user, Is.EqualTo("CORP\\ana"));
+    }
+
+    [Test]
+    public void TryExtractPrimaryLoggedUser_ReturnsNullWithoutUsers()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(HardwareInventoryParser.TryExtractPrimaryLoggedUser(null), Is.Null);
+            Assert.That(HardwareInventoryParser.TryExtractPrimaryLoggedUser(""), Is.Null);
+            Assert.That(HardwareInventoryParser.TryExtractPrimaryLoggedUser("not-json"), Is.Null);
+            Assert.That(HardwareInventoryParser.TryExtractPrimaryLoggedUser("""{"loggedInUsers":[]}"""), Is.Null);
+            Assert.That(HardwareInventoryParser.TryExtractPrimaryLoggedUser("""{"loggedInUsers":[{"user":""}]}"""), Is.Null);
+        });
+    }
+
     private static AgentHardwareComponents? InvokeTryBuildComponents(string inventoryRaw, Guid agentId, DateTime collectedAt)
     {
         // Parser movido para Discovery.Infrastructure (usado pelo handler de ingestão).

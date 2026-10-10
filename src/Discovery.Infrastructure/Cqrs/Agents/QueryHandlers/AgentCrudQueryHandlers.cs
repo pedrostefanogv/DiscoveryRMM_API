@@ -31,6 +31,10 @@ public sealed class GetAgentByIdQueryHandler(
 
         var dto = AgentQueryHelper.MapToDto(agent);
 
+        // Preferência do usuário logado: valor ao vivo do heartbeat (Redis) →
+        // último persistido. O MapToDto de 1 argumento devolve só o persistido.
+        dto = AgentQueryHelper.WithLiveLoggedUser(dto, agent, heartbeat);
+
         // Popula o ClientId do agente (o site guarda a associação ao cliente).
         // Necessário para o frontend resolver a cadeia Cliente → Site → Hostname
         // na interface de acesso remoto.
@@ -57,9 +61,10 @@ public sealed class GetAgentsBySiteQueryHandler(
         var dtos = new List<AgentDto>(agents.Count);
         foreach (var agent in agents)
         {
-            AgentQueryHelper.ApplyRealtimeHeartbeat(agent, heartbeatByAgent.GetValueOrDefault(agent.Id));
+            var heartbeat = heartbeatByAgent.GetValueOrDefault(agent.Id);
+            AgentQueryHelper.ApplyRealtimeHeartbeat(agent, heartbeat);
             AgentQueryHelper.ApplyEffectiveStatus(agent, grace);
-            dtos.Add(AgentQueryHelper.MapToDto(agent));
+            dtos.Add(AgentQueryHelper.WithLiveLoggedUser(AgentQueryHelper.MapToDto(agent), agent, heartbeat));
         }
         return Result<IReadOnlyList<AgentDto>>.Success(dtos);
     }
@@ -80,9 +85,10 @@ public sealed class GetAgentsByClientQueryHandler(
         var dtos = new List<AgentDto>(agents.Count);
         foreach (var agent in agents)
         {
-            AgentQueryHelper.ApplyRealtimeHeartbeat(agent, heartbeatByAgent.GetValueOrDefault(agent.Id));
+            var heartbeat = heartbeatByAgent.GetValueOrDefault(agent.Id);
+            AgentQueryHelper.ApplyRealtimeHeartbeat(agent, heartbeat);
             AgentQueryHelper.ApplyEffectiveStatus(agent, graceBySite.GetValueOrDefault(agent.SiteId, 60));
-            dtos.Add(AgentQueryHelper.MapToDto(agent));
+            dtos.Add(AgentQueryHelper.WithLiveLoggedUser(AgentQueryHelper.MapToDto(agent), agent, heartbeat));
         }
         return Result<IReadOnlyList<AgentDto>>.Success(dtos);
     }
@@ -134,6 +140,7 @@ public sealed class GetDeletedAgentsQueryHandler(
                 agent.Hostname.ToLower().Contains(term) ||
                 (agent.DisplayName != null && agent.DisplayName.ToLower().Contains(term)) ||
                 (agent.LastIpAddress != null && agent.LastIpAddress.ToLower().Contains(term)) ||
+                (agent.LoggedUser != null && agent.LoggedUser.ToLower().Contains(term)) ||
                 (agent.OperatingSystem != null && agent.OperatingSystem.ToLower().Contains(term)) ||
                 // Nome do site/cliente: a UI promete buscar por "cliente".
                 db.Sites.Any(site => site.Id == agent.SiteId &&

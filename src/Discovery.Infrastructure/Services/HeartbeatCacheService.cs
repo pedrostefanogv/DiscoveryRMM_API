@@ -135,7 +135,10 @@ public class HeartbeatCacheService : IHeartbeatCacheService
                 Addrs = heartbeat.Addrs,
                 Port = heartbeat.Port,
                 // ── Separção serviço × UI ──
-                UiOnline = heartbeat.UiOnline
+                UiOnline = heartbeat.UiOnline,
+                // ── Usuário logado (sessão interativa) ──
+                LoggedUser = heartbeat.LoggedUser,
+                LoggedUserSince = heartbeat.LoggedUserSince
             };
 
             var json = JsonSerializer.Serialize(entry, JsonOptions);

@@ -110,6 +110,9 @@ public partial class DiscoveryDbContext
             entity.Property(agent => agent.MacAddress)
                 .HasColumnName("mac_address")
                 .HasMaxLength(17);
+            entity.Property(agent => agent.LoggedUser)
+                .HasColumnName("logged_user")
+                .HasMaxLength(256);
             entity.Property(agent => agent.LastSeenAt)
                 .HasColumnName("last_seen_at")
                 .HasColumnType("timestamptz");

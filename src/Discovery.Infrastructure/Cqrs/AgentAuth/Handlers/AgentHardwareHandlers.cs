@@ -105,6 +105,20 @@ public sealed class ReportAgentHardwareCommandHandler(
         if (!string.IsNullOrWhiteSpace(cmd.MacAddress))
             agent.MacAddress = cmd.MacAddress;
 
+        // Usuário logado no Windows (último valor conhecido). Preferência:
+        // 1) campo explícito do envelope (mesmo valor do heartbeat);
+        // 2) parse do inventoryRaw (agentes antigos, que já enviam loggedInUsers).
+        // O valor ao vivo chega pelo heartbeat; persistir aqui mantém
+        // display/busca para agentes offline. Nunca sobrescreve com vazio
+        // (sync parcial de portas/tarefas não apaga).
+        var reportedLoggedUser = !string.IsNullOrWhiteSpace(cmd.LoggedUser)
+            ? cmd.LoggedUser.Trim()
+            : HardwareInventoryParser.TryExtractPrimaryLoggedUser(cmd.InventoryRaw?.GetRawText());
+        if (reportedLoggedUser is { Length: > 256 })
+            reportedLoggedUser = reportedLoggedUser[..256];
+        if (!string.IsNullOrWhiteSpace(reportedLoggedUser) && agent.LoggedUser != reportedLoggedUser)
+            agent.LoggedUser = reportedLoggedUser;
+
         // Fingerprint de hardware (Recuperação de Dispositivos): TPM EK + SMBIOS UUID.
         // Persistido no agent para permitir recuperação futura. Só atualiza se mudou.
         if (cmd.Hardware is JsonElement { ValueKind: JsonValueKind.Object } hwFp)

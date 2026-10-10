@@ -35,5 +35,14 @@ public record AgentHeartbeat(
     // ── NOVOS: separação serviço × UI (PLANO_SEPARACAO_SERVICO_UI.md) ──
     // Enviado apenas pelo serviço (modo SYSTEM): true quando há UI companion
     // conectada via IPC, false quando não há. Absente em agentes antigos/standalone.
-    bool? UiOnline = null
+    bool? UiOnline = null,
+
+    // Usuário da sessão interativa (console) do Windows, reportado a cada
+    // heartbeat. Vazio ("") em agent novo sem sessão interativa; null em agentes
+    // antigos (campo ausente) — a distinção permite mostrar "—" em vez de cair
+    // para o último usuário conhecido.
+    string? LoggedUser = null,
+
+    // Início da sessão interativa atual (UTC). Null quando desconhecido.
+    DateTime? LoggedUserSince = null
 );

@@ -16,5 +16,8 @@ public sealed record ReportAgentHardwareCommand(
     string? Status, string? OperatingSystem, string? OsVersion, string? AgentVersion, string? CommitHash,
     string? LastIpAddress, string? MacAddress,
     object? Hardware, object? Components, JsonElement? InventoryRaw,
-    string? InventorySchemaVersion, DateTime? InventoryCollectedAt, int? MachineScore
+    string? InventorySchemaVersion, DateTime? InventoryCollectedAt, int? MachineScore,
+    // Usuário logado no envelope de inventário (mesmo valor do heartbeat).
+    // Ausente em agentes antigos — nesse caso o servidor lê o inventoryRaw.
+    string? LoggedUser = null
 ) : ICommand<Result<VoidResult>>;

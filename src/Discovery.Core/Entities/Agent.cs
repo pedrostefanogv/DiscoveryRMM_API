@@ -16,6 +16,12 @@ public class Agent
     public string? CommitHash { get; set; }
     public string? LastIpAddress { get; set; }
     public string? MacAddress { get; set; }
+    /// <summary>
+    /// Último usuário logado no Windows reportado pelo agent (sessão de console).
+    /// Valor ao vivo chega pelo heartbeat; aqui fica o "último conhecido" para
+    /// listagem/busca mesmo com o agent offline.
+    /// </summary>
+    public string? LoggedUser { get; set; }
     public DateTime? LastSeenAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

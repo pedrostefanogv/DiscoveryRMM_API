@@ -12,7 +12,7 @@ public record SendCommandRequest(CommandType CommandType, string Payload);
 public record StartRemoteDebugRequest(string? LogLevel = "info", int? TtlMinutes = 20, string? PreferredTransport = null);
 public record SetRemoteDebugLevelRequest(string? LogLevel);
 public record RemoteDebugStartResponse(Guid SessionId, Guid CommandId, Guid AgentId, string LogLevel, DateTime StartedAtUtc, DateTime ExpiresAtUtc, string PreferredTransport, string NatsSubject);
-public record HardwareReportRequest(string? Hostname, string? DisplayName, AgentStatus? Status, string? OperatingSystem, string? OsVersion, string? AgentVersion, string? CommitHash, string? LastIpAddress, string? MacAddress, AgentHardwareInfo? Hardware, HardwareComponentsPayload? Components, JsonElement? InventoryRaw, string? InventorySchemaVersion, DateTime? InventoryCollectedAt, int? MachineScore);
+public record HardwareReportRequest(string? Hostname, string? DisplayName, AgentStatus? Status, string? OperatingSystem, string? OsVersion, string? AgentVersion, string? CommitHash, string? LastIpAddress, string? MacAddress, AgentHardwareInfo? Hardware, HardwareComponentsPayload? Components, JsonElement? InventoryRaw, string? InventorySchemaVersion, DateTime? InventoryCollectedAt, int? MachineScore, string? LoggedUser = null);
 public record HardwareComponentsPayload(List<DiskInfo>? Disks, List<NetworkAdapterInfo>? NetworkAdapters, List<MemoryModuleInfo>? MemoryModules, List<PrinterInfo>? Printers, List<ListeningPortInfo>? ListeningPorts, List<OpenSocketInfo>? OpenSockets);
 public record CreateTokenRequest(string? Description);
 public record ForceAutomationSyncRequest(bool Policies = true, bool Inventory = false, bool Software = false, bool AppStore = false);

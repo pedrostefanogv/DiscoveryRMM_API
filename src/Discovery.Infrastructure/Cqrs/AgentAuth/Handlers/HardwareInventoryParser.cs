@@ -46,6 +46,47 @@ internal static class HardwareInventoryParser
             : result;
     }
 
+    /// <summary>
+    /// Extrai o usuário logado primário do inventário cru
+    /// (<c>inventoryRaw.loggedInUsers[]</c>), usado como "último usuário
+    /// conhecido" do agent. Prefere a sessão marcada como "active"; na ausência
+    /// usa o primeiro usuário. Retorna null quando não há usuários ou o payload
+    /// é inválido. O valor ao vivo chega separadamente pelo heartbeat.
+    /// </summary>
+    public static string? TryExtractPrimaryLoggedUser(string? inventoryRaw)
+    {
+        if (string.IsNullOrWhiteSpace(inventoryRaw))
+            return null;
+
+        if (!TryParseInventoryRoot(inventoryRaw, out var root))
+            return null;
+
+        if (!ParseJson.TryGetArrayProperty(root, out var users, "loggedInUsers", "logged_in_users"))
+            return null;
+
+        string? firstUser = null;
+        foreach (var item in users.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var user = ParseJson.GetString(item, "user")?.Trim();
+            if (string.IsNullOrWhiteSpace(user))
+                continue;
+
+            if (user.Length > 256)
+                user = user[..256];
+
+            var type = ParseJson.GetString(item, "type")?.Trim();
+            if (string.Equals(type, "active", StringComparison.OrdinalIgnoreCase))
+                return user;
+
+            firstUser ??= user;
+        }
+
+        return firstUser;
+    }
+
     private static bool TryParseInventoryRoot(string inventoryRaw, out JsonElement root)
     {
         root = default;

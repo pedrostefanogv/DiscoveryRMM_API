@@ -83,4 +83,10 @@ public class HeartbeatCacheEntry
 
     // ── NOVOS: separação serviço × UI — UI companion conectada ao serviço via IPC ──
     public bool? UiOnline { get; init; }
+
+    // Usuário da sessão interativa (console) do Windows reportado no heartbeat.
+    public string? LoggedUser { get; init; }
+
+    // Início da sessão interativa atual (UTC), quando reportado.
+    public DateTime? LoggedUserSince { get; init; }
 }

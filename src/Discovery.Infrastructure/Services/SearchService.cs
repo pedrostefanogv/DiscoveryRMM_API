@@ -127,13 +127,15 @@ public class SearchService : ISearchService
     private async Task<SearchResultGroup?> SearchAgentsAsync(
         string query, UserScopeAccess access, int maxResults, CancellationToken ct)
     {
+        var likePattern = LikePattern(query);
         var agents = _db.Agents
             .AsNoTracking()
             .Where(a => a.DeletedAt == null)
-            .Where(a => EF.Functions.ILike(a.Hostname, $"%{query}%")
-                     || EF.Functions.ILike(a.DisplayName ?? "", $"%{query}%")
-                     || EF.Functions.ILike(a.OperatingSystem ?? "", $"%{query}%")
-                     || EF.Functions.ILike(a.LastIpAddress ?? "", $"%{query}%"));
+            .Where(a => EF.Functions.ILike(a.Hostname, likePattern)
+                     || EF.Functions.ILike(a.DisplayName ?? "", likePattern)
+                     || EF.Functions.ILike(a.OperatingSystem ?? "", likePattern)
+                     || EF.Functions.ILike(a.LastIpAddress ?? "", likePattern)
+                     || EF.Functions.ILike(a.LoggedUser ?? "", likePattern));
 
         // Aplica filtro de escopo via join com sites
         if (!access.HasGlobalAccess)
@@ -152,7 +154,7 @@ public class SearchService : ISearchService
         var results = await agents
             .OrderBy(a => a.Hostname)
             .Take(maxResults)
-            .Select(a => new { a.Id, a.Hostname, a.DisplayName, a.SiteId, a.OperatingSystem })
+            .Select(a => new { a.Id, a.Hostname, a.DisplayName, a.SiteId, a.OperatingSystem, a.LoggedUser })
             .ToListAsync(ct);
 
         if (results.Count == 0) return null;
@@ -183,7 +185,10 @@ public class SearchService : ISearchService
                 Id: r.Id,
                 Title: r.DisplayName ?? r.Hostname,
                 Subtitle: r.OperatingSystem,
-                Description: r.Hostname,
+                // Mostra o usuário logado quando a busca casou por ele.
+                Description: string.IsNullOrWhiteSpace(r.LoggedUser)
+                    ? r.Hostname
+                    : $"{r.Hostname} · {r.LoggedUser}",
                 EntityType: "agent",
                 ClientId: client?.Id,
                 ClientName: client?.Name,
@@ -199,9 +204,10 @@ public class SearchService : ISearchService
     private async Task<SearchResultGroup?> SearchClientsAsync(
         string query, UserScopeAccess access, int maxResults, CancellationToken ct)
     {
+        var likePattern = LikePattern(query);
         var clients = _db.Clients
             .AsNoTracking()
-            .Where(c => EF.Functions.ILike(c.Name, $"%{query}%"))
+            .Where(c => EF.Functions.ILike(c.Name, likePattern))
             .Where(c => c.IsActive);
 
         if (!access.HasGlobalAccess && access.AllowedClientIds.Count > 0)
@@ -243,9 +249,10 @@ public class SearchService : ISearchService
     private async Task<SearchResultGroup?> SearchSitesAsync(
         string query, UserScopeAccess clientAccess, UserScopeAccess siteAccess, int maxResults, CancellationToken ct)
     {
+        var likePattern = LikePattern(query);
         var sites = _db.Sites
             .AsNoTracking()
-            .Where(s => EF.Functions.ILike(s.Name, $"%{query}%"))
+            .Where(s => EF.Functions.ILike(s.Name, likePattern))
             .Where(s => s.IsActive);
 
         // Filtro por escopo: acesso a Client ou Site
@@ -360,10 +367,11 @@ public class SearchService : ISearchService
         string query, UserScopeAccess access, int maxResults, CancellationToken ct)
     {
         // Busca global primeiro no catálogo, depois filtra por escopo via agent → site → client
+        var likePattern = LikePattern(query);
         var catalogMatches = await _db.SoftwareCatalogs
             .AsNoTracking()
-            .Where(s => EF.Functions.ILike(s.Name, $"%{query}%")
-                     || EF.Functions.ILike(s.Publisher ?? "", $"%{query}%"))
+            .Where(s => EF.Functions.ILike(s.Name, likePattern)
+                     || EF.Functions.ILike(s.Publisher ?? "", likePattern))
             .Select(s => new { s.Id, s.Name, s.Publisher })
             .Take(maxResults * 3) // Busca mais para filtrar por escopo depois
             .ToListAsync(ct);
@@ -503,13 +511,14 @@ public class SearchService : ISearchService
         if (!HasAnyAccess(access))
             return null;
 
+        var likePattern = LikePattern(query);
         var templates = _db.ReportTemplates
             .AsNoTracking()
             .Where(template => template.IsActive)
             .Where(template =>
-                EF.Functions.ILike(template.Name, $"%{query}%") ||
-                EF.Functions.ILike(template.Description ?? "", $"%{query}%") ||
-                EF.Functions.ILike(template.Instructions ?? "", $"%{query}%"));
+                EF.Functions.ILike(template.Name, likePattern) ||
+                EF.Functions.ILike(template.Description ?? "", likePattern) ||
+                EF.Functions.ILike(template.Instructions ?? "", likePattern));
 
         if (!access.HasGlobalAccess)
         {
@@ -701,6 +710,13 @@ public class SearchService : ISearchService
         new("Campos Personalizados", "Configurações", "Campos customizáveis.", "/settings/custom-fields", "campos personalizados custom fields", [ResourceType.ServerConfig]),
         new("Branding", "Configurações", "Identidade visual da plataforma.", "/settings/branding", "branding tema marca", [ResourceType.ServerConfig])
     ];
+
+    /// <summary>
+    /// Escapa os curingas do LIKE/ILIKE (% _ \) para que o texto digitado seja
+    /// tratado como literal. O PostgreSQL usa '\' como escape padrão.
+    /// </summary>
+    private static string LikePattern(string value)
+        => $"%{value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_")}%";
 
     private static UniversalSearchResult EmptyResult()
         => new([], 0, DateTime.UtcNow);

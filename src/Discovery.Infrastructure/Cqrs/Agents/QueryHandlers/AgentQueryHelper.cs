@@ -28,7 +28,8 @@ internal static class AgentQueryHelper
         a.ZeroTouchPending,
         a.CreatedAt,
         a.UpdatedAt,
-        null);
+        null,
+        LoggedUser: a.LoggedUser);
 
     internal static AgentDto MapToDto(Agent a, HeartbeatCacheEntry? hb)
     {
@@ -41,7 +42,7 @@ internal static class AgentQueryHelper
         var version = AgentVersionNormalizer.PickVersion(hb?.AgentVersion, a.AgentVersion);
         var commitHash = AgentVersionNormalizer.NormalizeCommit(a.CommitHash);
 
-        return new AgentDto(
+        var dto = new AgentDto(
             a.Id,
             hb?.Hostname ?? a.Hostname,
             a.DisplayName,
@@ -67,7 +68,21 @@ internal static class AgentQueryHelper
                 hb.UiOnline,
                 hb.IpAddress, hb.Hostname, version, commitHash,
                 hb.LastHeartbeatAt, hb.LastHeartbeatAt));
+
+        return WithLiveLoggedUser(dto, a, hb);
     }
+
+    /// <summary>
+    /// Precedência do usuário logado: heartbeat ao vivo (Redis) → último
+    /// persistido. Vazio ("") é valor válido do agent novo SEM sessão e não pode
+    /// cair para o persistido; null significa "agent não reporta o campo".
+    /// </summary>
+    internal static AgentDto WithLiveLoggedUser(AgentDto dto, Agent a, HeartbeatCacheEntry? heartbeat)
+        => dto with
+        {
+            LoggedUser = heartbeat?.LoggedUser ?? a.LoggedUser,
+            LoggedUserSince = heartbeat?.LoggedUserSince
+        };
 
     internal static void ApplyRealtimeHeartbeat(Agent agent, HeartbeatCacheEntry? heartbeat)
     {

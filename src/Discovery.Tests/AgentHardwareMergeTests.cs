@@ -280,4 +280,82 @@ public class AgentHardwareMergeTests
 
         Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
     }
+
+    /// <summary>
+    /// inventoryRaw.loggedInUsers -> agents.logged_user (ultimo usuario conhecido).
+    /// Prefere a sessao ativa e nunca apaga o valor com um sync parcial.
+    /// </summary>
+    [Test]
+    public async Task InventoryRaw_PersistsPrimaryLoggedUser_WithoutOverwritingOnPartialSync()
+    {
+        var agent = new Agent { Id = AgentId, Hostname = "HOST" };
+        var hardwareRepo = new CapturingHardwareRepository(new AgentHardwareComponents());
+        var handler = new ReportAgentHardwareCommandHandler(new FakeAgentRepository(agent), hardwareRepo);
+
+        var fullJson = JsonSerializer.Serialize(new
+        {
+            loggedInUsers = new object[]
+            {
+                new { user = @"CORP\desconectado", type = "disconnected" },
+                new { user = @"CORP\pedro", type = "active" },
+            }
+        });
+
+        var full = BuildCommand(new
+        {
+            agentId = AgentId,
+            hostname = "HOST",
+            status = "Online",
+            inventoryCollectedAt = "2026-09-22T19:00:00Z",
+            inventoryRaw = fullJson,
+        });
+
+        await handler.Handle(full, CancellationToken.None);
+        Assert.That(agent.LoggedUser, Is.EqualTo(@"CORP\pedro"));
+
+        // Sync parcial (sem inventoryRaw/loggedInUsers) nao pode apagar o valor.
+        var partial = BuildCommand(new
+        {
+            agentId = AgentId,
+            hostname = "HOST",
+            status = "Online",
+            components = new { openSockets = Array.Empty<object>() },
+        });
+
+        await handler.Handle(partial, CancellationToken.None);
+        Assert.That(agent.LoggedUser, Is.EqualTo(@"CORP\pedro"));
+    }
+
+    /// <summary>
+    /// Campo explícito do envelope (loggedUser) tem prioridade sobre o parse do
+    /// inventoryRaw — mantém o persistido igual ao que o heartbeat reporta ao
+    /// vivo, sem depender de heurística do parser.
+    /// </summary>
+    [Test]
+    public async Task ExplicitLoggedUser_TakesPrecedenceOverInventoryRaw()
+    {
+        var agent = new Agent { Id = AgentId, Hostname = "HOST" };
+        var hardwareRepo = new CapturingHardwareRepository(new AgentHardwareComponents());
+        var handler = new ReportAgentHardwareCommandHandler(new FakeAgentRepository(agent), hardwareRepo);
+
+        var inventoryJson = JsonSerializer.Serialize(new
+        {
+            loggedInUsers = new object[]
+            {
+                new { user = @"CORP\doInventario", type = "active" },
+            }
+        });
+
+        var cmd = BuildCommand(new
+        {
+            agentId = AgentId,
+            hostname = "HOST",
+            status = "Online",
+            inventoryRaw = inventoryJson,
+            loggedUser = @"CORP\doEnvelope",
+        });
+
+        await handler.Handle(cmd, CancellationToken.None);
+        Assert.That(agent.LoggedUser, Is.EqualTo(@"CORP\doEnvelope"));
+    }
 }

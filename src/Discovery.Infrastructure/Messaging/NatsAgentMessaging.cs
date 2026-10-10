@@ -380,7 +380,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 heartbeat.P2pPeers,
                                 heartbeat.UptimeSeconds,
                                 heartbeat.ProcessCount,
-                                heartbeat.UiOnline
+                                heartbeat.UiOnline,
+                                heartbeat.LoggedUser,
+                                heartbeat.LoggedUserSince
                             };
 
                             var dashboardMessage = DashboardEventMessage.Create(

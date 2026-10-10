@@ -40,7 +40,11 @@ public sealed record AgentDto(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     HeartbeatMetricsDto? HeartbeatMetrics = null,
-    DateTime? DeletedAt = null
+    DateTime? DeletedAt = null,
+    /// <summary>Usuário logado no Windows (ao vivo pelo heartbeat; senão o último persistido).</summary>
+    string? LoggedUser = null,
+    /// <summary>Início da sessão interativa atual (só quando há heartbeat ao vivo).</summary>
+    DateTime? LoggedUserSince = null
 );
 
 /// <summary>Página de agentes na lixeira (soft-deleted), com o clientId já resolvido.</summary>
