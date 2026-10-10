@@ -68,7 +68,7 @@ public class TicketWorkflowServiceTests
     }
 
     [Test]
-    public void TransitionAsync_ShouldThrow_WhenTicketNotFound()
+    public async Task TransitionAsync_ShouldThrow_WhenTicketNotFound()
     {
         var repo = new FakeTicketRepositorySingle(null);
         var workflowRepo = new FakeWorkflowRepositorySimple(OldStateId, NewStateId, true);
@@ -77,11 +77,11 @@ public class TicketWorkflowServiceTests
             new FakeTicketAlertRuleRepository(), new FakeAlertDispatchService(),
             new FakeNotificationService(), NullLogger<TicketWorkflowService>.Instance);
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => svc.TransitionAsync(Guid.NewGuid(), NewStateId, null));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.TransitionAsync(Guid.NewGuid(), NewStateId, null));
     }
 
     [Test]
-    public void TransitionAsync_ShouldThrow_WhenTransitionIsInvalid()
+    public async Task TransitionAsync_ShouldThrow_WhenTransitionIsInvalid()
     {
         var ticket = CreateTicket();
         var repo = new FakeTicketRepositorySingle(ticket);
@@ -94,7 +94,7 @@ public class TicketWorkflowServiceTests
             new FakeTicketAlertRuleRepository(), new FakeAlertDispatchService(),
             new FakeNotificationService(), NullLogger<TicketWorkflowService>.Instance);
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => svc.TransitionAsync(ticket.Id, NewStateId, null));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.TransitionAsync(ticket.Id, NewStateId, null));
     }
 
     [Test]
@@ -143,7 +143,7 @@ public class TicketWorkflowServiceTests
     }
 
     [Test]
-    public void TransitionAsync_ShouldThrow_WhenTargetStateDoesNotExist()
+    public async Task TransitionAsync_ShouldThrow_WhenTargetStateDoesNotExist()
     {
         var ticket = CreateTicket();
         var repo = new FakeTicketRepositorySingle(ticket);
@@ -155,7 +155,7 @@ public class TicketWorkflowServiceTests
             new FakeTicketAlertRuleRepository(), new FakeAlertDispatchService(),
             new FakeNotificationService(), NullLogger<TicketWorkflowService>.Instance);
 
-        Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<InvalidOperationException>(
             () => svc.TransitionAsync(ticket.Id, unknownStateId, null));
     }
 

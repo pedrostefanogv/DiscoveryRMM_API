@@ -47,7 +47,7 @@ public class AgentLabelRuleConcurrencyTests
         var first = new AgentLabelRule { Id = ruleId, Name = "Edit A", Label = "A", IsEnabled = true, ApplyMode = AgentLabelApplyMode.ApplyOnly, ExpressionJson = "{}", UpdatedBy = "userA" };
         var second = new AgentLabelRule { Id = ruleId, Name = "Edit B", Label = "B", IsEnabled = false, ApplyMode = AgentLabelApplyMode.ApplyAndRemove, ExpressionJson = "{}", UpdatedBy = "userB" };
 
-        Assert.DoesNotThrowAsync(async () =>
+        await Assert.DoesNotThrowAsync(async () =>
         {
             await repo.UpdateAsync(first);
             await repo.UpdateAsync(second);
@@ -71,7 +71,7 @@ public class AgentLabelRuleConcurrencyTests
 
         var missing = new AgentLabelRule { Id = Guid.NewGuid(), Name = "x", Label = "L", ExpressionJson = "{}" };
 
-        Assert.DoesNotThrowAsync(() => repo.UpdateAsync(missing));
+        await Assert.DoesNotThrowAsync(() => repo.UpdateAsync(missing));
     }
 
     private sealed class RuleTestDbContext(DbContextOptions<DiscoveryDbContext> options) : DiscoveryDbContext(options)

@@ -81,7 +81,7 @@ public class TicketCommandServiceDepartmentTransferTests
     }
 
     [Test]
-    public void UpdateTicketAsync_ShouldThrow_WhenTargetDepartmentBelongsToAnotherClient()
+    public async Task UpdateTicketAsync_ShouldThrow_WhenTargetDepartmentBelongsToAnotherClient()
     {
         var ticket = CreateTicket(DepartmentA, ProfileA);
         var repo = new FakeTicketRepository(ticket);
@@ -92,14 +92,14 @@ public class TicketCommandServiceDepartmentTransferTests
 
         var svc = CreateService(repo, activityLog, profiles, sla, departments);
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => svc.UpdateTicketAsync(
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.UpdateTicketAsync(
             ticket.Id, null, null, null,
             departmentId: DepartmentB, workflowProfileId: null,
             assignedToUserId: ticket.AssignedToUserId, category: null));
     }
 
     [Test]
-    public void UpdateTicketAsync_ShouldThrow_WhenTargetDepartmentIsInactive()
+    public async Task UpdateTicketAsync_ShouldThrow_WhenTargetDepartmentIsInactive()
     {
         var ticket = CreateTicket(DepartmentA, ProfileA);
         var repo = new FakeTicketRepository(ticket);
@@ -108,7 +108,7 @@ public class TicketCommandServiceDepartmentTransferTests
 
         var svc = CreateService(repo, new FakeActivityLogService(), profiles, new FakeSlaService(), departments);
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => svc.UpdateTicketAsync(
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.UpdateTicketAsync(
             ticket.Id, null, null, null,
             departmentId: DepartmentB, workflowProfileId: null,
             assignedToUserId: ticket.AssignedToUserId, category: null));

@@ -203,7 +203,7 @@ public class AgentHomeTabTests
 
         var service = BuildService(db);
 
-        Assert.ThrowsAsync<ArgumentException>(() => service.UpdateClientAsync(
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateClientAsync(
             clientId,
             new ClientConfiguration { ClientId = clientId, AgentHomeTab = "aba-inexistente" }));
 
@@ -218,7 +218,7 @@ public class AgentHomeTabTests
         var clientId = Guid.NewGuid();
         var service = BuildService(db);
 
-        Assert.ThrowsAsync<ArgumentException>(() => service.CreateClientConfigAsync(
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateClientConfigAsync(
             clientId,
             new ClientConfiguration { ClientId = clientId, AgentHomeTab = "aba-inexistente" }));
     }
@@ -239,7 +239,7 @@ public class AgentHomeTabTests
 
         var service = BuildService(db);
 
-        Assert.ThrowsAsync<ArgumentException>(() => service.UpdateSiteAsync(
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateSiteAsync(
             siteId,
             new SiteConfiguration { SiteId = siteId, ClientId = clientId, AgentHomeTab = "aba-inexistente" }));
     }

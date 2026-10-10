@@ -39,7 +39,7 @@ public class WebPushDispatchQueueTests
             new FakeServiceProvider(),
             NullLogger<WebPushDispatchBackgroundService>.Instance);
 
-        Assert.DoesNotThrowAsync(async () =>
+        await Assert.DoesNotThrowAsync(async () =>
             await service.EnqueueAsync(Guid.Empty, new WebPushMessage("titulo", "corpo")));
     }
 

@@ -199,7 +199,7 @@ public class McpToolPolicyGovernanceTests
         var governance = new McpToolGovernance(new McpToolPolicyRepository(db), new FakeExecutor());
         var clientId = Guid.NewGuid();
 
-        Assert.ThrowsAsync<McpToolPolicyLockedException>(async () =>
+        await Assert.ThrowsAsync<McpToolPolicyLockedException>(async () =>
             await governance.SavePolicyAsync("bloqueada",
                 new SaveMcpToolPolicyRequest(clientId, null, null, IsEnabled: false,
                     MaxCallsPerMinute: null, TimeoutSeconds: null, Locked: false)));

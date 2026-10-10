@@ -133,7 +133,7 @@ public class AgentHardwareMergeTests
         var hardwareRepo = new CapturingHardwareRepository(new AgentHardwareComponents());
         var cmd = BuildCommand(FullPayload());
 
-        Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
+        await Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
 
         var components = hardwareRepo.LastComponents;
         Assert.That(components, Is.Not.Null, "componentes deveriam ter sido persistidos");
@@ -238,7 +238,7 @@ public class AgentHardwareMergeTests
         };
         var cmd = BuildCommand(payload);
 
-        Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
+        await Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
         Assert.That(hardwareRepo.LastComponents!.StartupItems, Has.Count.EqualTo(1));
     }
 
@@ -258,7 +258,7 @@ public class AgentHardwareMergeTests
         };
         var cmd = BuildCommand(payload);
 
-        Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
+        await Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
     }
 
     /// <summary>
@@ -278,7 +278,7 @@ public class AgentHardwareMergeTests
         };
         var cmd = BuildCommand(payload);
 
-        Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
+        await Assert.DoesNotThrowAsync(async () => await RunHandler(cmd, hardwareRepo));
     }
 
     /// <summary>

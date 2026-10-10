@@ -288,7 +288,7 @@ public class AgentAutoLabelingServiceTests
         });
         await fx.Db.SaveChangesAsync();
 
-        Assert.DoesNotThrowAsync(() => fx.Service.EvaluateAgentAsync(fx.AgentId, "collision"));
+        await Assert.DoesNotThrowAsync(() => fx.Service.EvaluateAgentAsync(fx.AgentId, "collision"));
 
         var labels = await fx.Db.AgentLabels.AsNoTracking().ToListAsync();
         Assert.That(labels, Has.Count.EqualTo(1), "Nao deve duplicar a label ja existente.");
