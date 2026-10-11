@@ -91,17 +91,25 @@ public class TicketChatRepository(DiscoveryDbContext db) : ITicketChatRepository
         IReadOnlyList<Guid> attachmentIds,
         CancellationToken cancellationToken)
     {
-        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
-
+        // NÃO abrir transação própria aqui.
+        //
+        // BUG CORRIGIDO: o TransactionBehavior do pipeline MediatR já envolve
+        // TODO ICommand numa transação, na MESMA conexão do DbContext. Abrir
+        // outra aqui faz o Npgsql responder "The connection is already in a
+        // transaction and cannot participate in another transaction", que o
+        // ExceptionHandlingMiddleware mapeia para HTTP 400 "Requisição
+        // inválida" — o envio de mensagem falhava no site E no agent.
+        //
+        // Atomicidade: tudo abaixo (mensagem + vínculos de anexo + contadores da
+        // sessão) é gravado num ÚNICO SaveChangesAsync, que o EF já executa
+        // dentro de uma transação — seja a do pipeline, seja a implícita dele.
+        //
         // Idempotência: reentrega do mesmo envelope (at-least-once) não duplica.
         var existing = await db.TicketChatMessages
             .AsNoTracking()
             .FirstOrDefaultAsync(m => m.SessionId == sessionId && m.ClientMessageId == message.ClientMessageId, cancellationToken);
         if (existing is not null)
-        {
-            await transaction.RollbackAsync(cancellationToken);
             return (existing, false);
-        }
 
         var nextSequence = (await db.TicketChatMessages
             .Where(m => m.SessionId == sessionId)
@@ -131,7 +139,6 @@ public class TicketChatRepository(DiscoveryDbContext db) : ITicketChatRepository
         session.UpdatedAt = DateTime.UtcNow;
 
         await db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
 
         return (message, true);
     }
