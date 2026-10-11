@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Discovery.Core.Enums;
 
@@ -29,7 +30,15 @@ public sealed record TicketTemplateAnswerError(string Key, string Message);
 /// <summary>Parse/serialização e validação das perguntas do template.</summary>
 public static class TicketTemplateQuestions
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        // dataType é lido como número (formato que a API grava) OU como texto
+        // ("ListBox") — o parser do cliente web aceita os dois. Sem isso, um
+        // questions_json com texto zerava TODAS as perguntas sem erro visível:
+        // o agent não mostrava os campos e as respostas eram descartadas.
+        // A escrita continua numérica para não mudar o formato persistido.
+        Converters = { new TolerantEnumConverter<CustomFieldDataType>() },
+    };
 
     public static IReadOnlyList<TicketTemplateQuestion> Parse(string? json)
     {
@@ -153,6 +162,14 @@ public static class TicketTemplateQuestions
     }
 
     public static string FormatAnswer(TicketTemplateQuestion question, JsonElement value)
+        => FormatAnswer(value);
+
+    /// <summary>
+    /// Formata o valor da resposta sem depender da definição da pergunta (usado
+    /// quando o template está sem perguntas legíveis e ainda assim precisamos
+    /// preservar o que o cliente enviou).
+    /// </summary>
+    public static string FormatAnswer(JsonElement value)
     {
         switch (value.ValueKind)
         {
@@ -271,4 +288,33 @@ public static class TicketTemplateQuestions
             }
         }
     }
+}
+
+/// <summary>
+/// Lê enum como número (formato que a API grava) ou como texto ("ListBox",
+/// formato aceito pelo cliente web) e continua escrevendo número, preservando o
+/// formato do JSON já persistido.
+/// </summary>
+internal sealed class TolerantEnumConverter<T> : JsonConverter<T> where T : struct, Enum
+{
+    public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var text = reader.GetString();
+            if (!string.IsNullOrWhiteSpace(text) && Enum.TryParse<T>(text, ignoreCase: true, out var parsed))
+                return parsed;
+            if (int.TryParse(text, out var numeric))
+                return (T)Enum.ToObject(typeof(T), numeric);
+            throw new JsonException($"Valor inválido para {typeof(T).Name}: '{text}'.");
+        }
+
+        if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var value))
+            return (T)Enum.ToObject(typeof(T), value);
+
+        throw new JsonException($"Valor inválido para {typeof(T).Name}.");
+    }
+
+    public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+        => writer.WriteNumberValue(Convert.ToInt32(value));
 }

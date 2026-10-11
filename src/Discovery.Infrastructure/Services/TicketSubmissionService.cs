@@ -127,6 +127,15 @@ public class TicketSubmissionService(
             errors.Add(new DepartmentFieldValidationError(Guid.Empty, answerError.Key, answerError.Message));
         }
 
+        // Template com questions_json ilegível/corrompido: sem este aviso as
+        // respostas eram descartadas em silêncio (o chamado nascia sem elas).
+        if (questions.Count == 0 && template is not null && request.TemplateAnswers is { Count: > 0 })
+        {
+            logger.LogWarning(
+                "Respostas do template {TemplateId} chegaram sem perguntas legíveis em questions_json; serão gravadas com a chave como rótulo.",
+                template.Id);
+        }
+
         // ── Campos do departamento: SEMPRE valem para todo chamado do
         // departamento, independentes do template (obrigatório ou não conforme
         // a configuração de cada campo). ─────────────────────────────────────
@@ -263,8 +272,24 @@ public class TicketSubmissionService(
         IReadOnlyList<TicketTemplateQuestion> questions,
         IReadOnlyDictionary<string, JsonElement>? answers)
     {
-        if (answers is null || answers.Count == 0 || questions.Count == 0)
+        if (answers is null || answers.Count == 0)
             return Array.Empty<TicketAnswerDraft>();
+
+        // Sem perguntas legíveis (questions_json corrompido/vazio), preserva o
+        // que o cliente enviou usando a chave como rótulo — antes a resposta era
+        // descartada sem aviso e o chamado nascia sem ela.
+        if (questions.Count == 0)
+        {
+            return answers
+                .Where(pair => pair.Value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+                .Select(pair => new TicketAnswerDraft(
+                    pair.Key,
+                    pair.Key,
+                    TicketTemplateQuestions.FormatAnswer(pair.Value),
+                    pair.Value.GetRawText()))
+                .Where(draft => !string.IsNullOrWhiteSpace(draft.ValueText))
+                .ToList();
+        }
 
         var drafts = new List<TicketAnswerDraft>();
         foreach (var question in questions)
