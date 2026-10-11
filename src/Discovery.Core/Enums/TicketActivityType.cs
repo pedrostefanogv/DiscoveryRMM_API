@@ -39,5 +39,11 @@ public enum TicketActivityType
     AiAssigned = 27,
 
     /// <summary>Triagem por IA gerou sugestão de responsável (modo assistido).</summary>
-    AiAssignmentSuggested = 28
+    AiAssignmentSuggested = 28,
+
+    /// <summary>Chat de suporte do chamado iniciado pelo atendente (convite enviado à máquina).</summary>
+    ChatStarted = 29,
+
+    /// <summary>Chat de suporte encerrado (pelo usuário, pelo suporte ou pelo sistema).</summary>
+    ChatEnded = 30
 }

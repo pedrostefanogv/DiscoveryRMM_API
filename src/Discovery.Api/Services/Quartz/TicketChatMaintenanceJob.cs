@@ -1,5 +1,6 @@
 using Discovery.Core.Configuration;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Options;
 using Quartz;
@@ -31,17 +32,18 @@ public sealed class TicketChatMaintenanceJob : IJob
         await using var scope = scopeFactory.CreateAsyncScope();
         var repository = scope.ServiceProvider.GetRequiredService<ITicketChatRepository>();
         var publisher = scope.ServiceProvider.GetRequiredService<ITicketChatEnvelopePublisher>();
+        var activityLog = scope.ServiceProvider.GetRequiredService<IActivityLogService>();
         var options = scope.ServiceProvider.GetRequiredService<IOptions<TicketChatOptions>>().Value;
         var ct = context.CancellationToken;
 
         var now = DateTime.UtcNow;
 
-        var expiredCount = await ExpirePendingInvitesAsync(repository, publisher, now, logger, ct);
+        var expiredCount = await ExpirePendingInvitesAsync(repository, publisher, activityLog, now, logger, ct);
 
         var inactivityCutoff = now.AddMinutes(-Math.Max(1, options.InactivityTimeoutMinutes));
-        var inactivityCount = await CloseInactiveSessionsAsync(repository, publisher, inactivityCutoff, logger, ct);
+        var inactivityCount = await CloseInactiveSessionsAsync(repository, publisher, activityLog, inactivityCutoff, logger, ct);
 
-        var ticketClosedCount = await CloseSessionsOfClosedTicketsAsync(repository, publisher, logger, ct);
+        var ticketClosedCount = await CloseSessionsOfClosedTicketsAsync(repository, publisher, activityLog, logger, ct);
 
         logger.LogInformation(
             "Ticket chat maintenance: expired invites={Expired}, inactive sessions={Inactive}, ticket-closed sessions={TicketClosed}",
@@ -58,6 +60,7 @@ public sealed class TicketChatMaintenanceJob : IJob
     private static async Task<int> ExpirePendingInvitesAsync(
         ITicketChatRepository repository,
         ITicketChatEnvelopePublisher publisher,
+        IActivityLogService activityLog,
         DateTime nowUtc,
         ILogger logger,
         CancellationToken ct)
@@ -76,6 +79,13 @@ public sealed class TicketChatMaintenanceJob : IJob
 
             await repository.UpdateSessionAsync(session, ct);
             await publisher.PublishSessionStatusSignalAsync(session, ct);
+
+            await activityLog.LogActivityAsync(
+                session.TicketId,
+                TicketActivityType.ChatEnded,
+                null,
+                comment: TicketChatAuditText.Declined("timeout"));
+
             count++;
         }
 
@@ -88,6 +98,7 @@ public sealed class TicketChatMaintenanceJob : IJob
     private static async Task<int> CloseInactiveSessionsAsync(
         ITicketChatRepository repository,
         ITicketChatEnvelopePublisher publisher,
+        IActivityLogService activityLog,
         DateTime cutoffUtc,
         ILogger logger,
         CancellationToken ct)
@@ -105,6 +116,13 @@ public sealed class TicketChatMaintenanceJob : IJob
             await repository.UpdateSessionAsync(session, ct);
             await publisher.PublishSessionEndedAsync(session, ct);
             await publisher.PublishSessionStatusSignalAsync(session, ct);
+
+            await activityLog.LogActivityAsync(
+                session.TicketId,
+                TicketActivityType.ChatEnded,
+                null,
+                comment: TicketChatAuditText.Ended("inactivity"));
+
             count++;
         }
 
@@ -117,6 +135,7 @@ public sealed class TicketChatMaintenanceJob : IJob
     private static async Task<int> CloseSessionsOfClosedTicketsAsync(
         ITicketChatRepository repository,
         ITicketChatEnvelopePublisher publisher,
+        IActivityLogService activityLog,
         ILogger logger,
         CancellationToken ct)
     {
@@ -133,6 +152,13 @@ public sealed class TicketChatMaintenanceJob : IJob
             await repository.UpdateSessionAsync(session, ct);
             await publisher.PublishSessionEndedAsync(session, ct);
             await publisher.PublishSessionStatusSignalAsync(session, ct);
+
+            await activityLog.LogActivityAsync(
+                session.TicketId,
+                TicketActivityType.ChatEnded,
+                null,
+                comment: TicketChatAuditText.Ended("ticket_closed"));
+
             count++;
         }
 

@@ -122,6 +122,10 @@ public static class TicketTimelineMapper
             TicketActivityType.AutomationLinked => comment ?? "Automação vinculada",
             TicketActivityType.AutomationApproved => comment ?? "Automação aprovada",
             TicketActivityType.AutomationRejected => comment ?? "Automação rejeitada",
+            // Chat de suporte: o texto específico vem no Comment (quem iniciou,
+            // por quem/por que foi encerrado), então é preservado.
+            TicketActivityType.ChatStarted => comment ?? "Chat de suporte iniciado",
+            TicketActivityType.ChatEnded => comment ?? "Chat de suporte encerrado",
             _ => comment ?? type.ToString()
         };
     }

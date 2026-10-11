@@ -73,6 +73,8 @@ public sealed class StartTicketChatSessionCommandHandler(
     ITicketQueryService ticketQueryService,
     IAgentRepository agentRepository,
     IAgentCommandDispatcher commandDispatcher,
+    ITicketChatEnvelopePublisher envelopePublisher,
+    IActivityLogService activityLog,
     IOptions<TicketChatOptions> options,
     ILogger<StartTicketChatSessionCommandHandler> logger)
     : IRequestHandler<StartTicketChatSessionCommand, Result<TicketChatSessionDto>>
@@ -122,7 +124,24 @@ public sealed class StartTicketChatSessionCommandHandler(
         };
 
         await chatRepository.AddSessionAsync(session, ct);
+
+        // Timeline do chamado: cada novo chat precisa aparecer na linha do tempo
+        // para o atendente acompanhar a movimentação (quem iniciou e quando).
+        //
+        // Antes do convite de propósito: o envio ao agent é um efeito externo
+        // irreversível; se a auditoria falhar, a transação reverte sem deixar um
+        // convite disparado para uma sessão que não existe.
+        await activityLog.LogActivityAsync(
+            cmd.TicketId,
+            TicketActivityType.ChatStarted,
+            cmd.StartedByUserId,
+            comment: TicketChatAuditText.Started(cmd.StartedByName));
+
         await DispatchInviteAsync(session, ticket.Title, ct);
+
+        // Outro atendente com o mesmo chamado aberto passa a ver a conversa nova
+        // sem recarregar a página.
+        await envelopePublisher.PublishSessionStatusSignalAsync(session, ct);
 
         logger.LogInformation(
             "Support chat session {SessionId} created for ticket {TicketId} (agent {AgentId}) by {Support}",
@@ -212,6 +231,7 @@ public sealed class RetryTicketChatInviteCommandHandler(
 public sealed class RespondTicketChatInviteCommandHandler(
     ITicketChatRepository chatRepository,
     ITicketChatEnvelopePublisher envelopePublisher,
+    IActivityLogService activityLog,
     ILogger<RespondTicketChatInviteCommandHandler> logger)
     : IRequestHandler<RespondTicketChatInviteCommand, Result<TicketChatSessionDto>>
 {
@@ -242,7 +262,18 @@ public sealed class RespondTicketChatInviteCommandHandler(
         await chatRepository.UpdateSessionAsync(session, ct);
 
         if (cmd.Accepted)
+        {
             await envelopePublisher.PublishSessionOpenedAsync(session, ct);
+        }
+        else
+        {
+            // Recusa também é movimentação do chamado: entra na timeline.
+            await activityLog.LogActivityAsync(
+                session.TicketId,
+                TicketActivityType.ChatEnded,
+                null,
+                comment: TicketChatAuditText.Declined(session.DeclinedReason));
+        }
 
         // O console recebe a mudança de estado (aceite/recusa) imediatamente,
         // sem polling, pelo canal de dashboard (sem corpo de mensagem).
@@ -381,6 +412,7 @@ public sealed class SendTicketChatMessageCommandHandler(
 public sealed class EndTicketChatSessionCommandHandler(
     ITicketChatRepository chatRepository,
     ITicketChatEnvelopePublisher envelopePublisher,
+    IActivityLogService activityLog,
     ILogger<EndTicketChatSessionCommandHandler> logger)
     : IRequestHandler<EndTicketChatSessionCommand, Result<TicketChatSessionDto>>
 {
@@ -399,7 +431,18 @@ public sealed class EndTicketChatSessionCommandHandler(
         session.EndReason = string.IsNullOrWhiteSpace(cmd.Reason) ? "closed" : cmd.Reason.Trim().ToLowerInvariant();
 
         await chatRepository.UpdateSessionAsync(session, ct);
+
+        // SessionEnded fecha a janela do agent; o SINAL DE ESTADO é o que avisa o
+        // console. Sem ele o operador não via que o usuário encerrou a conversa
+        // (a aba do chamado não faz polling).
         await envelopePublisher.PublishSessionEndedAsync(session, ct);
+        await envelopePublisher.PublishSessionStatusSignalAsync(session, ct);
+
+        await activityLog.LogActivityAsync(
+            session.TicketId,
+            TicketActivityType.ChatEnded,
+            cmd.EndedBy == "support" ? session.StartedByUserId : null,
+            comment: TicketChatAuditText.Ended(session.EndReason));
 
         logger.LogInformation(
             "Support chat session {SessionId} ended (by={EndedBy}, reason={Reason})",

@@ -1,6 +1,7 @@
 using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Configurations.Queries;
 using Discovery.Core.Cqrs.Tickets.Chat.Commands;
+using Discovery.Core.Cqrs.Tickets.Chat.Dtos;
 using Discovery.Core.Cqrs.Tickets.Chat.Queries;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
@@ -73,9 +74,9 @@ public class TicketChatController(
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.View, ct))
             return NotFound();
 
-        var ownership = await ResolveSessionAsync(ticketId, sessionId, ct);
-        if (ownership is not null)
-            return ownership;
+        var (ownershipError, session) = await ResolveSessionAsync(ticketId, sessionId, ct);
+        if (ownershipError is not null)
+            return ownershipError;
 
         var result = await mediator.Send(new GetTicketChatMessagesQuery(sessionId, afterSequence, limit), ct);
         return result.ToActionResult();
@@ -112,9 +113,9 @@ public class TicketChatController(
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
             return NotFound();
 
-        var ownership = await ResolveSessionAsync(ticketId, sessionId, ct);
-        if (ownership is not null)
-            return ownership;
+        var (ownershipError, session) = await ResolveSessionAsync(ticketId, sessionId, ct);
+        if (ownershipError is not null)
+            return ownershipError;
 
         var result = await mediator.Send(new RetryTicketChatInviteCommand(sessionId), ct);
         if (result.IsFailure)
@@ -137,9 +138,9 @@ public class TicketChatController(
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
             return NotFound();
 
-        var ownership = await ResolveSessionAsync(ticketId, sessionId, ct);
-        if (ownership is not null)
-            return ownership;
+        var (ownershipError, session) = await ResolveSessionAsync(ticketId, sessionId, ct);
+        if (ownershipError is not null)
+            return ownershipError;
 
         var result = await mediator.Send(new SendTicketChatMessageCommand(
             sessionId,
@@ -164,9 +165,9 @@ public class TicketChatController(
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
             return NotFound();
 
-        var ownership = await ResolveSessionAsync(ticketId, sessionId, ct);
-        if (ownership is not null)
-            return ownership;
+        var (ownershipError, session) = await ResolveSessionAsync(ticketId, sessionId, ct);
+        if (ownershipError is not null)
+            return ownershipError;
 
         var result = await mediator.Send(new EndTicketChatSessionCommand(sessionId, "support", "support_closed"), ct);
         return result.ToActionResult();
@@ -182,9 +183,12 @@ public class TicketChatController(
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
             return NotFound();
 
-        var ownership = await ResolveSessionAsync(ticketId, sessionId, ct);
-        if (ownership is not null)
-            return ownership;
+        var (ownershipError, session) = await ResolveSessionAsync(ticketId, sessionId, ct);
+        if (ownershipError is not null)
+            return ownershipError;
+
+        if (RequireActiveSession(session) is { } inactive)
+            return inactive;
 
         var ticket = await ticketQueryService.GetTicketByIdAsync(ticketId, ct);
         if (ticket is null)
@@ -222,9 +226,12 @@ public class TicketChatController(
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
             return NotFound();
 
-        var ownership = await ResolveSessionAsync(ticketId, sessionId, ct);
-        if (ownership is not null)
-            return ownership;
+        var (ownershipError, session) = await ResolveSessionAsync(ticketId, sessionId, ct);
+        if (ownershipError is not null)
+            return ownershipError;
+
+        if (RequireActiveSession(session) is { } inactive)
+            return inactive;
 
         var ticket = await ticketQueryService.GetTicketByIdAsync(ticketId, ct);
         if (ticket is null)
@@ -312,16 +319,27 @@ public class TicketChatController(
 
     /// <summary>
     /// Confirma que a sessão pertence a ESTE chamado (evita ler/escrever a
-    /// conversa de outro chamado com um id de sessão vazado).
+    /// conversa de outro chamado com um id de sessão vazado) e devolve a sessão.
     /// </summary>
-    private async Task<IActionResult?> ResolveSessionAsync(Guid ticketId, Guid sessionId, CancellationToken ct)
+    private async Task<(IActionResult? Error, TicketChatSessionDto? Session)> ResolveSessionAsync(Guid ticketId, Guid sessionId, CancellationToken ct)
     {
         var state = await mediator.Send(new GetTicketChatSessionQuery(sessionId), ct);
-        if (state.IsFailure || state.Value?.Session is null)
-            return NotFound();
+        var session = state.IsSuccess ? state.Value?.Session : null;
 
-        return state.Value.Session.TicketId == ticketId ? null : NotFound();
+        if (session is null || session.TicketId != ticketId)
+            return (NotFound(), null);
+
+        return (null, session);
     }
+
+    /// <summary>
+    /// Anexo só entra em conversa ATIVA: evita arquivos órfãos no storage para
+    /// uma sessão que já terminou (a UI já bloqueia, isto é defesa no servidor).
+    /// </summary>
+    private IActionResult? RequireActiveSession(TicketChatSessionDto? session)
+        => string.Equals(session?.Status, "Active", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : Conflict(new { code = "session_not_active", error = "A conversa não está ativa." });
 
     private static string DescribeConflict(string code) => code switch
     {

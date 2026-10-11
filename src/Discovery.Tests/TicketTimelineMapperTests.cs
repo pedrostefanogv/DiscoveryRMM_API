@@ -1,5 +1,6 @@
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Infrastructure.Services;
 
 namespace Discovery.Tests;
@@ -82,6 +83,51 @@ public class TicketTimelineMapperTests
             TicketTimelineMapper.BuildDescription(
                 TicketActivityType.TicketRelationAdded, "Relação RelatesTo criada.", null, "TCK-2"),
             Is.EqualTo("Relação RelatesTo criada."));
+    }
+
+    /// <summary>
+    /// Ciclo de vida do chat de suporte na timeline: início, encerramento e
+    /// terminais "sem conversa" (recusa/expiração) precisam de texto legível —
+    /// é o que o atendente lê para acompanhar a movimentação do chamado.
+    /// </summary>
+    [Test]
+    public void BuildDescription_ShouldDescribeChatLifecycle()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                TicketTimelineMapper.BuildDescription(
+                    TicketActivityType.ChatStarted, TicketChatAuditText.Started("Ana"), null, null),
+                Is.EqualTo("Chat de suporte iniciado por Ana · aguardando confirmação na máquina"));
+
+            Assert.That(
+                TicketTimelineMapper.BuildDescription(
+                    TicketActivityType.ChatEnded, TicketChatAuditText.Ended("user_closed"), null, null),
+                Is.EqualTo("Chat de suporte encerrado pelo usuário"));
+
+            Assert.That(
+                TicketTimelineMapper.BuildDescription(
+                    TicketActivityType.ChatEnded, TicketChatAuditText.Ended("inactivity"), null, null),
+                Is.EqualTo("Chat de suporte encerrado por inatividade"));
+
+            Assert.That(
+                TicketTimelineMapper.BuildDescription(
+                    TicketActivityType.ChatEnded, TicketChatAuditText.Declined("timeout"), null, null),
+                Is.EqualTo("Convite de chat expirado sem confirmação na máquina"));
+
+            Assert.That(
+                TicketTimelineMapper.BuildDescription(
+                    TicketActivityType.ChatEnded, TicketChatAuditText.Declined("busy"), null, null),
+                Is.EqualTo("Convite de chat recusado: a máquina já estava em outro chat"));
+
+            // Sem comentário o tipo ainda rende texto legível (nunca "só a data").
+            Assert.That(
+                TicketTimelineMapper.BuildDescription(TicketActivityType.ChatStarted, null, null, null),
+                Is.EqualTo("Chat de suporte iniciado"));
+            Assert.That(
+                TicketTimelineMapper.BuildDescription(TicketActivityType.ChatEnded, null, null, null),
+                Is.EqualTo("Chat de suporte encerrado"));
+        });
     }
 
     [Test]

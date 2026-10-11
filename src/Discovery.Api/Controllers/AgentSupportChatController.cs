@@ -2,6 +2,7 @@ using Discovery.Api;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Configurations.Queries;
 using Discovery.Core.Cqrs.Tickets.Chat.Commands;
+using Discovery.Core.Cqrs.Tickets.Chat.Dtos;
 using Discovery.Core.Cqrs.Tickets.Chat.Queries;
 using Discovery.Core.Interfaces;
 using MediatR;
@@ -148,7 +149,10 @@ public class AgentSupportChatController(
         if (ownership.Error is not null)
             return ownership.Error;
 
-        var ticket = await ticketQueryService.GetTicketByIdAsync(ownership.TicketId!.Value, ct);
+        if (RequireActiveSession(ownership.Session) is { } inactive)
+            return inactive;
+
+        var ticket = await ticketQueryService.GetTicketByIdAsync(ownership.Session!.TicketId, ct);
         if (ticket is null)
             return NotFound();
 
@@ -187,7 +191,10 @@ public class AgentSupportChatController(
         if (ownership.Error is not null)
             return ownership.Error;
 
-        var ticket = await ticketQueryService.GetTicketByIdAsync(ownership.TicketId!.Value, ct);
+        if (RequireActiveSession(ownership.Session) is { } inactive)
+            return inactive;
+
+        var ticket = await ticketQueryService.GetTicketByIdAsync(ownership.Session!.TicketId, ct);
         if (ticket is null)
             return NotFound();
 
@@ -245,7 +252,7 @@ public class AgentSupportChatController(
         if (attachment is null
             || attachment.IsDeleted
             || !string.Equals(attachment.EntityType, ChatEntityType, StringComparison.OrdinalIgnoreCase)
-            || attachment.EntityId != ownership.TicketId!.Value)
+            || attachment.EntityId != ownership.Session!.TicketId)
         {
             return NotFound();
         }
@@ -275,7 +282,7 @@ public class AgentSupportChatController(
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
-    private async Task<(IActionResult? Error, Guid? TicketId)> ResolveOwnedSessionAsync(Guid sessionId, Guid agentId, CancellationToken ct)
+    private async Task<(IActionResult? Error, TicketChatSessionDto? Session)> ResolveOwnedSessionAsync(Guid sessionId, Guid agentId, CancellationToken ct)
     {
         var state = await mediator.Send(new GetTicketChatSessionQuery(sessionId), ct);
         var session = state.IsSuccess ? state.Value?.Session : null;
@@ -286,8 +293,17 @@ public class AgentSupportChatController(
             return (NotFound(), null);
         }
 
-        return (null, session.TicketId);
+        return (null, session);
     }
+
+    /// <summary>
+    /// Anexo só entra em conversa ATIVA: evita arquivos órfãos no storage para
+    /// uma sessão já encerrada (a janela já bloqueia; isto é defesa no servidor).
+    /// </summary>
+    private IActionResult? RequireActiveSession(TicketChatSessionDto? session)
+        => string.Equals(session?.Status, "Active", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : Conflict(new { code = "session_not_active", error = "A conversa não está ativa." });
 }
 
 public record AgentSendTicketChatMessageRequest(
