@@ -15,6 +15,10 @@ namespace Discovery.Infrastructure.Services;
 public class MinioObjectStorageProvider : IObjectStorageService
 {
     private readonly IMinioClient _client;
+    // Cliente extra usado SO para assinar URLs (endpoint publico). No modo
+    // interno o servidor fala com o storage por loopback, mas a URL entregue ao
+    // agente precisa do host publico — a assinatura cobre o Host.
+    private readonly IMinioClient _presignClient;
     private readonly string _bucketName;
     private readonly string _region;
     private readonly ILogger<MinioObjectStorageProvider> _logger;
@@ -40,40 +44,20 @@ public class MinioObjectStorageProvider : IObjectStorageService
         _bucketName = settings.BucketName;
         _region = string.IsNullOrWhiteSpace(settings.Region) ? "us-east-1" : settings.Region;
 
-        var (endpoint, secure) = NormalizeEndpoint(settings.Endpoint);
+        // UsePathStyle: o SDK MinIO escolhe path-style para endpoints nao-Amazon
+        // (MinIO/RustFS/R2/Oracle) e virtual-hosted para *.amazonaws.com — o
+        // settings.UsePathStyle apenas documenta a intencao.
+        _client = BuildClient(settings.Endpoint, settings, _logger);
+        // Modo interno (RustFS local): o servidor opera por loopback e assina as
+        // URLs com o endpoint publico, que e o host alcancavel pelo agente.
+        _presignClient = string.IsNullOrWhiteSpace(settings.PresignEndpoint)
+            || string.Equals(settings.PresignEndpoint, settings.Endpoint, StringComparison.OrdinalIgnoreCase)
+            ? _client
+            : BuildClient(settings.PresignEndpoint!, settings, _logger);
 
-        // UsePathStyle: the MinIO SDK automatically selects path-style routing for non-Amazon endpoints
-        // (MinIO, Cloudflare R2, Oracle S3, custom S3-compatible) and virtual-hosted style for
-        // *.amazonaws.com. No explicit override is needed — this mirrors settings.UsePathStyle intent.
-
-        // SslVerify = false: disable certificate validation for self-signed certificates (dev/private).
-        // Only applied when the endpoint uses HTTPS.
-        HttpClient? httpClient = null;
-        if (secure && !settings.SslVerify)
-        {
-            var handler = new System.Net.Http.HttpClientHandler
-            {
-                ServerCertificateCustomValidationCallback =
-                    System.Net.Http.HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-            };
-            httpClient = new HttpClient(handler);
-            _logger.LogWarning(
-                "SSL certificate verification is DISABLED for object storage endpoint {Endpoint}. " +
-                "Enable SslVerify in production environments.",
-                endpoint);
-        }
-
-        var builder = new MinioClient()
-            .WithEndpoint(endpoint)
-            .WithCredentials(settings.AccessKey, settings.SecretKey)
-            .WithSSL(secure);
-
-        if (httpClient is not null)
-            builder = builder.WithHttpClient(httpClient);
-
-        _client = builder.Build();
-
-        _logger.LogInformation("MinIO S3-compatible provider initialized for endpoint {Endpoint} bucket {Bucket}", endpoint, _bucketName);
+        _logger.LogInformation(
+            "MinIO S3-compatible provider initialized: endpoint={Endpoint} bucket={Bucket} presign={PresignEndpoint}",
+            settings.Endpoint, _bucketName, settings.PresignEndpoint ?? settings.Endpoint);
     }
 
     public async Task<StorageObject> UploadAsync(string objectKey, Stream content, string contentType, CancellationToken cancellationToken = default)
@@ -179,7 +163,7 @@ public class MinioObjectStorageProvider : IObjectStorageService
             .WithObject(objectKey)
             .WithExpiry(ttlHours * 3600);
 
-        return _client.PresignedGetObjectAsync(args);
+        return _presignClient.PresignedGetObjectAsync(args);
     }
 
     public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
@@ -194,7 +178,7 @@ public class MinioObjectStorageProvider : IObjectStorageService
             .WithObject(objectKey)
             .WithExpiry(ttlMinutes * 60);
 
-        return _client.PresignedPutObjectAsync(args);
+        return _presignClient.PresignedPutObjectAsync(args);
     }
 
     public async Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
@@ -299,6 +283,40 @@ public class MinioObjectStorageProvider : IObjectStorageService
     {
         if (string.IsNullOrWhiteSpace(objectKey))
             throw new ArgumentException("Object key cannot be empty", nameof(objectKey));
+    }
+
+    /// <summary>
+    /// Constroi um cliente MinIO para o endpoint informado (operacoes ou
+    /// assinatura de URL). SslVerify=false vale apenas para HTTPS.
+    /// </summary>
+    private static IMinioClient BuildClient(string rawEndpoint, ObjectStorageSettings settings, ILogger logger)
+    {
+        var (endpoint, secure) = NormalizeEndpoint(rawEndpoint);
+
+        HttpClient? httpClient = null;
+        if (secure && !settings.SslVerify)
+        {
+            var handler = new System.Net.Http.HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback =
+                    System.Net.Http.HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            };
+            httpClient = new HttpClient(handler);
+            logger.LogWarning(
+                "SSL certificate verification is DISABLED for object storage endpoint {Endpoint}. " +
+                "Enable SslVerify in production environments.",
+                endpoint);
+        }
+
+        var builder = new MinioClient()
+            .WithEndpoint(endpoint)
+            .WithCredentials(settings.AccessKey, settings.SecretKey)
+            .WithSSL(secure);
+
+        if (httpClient is not null)
+            builder = builder.WithHttpClient(httpClient);
+
+        return builder.Build();
     }
 
     private static (string Endpoint, bool Secure) NormalizeEndpoint(string rawEndpoint)

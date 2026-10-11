@@ -12,6 +12,15 @@ upstream discovery_api_backend {
   keepalive 32;
 }
 
+# Storage de objetos (RustFS local): o caminho do bucket e publicado no MESMO
+# host do portal, entao as URLs pre-assinadas funcionam de fora sem DNS nem
+# certificado novos. O header Host e preservado porque a assinatura SigV4
+# cobre o host — reescrever para o upstream invalidaria a assinatura.
+upstream discovery_object_storage_backend {
+  server 127.0.0.1:9000;
+  keepalive 16;
+}
+
 # Catch-all: responde 444 a qualquer Host fora da allowlist (scan/scan bots
 # apontando DNS arbitrario para o IP do servidor). Reaproveita o certificado
 # interno para manter compatibilidade com nginx 1.18 (Ubuntu 20.04), onde
@@ -29,6 +38,11 @@ server {
   listen 80;
   listen [::]:80;
   server_name __SERVER_NAME_LIST__;
+
+  # Endpoints http:// do storage (instalacao internal sem TLS): o caminho do
+  # bucket e proxiado aqui, ANTES do redirect — PUT de URL pre-assinada nao
+  # pode passar por 301.
+__OBJECT_STORAGE_LOCATION_PORT80__
   return 301 https://$host$request_uri;
 }
 
@@ -164,6 +178,9 @@ __REDIRECT_RULES__
     return 503 "<!DOCTYPE html><html lang='pt-BR'><head><meta charset='UTF-8'><title>Discovery API Docs</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f5f5f5}.box{background:#fff;padding:2rem 3rem;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.1);text-align:center}h1{color:#333;font-size:1.4rem}p{color:#666}a{color:#4a90e2}</style></head><body><div class='box'><h1>Documentacao da API indisponivel</h1><p>A documentacao OpenAPI/Scalar esta desabilitada ou a API esta temporariamente fora do ar.</p><p>Tente acessar diretamente: <a href='/openapi/v1.json'>/openapi/v1.json</a></p></div></body></html>";
   }
 
+  # Caminho do bucket do storage (vazio quando o storage nao e local). Fica
+  # antes do fallback da SPA para nao cair no index.html.
+__OBJECT_STORAGE_LOCATION__
   location / {
     try_files $uri $uri/ /index.html;
   }

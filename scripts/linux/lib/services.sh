@@ -523,3 +523,241 @@ EOF
     log "Servico nats-server sem alteracoes; pulando restart."
   fi
 }
+# ── Object storage: RustFS local ───────────────────────────────────────────
+#
+# O RustFS e o provider S3-compativel embutido (o MinIO atual exige licenca). O
+# servico escuta apenas em loopback e o nginx publica o caminho do bucket no
+# mesmo host do portal — assim as URLs pre-assinadas funcionam tambem para
+# agentes fora do servidor, sem DNS/certificado novo.
+#
+# NUNCA atualiza uma instalacao existente: versao fixada (RUSTFS_VERSION) e, se
+# ja instalado, apenas avisa quando a versao instalada difere.
+
+rustfs_arch_pattern() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'linux-x86_64' ;;
+    aarch64|arm64) printf 'linux-aarch64' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Resolve a URL do asset do release fixado via API do GitHub — evita nome de
+# arquivo hardcoded (muda entre versoes/arquiteturas).
+rustfs_download_url() {
+  local version="$1" pattern="$2" json
+  json="$(curl -fsSL --connect-timeout 15 --retry 2 \
+    "https://api.github.com/repos/rustfs/rustfs/releases/tags/${version}" 2>/dev/null || true)"
+  [[ -n "$json" ]] || return 1
+  printf '%s' "$json" \
+    | grep -o "\"browser_download_url\": *\"[^\"]*${pattern}[^\"]*\.zip\"" \
+    | head -n 1 | sed 's/.*: *"//; s/"$//'
+}
+
+# Baixa/instala o binario na versao fixada (idempotente: nao toca se ja existe).
+install_rustfs_binary() {
+  local version="$1" pattern url tmp_zip tmp_dir bin sha_expected sha_got
+  if sudo test -x /opt/rustfs/bin/rustfs; then
+    local installed
+    installed="$(/opt/rustfs/bin/rustfs --version 2>/dev/null | head -n 1 || true)"
+    if [[ "$installed" == *"$version"* ]]; then
+      log "RustFS ${version} ja instalado; mantendo (sem auto-update)."
+      return 0
+    fi
+    warn "RustFS instalado difere da versao pedida (${installed:-desconhecida} x ${version}); mantendo a versao instalada (sem auto-update)."
+    return 0
+  fi
+
+  pattern="$(rustfs_arch_pattern)" || fail "Arquitetura $(uname -m) sem pacote RustFS; use a opcao 2 (provedor externo)."
+  url="$(rustfs_download_url "$version" "$pattern" || true)"
+  [[ -n "$url" ]] || fail "Nao foi possivel resolver o pacote RustFS ${version} (${pattern}). Verifique a rede ou escolha o provedor externo."
+
+  tmp_zip="$(mktemp --suffix=.zip)"
+  tmp_dir="$(mktemp -d)"
+  log "Baixando $url"
+  if ! curl -fsSL --connect-timeout 20 --retry 3 --retry-delay 2 -o "$tmp_zip" "$url"; then
+    rm -f "$tmp_zip"; rm -rf "$tmp_dir"
+    fail "Falha ao baixar o RustFS de $url"
+  fi
+
+  if [[ -n "${RUSTFS_SHA256:-}" ]]; then
+    sha_got="$(sha256sum "$tmp_zip" | awk '{print $1}')"
+    sha_expected="$(printf '%s' "$RUSTFS_SHA256" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$sha_got" != "$sha_expected" ]]; then
+      rm -f "$tmp_zip"; rm -rf "$tmp_dir"
+      fail "sha256 do pacote RustFS nao confere (esperado $sha_expected, obtido $sha_got)."
+    fi
+    log "sha256 do pacote RustFS confere."
+  else
+    warn "RUSTFS_SHA256 nao informado: pacote instalado SEM verificacao de integridade (sha256: $(sha256sum "$tmp_zip" | awk '{print $1}'))"
+  fi
+
+  unzip -qo "$tmp_zip" -d "$tmp_dir" || { rm -f "$tmp_zip"; rm -rf "$tmp_dir"; fail "Pacote do RustFS invalido (unzip)."; }
+  bin="$(find "$tmp_dir" -maxdepth 3 -type f -name rustfs | head -n 1)"
+  [[ -n "$bin" ]] || { rm -f "$tmp_zip"; rm -rf "$tmp_dir"; fail "Binario rustfs nao encontrado no pacote."; }
+  sudo install -m 0755 -o root -g root "$bin" /opt/rustfs/bin/rustfs
+  rm -f "$tmp_zip"; rm -rf "$tmp_dir"
+
+  local installed_version
+  installed_version="$(/opt/rustfs/bin/rustfs --version 2>/dev/null | head -n 1 || true)"
+  [[ "$installed_version" == *"$version"* ]] || warn "Versao instalada (${installed_version:-desconhecida}) difere de RUSTFS_VERSION=${version}."
+  log "RustFS instalado: ${installed_version:-desconhecido}"
+}
+
+ensure_mc_cli() {
+  if command -v mc >/dev/null 2>&1; then return 0; fi
+  local url tmp
+  for url in "https://dl.min.io/aistor/mc/release/linux-amd64/mc" "https://dl.min.io/client/mc/release/linux-amd64/mc"; do
+    tmp="$(mktemp)"
+    if curl -fsSL --connect-timeout 15 --retry 2 -o "$tmp" "$url"; then
+      sudo install -m 0755 -o root -g root "$tmp" /usr/local/bin/mc
+      rm -f "$tmp"
+      return 0
+    fi
+    rm -f "$tmp"
+  done
+  warn "Nao foi possivel baixar o mc; o bucket sera criado pela propria API no primeiro uso."
+  return 1
+}
+
+# Cria o bucket privado. Best-effort: o MinioObjectStorageProvider cria o bucket
+# no primeiro uso quando ele nao existe.
+create_rustfs_bucket() {
+  local bucket="$1" env_file=/etc/default/rustfs access secret
+  [[ -f "$env_file" ]] || return 0
+  access="$(sudo awk -F= '/^RUSTFS_ACCESS_KEY=/{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true)"
+  secret="$(sudo awk -F= '/^RUSTFS_SECRET_KEY=/{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true)"
+  [[ -n "$access" && -n "$secret" ]] || return 0
+  ensure_mc_cli || return 0
+  mc alias set discovery-local "http://127.0.0.1:${DISCOVERY_OBJECT_STORAGE_PORT:-9000}" "$access" "$secret" >/dev/null 2>&1 || return 0
+  mc mb --ignore-existing "discovery-local/${bucket}" >/dev/null 2>&1 || true
+  mc anonymous set none "discovery-local/${bucket}" >/dev/null 2>&1 || true
+  if mc ls "discovery-local/${bucket}" >/dev/null 2>&1; then
+    log "Bucket ${bucket} pronto no RustFS (privado)."
+    return 0
+  fi
+  warn "Nao foi possivel confirmar o bucket ${bucket}; a API cria no primeiro uso."
+  return 0
+}
+
+write_rustfs_env_file() {
+  if sudo test -f /etc/default/rustfs; then
+    log "Credenciais do RustFS ja existem em /etc/default/rustfs; reutilizando (nao rotaciona)."
+    return 0
+  fi
+  local access="discoveryrustfs" secret tmp
+  secret="$(generate_random_password 28)"
+  tmp="$(mktemp)"
+  {
+    printf 'RUSTFS_ACCESS_KEY=%s\n' "$access"
+    printf 'RUSTFS_SECRET_KEY=%s\n' "$secret"
+    printf 'RUSTFS_VOLUMES="%s"\n' "${RUSTFS_DATA_DIR:-/opt/rustfs/data}"
+    printf 'RUSTFS_ADDRESS="%s"\n' "${RUSTFS_ADDRESS:-127.0.0.1:9000}"
+    printf 'RUSTFS_CONSOLE_ADDRESS="127.0.0.1:9001"\n'
+  } > "$tmp"
+  sudo install -m 600 -o root -g root "$tmp" /etc/default/rustfs
+  rm -f "$tmp"
+  DISCOVERY_OBJECT_STORAGE_ACCESS_KEY="$access"
+  DISCOVERY_OBJECT_STORAGE_SECRET_KEY="$secret"
+  log "Credenciais do RustFS geradas (guardadas em /etc/default/rustfs, modo 600)."
+}
+
+write_rustfs_systemd_unit() {
+  local unit=/etc/systemd/system/rustfs.service tmp
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'UNITEOF'
+[Unit]
+Description=RustFS (object storage S3-compativel do Discovery)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=rustfs
+Group=rustfs
+EnvironmentFile=/etc/default/rustfs
+ExecStart=/opt/rustfs/bin/rustfs server $RUSTFS_VOLUMES
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+  if sudo test -f "$unit" && sudo diff -q "$tmp" "$unit" >/dev/null 2>&1; then
+    log "Unit rustfs.service inalterada; mantendo."
+  else
+    sudo install -m 644 -o root -g root "$tmp" "$unit"
+    sudo systemctl daemon-reload
+  fi
+  rm -f "$tmp"
+}
+
+wait_for_rustfs_health() {
+  local port="${DISCOVERY_OBJECT_STORAGE_PORT:-9000}" attempt
+  for attempt in $(seq 1 30); do
+    if curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:${port}/health" 2>/dev/null; then
+      log "RustFS respondendo em 127.0.0.1:${port}."
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+setup_object_storage_rustfs() {
+  log "Configurando RustFS (storage de objetos S3-compativel)..."
+
+  if ! id -u rustfs >/dev/null 2>&1; then
+    sudo useradd --system --home-dir /opt/rustfs --shell /usr/sbin/nologin rustfs
+  fi
+  sudo install -d -m 755 -o rustfs -g rustfs /opt/rustfs
+  sudo install -d -m 750 -o rustfs -g rustfs /opt/rustfs/bin
+  sudo install -d -m 750 -o rustfs -g rustfs "${RUSTFS_DATA_DIR:-/opt/rustfs/data}"
+
+  install_rustfs_binary "$RUSTFS_VERSION"
+  write_rustfs_env_file
+  write_rustfs_systemd_unit
+
+  if ! sudo systemctl is-active --quiet rustfs; then
+    if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ":${DISCOVERY_OBJECT_STORAGE_PORT:-9000} "; then
+      fail "A porta ${DISCOVERY_OBJECT_STORAGE_PORT:-9000} ja esta em uso por outro processo. Ajuste DISCOVERY_OBJECT_STORAGE_PORT/RUSTFS_ADDRESS."
+    fi
+  fi
+
+  sudo systemctl enable rustfs >/dev/null 2>&1 || true
+  sudo systemctl restart rustfs
+  if ! wait_for_rustfs_health; then
+    warn "RustFS nao respondeu em 30s. Verifique: journalctl -u rustfs -n 50"
+  fi
+
+  if [[ -z "${DISCOVERY_OBJECT_STORAGE_ACCESS_KEY:-}" || -z "${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}" ]]; then
+    local env_file=/etc/default/rustfs
+    if sudo test -f "$env_file"; then
+      DISCOVERY_OBJECT_STORAGE_ACCESS_KEY="$(sudo awk -F= '/^RUSTFS_ACCESS_KEY=/{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true)"
+      DISCOVERY_OBJECT_STORAGE_SECRET_KEY="$(sudo awk -F= '/^RUSTFS_SECRET_KEY=/{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true)"
+    fi
+  fi
+
+  create_rustfs_bucket "$DISCOVERY_OBJECT_STORAGE_BUCKET"
+}
+
+# Garantia usada no modo UPDATE: NAO instala e NAO atualiza nada. Apenas
+# verifica servico/bucket/configuracao quando o modo persistido e rustfs.
+ensure_object_storage() {
+  load_existing_object_storage_defaults
+  normalize_object_storage_settings
+
+  case "$DISCOVERY_OBJECT_STORAGE_MODE" in
+    rustfs)
+      if sudo systemctl is-active --quiet rustfs; then
+        create_rustfs_bucket "$DISCOVERY_OBJECT_STORAGE_BUCKET" || true
+        if declare -F configure_object_storage_in_database >/dev/null 2>&1; then
+          configure_object_storage_in_database || warn "Falha ao garantir a configuracao do storage no banco (nao-bloqueante)."
+        fi
+      else
+        warn "Modo rustfs configurado, mas o servico rustfs nao esta ativo. Rode o instalador (opcao 1) para instalar/reparar."
+      fi
+      ;;
+    external) log "Storage externo: nada a garantir nesta maquina." ;;
+    *) log "Storage nao configurado (skip): nada a garantir." ;;
+  esac
+}

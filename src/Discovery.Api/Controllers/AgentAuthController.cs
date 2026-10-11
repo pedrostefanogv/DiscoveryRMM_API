@@ -12,6 +12,8 @@ using Discovery.Core.Cqrs.AgentAuth.P2P;
 using Discovery.Core.Cqrs.AgentAuth.Software;
 using Discovery.Core.Cqrs.AgentAuth.Status;
 using Discovery.Core.Cqrs.AgentAuth.Tickets;
+using Discovery.Core.Cqrs.Configurations.Queries;
+using Discovery.Core.Cqrs.Tickets.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
@@ -37,6 +39,8 @@ public class AgentAuthController : ControllerBase
     private readonly IDepartmentCustomFieldService _departmentCustomFieldService;
     private readonly ITicketFormSchemaService _ticketFormSchemaService;
     private readonly IP2pService _p2pService;
+    private readonly IAttachmentService _attachmentService;
+    private readonly IAttachmentRepository _attachmentRepository;
     private readonly ILogger<AgentAuthController> _logger;
 
     public AgentAuthController(
@@ -50,6 +54,8 @@ public class AgentAuthController : ControllerBase
         IDepartmentCustomFieldService departmentCustomFieldService,
         ITicketFormSchemaService ticketFormSchemaService,
         IP2pService p2pService,
+        IAttachmentService attachmentService,
+        IAttachmentRepository attachmentRepository,
         ILogger<AgentAuthController> logger)
     {
         _mediator = mediator;
@@ -62,6 +68,8 @@ public class AgentAuthController : ControllerBase
         _departmentCustomFieldService = departmentCustomFieldService;
         _ticketFormSchemaService = ticketFormSchemaService;
         _p2pService = p2pService;
+        _attachmentService = attachmentService;
+        _attachmentRepository = attachmentRepository;
         _logger = logger;
     }
 
@@ -320,6 +328,180 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetMyTicketCommentsQuery(id, ticketId)), Ok);
     }
 
+
+    // ── Anexos de chamados (agent) ─────────────────────────────────────────
+    //
+    // O agent precisa anexar arquivos/prints ao comentar um chamado. As rotas
+    // do console (/tickets/{id}/attachments/*) exigem permissao de usuario,
+    // entao o equivalente existe aqui, com isolamento por Ticket.AgentId (IDOR)
+    // e as MESMAS regras de TicketAttachmentSettings usadas no console/chat.
+
+    /// <summary>Configuracao de anexos (tipos/tamanho) para a UI do agent.</summary>
+    [HttpGet("me/tickets/attachment-settings")]
+    public async Task<IActionResult> GetMyTicketAttachmentSettings()
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        var result = await _mediator.Send(new GetTicketAttachmentSettingsQuery(), HttpContext.RequestAborted);
+        if (result.IsFailure || result.Value is null)
+            return BadRequest(new { error = "Não foi possível ler a configuração de anexos." });
+
+        var settings = result.Value;
+        return Ok(new
+        {
+            enabled = settings.Enabled,
+            allowedContentTypes = settings.AllowedContentTypes,
+            maxFileSizeBytes = settings.MaxFileSizeBytes,
+        });
+    }
+
+    /// <summary>Lista os anexos do chamado (somente do proprio agent).</summary>
+    [HttpGet("me/tickets/{ticketId:guid}/attachments")]
+    public async Task<IActionResult> GetMyTicketAttachments(
+        Guid ticketId,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        if (await ResolveMyTicketAsync(id, ticketId) is null) return NotFound();
+
+        var result = await _mediator.Send(new GetTicketAttachmentsQuery(ticketId, cursor, limit), HttpContext.RequestAborted);
+        return MapResult(result, Ok);
+    }
+
+    /// <summary>Baixa um anexo do chamado (stream same-origin autenticado).</summary>
+    [HttpGet("me/tickets/{ticketId:guid}/attachments/{attachmentId:guid}/download")]
+    public async Task<IActionResult> DownloadMyTicketAttachment(Guid ticketId, Guid attachmentId, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        if (await ResolveMyTicketAsync(id, ticketId) is null) return NotFound();
+
+        var attachment = await _attachmentRepository.GetByIdAsync(attachmentId, ct);
+        if (attachment is null
+            || attachment.IsDeleted
+            || !string.Equals(attachment.EntityType, "Ticket", StringComparison.OrdinalIgnoreCase)
+            || attachment.EntityId != ticketId)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            var stream = await _attachmentService.DownloadAttachmentAsync(attachmentId, ct);
+            var contentType = string.IsNullOrWhiteSpace(attachment.ContentType)
+                ? "application/octet-stream"
+                : attachment.ContentType;
+            return File(stream, contentType, attachment.FileName);
+        }
+        catch (FileNotFoundException) { return NotFound(); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (Exception)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Não foi possível baixar o arquivo." });
+        }
+    }
+
+    /// <summary>Prepara o upload direto no storage (URL pre-assinada).</summary>
+    [HttpPost("me/tickets/{ticketId:guid}/attachments/presigned-upload")]
+    public async Task<IActionResult> PrepareMyTicketAttachmentUpload(
+        Guid ticketId,
+        [FromBody] PresignedUploadRequestDto req)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        var ticket = await ResolveMyTicketAsync(id, ticketId);
+        if (ticket is null) return NotFound();
+
+        var settingsResult = await _mediator.Send(new GetTicketAttachmentSettingsQuery(), HttpContext.RequestAborted);
+        if (settingsResult.IsFailure || settingsResult.Value is null)
+            return BadRequest(new { error = "Não foi possível ler a configuração de anexos." });
+        var settings = settingsResult.Value;
+
+        if (!settings.Enabled)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Anexos de chamados estão desabilitados nas configurações do servidor." });
+
+        if (req is null || string.IsNullOrWhiteSpace(req.FileName) || string.IsNullOrWhiteSpace(req.ContentType))
+            return BadRequest(new { error = "Nome e tipo do arquivo são obrigatórios." });
+
+        if (!settings.IsContentTypeAllowed(req.ContentType))
+            return BadRequest(new { error = $"Tipo de arquivo não permitido: {req.ContentType}." });
+
+        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxFileSizeBytes)
+            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxFileSizeBytes} bytes." });
+
+        var result = await _attachmentService.PreparePresignedUploadAsync(
+            "Ticket", ticketId, ticket.ClientId, req.FileName, req.ContentType, req.SizeBytes,
+            settings.PresignedUploadUrlTtlMinutes, HttpContext.RequestAborted);
+
+        return Ok(result);
+    }
+
+    /// <summary>Finaliza o upload pre-assinado e persiste o anexo do chamado.</summary>
+    [HttpPost("me/tickets/{ticketId:guid}/attachments/complete-upload")]
+    public async Task<IActionResult> CompleteMyTicketAttachmentUpload(
+        Guid ticketId,
+        [FromBody] AgentCompleteUploadRequest req,
+        CancellationToken ct = default)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        var ticket = await ResolveMyTicketAsync(id, ticketId);
+        if (ticket is null) return NotFound();
+
+        var settingsResult = await _mediator.Send(new GetTicketAttachmentSettingsQuery(), ct);
+        if (settingsResult.IsFailure || settingsResult.Value is null)
+            return BadRequest(new { error = "Não foi possível ler a configuração de anexos." });
+        var settings = settingsResult.Value;
+
+        if (!settings.Enabled)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Anexos de chamados estão desabilitados nas configurações do servidor." });
+
+        if (req is null || !settings.IsContentTypeAllowed(req.ContentType))
+            return BadRequest(new { error = $"Tipo de arquivo não permitido: {req?.ContentType}." });
+
+        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxFileSizeBytes)
+            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxFileSizeBytes} bytes." });
+
+        try
+        {
+            // Autor sempre derivado do agent autenticado (nunca do body).
+            var attachment = await _attachmentService.CompletePresignedUploadAsync(
+                req.AttachmentId, "Ticket", ticketId, ticket.ClientId,
+                req.FileName, req.ContentType, req.SizeBytes, req.ObjectKey,
+                $"agent:{id}", ct);
+
+            // O limite vale sobre o tamanho REAL no storage (nao o declarado).
+            if (attachment.SizeBytes > settings.MaxFileSizeBytes)
+            {
+                await _attachmentService.DeleteAttachmentAsync(attachment.Id, ct);
+                return StatusCode(StatusCodes.Status413RequestEntityTooLarge, new { error = $"Arquivo excede o tamanho máximo permitido ({settings.MaxFileSizeBytes} bytes)." });
+            }
+
+            return Ok(attachment);
+        }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    /// <summary>
+    /// Ticket do proprio agent (isolamento por AgentId). Devolve null quando o
+    /// ticket nao existe OU pertence a outro agent — sem revelar a existencia.
+    /// </summary>
+    private async Task<AgentTicketDto?> ResolveMyTicketAsync(Guid agentId, Guid ticketId)
+    {
+        var result = await _mediator.Send(new GetMyTicketQuery(agentId, ticketId), HttpContext.RequestAborted);
+        return result.IsSuccess ? result.Value : null;
+    }
     /// <summary>
     /// Lista os estados de workflow disponíveis para os tickets do agente.
     /// O seletor de estado final da UI de suporte do agente chama este endpoint.

@@ -122,6 +122,10 @@ main() {
   fi
 
   prompt_tls_certificate_configuration
+  # Storage de arquivos: decide RustFS local x provedor externo ANTES de
+  # escrever o env/gerar o nginx (o endpoint e o location do bucket dependem
+  # dessa escolha). Default = nao instalar nada.
+  prompt_object_storage_configuration
 
   wizard_header "Documentacao OpenAPI (Scalar)" "$(wizard_step_label "7/9" "6/8")"
   echo "Habilite ou nao a documentacao OpenAPI (Scalar) na API."
@@ -217,11 +221,18 @@ main() {
 
   publish_api
   publish_site
+  # RustFS local (quando escolhido): instala o servico ANTES de publicar o
+  # nginx. Nao atualiza instalacao existente (versao fixada).
+  if [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" == "rustfs" ]]; then
+    setup_object_storage_rustfs
+  fi
   # Update e sempre manual: remove qualquer automacao remanescente de versoes antigas.
   remove_selfupdate_automation
   write_systemd_service
   write_site_proxy_config
   run_db_migrations
+  # Configuracao do storage no banco via CLI da API (segredo criptografado).
+  configure_object_storage_in_database
   ensure_nats_fanout_stream
   show_summary
 }

@@ -12,6 +12,13 @@ public class ObjectStorageSettings
     /// <summary>Endpoint do provedor S3-compatível (ex: s3.amazonaws.com, api.cloudflare.com, object.oracle.com)</summary>
     public string Endpoint { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Endpoint PUBLICO usado apenas para gerar URLs pre-assinadas. Quando vazio
+    /// usa o proprio Endpoint. Necessario no modo interno: o servidor fala com o
+    /// storage por loopback, mas o agente precisa de uma URL que ele alcance.
+    /// </summary>
+    public string? PresignEndpoint { get; set; }
+
     /// <summary>Região (ex: us-east-1, auto para R2)</summary>
     public string Region { get; set; } = string.Empty;
 
@@ -60,6 +67,9 @@ public class ObjectStorageSettings
             errors.Add("Endpoint é obrigatório");
         else if (!TryValidateEndpoint(Endpoint))
             errors.Add("Endpoint deve ser um host válido ou URL http/https sem path, query ou fragment");
+
+        if (!string.IsNullOrWhiteSpace(PresignEndpoint) && !TryValidateEndpoint(PresignEndpoint!))
+            errors.Add("PresignEndpoint deve ser um host válido ou URL http/https sem path");
 
         if (string.IsNullOrWhiteSpace(Region))
             errors.Add("Region é obrigatório");

@@ -1,8 +1,11 @@
+using Discovery.Core.Configuration;
+using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -20,19 +23,48 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     private readonly ILogger<ObjectStorageProviderFactory> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ISecretProtector _secretProtector;
+    private readonly IOptions<ObjectStorageOptions> _objectStorageOptions;
 
     public ObjectStorageProviderFactory(
         IServerConfigurationRepository serverConfigRepository,
         IMemoryCache cache,
         ILogger<ObjectStorageProviderFactory> logger,
         ILoggerFactory loggerFactory,
-        ISecretProtector secretProtector)
+        ISecretProtector secretProtector,
+        IOptions<ObjectStorageOptions> objectStorageOptions)
     {
         _serverConfigRepository = serverConfigRepository ?? throw new ArgumentNullException(nameof(serverConfigRepository));
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _secretProtector = secretProtector ?? throw new ArgumentNullException(nameof(secretProtector));
+        _objectStorageOptions = objectStorageOptions ?? throw new ArgumentNullException(nameof(objectStorageOptions));
+    }
+
+    /// <summary>
+    /// Configuracao efetiva: no modo interno (RustFS do servidor) os dados vem do
+    /// env do projeto (ObjectStorage__*), nao do banco; nos demais o banco manda.
+    /// </summary>
+    private ObjectStorageSettings ResolveSettings(ServerConfiguration serverConfig)
+    {
+        var options = _objectStorageOptions.Value;
+        if (!options.IsInternal)
+            return ObjectStorageSettingsFromServerConfiguration(serverConfig);
+
+        return new ObjectStorageSettings
+        {
+            BucketName = string.IsNullOrWhiteSpace(options.Bucket)
+                ? serverConfig.ObjectStorageBucketName
+                : options.Bucket,
+            Endpoint = options.InternalEndpoint,
+            PresignEndpoint = string.IsNullOrWhiteSpace(options.PublicEndpoint) ? null : options.PublicEndpoint,
+            Region = string.IsNullOrWhiteSpace(options.Region) ? "us-east-1" : options.Region,
+            AccessKey = options.AccessKey,
+            SecretKey = options.SecretKey,
+            UrlTtlHours = options.UrlTtlHours > 0 ? options.UrlTtlHours : 24,
+            UsePathStyle = options.UsePathStyle,
+            SslVerify = options.SslVerify,
+        };
     }
 
     /// <summary>
@@ -50,7 +82,7 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
 
         var config = await _serverConfigRepository.GetAsync() ??
             await _serverConfigRepository.GetOrCreateDefaultAsync();
-        var settings = ObjectStorageSettingsFromServerConfiguration(config);
+        var settings = ResolveSettings(config);
         var errors = settings.Validate();
         if (errors.Count > 0)
         {
@@ -84,7 +116,7 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     public async Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
     {
         var config = await _serverConfigRepository.GetOrCreateDefaultAsync();
-        var settings = ObjectStorageSettingsFromServerConfiguration(config);
+        var settings = ResolveSettings(config);
         var validationErrors = settings.Validate();
 
         if (validationErrors.Count > 0)

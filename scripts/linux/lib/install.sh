@@ -362,6 +362,10 @@ create_directories() {
   sudo install -d -m 750 -o discovery-api -g discovery-api "$DISCOVERY_OPS_DIR"
   sudo install -d -m 750 -o root -g discovery-api /etc/discovery-api
   sudo install -d -m 750 -o root -g discovery-api /etc/discovery-api/certs
+  if [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" == "rustfs" ]]; then
+    # Base do RustFS; o dono (usuario rustfs) e criado em setup_object_storage_rustfs.
+    sudo install -d -m 755 /opt/rustfs
+  fi
 
   cleanup_pipe_prefixed_artifacts "/root"
   cleanup_pipe_prefixed_artifacts "$DISCOVERY_API_BASE"

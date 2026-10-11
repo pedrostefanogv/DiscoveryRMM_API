@@ -210,6 +210,120 @@ normalize_site_realtime_settings() {
   fi
 }
 
+
+# ── Object storage (arquivos/anexos) ───────────────────────────────────────
+
+# Le valores ja persistidos (adoption em reinstall/update): env da API em
+# primeiro lugar (e a fonte de verdade para o modo escolhido) e o
+# /etc/default/rustfs para reutilizar as credenciais do RustFS ja instalado.
+load_existing_object_storage_defaults() {
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  if sudo test -f "$env_file"; then
+    local key value
+    for key in DISCOVERY_OBJECT_STORAGE_MODE DISCOVERY_OBJECT_STORAGE_BUCKET \
+               DISCOVERY_OBJECT_STORAGE_ENDPOINT DISCOVERY_OBJECT_STORAGE_REGION \
+               DISCOVERY_OBJECT_STORAGE_ACCESS_KEY DISCOVERY_OBJECT_STORAGE_SECRET_KEY \
+               DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE DISCOVERY_OBJECT_STORAGE_SSL_VERIFY \
+               DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED \
+               DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD RUSTFS_VERSION; do
+      [[ -n "${!key:-}" ]] && continue
+      value="$(sudo awk -F= -v k="$key" '$1==k{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true)"
+      [[ -n "$value" ]] && printf -v "$key" '%s' "$value"
+    done
+  fi
+
+  if sudo test -f /etc/default/rustfs; then
+    local rust_access rust_secret
+    rust_access="$(sudo awk -F= '/^RUSTFS_ACCESS_KEY=/{sub("^[^=]*=","");print;exit}' /etc/default/rustfs 2>/dev/null || true)"
+    rust_secret="$(sudo awk -F= '/^RUSTFS_SECRET_KEY=/{sub("^[^=]*=","");print;exit}' /etc/default/rustfs 2>/dev/null || true)"
+    [[ -z "${DISCOVERY_OBJECT_STORAGE_ACCESS_KEY:-}" && -n "$rust_access" ]] && DISCOVERY_OBJECT_STORAGE_ACCESS_KEY="$rust_access"
+    [[ -z "${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}" && -n "$rust_secret" ]] && DISCOVERY_OBJECT_STORAGE_SECRET_KEY="$rust_secret"
+  fi
+}
+
+# Endpoint default do storage: o MESMO host do portal (o path do bucket entra
+# pelo location do nginx). Usa o dominio do certificado quando existe (HTTPS
+# confiavel); caso contrario cai para o host interno em HTTP.
+resolve_object_storage_default_endpoint() {
+  local domain="${ZEROSSL_CERT_DOMAIN:-${LETSENCRYPT_CERT_DOMAIN:-}}"
+  if [[ -z "$domain" ]]; then
+    domain="$(resolve_fido2_server_domain 2>/dev/null || true)"
+  fi
+  domain="$(normalize_host_without_scheme "$domain")"
+  if [[ -n "$domain" ]]; then
+    printf 'https://%s' "$domain"
+    return
+  fi
+  local internal_host
+  internal_host="$(normalize_host_without_scheme "${INTERNAL_API_HOST:-}")"
+  if [[ -n "$internal_host" ]]; then
+    printf 'http://%s' "$internal_host"
+    return
+  fi
+  printf ''
+}
+
+normalize_object_storage_settings() {
+  local raw_mode="${DISCOVERY_OBJECT_STORAGE_MODE:-skip}"
+  raw_mode="$(printf '%s' "$raw_mode" | tr '[:upper:]' '[:lower:]')"
+  case "$raw_mode" in
+    1|local|rustfs)    DISCOVERY_OBJECT_STORAGE_MODE="rustfs" ;;
+    2|external|s3)     DISCOVERY_OBJECT_STORAGE_MODE="external" ;;
+    3|skip|none|"")    DISCOVERY_OBJECT_STORAGE_MODE="skip" ;;
+    *) fail "DISCOVERY_OBJECT_STORAGE_MODE invalido: $raw_mode (use rustfs, external ou skip)" ;;
+  esac
+
+  RUSTFS_VERSION="${RUSTFS_VERSION:-1.0.1}"
+  RUSTFS_ADDRESS="${RUSTFS_ADDRESS:-127.0.0.1:9000}"
+  RUSTFS_DATA_DIR="${RUSTFS_DATA_DIR:-/opt/rustfs/data}"
+  DISCOVERY_OBJECT_STORAGE_BUCKET="${DISCOVERY_OBJECT_STORAGE_BUCKET:-discovery-files}"
+  DISCOVERY_OBJECT_STORAGE_REGION="${DISCOVERY_OBJECT_STORAGE_REGION:-us-east-1}"
+  DISCOVERY_OBJECT_STORAGE_PORT="${DISCOVERY_OBJECT_STORAGE_PORT:-9000}"
+  DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS="${DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS:-24}"
+  DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD="${DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD:-500m}"
+  DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED="${DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED:-y}"
+  DISCOVERY_OBJECT_STORAGE_SSL_VERIFY="${DISCOVERY_OBJECT_STORAGE_SSL_VERIFY:-true}"
+  # S3-compativeis (RustFS/MinIO/R2) usam path-style; AWS S3 puro usa
+  # virtual-hosted e o proprio SDK resolve pelo host. O valor aqui documenta a
+  # intencao e e gravado no banco.
+  DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE="${DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE:-true}"
+
+  case "$DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED" in
+    1|y|yes|true|on|Y|YES) DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED="y" ;;
+    *) DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED="n" ;;
+  esac
+
+  if [[ "$DISCOVERY_OBJECT_STORAGE_MODE" == "skip" ]]; then
+    return 0
+  fi
+
+  [[ "$DISCOVERY_OBJECT_STORAGE_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] \
+    || fail "DISCOVERY_OBJECT_STORAGE_BUCKET invalido: $DISCOVERY_OBJECT_STORAGE_BUCKET (minusculas, digitos, ponto e hifen; 3-63)"
+  [[ "$DISCOVERY_OBJECT_STORAGE_PORT" =~ ^[0-9]{2,5}$ ]] \
+    || fail "DISCOVERY_OBJECT_STORAGE_PORT invalido: $DISCOVERY_OBJECT_STORAGE_PORT"
+  [[ "$DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS" =~ ^[0-9]+$ ]] \
+    || fail "DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS invalido: $DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS"
+
+  if [[ "$DISCOVERY_OBJECT_STORAGE_MODE" == "rustfs" && -z "${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}" ]]; then
+    DISCOVERY_OBJECT_STORAGE_ENDPOINT="$(resolve_object_storage_default_endpoint)"
+  fi
+  if [[ "$DISCOVERY_OBJECT_STORAGE_MODE" == "rustfs" && -z "${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}" ]]; then
+    fail "Nao foi possivel derivar o endpoint do RustFS; informe DISCOVERY_OBJECT_STORAGE_ENDPOINT (host ou http(s)://host, sem path)."
+  fi
+
+  if [[ -n "${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}" ]]; then
+    # O banco guarda host[:porta] (com ou sem scheme): um path quebraria a
+    # assinatura das URLs pre-assinadas e e rejeitado pelo proprio backend.
+    [[ "$DISCOVERY_OBJECT_STORAGE_ENDPOINT" =~ ^(https?://)?[A-Za-z0-9.-]+(:[0-9]{2,5})?$ ]] \
+      || fail "DISCOVERY_OBJECT_STORAGE_ENDPOINT deve ser host[:porta] ou http(s)://host[:porta], sem path: $DISCOVERY_OBJECT_STORAGE_ENDPOINT"
+  fi
+
+  if [[ "$DISCOVERY_OBJECT_STORAGE_MODE" == "external" ]]; then
+    [[ -n "${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}" ]] || fail "Informe DISCOVERY_OBJECT_STORAGE_ENDPOINT para o provedor externo."
+    [[ -n "${DISCOVERY_OBJECT_STORAGE_ACCESS_KEY:-}" ]] || fail "Informe DISCOVERY_OBJECT_STORAGE_ACCESS_KEY para o provedor externo."
+    [[ -n "${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}" ]] || fail "Informe DISCOVERY_OBJECT_STORAGE_SECRET_KEY para o provedor externo."
+  fi
+}
 normalize_install_branch_input() {
   local raw_branch="$1"
   local normalized_branch

@@ -576,6 +576,25 @@ RemoteDebug__MissedPingsBeforeClose=${REMOTE_DEBUG_MISSED_PINGS_BEFORE_CLOSE:-3}
 RemoteDebug__InitialGraceSeconds=${REMOTE_DEBUG_INITIAL_GRACE_SECONDS:-60}
 RemoteDebug__KeepAliveSeconds=${REMOTE_DEBUG_KEEP_ALIVE_SECONDS:-60}
 RemoteDebug__KeepAliveTimeoutSeconds=${REMOTE_DEBUG_KEEP_ALIVE_TIMEOUT_SECONDS:-300}
+# ── Object storage (anexos/prints) ────────────────────────────────────────
+# DISCOVERY_OBJECT_STORAGE_MODE: rustfs (instalado nesta maquina), external
+# (S3-compativel externo) ou skip. O endpoint guardado no banco e apenas
+# host[:porta]; o caminho do bucket e publicado pelo nginx no mesmo host.
+DISCOVERY_OBJECT_STORAGE_MODE=${DISCOVERY_OBJECT_STORAGE_MODE:-skip}
+DISCOVERY_OBJECT_STORAGE_BUCKET=${DISCOVERY_OBJECT_STORAGE_BUCKET:-discovery-files}
+DISCOVERY_OBJECT_STORAGE_ENDPOINT=${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}
+DISCOVERY_OBJECT_STORAGE_REGION=${DISCOVERY_OBJECT_STORAGE_REGION:-us-east-1}
+DISCOVERY_OBJECT_STORAGE_ACCESS_KEY=${DISCOVERY_OBJECT_STORAGE_ACCESS_KEY:-}
+DISCOVERY_OBJECT_STORAGE_SECRET_KEY=${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}
+DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE=${DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE:-true}
+DISCOVERY_OBJECT_STORAGE_SSL_VERIFY=${DISCOVERY_OBJECT_STORAGE_SSL_VERIFY:-true}
+DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS=${DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS:-24}
+DISCOVERY_OBJECT_STORAGE_PORT=${DISCOVERY_OBJECT_STORAGE_PORT:-9000}
+DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED=${DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED:-y}
+DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD=${DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD:-500m}
+RUSTFS_VERSION=${RUSTFS_VERSION:-1.0.1}
+RUSTFS_ADDRESS=${RUSTFS_ADDRESS:-127.0.0.1:9000}
+RUSTFS_DATA_DIR=${RUSTFS_DATA_DIR:-/opt/rustfs/data}
 EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
@@ -752,6 +771,41 @@ write_site_proxy_config() {
     fi
   fi
 
+# ── Object storage: publica o caminho do bucket no MESMO host do portal ──
+  # O endpoint guardado no banco e apenas host[:porta]; o bucket entra como
+  # primeiro segmento do path (path-style), entao basta um location ^~ /bucket/.
+  local object_storage_location=""
+  local os_mode os_bucket os_max_upload
+  os_mode="$(printf '%s' "${DISCOVERY_OBJECT_STORAGE_MODE:-$(_env_key DISCOVERY_OBJECT_STORAGE_MODE)}" | tr '[:upper:]' '[:lower:]')"
+  os_mode="${os_mode:-skip}"
+  os_bucket="${DISCOVERY_OBJECT_STORAGE_BUCKET:-$(_env_key DISCOVERY_OBJECT_STORAGE_BUCKET)}"
+  os_max_upload="${DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD:-$(_env_key DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD)}"
+  os_max_upload="${os_max_upload:-500m}"
+  local os_nginx_enabled="${DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED:-$(_env_key DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED)}"
+  os_nginx_enabled="${os_nginx_enabled:-y}"
+
+  if [[ "$os_mode" == "rustfs" && "$os_nginx_enabled" == "y" && -n "$os_bucket" ]]; then
+    object_storage_location="$(cat <<EOF
+  location ^~ /${os_bucket}/ {
+    proxy_pass http://discovery_object_storage_backend;
+    proxy_http_version 1.1;
+    # SigV4 assina o Host: NAO reescrever para o upstream (invalidaria a URL).
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # Upload/download de arquivo: sem buffer em disco e com timeout longo.
+    proxy_request_buffering off;
+    proxy_buffering off;
+    client_max_body_size ${os_max_upload};
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+  }
+EOF
+)"
+  elif [[ "$os_mode" == "rustfs" ]]; then
+    warn "RustFS configurado (bucket ${os_bucket:-definido}) mas a publicacao pelo nginx esta desativada (DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED=${os_nginx_enabled}). URLs pre-assinadas so funcionam na rede interna."
+  fi
   [[ -f "$NGINX_TEMPLATE_PATH" ]] || fail "Template Nginx nao encontrado: $NGINX_TEMPLATE_PATH"
 
   local rendered_conf; rendered_conf="$(mktemp)"
@@ -760,12 +814,19 @@ write_site_proxy_config() {
     -v discovery_site_current="$DISCOVERY_SITE_CURRENT" \
     -v nats_ws_port="${NATS_WS_PORT:-8081}" \
     -v redirect_rules="$redirect_rules" \
+    -v object_storage_location="$object_storage_location" \
     '{
       gsub("__SERVER_NAME_LIST__", server_name_list)
       gsub("__DISCOVERY_SITE_CURRENT__", discovery_site_current)
       gsub("__NATS_WS_PORT__", nats_ws_port)
       if ($0 ~ /__REDIRECT_RULES__/) {
         if (length(redirect_rules) > 0) { printf "%s", redirect_rules }
+        next
+      }
+      # Storage: mesmo bloco de location nos dois vhosts (443 e 80). No vhost 80
+      # ele vem ANTES do redirect para http:// pre-assinado nao passar por 301.
+      if ($0 ~ /__OBJECT_STORAGE_LOCATION__/ || $0 ~ /__OBJECT_STORAGE_LOCATION_PORT80__/) {
+        if (length(object_storage_location) > 0) { printf "%s\n", object_storage_location }
         next
       }
       print
@@ -1103,6 +1164,102 @@ EOF
   rm -f "$tmp_file"
   log "Variaveis RemoteAccess atualizadas no $env_file"
 }
+# Persiste as variaveis do object storage no discovery.env (modo UPDATE).
+# Segue o padrao do update_remote_access_environment_file: filtra as linhas do
+# bloco e reescreve, para nao duplicar chaves a cada execucao.
+update_object_storage_environment_file() {
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  if ! sudo test -f "$env_file"; then
+    log "Arquivo $env_file nao encontrado. Pulando atualizacao das variaveis de storage."; return
+  fi
+
+  # Sem carregar o que ja esta no env o modo viraria "skip" e o bloco seria
+  # reescrito apagando a configuracao existente.
+  load_existing_object_storage_defaults
+  normalize_object_storage_settings
+
+  local tmp_file; tmp_file="$(mktemp)"
+  set +e
+  sudo awk '!/^DISCOVERY_OBJECT_STORAGE_/ && !/^RUSTFS_/' "$env_file" > "$tmp_file" 2>/dev/null
+  set -e
+
+  cat >> "$tmp_file" <<EOF
+# ── Object storage (anexos/prints) ────────────────────────────────────────
+# DISCOVERY_OBJECT_STORAGE_MODE: rustfs (instalado nesta maquina), external
+# (S3-compativel externo) ou skip. O endpoint guardado no banco e apenas
+# host[:porta]; o caminho do bucket e publicado pelo nginx no mesmo host.
+DISCOVERY_OBJECT_STORAGE_MODE=${DISCOVERY_OBJECT_STORAGE_MODE:-skip}
+DISCOVERY_OBJECT_STORAGE_BUCKET=${DISCOVERY_OBJECT_STORAGE_BUCKET:-discovery-files}
+DISCOVERY_OBJECT_STORAGE_ENDPOINT=${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}
+DISCOVERY_OBJECT_STORAGE_REGION=${DISCOVERY_OBJECT_STORAGE_REGION:-us-east-1}
+DISCOVERY_OBJECT_STORAGE_ACCESS_KEY=${DISCOVERY_OBJECT_STORAGE_ACCESS_KEY:-}
+DISCOVERY_OBJECT_STORAGE_SECRET_KEY=${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}
+DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE=${DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE:-true}
+DISCOVERY_OBJECT_STORAGE_SSL_VERIFY=${DISCOVERY_OBJECT_STORAGE_SSL_VERIFY:-true}
+DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS=${DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS:-24}
+DISCOVERY_OBJECT_STORAGE_PORT=${DISCOVERY_OBJECT_STORAGE_PORT:-9000}
+DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED=${DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED:-y}
+DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD=${DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD:-500m}
+RUSTFS_VERSION=${RUSTFS_VERSION:-1.0.1}
+RUSTFS_ADDRESS=${RUSTFS_ADDRESS:-127.0.0.1:9000}
+RUSTFS_DATA_DIR=${RUSTFS_DATA_DIR:-/opt/rustfs/data}
+EOF
+
+  sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
+  rm -f "$tmp_file"
+  log "Variaveis de object storage atualizadas no $env_file"
+}
+
+# Grava a configuracao do storage no banco via CLI da API
+# (Discovery.Api --set-object-storage). Vantagens sobre SQL direto: o segredo e
+# criptografado pelo SecretProtector (funciona com SecretEncryption on/off), os
+# campos sao validados e o audit registra updated_by=installer.
+configure_object_storage_in_database() {
+  local mode="${DISCOVERY_OBJECT_STORAGE_MODE:-skip}"
+  if [[ "$mode" == "skip" ]]; then
+    log "Storage de objetos nao configurado (skip); nada a gravar no banco."
+    return 0
+  fi
+
+  local api_env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  local api_current="${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}"
+  if ! sudo -u discovery-api test -x "$api_current/Discovery.Api"; then
+    fail "Binario da API nao encontrado em $api_current/Discovery.Api; rode publish_api antes."
+  fi
+  if ! sudo -u discovery-api test -r "$api_env_file"; then
+    fail "Arquivo de ambiente da API inacessivel: $api_env_file"
+  fi
+
+  local flags="--set-object-storage"
+  if [[ "${DISCOVERY_OBJECT_STORAGE_TEST:-1}" != "0" ]]; then
+    flags="--set-object-storage --test-object-storage"
+  fi
+  if [[ "${DISCOVERY_OBJECT_STORAGE_FORCE:-0}" == "1" ]]; then
+    flags="$flags --force"
+  fi
+
+  log "Gravando a configuracao do object storage no banco (CLI da API)"
+  local output
+  if ! output="$(sudo -u discovery-api env \
+      DISCOVERY_API_MAINTENANCE_ENV_FILE="$api_env_file" \
+      DISCOVERY_API_MAINTENANCE_CURRENT="$api_current" \
+      DISCOVERY_API_MAINTENANCE_FLAGS="$flags" \
+      bash -lc '
+        set -euo pipefail
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          line="${line%$'"'"'\r'"'"'}"
+          case "$line" in ""|\#*) continue ;; esac
+          export "$line"
+        done < "$DISCOVERY_API_MAINTENANCE_ENV_FILE"
+        cd "$DISCOVERY_API_MAINTENANCE_CURRENT"
+        export Logging__LogLevel__Default=Warning
+        export Logging__LogLevel__Microsoft=Warning
+        ./Discovery.Api $DISCOVERY_API_MAINTENANCE_FLAGS
+      ' 2>&1)"; then
+    fail "Falha ao configurar o object storage:\n${output}"
+  fi
+  printf '%s\n' "$output"
+}
 
 update_nats_environment_file() {
   local env_file="/etc/discovery-api/discovery.env"
@@ -1249,6 +1406,20 @@ show_summary() {
   fi
   if [[ -n "$primary_portal_host" ]]; then echo "- Hostname MFA/portal: $primary_portal_host"; fi
   echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
+  local summary_storage_mode="${DISCOVERY_OBJECT_STORAGE_MODE:-skip}"
+  if [[ "$summary_storage_mode" != "skip" ]]; then
+    echo "- Storage de objetos: ${summary_storage_mode}"
+    [[ -n "${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}" ]] && echo "- Storage endpoint: ${DISCOVERY_OBJECT_STORAGE_ENDPOINT}"
+    [[ -n "${DISCOVERY_OBJECT_STORAGE_BUCKET:-}" ]] && echo "- Storage bucket: ${DISCOVERY_OBJECT_STORAGE_BUCKET}"
+    if [[ "$summary_storage_mode" == "rustfs" ]]; then
+      echo "- RustFS: versao ${RUSTFS_VERSION:-} | servico rustfs | dados em ${RUSTFS_DATA_DIR:-/opt/rustfs/data}"
+      if [[ "${DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED:-y}" == "y" ]]; then
+        echo "- Storage publicado no nginx: /${DISCOVERY_OBJECT_STORAGE_BUCKET:-}/ (mesmo host do portal, URLs pre-assinadas)"
+      fi
+    fi
+  else
+    echo "- Storage de objetos: nao configurado (ajuste pelo console ou por Discovery.Api --set-object-storage)"
+  fi
   echo
 
   print_selected_configuration_summary

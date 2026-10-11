@@ -541,6 +541,69 @@ print_selected_configuration_summary() {
   else echo "- Admin bootstrap senha: informada pelo operador"; fi
 }
 
+# ── Object storage (anexos/prints) ─────────────────────────────────────────
+#
+# Pergunta se o storage de objetos sera o RustFS local (instalado por este
+# instalador) ou um provedor S3-compativel externo. Quando RustFS: instala o
+# servico em loopback, cria o bucket e grava a configuracao no banco. O
+# caminho do bucket e publicado pelo nginx (mesmo host do portal) para as URLs
+# pre-assinadas funcionarem tambem para agentes fora da maquina.
+#
+# Default "skip": apertar Enter NAO instala nada — instalar exige digitar "1".
+prompt_object_storage_configuration() {
+  load_existing_object_storage_defaults
+  wizard_header "Storage de arquivos (anexos/prints)" "$(wizard_step_label "8/10" "6/9")"
+  echo "1) RustFS local      - instala o servidor de objetos nesta maquina (S3 compativel)."
+  echo "2) Provedor externo  - S3 compativel ja existente (R2/S3/MinIO/...)."
+  echo "3) Configurar depois - nao instala e nao altera nada."
+  echo "----------------------------------------"
+  prompt_if_empty DISCOVERY_OBJECT_STORAGE_MODE "Storage de arquivos (1/2/3 ou rustfs/external/skip)" 0 "skip"
+
+  case "$(printf '%s' "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" | tr '[:upper:]' '[:lower:]')" in
+    1|local|rustfs) DISCOVERY_OBJECT_STORAGE_MODE="rustfs" ;;
+    2|external|s3)  DISCOVERY_OBJECT_STORAGE_MODE="external" ;;
+    3|skip|none)    DISCOVERY_OBJECT_STORAGE_MODE="skip" ;;
+  esac
+
+  if [[ "$DISCOVERY_OBJECT_STORAGE_MODE" == "rustfs" ]]; then
+    echo
+    echo "RustFS: o bucket fica em /opt/rustfs/data e o servico escuta apenas em loopback."
+    echo "O nginx publica o caminho do bucket no MESMO host do portal (sem DNS novo)."
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_BUCKET "Nome do bucket" 0 "discovery-files"
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_ENDPOINT \
+      "Endpoint publico do storage (host ou https://host, SEM path)" 0 "$(resolve_object_storage_default_endpoint)"
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_REGION "Regiao S3" 0 "us-east-1"
+    prompt_if_empty RUSTFS_VERSION "Versao do RustFS a instalar (fixa, sem auto-update)" 0 "1.0.1"
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED "Publicar o bucket pelo nginx? (y/N)" 0 "y"
+    if [[ "$NON_INTERACTIVE" -eq 0 && -z "${RUSTFS_SHA256:-}" ]]; then
+      read -r -p "sha256 do pacote do RustFS (opcional, recomendado; Enter = nao verificar): " RUSTFS_SHA256
+    fi
+  elif [[ "$DISCOVERY_OBJECT_STORAGE_MODE" == "external" ]]; then
+    echo
+    echo "Provedor externo: informe endpoint/bucket/credenciais. Nada sera instalado nesta maquina."
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_ENDPOINT "Endpoint do storage (host ou http(s)://host[:porta], SEM path)"
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_BUCKET "Nome do bucket"
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_REGION "Regiao S3" 0 "us-east-1"
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_ACCESS_KEY "Access key"
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_SECRET_KEY "Secret key" 1
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE "Usar path-style? (y/N)" 0 "y"
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_SSL_VERIFY "Verificar certificado TLS do storage? (y/N)" 0 "y"
+  else
+    log "Storage de arquivos: configuracao adiada (nada sera instalado/alterado)."
+  fi
+
+  normalize_object_storage_settings
+
+  case "$DISCOVERY_OBJECT_STORAGE_MODE" in
+    rustfs)
+      log "Storage: RustFS local (endpoint ${DISCOVERY_OBJECT_STORAGE_ENDPOINT}, bucket ${DISCOVERY_OBJECT_STORAGE_BUCKET}, versao ${RUSTFS_VERSION})" ;;
+    external)
+      log "Storage: provedor externo (endpoint ${DISCOVERY_OBJECT_STORAGE_ENDPOINT}, bucket ${DISCOVERY_OBJECT_STORAGE_BUCKET})" ;;
+    *)
+      log "Storage: nao configurado nesta execucao" ;;
+  esac
+}
+
 confirm_installation() {
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then return; fi
 

@@ -44,6 +44,25 @@ if (hasMaintenanceMode && maintenanceOptions.ShowHelp)
     return;
 }
 
+// CLI de configuracao do object storage (usada pelo instalador do servidor):
+// mesmo padrao do --recover-admin — parse antes de construir o host e execucao
+// depois do app construido (precisa do DI/banco).
+var hasObjectStorageMode = ObjectStorageCliMode.TryParse(args, out var objectStorageOptions, out var objectStorageParseError);
+if (hasObjectStorageMode && !string.IsNullOrWhiteSpace(objectStorageParseError))
+{
+    Console.Error.WriteLine(objectStorageParseError);
+    Environment.ExitCode = 2;
+    return;
+}
+
+if (hasObjectStorageMode && objectStorageOptions.ShowHelp)
+{
+    ObjectStorageCliMode.PrintHelp();
+    return;
+}
+
+var hasCliMode = hasMaintenanceMode || hasObjectStorageMode;
+
 var builder = WebApplication.CreateBuilder(args);
 
 var agentHostProfile = AgentPackageStartup.ResolveActiveProfile(builder.Configuration);
@@ -53,7 +72,7 @@ if (!string.Equals(agentInstallerTarget, "windows/amd64", StringComparison.Ordin
     throw new InvalidOperationException($"AgentPackage installer target must be windows/amd64. Resolved value: {agentInstallerTarget}");
 }
 
-if (!hasMaintenanceMode)
+if (!hasCliMode)
 {
     AgentPackageStartup.ValidateRequired(builder.Configuration, agentHostProfile, "DiscoveryProjectPath");
     AgentPackageStartup.ValidateRequired(builder.Configuration, agentHostProfile, "BinaryPath");
@@ -181,6 +200,12 @@ builder.Services.Configure<AutoTicketOptions>(
     builder.Configuration.GetSection(AutoTicketOptions.SectionName));
 builder.Services.Configure<SecretEncryptionOptions>(
     builder.Configuration.GetSection(SecretEncryptionOptions.SectionName));
+
+// Object storage: quando ObjectStorage__Mode=internal o storage (RustFS do
+// servidor) usa endpoints/credenciais do env do projeto; o servidor opera por
+// loopback e assina as URLs com o endpoint publico.
+builder.Services.Configure<ObjectStorageOptions>(
+    builder.Configuration.GetSection(ObjectStorageOptions.SectionName));
 
 // Web Push (notificacoes do navegador). Chaves VAPID devem vir de secret/vars
 // de ambiente em producao (Push__VapidPrivateKey); em Development um par
@@ -332,7 +357,7 @@ app.Logger.LogInformation(
     OperatingSystem.IsWindows() ? "windows" : "linux",
     agentInstallerTarget);
 
-if (hasMaintenanceMode)
+if (hasCliMode)
 {
     // Run migrations first so that recover-admin can bind users to roles/groups
     await using (var migrationScope = app.Services.CreateAsyncScope())
@@ -341,8 +366,18 @@ if (hasMaintenanceMode)
         runner.MigrateUp();
     }
 
-    var maintenanceExitCode = await MaintenanceMode.ExecuteAsync(app.Services, maintenanceOptions);
-    Environment.ExitCode = maintenanceExitCode;
+    var cliExitCode = 0;
+    if (hasMaintenanceMode)
+        cliExitCode = await MaintenanceMode.ExecuteAsync(app.Services, maintenanceOptions);
+
+    if (hasObjectStorageMode)
+    {
+        var objectStorageExitCode = await ObjectStorageCliMode.ExecuteAsync(app.Services, objectStorageOptions);
+        if (objectStorageExitCode != 0 && cliExitCode == 0)
+            cliExitCode = objectStorageExitCode;
+    }
+
+    Environment.ExitCode = cliExitCode;
     return;
 }
 

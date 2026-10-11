@@ -90,6 +90,12 @@ update_api() {
   else
     warn "Servico discovery-api nao encontrado; pulando restart"
   fi
+
+  # Storage de objetos: persiste as variaveis e garante servico/bucket/config.
+  # NAO instala e NAO atualiza o RustFS (ver setup_object_storage_rustfs), e no
+  # modo skip/external nao altera nada.
+  update_object_storage_environment_file || warn "Falha ao atualizar variaveis de storage (nao-bloqueante)"
+  ensure_object_storage || warn "Falha ao garantir o object storage (nao-bloqueante)"
 }
 
 update_site() {
@@ -200,6 +206,9 @@ update_all_components() {
     log "Atualizando infraestrutura auxiliar (Nginx) a partir do template do repo (config anterior salvo em .bak)"
     write_site_proxy_config || warn "Falha ao escrever config do Nginx (nao-bloqueante)"
   fi
+  # Storage de objetos (mesma garantia do update_api): persiste as variaveis e
+  # confere servico/bucket/configuracao — sem instalar/atualizar nada.
+  update_object_storage_environment_file || warn "Falha ao atualizar variaveis de storage (nao-bloqueante)"
   log "Reiniciando servicos..."
   if sudo systemctl list-unit-files --no-legend discovery-api.service 2>/dev/null | grep -q .; then
     # Health check pos-restart com rollback automatico para a release anterior.
