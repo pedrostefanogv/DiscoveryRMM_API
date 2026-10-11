@@ -11,8 +11,6 @@ namespace Discovery.Infrastructure.Repositories;
 /// </summary>
 public class TicketChatRepository(DiscoveryDbContext db) : ITicketChatRepository
 {
-    private const int SequenceRetryAttempts = 5;
-
     public Task<TicketChatSession?> GetByIdAsync(Guid sessionId, CancellationToken cancellationToken = default)
         => db.TicketChatSessions.FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken);
 
@@ -53,37 +51,52 @@ public class TicketChatRepository(DiscoveryDbContext db) : ITicketChatRepository
             .ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<TicketChatMessage>> GetMessagesAsync(Guid sessionId, long afterSequence, int limit, CancellationToken cancellationToken = default)
-        => await db.TicketChatMessages
+    {
+        var take = Math.Clamp(limit, 1, 500);
+
+        if (afterSequence > 0)
+        {
+            // Delta incremental a partir da última sequência conhecida.
+            return await db.TicketChatMessages
+                .AsNoTracking()
+                .Where(m => m.SessionId == sessionId && m.SequenceNumber > afterSequence)
+                .OrderBy(m => m.SequenceNumber)
+                .Take(take)
+                .ToListAsync(cancellationToken);
+        }
+
+        // Carga inicial (afterSequence = 0): devolve as ÚLTIMAS N mensagens.
+        //
+        // BUG CORRIGIDO: antes devolvia as PRIMEIRAS N — numa conversa com mais
+        // mensagens que o limite (300 no console, 300 no agent), a janela exibia
+        // o começo do histórico e escondia as mensagens recentes.
+        var newest = await db.TicketChatMessages
             .AsNoTracking()
-            .Where(m => m.SessionId == sessionId && m.SequenceNumber > afterSequence)
-            .OrderBy(m => m.SequenceNumber)
-            .Take(Math.Clamp(limit, 1, 500))
+            .Where(m => m.SessionId == sessionId)
+            .OrderByDescending(m => m.SequenceNumber)
+            .Take(take)
             .ToListAsync(cancellationToken);
 
-    public async Task<(TicketChatMessage Message, bool Created)> AppendMessageAsync(
+        newest.Reverse();
+        return newest;
+    }
+
+    public Task<(TicketChatMessage Message, bool Created)> AppendMessageAsync(
         Guid sessionId,
         TicketChatMessage message,
         IReadOnlyList<Guid> attachmentIds,
         CancellationToken cancellationToken = default)
-    {
-        for (var attempt = 1; attempt <= SequenceRetryAttempts; attempt++)
-        {
-            try
-            {
-                return await AppendOnceAsync(sessionId, message, attachmentIds, cancellationToken);
-            }
-            catch (DbUpdateException) when (attempt < SequenceRetryAttempts)
-            {
-                // Corrida de sequence_number (ou reentrega simultânea do mesmo
-                // client_message_id): o índice único transforma a corrida em erro
-                // visível. Limpa o tracker e recalcula.
-                db.ChangeTracker.Clear();
-                await Task.Delay(25 * attempt, cancellationToken);
-            }
-        }
+        => AppendOnceAsync(sessionId, message, attachmentIds, cancellationToken);
 
-        return await AppendOnceAsync(sessionId, message, attachmentIds, cancellationToken);
-    }
+    /*
+     * NOTA (revisão): o retry de DbUpdateException que existia aqui era
+     * INEFICAZ. Qualquer erro dentro da transação do TransactionBehavior aborta
+     * a transação no Postgres ("current transaction is aborted"), então a
+     * segunda tentativa falharia igual. A serialização passou a ser feita por um
+     * advisory lock transacional por sessão (abaixo), que elimina a corrida na
+     * origem; o índice único (session_id, sequence_number) segue como rede de
+     * segurança.
+     */
 
     private async Task<(TicketChatMessage Message, bool Created)> AppendOnceAsync(
         Guid sessionId,
@@ -104,6 +117,17 @@ public class TicketChatRepository(DiscoveryDbContext db) : ITicketChatRepository
         // sessão) é gravado num ÚNICO SaveChangesAsync, que o EF já executa
         // dentro de uma transação — seja a do pipeline, seja a implícita dele.
         //
+        // Serialização por sessão: sem isto, duas mensagens simultâneas (suporte
+        // + usuário, ou dois atendentes) calculariam o mesmo max+1 e a segunda
+        // morreria no índice único — que dentro da transação do pipeline não
+        // pode ser repetida. O advisory lock transacional é liberado no
+        // commit/rollback e também serializa a reentrega concorrente do MESMO
+        // client_message_id (o pre-check abaixo já a encontra e devolve a
+        // mensagem existente, sem duplicar).
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtext({sessionId.ToString()})::bigint)",
+            cancellationToken);
+
         // Idempotência: reentrega do mesmo envelope (at-least-once) não duplica.
         var existing = await db.TicketChatMessages
             .AsNoTracking()

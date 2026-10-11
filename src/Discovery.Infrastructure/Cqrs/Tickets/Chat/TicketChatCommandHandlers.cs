@@ -56,6 +56,7 @@ public static class TicketChatMapper
             .Select(m => new TicketChatMessageDto(
                 m.Id,
                 m.SequenceNumber,
+                m.ClientMessageId,
                 m.AuthorKind.ToString(),
                 m.AuthorUserId,
                 m.AuthorName,

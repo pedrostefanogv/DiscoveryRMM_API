@@ -9,10 +9,17 @@ public sealed record TicketChatAttachmentDto(
     string? UploadedBy,
     DateTime CreatedAt);
 
-/// <summary>Mensagem do chat de suporte.</summary>
+/// <summary>
+/// Mensagem do chat de suporte.
+///
+/// `ClientMessageId` é a chave de idempotência gerada pelo EMISSOR: o agent usa
+/// para casar a bolha otimista (ainda sem sequência) com a mensagem canônica
+/// devolvida pelo servidor, sem depender de heurística por corpo/horário.
+/// </summary>
 public sealed record TicketChatMessageDto(
     Guid Id,
     long SequenceNumber,
+    Guid ClientMessageId,
     string AuthorKind,
     Guid? AuthorUserId,
     string? AuthorName,
