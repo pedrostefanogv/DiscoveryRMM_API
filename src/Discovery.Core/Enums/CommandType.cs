@@ -34,5 +34,10 @@ public enum CommandType
     // Descomissionamento remoto: o agent se desinstala da máquina (uninstaller
     // NSIS silencioso). Disparado ao mover o agente para a lixeira quando ele
     // está online — a remoção local é irreversível.
-    DecommissionAgent = 22
+    DecommissionAgent = 22,
+
+    // Convite de chat de suporte vinculado a um chamado: exibe um modal de
+    // confirmação na máquina; o aceite abre uma janela dedicada do chat.
+    // Somente o atendente (user-auth) dispara este comando.
+    TicketChatInvite = 23
 }

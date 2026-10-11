@@ -264,6 +264,38 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     }
 
     /// <inheritdoc />
+    public async Task PublishSupportChatServerAsync(
+        Guid clientId,
+        Guid siteId,
+        Guid agentId,
+        Discovery.Core.DTOs.TicketChatEnvelope envelope,
+        CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return;
+
+        var subject = NatsSubjectBuilder.SupportChatServerSubject(clientId, siteId, agentId);
+        var payload = JsonSerializer.Serialize(envelope, JsonOptions);
+
+        // Nats-Msg-Id alimenta o DuplicateWindow do JetStream: uma reentrega do
+        // mesmo envelope (retry do chamador, reconexão do publish) não duplica
+        // a mensagem no stream nem no consumer durável do agent.
+        var messageId = envelope.ClientMessageId != Guid.Empty
+            ? $"{envelope.SessionId:N}:{envelope.ClientMessageId:N}"
+            : $"{envelope.SessionId:N}:{envelope.EventType}:{envelope.TimestampUtc:O}";
+
+        var headers = new NatsHeaders
+        {
+            ["Nats-Msg-Id"] = messageId,
+        };
+
+        await _connection.PublishAsync(subject, payload, headers: headers, cancellationToken: cancellationToken);
+        _logger.LogDebug(
+            "Support chat envelope {EventType} published to agent {AgentId} on {Subject} (session={SessionId})",
+            envelope.EventType, agentId, subject, envelope.SessionId);
+    }
+
+    /// <inheritdoc />
     public async Task SendCommandToSubjectAsync(Guid clientId, Guid siteId, Guid agentId, Guid commandId, string commandType, string payload)
     {
         var subject = NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "command");
@@ -639,10 +671,70 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             }
         }, cancellationToken);
 
+        // Envelopes do chat de suporte: tenant.*.site.*.agent.*.supportchat.agent
+        var supportChatTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var msg in _connection.SubscribeAsync<string>(
+                    NatsSubjectBuilder.SupportChatStreamAgentSubject,
+                    cancellationToken: cancellationToken))
+                {
+                    try
+                    {
+                        var agentId = ExtractAgentId(msg.Subject);
+                        if (!agentId.HasValue)
+                        {
+                            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=subject reason=MissingAgentId subject={Subject}", msg.Subject);
+                            continue;
+                        }
+
+                        if (!await IsAgentAuthorizedAsync(agentId.Value))
+                        {
+                            _logger.LogWarning("NATS: envelope de chat de suporte rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
+                            continue;
+                        }
+
+                        var envelope = JsonSerializer.Deserialize<Discovery.Core.DTOs.TicketChatEnvelope>(msg.Data ?? "", JsonOptions);
+                        if (envelope is null || envelope.SessionId == Guid.Empty)
+                        {
+                            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=SupportChatEnvelope reason=DeserializationFailed agentId={AgentId} subject={Subject}", agentId.Value, msg.Subject);
+                            continue;
+                        }
+
+                        // Resolvido por escopo: o serviço de ingestão depende de
+                        // IAgentMessaging (para publicar de volta), o que criaria
+                        // dependência circular se injetado no construtor.
+                        await using var scope = _scopeFactory.CreateAsyncScope();
+                        var ingest = scope.ServiceProvider.GetService<ITicketChatIngestService>();
+                        if (ingest is null)
+                        {
+                            _logger.LogWarning("NATS: ITicketChatIngestService indisponível; envelope de chat descartado (session={SessionId})", envelope.SessionId);
+                            continue;
+                        }
+
+                        await ingest.HandleAgentEnvelopeAsync(envelope, agentId.Value, cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing support chat envelope from {Subject}", msg.Subject);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("Support chat subscription cancelled.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Fatal error in support chat subscription");
+            }
+        }, cancellationToken);
+
         _logger.LogInformation("NATS agent message subscriptions started successfully");
 
         // Mantém o método ativo enquanto as subscriptions estiverem vivas.
-        await Task.WhenAll(heartbeatTask, resultTask, hardwareTask, globalPongTask);
+        await Task.WhenAll(heartbeatTask, resultTask, hardwareTask, globalPongTask, supportChatTask);
     }
 
     private static Guid? ExtractAgentId(string subject)

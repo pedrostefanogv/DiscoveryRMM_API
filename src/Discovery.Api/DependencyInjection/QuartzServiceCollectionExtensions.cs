@@ -37,6 +37,13 @@ public static class QuartzServiceCollectionExtensions
                 .WithCronSchedule("0 0 2 * * ?")
                 .WithDescription("Soft/hard delete expired AI chat sessions"));
 
+            // ── Ticket Support Chat: every 1 minute ──────────────────────
+            q.ScheduleJob<TicketChatMaintenanceJob>(trigger => trigger
+                .WithIdentity(TicketChatMaintenanceJob.Key.Name, TicketChatMaintenanceJob.Key.Group)
+                .StartAt(DateTimeOffset.UtcNow.AddSeconds(20))
+                .WithSimpleSchedule(s => s.WithIntervalInMinutes(1).RepeatForever())
+                .WithDescription("Expire chat invites, close inactive/ticket-closed support chat sessions"));
+
             // ── P2P Maintenance: every 15 minutes ────────────────────────
             q.ScheduleJob<P2pMaintenanceJob>(trigger => trigger
                 .WithIdentity(P2pMaintenanceJob.Key.Name, P2pMaintenanceJob.Key.Group)

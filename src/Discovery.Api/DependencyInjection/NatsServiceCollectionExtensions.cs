@@ -47,6 +47,12 @@ public static class NatsServiceCollectionExtensions
         services.Configure<NatsFanoutStreamOptions>(
             configuration.GetSection(NatsFanoutStreamOptions.SectionName));
 
+        services.Configure<NatsSupportChatStreamOptions>(
+            configuration.GetSection(NatsSupportChatStreamOptions.SectionName));
+
+        services.Configure<TicketChatOptions>(
+            configuration.GetSection(TicketChatOptions.SectionName));
+
         services.Configure<NatsGlobalPongOptions>(
             configuration.GetSection(NatsGlobalPongOptions.SectionName));
 
@@ -55,6 +61,8 @@ public static class NatsServiceCollectionExtensions
 
         services.AddHostedService<NatsBackgroundService>();
         services.AddHostedService<NatsFanoutStreamBootstrapService>();
+        // Stream durável do chat de suporte (replay para o agent reconectado).
+        services.AddHostedService<NatsSupportChatStreamBootstrapService>();
         // Reentrega de comandos não confirmados (agente estava offline no envio).
         services.AddHostedService<PendingCommandRedeliveryService>();
         services.AddHostedService<RemoteDebugSessionCleanupService>();

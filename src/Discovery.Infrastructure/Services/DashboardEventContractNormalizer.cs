@@ -18,7 +18,11 @@ public sealed class DashboardEventContractNormalizer
         "AgentConnected",
         "AgentDisconnected",
         "AgentTransferred",
-        "LogCreated"
+        "LogCreated",
+        // Chat de suporte vinculado ao chamado: sinal SEM corpo (metadados apenas).
+        // O conteúdo das mensagens nunca trafega pelo canal de dashboard — o
+        // console busca o delta por REST autenticado e escopado por chamado.
+        "TicketChatActivity"
     };
 
     // REMOVE_AFTER_2026-06-01

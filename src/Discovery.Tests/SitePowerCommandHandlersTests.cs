@@ -90,6 +90,7 @@ public class SitePowerCommandHandlersTests
         public Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, CancellationToken ct = default) => Task.CompletedTask;
         public Task PublishSyncPingAsync(Guid agentId, SyncInvalidationPingMessage ping, Guid overrideClientId, Guid overrideSiteId, CancellationToken ct = default) => Task.CompletedTask;
         public Task PublishRemoteDebugControlAsync(Guid clientId, Guid siteId, Guid agentId, string payload, CancellationToken ct = default) => Task.CompletedTask;
+        public Task PublishSupportChatServerAsync(Guid clientId, Guid siteId, Guid agentId, TicketChatEnvelope envelope, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SendCommandToSubjectAsync(Guid clientId, Guid siteId, Guid agentId, Guid commandId, string commandType, string payload) => Task.CompletedTask;
         public Task SubscribeToAgentMessagesAsync(CancellationToken ct) => Task.CompletedTask;
     }

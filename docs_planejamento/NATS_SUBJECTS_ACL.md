@@ -67,6 +67,37 @@ Este documento consolida:
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.resp`      | Agent -> Viewer                | Agent            | Viewer                                | JSON: `{status, headers, body?, error?}`                          |
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal`          | Bidirecional                   | Viewer/Agent     | Agent/Viewer                          | JSON: SDP offer/answer + ICE candidates                           |
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.recording.frame` | Agent -> Servidor              | Agent            | Servidor                              | Binario: header + frame                                           |
+| `tenant.{c}.site.{s}.agent.{a}.supportchat.server`                       | Servidor -> Agent              | Servidor         | Agent (durable JetStream)             | `TicketChatEnvelope` (sessao aberta/encerrada + mensagem do atendente) |
+| `tenant.{c}.site.{s}.agent.{a}.supportchat.agent`                        | Agent -> Servidor              | Agent            | Servidor                              | `TicketChatEnvelope` (mensagem do usuario final + resposta ao convite) |
+
+### 2.1 Chat de suporte vinculado ao chamado (JetStream `DISCOVERY_SUPPORT_CHAT`)
+
+O chat de suporte e o unico recurso que exige **durabilidade funcional** no NATS:
+uma mensagem do atendente enviada enquanto o agent esta reconectando NAO pode se
+perder.
+
+- Stream: `DISCOVERY_SUPPORT_CHAT` (`Nats:SupportChatStream`), sujeito unico
+  `tenant.*.site.*.agent.*.supportchat.*`, `Retention=Limits`, `Storage=File`,
+  `MaxAge=24h`, `DuplicateWindow=2m`. O stream e criado/atualizado no startup da
+  API por `NatsSupportChatStreamBootstrapService` (espelho do fan-out).
+- Servidor -> agent: consumer **duravel** no agent
+  (`agent-{agentId}-supportchat`, `AckExplicit` + `ManualAck` + `DeliverAll`) —
+  replay a partir do ultimo Ack apos reconexao/restart.
+- Agent -> servidor: `js.Publish` com `Nats-Msg-Id = {sessionId}:{clientMessageId}`
+  (PubAck + dedupe do broker). O servidor assina
+  `tenant.*.site.*.agent.*.supportchat.agent` no mesmo estilo de
+  `heartbeat`/`result`/`hardware`.
+- Fallback: se o stream nao existir, o agent cai para core NATS **com log
+  explicito do risco de perda** e reconcilia pelo snapshot REST
+  (`GET /api/v1/agent-auth/me/support-chat/active`) ao abrir a janela.
+- Console web: NAO recebe subject novo. O servidor publica o `DashboardEvent`
+  `TicketChatActivity` **sem o corpo da mensagem**
+  (`{ticketId, sessionId, authorKind, sequence}`) e o console busca o delta por
+  REST autenticado (`/api/v1/tickets/{id}/chat/...`). Isso preserva a regra 3
+  ($4) — frontend consome somente `*.dashboard.events` — e evita expor conversas
+  de outros chamados do mesmo site a qualquer tecnico com acesso ao site.
+- Anexos NAO passam pelo NATS: continuam no fluxo presigned existente
+  (`EntityType = TicketChat`, `EntityId = ticketId`).
 
 ---
 
@@ -296,6 +327,20 @@ Ativacao da logica de sobrecarga (servidor):
 | ServerCommandPublisher   | `tenant.*.site.*.agent.*.result`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`                                                                                                                                                                                                                                                                          | nao expor credencial no browser                                |
 | BackendInternal          | conforme servico                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | opcional e restrito                                                                                                                                                                                                                                                                                                                                                                                                 | nao reutilizar token de backend no browser                     |
 | RemoteSessionParticipant | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.frame`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.event`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.out`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.stats`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.completion.res`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.resp`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.resp`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal`                                                                                                                                                                                                                                      | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.input`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.ack`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.in`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.completion.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal` | apenas subjects da propria sessao; JWT scoped por sessionId    |
+
+### 5.1.1 Complemento do perfil `AgentIdentity` — chat de suporte
+
+Adicionados ao perfil `AgentIdentity` (mesmo tratamento dado a `remote.session`):
+
+- `sub.allow`: `tenant.{c}.site.{s}.agent.{a}.supportchat.server`
+- `pub.allow`: `tenant.{c}.site.{s}.agent.{a}.supportchat.agent`
+- `pub.allow` (JetStream do consumer duravel):
+  `$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>`,
+  `$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>`,
+  `$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>`
+
+Os subjects sao do escopo EXATO do agent (sem wildcard multi-tenant) e ha teste
+de isolamento cobrindo a lista canonica (`NatsIsolationTests`).
 
 ### 5.2 Regras de emissao de JWT
 

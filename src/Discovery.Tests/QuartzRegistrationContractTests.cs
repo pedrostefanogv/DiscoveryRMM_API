@@ -51,6 +51,7 @@ public class QuartzRegistrationContractTests
             AiChatRetentionJob.Key,
             DatabaseMaintenanceJob.Key,
             P2pMaintenanceJob.Key,
+            TicketChatMaintenanceJob.Key,
         ];
 
         foreach (var key in expected)

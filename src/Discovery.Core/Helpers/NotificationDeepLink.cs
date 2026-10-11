@@ -24,7 +24,14 @@ public static class NotificationDeepLink
 
             var ticketId = ReadText(root, "ticketId", "ticket_id");
             if (ticketId is not null)
-                return "/tickets/" + ticketId;
+            {
+                // Aba opcional (ex.: chat do chamado). Slug restrito evita
+                // injetar querystring arbitrária a partir do payload.
+                var tab = ReadText(root, "tab");
+                return IsSafeTab(tab)
+                    ? $"/tickets/{ticketId}?tab={tab}"
+                    : "/tickets/" + ticketId;
+            }
 
             var agentId = ReadText(root, "agentId", "agent_id");
             if (agentId is not null)
@@ -40,6 +47,20 @@ public static class NotificationDeepLink
         {
             return null;
         }
+    }
+
+    private static bool IsSafeTab(string? tab)
+    {
+        if (string.IsNullOrWhiteSpace(tab) || tab.Length > 32)
+            return false;
+
+        foreach (var ch in tab)
+        {
+            if (!char.IsAsciiLetterOrDigit(ch) && ch != '-' && ch != '_')
+                return false;
+        }
+
+        return true;
     }
 
     private static string? ReadText(JsonElement root, params string[] keys)

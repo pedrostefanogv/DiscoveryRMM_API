@@ -31,6 +31,7 @@ public static class CommandTypeWireMapper
             CommandType.SoftwareUpdate => "softwareupdate",
             CommandType.SoftwareUninstall => "softwareuninstall",
             CommandType.DecommissionAgent => "decommissionagent",
+            CommandType.TicketChatInvite => "ticketchatinvite",
             _ => commandType.ToString().ToLowerInvariant()
         };
     }
@@ -54,6 +55,7 @@ public static class CommandTypeWireMapper
             or CommandType.ScheduledTask
             or CommandType.SoftwareUpdate
             or CommandType.SoftwareUninstall
-            or CommandType.DecommissionAgent;
+            or CommandType.DecommissionAgent
+            or CommandType.TicketChatInvite;
     }
 }

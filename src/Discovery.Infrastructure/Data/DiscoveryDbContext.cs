@@ -151,6 +151,11 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<RemoteSessionAudit> RemoteSessionAudits => Set<RemoteSessionAudit>();
     public DbSet<RemoteSessionRecording> RemoteSessionRecordings => Set<RemoteSessionRecording>();
 
+    // Chat de suporte vinculado ao chamado (Site <-> NATS <-> Agent)
+    public DbSet<TicketChatSession> TicketChatSessions => Set<TicketChatSession>();
+    public DbSet<TicketChatMessage> TicketChatMessages => Set<TicketChatMessage>();
+    public DbSet<TicketChatMessageAttachment> TicketChatMessageAttachments => Set<TicketChatMessageAttachment>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureDateTimeConversion(modelBuilder);
@@ -183,6 +188,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         // Remote sessions (acesso remoto nativo)
         ConfigureRemoteSessions(modelBuilder);
 
+        // Chat de suporte vinculado ao chamado
+        ConfigureTicketChat(modelBuilder);
+
         // Fallback convention: ensure any entity/column not explicitly mapped also uses snake_case.
         ApplySnakeCaseFallback(modelBuilder);
     }
@@ -207,6 +215,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureBackgroundProcessing(ModelBuilder modelBuilder);
     static partial void ConfigureAttachments(ModelBuilder modelBuilder);
     static partial void ConfigureRemoteSessions(ModelBuilder modelBuilder);
+    static partial void ConfigureTicketChat(ModelBuilder modelBuilder);
 
     private static void ApplySnakeCaseFallback(ModelBuilder modelBuilder)
     {

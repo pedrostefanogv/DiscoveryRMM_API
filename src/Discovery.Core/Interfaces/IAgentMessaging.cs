@@ -52,6 +52,12 @@ public interface IAgentMessaging
     /// </summary>
     Task PublishRemoteDebugControlAsync(Guid clientId, Guid siteId, Guid agentId, string payload, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Publica um envelope do chat de suporte no canal servidor -> agent
+    /// (JetStream DISCOVERY_SUPPORT_CHAT, com replay para o agent reconectado).
+    /// </summary>
+    Task PublishSupportChatServerAsync(Guid clientId, Guid siteId, Guid agentId, Discovery.Core.DTOs.TicketChatEnvelope envelope, CancellationToken cancellationToken = default);
+
     /// <summary>Registra handler para mensagens de agents (heartbeat, command result, hardware report).</summary>
     Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken);
 

@@ -46,6 +46,9 @@ public class NatsIsolationTests
             "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
             "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
             "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
+            "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
+            "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
+            "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
             "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
@@ -72,14 +75,14 @@ public class NatsIsolationTests
     }
 
     [Test]
-    public void AgentSubjects_ContainInfraSubjects_TenPublishElevenSubscribe()
+    public void AgentSubjects_ContainInfraSubjects_FourteenPublishTwelveSubscribe()
     {
         var (pub, sub) = BuildAgentSubjectLists(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
-        Assert.That(pub, Has.Count.EqualTo(10),
-            "Agente deve publicar em 10 subjects: 4 telemetrias canônicas + remote-debug.control + remote.session + 4 lookup JetStream.");
-        Assert.That(sub, Has.Count.EqualTo(11),
-            "Agente deve assinar em 11 subjects: comandos + p2p + remote-debug.control + remote.session + inbox.");
+        Assert.That(pub, Has.Count.EqualTo(14),
+            "Agente deve publicar em 14 subjects: 4 telemetrias canônicas + remote-debug.control + remote.session + supportchat.agent + 4 lookup JetStream do fan-out + 3 lookup JetStream do chat de suporte.");
+        Assert.That(sub, Has.Count.EqualTo(12),
+            "Agente deve assinar em 12 subjects: comandos + p2p + remote-debug.control + remote.session + supportchat.server + inbox.");
     }
 
     [Test]
@@ -102,10 +105,14 @@ public class NatsIsolationTests
                 expectedPrefix + "remote-debug.log",
                 expectedPrefix + "remote-debug.control",
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
+                expectedPrefix + "supportchat.agent",
                 "$JS.API.STREAM.NAMES",
                 "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
                 "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
                 "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
+                "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
+                "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
+                "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
             }),
             "Publish subjects devem conter somente os message types canônicos.");
 
@@ -120,6 +127,7 @@ public class NatsIsolationTests
                 "tenant.global.pong",
                 expectedPrefix + "sync.ping",
                 expectedPrefix + "remote-debug.control",
+                expectedPrefix + "supportchat.server",
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
 #pragma warning disable CS0618 // Subject legado do P2P discovery: segue na lista canônica durante a transição com agents antigos (ver NatsCredentialsService).
                 NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),
@@ -160,6 +168,9 @@ public class NatsIsolationTests
             "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
             "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
             "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
+            "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
+            "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
+            "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
             "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
@@ -458,10 +469,14 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "remote-debug.log"),
                 NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId),
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
+                NatsSubjectBuilder.SupportChatAgentSubject(clientId, siteId, agentId),
                 "$JS.API.STREAM.NAMES",
                 "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
                 "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
                 "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
+                "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
+                "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
+                "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
             ],
             Subscribe:
             [
@@ -472,6 +487,7 @@ public class NatsIsolationTests
                 NatsSubjectBuilder.ServerPongSubject(),
                 NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, "sync.ping"),
                 NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId),
+                NatsSubjectBuilder.SupportChatServerSubject(clientId, siteId, agentId),
                 NatsSubjectBuilder.P2pClientEventsSubject(clientId),
 #pragma warning disable CS0618 // Subject legado do P2P discovery: segue na lista canônica durante a transição com agents antigos (ver NatsCredentialsService).
                 NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId),

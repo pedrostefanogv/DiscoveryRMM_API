@@ -265,6 +265,13 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add("$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>");
         publishSubjects.Add("$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>");
         publishSubjects.Add("$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>");
+        // Chat de suporte: o agent publica as mensagens do usuário final e a
+        // resposta ao convite; o consumer durável do stream lê as mensagens do
+        // atendente (replay sem perda após reconexão/restart).
+        publishSubjects.Add(NatsSubjectBuilder.SupportChatAgentSubject(clientId, siteId, agentId));
+        publishSubjects.Add("$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>");
+        publishSubjects.Add("$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>");
+        publishSubjects.Add("$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>");
 
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeCommand));
         subscribeSubjects.Add(NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId));
@@ -273,6 +280,7 @@ public class NatsCredentialsService : INatsCredentialsService
         subscribeSubjects.Add(NatsSubjectBuilder.ServerPongSubject());
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeSyncPing));
         subscribeSubjects.Add(NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId));
+        subscribeSubjects.Add(NatsSubjectBuilder.SupportChatServerSubject(clientId, siteId, agentId));
         subscribeSubjects.Add(NatsSubjectBuilder.P2pClientEventsSubject(clientId));
 #pragma warning disable CS0618 // P2pSiteDiscoverySubject é obsoleto mas necessário para compatibilidade com agents antigos
         subscribeSubjects.Add(NatsSubjectBuilder.P2pSiteDiscoverySubject(clientId, siteId));

@@ -176,6 +176,28 @@
 | `POST /api/v1/tickets/{id}/attachments/presigned-upload` | `Tickets.Edit`   | G     |
 | `POST /api/v1/tickets/{id}/attachments/complete-upload`  | `Tickets.Edit`   | G     |
 
+#### Chat de suporte vinculado ao chamado
+
+O chat reusa as permissões já existentes do chamado — **não** há permissão nova.
+Todos os endpoints user-auth validam o escopo do chamado
+(`CanAccessTicketAsync`/`ITicketAccessGuard`) além da permissão.
+
+| Endpoint                                                                        | Permissão       | Scope |
+| ------------------------------------------------------------------------------- | --------------- | ----- |
+| `GET  /api/v1/tickets/{id}/chat/sessions/current`                              | `Tickets.View`  | G     |
+| `GET  /api/v1/tickets/{id}/chat/sessions`                                      | `Tickets.View`  | G     |
+| `GET  /api/v1/tickets/{id}/chat/sessions/{sessionId}/messages`                 | `Tickets.View`  | G     |
+| `GET  /api/v1/tickets/{id}/chat/attachments/{attachmentId}`                    | `Tickets.View`  | G     |
+| `POST /api/v1/tickets/{id}/chat/sessions` (start — **só o atendente**)         | `Tickets.Edit`  | G     |
+| `POST /api/v1/tickets/{id}/chat/sessions/{sessionId}/invite/retry`             | `Tickets.Edit`  | G     |
+| `POST /api/v1/tickets/{id}/chat/sessions/{sessionId}/messages`                 | `Tickets.Edit`  | G     |
+| `POST /api/v1/tickets/{id}/chat/sessions/{sessionId}/end`                      | `Tickets.Edit`  | G     |
+| `POST /api/v1/tickets/{id}/chat/sessions/{sessionId}/attachments/*`            | `Tickets.Edit`  | G     |
+
+Lado do agent (`/api/v1/agent-auth/me/support-chat/*`): autenticação por token
+`mdz_` + `X-Agent-ID`; **nenhum** endpoint cria sessão e toda rota valida que a
+sessão pertence ao agent autenticado (404 caso contrário).
+
 ### Dashboard
 
 | Endpoint                                                          | Permissão        | Scope |

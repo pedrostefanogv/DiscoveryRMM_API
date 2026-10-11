@@ -7,8 +7,36 @@ public static class NatsSubjectBuilder
     public const string GlobalAgentsCommandStreamSubject = "tenant.global.agents.command";
     public const string GlobalPongSubject = "tenant.global.pong";
 
+    /// <summary>
+    /// Subject do stream JetStream do chat de suporte (captura as duas direções).
+    /// Um ÚNICO wildcard: incluir variantes com overlap faz o NATS rejeitar o
+    /// stream com "subject overlaps with" (ver NatsFanoutStreamBootstrapService).
+    /// </summary>
+    public const string SupportChatStreamSubject = "tenant.*.site.*.agent.*.supportchat.*";
+
+    /// <summary>
+    /// Subject (agent -> servidor) do chat de suporte. É o que a API assina
+    /// para persistir as mensagens do usuário final.
+    /// </summary>
+    public const string SupportChatStreamAgentSubject = "tenant.*.site.*.agent.*.supportchat.agent";
+
     public static string AgentBase(Guid clientId, Guid siteId, Guid agentId)
         => $"tenant.{clientId}.site.{siteId}.agent.{agentId}";
+
+    /// <summary>
+    /// Subject (servidor -> agent) do chat de suporte: sessão aberta/encerrada e
+    /// mensagens do atendente. O agent assina com consumer JetStream durável
+    /// (replay sem perda após reconexão/restart).
+    /// </summary>
+    public static string SupportChatServerSubject(Guid clientId, Guid siteId, Guid agentId)
+        => AgentSubject(clientId, siteId, agentId, "supportchat.server");
+
+    /// <summary>
+    /// Subject (agent -> servidor) do chat de suporte: mensagens do usuário
+    /// final e resposta ao convite.
+    /// </summary>
+    public static string SupportChatAgentSubject(Guid clientId, Guid siteId, Guid agentId)
+        => AgentSubject(clientId, siteId, agentId, "supportchat.agent");
 
     public static string AgentSubject(Guid clientId, Guid siteId, Guid agentId, string messageType)
         => $"{AgentBase(clientId, siteId, agentId)}.{messageType}";

@@ -177,6 +177,7 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.SoftwareUpdate => TryNormalizeSoftwareUpdate(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.SoftwareUninstall => TryNormalizeSoftwareUninstall(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.DecommissionAgent => TryNormalizeDecommission(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.TicketChatInvite => TryNormalizeTicketChatInvite(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }
@@ -1368,6 +1369,61 @@ public sealed class SpecialCommandPayloadValidator
         };
 
         normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    /// <summary>
+    /// Convite de chat de suporte. O payload só carrega metadados de exibição e
+    /// correlação — o conteúdo das mensagens NUNCA trafega por comando.
+    /// </summary>
+    private static bool TryNormalizeTicketChatInvite(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!TryGetRequiredGuid(payload, "sessionId", out var sessionId, out validationError))
+            return false;
+
+        if (!TryGetRequiredGuid(payload, "ticketId", out var ticketId, out validationError))
+            return false;
+
+        if (!TryGetRequiredString(payload, "ticketTitle", out var ticketTitle, out validationError, allowEmpty: true))
+            return false;
+
+        if (ticketTitle.Length > TicketChatInvitePayloadFactory.MaxTicketTitleLength)
+        {
+            validationError = $"field 'ticketTitle' must have at most {TicketChatInvitePayloadFactory.MaxTicketTitleLength} characters.";
+            return false;
+        }
+
+        if (!TryGetRequiredString(payload, "supportUserName", out var supportUserName, out validationError, allowEmpty: true))
+            return false;
+
+        if (supportUserName.Length > TicketChatInvitePayloadFactory.MaxSupportUserNameLength)
+        {
+            validationError = $"field 'supportUserName' must have at most {TicketChatInvitePayloadFactory.MaxSupportUserNameLength} characters.";
+            return false;
+        }
+
+        if (!TryGetRequiredString(payload, "expiresAtUtc", out var expiresAtUtcRaw, out validationError, allowEmpty: true))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(expiresAtUtcRaw) && !TryParseIsoUtc(expiresAtUtcRaw, out _))
+        {
+            validationError = "field 'expiresAtUtc' must be an ISO-8601 UTC timestamp.";
+            return false;
+        }
+
+        normalizedPayload = TicketChatInvitePayloadFactory.Build(
+            sessionId,
+            ticketId,
+            ticketTitle,
+            supportUserName,
+            string.IsNullOrWhiteSpace(expiresAtUtcRaw) ? null : expiresAtUtcRaw);
+
         return true;
     }
 

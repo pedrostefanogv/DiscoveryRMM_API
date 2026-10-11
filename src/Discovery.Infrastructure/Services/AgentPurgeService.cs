@@ -81,6 +81,9 @@ public class AgentPurgeService : IAgentPurgeService
         "auto_ticket_rule_executions",
         "ticket_remote_sessions",
         "app_approval_audits",
+        // Histórico do chat de suporte: sobrevive à exclusão do agente; a
+        // sessão fica com agent_id = NULL (o registro do chamado permanece).
+        "ticket_chat_sessions",
     ];
 
     public async Task PurgeAsync(Guid agentId, CancellationToken ct = default)
