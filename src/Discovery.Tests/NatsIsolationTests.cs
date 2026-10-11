@@ -49,6 +49,8 @@ public class NatsIsolationTests
             "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
             "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
             "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
+            "$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
+            "$JS.ACK.DISCOVERY_SUPPORT_CHAT.>",
             "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
@@ -79,8 +81,8 @@ public class NatsIsolationTests
     {
         var (pub, sub) = BuildAgentSubjectLists(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
-        Assert.That(pub, Has.Count.EqualTo(14),
-            "Agente deve publicar em 14 subjects: 4 telemetrias canônicas + remote-debug.control + remote.session + supportchat.agent + 4 lookup JetStream do fan-out + 3 lookup JetStream do chat de suporte.");
+        Assert.That(pub, Has.Count.EqualTo(16),
+            "Agente deve publicar em 16 subjects: 4 telemetrias canônicas + remote-debug.control + remote.session + supportchat.agent + 4 lookup JetStream do fan-out + 3 lookup JetStream do chat de suporte + 2 ACK de consumer durável.");
         Assert.That(sub, Has.Count.EqualTo(12),
             "Agente deve assinar em 12 subjects: comandos + p2p + remote-debug.control + remote.session + supportchat.server + inbox.");
     }
@@ -113,6 +115,8 @@ public class NatsIsolationTests
                 "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
                 "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
                 "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
+                "$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
+                "$JS.ACK.DISCOVERY_SUPPORT_CHAT.>",
             }),
             "Publish subjects devem conter somente os message types canônicos.");
 
@@ -171,6 +175,8 @@ public class NatsIsolationTests
             "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
             "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
             "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
+            "$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
+            "$JS.ACK.DISCOVERY_SUPPORT_CHAT.>",
             "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
@@ -477,6 +483,8 @@ public class NatsIsolationTests
                 "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
                 "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
                 "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
+                "$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
+                "$JS.ACK.DISCOVERY_SUPPORT_CHAT.>",
             ],
             Subscribe:
             [

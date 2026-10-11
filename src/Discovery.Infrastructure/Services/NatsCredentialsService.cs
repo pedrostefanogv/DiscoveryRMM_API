@@ -265,6 +265,12 @@ public class NatsCredentialsService : INatsCredentialsService
         publishSubjects.Add("$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>");
         publishSubjects.Add("$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>");
         publishSubjects.Add("$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>");
+        // ACK dos consumers duráveis. Sem estas permissões o `msg.Ack()` do agent
+        // falha com "Permissions Violation": o consumer nunca avança, a mensagem
+        // é reentregue a cada AckWait (30s) e o MaxAckPending pode saturar.
+        // (O fan-out já sofria disso antes do chat de suporte — mesma causa.)
+        publishSubjects.Add("$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>");
+        publishSubjects.Add("$JS.ACK.DISCOVERY_SUPPORT_CHAT.>");
         // Chat de suporte: o agent publica as mensagens do usuário final e a
         // resposta ao convite; o consumer durável do stream lê as mensagens do
         // atendente (replay sem perda após reconexão/restart).
