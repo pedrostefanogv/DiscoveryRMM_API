@@ -35,7 +35,10 @@ public class TicketChatEnvelopePublisher(
             TicketId = session.TicketId,
             AgentId = session.AgentId ?? Guid.Empty,
             Sequence = message.SequenceNumber,
-            AuthorKind = "support",
+            // Autor derivado da mensagem: "support", "enduser" ou "system".
+            // (Fixado em "support" antes, mensagens de sistema — como o
+            // encerramento — apareciam como se o atendente as tivesse escrito.)
+            AuthorKind = message.AuthorKind.ToString().ToLowerInvariant(),
             AuthorName = message.AuthorName,
             Body = message.Body,
             ClientMessageId = message.ClientMessageId,

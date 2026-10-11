@@ -1,4 +1,5 @@
 using Discovery.Core.Configuration;
+using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
@@ -55,6 +56,30 @@ public sealed class TicketChatMaintenanceJob : IJob
             inactiveSessions = inactivityCount,
             ticketClosedSessions = ticketClosedCount
         };
+    }
+
+    /// <summary>
+    /// Grava no histórico a mensagem de SISTEMA que registra quem (ou o que)
+    /// encerrou a conversa, e entrega ao agent para ele exibir na thread.
+    /// </summary>
+    private static async Task AppendClosureMessageAsync(
+        ITicketChatRepository repository,
+        ITicketChatEnvelopePublisher publisher,
+        TicketChatSession session,
+        CancellationToken ct)
+    {
+        var message = new TicketChatMessage
+        {
+            Id = Guid.NewGuid(),
+            SessionId = session.Id,
+            ClientMessageId = Guid.NewGuid(),
+            AuthorKind = TicketChatAuthorKind.System,
+            Body = TicketChatAuditText.Ended(session.EndReason),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var (saved, _) = await repository.AppendMessageAsync(session.Id, message, [], ct);
+        await publisher.PublishMessageToAgentAsync(session, saved, ct);
     }
 
     private static async Task<int> ExpirePendingInvitesAsync(
@@ -114,6 +139,7 @@ public sealed class TicketChatMaintenanceJob : IJob
             session.EndReason = "inactivity";
 
             await repository.UpdateSessionAsync(session, ct);
+            await AppendClosureMessageAsync(repository, publisher, session, ct);
             await publisher.PublishSessionEndedAsync(session, ct);
             await publisher.PublishSessionStatusSignalAsync(session, ct);
 
@@ -150,6 +176,7 @@ public sealed class TicketChatMaintenanceJob : IJob
             session.EndReason = "ticket_closed";
 
             await repository.UpdateSessionAsync(session, ct);
+            await AppendClosureMessageAsync(repository, publisher, session, ct);
             await publisher.PublishSessionEndedAsync(session, ct);
             await publisher.PublishSessionStatusSignalAsync(session, ct);
 

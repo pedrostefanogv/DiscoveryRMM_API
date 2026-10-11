@@ -41,8 +41,9 @@ public class TicketChatEndSignalTests
         var session = ActiveSession();
         var publisher = new RecordingEnvelopePublisher();
 
+        var repository = new FakeTicketChatRepository(session);
         var handler = new EndTicketChatSessionCommandHandler(
-            new FakeTicketChatRepository(session),
+            repository,
             publisher,
             new NoopActivityLogService(),
             NullLogger<EndTicketChatSessionCommandHandler>.Instance);
@@ -65,6 +66,19 @@ public class TicketChatEndSignalTests
                 publisher.Published,
                 Does.Contain("StatusSignal"),
                 "o CONSOLE precisa receber o sinal de estado — sem ele o operador não vê que o usuário encerrou");
+
+            // Quem encerrou fica no HISTÓRICO (mensagem de sistema), não só no
+            // log de atividades do chamado: os dois lados leem isso na thread.
+            Assert.That(repository.Appended, Has.Count.EqualTo(1), "encerrar deve gravar a mensagem de sistema");
+            Assert.That(repository.Appended[0].AuthorKind, Is.EqualTo(TicketChatAuthorKind.System));
+            Assert.That(repository.Appended[0].Body, Does.Contain("usuário"));
+            Assert.That(publisher.Published, Does.Contain("Message"), "a mensagem de sistema precisa ir para o agent");
+
+            // ORDEM: a nota precisa chegar ANTES do SessionEnded — depois dele a
+            // janela do agent entra em leitura e a mensagem não seria aplicada.
+            var messageIndex = publisher.Published.IndexOf("Message");
+            var endedIndex = publisher.Published.IndexOf("SessionEnded");
+            Assert.That(messageIndex, Is.LessThan(endedIndex), "a mensagem de sistema deve preceder o SessionEnded");
         });
     }
 
@@ -105,6 +119,8 @@ public class TicketChatEndSignalTests
 
     private sealed class FakeTicketChatRepository(TicketChatSession session) : ITicketChatRepository
     {
+        public List<TicketChatMessage> Appended { get; } = [];
+
         public Task<TicketChatSession?> GetByIdAsync(Guid sessionId, CancellationToken cancellationToken = default)
             => Task.FromResult<TicketChatSession?>(session.Id == sessionId ? session : null);
 
@@ -122,7 +138,12 @@ public class TicketChatEndSignalTests
         public Task AddSessionAsync(TicketChatSession newSession, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatSession>> GetHistoryAsync(Guid ticketId, int skip, int take, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatMessage>> GetMessagesAsync(Guid sessionId, long afterSequence, int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<(TicketChatMessage Message, bool Created)> AppendMessageAsync(Guid sessionId, TicketChatMessage message, IReadOnlyList<Guid> attachmentIds, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<(TicketChatMessage Message, bool Created)> AppendMessageAsync(Guid sessionId, TicketChatMessage message, IReadOnlyList<Guid> attachmentIds, CancellationToken cancellationToken = default)
+        {
+            message.SequenceNumber = Appended.Count + 1;
+            Appended.Add(message);
+            return Task.FromResult((message, true));
+        }
         public Task<IReadOnlyList<TicketChatAttachmentRef>> GetAttachmentsForMessagesAsync(IReadOnlyList<Guid> messageIds, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatSession>> GetExpiredPendingAsync(DateTime nowUtc, int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatSession>> GetInactiveActiveAsync(DateTime cutoffUtc, int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();

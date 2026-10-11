@@ -432,17 +432,37 @@ public sealed class EndTicketChatSessionCommandHandler(
 
         await chatRepository.UpdateSessionAsync(session, ct);
 
-        // SessionEnded fecha a janela do agent; o SINAL DE ESTADO é o que avisa o
-        // console. Sem ele o operador não via que o usuário encerrou a conversa
-        // (a aba do chamado não faz polling).
-        await envelopePublisher.PublishSessionEndedAsync(session, ct);
-        await envelopePublisher.PublishSessionStatusSignalAsync(session, ct);
-
+        // Auditoria ANTES dos publishes: as escritas que podem falhar ficam antes
+        // dos efeitos externos irreversíveis (o agent fechar a janela e o console
+        // marcar como encerrado). Se a gravação falhar, a transação reverte sem
+        // ter avisado ninguém de um encerramento que não existe.
         await activityLog.LogActivityAsync(
             session.TicketId,
             TicketActivityType.ChatEnded,
             cmd.EndedBy == "support" ? session.StartedByUserId : null,
             comment: TicketChatAuditText.Ended(session.EndReason));
+
+        // Mensagem de SISTEMA no histórico: registra QUEM encerrou a conversa,
+        // para os dois lados lerem isso na própria thread (o servidor é a fonte
+        // do histórico; o console a busca por REST e o agent a recebe no canal).
+        var systemMessage = new TicketChatMessage
+        {
+            Id = Guid.NewGuid(),
+            SessionId = session.Id,
+            ClientMessageId = Guid.NewGuid(),
+            AuthorKind = TicketChatAuthorKind.System,
+            Body = TicketChatAuditText.Ended(session.EndReason),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var (savedSystemMessage, _) = await chatRepository.AppendMessageAsync(session.Id, systemMessage, [], ct);
+        await envelopePublisher.PublishMessageToAgentAsync(session, savedSystemMessage, ct);
+
+        // SessionEnded fecha a janela do agent; o SINAL DE ESTADO é o que avisa o
+        // console. Sem ele o operador não via que o usuário encerrou a conversa
+        // (a aba do chamado não faz polling).
+        await envelopePublisher.PublishSessionEndedAsync(session, ct);
+        await envelopePublisher.PublishSessionStatusSignalAsync(session, ct);
 
         logger.LogInformation(
             "Support chat session {SessionId} ended (by={EndedBy}, reason={Reason})",
