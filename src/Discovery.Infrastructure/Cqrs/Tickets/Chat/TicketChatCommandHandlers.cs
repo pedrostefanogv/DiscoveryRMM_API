@@ -377,11 +377,11 @@ public sealed class SendTicketChatMessageCommandHandler(
         if (!options.Value.NotifySupportOnMessage || session.StartedByUserId is null)
             return;
 
-        // Se o atendente está com a JANELA DO CHAT aberta e visível, ele já está
-        // lendo a mensagem na hora: notificar (sino + Web Push do navegador) vira
-        // ruído e ainda por cima deixa a caixa cheia de itens que ele acabou de
-        // ler. Só avisa quando ele NÃO está vendo a conversa — janela fechada,
-        // aba oculta/minimizada ou em outra tela.
+        // Se o atendente está com a JANELA DO CHAT aberta, visível e em foco, ele
+        // já está lendo a mensagem na hora: notificar (sino + Web Push do
+        // navegador) vira ruído e ainda por cima deixa a caixa cheia de itens que
+        // ele acabou de ler. Só avisa quando ele NÃO está vendo a conversa —
+        // janela fechada, aba oculta/minimizada ou a janela sem foco.
         if (await presenceService.IsViewingAsync(session.StartedByUserId.Value, session.TicketId, ct))
         {
             logger.LogDebug(

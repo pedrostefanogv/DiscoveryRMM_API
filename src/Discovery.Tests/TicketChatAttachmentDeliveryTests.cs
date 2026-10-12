@@ -231,8 +231,8 @@ public class TicketChatAttachmentDeliveryTests
     private sealed class NotViewingPresenceService : ITicketChatPresenceService
     {
         public int TtlSeconds => 75;
-        public Task TouchAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ClearAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task TouchAsync(Guid userId, Guid ticketId, string? clientId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ClearAsync(Guid userId, Guid ticketId, string? clientId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<bool> IsViewingAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default) => Task.FromResult(false);
     }
 

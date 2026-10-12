@@ -86,14 +86,14 @@ public class TicketChatController(
     // ── Presença (janela do chat aberta) ──────────────────────────────────
 
     /// <summary>
-    /// Heartbeat: o atendente está com a janela do chat deste chamado aberta e
-    /// visível. Enquanto a presença estiver válida, o servidor NÃO cria
+    /// Heartbeat: o atendente está com a janela do chat deste chamado aberta,
+    /// visível e em foco. Enquanto a presença estiver válida, o servidor NÃO cria
     /// notificação de nova mensagem do usuário final (sino + Web Push) — o
     /// atendente já está lendo a conversa na frente dele.
     /// </summary>
     [HttpPost("presence")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> TouchPresence(Guid ticketId, CancellationToken ct)
+    public async Task<IActionResult> TouchPresence(Guid ticketId, [FromQuery] string? clientId, CancellationToken ct)
     {
         if (CurrentUserId is not { } userId)
             return Unauthorized();
@@ -101,17 +101,17 @@ public class TicketChatController(
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.View, ct))
             return NotFound();
 
-        await presenceService.TouchAsync(userId, ticketId, ct);
+        await presenceService.TouchAsync(userId, ticketId, clientId, ct);
         return NoContent();
     }
 
     /// <summary>Limpa a presença (janela fechada, aba oculta ou ao desmontar a tela).</summary>
     [HttpDelete("presence")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
-    public async Task<IActionResult> ClearPresence(Guid ticketId, CancellationToken ct)
+    public async Task<IActionResult> ClearPresence(Guid ticketId, [FromQuery] string? clientId, CancellationToken ct)
     {
         if (CurrentUserId is { } userId)
-            await presenceService.ClearAsync(userId, ticketId, ct);
+            await presenceService.ClearAsync(userId, ticketId, clientId, ct);
 
         return NoContent();
     }

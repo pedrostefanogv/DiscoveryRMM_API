@@ -97,6 +97,28 @@ public class TicketChatPresenceTests
             "fechar a janela do chat precisa liberar a notificação na hora");
     }
 
+    [Test]
+    public async Task Presence_StaleClear_DoesNotDropNewerWindow()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var presence = new TicketChatPresenceService(clock);
+
+        // React StrictMode monta/desmonta/monta: o DELETE da primeira montagem
+        // pode chegar DEPOIS do POST da segunda. Sem o dono da presenca, a
+        // supressao falharia por corrida com a janela do chat aberta.
+        await presence.TouchAsync(AttendantUserId, TicketId, "instancia-1");
+        await presence.TouchAsync(AttendantUserId, TicketId, "instancia-2");
+        await presence.ClearAsync(AttendantUserId, TicketId, "instancia-1");
+
+        Assert.That(await presence.IsViewingAsync(AttendantUserId, TicketId), Is.True,
+            "o clear atrasado de uma montagem antiga não pode derrubar a presença da janela atual");
+
+        await presence.ClearAsync(AttendantUserId, TicketId, "instancia-2");
+
+        Assert.That(await presence.IsViewingAsync(AttendantUserId, TicketId), Is.False,
+            "o dono atual continua podendo limpar a presença");
+    }
+
     // ── Supressão no envio da mensagem do usuário final ───────────────────
 
     [Test]
@@ -166,8 +188,8 @@ public class TicketChatPresenceTests
     private sealed class StubPresenceService(bool isViewing) : ITicketChatPresenceService
     {
         public int TtlSeconds => 75;
-        public Task TouchAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ClearAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task TouchAsync(Guid userId, Guid ticketId, string? clientId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ClearAsync(Guid userId, Guid ticketId, string? clientId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<bool> IsViewingAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default)
             => Task.FromResult(isViewing);
     }
