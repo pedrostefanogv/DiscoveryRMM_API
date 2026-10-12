@@ -45,5 +45,8 @@ public enum TicketActivityType
     ChatStarted = 29,
 
     /// <summary>Chat de suporte encerrado (pelo usuário, pelo suporte ou pelo sistema).</summary>
-    ChatEnded = 30
+    ChatEnded = 30,
+
+    /// <summary>Comentário excluído (soft delete) — permanece legível no histórico.</summary>
+    CommentDeleted = 31
 }

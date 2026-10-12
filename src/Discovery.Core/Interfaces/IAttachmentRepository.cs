@@ -23,6 +23,15 @@ public interface IAttachmentRepository
     /// <summary>Fazer hard delete permanente (remover registro)</summary>
     Task<bool> HardDeleteAsync(Guid attachmentId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Soft delete de TODOS os anexos de uma entidade (ex.: comentário excluído
+    /// leva junto os anexos da conversa). Devolve quantos foram marcados.
+    /// </summary>
+    Task<int> SoftDeleteByEntityAsync(
+        string entityType,
+        Guid entityId,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Listar anexos de uma entidade (excluindo soft-deletados)</summary>
     Task<List<Attachment>> GetByEntityAsync(
         string entityType,

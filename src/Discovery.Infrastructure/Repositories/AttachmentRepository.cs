@@ -86,6 +86,36 @@ public class AttachmentRepository : IAttachmentRepository
         return true;
     }
 
+    /// <summary>
+    /// Soft delete em lote dos anexos de uma entidade (ex.: comentário excluído).
+    /// Carrega e marca os registros em vez de usar ExecuteUpdate: o volume por
+    /// comentário é pequeno e assim o método funciona também no provider
+    /// InMemory usado pelos testes (ExecuteUpdate é só relacional).
+    /// </summary>
+    public async Task<int> SoftDeleteByEntityAsync(
+        string entityType,
+        Guid entityId,
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTime.UtcNow;
+
+        var attachments = await _db.Attachments
+            .Where(a => a.EntityType == entityType && a.EntityId == entityId && a.DeletedAt == null)
+            .ToListAsync(cancellationToken);
+
+        if (attachments.Count == 0)
+            return 0;
+
+        foreach (var attachment in attachments)
+        {
+            attachment.DeletedAt = now;
+            attachment.UpdatedAt = now;
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return attachments.Count;
+    }
+
     /// <summary>Listar anexos de uma entidade</summary>
     public async Task<List<Attachment>> GetByEntityAsync(
         string entityType,

@@ -798,7 +798,7 @@ write_site_proxy_config() {
   os_mode="${os_mode:-skip}"
   os_bucket="${DISCOVERY_OBJECT_STORAGE_BUCKET:-$(_env_key DISCOVERY_OBJECT_STORAGE_BUCKET)}"
   os_max_upload="${DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD:-$(_env_key DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD)}"
-  os_max_upload="${os_max_upload:-500m}"
+  os_max_upload="${os_max_upload:-10240m}"
   local os_nginx_enabled="${DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED:-$(_env_key DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED)}"
   os_nginx_enabled="${os_nginx_enabled:-y}"
 

@@ -147,6 +147,22 @@ public class ServerConfiguration
     /// </summary>
     public string TicketAttachmentSettingsJson { get; set; } = "{}";
 
+    // ── Anexos por nível (comentário x repositório do chamado) ─────────────
+    // O anexo de COMENTÁRIO faz parte da conversa (pequeno, com miniatura); o
+    // anexo do CHAMADO é o repositório de arquivos grandes (até 2 GB, com upload
+    // resumível). Ambos configuráveis aqui e resolvidos por Site > Cliente >
+    // Servidor.
+    public long AttachmentCommentMaxFileSizeBytes { get; set; } = 10L * 1024 * 1024;
+    public string AttachmentCommentAllowedContentTypes { get; set; } =
+        "image/jpeg,image/png,image/webp,application/pdf";
+    public long AttachmentTicketMaxFileSizeBytes { get; set; } = 2L * 1024 * 1024 * 1024;
+    public string AttachmentTicketAllowedContentTypes { get; set; } =
+        "image/jpeg,image/png,image/webp,application/pdf,application/zip," +
+        "application/x-7z-compressed,application/x-msdownload,text/plain,text/csv," +
+        "application/octet-stream";
+    /// <summary>Cota total de anexos por chamado (0 = sem cota).</summary>
+    public long AttachmentTicketTotalQuotaBytes { get; set; }
+
     /// <summary>
     /// Configuração global dos processamentos em segundo plano (JSON): ciclo das
     /// métricas por atendente e ciclo de triagem por IA. Herdada por clientes

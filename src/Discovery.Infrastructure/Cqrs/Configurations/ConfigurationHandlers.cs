@@ -206,6 +206,32 @@ public sealed class GetTicketAttachmentSettingsQueryHandler(IConfigurationServic
     }
 }
 
+public sealed class GetCommentAttachmentSettingsQueryHandler(IConfigurationService config)
+    : IRequestHandler<GetCommentAttachmentSettingsQuery, Result<TicketAttachmentSettings>>
+{
+    public async Task<Result<TicketAttachmentSettings>> Handle(GetCommentAttachmentSettingsQuery q, CancellationToken ct)
+    {
+        var server = await config.GetServerConfigAsync();
+
+        // O nível comentário não passa pelo JSON legado (TicketAttachmentSettingsJson):
+        // ele tem colunas próprias para que o console possa editá-las diretamente.
+        var settings = new TicketAttachmentSettings
+        {
+            Enabled = true,
+            MaxFileSizeBytes = server.AttachmentCommentMaxFileSizeBytes > 0
+                ? server.AttachmentCommentMaxFileSizeBytes
+                : 10L * 1024 * 1024,
+            AllowedContentTypes = (server.AttachmentCommentAllowedContentTypes ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+        };
+
+        if (settings.AllowedContentTypes.Length == 0)
+            settings.AllowedContentTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+
+        return Result<TicketAttachmentSettings>.Success(settings);
+    }
+}
+
 public sealed class UpdateTicketAttachmentSettingsCommandHandler(IConfigurationService config)
     : IRequestHandler<UpdateTicketAttachmentSettingsCommand, Result<ServerConfiguration>>
 {

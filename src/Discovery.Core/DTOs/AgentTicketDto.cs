@@ -63,7 +63,12 @@ public sealed record AgentTicketCommentDto(
     Guid Id,
     string Author,
     string Content,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    /// <summary>Marcado quando o comentário foi excluído no console (segue legível).</summary>
+    DateTime? DeletedAt = null,
+    string? DeletedBy = null,
+    /// <summary>Anexos do nível conversa (pequenos, com miniatura).</summary>
+    IReadOnlyList<Discovery.Core.Cqrs.Tickets.Queries.TicketCommentAttachmentDto>? Attachments = null);
 
 public static class AgentTicketMapper
 {

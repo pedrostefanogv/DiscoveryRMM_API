@@ -286,7 +286,7 @@ public class AgentTicketLifecycleTests
             new TicketComment { Id = Guid.NewGuid(), TicketId = ticket.Id, Author = "Tecnico", Content = "nota interna", IsInternal = true, CreatedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
 
-        var handler = new GetMyTicketCommentsHandler(new TicketRepository(db, new NoopAgentMessaging()));
+        var handler = new GetMyTicketCommentsHandler(new TicketRepository(db, new NoopAgentMessaging()), db);
         var result = await handler.Handle(new GetMyTicketCommentsQuery(agentId, ticket.Id), default);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -417,7 +417,7 @@ public class AgentTicketLifecycleTests
             var allowed = new HashSet<Type>
             {
                 typeof(Client), typeof(WorkflowState), typeof(Ticket), typeof(TicketComment),
-                typeof(TicketActivityLog), typeof(TicketAnswer)
+                typeof(TicketActivityLog), typeof(TicketAnswer), typeof(Attachment)
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -431,7 +431,11 @@ public class AgentTicketLifecycleTests
             modelBuilder.Entity<Client>(e => { e.HasKey(c => c.Id); e.Property(c => c.Name).IsRequired(); });
             modelBuilder.Entity<WorkflowState>(e => e.HasKey(s => s.Id));
             modelBuilder.Entity<Ticket>(e => { e.HasKey(t => t.Id); e.Ignore(t => t.DaysOpen); });
-            modelBuilder.Entity<TicketComment>(e => e.HasKey(c => c.Id));
+            // Attachment passou a ser consultado pelo handler de comentários do
+            // agent (anexos do nível conversa): sem mapeá-lo aqui o DbContext de
+            // teste o ignora e a consulta falha.
+            modelBuilder.Entity<TicketComment>(e => { e.HasKey(c => c.Id); e.Ignore(c => c.IsDeleted); });
+            modelBuilder.Entity<Attachment>(e => { e.HasKey(a => a.Id); e.Ignore(a => a.IsDeleted); });
             modelBuilder.Entity<TicketActivityLog>(e => e.HasKey(l => l.Id));
             modelBuilder.Entity<TicketAnswer>(e => { e.HasKey(a => a.Id); e.Ignore(a => a.Embedding); });
         }

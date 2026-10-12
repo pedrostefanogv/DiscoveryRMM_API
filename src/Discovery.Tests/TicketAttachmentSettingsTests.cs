@@ -17,9 +17,21 @@ public class TicketAttachmentSettingsTests
     }
 
     [Test]
-    public void Validate_RejectsOversizedFile()
+    public void Validate_AcceptsRepositorySizesUpTo10Gb()
     {
-        var settings = new TicketAttachmentSettings { MaxFileSizeBytes = 2L * 1024 * 1024 * 1024 };
+        // O teto acompanha o nginx (client_max_body_size 10240m): 2 GB e 10 GiB
+        // sao configuracoes validas para o repositorio do chamado.
+        var twoGb = new TicketAttachmentSettings { MaxFileSizeBytes = 2L * 1024 * 1024 * 1024 };
+        Assert.That(twoGb.Validate(), Is.Empty);
+
+        var tenGb = new TicketAttachmentSettings { MaxFileSizeBytes = 10L * 1024 * 1024 * 1024 };
+        Assert.That(tenGb.Validate(), Is.Empty);
+    }
+
+    [Test]
+    public void Validate_RejectsFileAbove10Gb()
+    {
+        var settings = new TicketAttachmentSettings { MaxFileSizeBytes = 11L * 1024 * 1024 * 1024 };
 
         Assert.That(settings.Validate(), Has.Some.Contains("MaxFileSizeBytes"));
     }

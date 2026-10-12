@@ -298,9 +298,12 @@ public sealed class AddMyTicketCommentHandler(
 }
 
 public sealed class GetMyTicketCommentsHandler(
-    ITicketRepository ticketRepo
+    ITicketRepository ticketRepo,
+    DiscoveryDbContext db
 ) : IRequestHandler<GetMyTicketCommentsQuery, Result<IReadOnlyList<AgentTicketCommentDto>>>
 {
+    private const string CommentEntityType = "TicketComment";
+
     public async Task<Result<IReadOnlyList<AgentTicketCommentDto>>> Handle(GetMyTicketCommentsQuery q, CancellationToken ct)
     {
         var ticket = await ticketRepo.GetByIdAsync(q.TicketId);
@@ -312,10 +315,43 @@ public sealed class GetMyTicketCommentsHandler(
         // público não expõe IsInternal/TicketId.
         var visible = (comments ?? Enumerable.Empty<Discovery.Core.Entities.TicketComment>())
             .Where(comment => !comment.IsInternal)
-            .Select(comment => new AgentTicketCommentDto(
-                comment.Id, comment.Author, comment.Content, comment.CreatedAt))
             .ToList();
-        return Result<IReadOnlyList<AgentTicketCommentDto>>.Success(visible);
+
+        // Anexos do nível conversa em UMA consulta (sem N+1).
+        var attachmentsByComment = new Dictionary<Guid, IReadOnlyList<Discovery.Core.Cqrs.Tickets.Queries.TicketCommentAttachmentDto>>();
+        var commentIds = visible.Select(comment => comment.Id).ToList();
+        if (commentIds.Count > 0)
+        {
+            var rows = await db.Attachments.AsNoTracking()
+                .Where(a => a.EntityType == CommentEntityType
+                    && a.DeletedAt == null
+                    && commentIds.Contains(a.EntityId))
+                .OrderBy(a => a.CreatedAt)
+                .Select(a => new { a.Id, a.EntityId, a.FileName, a.ContentType, a.SizeBytes, a.UploadedBy, a.CreatedAt })
+                .ToListAsync(ct);
+
+            attachmentsByComment = rows
+                .GroupBy(a => a.EntityId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => (IReadOnlyList<Discovery.Core.Cqrs.Tickets.Queries.TicketCommentAttachmentDto>)group
+                        .Select(a => new Discovery.Core.Cqrs.Tickets.Queries.TicketCommentAttachmentDto(
+                            a.Id, a.FileName, a.ContentType, a.SizeBytes, a.UploadedBy, a.CreatedAt))
+                        .ToList());
+        }
+
+        var dtos = visible
+            .Select(comment => new AgentTicketCommentDto(
+                comment.Id,
+                comment.Author,
+                comment.Content,
+                comment.CreatedAt,
+                comment.DeletedAt,
+                comment.DeletedBy,
+                attachmentsByComment.TryGetValue(comment.Id, out var list) ? list : null))
+            .ToList();
+
+        return Result<IReadOnlyList<AgentTicketCommentDto>>.Success(dtos);
     }
 }
 

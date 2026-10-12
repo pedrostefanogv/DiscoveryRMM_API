@@ -55,10 +55,12 @@ public class TicketAttachmentSettings
         if (MaxFileSizeBytes <= 0)
             errors.Add("MaxFileSizeBytes deve ser maior que zero.");
 
-        // Limite defensivo de 1 GB para evitar configuração acidentalmente abusiva.
-        const long hardUpperLimitBytes = 1024L * 1024 * 1024;
+        // Teto de 10 GiB: mesmo limite do nginx (client_max_body_size 10240m) e
+        // do upload multipart com retomada. Sem esse alinhamento o proxy
+        // rejeitaria a requisicao (413) antes de a API validar o anexo.
+        const long hardUpperLimitBytes = 10L * 1024 * 1024 * 1024;
         if (MaxFileSizeBytes > hardUpperLimitBytes)
-            errors.Add("MaxFileSizeBytes não pode ultrapassar 1GB.");
+            errors.Add("MaxFileSizeBytes não pode ultrapassar 10GB.");
 
         if (PresignedUploadUrlTtlMinutes is < 1 or > 120)
             errors.Add("PresignedUploadUrlTtlMinutes deve estar entre 1 e 120.");

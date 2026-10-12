@@ -19,6 +19,9 @@ public class AgentUpdateEventRepository(DiscoveryDbContext db) : IAgentUpdateEve
         return updateEvent;
     }
 
+    // HISTÓRICO (auditoria) SOBREVIVE À LIXEIRA: consulta por AgentId, sem
+    // atravessar a navegação Agent (filtrada) — os eventos de update de um agent
+    // deletado continuam disponíveis para auditoria.
     public async Task<IReadOnlyList<AgentUpdateEvent>> GetByAgentIdAsync(Guid agentId, int limit = 100, CancellationToken cancellationToken = default)
     {
         var safeLimit = Math.Clamp(limit, 1, 500);
@@ -31,6 +34,9 @@ public class AgentUpdateEventRepository(DiscoveryDbContext db) : IAgentUpdateEve
             .ToListAsync(cancellationToken);
     }
 
+    // VISÃO OPERACIONAL (exceção deliberada): o rollout de atualizações NÃO lista
+    // agents na lixeira — aqui a navegação `agent` é percorrida de propósito e o
+    // query filter de soft delete deve valer (planejamento de distribuição).
     public async Task<IReadOnlyList<AgentUpdateRolloutAgentSnapshotDto>> GetRolloutSnapshotsAsync(Guid? clientId = null, Guid? siteId = null, int limit = 200, CancellationToken cancellationToken = default)
     {
         var safeLimit = Math.Clamp(limit, 1, 1000);

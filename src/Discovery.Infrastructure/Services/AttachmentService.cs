@@ -24,8 +24,12 @@ public class AttachmentService : IAttachmentService
     private readonly IObjectStorageProviderFactory _storageFactory;
     private readonly ILogger<AttachmentService> _logger;
 
-    // Limites e validações
-    private const long MaxFileSizeBytes = 100 * 1024 * 1024; // 100 MB
+    // Limites e validacoes.
+    // O teto real por nivel vem de ServerConfiguration (comentario ~10 MB;
+    // repositorio ate 10 GiB). Aqui e so o guarda-corpo do servico, alinhado ao
+    // nginx (client_max_body_size 10240m): sem isso o fluxo pre-assinado recusava
+    // qualquer arquivo acima de 100 MB antes mesmo de chegar ao storage.
+    private const long MaxFileSizeBytes = 10L * 1024 * 1024 * 1024; // 10 GiB
     private static readonly HashSet<string> AllowedMimeTypes = new()
     {
         // Documentos

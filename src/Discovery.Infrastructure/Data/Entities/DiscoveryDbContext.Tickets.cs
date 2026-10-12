@@ -63,6 +63,9 @@ public partial class DiscoveryDbContext
             entity.ToTable("ticket_comments");
             entity.HasKey(comment => comment.Id);
             entity.HasIndex(comment => comment.TicketId).HasDatabaseName("ix_ticket_comments_ticket_id");
+            // O histórico inclui comentários excluídos (soft delete); o índice
+            // evita varredura quando a UI filtra/marca os excluídos.
+            entity.HasIndex(comment => comment.DeletedAt).HasDatabaseName("ix_ticket_comments_deleted_at");
 
             entity.Property(comment => comment.Id).HasColumnName("id").ValueGeneratedNever();
             entity.Property(comment => comment.TicketId).HasColumnName("ticket_id");
@@ -70,6 +73,8 @@ public partial class DiscoveryDbContext
             entity.Property(comment => comment.Content).HasColumnName("content");
             entity.Property(comment => comment.IsInternal).HasColumnName("is_internal");
             entity.Property(comment => comment.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(comment => comment.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+            entity.Property(comment => comment.DeletedBy).HasColumnName("deleted_by").HasMaxLength(200);
 
             entity.HasOne<Ticket>().WithMany().HasForeignKey(comment => comment.TicketId).OnDelete(DeleteBehavior.Restrict);
         });

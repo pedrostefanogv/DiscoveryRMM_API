@@ -12,6 +12,9 @@ public class AiChatSessionRepository : IAiChatSessionRepository
 
     public AiChatSessionRepository(DiscoveryDbContext db) => _db = db;
 
+    // HISTÓRICO SOBREVIVE À LIXEIRA: as buscas usam AgentId e não a navegação
+    // Agent (filtrada por soft delete), então as sessões de IA de um agent
+    // deletado continuam listáveis.
     public async Task<AiChatSession> CreateAsync(AiChatSession session, CancellationToken ct = default)
     {
         session.Id = IdGenerator.NewId();

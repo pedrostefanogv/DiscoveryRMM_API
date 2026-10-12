@@ -11,6 +11,12 @@ public class RemoteSessionRepository : IRemoteSessionRepository
 
     public RemoteSessionRepository(DiscoveryDbContext db) => _db = db;
 
+    // HISTÓRICO SOBREVIVE À LIXEIRA (decisão de produto): as consultas deste
+    // repositório filtram por AgentId e NÃO atravessam a navegação Agent, que tem
+    // query filter de soft delete (`Agent.DeletedAt == null`). É intencional: as
+    // sessões remotas de um agent na lixeira continuam no histórico.
+    // Consequência aceita: o EF emite o aviso 10622 (navegação obrigatória com
+    // principal filtrado) — ver comentário no DiscoveryDbContext.CoreEntities.
     public async Task<RemoteSession?> GetByIdAsync(Guid id, CancellationToken ct = default)
         => await _db.RemoteSessions
             .Include(s => s.Recording)

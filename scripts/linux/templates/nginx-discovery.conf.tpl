@@ -66,7 +66,9 @@ __REDIRECT_RULES__
 
   # Uploads (ex.: artefatos de build do agent com RequestSizeLimit de 500MB
   # na API). Default do nginx e 1m — sem isso, todo upload maior falha com 413.
-  client_max_body_size 100m;
+  # 10 GB: o console permite anexo de repositorio ate 10 GiB; o nginx precisa
+# aceitar o mesmo teto para nao devolver 413 antes da API.
+client_max_body_size 10240m;
 
   gzip on;
   gzip_types text/css application/javascript application/json image/svg+xml;

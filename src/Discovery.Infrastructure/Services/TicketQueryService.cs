@@ -14,6 +14,9 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public sealed class TicketQueryService : ITicketQueryService
 {
+    /// <summary>EntityType dos anexos de nível COMENTÁRIO (conversa) na tabela attachments.</summary>
+    private const string CommentEntityType = "TicketComment";
+
     private readonly DiscoveryDbContext _db;
 
     public TicketQueryService(DiscoveryDbContext db)
@@ -129,7 +132,8 @@ public sealed class TicketQueryService : ITicketQueryService
         limit = Math.Clamp(limit, 1, 200);
         var items = await cq.OrderByDescending(c => c.CreatedAt).ThenByDescending(c => c.Id)
             .Take(limit + 1)
-            .Select(c => new TicketCommentDto(c.Id, c.Author, c.Content, c.IsInternal, c.CreatedAt))
+            .Select(c => new TicketCommentDto(
+                c.Id, c.Author, c.Content, c.IsInternal, c.CreatedAt, c.DeletedAt, c.DeletedBy, null))
             .ToListAsync(ct);
 
         var hm = items.Count > limit;
@@ -137,6 +141,34 @@ public sealed class TicketQueryService : ITicketQueryService
         var nc = hm && pg.Count > 0
             ? CursorPaginationHelper.EncodeCreatedAtCursor(pg[^1].CreatedAt, pg[^1].Id)
             : null;
+
+        // Anexos do nível comentário: UMA consulta para toda a página (sem N+1).
+        if (pg.Count > 0)
+        {
+            var commentIds = pg.Select(c => c.Id).ToList();
+            var rows = await _db.Attachments.AsNoTracking()
+                .Where(a => a.EntityType == CommentEntityType
+                    && a.DeletedAt == null
+                    && commentIds.Contains(a.EntityId))
+                .OrderBy(a => a.CreatedAt)
+                .Select(a => new { a.Id, a.EntityId, a.FileName, a.ContentType, a.SizeBytes, a.UploadedBy, a.CreatedAt })
+                .ToListAsync(ct);
+
+            var byComment = rows
+                .GroupBy(a => a.EntityId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => (IReadOnlyList<TicketCommentAttachmentDto>)group
+                        .Select(a => new TicketCommentAttachmentDto(
+                            a.Id, a.FileName, a.ContentType, a.SizeBytes, a.UploadedBy, a.CreatedAt))
+                        .ToList());
+
+            for (var i = 0; i < pg.Count; i++)
+            {
+                if (byComment.TryGetValue(pg[i].Id, out var list))
+                    pg[i] = pg[i] with { Attachments = list };
+            }
+        }
 
         return new CursorPageDto<TicketCommentDto>(pg, pg.Count, cursor, nc, hm, limit);
     }

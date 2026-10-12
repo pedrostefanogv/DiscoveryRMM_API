@@ -76,7 +76,15 @@ public partial class DiscoveryDbContext
                 .HasDatabaseName("ix_agents_hostname");
             entity.HasIndex(agent => agent.DeletedAt)
                 .HasDatabaseName("ix_agents_deleted_at");
-            entity.HasQueryFilter(agent => agent.DeletedAt == null);
+            // Soft delete do Agent. DECISÃO (2026-10-12): o HISTÓRICO relacionado
+        // (sessões remotas, sessões de IA, eventos de update) deve SOBREVIVER à
+        // lixeira; essas consultas usam AgentId e não atravessam esta navegação.
+        // O aviso EF 10622 (RequiredNavigationWithQueryFilterInteraction) é
+        // esperado aqui e aceito de propósito — adicionar filtros espelhados nos
+        // dependentes esconderia o histórico. A única exceção deliberada é a visão
+        // de ROLLOUT de atualizações, que deve esconder agents deletados
+        // (AgentUpdateEventRepository.GetRolloutSnapshotsAsync).
+        entity.HasQueryFilter(agent => agent.DeletedAt == null);
 
             entity.Property(agent => agent.Id)
                 .HasColumnName("id")

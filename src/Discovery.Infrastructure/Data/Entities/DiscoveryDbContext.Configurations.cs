@@ -49,6 +49,11 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.ObjectStorageBucketName).HasColumnName("object_storage_bucket_name");
             entity.Property(config => config.ObjectStorageEndpoint).HasColumnName("object_storage_endpoint");
             entity.Property(config => config.ObjectStorageInternal).HasColumnName("object_storage_internal");
+            entity.Property(config => config.AttachmentCommentMaxFileSizeBytes).HasColumnName("attachment_comment_max_file_size_bytes");
+            entity.Property(config => config.AttachmentCommentAllowedContentTypes).HasColumnName("attachment_comment_allowed_content_types");
+            entity.Property(config => config.AttachmentTicketMaxFileSizeBytes).HasColumnName("attachment_ticket_max_file_size_bytes");
+            entity.Property(config => config.AttachmentTicketAllowedContentTypes).HasColumnName("attachment_ticket_allowed_content_types");
+            entity.Property(config => config.AttachmentTicketTotalQuotaBytes).HasColumnName("attachment_ticket_total_quota_bytes");
             entity.Property(config => config.ObjectStorageRegion).HasColumnName("object_storage_region");
             entity.Property(config => config.ObjectStorageAccessKey).HasColumnName("object_storage_access_key");
             entity.Property(config => config.ObjectStorageSecretKey).HasColumnName("object_storage_secret_key");

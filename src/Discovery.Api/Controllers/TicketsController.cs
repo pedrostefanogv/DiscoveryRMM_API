@@ -2,6 +2,7 @@ using System.Text.Json;
 using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Configurations.Queries;
 using Discovery.Core.Cqrs.Tickets.Commands;
+using Discovery.Core.Cqrs.Tickets.Dtos;
 using Discovery.Core.Cqrs.Support.Csat;
 using Discovery.Core.Cqrs.Tickets.Queries;
 using Discovery.Core.DTOs;
@@ -10,6 +11,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Core.ValueObjects;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -28,7 +30,9 @@ public class TicketsController(
     IAttachmentRepository attachmentRepository,
     ITicketRepository ticketRepository,
     IScopeContext scopeContext,
-    ITicketAnswerSearchService ticketAnswerSearchService) : ControllerBase
+    ITicketAnswerSearchService ticketAnswerSearchService,
+    INotificationService notificationService,
+    ILogger<TicketsController> logger) : ControllerBase
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
     private Guid? CurrentUserId => HttpContext.Items["UserId"] as Guid?;
@@ -566,6 +570,10 @@ public class TicketsController(
                 return StatusCode(StatusCodes.Status413RequestEntityTooLarge, new { error = $"Arquivo excede o tamanho máximo permitido ({settings.MaxFileSizeBytes} bytes)." });
             }
 
+            // Anexo do REPOSITÓRIO (arquivo grande): avisa o outro lado. Anexo de
+            // comentário não passa por aqui — ele já faz parte da conversa.
+            await NotifyRepositoryAttachmentAsync(ticket, attachment.Id, attachment.FileName, attachment.SizeBytes);
+
             return Ok(attachment);
         }
         catch (ArgumentException ex)
@@ -575,6 +583,216 @@ public class TicketsController(
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    // ── Anexos de COMENTÁRIO (nível conversa) ────────────────────────────
+    //
+    // O anexo do chamado (acima) é o REPOSITÓRIO de arquivos grandes. O anexo
+    // de comentário faz parte da CONVERSA: pequeno (10 MB por padrão),
+    // imagens/PDF, com miniatura. As duas famílias usam a mesma tabela
+    // attachments e se distinguem por EntityType ("TicketComment" x "Ticket"),
+    // e os limites de cada nível vêm de configurações separadas.
+
+    /// <summary>Resolve o comentário garantindo que ele pertence a ESTE chamado.</summary>
+    private async Task<TicketCommentDto?> ResolveCommentAsync(Guid ticketId, Guid commentId)
+    {
+        var result = await mediator.Send(
+            new GetTicketCommentQuery(ticketId, commentId), HttpContext.RequestAborted);
+        return result.IsSuccess ? result.Value : null;
+    }
+
+    /// <summary>Configuração do nível comentário (tamanho/tipos permitidos).</summary>
+    private async Task<TicketAttachmentSettings?> ResolveCommentSettingsAsync()
+    {
+        var result = await mediator.Send(
+            new GetCommentAttachmentSettingsQuery(), HttpContext.RequestAborted);
+        return result.IsSuccess ? result.Value : null;
+    }
+
+    /// <summary>Prepara upload direto no storage para um anexo de comentário.</summary>
+    [HttpPost("{id:guid}/comments/{commentId:guid}/attachments/presigned-upload")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> PrepareCommentAttachmentUpload(
+        Guid id, Guid commentId, [FromBody] PresignedUploadRequestDto req)
+    {
+        var ct = HttpContext.RequestAborted;
+        if (!await CanAccessTicketAsync(id, ActionType.Edit, ct))
+            return NotFound();
+
+        if (await ResolveCommentAsync(id, commentId) is null)
+            return NotFound();
+
+        var ticket = await queryService.GetTicketByIdAsync(id, ct);
+        if (ticket is null)
+            return NotFound();
+
+        var settings = await ResolveCommentSettingsAsync();
+        if (settings is null)
+            return BadRequest(new { error = "Não foi possível ler a configuração de anexos de comentário." });
+
+        if (req is null || string.IsNullOrWhiteSpace(req.FileName) || string.IsNullOrWhiteSpace(req.ContentType))
+            return BadRequest(new { error = "Nome e tipo do arquivo são obrigatórios." });
+
+        if (!settings.IsContentTypeAllowed(req.ContentType))
+            return BadRequest(new { error = $"Tipo de arquivo não permitido em comentários: {req.ContentType}." });
+
+        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxFileSizeBytes)
+            return BadRequest(new { error = $"Anexo de comentário excede o limite de {settings.MaxFileSizeBytes} bytes." });
+
+        var result = await attachmentService.PreparePresignedUploadAsync(
+            CommentEntityType, commentId, ticket.ClientId, req.FileName, req.ContentType,
+            req.SizeBytes, settings.PresignedUploadUrlTtlMinutes, ct);
+
+        return Ok(result);
+    }
+
+    /// <summary>Finaliza o upload pré-assinado e persiste o anexo do comentário.</summary>
+    [HttpPost("{id:guid}/comments/{commentId:guid}/attachments/complete-upload")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> CompleteCommentAttachmentUpload(
+        Guid id, Guid commentId, [FromBody] CompleteUploadRequestDto req)
+    {
+        var ct = HttpContext.RequestAborted;
+        if (!await CanAccessTicketAsync(id, ActionType.Edit, ct))
+            return NotFound();
+
+        if (await ResolveCommentAsync(id, commentId) is null)
+            return NotFound();
+
+        var ticket = await queryService.GetTicketByIdAsync(id, ct);
+        if (ticket is null)
+            return NotFound();
+
+        var settings = await ResolveCommentSettingsAsync();
+        if (settings is null)
+            return BadRequest(new { error = "Não foi possível ler a configuração de anexos de comentário." });
+
+        if (req is null || !settings.IsContentTypeAllowed(req.ContentType))
+            return BadRequest(new { error = $"Tipo de arquivo não permitido em comentários: {req?.ContentType}." });
+
+        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxFileSizeBytes)
+            return BadRequest(new { error = $"Anexo de comentário excede o limite de {settings.MaxFileSizeBytes} bytes." });
+
+        try
+        {
+            // Autor sempre o usuário autenticado — nunca o body.
+            var attachment = await attachmentService.CompletePresignedUploadAsync(
+                req.AttachmentId, CommentEntityType, commentId, ticket.ClientId,
+                req.FileName, req.ContentType, req.SizeBytes, req.ObjectKey, Username, ct);
+
+            // O limite vale sobre o tamanho REAL no storage (não o declarado).
+            if (attachment.SizeBytes > settings.MaxFileSizeBytes)
+            {
+                await attachmentService.DeleteAttachmentAsync(attachment.Id, ct);
+                return StatusCode(StatusCodes.Status413RequestEntityTooLarge,
+                    new { error = $"Arquivo excede o limite de anexo de comentário ({settings.MaxFileSizeBytes} bytes)." });
+            }
+
+            return Ok(attachment);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Baixa um anexo de comentário (stream same-origin autenticado).</summary>
+    [HttpGet("{id:guid}/comments/{commentId:guid}/attachments/{attachmentId:guid}/download")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> DownloadCommentAttachment(
+        Guid id, Guid commentId, Guid attachmentId, CancellationToken ct)
+    {
+        if (!await CanAccessTicketAsync(id, ct))
+            return NotFound();
+
+        if (await ResolveCommentAsync(id, commentId) is null)
+            return NotFound();
+
+        var attachment = await attachmentRepository.GetByIdAsync(attachmentId, ct);
+        if (attachment is null
+            || attachment.IsDeleted
+            || !string.Equals(attachment.EntityType, CommentEntityType, StringComparison.OrdinalIgnoreCase)
+            || attachment.EntityId != commentId)
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            var stream = await attachmentService.DownloadAttachmentAsync(attachmentId, ct);
+            var contentType = string.IsNullOrWhiteSpace(attachment.ContentType)
+                ? "application/octet-stream"
+                : attachment.ContentType;
+            return File(stream, contentType, attachment.FileName);
+        }
+        catch (FileNotFoundException) { return NotFound(); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (Exception)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Não foi possível baixar o arquivo." });
+        }
+    }
+
+    /// <summary>
+    /// Exclui (soft delete) um comentário. O comentário continua legível e
+    /// marcado como excluído; os anexos da conversa saem da listagem junto.
+    /// </summary>
+    [HttpDelete("{id:guid}/comments/{commentId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    public async Task<IActionResult> DeleteComment(Guid id, Guid commentId)
+    {
+        if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
+            return NotFound();
+
+        var result = await mediator.Send(
+            new DeleteTicketCommentCommand(id, commentId, CurrentUserId, Username),
+            HttpContext.RequestAborted);
+        return result.ToActionResult();
+    }
+
+    /// <summary>EntityType dos anexos de comentário na tabela attachments.</summary>
+    private const string CommentEntityType = "TicketComment";
+
+    /// <summary>
+    /// Notifica o AGENT do chamado que o repositório ganhou um arquivo. O
+    /// arquivo NÃO vai no payload (só metadado + deep link): o objetivo é o
+    /// badge/toast, não trafegar o binário de volta.
+    /// </summary>
+    private async Task NotifyRepositoryAttachmentAsync(
+        TicketDetailDto ticket, Guid attachmentId, string fileName, long sizeBytes)
+    {
+        if (ticket.AgentId is not Guid agentId)
+            return;
+
+        try
+        {
+            await notificationService.PublishAsync(new NotificationPublishRequest(
+                EventType: "ticket.attachment.added",
+                Topic: "tickets",
+                Title: "Novo anexo no chamado",
+                Message: $"{ticket.Title}: {fileName}",
+                Severity: NotificationSeverity.Informational,
+                Payload: new
+                {
+                    ticketId = ticket.Id,
+                    attachmentId,
+                    fileName,
+                    sizeBytes,
+                    origin = "console"
+                },
+                RecipientAgentId: agentId,
+                CreatedBy: Username));
+        }
+        catch (Exception ex)
+        {
+            // Notificação é best-effort: o upload já está persistido e não pode
+            // falhar (nem devolver erro) por causa do aviso.
+            logger.LogWarning(ex, "Falha ao notificar anexo do chamado {TicketId}", ticket.Id);
         }
     }
 

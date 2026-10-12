@@ -33,6 +33,13 @@ public sealed record GetConfigurationMetadataQuery(string EntityType, Guid Entit
 /// </summary>
 public sealed record GetTicketAttachmentSettingsQuery : IQuery<Result<TicketAttachmentSettings>>;
 
+/// <summary>
+/// Configuração do nível COMENTÁRIO (conversa): arquivos pequenos com
+/// miniatura (imagens + PDF, 10 MB por padrão). Resolvida das colunas
+/// AttachmentComment* de ServerConfiguration.
+/// </summary>
+public sealed record GetCommentAttachmentSettingsQuery : IQuery<Result<TicketAttachmentSettings>>;
+
 /// <summary>Impacto de bloquear campos no servidor: overrides que seriam removidos.</summary>
 public sealed record GetServerLocksImpactQuery(string[] Fields) : IQuery<Result<ConfigurationLockImpact>>;
 
