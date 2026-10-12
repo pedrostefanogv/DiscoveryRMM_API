@@ -34,6 +34,8 @@ internal static class ObjectStorageCliMode
     public const string UsePathStyleEnv = "DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE";
     public const string SslVerifyEnv = "DISCOVERY_OBJECT_STORAGE_SSL_VERIFY";
     public const string UrlTtlHoursEnv = "DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS";
+    /// <summary>Liga o storage interno (RustFS do servidor; chaves do env do servidor).</summary>
+    public const string InternalEnv = "DISCOVERY_OBJECT_STORAGE_INTERNAL";
 
     private const string SetFlag = "--set-object-storage";
     private const string ShowFlag = "--show-object-storage";
@@ -102,7 +104,7 @@ internal static class ObjectStorageCliMode
         foreach (var name in new[]
                  {
                      BucketEnv, EndpointEnv, RegionEnv, AccessKeyEnv, SecretKeyEnv,
-                     UsePathStyleEnv, SslVerifyEnv, UrlTtlHoursEnv,
+                     UsePathStyleEnv, SslVerifyEnv, UrlTtlHoursEnv, InternalEnv,
                  })
         {
             Console.WriteLine("  " + name);
@@ -135,7 +137,11 @@ internal static class ObjectStorageCliMode
             }
             else
             {
-                var validationErrors = EffectiveSettings(current, updates).Validate();
+                // Modo interno: chaves/loopback vem do env do servidor, entao a
+                // validacao de endpoint/credenciais no banco nao se aplica.
+                var internalMode = updates.TryGetValue(nameof(ServerConfiguration.ObjectStorageInternal), out var internalValue)
+                    && internalValue is bool flag && flag;
+                var validationErrors = internalMode ? [] : EffectiveSettings(current, updates).Validate();
                 if (validationErrors.Count > 0)
                 {
                     Console.Error.WriteLine("[object-storage] Configuracao invalida:");
@@ -227,6 +233,12 @@ internal static class ObjectStorageCliMode
         else if (!string.IsNullOrWhiteSpace(sslVerifyRaw))
             notes.Add($"Valor invalido em {SslVerifyEnv} ({sslVerifyRaw}): campo preservado.");
 
+        var internalRaw = read(InternalEnv)?.Trim();
+        if (TryParseBool(internalRaw, out var internalStorage))
+            updates[nameof(ServerConfiguration.ObjectStorageInternal)] = internalStorage;
+        else if (!string.IsNullOrWhiteSpace(internalRaw))
+            notes.Add($"Valor invalido em {InternalEnv} ({internalRaw}): campo preservado.");
+
         var ttlRaw = read(UrlTtlHoursEnv)?.Trim();
         if (!string.IsNullOrWhiteSpace(ttlRaw))
         {
@@ -295,6 +307,7 @@ internal static class ObjectStorageCliMode
             $"  usePathStyle: {config.ObjectStorageUsePathStyle}",
             $"  sslVerify: {config.ObjectStorageSslVerify}",
             $"  urlTtlHours: {config.ObjectStorageUrlTtlHours}",
+            $"  internal: {config.ObjectStorageInternal}",
             $"  secretConfigured: {secretConfigured}",
             $"  urlPrefix: {urlPrefix}",
         });

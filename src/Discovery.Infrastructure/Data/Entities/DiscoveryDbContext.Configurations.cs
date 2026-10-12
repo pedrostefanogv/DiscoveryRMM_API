@@ -48,6 +48,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.BackgroundProcessingSettingsJson).HasColumnName("background_processing_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.ObjectStorageBucketName).HasColumnName("object_storage_bucket_name");
             entity.Property(config => config.ObjectStorageEndpoint).HasColumnName("object_storage_endpoint");
+            entity.Property(config => config.ObjectStorageInternal).HasColumnName("object_storage_internal");
             entity.Property(config => config.ObjectStorageRegion).HasColumnName("object_storage_region");
             entity.Property(config => config.ObjectStorageAccessKey).HasColumnName("object_storage_access_key");
             entity.Property(config => config.ObjectStorageSecretKey).HasColumnName("object_storage_secret_key");

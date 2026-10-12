@@ -595,6 +595,21 @@ DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD=${DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD:-500m}
 RUSTFS_VERSION=${RUSTFS_VERSION:-1.0.1}
 RUSTFS_ADDRESS=${RUSTFS_ADDRESS:-127.0.0.1:9000}
 RUSTFS_DATA_DIR=${RUSTFS_DATA_DIR:-/opt/rustfs/data}
+# Modo interno (RustFS do servidor): o CLI --set-object-storage grava o flag no
+# banco e a API usa os ObjectStorage__* abaixo. No modo interno o SERVIDOR opera
+# por loopback e as URLs pre-assinadas sao assinadas com o endpoint publico (o
+# host que o agent/navegador alcanca).
+DISCOVERY_OBJECT_STORAGE_INTERNAL=$( [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" == "rustfs" ]] && echo true || echo false )
+ObjectStorage__Mode=${DISCOVERY_OBJECT_STORAGE_MODE:-database}
+ObjectStorage__InternalEndpoint=http://127.0.0.1:${DISCOVERY_OBJECT_STORAGE_PORT:-9000}
+ObjectStorage__PublicEndpoint=${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}
+ObjectStorage__Bucket=${DISCOVERY_OBJECT_STORAGE_BUCKET:-discovery-files}
+ObjectStorage__Region=${DISCOVERY_OBJECT_STORAGE_REGION:-us-east-1}
+ObjectStorage__AccessKey=${DISCOVERY_OBJECT_STORAGE_ACCESS_KEY:-}
+ObjectStorage__SecretKey=${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}
+ObjectStorage__UsePathStyle=true
+ObjectStorage__SslVerify=${DISCOVERY_OBJECT_STORAGE_SSL_VERIFY:-true}
+ObjectStorage__UrlTtlHours=${DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS:-24}
 EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
@@ -1180,7 +1195,7 @@ update_object_storage_environment_file() {
 
   local tmp_file; tmp_file="$(mktemp)"
   set +e
-  sudo awk '!/^DISCOVERY_OBJECT_STORAGE_/ && !/^RUSTFS_/' "$env_file" > "$tmp_file" 2>/dev/null
+  sudo awk '!/^DISCOVERY_OBJECT_STORAGE_/ && !/^RUSTFS_/ && !/^ObjectStorage__/' "$env_file" > "$tmp_file" 2>/dev/null
   set -e
 
   cat >> "$tmp_file" <<EOF
@@ -1203,6 +1218,21 @@ DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD=${DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD:-500m}
 RUSTFS_VERSION=${RUSTFS_VERSION:-1.0.1}
 RUSTFS_ADDRESS=${RUSTFS_ADDRESS:-127.0.0.1:9000}
 RUSTFS_DATA_DIR=${RUSTFS_DATA_DIR:-/opt/rustfs/data}
+# Modo interno (RustFS do servidor): o CLI --set-object-storage grava o flag no
+# banco e a API usa os ObjectStorage__* abaixo. No modo interno o SERVIDOR opera
+# por loopback e as URLs pre-assinadas sao assinadas com o endpoint publico (o
+# host que o agent/navegador alcanca).
+DISCOVERY_OBJECT_STORAGE_INTERNAL=$( [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" == "rustfs" ]] && echo true || echo false )
+ObjectStorage__Mode=${DISCOVERY_OBJECT_STORAGE_MODE:-database}
+ObjectStorage__InternalEndpoint=http://127.0.0.1:${DISCOVERY_OBJECT_STORAGE_PORT:-9000}
+ObjectStorage__PublicEndpoint=${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}
+ObjectStorage__Bucket=${DISCOVERY_OBJECT_STORAGE_BUCKET:-discovery-files}
+ObjectStorage__Region=${DISCOVERY_OBJECT_STORAGE_REGION:-us-east-1}
+ObjectStorage__AccessKey=${DISCOVERY_OBJECT_STORAGE_ACCESS_KEY:-}
+ObjectStorage__SecretKey=${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}
+ObjectStorage__UsePathStyle=true
+ObjectStorage__SslVerify=${DISCOVERY_OBJECT_STORAGE_SSL_VERIFY:-true}
+ObjectStorage__UrlTtlHours=${DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS:-24}
 EOF
 
   sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"

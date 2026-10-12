@@ -172,6 +172,14 @@ public class ServerConfiguration
     public string ObjectStorageSecretKey { get; set; } = string.Empty;
 
     /// <summary>
+    /// Usa o object storage INTERNO deste servidor (RustFS): as credenciais e o
+    /// endpoint de loopback vem do env do projeto (ObjectStorage__*), enquanto o
+    /// Endpoint/Bucket/Regiao desta configuracao definem a URL PUBLICA usada nas
+    /// URLs pre-assinadas (o host que o agent e o navegador alcancam).
+    /// </summary>
+    public bool ObjectStorageInternal { get; set; }
+
+    /// <summary>
     /// Somente leitura para o cliente: indica que há um segredo de storage configurado,
     /// sem expor o valor cifrado. Não é persistido.
     /// </summary>

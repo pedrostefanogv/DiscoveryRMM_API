@@ -48,23 +48,54 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     private ObjectStorageSettings ResolveSettings(ServerConfiguration serverConfig)
     {
         var options = _objectStorageOptions.Value;
-        if (!options.IsInternal)
+        // Modo interno: ligado pelo console (ObjectStorageInternal) ou pelo env
+        // (ObjectStorage__Mode=internal), para instalacoes 100% automatizadas.
+        if (!options.IsInternal && !serverConfig.ObjectStorageInternal)
             return ObjectStorageSettingsFromServerConfiguration(serverConfig);
+
+        if (string.IsNullOrWhiteSpace(options.AccessKey) || string.IsNullOrWhiteSpace(options.SecretKey))
+        {
+            _logger.LogWarning(
+                "Storage interno habilitado, mas ObjectStorage__AccessKey/__SecretKey nao estao definidos no env do servidor. " +
+                "Configure as chaves do RustFS no discovery.env (o instalador faz isso na opcao RustFS).");
+        }
+
+        // O SERVIDOR opera pelo loopback; o AGENTE/navegador recebem as URLs
+        // pre-assinadas com o endpoint publico (Endpoint S3 do console), que e o
+        // host que o nginx publica — a assinatura SigV4 cobre o Host.
+        var internalEndpoint = string.IsNullOrWhiteSpace(options.InternalEndpoint)
+            ? "http://127.0.0.1:9000"
+            : options.InternalEndpoint;
+        var publicEndpoint = !string.IsNullOrWhiteSpace(serverConfig.ObjectStorageEndpoint)
+            ? serverConfig.ObjectStorageEndpoint
+            : options.PublicEndpoint;
 
         return new ObjectStorageSettings
         {
-            BucketName = string.IsNullOrWhiteSpace(options.Bucket)
-                ? serverConfig.ObjectStorageBucketName
-                : options.Bucket,
-            Endpoint = options.InternalEndpoint,
-            PresignEndpoint = string.IsNullOrWhiteSpace(options.PublicEndpoint) ? null : options.PublicEndpoint,
-            Region = string.IsNullOrWhiteSpace(options.Region) ? "us-east-1" : options.Region,
+            BucketName = FirstNonEmpty(serverConfig.ObjectStorageBucketName, options.Bucket),
+            Endpoint = internalEndpoint,
+            PresignEndpoint = string.IsNullOrWhiteSpace(publicEndpoint) ? null : publicEndpoint,
+            Region = FirstNonEmpty(serverConfig.ObjectStorageRegion, options.Region, "us-east-1"),
             AccessKey = options.AccessKey,
             SecretKey = options.SecretKey,
-            UrlTtlHours = options.UrlTtlHours > 0 ? options.UrlTtlHours : 24,
-            UsePathStyle = options.UsePathStyle,
-            SslVerify = options.SslVerify,
+            UrlTtlHours = serverConfig.ObjectStorageUrlTtlHours > 0
+                ? serverConfig.ObjectStorageUrlTtlHours
+                : (options.UrlTtlHours > 0 ? options.UrlTtlHours : 24),
+            // RustFS/MinIO atras do nginx no mesmo host exigem path-style.
+            UsePathStyle = true,
+            SslVerify = serverConfig.ObjectStorageSslVerify,
         };
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return string.Empty;
     }
 
     /// <summary>
