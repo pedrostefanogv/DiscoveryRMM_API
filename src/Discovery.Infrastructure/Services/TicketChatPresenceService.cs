@@ -32,16 +32,33 @@ public sealed class TicketChatPresenceService : ITicketChatPresenceService
     public int TtlSeconds => (int)Ttl.TotalSeconds;
 
     public Task TouchAsync(Guid userId, Guid ticketId, string? clientId = null, CancellationToken cancellationToken = default)
+        => TouchKeyAsync(TicketKey(userId, ticketId), clientId);
+
+    public Task TouchSessionAsync(Guid userId, Guid sessionId, string? clientId = null, CancellationToken cancellationToken = default)
+        => TouchKeyAsync(SessionKey(userId, sessionId), clientId);
+
+    public Task ClearAsync(Guid userId, Guid ticketId, string? clientId = null, CancellationToken cancellationToken = default)
+        => ClearKeyAsync(TicketKey(userId, ticketId), clientId);
+
+    public Task ClearSessionAsync(Guid userId, Guid sessionId, string? clientId = null, CancellationToken cancellationToken = default)
+        => ClearKeyAsync(SessionKey(userId, sessionId), clientId);
+
+    public Task<bool> IsViewingAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default)
+        => IsViewingKeyAsync(TicketKey(userId, ticketId));
+
+    public Task<bool> IsViewingSessionAsync(Guid userId, Guid sessionId, CancellationToken cancellationToken = default)
+        => IsViewingKeyAsync(SessionKey(userId, sessionId));
+
+    private Task TouchKeyAsync(string key, string? clientId)
     {
         var now = _timeProvider.GetUtcNow();
         PruneExpired(now);
-        _viewers[Key(userId, ticketId)] = new PresenceEntry(NormalizeClientId(clientId), now);
+        _viewers[key] = new PresenceEntry(NormalizeClientId(clientId), now);
         return Task.CompletedTask;
     }
 
-    public Task ClearAsync(Guid userId, Guid ticketId, string? clientId = null, CancellationToken cancellationToken = default)
+    private Task ClearKeyAsync(string key, string? clientId)
     {
-        var key = Key(userId, ticketId);
         var owner = NormalizeClientId(clientId);
 
         if (owner.Length == 0)
@@ -61,9 +78,8 @@ public sealed class TicketChatPresenceService : ITicketChatPresenceService
         return Task.CompletedTask;
     }
 
-    public Task<bool> IsViewingAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default)
+    private Task<bool> IsViewingKeyAsync(string key)
     {
-        var key = Key(userId, ticketId);
         if (!_viewers.TryGetValue(key, out var entry))
             return Task.FromResult(false);
 
@@ -89,7 +105,10 @@ public sealed class TicketChatPresenceService : ITicketChatPresenceService
         }
     }
 
-    private static string Key(Guid userId, Guid ticketId) => userId.ToString("N") + ":" + ticketId.ToString("N");
+    private static string TicketKey(Guid userId, Guid ticketId) => userId.ToString("N") + ":t:" + ticketId.ToString("N");
+
+    /// <summary>Presenca de conversa AVULSA, identificada pelo id da sessão.</summary>
+    private static string SessionKey(Guid userId, Guid sessionId) => userId.ToString("N") + ":s:" + sessionId.ToString("N");
 
     /// <summary>Normaliza o identificador de janela (trim + teto) vindo da query string.</summary>
     private static string NormalizeClientId(string? clientId)

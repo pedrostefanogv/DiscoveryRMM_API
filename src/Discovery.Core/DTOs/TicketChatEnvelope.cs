@@ -32,7 +32,8 @@ public class TicketChatEnvelope
 
     public Guid SessionId { get; set; }
 
-    public Guid TicketId { get; set; }
+    /// <summary>Chamado vinculado; nulo em conversas avulsas (sem chamado).</summary>
+    public Guid? TicketId { get; set; }
 
     public Guid AgentId { get; set; }
 

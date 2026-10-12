@@ -33,7 +33,7 @@ public sealed record TicketChatMessageDto(
 /// </summary>
 public sealed record TicketChatSessionDto(
     Guid Id,
-    Guid TicketId,
+    Guid? TicketId,
     Guid? AgentId,
     string Status,
     Guid? StartedByUserId,

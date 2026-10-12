@@ -3,7 +3,8 @@ using Discovery.Core.Enums;
 namespace Discovery.Core.Entities;
 
 /// <summary>
-/// Sessão de chat de suporte vinculada a um chamado.
+/// Sessão de chat de suporte. Pode estar vinculada a um chamado ou ser
+/// AVULSA (TicketId nulo), aberta direto pela lista/detalhe do agent.
 ///
 /// O histórico vive no SERVIDOR (tabelas ticket_chat_sessions/messages) e é
 /// consultável apenas pelo console web. O agent mantém somente o estado em
@@ -13,7 +14,8 @@ public class TicketChatSession
 {
     public Guid Id { get; set; }
 
-    public Guid TicketId { get; set; }
+    /// <summary>Chamado vinculado; nulo em conversas AVULSAS (sem chamado).</summary>
+    public Guid? TicketId { get; set; }
 
     /// <summary>Agent (máquina) do chamado no momento da abertura.</summary>
     public Guid? AgentId { get; set; }
@@ -56,7 +58,7 @@ public class TicketChatSession
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
-    public Ticket Ticket { get; set; } = null!;
+    public Ticket? Ticket { get; set; }
 
     public Agent? Agent { get; set; }
 

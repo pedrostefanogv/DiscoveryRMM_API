@@ -137,7 +137,7 @@ public sealed class StartTicketChatSessionCommandHandler(
             cmd.StartedByUserId,
             comment: TicketChatAuditText.Started(cmd.StartedByName));
 
-        await DispatchInviteAsync(session, ticket.Title, ct);
+        await TicketChatInviteDispatcher.DispatchAsync(commandDispatcher, session, ticket.Title, ct);
 
         // Outro atendente com o mesmo chamado aberto passa a ver a conversa nova
         // sem recarregar a página.
@@ -150,8 +150,105 @@ public sealed class StartTicketChatSessionCommandHandler(
         return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(session));
     }
 
-    private async Task DispatchInviteAsync(TicketChatSession session, string? ticketTitle, CancellationToken ct)
+    private static string? Trim(string? value, int max)
     {
+        var trimmed = (value ?? string.Empty).Trim();
+        if (trimmed.Length == 0) return null;
+        return trimmed.Length <= max ? trimmed : trimmed[..max];
+    }
+}
+
+/// <summary>
+/// Inicia uma sessão de chat de suporte AVULSA (sem chamado) a partir da
+/// máquina escolhida na lista/detalhe do agent no console.
+/// </summary>
+public sealed class StartAgentSupportChatSessionCommandHandler(
+    ITicketChatRepository chatRepository,
+    IAgentRepository agentRepository,
+    ISiteRepository siteRepository,
+    IAgentCommandDispatcher commandDispatcher,
+    ITicketChatEnvelopePublisher envelopePublisher,
+    IOptions<TicketChatOptions> options,
+    ILogger<StartAgentSupportChatSessionCommandHandler> logger)
+    : IRequestHandler<StartAgentSupportChatSessionCommand, Result<TicketChatSessionDto>>
+{
+    public async Task<Result<TicketChatSessionDto>> Handle(StartAgentSupportChatSessionCommand cmd, CancellationToken ct)
+    {
+        var agent = await agentRepository.GetByIdAsync(cmd.AgentId);
+        if (agent is null || agent.DeletedAt is not null)
+            return Result<TicketChatSessionDto>.Failure(Error.NotFound("Agente não encontrado."));
+
+        // Uma sessão por máquina: se já existe pendente/ativa, devolve a atual
+        // (o atendente reabre a mesma conversa em vez de criar uma paralela).
+        // Antes do check de online: a máquina pode ter caído no MEIO da conversa
+        // e o atendente ainda precisa retomar o que já existe.
+        var currentForAgent = await chatRepository.GetCurrentForAgentAsync(agent.Id, ct);
+        if (currentForAgent is not null)
+            return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(currentForAgent));
+
+        if (agent.Status != AgentStatus.Online)
+            return Result<TicketChatSessionDto>.Failure(Error.Conflict("agent_offline"));
+
+        var site = await siteRepository.GetByIdAsync(agent.SiteId);
+        var now = DateTime.UtcNow;
+        var session = new TicketChatSession
+        {
+            Id = Guid.NewGuid(),
+            TicketId = null,
+            AgentId = agent.Id,
+            ClientId = site?.ClientId ?? Guid.Empty,
+            SiteId = agent.SiteId,
+            Status = TicketChatSessionStatus.Pending,
+            StartedByUserId = cmd.StartedByUserId,
+            StartedByName = Trim(cmd.StartedByName, 255),
+            StartedAt = now,
+            InviteExpiresAt = now.AddSeconds(Math.Max(30, options.Value.InviteTimeoutSeconds)),
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        await chatRepository.AddSessionAsync(session, ct);
+
+        // Sem chamado não há linha do tempo para auditar: a conversa fica ligada
+        // apenas à máquina/tenant. O convite é efeito externo irreversível e vai
+        // depois das escritas que podem falhar.
+        await TicketChatInviteDispatcher.DispatchAsync(commandDispatcher, session, ticketTitle: string.Empty, ct);
+
+        // Outro atendente com a janela do agent aberta vê a conversa nova sem
+        // recarregar a página.
+        await envelopePublisher.PublishSessionStatusSignalAsync(session, ct);
+
+        logger.LogInformation(
+            "Ad-hoc support chat session {SessionId} created for agent {AgentId} by {Support}",
+            session.Id, session.AgentId, session.StartedByName);
+
+        return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(session));
+    }
+
+    private static string? Trim(string? value, int max)
+    {
+        var trimmed = (value ?? string.Empty).Trim();
+        if (trimmed.Length == 0) return null;
+        return trimmed.Length <= max ? trimmed : trimmed[..max];
+    }
+}
+
+/// <summary>
+/// Despacha o convite (CommandType.TicketChatInvite) para a máquina da sessão.
+/// Compartilhado pelo início vinculado a chamado e pelo início avulso — o
+/// contrato do payload fica em um lugar só.
+/// </summary>
+internal static class TicketChatInviteDispatcher
+{
+    public static async Task DispatchAsync(
+        IAgentCommandDispatcher commandDispatcher,
+        TicketChatSession session,
+        string? ticketTitle,
+        CancellationToken ct)
+    {
+        if (session.AgentId is null || session.AgentId == Guid.Empty)
+            return;
+
         var payload = TicketChatInvitePayloadFactory.Build(
             session.Id,
             session.TicketId,
@@ -161,17 +258,10 @@ public sealed class StartTicketChatSessionCommandHandler(
 
         await commandDispatcher.DispatchAsync(new AgentCommand
         {
-            AgentId = session.AgentId!.Value,
+            AgentId = session.AgentId.Value,
             CommandType = CommandType.TicketChatInvite,
             Payload = payload
         }, ct);
-    }
-
-    private static string? Trim(string? value, int max)
-    {
-        var trimmed = (value ?? string.Empty).Trim();
-        if (trimmed.Length == 0) return null;
-        return trimmed.Length <= max ? trimmed : trimmed[..max];
     }
 }
 
@@ -205,7 +295,9 @@ public sealed class RetryTicketChatInviteCommandHandler(
         if (now < lastSentAt + cooldown)
             return Result<TicketChatSessionDto>.Failure(Error.TooManyRequests("invite_cooldown"));
 
-        var ticket = await ticketQueryService.GetTicketByIdAsync(session.TicketId, ct);
+        var ticket = session.TicketId is { } retryTicketId
+            ? await ticketQueryService.GetTicketByIdAsync(retryTicketId, ct)
+            : null;
         session.InviteExpiresAt = now + inviteTimeout;
 
         var payload = TicketChatInvitePayloadFactory.Build(
@@ -267,12 +359,16 @@ public sealed class RespondTicketChatInviteCommandHandler(
         }
         else
         {
-            // Recusa também é movimentação do chamado: entra na timeline.
-            await activityLog.LogActivityAsync(
-                session.TicketId,
-                TicketActivityType.ChatEnded,
-                null,
-                comment: TicketChatAuditText.Declined(session.DeclinedReason));
+            // Recusa também é movimentação do chamado: entra na timeline. Conversa
+            // avulsa (sem chamado) não tem timeline.
+            if (session.TicketId is { } declinedTicketId)
+            {
+                await activityLog.LogActivityAsync(
+                    declinedTicketId,
+                    TicketActivityType.ChatEnded,
+                    null,
+                    comment: TicketChatAuditText.Declined(session.DeclinedReason));
+            }
         }
 
         // O console recebe a mudança de estado (aceite/recusa) imediatamente,
@@ -382,11 +478,18 @@ public sealed class SendTicketChatMessageCommandHandler(
         // navegador) vira ruído e ainda por cima deixa a caixa cheia de itens que
         // ele acabou de ler. Só avisa quando ele NÃO está vendo a conversa —
         // janela fechada, aba oculta/minimizada ou a janela sem foco.
-        if (await presenceService.IsViewingAsync(session.StartedByUserId.Value, session.TicketId, ct))
+        // A janela vinculada a chamado registra presença pelo ticket; a janela
+        // avulsa (aberta pela lista/detalhe do agent) registra presença pela
+        // sessão. Checar as duas cobre os dois fluxos.
+        var viewingByTicket = session.TicketId is { } viewingTicketId
+            && await presenceService.IsViewingAsync(session.StartedByUserId.Value, viewingTicketId, ct);
+        var viewingBySession = await presenceService.IsViewingSessionAsync(session.StartedByUserId.Value, session.Id, ct);
+
+        if (viewingByTicket || viewingBySession)
         {
             logger.LogDebug(
-                "Atendente {UserId} está vendo o chat do chamado {TicketId}; notificação suprimida",
-                session.StartedByUserId, session.TicketId);
+                "Atendente {UserId} está vendo o chat (ticket={TicketId}, session={SessionId}); notificação suprimida",
+                session.StartedByUserId, session.TicketId, session.Id);
             return;
         }
 
@@ -395,10 +498,13 @@ public sealed class SendTicketChatMessageCommandHandler(
             await notificationService.PublishAsync(new NotificationPublishRequest(
                 EventType: "ticket_chat_message",
                 Topic: "ticket-chat",
-                Title: "Nova mensagem no chat do chamado",
+                // Conversa avulsa não tem chamado: o título não pode mentir.
+                Title: session.TicketId is null
+                    ? "Nova mensagem no chat de suporte"
+                    : "Nova mensagem no chat do chamado",
                 Message: Truncate(message.Body, 240),
                 Severity: NotificationSeverity.Informational,
-                Payload: new { ticketId = session.TicketId, sessionId = session.Id, tab = "chat" },
+                Payload: new { ticketId = session.TicketId, sessionId = session.Id, agentId = session.AgentId, tab = "chat" },
                 RecipientUserId: session.StartedByUserId), ct);
         }
         catch (Exception ex)
@@ -455,11 +561,14 @@ public sealed class EndTicketChatSessionCommandHandler(
         // dos efeitos externos irreversíveis (o agent fechar a janela e o console
         // marcar como encerrado). Se a gravação falhar, a transação reverte sem
         // ter avisado ninguém de um encerramento que não existe.
-        await activityLog.LogActivityAsync(
-            session.TicketId,
-            TicketActivityType.ChatEnded,
-            cmd.EndedBy == "support" ? session.StartedByUserId : null,
-            comment: TicketChatAuditText.Ended(session.EndReason));
+        if (session.TicketId is { } endedTicketId)
+        {
+            await activityLog.LogActivityAsync(
+                endedTicketId,
+                TicketActivityType.ChatEnded,
+                cmd.EndedBy == "support" ? session.StartedByUserId : null,
+                comment: TicketChatAuditText.Ended(session.EndReason));
+        }
 
         // Mensagem de SISTEMA no histórico: registra QUEM encerrou a conversa,
         // para os dois lados lerem isso na própria thread (o servidor é a fonte

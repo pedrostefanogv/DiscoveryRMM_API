@@ -27,4 +27,13 @@ public interface ITicketChatPresenceService
 
     /// <summary>True quando a presenca do usuario para o chamado ainda esta valida.</summary>
     Task<bool> IsViewingAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default);
+
+    /// <summary>Marca/renova que o usuario esta vendo uma conversa AVULSA (sem chamado).</summary>
+    Task TouchSessionAsync(Guid userId, Guid sessionId, string? clientId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Remove a presenca da conversa avulsa.</summary>
+    Task ClearSessionAsync(Guid userId, Guid sessionId, string? clientId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>True quando a presenca do usuario para a conversa avulsa ainda esta valida.</summary>
+    Task<bool> IsViewingSessionAsync(Guid userId, Guid sessionId, CancellationToken cancellationToken = default);
 }

@@ -213,6 +213,7 @@ public class TicketChatRepository(DiscoveryDbContext db) : ITicketChatRepository
     public async Task<IReadOnlyList<TicketChatSession>> GetActiveForClosedTicketsAsync(int limit, CancellationToken cancellationToken = default)
         => await db.TicketChatSessions
             .Where(s => s.Status == TicketChatSessionStatus.Active
+                && s.TicketId != null
                 && db.Tickets.Any(t => t.Id == s.TicketId && t.ClosedAt != null))
             .OrderBy(s => s.StartedAt)
             .Take(Math.Clamp(limit, 1, 500))

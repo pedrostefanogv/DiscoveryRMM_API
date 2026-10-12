@@ -105,11 +105,15 @@ public sealed class TicketChatMaintenanceJob : IJob
             await repository.UpdateSessionAsync(session, ct);
             await publisher.PublishSessionStatusSignalAsync(session, ct);
 
-            await activityLog.LogActivityAsync(
-                session.TicketId,
-                TicketActivityType.ChatEnded,
-                null,
-                comment: TicketChatAuditText.Declined("timeout"));
+            // Conversa avulsa (sem chamado) não tem linha do tempo para auditar.
+            if (session.TicketId is { } ticketId)
+            {
+                await activityLog.LogActivityAsync(
+                    ticketId,
+                    TicketActivityType.ChatEnded,
+                    null,
+                    comment: TicketChatAuditText.Declined("timeout"));
+            }
 
             count++;
         }
@@ -143,11 +147,14 @@ public sealed class TicketChatMaintenanceJob : IJob
             await publisher.PublishSessionEndedAsync(session, ct);
             await publisher.PublishSessionStatusSignalAsync(session, ct);
 
-            await activityLog.LogActivityAsync(
-                session.TicketId,
-                TicketActivityType.ChatEnded,
-                null,
-                comment: TicketChatAuditText.Ended("inactivity"));
+            if (session.TicketId is { } ticketId)
+            {
+                await activityLog.LogActivityAsync(
+                    ticketId,
+                    TicketActivityType.ChatEnded,
+                    null,
+                    comment: TicketChatAuditText.Ended("inactivity"));
+            }
 
             count++;
         }
@@ -180,11 +187,14 @@ public sealed class TicketChatMaintenanceJob : IJob
             await publisher.PublishSessionEndedAsync(session, ct);
             await publisher.PublishSessionStatusSignalAsync(session, ct);
 
-            await activityLog.LogActivityAsync(
-                session.TicketId,
-                TicketActivityType.ChatEnded,
-                null,
-                comment: TicketChatAuditText.Ended("ticket_closed"));
+            if (session.TicketId is { } ticketId)
+            {
+                await activityLog.LogActivityAsync(
+                    ticketId,
+                    TicketActivityType.ChatEnded,
+                    null,
+                    comment: TicketChatAuditText.Ended("ticket_closed"));
+            }
 
             count++;
         }

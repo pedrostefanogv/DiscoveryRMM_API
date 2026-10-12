@@ -6,9 +6,13 @@ namespace Discovery.Core.Helpers;
 /// <summary>
 /// Monta o payload JSON do comando <see cref="Enums.CommandType.TicketChatInvite"/>.
 ///
-/// O payload carrega APENAS metadados de exibição e correlação (sessão, chamado,
-/// título, nome do atendente e prazo). O conteúdo das mensagens trafega pelo
-/// stream JetStream do chat de suporte, nunca pelo canal de comando.
+/// O payload carrega APENAS metadados de exibição e correlação (sessão, chamado
+/// — quando existir —, título, nome do atendente e prazo). O conteúdo das
+/// mensagens trafega pelo stream JetStream do chat de suporte, nunca pelo canal
+/// de comando.
+///
+/// Conversas AVULSAS (sem chamado) enviam `ticketId` OMITIDO: agents antigos
+/// continuam funcionando porque o campo vira string vazia no Go.
 /// </summary>
 public static class TicketChatInvitePayloadFactory
 {
@@ -23,7 +27,7 @@ public static class TicketChatInvitePayloadFactory
 
     public static string Build(
         Guid sessionId,
-        Guid ticketId,
+        Guid? ticketId,
         string ticketTitle,
         string supportUserName,
         string? expiresAtUtc)
@@ -31,7 +35,7 @@ public static class TicketChatInvitePayloadFactory
         return JsonSerializer.Serialize(new
         {
             sessionId = sessionId.ToString(),
-            ticketId = ticketId.ToString(),
+            ticketId = ticketId?.ToString(),
             ticketTitle = Clamp(ticketTitle, MaxTicketTitleLength),
             supportUserName = Clamp(supportUserName, MaxSupportUserNameLength),
             expiresAtUtc = string.IsNullOrWhiteSpace(expiresAtUtc) ? null : expiresAtUtc.Trim()

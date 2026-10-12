@@ -14,6 +14,17 @@ public sealed record StartTicketChatSessionCommand(
     string? StartedByName
 ) : ICommand<Result<TicketChatSessionDto>>;
 
+/// <summary>
+/// Inicia uma sessão de chat de suporte AVULSA (sem chamado) para a máquina.
+/// Somente o atendente (endpoint user-auth) pode criar; valida agent
+/// presente/online e ausência de chat pendente/ativo na mesma máquina.
+/// </summary>
+public sealed record StartAgentSupportChatSessionCommand(
+    Guid AgentId,
+    Guid? StartedByUserId,
+    string? StartedByName
+) : ICommand<Result<TicketChatSessionDto>>;
+
 /// <summary>Reenvia o convite de uma sessão pendente ainda não expirada.</summary>
 public sealed record RetryTicketChatInviteCommand(Guid SessionId)
     : ICommand<Result<TicketChatSessionDto>>;

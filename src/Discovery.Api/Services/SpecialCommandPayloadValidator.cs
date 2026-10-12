@@ -1387,7 +1387,8 @@ public sealed class SpecialCommandPayloadValidator
         if (!TryGetRequiredGuid(payload, "sessionId", out var sessionId, out validationError))
             return false;
 
-        if (!TryGetRequiredGuid(payload, "ticketId", out var ticketId, out validationError))
+        // Opcional: conversas avulsas (sem chamado) não enviam ticketId.
+        if (!TryGetOptionalGuid(payload, "ticketId", out var ticketId, out validationError))
             return false;
 
         if (!TryGetRequiredString(payload, "ticketTitle", out var ticketTitle, out validationError, allowEmpty: true))
@@ -1480,6 +1481,40 @@ public sealed class SpecialCommandPayloadValidator
             return false;
         }
 
+        return true;
+    }
+
+    /// <summary>
+    /// GUID OPCIONAL: ausente/nulo/vazio devolve null; string inválida é erro.
+    /// </summary>
+    private static bool TryGetOptionalGuid(
+        JsonElement payload,
+        string propertyName,
+        out Guid? value,
+        out string validationError)
+    {
+        value = null;
+        validationError = string.Empty;
+
+        if (!payload.TryGetProperty(propertyName, out var element) || element.ValueKind == JsonValueKind.Null)
+            return true;
+
+        if (!TryReadString(element, out var raw))
+        {
+            validationError = $"field '{propertyName}' must be a valid GUID string.";
+            return false;
+        }
+
+        if (raw.Length == 0)
+            return true;
+
+        if (!Guid.TryParse(raw, out var parsed))
+        {
+            validationError = $"field '{propertyName}' must be a valid GUID string.";
+            return false;
+        }
+
+        value = parsed;
         return true;
     }
 

@@ -39,7 +39,8 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(s => s.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 
-            entity.HasOne(s => s.Ticket).WithMany().HasForeignKey(s => s.TicketId).OnDelete(DeleteBehavior.Cascade);
+            // FK opcional: sessões avulsas (sem chamado) têm ticket_id nulo.
+            entity.HasOne(s => s.Ticket).WithMany().HasForeignKey(s => s.TicketId).IsRequired(false).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(s => s.Agent).WithMany().HasForeignKey(s => s.AgentId).OnDelete(DeleteBehavior.SetNull);
             entity.HasMany(s => s.Messages).WithOne(m => m.Session).HasForeignKey(m => m.SessionId).OnDelete(DeleteBehavior.Cascade);
         });

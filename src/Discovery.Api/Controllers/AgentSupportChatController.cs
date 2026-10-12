@@ -24,11 +24,15 @@ namespace Discovery.Api.Controllers;
 public class AgentSupportChatController(
     IMediator mediator,
     ITicketQueryService ticketQueryService,
+    ITicketChatRepository chatRepository,
     IAttachmentService attachmentService,
     IAttachmentRepository attachmentRepository,
     ILogger<AgentSupportChatController> logger) : ControllerBase
 {
     private const string ChatEntityType = "TicketChat";
+
+    /// <summary>Anexos de conversa AVULSA (sem chamado) ficam ligados à sessão.</summary>
+    private const string AdHocChatEntityType = "SupportChat";
 
     private bool TryGetAgentId(out Guid agentId)
     {
@@ -152,8 +156,8 @@ public class AgentSupportChatController(
         if (RequireActiveSession(ownership.Session) is { } inactive)
             return inactive;
 
-        var ticket = await ticketQueryService.GetTicketByIdAsync(ownership.Session!.TicketId, ct);
-        if (ticket is null)
+        var scope = await ResolveAttachmentScopeAsync(ownership.Session!, ct);
+        if (scope is null)
             return NotFound();
 
         var settingsResult = await mediator.Send(new GetTicketAttachmentSettingsQuery(), ct);
@@ -174,7 +178,8 @@ public class AgentSupportChatController(
             return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxFileSizeBytes} bytes." });
 
         var result = await attachmentService.PreparePresignedUploadAsync(
-            ChatEntityType, ticket.Id, ticket.ClientId, req.FileName, req.ContentType, req.SizeBytes,
+            scope.Value.EntityType, scope.Value.EntityId, scope.Value.ClientId,
+            req.FileName, req.ContentType, req.SizeBytes,
             settings.PresignedUploadUrlTtlMinutes, ct);
 
         return Ok(result);
@@ -194,8 +199,8 @@ public class AgentSupportChatController(
         if (RequireActiveSession(ownership.Session) is { } inactive)
             return inactive;
 
-        var ticket = await ticketQueryService.GetTicketByIdAsync(ownership.Session!.TicketId, ct);
-        if (ticket is null)
+        var scope = await ResolveAttachmentScopeAsync(ownership.Session!, ct);
+        if (scope is null)
             return NotFound();
 
         var settingsResult = await mediator.Send(new GetTicketAttachmentSettingsQuery(), ct);
@@ -215,7 +220,7 @@ public class AgentSupportChatController(
         try
         {
             var attachment = await attachmentService.CompletePresignedUploadAsync(
-                req.AttachmentId, ChatEntityType, ticket.Id, ticket.ClientId,
+                req.AttachmentId, scope.Value.EntityType, scope.Value.EntityId, scope.Value.ClientId,
                 req.FileName, req.ContentType, req.SizeBytes, req.ObjectKey,
                 $"agent:{agentId}", ct);
 
@@ -248,11 +253,13 @@ public class AgentSupportChatController(
         if (ownership.Error is not null)
             return ownership.Error;
 
+        var scope = await ResolveAttachmentScopeAsync(ownership.Session!, ct);
         var attachment = await attachmentRepository.GetByIdAsync(attachmentId, ct);
-        if (attachment is null
+        if (scope is null
+            || attachment is null
             || attachment.IsDeleted
-            || !string.Equals(attachment.EntityType, ChatEntityType, StringComparison.OrdinalIgnoreCase)
-            || attachment.EntityId != ownership.Session!.TicketId)
+            || !string.Equals(attachment.EntityType, scope.Value.EntityType, StringComparison.OrdinalIgnoreCase)
+            || attachment.EntityId != scope.Value.EntityId)
         {
             return NotFound();
         }
@@ -294,6 +301,25 @@ public class AgentSupportChatController(
         }
 
         return (null, session);
+    }
+
+    /// <summary>
+    /// Escopo de armazenamento do anexo. Conversa vinculada a chamado usa o
+    /// CHAMADO (compatível com o histórico já gravado); conversa avulsa usa a
+    /// SESSÃO. Devolve null quando o chamado/sessão não existe mais.
+    /// </summary>
+    private async Task<(string EntityType, Guid EntityId, Guid ClientId)?> ResolveAttachmentScopeAsync(
+        TicketChatSessionDto session,
+        CancellationToken ct)
+    {
+        if (session.TicketId is { } ticketId)
+        {
+            var ticket = await ticketQueryService.GetTicketByIdAsync(ticketId, ct);
+            return ticket is null ? null : (ChatEntityType, ticket.Id, ticket.ClientId);
+        }
+
+        var entity = await chatRepository.GetByIdAsync(session.Id, ct);
+        return entity is null ? null : (AdHocChatEntityType, entity.Id, entity.ClientId);
     }
 
     /// <summary>

@@ -371,4 +371,55 @@ public class SpecialCommandPayloadValidatorTests
         Assert.That(ok, Is.False);
         Assert.That(error, Does.Contain("waitForUser"));
     }
+
+    [Test]
+    public void TicketChatInvite_ShouldAcceptAdHocSessionWithoutTicketId()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        // Conversa avulsa (sem chamado) aberta pela lista/detalhe do agent.
+        var payload = """
+            {
+              "sessionId": "33333333-3333-3333-3333-333333333333",
+              "ticketTitle": "",
+              "supportUserName": "Ana",
+              "expiresAtUtc": ""
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.TicketChatInvite, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                json.RootElement.GetProperty("sessionId").GetString(),
+                Is.EqualTo("33333333-3333-3333-3333-333333333333"));
+            // Sem chamado o campo não é emitido (agent antigo lê string vazia).
+            Assert.That(json.RootElement.TryGetProperty("ticketId", out _), Is.False);
+            Assert.That(json.RootElement.TryGetProperty("expiresAtUtc", out _), Is.False);
+        });
+    }
+
+    [Test]
+    public void TicketChatInvite_ShouldRejectInvalidTicketId()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "sessionId": "33333333-3333-3333-3333-333333333333",
+              "ticketId": "nao-e-guid",
+              "ticketTitle": "Chamado",
+              "supportUserName": "Ana"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.TicketChatInvite, payload, out _, out var error);
+
+        Assert.That(ok, Is.False);
+        Assert.That(error, Does.Contain("ticketId"));
+    }
 }

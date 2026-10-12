@@ -234,6 +234,9 @@ public class TicketChatAttachmentDeliveryTests
         public Task TouchAsync(Guid userId, Guid ticketId, string? clientId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ClearAsync(Guid userId, Guid ticketId, string? clientId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<bool> IsViewingAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default) => Task.FromResult(false);
+        public Task TouchSessionAsync(Guid userId, Guid sessionId, string? clientId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ClearSessionAsync(Guid userId, Guid sessionId, string? clientId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<bool> IsViewingSessionAsync(Guid userId, Guid sessionId, CancellationToken cancellationToken = default) => Task.FromResult(false);
     }
 
     private sealed class NoopNotificationService : INotificationService
