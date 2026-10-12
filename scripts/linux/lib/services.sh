@@ -629,10 +629,28 @@ create_rustfs_bucket() {
   [[ -n "$access" && -n "$secret" ]] || return 0
   ensure_mc_cli || return 0
   mc alias set discovery-local "http://127.0.0.1:${DISCOVERY_OBJECT_STORAGE_PORT:-9000}" "$access" "$secret" >/dev/null 2>&1 || return 0
+
+  # Idempotencia: bucket ja existente e privado nao e recriado/reconfigurado a
+  # cada update. So reaplica a politica quando ela nao estiver mais em "none"
+  # (ex.: alguem publicou o bucket manualmente).
+  if mc ls "discovery-local/${bucket}" >/dev/null 2>&1; then
+    local policy
+    policy="$(mc anonymous get "discovery-local/${bucket}" 2>/dev/null || true)"
+    case "$policy" in
+      *none*)
+        log "Bucket ${bucket} ja existe e esta privado no RustFS; mantendo sem regravar."
+        return 0 ;;
+    esac
+    warn "Bucket ${bucket} existia com politica diferente de privado; reaplicando."
+    mc anonymous set none "discovery-local/${bucket}" >/dev/null 2>&1 || true
+    log "Bucket ${bucket} pronto no RustFS (privado)."
+    return 0
+  fi
+
   mc mb --ignore-existing "discovery-local/${bucket}" >/dev/null 2>&1 || true
   mc anonymous set none "discovery-local/${bucket}" >/dev/null 2>&1 || true
   if mc ls "discovery-local/${bucket}" >/dev/null 2>&1; then
-    log "Bucket ${bucket} pronto no RustFS (privado)."
+    log "Bucket ${bucket} criado no RustFS (privado)."
     return 0
   fi
   warn "Nao foi possivel confirmar o bucket ${bucket}; a API cria no primeiro uso."

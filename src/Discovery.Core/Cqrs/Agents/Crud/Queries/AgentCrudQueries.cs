@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Crud.Commands;
 using Discovery.Core.Cqrs.Agents.Crud.Queries;
+using Discovery.Core.DTOs;
 
 namespace Discovery.Core.Cqrs.Agents.Crud.Queries;
 
@@ -23,5 +24,12 @@ public sealed record GetDeletedAgentsQuery(
     IReadOnlyList<Guid>? AllowedClientIds = null) : IQuery<Result<DeletedAgentsPageDto>>;
 
 public sealed record GetAgentCustomFieldsQuery(Guid AgentId, bool IncludeSecrets = false) : IQuery<Result<IReadOnlyList<CustomFieldValueDto>>>;
+
+/// <summary>
+/// Schema dos campos customizados do agente para o card do portal: inclui tipo,
+/// opções, capacidades, destaque e valores (segredos mascarados). Só devolve
+/// campos com webRead=true.
+/// </summary>
+public sealed record GetAgentCustomFieldSchemaQuery(Guid AgentId, bool IncludeSecrets = false) : IQuery<Result<IReadOnlyList<CustomFieldSchemaItemDto>>>;
 public sealed record UpsertAgentCustomFieldCommand(Guid AgentId, Guid DefinitionId, string ValueJson, string? UpdatedBy) : ICommand<Result<CustomFieldValueDto>>;
 public sealed record CustomFieldValueDto(Guid DefinitionId, string Name, string Label, string ValueJson);

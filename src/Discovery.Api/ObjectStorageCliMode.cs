@@ -97,7 +97,7 @@ internal static class ObjectStorageCliMode
         Console.WriteLine("  --set-object-storage     Grava no banco o que estiver nas variaveis de ambiente");
         Console.WriteLine("  --show-object-storage    Mostra o estado atual (segredo sempre mascarado)");
         Console.WriteLine("  --test-object-storage    Testa a conexao/bucket com a configuracao atual");
-        Console.WriteLine("  --force                  Substitui um segredo ja configurado (default: preserva)");
+        Console.WriteLine("  --force                  Regrava mesmo sem mudanca e substitui o segredo (default: preserva)");
         Console.WriteLine("  --object-storage-help    Mostra esta ajuda");
         Console.WriteLine();
         Console.WriteLine("Variaveis de ambiente lidas por --set-object-storage:");
@@ -112,6 +112,7 @@ internal static class ObjectStorageCliMode
         Console.WriteLine();
         Console.WriteLine("Campos ausentes sao preservados; o endpoint deve ser host/host:porta");
         Console.WriteLine("(sem path) e o segredo nunca e impresso.");
+        Console.WriteLine("Sem --force, campos iguais aos ja gravados nao sao reescritos (idempotente).");
     }
 
     internal static async Task<int> ExecuteAsync(IServiceProvider services, Options options)
@@ -150,9 +151,24 @@ internal static class ObjectStorageCliMode
                     return 1;
                 }
 
-                var saved = await configService.PatchServerAsync(updates, Actor);
-                Console.WriteLine("[object-storage] Configuracao gravada.");
-                Console.WriteLine(DescribeState(saved));
+                // Idempotencia: sem --force so grava o que realmente mudou. O update
+                // do servidor chama este CLI em TODA execucao; regravar sempre (mesmo
+                // com valores iguais) inflava Version/UpdatedBy e o audit de
+                // server_configurations a cada update sem nenhuma mudanca real.
+                var toSave = options.Force ? updates : SelectChanged(current, updates);
+                if (toSave.Count == 0)
+                {
+                    Console.WriteLine("[object-storage] Configuracao ja gravada e igual ao ambiente; nada a regravar (use --force para regravar).");
+                    Console.WriteLine(DescribeState(current));
+                }
+                else
+                {
+                    var saved = await configService.PatchServerAsync(toSave, Actor);
+                    Console.WriteLine("[object-storage] Configuracao gravada.");
+                    if (toSave.Count < updates.Count)
+                        Console.WriteLine($"[object-storage] {updates.Count - toSave.Count} campo(s) inalterado(s) preservado(s).");
+                    Console.WriteLine(DescribeState(saved));
+                }
             }
         }
 
@@ -250,6 +266,72 @@ internal static class ObjectStorageCliMode
 
         return updates;
     }
+
+    /// <summary>
+    /// Filtra o dicionario montado pelo ambiente mantendo APENAS os campos que
+    /// diferem do que ja esta gravado. Usado por --set-object-storage sem --force
+    /// para tornar o update idempotente: se nada mudou, PatchServerAsync nem e
+    /// chamado (sem bump de Version, sem UpdatedBy artificial, sem audit).
+    ///
+    /// O segredo e sempre considerado alterado quando presente: ele pode estar
+    /// protegido (SecretProtector) e nao ha comparacao confiavel em texto.
+    /// </summary>
+    internal static Dictionary<string, object> SelectChanged(
+        ServerConfiguration current,
+        IReadOnlyDictionary<string, object> updates)
+    {
+        var changed = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in updates)
+        {
+            if (IsDifferent(current, key, value))
+                changed[key] = value;
+        }
+
+        return changed;
+    }
+
+    private static bool IsDifferent(ServerConfiguration current, string property, object? value)
+    {
+        switch (property)
+        {
+            case nameof(ServerConfiguration.ObjectStorageBucketName):
+                return !SameText(current.ObjectStorageBucketName, value);
+            case nameof(ServerConfiguration.ObjectStorageEndpoint):
+                return !SameEndpoint(current.ObjectStorageEndpoint, value);
+            case nameof(ServerConfiguration.ObjectStorageRegion):
+                return !SameText(current.ObjectStorageRegion, value);
+            case nameof(ServerConfiguration.ObjectStorageAccessKey):
+                return !SameText(current.ObjectStorageAccessKey, value);
+            case nameof(ServerConfiguration.ObjectStorageSecretKey):
+                return true;
+            case nameof(ServerConfiguration.ObjectStorageUsePathStyle):
+                return value is bool pathStyle && pathStyle != current.ObjectStorageUsePathStyle;
+            case nameof(ServerConfiguration.ObjectStorageSslVerify):
+                return value is bool sslVerify && sslVerify != current.ObjectStorageSslVerify;
+            case nameof(ServerConfiguration.ObjectStorageInternal):
+                return value is bool internalStorage && internalStorage != current.ObjectStorageInternal;
+            case nameof(ServerConfiguration.ObjectStorageUrlTtlHours):
+                return value is int ttl && ttl != current.ObjectStorageUrlTtlHours;
+            default:
+                return true;
+        }
+    }
+
+    private static bool SameText(string? current, object? value)
+        => string.Equals(
+            (current ?? string.Empty).Trim(),
+            Convert.ToString(value)?.Trim() ?? string.Empty,
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// Endpoint: comparado sem barra final e sem case. O banco guarda host[:porta]
+    /// (as vezes com scheme) e o env pode trazer "https://host" vs "host".
+    /// </summary>
+    private static bool SameEndpoint(string? current, object? value)
+        => string.Equals(
+            (current ?? string.Empty).Trim().TrimEnd('/'),
+            (Convert.ToString(value) ?? string.Empty).Trim().TrimEnd('/'),
+            StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Configuracao efetiva (atual + campos informados) usada para validar ANTES

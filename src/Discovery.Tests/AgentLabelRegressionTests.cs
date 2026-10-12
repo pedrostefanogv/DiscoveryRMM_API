@@ -739,7 +739,7 @@ public class AgentLabelRegressionTests
             => throw new NotSupportedException();
 
         public Task<IReadOnlyList<CustomFieldSchemaItemDto>> GetSchemaAsync(
-            CustomFieldScopeType scopeType, Guid? entityId, bool includeInactive = false, bool includeSecrets = true, CancellationToken cancellationToken = default)
+            CustomFieldScopeType scopeType, Guid? entityId, bool includeInactive = false, bool includeSecrets = true, CancellationToken cancellationToken = default, bool visibleOnly = false)
             => throw new NotSupportedException();
 
         public Task<CustomFieldResolvedValueDto> UpsertValueAsync(UpsertCustomFieldValueInput input, CancellationToken cancellationToken = default)

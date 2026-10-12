@@ -82,6 +82,15 @@ update_api() {
     log "Atualizando infraestrutura auxiliar (Nginx) a partir do template do repo (config anterior salvo em .bak)"
     write_site_proxy_config || warn "Falha ao escrever config do Nginx (nao-bloqueante)"
   fi
+
+  # Storage de objetos: persiste as variaveis (so se mudaram) e garante
+  # servico/bucket/config. NAO instala e NAO atualiza o RustFS (ver
+  # setup_object_storage_rustfs), e no modo skip/external nao altera nada.
+  # Roda ANTES do restart para que qualquer alteracao do env seja aplicada
+  # pelo proprio restart; o banco/bucket sao idempotentes.
+  update_object_storage_environment_file || warn "Falha ao atualizar variaveis de storage (nao-bloqueante)"
+  ensure_object_storage || warn "Falha ao garantir o object storage (nao-bloqueante)"
+
   if sudo systemctl list-unit-files --no-legend discovery-api.service 2>/dev/null | grep -q .; then
     # Health check pos-restart com rollback automatico para a release anterior.
     if ! restart_api_with_rollback; then
@@ -90,12 +99,6 @@ update_api() {
   else
     warn "Servico discovery-api nao encontrado; pulando restart"
   fi
-
-  # Storage de objetos: persiste as variaveis e garante servico/bucket/config.
-  # NAO instala e NAO atualiza o RustFS (ver setup_object_storage_rustfs), e no
-  # modo skip/external nao altera nada.
-  update_object_storage_environment_file || warn "Falha ao atualizar variaveis de storage (nao-bloqueante)"
-  ensure_object_storage || warn "Falha ao garantir o object storage (nao-bloqueante)"
 }
 
 update_site() {
@@ -534,6 +537,7 @@ apply_maintenance_mode() {
     echo "5) Ver ajuda completa do recover-admin"
     echo "6) Trocar provedor de certificado TLS (self-signed/ZeroSSL/Let's Encrypt)"
     echo "7) Limpeza de dados (builds antigos, temp, journal, cache)"
+    echo "8) Regravar/atualizar a configuracao do object storage (forcado)"
     echo "0) Sair"
     echo "----------------------------------------"
 
@@ -575,6 +579,9 @@ apply_maintenance_mode() {
       7)
         data_cleanup_menu
         pause_maintenance_menu ;;
+      8)
+        force_refresh_object_storage
+        pause_maintenance_menu ;;
       0|sair|exit|q|quit)
         log "Saindo do modo de manutencao"
         return ;;
@@ -582,6 +589,76 @@ apply_maintenance_mode() {
         echo "Opcao invalida: $selected_option" >&2 ;;
     esac
   done
+}
+
+# ── Regravar configuracao do object storage (menu de manutencao, opcao 8) ──
+#
+# O update normal e idempotente: quando o bloco do discovery.env, a configuracao
+# no banco e o bucket do RustFS ja estao iguais, NADA e regravado (evita inflar
+# Version/UpdatedBy/audit a cada update). Esta opcao existe para quando o
+# operador precisa forcar: mudou algo pelo console, quer reassinar a credencial
+# do env na configuracao do banco, ou deseja apenas reexecutar/retestar o
+# storage. Usa DISCOVERY_OBJECT_STORAGE_FORCE=1 internamente (local, some ao
+# retornar) e pede confirmacao antes de alterar.
+force_refresh_object_storage() {
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  sudo test -f "$env_file" || fail "Arquivo de ambiente da API nao encontrado: $env_file"
+
+  echo
+  echo "Regravacao FORCADA do object storage:"
+  echo "- bloco de variaveis em $env_file"
+  echo "- configuracao no banco (--force; o segredo do env substitui o gravado)"
+  echo "- bucket no RustFS local (quando o modo persistido for rustfs)"
+  local confirm
+  read -r -p "Confirmar regravacao forcada? (s/N): " confirm
+  confirm="$(printf '%s' "${confirm:-n}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$confirm" in
+    s|sim|y|yes|1) ;;
+    *) log "Regravacao do object storage cancelada."; return ;;
+  esac
+
+  # local: visivel para as funcoes chamadas (escopo dinamico do bash) e removido
+  # ao retornar, para nao deixar o menu inteiro em modo forcado.
+  local DISCOVERY_OBJECT_STORAGE_FORCE=1
+
+  load_existing_object_storage_defaults
+  normalize_object_storage_settings
+
+  local before_hash after_hash
+  before_hash="$(sudo sha256sum "$env_file" 2>/dev/null | awk '{print $1}' || true)"
+
+  update_object_storage_environment_file || warn "Falha ao regravar as variaveis de storage (nao-bloqueante)"
+  after_hash="$(sudo sha256sum "$env_file" 2>/dev/null | awk '{print $1}' || true)"
+
+  case "$DISCOVERY_OBJECT_STORAGE_MODE" in
+    rustfs)
+      create_rustfs_bucket "$DISCOVERY_OBJECT_STORAGE_BUCKET" || warn "Falha ao garantir o bucket no RustFS (nao-bloqueante)" ;;
+    external)
+      log "Storage externo: nada a criar nesta maquina." ;;
+    *)
+      log "Storage nao configurado (skip); nada a regravar no banco."
+      return ;;
+  esac
+
+  if declare -F configure_object_storage_in_database >/dev/null 2>&1; then
+    configure_object_storage_in_database || warn "Falha ao regravar a configuracao do storage no banco (nao-bloqueante)"
+  fi
+
+  if [[ "$before_hash" != "$after_hash" ]]; then
+    echo
+    warn "As variaveis do object storage mudaram em $env_file; a API precisa reiniciar para aplicar."
+    local restart
+    read -r -p "Reiniciar discovery-api agora? (s/N): " restart
+    restart="$(printf '%s' "${restart:-n}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$restart" in
+      s|sim|y|yes|1)
+        sudo systemctl restart discovery-api && log "discovery-api reiniciada." || warn "Falha ao reiniciar discovery-api." ;;
+      *)
+        log "Restart nao executado. Quando puder, rode: sudo systemctl restart discovery-api" ;;
+    esac
+  else
+    log "Nenhuma alteracao nas variaveis do env; restart da API nao e necessario."
+  fi
 }
 
 # ── Troca de provedor de certificado TLS ───────────────────────────────────

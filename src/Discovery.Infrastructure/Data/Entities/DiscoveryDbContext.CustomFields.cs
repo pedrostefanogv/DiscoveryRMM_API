@@ -44,6 +44,10 @@ public partial class DiscoveryDbContext
             entity.Property(d => d.AllowRuntimeRead).HasColumnName("allow_runtime_read");
             entity.Property(d => d.AllowAgentWrite).HasColumnName("allow_agent_write");
             entity.Property(d => d.RuntimeAccessMode).HasColumnName("runtime_access_mode").HasConversion<int>();
+            entity.Property(d => d.AllowWebRead).HasColumnName("allow_web_read").HasDefaultValue(true);
+            entity.Property(d => d.AllowWebEdit).HasColumnName("allow_web_edit").HasDefaultValue(true);
+            entity.Property(d => d.IsPinned).HasColumnName("is_pinned").HasDefaultValue(false);
+            entity.Property(d => d.DefaultValueJson).HasColumnName("default_value_json");
             entity.Property(d => d.DepartmentId).HasColumnName("department_id");
             entity.Property(d => d.IsInternal).HasColumnName("is_internal");
             entity.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");

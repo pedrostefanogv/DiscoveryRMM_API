@@ -156,6 +156,17 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));
     }
 
+    /// <summary>Schema dos campos do cliente para o card do detalhe (só webRead; segredos mascarados).</summary>
+    [HttpGet("{id:guid}/custom-fields/schema")]
+    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    public async Task<IActionResult> GetCustomFieldSchema(Guid id, [FromQuery] bool includeSecrets = false, CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new GetClientCustomFieldSchemaQuery(id, includeSecrets), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));
+    }
+
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
     [RequirePermission(ResourceType.Clients, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomFieldValue(

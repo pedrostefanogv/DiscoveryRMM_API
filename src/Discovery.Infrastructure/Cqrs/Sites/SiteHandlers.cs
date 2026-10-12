@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Sites.Commands;
 using Discovery.Core.Cqrs.Sites.Queries;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
@@ -157,6 +158,29 @@ public sealed class GetSiteCustomFieldsQueryHandler(
 
         var values = await customFieldService.GetValuesAsync(CustomFieldScopeType.Site, q.SiteId, q.IncludeSecrets, ct);
         return Result<IReadOnlyList<object>>.Success(values);
+    }
+}
+
+public sealed class GetSiteCustomFieldSchemaQueryHandler(
+    ISiteRepository repo,
+    ICustomFieldService customFieldService
+) : IRequestHandler<GetSiteCustomFieldSchemaQuery, Result<IReadOnlyList<CustomFieldSchemaItemDto>>>
+{
+    public async Task<Result<IReadOnlyList<CustomFieldSchemaItemDto>>> Handle(GetSiteCustomFieldSchemaQuery q, CancellationToken ct)
+    {
+        var site = await repo.GetByIdAsync(q.SiteId);
+        if (site is null || site.ClientId != q.ClientId)
+            return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Failure(Error.NotFound("Site not found."));
+
+        var schema = await customFieldService.GetSchemaAsync(
+            CustomFieldScopeType.Site,
+            q.SiteId,
+            includeInactive: false,
+            includeSecrets: q.IncludeSecrets,
+            cancellationToken: ct,
+            visibleOnly: true);
+
+        return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Success(schema);
     }
 }
 

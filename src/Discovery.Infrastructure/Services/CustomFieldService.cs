@@ -109,6 +109,10 @@ public class CustomFieldService : ICustomFieldService
             AllowRuntimeRead = input.AllowRuntimeRead,
             AllowAgentWrite = input.AllowAgentWrite,
             RuntimeAccessMode = input.RuntimeAccessMode,
+            AllowWebRead = input.AllowWebRead,
+            AllowWebEdit = input.AllowWebEdit,
+            IsPinned = input.IsPinned,
+            DefaultValueJson = NormalizeDefaultValue(input.DefaultValueJson),
             DepartmentId = input.DepartmentId,
             CreatedAt = now,
             UpdatedAt = now
@@ -164,6 +168,10 @@ public class CustomFieldService : ICustomFieldService
         definition.AllowRuntimeRead = input.AllowRuntimeRead;
         definition.AllowAgentWrite = input.AllowAgentWrite;
         definition.RuntimeAccessMode = input.RuntimeAccessMode;
+        definition.AllowWebRead = input.AllowWebRead;
+        definition.AllowWebEdit = input.AllowWebEdit;
+        definition.IsPinned = input.IsPinned;
+        definition.DefaultValueJson = NormalizeDefaultValue(input.DefaultValueJson);
         definition.DepartmentId = input.DepartmentId;
         definition.UpdatedAt = DateTime.UtcNow;
 
@@ -214,13 +222,19 @@ public class CustomFieldService : ICustomFieldService
         {
             if (!values.TryGetValue(definition.Id, out var value))
             {
+                // Sem valor gravado: devolve o valor padrão (nunca para segredo,
+                // para não expor o padrão na listagem sem permissão de ver).
+                var fallbackJson = !definition.IsSecret && !string.IsNullOrWhiteSpace(definition.DefaultValueJson)
+                    ? definition.DefaultValueJson!
+                    : "null";
+
                 result.Add(new CustomFieldResolvedValueDto(
                     definition.Id,
                     definition.Name,
                     definition.Label,
                     definition.ScopeType,
                     entityId,
-                    "null",
+                    fallbackJson,
                     definition.UpdatedAt,
                     definition.IsSecret));
                 continue;
@@ -368,7 +382,8 @@ public class CustomFieldService : ICustomFieldService
         Guid? entityId,
         bool includeInactive = false,
         bool includeSecrets = true,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool visibleOnly = false)
     {
         ValidateScopeEntity(scopeType, entityId);
 
@@ -379,6 +394,10 @@ public class CustomFieldService : ICustomFieldService
 
         if (!includeInactive)
             definitionsQuery = definitionsQuery.Where(definition => definition.IsActive);
+
+        // visibleOnly: o card do portal só mostra campos com webRead=true.
+        if (visibleOnly)
+            definitionsQuery = definitionsQuery.Where(definition => definition.AllowWebRead);
 
         var definitions = await definitionsQuery
             .OrderBy(definition => definition.Name)
@@ -416,7 +435,9 @@ public class CustomFieldService : ICustomFieldService
         {
             values.TryGetValue(definition.Id, out var value);
             var outputJson = value is null
-                ? "null"
+                ? (!definition.IsSecret && !string.IsNullOrWhiteSpace(definition.DefaultValueJson)
+                    ? definition.DefaultValueJson!
+                    : "null")
                 : includeSecrets || !definition.IsSecret
                     ? value.ValueJson
                     : JsonSerializer.Serialize("***", JsonOptions);
@@ -443,7 +464,11 @@ public class CustomFieldService : ICustomFieldService
                 bindingsByDefinition.GetValueOrDefault(definition.Id, []),
                 entityId,
                 outputJson,
-                value?.UpdatedAt);
+                value?.UpdatedAt,
+                definition.AllowWebRead,
+                definition.AllowWebEdit,
+                definition.IsPinned,
+                value?.UpdatedBy);
         }).ToList();
     }
 
@@ -581,12 +606,15 @@ public class CustomFieldService : ICustomFieldService
             var entityKey = ResolveRuntimeEntityKey(definition.ScopeType, agentId, site.Id, site.ClientId);
             valuesByKey.TryGetValue((definition.Id, entityKey), out var valueJson);
 
+            // Sem valor gravado, o script recebe o valor padrão (se houver).
+            var runtimeJson = valueJson ?? definition.DefaultValueJson ?? "null";
+
             result.Add(new RuntimeCustomFieldDto(
                 definition.Id,
                 definition.Name,
                 definition.Label,
                 definition.ScopeType,
-                valueJson ?? "null",
+                runtimeJson,
                 definition.IsSecret));
         }
 
@@ -657,12 +685,21 @@ public class CustomFieldService : ICustomFieldService
         IReadOnlyList<CustomFieldAccessBindingInput>? bindings,
         CancellationToken cancellationToken)
     {
-        await _db.CustomFieldExecutionAccesses
+        // RemoveRange (em vez de ExecuteDeleteAsync) mantém o provider em memória
+        // compatível e preserva o change tracker.
+        var existing = await _db.CustomFieldExecutionAccesses
             .Where(item => item.DefinitionId == definitionId)
-            .ExecuteDeleteAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
+
+        if (existing.Count > 0)
+            _db.CustomFieldExecutionAccesses.RemoveRange(existing);
 
         if (bindings is null || bindings.Count == 0)
+        {
+            if (existing.Count > 0)
+                await _db.SaveChangesAsync(cancellationToken);
             return;
+        }
 
         var now = DateTime.UtcNow;
         var normalized = bindings
@@ -853,6 +890,16 @@ public class CustomFieldService : ICustomFieldService
             : entityId!.Value.ToString("D");
     }
 
+    /// <summary>Normaliza o valor padrão em JSON; vazio/"null" viram NULL no banco.</summary>
+    private static string? NormalizeDefaultValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = NormalizeJson(value);
+        return normalized == "null" ? null : normalized;
+    }
+
     private static void ValidateDefinitionInput(UpsertCustomFieldDefinitionInput input)
     {
         if (string.IsNullOrWhiteSpace(input.Name))
@@ -883,6 +930,10 @@ public class CustomFieldService : ICustomFieldService
 
         if (input.AllowAgentWrite && input.ScopeType != CustomFieldScopeType.Agent)
             throw new InvalidOperationException("Somente custom fields com escopo de agente podem habilitar allowAgentWrite.");
+
+        // Não existe "editar sem ver": o portal precisa exibir o valor para poder alterá-lo.
+        if (input.AllowWebEdit && !input.AllowWebRead)
+            throw new InvalidOperationException("allowWebEdit exige allowWebRead: o suporte não pode editar um campo que não vê no portal.");
 
         if ((input.DataType == CustomFieldDataType.Dropdown || input.DataType == CustomFieldDataType.ListBox)
             && (input.Options is null || input.Options.Count == 0))

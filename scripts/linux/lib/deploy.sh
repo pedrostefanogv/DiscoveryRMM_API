@@ -576,6 +576,7 @@ RemoteDebug__MissedPingsBeforeClose=${REMOTE_DEBUG_MISSED_PINGS_BEFORE_CLOSE:-3}
 RemoteDebug__InitialGraceSeconds=${REMOTE_DEBUG_INITIAL_GRACE_SECONDS:-60}
 RemoteDebug__KeepAliveSeconds=${REMOTE_DEBUG_KEEP_ALIVE_SECONDS:-60}
 RemoteDebug__KeepAliveTimeoutSeconds=${REMOTE_DEBUG_KEEP_ALIVE_TIMEOUT_SECONDS:-300}
+# >>> DISCOVERY_OBJECT_STORAGE_BEGIN
 # ── Object storage (anexos/prints) ────────────────────────────────────────
 # DISCOVERY_OBJECT_STORAGE_MODE: rustfs (instalado nesta maquina), external
 # (S3-compativel externo) ou skip. O endpoint guardado no banco e apenas
@@ -610,6 +611,7 @@ ObjectStorage__SecretKey=${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}
 ObjectStorage__UsePathStyle=true
 ObjectStorage__SslVerify=${DISCOVERY_OBJECT_STORAGE_SSL_VERIFY:-true}
 ObjectStorage__UrlTtlHours=${DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS:-24}
+# <<< DISCOVERY_OBJECT_STORAGE_END
 EOF
 
   sudo chmod 640 /etc/discovery-api/discovery.env
@@ -1202,12 +1204,26 @@ update_object_storage_environment_file() {
   load_existing_object_storage_defaults
   normalize_object_storage_settings
 
+  # Filtra o bloco anterior pelo par de marcadores (BEGIN/END) e, por
+  # compatibilidade, tambem as chaves soltas e o cabecalho de comentario das
+  # versoes antigas (que acumulava comentario a cada update). Isso deixa o
+  # arquivo regenerado estavel: se nada mudou, o cmp abaixo detecta e nao
+  # regrava.
   local tmp_file; tmp_file="$(mktemp)"
   set +e
-  sudo awk '!/^DISCOVERY_OBJECT_STORAGE_/ && !/^RUSTFS_/ && !/^ObjectStorage__/' "$env_file" > "$tmp_file" 2>/dev/null
+  sudo awk '
+    /^# >>> DISCOVERY_OBJECT_STORAGE_BEGIN/ { in_block=1; next }
+    /^# <<< DISCOVERY_OBJECT_STORAGE_END/   { in_block=0; next }
+    in_block { next }
+    /^# ── Object storage/ { in_legacy_comments=1; next }
+    in_legacy_comments { if ($0 ~ /^#/) next; in_legacy_comments=0 }
+    /^DISCOVERY_OBJECT_STORAGE_/ || /^RUSTFS_/ || /^ObjectStorage__/ { next }
+    { print }
+  ' "$env_file" > "$tmp_file" 2>/dev/null
   set -e
 
   cat >> "$tmp_file" <<EOF
+# >>> DISCOVERY_OBJECT_STORAGE_BEGIN
 # ── Object storage (anexos/prints) ────────────────────────────────────────
 # DISCOVERY_OBJECT_STORAGE_MODE: rustfs (instalado nesta maquina), external
 # (S3-compativel externo) ou skip. O endpoint guardado no banco e apenas
@@ -1242,11 +1258,25 @@ ObjectStorage__SecretKey=${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}
 ObjectStorage__UsePathStyle=true
 ObjectStorage__SslVerify=${DISCOVERY_OBJECT_STORAGE_SSL_VERIFY:-true}
 ObjectStorage__UrlTtlHours=${DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS:-24}
+# <<< DISCOVERY_OBJECT_STORAGE_END
 EOF
+
+  # Idempotencia: se o bloco gerado e byte-identico ao arquivo atual, nao
+  # regrava (o update chama esta funcao em toda execucao). `cmp` e coreutils;
+  # se faltar, cai no install normal. --force ignora a checagem.
+  if [[ "${DISCOVERY_OBJECT_STORAGE_FORCE:-0}" != "1" ]] && sudo cmp -s "$tmp_file" "$env_file" 2>/dev/null; then
+    rm -f "$tmp_file"
+    log "Variaveis de object storage ja estao iguais em $env_file; mantendo sem regravar (use --force ou a opcao de manutencao para forcar)."
+    return 0
+  fi
 
   sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
   rm -f "$tmp_file"
-  log "Variaveis de object storage atualizadas no $env_file"
+  if [[ "${DISCOVERY_OBJECT_STORAGE_FORCE:-0}" == "1" ]]; then
+    log "Variaveis de object storage regravadas (--force) no $env_file"
+  else
+    log "Variaveis de object storage atualizadas no $env_file"
+  fi
 }
 
 # Grava a configuracao do storage no banco via CLI da API
@@ -1277,7 +1307,11 @@ configure_object_storage_in_database() {
     flags="$flags --force"
   fi
 
-  log "Gravando a configuracao do object storage no banco (CLI da API)"
+  if [[ "${DISCOVERY_OBJECT_STORAGE_FORCE:-0}" == "1" ]]; then
+    log "Regravando a configuracao do object storage no banco (CLI da API, --force)"
+  else
+    log "Sincronizando a configuracao do object storage no banco (CLI da API; so grava se mudou)"
+  fi
   local output
   if ! output="$(sudo -u discovery-api env \
       DISCOVERY_API_MAINTENANCE_ENV_FILE="$api_env_file" \

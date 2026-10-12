@@ -198,6 +198,29 @@ public sealed class GetAgentCustomFieldsQueryHandler(
     }
 }
 
+public sealed class GetAgentCustomFieldSchemaQueryHandler(
+    IAgentRepository agentRepo,
+    ICustomFieldService customFieldService
+) : IRequestHandler<GetAgentCustomFieldSchemaQuery, Result<IReadOnlyList<CustomFieldSchemaItemDto>>>
+{
+    public async Task<Result<IReadOnlyList<CustomFieldSchemaItemDto>>> Handle(GetAgentCustomFieldSchemaQuery q, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Failure(Error.NotFound("Agent not found."));
+
+        var schema = await customFieldService.GetSchemaAsync(
+            CustomFieldScopeType.Agent,
+            q.AgentId,
+            includeInactive: false,
+            includeSecrets: q.IncludeSecrets,
+            cancellationToken: ct,
+            visibleOnly: true);
+
+        return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Success(schema);
+    }
+}
+
 public sealed class UpsertAgentCustomFieldCommandHandler(
     IAgentRepository agentRepo,
     ICustomFieldService customFieldService

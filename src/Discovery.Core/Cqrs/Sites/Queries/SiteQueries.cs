@@ -1,4 +1,5 @@
 using Discovery.Core.Cqrs;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 
 namespace Discovery.Core.Cqrs.Sites.Queries;
@@ -30,3 +31,6 @@ public sealed record SiteWithClientDto(
 );
 public sealed record GetSiteByIdQuery(Guid ClientId, Guid SiteId) : IQuery<Result<Site>>;
 public sealed record GetSiteCustomFieldsQuery(Guid ClientId, Guid SiteId, bool IncludeSecrets = true) : IQuery<Result<IReadOnlyList<object>>>;
+
+/// <summary>Schema dos campos do site para o card do portal (só webRead).</summary>
+public sealed record GetSiteCustomFieldSchemaQuery(Guid ClientId, Guid SiteId, bool IncludeSecrets = false) : IQuery<Result<IReadOnlyList<CustomFieldSchemaItemDto>>>;

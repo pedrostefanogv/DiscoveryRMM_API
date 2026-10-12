@@ -204,6 +204,21 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
     }
 
+    /// <summary>
+    /// Schema completo dos campos do agente para o card do detalhe: tipo, opções,
+    /// capacidades, destaque e valores (segredos mascarados por padrão). Só campos
+    /// com visibilidade no portal (webRead).
+    /// </summary>
+    [HttpGet("{id:guid}/custom-fields/schema")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetCustomFieldSchema(Guid id, [FromQuery] bool includeSecrets = false, CancellationToken ct = default)
+    {
+        var result = await _mediator.Send(new GetAgentCustomFieldSchemaQuery(id, includeSecrets), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+    }
+
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]
     public async Task<IActionResult> UpsertCustomFieldValue(Guid id, Guid definitionId, [FromBody] UpsertAgentCustomFieldCommand cmd, CancellationToken ct = default)

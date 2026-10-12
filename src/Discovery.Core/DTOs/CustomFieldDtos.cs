@@ -27,7 +27,11 @@ public sealed record UpsertCustomFieldDefinitionInput(
     bool AllowAgentWrite,
     CustomFieldRuntimeAccessMode RuntimeAccessMode,
     IReadOnlyList<CustomFieldAccessBindingInput>? AccessBindings,
-    Guid? DepartmentId = null);
+    Guid? DepartmentId = null,
+    bool AllowWebRead = true,
+    bool AllowWebEdit = true,
+    bool IsPinned = false,
+    string? DefaultValueJson = null);
 
 public sealed record UpsertCustomFieldValueInput(
     Guid DefinitionId,
@@ -90,4 +94,8 @@ public sealed record CustomFieldSchemaItemDto(
     IReadOnlyList<CustomFieldAccessBindingDto> AccessBindings,
     Guid? EntityId,
     string ValueJson,
-    DateTime? ValueUpdatedAt);
+    DateTime? ValueUpdatedAt,
+    bool AllowWebRead = true,
+    bool AllowWebEdit = true,
+    bool IsPinned = false,
+    string? ValueUpdatedBy = null);

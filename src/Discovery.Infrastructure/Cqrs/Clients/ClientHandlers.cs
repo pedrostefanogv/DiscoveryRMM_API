@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Clients.Commands;
 using Discovery.Core.Cqrs.Clients.Queries;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
@@ -106,6 +107,29 @@ public sealed class GetClientCustomFieldsQueryHandler(
 
         var values = await customFieldService.GetValuesAsync(CustomFieldScopeType.Client, q.ClientId, q.IncludeSecrets, ct);
         return Result<IReadOnlyList<object>>.Success(values);
+    }
+}
+
+public sealed class GetClientCustomFieldSchemaQueryHandler(
+    IClientRepository repo,
+    ICustomFieldService customFieldService
+) : IRequestHandler<GetClientCustomFieldSchemaQuery, Result<IReadOnlyList<CustomFieldSchemaItemDto>>>
+{
+    public async Task<Result<IReadOnlyList<CustomFieldSchemaItemDto>>> Handle(GetClientCustomFieldSchemaQuery q, CancellationToken ct)
+    {
+        var client = await repo.GetByIdAsync(q.ClientId);
+        if (client is null)
+            return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Failure(Error.NotFound("Client not found."));
+
+        var schema = await customFieldService.GetSchemaAsync(
+            CustomFieldScopeType.Client,
+            q.ClientId,
+            includeInactive: false,
+            includeSecrets: q.IncludeSecrets,
+            cancellationToken: ct,
+            visibleOnly: true);
+
+        return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Success(schema);
     }
 }
 

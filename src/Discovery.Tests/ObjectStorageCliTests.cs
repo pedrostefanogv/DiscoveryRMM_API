@@ -258,4 +258,132 @@ public class ObjectStorageCliTests
         var described = ObjectStorageCliMode.DescribeState(Config(bucket: "b", endpoint: "host:9000"));
         Assert.That(described, Does.Contain("https://host:9000/b/"));
     }
+
+    // ── Idempotencia (nao regravar a cada update) ───────────────────────────
+
+    private static ServerConfiguration Configurado() => Config(
+        bucket: "discovery-files",
+        endpoint: "https://tngplacas.com.br",
+        region: "us-east-1",
+        accessKey: "discoveryrustfs",
+        secretKey: "enc:v1:v1:segredo",
+        pathStyle: true,
+        sslVerify: true,
+        ttlHours: 24);
+
+    private static Dictionary<string, object> UpdatesIguais()
+        => ObjectStorageCliMode.BuildUpdates(
+            Env(
+                (ObjectStorageCliMode.BucketEnv, "discovery-files"),
+                (ObjectStorageCliMode.EndpointEnv, "https://tngplacas.com.br"),
+                (ObjectStorageCliMode.RegionEnv, "us-east-1"),
+                (ObjectStorageCliMode.AccessKeyEnv, "discoveryrustfs"),
+                (ObjectStorageCliMode.UsePathStyleEnv, "true"),
+                (ObjectStorageCliMode.SslVerifyEnv, "true"),
+                (ObjectStorageCliMode.UrlTtlHoursEnv, "24")),
+            Configurado(),
+            force: false,
+            new List<string>());
+
+    [Test]
+    public void SelectChanged_ConfiguracaoIgual_NaoRegravaNada()
+    {
+        var changed = ObjectStorageCliMode.SelectChanged(Configurado(), UpdatesIguais());
+
+        Assert.That(changed, Is.Empty,
+            "update do servidor nao pode regravar o storage quando nada mudou (Version/audit artificiais)");
+    }
+
+    [Test]
+    public void SelectChanged_GravaSomenteOCampoQueMudou()
+    {
+        var env = Env(
+            (ObjectStorageCliMode.BucketEnv, "discovery-files"),
+            (ObjectStorageCliMode.EndpointEnv, "https://tngplacas.com.br"),
+            (ObjectStorageCliMode.RegionEnv, "eu-west-1"),
+            (ObjectStorageCliMode.AccessKeyEnv, "discoveryrustfs"),
+            (ObjectStorageCliMode.UsePathStyleEnv, "true"),
+            (ObjectStorageCliMode.SslVerifyEnv, "true"),
+            (ObjectStorageCliMode.UrlTtlHoursEnv, "48"));
+        var updates = ObjectStorageCliMode.BuildUpdates(env, Configurado(), force: false, new List<string>());
+
+        var changed = ObjectStorageCliMode.SelectChanged(Configurado(), updates);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(changed.Keys, Is.EquivalentTo(new[]
+            {
+                nameof(ServerConfiguration.ObjectStorageRegion),
+                nameof(ServerConfiguration.ObjectStorageUrlTtlHours),
+            }));
+            Assert.That(changed[nameof(ServerConfiguration.ObjectStorageRegion)], Is.EqualTo("eu-west-1"));
+            Assert.That(changed[nameof(ServerConfiguration.ObjectStorageUrlTtlHours)], Is.EqualTo(48));
+        });
+    }
+
+    [Test]
+    public void SelectChanged_DiferencaBooleana_GravaCampo()
+    {
+        var env = Env(
+            (ObjectStorageCliMode.UsePathStyleEnv, "false"),
+            (ObjectStorageCliMode.InternalEnv, "true"));
+        var updates = ObjectStorageCliMode.BuildUpdates(env, Configurado(), force: false, new List<string>());
+
+        var changed = ObjectStorageCliMode.SelectChanged(Configurado(), updates);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(changed[nameof(ServerConfiguration.ObjectStorageUsePathStyle)], Is.EqualTo(false));
+            Assert.That(changed[nameof(ServerConfiguration.ObjectStorageInternal)], Is.EqualTo(true));
+        });
+    }
+
+    [Test]
+    public void SelectChanged_EndpointComBarraFinalOuCase_ConsideraIgual()
+    {
+        var current = Config(
+            bucket: "discovery-files",
+            endpoint: "https://TngPlacas.com.br/",
+            region: "us-east-1",
+            accessKey: "discoveryrustfs",
+            secretKey: "enc:v1:v1:segredo",
+            pathStyle: true,
+            sslVerify: true,
+            ttlHours: 24);
+        var updates = ObjectStorageCliMode.BuildUpdates(
+            Env((ObjectStorageCliMode.EndpointEnv, "https://tngplacas.com.br")),
+            current,
+            force: false,
+            new List<string>());
+
+        var changed = ObjectStorageCliMode.SelectChanged(current, updates);
+
+        Assert.That(changed, Is.Empty, "barra final/case nao podem disparar regravacao");
+    }
+
+    [Test]
+    public void SelectChanged_SegredoComForce_SempreRegrava()
+    {
+        var current = Configurado();
+        var updates = ObjectStorageCliMode.BuildUpdates(
+            Env((ObjectStorageCliMode.SecretKeyEnv, "novo-segredo")),
+            current,
+            force: true,
+            new List<string>());
+
+        var changed = ObjectStorageCliMode.SelectChanged(current, updates);
+
+        Assert.That(changed[nameof(ServerConfiguration.ObjectStorageSecretKey)], Is.EqualTo("novo-segredo"),
+            "--force precisa substituir o segredo gravado");
+    }
+
+    [Test]
+    public void SelectChanged_SegredoAusente_NaoMexeNoCampo()
+    {
+        var updates = ObjectStorageCliMode.BuildUpdates(Env(), Configurado(), force: true, new List<string>());
+
+        var changed = ObjectStorageCliMode.SelectChanged(Configurado(), updates);
+
+        Assert.That(changed.ContainsKey(nameof(ServerConfiguration.ObjectStorageSecretKey)), Is.False);
+    }
 }

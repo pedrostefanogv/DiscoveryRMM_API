@@ -1,8 +1,13 @@
 using System.Text.Json;
+using Discovery.Core.Cqrs.Agents.Crud.Queries;
+using Discovery.Core.Cqrs.CustomFields.Commands;
+using Discovery.Core.Cqrs.CustomFields.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
+using Discovery.Infrastructure.Cqrs.CustomFields;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -500,6 +505,485 @@ public class CustomFieldServiceTests
             Assert.That(departmentValue.ValueJson, Is.EqualTo("\"1024\""));
             Assert.That(values.Select(item => item.DefinitionId), Contains.Item(ticketDefinition.Id));
         });
+    }
+
+
+    // ── Capacidades de automação (allowRuntimeRead / allowAgentWrite / runtimeAccessMode / vínculos) ──
+
+    [Test]
+    public async Task CreateCustomFieldCommand_ShouldPersistAutomationCapabilitiesAndBindings()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var taskId = Guid.NewGuid();
+        var handler = new CreateCustomFieldCommandHandler(fixture.Service, fixture.Db);
+
+        var result = await handler.Handle(
+            new CreateCustomFieldCommand(
+                "anydesk",
+                "ID do anydesk",
+                "ID usado no acesso remoto",
+                CustomFieldScopeType.Agent,
+                CustomFieldDataType.Text,
+                IsRequired: false,
+                IsSecret: false,
+                OptionsJson: null,
+                ValidationRegex: null,
+                DepartmentId: null,
+                UpdatedBy: "tester",
+                AllowRuntimeRead: true,
+                AllowAgentWrite: true,
+                RuntimeAccessMode: CustomFieldRuntimeAccessMode.RestrictedTaskScript,
+                AccessBindings: [new CustomFieldAccessBindingCommand(taskId, null, CanRead: true, CanWrite: true)]),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True, string.Join("; ", result.Errors.Select(e => e.Message)));
+        var dto = result.Value!;
+
+        var storedAccess = await fixture.Db.CustomFieldExecutionAccesses.AsNoTracking().ToListAsync();
+        var storedDefinition = await fixture.Db.CustomFieldDefinitions.AsNoTracking().SingleAsync(d => d.Id == dto.Id);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dto.AllowRuntimeRead, Is.True);
+            Assert.That(dto.AllowAgentWrite, Is.True);
+            Assert.That(dto.RuntimeAccessMode, Is.EqualTo(CustomFieldRuntimeAccessMode.RestrictedTaskScript));
+            Assert.That(dto.AccessBindings, Has.Count.EqualTo(1));
+            Assert.That(dto.AccessBindings![0].TaskId, Is.EqualTo(taskId));
+            Assert.That(dto.AccessBindings![0].CanWrite, Is.True);
+            Assert.That(storedDefinition.AllowRuntimeRead, Is.True);
+            Assert.That(storedDefinition.AllowAgentWrite, Is.True);
+            Assert.That(storedDefinition.RuntimeAccessMode, Is.EqualTo(CustomFieldRuntimeAccessMode.RestrictedTaskScript));
+            Assert.That(storedAccess, Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task UpdateCustomFieldCommand_ShouldPreserveAutomationWhenFlagsAreOmitted()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var taskId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var definition = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "anydesk",
+            Label = "ID antigo",
+            ScopeType = CustomFieldScopeType.Agent,
+            DataType = CustomFieldDataType.Dropdown,
+            IsActive = true,
+            OptionsJson = JsonSerializer.Serialize(new[] { "a", "b" }),
+            MinLength = 3,
+            MaxLength = 20,
+            AllowRuntimeRead = true,
+            AllowAgentWrite = true,
+            RuntimeAccessMode = CustomFieldRuntimeAccessMode.RestrictedTaskScript,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        fixture.Db.CustomFieldDefinitions.Add(definition);
+        fixture.Db.CustomFieldExecutionAccesses.Add(new CustomFieldExecutionAccess
+        {
+            Id = Guid.NewGuid(),
+            DefinitionId = definition.Id,
+            TaskId = taskId,
+            CanRead = true,
+            CanWrite = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        await fixture.Db.SaveChangesAsync();
+
+        var handler = new UpdateCustomFieldCommandHandler(fixture.Service, fixture.Db);
+        var result = await handler.Handle(
+            new UpdateCustomFieldCommand(
+                definition.Id,
+                Name: null,
+                Label: "ID do anydesk",
+                Description: null,
+                IsRequired: null,
+                IsSecret: null,
+                OptionsJson: null,
+                ValidationRegex: null,
+                DepartmentId: null,
+                IsActive: null,
+                UpdatedBy: "tester"),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True, string.Join("; ", result.Errors.Select(e => e.Message)));
+        var dto = result.Value!;
+
+        var stored = await fixture.Db.CustomFieldDefinitions.AsNoTracking().SingleAsync(d => d.Id == definition.Id);
+        var storedAccess = await fixture.Db.CustomFieldExecutionAccesses.AsNoTracking().ToListAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stored.Label, Is.EqualTo("ID do anydesk"), "o título deve ser atualizado");
+            Assert.That(stored.AllowRuntimeRead, Is.True, "editar o título não pode zerar allowRuntimeRead");
+            Assert.That(stored.AllowAgentWrite, Is.True, "editar o título não pode zerar allowAgentWrite");
+            Assert.That(stored.RuntimeAccessMode, Is.EqualTo(CustomFieldRuntimeAccessMode.RestrictedTaskScript));
+            Assert.That(storedAccess, Has.Count.EqualTo(1), "os vínculos não podem ser apagados");
+            Assert.That(stored.MinLength, Is.EqualTo(3), "minLength não pode ser zerado");
+            Assert.That(stored.MaxLength, Is.EqualTo(20), "maxLength não pode ser zerado");
+            Assert.That(stored.OptionsJson, Is.Not.Null, "as opções não podem ser apagadas");
+            Assert.That(dto.AccessBindings, Has.Count.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task UpdateCustomFieldCommand_ShouldApplyAndClearExplicitBindings()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var now = DateTime.UtcNow;
+        var definition = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "ativo_agente",
+            Label = "AtivoAgenteTexto",
+            ScopeType = CustomFieldScopeType.Agent,
+            DataType = CustomFieldDataType.Boolean,
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        fixture.Db.CustomFieldDefinitions.Add(definition);
+        await fixture.Db.SaveChangesAsync();
+
+        var handler = new UpdateCustomFieldCommandHandler(fixture.Service, fixture.Db);
+        var scriptId = Guid.NewGuid();
+
+        var applied = await handler.Handle(
+            new UpdateCustomFieldCommand(
+                definition.Id, null, null, null, null, null, null, null, null, null, "tester",
+                AllowRuntimeRead: true,
+                AllowAgentWrite: false,
+                RuntimeAccessMode: CustomFieldRuntimeAccessMode.RestrictedTaskScript,
+                AccessBindings: [new CustomFieldAccessBindingCommand(null, scriptId, CanRead: true, CanWrite: false)]),
+            CancellationToken.None);
+
+        Assert.That(applied.IsSuccess, Is.True, string.Join("; ", applied.Errors.Select(e => e.Message)));
+        Assert.That(applied.Value!.AccessBindings, Has.Count.EqualTo(1));
+        Assert.That(applied.Value!.AccessBindings![0].ScriptId, Is.EqualTo(scriptId));
+
+        var cleared = await handler.Handle(
+            new UpdateCustomFieldCommand(
+                definition.Id, null, null, null, null, null, null, null, null, null, "tester",
+                RuntimeAccessMode: CustomFieldRuntimeAccessMode.Public,
+                AccessBindings: []),
+            CancellationToken.None);
+
+        Assert.That(cleared.IsSuccess, Is.True, string.Join("; ", cleared.Errors.Select(e => e.Message)));
+        var storedAccess = await fixture.Db.CustomFieldExecutionAccesses.AsNoTracking().ToListAsync();
+        var stored = await fixture.Db.CustomFieldDefinitions.AsNoTracking().SingleAsync(d => d.Id == definition.Id);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(storedAccess, Is.Empty, "lista vazia deve remover os vínculos");
+            Assert.That(stored.RuntimeAccessMode, Is.EqualTo(CustomFieldRuntimeAccessMode.Public));
+            Assert.That(stored.AllowRuntimeRead, Is.True);
+            Assert.That(cleared.Value!.AccessBindings, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task ListCustomFieldsQuery_ShouldFilterByExecutionBinding()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var now = DateTime.UtcNow;
+        var taskId = Guid.NewGuid();
+        var scriptId = Guid.NewGuid();
+        var boundToTask = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "anydesk",
+            Label = "ID do anydesk",
+            ScopeType = CustomFieldScopeType.Agent,
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+            AllowRuntimeRead = true,
+            RuntimeAccessMode = CustomFieldRuntimeAccessMode.RestrictedTaskScript,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var boundToScript = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "ativo_agente",
+            Label = "AtivoAgenteTexto",
+            ScopeType = CustomFieldScopeType.Agent,
+            DataType = CustomFieldDataType.Boolean,
+            IsActive = true,
+            AllowRuntimeRead = true,
+            RuntimeAccessMode = CustomFieldRuntimeAccessMode.RestrictedTaskScript,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var unbound = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "sem_vinculo",
+            Label = "Sem vínculo",
+            ScopeType = CustomFieldScopeType.Agent,
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+            AllowRuntimeRead = true,
+            RuntimeAccessMode = CustomFieldRuntimeAccessMode.Public,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        fixture.Db.CustomFieldDefinitions.AddRange(boundToTask, boundToScript, unbound);
+        fixture.Db.CustomFieldExecutionAccesses.AddRange(
+            new CustomFieldExecutionAccess
+            {
+                Id = Guid.NewGuid(), DefinitionId = boundToTask.Id, TaskId = taskId,
+                CanRead = true, CanWrite = true, CreatedAt = now, UpdatedAt = now
+            },
+            new CustomFieldExecutionAccess
+            {
+                Id = Guid.NewGuid(), DefinitionId = boundToScript.Id, ScriptId = scriptId,
+                CanRead = true, CanWrite = false, CreatedAt = now, UpdatedAt = now
+            });
+        await fixture.Db.SaveChangesAsync();
+
+        var handler = new ListCustomFieldsQueryHandler(fixture.Service, fixture.Db);
+
+        var byTask = await handler.Handle(
+            new ListCustomFieldsQuery(CustomFieldScopeType.Agent, false, taskId, null), CancellationToken.None);
+        var byScript = await handler.Handle(
+            new ListCustomFieldsQuery(CustomFieldScopeType.Agent, false, null, scriptId), CancellationToken.None);
+        var all = await handler.Handle(
+            new ListCustomFieldsQuery(CustomFieldScopeType.Agent, false, null, null), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(byTask.Value!.Select(d => d.Name), Is.EqualTo(new[] { "anydesk" }));
+            Assert.That(byTask.Value![0].AccessBindings, Has.Count.EqualTo(1));
+            Assert.That(byScript.Value!.Select(d => d.Name), Is.EqualTo(new[] { "ativo_agente" }));
+            Assert.That(byScript.Value![0].AccessBindings![0].CanWrite, Is.False);
+            Assert.That(all.Value!.Select(d => d.Name), Does.Contain("sem_vinculo"));
+            Assert.That(all.Value!.Single(d => d.Name == "anydesk").AccessBindings, Has.Count.EqualTo(1));
+        });
+    }
+
+
+    // ── Visibilidade no portal (allow_web_read / allow_web_edit / is_pinned) ──
+
+    [Test]
+    public async Task CreateCustomFieldCommand_ShouldRejectWebEditWithoutWebRead()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var handler = new CreateCustomFieldCommandHandler(fixture.Service, fixture.Db);
+
+        var result = await handler.Handle(
+            new CreateCustomFieldCommand(
+                "invisivel", "Invisível", null,
+                CustomFieldScopeType.Agent, CustomFieldDataType.Text,
+                IsRequired: false, IsSecret: false, OptionsJson: null, ValidationRegex: null,
+                DepartmentId: null, UpdatedBy: "tester",
+                AllowWebRead: false, AllowWebEdit: true),
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(
+                result.Errors.Select(e => e.Message),
+                Has.Some.Contains("allowWebEdit"),
+                "a mensagem deve explicar que editar exige ver");
+        });
+    }
+
+    [Test]
+    public async Task GetAgentCustomFieldSchema_ShouldHideNonWebReadFieldsAndMaskSecrets()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var now = DateTime.UtcNow;
+        var visible = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "anydesk",
+            Label = "ID do anydesk",
+            ScopeType = CustomFieldScopeType.Agent,
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+            AllowWebRead = true,
+            AllowWebEdit = true,
+            IsPinned = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var hidden = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "token_interno",
+            Label = "Token interno",
+            ScopeType = CustomFieldScopeType.Agent,
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+            AllowRuntimeRead = true,
+            AllowWebRead = false,
+            AllowWebEdit = false,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var secret = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "api_key",
+            Label = "API Key",
+            ScopeType = CustomFieldScopeType.Agent,
+            DataType = CustomFieldDataType.Text,
+            IsActive = true,
+            IsSecret = true,
+            AllowWebRead = true,
+            AllowWebEdit = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        fixture.Db.CustomFieldDefinitions.AddRange(visible, hidden, secret);
+        fixture.Db.CustomFieldValues.AddRange(
+            new CustomFieldValue
+            {
+                Id = Guid.NewGuid(), DefinitionId = visible.Id, ScopeType = CustomFieldScopeType.Agent,
+                EntityId = fixture.Agent.Id, EntityKey = fixture.Agent.Id.ToString("D"),
+                ValueJson = JsonSerializer.Serialize("123 456 789"), UpdatedBy = "agent",
+                CreatedAt = now, UpdatedAt = now
+            },
+            new CustomFieldValue
+            {
+                Id = Guid.NewGuid(), DefinitionId = secret.Id, ScopeType = CustomFieldScopeType.Agent,
+                EntityId = fixture.Agent.Id, EntityKey = fixture.Agent.Id.ToString("D"),
+                ValueJson = JsonSerializer.Serialize("super-secreto"), UpdatedBy = "tester",
+                CreatedAt = now, UpdatedAt = now
+            });
+        await fixture.Db.SaveChangesAsync();
+
+        var handler = new GetAgentCustomFieldSchemaQueryHandler(new TestAgentRepository(fixture.Db), fixture.Service);
+        var result = await handler.Handle(new GetAgentCustomFieldSchemaQuery(fixture.Agent.Id), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True, string.Join("; ", result.Errors.Select(e => e.Message)));
+        var items = result.Value!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(items.Select(item => item.Name), Is.EquivalentTo(new[] { "anydesk", "api_key" }),
+                "campo sem webRead não pode aparecer no card");
+            var anydesk = items.Single(item => item.Name == "anydesk");
+            Assert.That(anydesk.IsPinned, Is.True);
+            Assert.That(anydesk.AllowWebEdit, Is.True);
+            Assert.That(anydesk.ValueUpdatedBy, Is.EqualTo("agent"));
+            Assert.That(JsonDocument.Parse(anydesk.ValueJson).RootElement.GetString(), Is.EqualTo("123 456 789"));
+
+            var apiKey = items.Single(item => item.Name == "api_key");
+            Assert.That(apiKey.IsSecret, Is.True);
+            Assert.That(JsonDocument.Parse(apiKey.ValueJson).RootElement.GetString(), Is.EqualTo("***"),
+                "segredo deve voltar mascarado por padrão");
+        });
+    }
+
+
+    [Test]
+    public async Task CreateCustomFieldCommand_ShouldPersistAndReturnOptionsFromList()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var handler = new CreateCustomFieldCommandHandler(fixture.Service, fixture.Db);
+
+        var created = await handler.Handle(
+            new CreateCustomFieldCommand(
+                "ambiente",
+                "Ambiente",
+                null,
+                CustomFieldScopeType.Agent,
+                CustomFieldDataType.Dropdown,
+                IsRequired: false,
+                IsSecret: false,
+                OptionsJson: null,
+                ValidationRegex: null,
+                DepartmentId: null,
+                UpdatedBy: "tester",
+                Options: ["prod", "homolog"]),
+            CancellationToken.None);
+
+        Assert.That(created.IsSuccess, Is.True, string.Join("; ", created.Errors.Select(e => e.Message)));
+        Assert.That(created.Value!.Options, Is.EquivalentTo(new[] { "prod", "homolog" }),
+            "a lista de opções enviada pela tela precisa ser persistida");
+
+        // Editar sem enviar Options preserva as opções atuais (patch).
+        var updateHandler = new UpdateCustomFieldCommandHandler(fixture.Service, fixture.Db);
+        var updated = await updateHandler.Handle(
+            new UpdateCustomFieldCommand(
+                created.Value!.Id, null, "Ambiente 2", null, null, null, null, null, null, null, "tester"),
+            CancellationToken.None);
+
+        Assert.That(updated.IsSuccess, Is.True, string.Join("; ", updated.Errors.Select(e => e.Message)));
+        Assert.That(updated.Value!.Options, Is.EquivalentTo(new[] { "prod", "homolog" }));
+        Assert.That(updated.Value!.Label, Is.EqualTo("Ambiente 2"));
+    }
+
+
+    // ── Valor padrão ─────────────────────────────────────────────────────
+
+    [Test]
+    public async Task DefaultValue_ShouldFeedPortalAndRuntimeAndBeClearable()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var now = DateTime.UtcNow;
+        var createHandler = new CreateCustomFieldCommandHandler(fixture.Service, fixture.Db);
+
+        var created = await createHandler.Handle(
+            new CreateCustomFieldCommand(
+                "ambiente", "Ambiente", null,
+                CustomFieldScopeType.Agent, CustomFieldDataType.Text,
+                IsRequired: false, IsSecret: false, OptionsJson: null, ValidationRegex: null,
+                DepartmentId: null, UpdatedBy: "tester",
+                AllowRuntimeRead: true,
+                RuntimeAccessMode: CustomFieldRuntimeAccessMode.Public,
+                DefaultValueJson: JsonSerializer.Serialize("prod")),
+            CancellationToken.None);
+
+        Assert.That(created.IsSuccess, Is.True, string.Join("; ", created.Errors.Select(e => e.Message)));
+        Assert.That(created.Value!.DefaultValueJson, Is.EqualTo(JsonSerializer.Serialize("prod")));
+
+        // Sem valor gravado, portal e runtime entregam o padrão.
+        var values = await fixture.Service.GetValuesAsync(CustomFieldScopeType.Agent, fixture.Agent.Id);
+        var runtime = await fixture.Service.GetRuntimeValuesForAgentAsync(fixture.Agent.Id, null, null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                JsonDocument.Parse(values.Single(v => v.DefinitionId == created.Value!.Id).ValueJson).RootElement.GetString(),
+                Is.EqualTo("prod"));
+            Assert.That(
+                JsonDocument.Parse(runtime.Single(f => f.Name == "ambiente").ValueJson).RootElement.GetString(),
+                Is.EqualTo("prod"));
+        });
+
+        // Segredo com padrão não expõe o padrão em listagem sem permissão de ver.
+        var secret = new CustomFieldDefinition
+        {
+            Id = Guid.NewGuid(), Name = "token_padrao", Label = "Token padrão",
+            ScopeType = CustomFieldScopeType.Agent, DataType = CustomFieldDataType.Text,
+            IsActive = true, IsSecret = true, AllowRuntimeRead = true,
+            DefaultValueJson = JsonSerializer.Serialize("nao-expor"),
+            CreatedAt = now, UpdatedAt = now
+        };
+        fixture.Db.CustomFieldDefinitions.Add(secret);
+        await fixture.Db.SaveChangesAsync();
+
+        var masked = await fixture.Service.GetValuesAsync(CustomFieldScopeType.Agent, fixture.Agent.Id, includeSecrets: false);
+        Assert.That(
+            JsonDocument.Parse(masked.Single(v => v.DefinitionId == secret.Id).ValueJson).RootElement.ValueKind,
+            Is.EqualTo(JsonValueKind.Null), "segredo sem valor não pode devolver o padrão em claro");
+
+        // String vazia limpa o padrão (patch).
+        var updateHandler = new UpdateCustomFieldCommandHandler(fixture.Service, fixture.Db);
+        var cleared = await updateHandler.Handle(
+            new UpdateCustomFieldCommand(
+                created.Value!.Id, null, null, null, null, null, null, null, null, null, "tester",
+                DefaultValueJson: ""),
+            CancellationToken.None);
+
+        Assert.That(cleared.IsSuccess, Is.True, string.Join("; ", cleared.Errors.Select(e => e.Message)));
+        Assert.That(cleared.Value!.DefaultValueJson, Is.Null);
     }
 
     private static async Task<CustomFieldFixture> CreateFixtureAsync()

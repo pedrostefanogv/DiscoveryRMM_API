@@ -16,9 +16,17 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
     [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
-    public async Task<IActionResult> GetAll([FromQuery] CustomFieldScopeType? scopeType = null, [FromQuery] bool includeInactive = false)
+    /// <summary>
+    /// Lista definições. Informando taskId ou scriptId devolve somente os campos
+    /// vinculados àquela execução (visão reversa usada na página de tarefas/scripts).
+    /// </summary>
+    public async Task<IActionResult> GetAll(
+        [FromQuery] CustomFieldScopeType? scopeType = null,
+        [FromQuery] bool includeInactive = false,
+        [FromQuery] Guid? taskId = null,
+        [FromQuery] Guid? scriptId = null)
     {
-        var result = await mediator.Send(new ListCustomFieldsQuery(scopeType, includeInactive));
+        var result = await mediator.Send(new ListCustomFieldsQuery(scopeType, includeInactive, taskId, scriptId));
         return result.ToActionResult();
     }
 

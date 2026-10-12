@@ -1,4 +1,5 @@
 using Discovery.Core.Cqrs;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 
 namespace Discovery.Core.Cqrs.Clients.Queries;
@@ -6,3 +7,6 @@ namespace Discovery.Core.Cqrs.Clients.Queries;
 public sealed record GetAllClientsQuery(bool IncludeInactive = false) : IQuery<Result<IReadOnlyList<Client>>>;
 public sealed record GetClientByIdQuery(Guid Id) : IQuery<Result<Client>>;
 public sealed record GetClientCustomFieldsQuery(Guid ClientId, bool IncludeSecrets = true) : IQuery<Result<IReadOnlyList<object>>>;
+
+/// <summary>Schema dos campos do cliente para o card do portal (só webRead).</summary>
+public sealed record GetClientCustomFieldSchemaQuery(Guid ClientId, bool IncludeSecrets = false) : IQuery<Result<IReadOnlyList<CustomFieldSchemaItemDto>>>;

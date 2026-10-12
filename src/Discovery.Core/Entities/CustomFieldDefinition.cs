@@ -26,6 +26,18 @@ public class CustomFieldDefinition
     public bool AllowRuntimeRead { get; set; }
     public bool AllowAgentWrite { get; set; }
     public CustomFieldRuntimeAccessMode RuntimeAccessMode { get; set; } = CustomFieldRuntimeAccessMode.Disabled;
+
+    /// <summary>Se o valor aparece no portal (detalhe do agente/cliente/site).</summary>
+    public bool AllowWebRead { get; set; } = true;
+
+    /// <summary>Se o suporte pode editar o valor pelo portal. Exige AllowWebRead.</summary>
+    public bool AllowWebEdit { get; set; } = true;
+
+    /// <summary>Destaque no card do detalhe (aparece antes dos demais).</summary>
+    public bool IsPinned { get; set; }
+
+    /// <summary>Valor padrão em JSON, usado quando a entidade ainda não tem valor.</summary>
+    public string? DefaultValueJson { get; set; }
     
     /// <summary>
     /// Departamento ao qual este campo pertence (quando ScopeType = Department).

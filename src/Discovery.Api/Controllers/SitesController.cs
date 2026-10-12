@@ -94,6 +94,16 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
         return result.Match<IActionResult>(success: Ok, failure: _ => NotFound());
     }
 
+    /// <summary>Schema dos campos do site para o card do detalhe (só webRead; segredos mascarados).</summary>
+    [HttpGet("{id:guid}/custom-fields/schema")]
+    [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
+    public async Task<IActionResult> GetCustomFieldSchema(
+        Guid clientId, Guid id, [FromQuery] bool includeSecrets = false, CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new GetSiteCustomFieldSchemaQuery(clientId, id, includeSecrets), ct);
+        return result.Match<IActionResult>(success: Ok, failure: _ => NotFound());
+    }
+
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
     [RequirePermission(ResourceType.Sites, ActionType.Edit, ScopeSource.FromRoute)]
     public async Task<IActionResult> UpsertCustomFieldValue(
