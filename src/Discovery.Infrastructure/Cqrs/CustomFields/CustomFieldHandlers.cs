@@ -1,31 +1,39 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.CustomFields.Commands;
 using Discovery.Core.Cqrs.CustomFields.Queries;
 using Discovery.Core.DTOs;
+using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Data;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Cqrs.CustomFields;
 
-public sealed class ListCustomFieldsQueryHandler(ICustomFieldService svc) : IRequestHandler<ListCustomFieldsQuery, Result<IReadOnlyList<CustomFieldDto>>>
+public sealed class ListCustomFieldsQueryHandler(ICustomFieldService svc, DiscoveryDbContext db) : IRequestHandler<ListCustomFieldsQuery, Result<IReadOnlyList<CustomFieldDto>>>
 {
     public async Task<Result<IReadOnlyList<CustomFieldDto>>> Handle(ListCustomFieldsQuery q, CancellationToken ct)
     {
         var defs = await svc.GetDefinitionsAsync(q.ScopeType, q.IncludeInactive, ct);
-        var items = defs.Select(d => new CustomFieldDto(d.Id, d.Name, d.Label, d.Description, d.ScopeType.ToString(), d.DataType.ToString(), d.IsRequired, d.IsSecret, d.IsActive, d.DepartmentId, d.CreatedAt, d.UpdatedAt)).ToList().AsReadOnly();
+        var departmentNames = await CustomFieldDtoMapping.ResolveDepartmentNamesAsync(db, defs, ct);
+        var items = defs
+            .Select(d => CustomFieldDtoMapping.ToDto(d, CustomFieldDtoMapping.DepartmentNameFor(departmentNames, d.DepartmentId)))
+            .ToList()
+            .AsReadOnly();
         return Result<IReadOnlyList<CustomFieldDto>>.Success(items);
     }
 }
 
-public sealed class GetCustomFieldByIdQueryHandler(ICustomFieldService svc) : IRequestHandler<GetCustomFieldByIdQuery, Result<CustomFieldDto>>
+public sealed class GetCustomFieldByIdQueryHandler(ICustomFieldService svc, DiscoveryDbContext db) : IRequestHandler<GetCustomFieldByIdQuery, Result<CustomFieldDto>>
 {
     public async Task<Result<CustomFieldDto>> Handle(GetCustomFieldByIdQuery q, CancellationToken ct)
     {
         var d = await svc.GetDefinitionByIdAsync(q.Id, ct);
         if (d is null) return Result<CustomFieldDto>.Failure(Error.NotFound($"CustomField {q.Id} not found"));
-        return Result<CustomFieldDto>.Success(new CustomFieldDto(d.Id, d.Name, d.Label, d.Description, d.ScopeType.ToString(), d.DataType.ToString(), d.IsRequired, d.IsSecret, d.IsActive, d.DepartmentId, d.CreatedAt, d.UpdatedAt));
+        var departmentNames = await CustomFieldDtoMapping.ResolveDepartmentNamesAsync(db, [d], ct);
+        return Result<CustomFieldDto>.Success(CustomFieldDtoMapping.ToDto(d, CustomFieldDtoMapping.DepartmentNameFor(departmentNames, d.DepartmentId)));
     }
 }
 
@@ -37,7 +45,7 @@ public sealed class CreateCustomFieldCommandHandler(ICustomFieldService svc) : I
         var input = new UpsertCustomFieldDefinitionInput(cmd.Name, cmd.Label, cmd.Description, cmd.ScopeType, cmd.DataType, cmd.IsRequired, true, cmd.IsSecret, options, cmd.ValidationRegex, null, null, null, null, false, false, CustomFieldRuntimeAccessMode.Disabled, null, cmd.DepartmentId);
         var d = await svc.CreateDefinitionAsync(input, cmd.UpdatedBy, ct);
         if (d is null) return Result<CustomFieldDto>.Failure(Error.Internal("Failed to create custom field"));
-        return Result<CustomFieldDto>.Success(new CustomFieldDto(d.Id, d.Name, d.Label, d.Description, d.ScopeType.ToString(), d.DataType.ToString(), d.IsRequired, d.IsSecret, d.IsActive, d.DepartmentId, d.CreatedAt, d.UpdatedAt));
+        return Result<CustomFieldDto>.Success(CustomFieldDtoMapping.ToDto(d));
     }
 }
 
@@ -51,7 +59,7 @@ public sealed class UpdateCustomFieldCommandHandler(ICustomFieldService svc) : I
         var input = new UpsertCustomFieldDefinitionInput(cmd.Name ?? d.Name, cmd.Label ?? d.Label, cmd.Description ?? d.Description, d.ScopeType, d.DataType, cmd.IsRequired ?? d.IsRequired, cmd.IsActive ?? d.IsActive, cmd.IsSecret ?? d.IsSecret, options, cmd.ValidationRegex, null, null, null, null, false, false, CustomFieldRuntimeAccessMode.Disabled, null, cmd.DepartmentId ?? d.DepartmentId);
         var updated = await svc.UpdateDefinitionAsync(cmd.Id, input, cmd.UpdatedBy, ct);
         if (updated is null) return Result<CustomFieldDto>.Failure(Error.NotFound($"CustomField {cmd.Id} not found"));
-        return Result<CustomFieldDto>.Success(new CustomFieldDto(updated.Id, updated.Name, updated.Label, updated.Description, updated.ScopeType.ToString(), updated.DataType.ToString(), updated.IsRequired, updated.IsSecret, updated.IsActive, updated.DepartmentId, updated.CreatedAt, updated.UpdatedAt));
+        return Result<CustomFieldDto>.Success(CustomFieldDtoMapping.ToDto(updated));
     }
 }
 
@@ -84,6 +92,52 @@ public sealed class UpsertCustomFieldValueCommandHandler(ICustomFieldService svc
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/// <summary>
+/// Mapeia definições para o DTO de listagem. O nome do departamento é resolvido
+/// junto (não vem no agregado) para a tela de Definições conseguir mostrar a qual
+/// departamento um campo está vinculado, em vez de exibir só o escopo.
+/// </summary>
+internal static class CustomFieldDtoMapping
+{
+    public static CustomFieldDto ToDto(CustomFieldDefinition definition, string? departmentName = null) => new(
+        definition.Id,
+        definition.Name,
+        definition.Label,
+        definition.Description,
+        definition.ScopeType.ToString(),
+        definition.DataType.ToString(),
+        definition.IsRequired,
+        definition.IsSecret,
+        definition.IsActive,
+        definition.DepartmentId,
+        definition.CreatedAt,
+        definition.UpdatedAt,
+        departmentName);
+
+    public static async Task<IReadOnlyDictionary<Guid, string>> ResolveDepartmentNamesAsync(
+        DiscoveryDbContext db,
+        IReadOnlyCollection<CustomFieldDefinition> definitions,
+        CancellationToken ct)
+    {
+        var departmentIds = definitions
+            .Where(definition => definition.DepartmentId.HasValue)
+            .Select(definition => definition.DepartmentId!.Value)
+            .Distinct()
+            .ToList();
+
+        if (departmentIds.Count == 0)
+            return new Dictionary<Guid, string>();
+
+        return await db.Departments
+            .AsNoTracking()
+            .Where(department => departmentIds.Contains(department.Id))
+            .ToDictionaryAsync(department => department.Id, department => department.Name, ct);
+    }
+
+    public static string? DepartmentNameFor(IReadOnlyDictionary<Guid, string> departmentNames, Guid? departmentId)
+        => departmentId.HasValue && departmentNames.TryGetValue(departmentId.Value, out var name) ? name : null;
+}
 
 /// <summary>
 /// Converte uma string JSON de opções (ex: "opcao1,opcao2") ou array JSON em IReadOnlyList&lt;string&gt;.
