@@ -289,6 +289,13 @@ resolve_object_storage_default_endpoint() {
 }
 
 normalize_object_storage_settings() {
+  # Endpoint PUBLICO persistido como loopback (ex.: "https://localhost" gerado
+  # por um update antigo) e inutil: agentes/navegadores nao alcancam. Limpa para
+  # a derivacao abaixo recalcular o host correto.
+  case "$(printf '%s' "${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}" | tr '[:upper:]' '[:lower:]')" in
+    *localhost*|*127.0.0.1*|*0.0.0.0*|*\[::1\]*) DISCOVERY_OBJECT_STORAGE_ENDPOINT="" ;;
+  esac
+
   local raw_mode="${DISCOVERY_OBJECT_STORAGE_MODE:-skip}"
   raw_mode="$(printf '%s' "$raw_mode" | tr '[:upper:]' '[:lower:]')"
   case "$raw_mode" in
