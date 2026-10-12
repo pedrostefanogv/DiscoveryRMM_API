@@ -6,7 +6,7 @@ namespace Discovery.Tests;
 
 /// <summary>
 /// Testes de parsing do heartbeat do agent (revisão 3 — campo uiOnline da
-/// separação serviço × UI, PLANO_SEPARACAO_SERVICO_UI.md).
+/// separação serviço × UI).
 /// </summary>
 public class AgentHeartbeatParsingTests
 {

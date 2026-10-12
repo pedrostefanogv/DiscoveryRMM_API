@@ -76,6 +76,12 @@ public class AutomationTaskDefinition
     /// </summary>
     public Guid? CollectorFieldDefinitionId { get; set; }
 
+    /// <summary>
+    /// Quando true, a saída da execução é gravada como uma nota no agent
+    /// (histórico do agente) — útil para coleta/relatório mais amplo.
+    /// </summary>
+    public bool WriteOutputToNote { get; set; }
+
     public bool IsActive { get; set; } = true;
     public DateTime? DeletedAt { get; set; }
 

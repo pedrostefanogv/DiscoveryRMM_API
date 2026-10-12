@@ -29,6 +29,7 @@ public sealed record CreateAutomationTaskCommand(
     AutomationNotificationMode? NotificationMode = null,
     AutomationToastTiming? ToastTiming = null,
     Guid? CollectorFieldDefinitionId = null,
+    bool? WriteOutputToNote = null,
     string? ChangedBy = null,
     string? IpAddress = null,
     string? CorrelationId = null
@@ -60,6 +61,7 @@ public sealed record UpdateAutomationTaskCommand(
     AutomationNotificationMode? NotificationMode = null,
     AutomationToastTiming? ToastTiming = null,
     Guid? CollectorFieldDefinitionId = null,
+    bool? WriteOutputToNote = null,
     string? Reason = null,
     string? ChangedBy = null,
     string? IpAddress = null,

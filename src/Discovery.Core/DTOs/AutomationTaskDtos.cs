@@ -33,6 +33,8 @@ public class AutomationTaskSummaryDto
     public AutomationToastTiming ToastTiming { get; set; } = AutomationToastTiming.After;
     /// <summary>Campo customizado que recebe a saida da execucao (tarefa coletora).</summary>
     public Guid? CollectorFieldDefinitionId { get; set; }
+    /// <summary>Grava a saida da execucao como nota no agent.</summary>
+    public bool WriteOutputToNote { get; set; }
     public DateTime LastUpdatedAt { get; set; }
     public bool IsDeleted { get; set; }
     public DateTime? DeletedAt { get; set; }
@@ -156,6 +158,8 @@ public class CreateAutomationTaskRequest
     public AutomationToastTiming? ToastTiming { get; set; }
     /// <summary>Campo customizado de agente que recebe a saida da execucao (tarefa coletora).</summary>
     public Guid? CollectorFieldDefinitionId { get; set; }
+    /// <summary>Grava a saida da execucao como nota no agent.</summary>
+    public bool WriteOutputToNote { get; set; }
     public bool IsActive { get; set; } = true;
 }
 

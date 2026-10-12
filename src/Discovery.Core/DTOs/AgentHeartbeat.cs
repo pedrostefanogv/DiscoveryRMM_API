@@ -32,7 +32,7 @@ public record AgentHeartbeat(
     IReadOnlyList<string>? Addrs = null,
     int? Port = null,
 
-    // ── NOVOS: separação serviço × UI (PLANO_SEPARACAO_SERVICO_UI.md) ──
+    // ── NOVOS: separação serviço × UI ──
     // Enviado apenas pelo serviço (modo SYSTEM): true quando há UI companion
     // conectada via IPC, false quando não há. Absente em agentes antigos/standalone.
     bool? UiOnline = null,

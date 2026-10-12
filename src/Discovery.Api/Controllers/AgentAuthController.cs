@@ -12,6 +12,7 @@ using Discovery.Core.Cqrs.AgentAuth.P2P;
 using Discovery.Core.Cqrs.AgentAuth.Software;
 using Discovery.Core.Cqrs.AgentAuth.Status;
 using Discovery.Core.Cqrs.AgentAuth.Tickets;
+using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.Cqrs.Configurations.Queries;
 using Discovery.Core.Cqrs.Tickets.Queries;
 using Discovery.Core.DTOs;
@@ -1003,6 +1004,21 @@ public class AgentAuthController : ControllerBase
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
         return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), Ok);
+    }
+
+    /// <summary>
+    /// Cria uma nota no próprio agent. Usado por tarefas com "gravar saída como
+    /// nota" para guardar o resultado/coleta no histórico do agente.
+    /// </summary>
+    [HttpPost("me/notes")]
+    public async Task<IActionResult> CreateAgentNote([FromBody] CreateNoteRequest request, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        var cmd = new CreateNoteCommand(null, null, id, request.Content, "agent", request.IsPinned);
+        return MapResult(await _mediator.Send(cmd, ct), Ok);
     }
 
     [HttpPost("me/zero-touch/deploy-token")]

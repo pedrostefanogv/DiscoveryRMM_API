@@ -1,7 +1,7 @@
 # Contrato — Comando `nats.reconnect` (Fase 3: Auto-recuperação do Agent)
 
 **Data:** 2026-09-02
-**Relacionado:** `AGENT_TRANSFER_SYNC_FIX_PLAN.md` (Fases 2 e 3)
+**Relacionado:** transferência de site do agent (`AgentTransferService.TransferAsync`)
 **Status:** Backend implementado; aguardando implementação no agent
 
 ---

@@ -19,8 +19,7 @@ public sealed record DepartmentTeamMember(
 ///
 /// É também o PONTO DE EXTENSÃO preparado para a herança de departamento:
 /// quando/se InheritFromGlobalId for implementado, a regra de herdar membros do
-/// departamento global entra SOMENTE aqui (ver
-/// docs_planejamento/DEPARTMENT_INHERITANCE_SEAM.md), sem tocar nos serviços.
+/// departamento global entra SOMENTE aqui, sem tocar nos serviços.
 /// </summary>
 public interface IDepartmentTeamResolver
 {

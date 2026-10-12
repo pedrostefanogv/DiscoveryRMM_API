@@ -155,6 +155,7 @@ public class AutomationTaskService : IAutomationTaskService
             NotificationMode = notificationMode,
             ToastTiming = request.ToastTiming ?? AutomationToastTiming.After,
             CollectorFieldDefinitionId = request.CollectorFieldDefinitionId,
+            WriteOutputToNote = request.WriteOutputToNote,
             AllowDefer = request.AllowDefer,
             CloseProcessesJson = SerializeTags(request.CloseProcesses),
             UserPromptTimeoutSeconds = NormalizePromptTimeout(request.PromptTimeoutSeconds),
@@ -243,6 +244,7 @@ public class AutomationTaskService : IAutomationTaskService
         existing.NotificationMode = notificationMode;
         existing.ToastTiming = request.ToastTiming ?? existing.ToastTiming;
         existing.CollectorFieldDefinitionId = request.CollectorFieldDefinitionId;
+        existing.WriteOutputToNote = request.WriteOutputToNote;
         // RequiresApproval derivado do modo (Prompt) — o handler de PUT ja
         // preserva o valor atual quando o campo nao vem no payload.
         existing.RequiresApproval = notificationMode == AutomationNotificationMode.Prompt;
@@ -616,6 +618,7 @@ public class AutomationTaskService : IAutomationTaskService
                 NotificationMode = task.NotificationMode,
                 ToastTiming = task.ToastTiming,
                 CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
+                WriteOutputToNote = task.WriteOutputToNote,
                 TriggerImmediate = task.TriggerImmediate,
                 TriggerRecurring = task.TriggerRecurring,
                 TriggerOnUserLogin = task.TriggerOnUserLogin,
@@ -795,6 +798,10 @@ public class AutomationTaskService : IAutomationTaskService
     {
         if (task.CollectorFieldDefinitionId is not Guid collectorId)
             return;
+
+        // Tarefa coletora só faz sentido em execução de script.
+        if (task.ActionType != AutomationTaskActionType.RunScript)
+            throw new InvalidOperationException("Tarefa coletora só é permitida em tarefas do tipo 'Executar script'.");
 
         var definition = await _customFieldService.GetDefinitionByIdAsync(collectorId);
         if (definition is null || !definition.IsActive)
@@ -1092,6 +1099,7 @@ public class AutomationTaskService : IAutomationTaskService
             NotificationMode = task.NotificationMode,
             ToastTiming = task.ToastTiming,
             CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
+            WriteOutputToNote = task.WriteOutputToNote,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt
@@ -1116,6 +1124,7 @@ public class AutomationTaskService : IAutomationTaskService
             NotificationMode = task.NotificationMode,
             ToastTiming = task.ToastTiming,
             CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
+            WriteOutputToNote = task.WriteOutputToNote,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt,
@@ -1162,6 +1171,7 @@ public class AutomationTaskService : IAutomationTaskService
             task.NotificationMode,
             task.ToastTiming,
             task.CollectorFieldDefinitionId,
+            task.WriteOutputToNote,
             task.AllowDefer,
             CloseProcesses = ParseTags(task.CloseProcessesJson),
             task.UserPromptTimeoutSeconds,

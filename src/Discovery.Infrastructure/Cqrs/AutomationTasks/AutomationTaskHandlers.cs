@@ -154,6 +154,7 @@ public sealed class CreateAutomationTaskCommandHandler(
             PromptTimeoutSeconds = cmd.PromptTimeoutSeconds,
             NotificationMode = cmd.NotificationMode,
             CollectorFieldDefinitionId = cmd.CollectorFieldDefinitionId,
+            WriteOutputToNote = cmd.WriteOutputToNote ?? false,
             ToastTiming = cmd.ToastTiming,
             IsActive = cmd.IsActive
         };
@@ -235,6 +236,7 @@ public sealed class UpdateAutomationTaskCommandHandler(
             PromptTimeoutSeconds = cmd.PromptTimeoutSeconds ?? current.PromptTimeoutSeconds,
             NotificationMode = cmd.NotificationMode ?? current.NotificationMode,
             CollectorFieldDefinitionId = cmd.CollectorFieldDefinitionId ?? current.CollectorFieldDefinitionId,
+            WriteOutputToNote = cmd.WriteOutputToNote ?? current.WriteOutputToNote,
             ToastTiming = cmd.ToastTiming ?? current.ToastTiming,
             Reason = cmd.Reason
         };

@@ -9,8 +9,7 @@ namespace Discovery.Tests;
 /// - Notas de sistema compartilhadas (síntese forçada, KB esgotada, round expirado)
 /// - Chunk de progresso do loop (loop_progress retrocompatível)
 /// Contexto: o chat "travava" sem responder quando o orçamento de iterações
-/// esgotava em silêncio ou a KB não retornava resultados — ver
-/// docs_planejamento/AI_CHAT_AGENT_LOOP_PLAN.md.
+/// esgotava em silêncio ou a KB não retornava resultados.
 /// </summary>
 public class AiChatAgentLoopTests
 {

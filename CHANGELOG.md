@@ -59,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A triagem exige a integração de IA habilitada (AIIntegration.Enabled + ChatAIEnabled +
   API key). Sem isso, a decisão é registrada como `ai_unavailable` e o fallback é aplicado.
 - Configuração de background em `BackgroundJobs:AiTicketAssignment:*` e
-  `BackgroundJobs:TechnicianMetrics:*`. Documentação em `docs_planejamento/AI_TICKET_ASSIGNMENT.md`.
+  `BackgroundJobs:TechnicianMetrics:*`.
 
 ### Added (segunda fase — tokens, custo, aprendizado e alertas)
 - 🎚️ **Orçamento de tokens por modelo**: teto de saída agora é `min(pedido, teto do departamento,
@@ -84,8 +84,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🧱 **Seam de herança de departamento**: `IDepartmentTeamResolver` é a fonte única da equipe
   candidata (herança por `InheritFromGlobalId` segue NÃO implementada, apenas preparada).
 - 🗃️ **Migração M180** (`M180_AddAiTokenBudgetAndLearning`), aditiva e com defaults.
-- 📖 **Documentação**: seções novas em `docs_planejamento/AI_TICKET_ASSIGNMENT.md` e
-  `docs_planejamento/DEPARTMENT_INHERITANCE_SEAM.md`.
 - 🖥️ **Card dedicado de Processamento em Segundo Plano**: campos tipados no servidor e, no cliente,
   override por campo com indicação "herdado do global"; painel de últimos ciclos por escopo, botões
   "rodar agora" e backfill/cancelar.
@@ -107,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   por escopo, retry/backoff por configuração e `EnqueueOnCreate = false` para o modo somente-lotes.
 - 🔌 **Endpoints** `GET /configurations/background-processing/effective` e `/status` (efetivo e último ciclo).
 - 🗃️ **Migração M181** (`M181_AddBackgroundProcessingSettings`) e documentação em
-  `docs_planejamento/BACKGROUND_PROCESSING_SETTINGS.md`.
+  `docs/BACKGROUND_PROCESSING_SETTINGS.md`.
 - 💬 **Orçamento model-aware no chat do agente**: `AiChatStreamingOrchestrator` (stream e multi-round,
   com sínteses forçadas) e `ProcessSyncAsync` passaram a limitar o teto do tenant pela capacidade real
   do modelo e pelo teto do produto. O clamp fixo de 8000 no `requestMaxTokens` síncrono foi removido.

@@ -254,6 +254,7 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         // Mesmo motivo das linhas acima: sem esta cópia o campo do coletor
         // escolhido na UI seria descartado no PUT.
         existing.CollectorFieldDefinitionId = task.CollectorFieldDefinitionId;
+        existing.WriteOutputToNote = task.WriteOutputToNote;
         existing.AllowDefer = task.AllowDefer;
         existing.CloseProcessesJson = task.CloseProcessesJson;
         existing.UserPromptTimeoutSeconds = task.UserPromptTimeoutSeconds;
