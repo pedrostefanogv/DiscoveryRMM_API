@@ -20,7 +20,7 @@ public class DatabaseMaintenanceSettingsTests
         Assert.That(settings.ReindexScope, Is.EqualTo(DatabaseReindexScopes.Invalid));
         Assert.That(settings.VacuumFullScope, Is.EqualTo(DatabaseMaintenanceScopes.Bloated));
         Assert.That(settings.Schedule, Is.EqualTo("0 0 3 ? * SUN"));
-        Assert.That(settings.CreateMissingForeignKeyIndexes, Is.False, "criação de índice muda schema: opt-in");
+        Assert.That(settings.CreateMissingForeignKeyIndexes, Is.True, "gap real de performance: ligado por padrão");
         Assert.That(settings.ForeignKeyIndexPrefix, Is.EqualTo("ix"));
     }
 

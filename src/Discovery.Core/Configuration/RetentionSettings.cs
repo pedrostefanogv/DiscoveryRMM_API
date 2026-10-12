@@ -167,10 +167,11 @@ public class DatabaseMaintenanceSettings
     /// <summary>
     /// Cria índices para foreign keys que não têm índice com a coluna de origem
     /// como primeira coluna (diagnóstico em <c>GET /admin/database-maintenance/health</c>).
-    /// Criação <c>CONCURRENTLY</c> e idempotente (<c>IF NOT EXISTS</c>), mas ainda
-    /// é mudança de schema — por isso o default é false e a ativação é explícita.
+    /// Criação <c>CONCURRENTLY</c> e idempotente (<c>IF NOT EXISTS</c>); quando já
+    /// existe um índice contendo a coluna (mesmo que não seja a primeira), nada é
+    /// criado — evita over-indexação. Default: true (era um gap real de performance).
     /// </summary>
-    public bool CreateMissingForeignKeyIndexes { get; set; } = false;
+    public bool CreateMissingForeignKeyIndexes { get; set; } = true;
 
     /// <summary>Prefixo dos índices de FK criados. Default: "ix".</summary>
     public string ForeignKeyIndexPrefix { get; set; } = "ix";

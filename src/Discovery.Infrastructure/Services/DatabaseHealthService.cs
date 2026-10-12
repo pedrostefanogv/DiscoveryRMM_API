@@ -161,38 +161,27 @@ public sealed class DatabaseHealthService(
             unusedIndexes.Count,
             unusedIndexes.Take(MaxSamples).Select(i => $"{i.Table}.{i.Index} — {FormatBytes(i.Bytes)}").ToList()));
 
-        // FKs sem índice correspondente.
-        var fkWithoutIndex = await QueryAsync(connection, """
-            SELECT con.conrelid::regclass::text AS table_name,
-                   con.conname,
-                   (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
-                    FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
-                    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum) AS columns
-            FROM pg_constraint con
-            JOIN pg_namespace n ON n.oid = con.connamespace
-            WHERE con.contype = 'f' AND n.nspname = 'public'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM pg_index i
-                  WHERE i.indrelid = con.conrelid
-                    AND i.indisvalid
-                    AND i.indkey[0] = con.conkey[1]
-              )
-            ORDER BY 1, 2
-            LIMIT 50
-            """, reader => new
-            {
-                Table = reader.GetString(0),
-                Constraint = reader.GetString(1),
-                Columns = reader.IsDBNull(2) ? "" : reader.GetString(2),
-            }, ct);
+        // FK sem NENHUM índice contendo a coluna de origem (gap real — o job cria).
+        var fkWithoutIndex = await QueryAsync(connection, FkQuerySql(leadingOnly: false), MapFk, ct);
         issues.Add(new DatabaseHealthIssue(
             DatabaseHealthIssueKeys.ForeignKeysWithoutIndex,
             "Foreign keys sem índice",
-            "info",
+            "warning",
             fkWithoutIndex.Count,
             fkWithoutIndex.Take(MaxSamples)
                 .Select(f => $"{f.Table} ({f.Columns}) — {f.Constraint}")
+                .ToList()));
+
+        // FK com índice existente, mas sem a coluna como PRIMEIRA (o índice não
+        // serve para o lookup do FK; criar outro pode ser redundante). Informativo.
+        var fkWithoutLeadingIndex = await QueryAsync(connection, FkQuerySql(leadingOnly: true), MapFk, ct);
+        issues.Add(new DatabaseHealthIssue(
+            DatabaseHealthIssueKeys.ForeignKeysWithoutLeadingIndex,
+            "Foreign keys sem índice líder",
+            "info",
+            fkWithoutLeadingIndex.Count,
+            fkWithoutLeadingIndex.Take(MaxSamples)
+                .Select(f => $"{f.Table} ({f.Columns}) — {f.Constraint} (índice existe, mas não lidera por esta coluna)")
                 .ToList()));
 
         // Transações longas bloqueando o vacuum.
@@ -223,6 +212,54 @@ public sealed class DatabaseHealthService(
             tables.Sum(t => t.TotalBytes),
             tables,
             issues);
+    }
+
+    private sealed record FkRow(string Table, string Constraint, string Columns);
+
+    private static FkRow MapFk(DbDataReader reader) => new(
+        reader.GetString(0),
+        reader.GetString(1),
+        reader.IsDBNull(2) ? "" : reader.GetString(2));
+
+    /// <summary>
+    /// Consulta de FKs sem índice. <paramref name="leadingOnly"/> = true devolve as
+    /// FKs que TEM índice contendo a coluna, mas não como primeira coluna (o índice
+    /// existe, porém não atende o lookup); false devolve as que não têm índice nenhum.
+    /// A checagem usa apenas a primeira coluna da FK (heurística para FKs compostas).
+    /// </summary>
+    private static string FkQuerySql(bool leadingOnly)
+    {
+        var predicate = leadingOnly
+            ? """
+              AND NOT EXISTS (
+                  SELECT 1 FROM pg_index i
+                  WHERE i.indrelid = con.conrelid AND i.indisvalid
+                    AND i.indkey[0] = con.conkey[1])
+              AND EXISTS (
+                  SELECT 1 FROM pg_index i
+                  WHERE i.indrelid = con.conrelid AND i.indisvalid
+                    AND con.conkey[1] = ANY(i.indkey::int2[]))
+              """
+            : """
+              AND NOT EXISTS (
+                  SELECT 1 FROM pg_index i
+                  WHERE i.indrelid = con.conrelid AND i.indisvalid
+                    AND con.conkey[1] = ANY(i.indkey::int2[]))
+              """;
+
+        return $$"""
+            SELECT con.conrelid::regclass::text AS table_name,
+                   con.conname,
+                   (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+                    FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum) AS columns
+            FROM pg_constraint con
+            JOIN pg_namespace n ON n.oid = con.connamespace
+            WHERE con.contype = 'f' AND n.nspname = 'public'
+            {{predicate}}
+            ORDER BY 1, 2
+            LIMIT 50
+            """;
     }
 
     // ── Helpers ADO.NET ─────────────────────────────────────────────────────

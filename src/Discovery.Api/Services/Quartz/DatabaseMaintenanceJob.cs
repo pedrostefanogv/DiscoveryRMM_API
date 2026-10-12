@@ -36,6 +36,9 @@ public sealed class DatabaseMaintenanceJob : IJob
 
     private static readonly Regex SafeIdentifier = new("^[a-z_][a-z0-9_]*$", RegexOptions.Compiled);
 
+    /// <summary>Volume mínimo para uma tabela nunca vacuumada virar prioridade. Default: 1000.</summary>
+    private const long NeverVacuumedMinLiveTuples = 1_000;
+
     public async Task Execute(IJobExecutionContext context)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
@@ -74,20 +77,37 @@ public sealed class DatabaseMaintenanceJob : IJob
             ? tables.OrderByDescending(t => t.TotalBytes).Take(settings.MaxTablesPerRun).ToList()
             : tables.OrderByDescending(t => t.TotalBytes).ToList();
 
+        // Tabelas nunca vacuumadas (nem manual, nem autovacuum) com volume relevante.
+        var neverVacuumed = targets.Where(t => t.IsNeverVacuumed).ToList();
+
         logger.LogInformation(
-            "Database maintenance: {Tables} tabelas descobertas, {Invalid} índices inválidos. VacuumAnalyze={VA}, VacuumFull={VF}/{Scope}, Reindex={RI}/{RScope}, Analyze={AN}, Freeze={FZ}",
-            tables.Count, invalidIndexes.Count, settings.VacuumAnalyze, settings.VacuumFull, settings.VacuumFullScope,
+            "Database maintenance: {Tables} tabelas descobertas ({NeverVacuumed} nunca vacuumadas), {Invalid} índices inválidos, {MissingFkIndexes} FKs sem índice. VacuumAnalyze={VA}, VacuumFull={VF}/{Scope}, Reindex={RI}/{RScope}, Analyze={AN}, Freeze={FZ}",
+            tables.Count, neverVacuumed.Count, invalidIndexes.Count, foreignKeysWithoutIndex.Count,
+            settings.VacuumAnalyze, settings.VacuumFull, settings.VacuumFullScope,
             settings.Reindex, settings.ReindexScope, settings.Analyze, settings.VacuumFreeze);
 
         var operations = new List<MaintenanceOperation>();
         var fullyVacuumed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // ── Fase 1: VACUUM ANALYZE (rotina leve, não bloqueia escrita) ──────
+        // ── Fase 1: tabelas NUNCA vacuumadas (garantia explícita) ───────────
+        // A manutenção tem de zerar o achado "nunca vacuumada" do diagnóstico,
+        // mesmo que a rotina leve esteja desligada na configuração.
+        var alreadyVacuumed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var table in neverVacuumed)
+        {
+            if (ct.IsCancellationRequested) break;
+            if (await RunOperationAsync(operations, connection, "vacuum-stale", table.Name,
+                    $"VACUUM (ANALYZE) {Quote(table.Name)}", logger, ct))
+                alreadyVacuumed.Add(table.Name);
+        }
+
+        // ── Fase 1b: VACUUM ANALYZE (rotina leve, não bloqueia escrita) ─────
         if (settings.VacuumAnalyze)
         {
             foreach (var table in targets)
             {
                 if (ct.IsCancellationRequested) break;
+                if (alreadyVacuumed.Contains(table.Name)) continue;
                 await RunOperationAsync(operations, connection, "vacuum-analyze", table.Name,
                     $"VACUUM (ANALYZE) {Quote(table.Name)}", logger, ct);
             }
@@ -207,6 +227,7 @@ public sealed class DatabaseMaintenanceJob : IJob
             durationSeconds = Math.Round((finishedAt - startedAt).TotalSeconds, 2),
             tableCount = tables.Count,
             invalidIndexCount = invalidIndexes.Count,
+            neverVacuumedCount = neverVacuumed.Count,
             missingForeignKeyIndexCount = foreignKeysWithoutIndex.Count,
             createdForeignKeyIndexCount = createdForeignKeyIndexes,
             successCount,
@@ -222,7 +243,17 @@ public sealed class DatabaseMaintenanceJob : IJob
 
     private sealed record TableInfo(
         string Name, long TotalBytes, long LiveTuples, long DeadTuples,
-        double DeadPercent, DateTime? LastAnalyzeUtc, long XidAge);
+        double DeadPercent, DateTime? LastAnalyzeUtc, long XidAge,
+        DateTime? LastVacuumUtc, DateTime? LastAutovacuumUtc)
+    {
+        /// <summary>
+        /// Nunca vacuumada (nem manual, nem autovacuum) e com volume que justifica
+        /// a passagem — mesma regra do diagnóstico de saúde.
+        /// </summary>
+        public bool IsNeverVacuumed =>
+            LastVacuumUtc is null && LastAutovacuumUtc is null
+            && (DeadTuples > 0 || LiveTuples >= NeverVacuumedMinLiveTuples);
+    }
 
     private sealed record IndexInfo(string Table, string Index);
 
@@ -240,6 +271,8 @@ public sealed class DatabaseMaintenanceJob : IJob
                    pg_total_relation_size(c.oid)               AS total_bytes,
                    COALESCE(s.n_live_tup, 0)                   AS live_tuples,
                    COALESCE(s.n_dead_tup, 0)                   AS dead_tuples,
+                   s.last_vacuum,
+                   s.last_autovacuum,
                    s.last_analyze,
                    age(c.relfrozenxid)                         AS xid_age
             FROM pg_class c
@@ -264,8 +297,10 @@ public sealed class DatabaseMaintenanceJob : IJob
                 live,
                 dead,
                 total <= 0 ? 0d : Math.Round(100d * dead / total, 2),
+                ReadUtc(reader, 6),
+                Convert.ToInt64(reader.GetValue(7)),
                 ReadUtc(reader, 4),
-                Convert.ToInt64(reader.GetValue(5))));
+                ReadUtc(reader, 5)));
         }
         return tables;
     }
@@ -308,12 +343,14 @@ public sealed class DatabaseMaintenanceJob : IJob
             FROM pg_constraint con
             JOIN pg_namespace n ON n.oid = con.connamespace
             WHERE con.contype = 'f' AND n.nspname = 'public'
+              -- Só "gap real": nenhum índice contém a coluna de origem. FKs cujo
+              -- índice existe mas não lidera pela coluna ficam como relatório.
               AND NOT EXISTS (
                   SELECT 1
                   FROM pg_index i
                   WHERE i.indrelid = con.conrelid
                     AND i.indisvalid
-                    AND i.indkey[0] = con.conkey[1]
+                    AND con.conkey[1] = ANY(i.indkey::int2[])
               )
             ORDER BY 1, 2
             """;

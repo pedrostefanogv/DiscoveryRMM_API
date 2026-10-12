@@ -46,6 +46,7 @@ public static class DatabaseHealthIssueKeys
     public const string BloatedTables = "bloated-tables";
     public const string UnusedIndexes = "unused-indexes";
     public const string ForeignKeysWithoutIndex = "foreign-keys-without-index";
+    public const string ForeignKeysWithoutLeadingIndex = "foreign-keys-without-leading-index";
     public const string StaleStatistics = "stale-statistics";
     public const string XidAge = "xid-age";
     public const string LongRunningTransactions = "long-running-transactions";
