@@ -600,7 +600,7 @@ RUSTFS_DATA_DIR=${RUSTFS_DATA_DIR:-/opt/rustfs/data}
 # por loopback e as URLs pre-assinadas sao assinadas com o endpoint publico (o
 # host que o agent/navegador alcanca).
 DISCOVERY_OBJECT_STORAGE_INTERNAL=$( [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" == "rustfs" ]] && echo true || echo false )
-ObjectStorage__Mode=${DISCOVERY_OBJECT_STORAGE_MODE:-database}
+ObjectStorage__Mode=$( [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" == "rustfs" ]] && echo internal || echo database )
 ObjectStorage__InternalEndpoint=http://127.0.0.1:${DISCOVERY_OBJECT_STORAGE_PORT:-9000}
 ObjectStorage__PublicEndpoint=${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}
 ObjectStorage__Bucket=${DISCOVERY_OBJECT_STORAGE_BUCKET:-discovery-files}
@@ -791,6 +791,9 @@ write_site_proxy_config() {
   # primeiro segmento do path (path-style), entao basta um location ^~ /bucket/.
   local object_storage_location=""
   local os_mode os_bucket os_max_upload
+  # Infere o modo quando o env ainda nao tem a chave (adoption de RustFS ja
+  # instalado): sem isso o location do bucket so apareceria no update seguinte.
+  load_existing_object_storage_defaults
   os_mode="$(printf '%s' "${DISCOVERY_OBJECT_STORAGE_MODE:-$(_env_key DISCOVERY_OBJECT_STORAGE_MODE)}" | tr '[:upper:]' '[:lower:]')"
   os_mode="${os_mode:-skip}"
   os_bucket="${DISCOVERY_OBJECT_STORAGE_BUCKET:-$(_env_key DISCOVERY_OBJECT_STORAGE_BUCKET)}"
@@ -1223,7 +1226,7 @@ RUSTFS_DATA_DIR=${RUSTFS_DATA_DIR:-/opt/rustfs/data}
 # por loopback e as URLs pre-assinadas sao assinadas com o endpoint publico (o
 # host que o agent/navegador alcanca).
 DISCOVERY_OBJECT_STORAGE_INTERNAL=$( [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" == "rustfs" ]] && echo true || echo false )
-ObjectStorage__Mode=${DISCOVERY_OBJECT_STORAGE_MODE:-database}
+ObjectStorage__Mode=$( [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" == "rustfs" ]] && echo internal || echo database )
 ObjectStorage__InternalEndpoint=http://127.0.0.1:${DISCOVERY_OBJECT_STORAGE_PORT:-9000}
 ObjectStorage__PublicEndpoint=${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}
 ObjectStorage__Bucket=${DISCOVERY_OBJECT_STORAGE_BUCKET:-discovery-files}

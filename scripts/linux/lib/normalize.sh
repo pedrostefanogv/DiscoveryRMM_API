@@ -239,6 +239,20 @@ load_existing_object_storage_defaults() {
     [[ -z "${DISCOVERY_OBJECT_STORAGE_ACCESS_KEY:-}" && -n "$rust_access" ]] && DISCOVERY_OBJECT_STORAGE_ACCESS_KEY="$rust_access"
     [[ -z "${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}" && -n "$rust_secret" ]] && DISCOVERY_OBJECT_STORAGE_SECRET_KEY="$rust_secret"
   fi
+
+  # ADOPTION: RustFS instalado nesta maquina mas modo nao persistido (env antigo).
+  # Sem esta inferencia o update trataria como "skip": nao publicaria o caminho do
+  # bucket no nginx nem garantiria a configuracao no banco. Nao instala nem
+  # atualiza nada — apenas reconhece o que ja existe.
+  local current_mode="${DISCOVERY_OBJECT_STORAGE_MODE:-}"
+  current_mode="$(printf '%s' "$current_mode" | tr '[:upper:]' '[:lower:]')"
+  if [[ -z "$current_mode" || "$current_mode" == "skip" ]]; then
+    if sudo test -x /opt/rustfs/bin/rustfs \
+       && sudo systemctl list-unit-files --no-legend rustfs.service >/dev/null 2>&1; then
+      DISCOVERY_OBJECT_STORAGE_MODE="rustfs"
+      log "Storage: RustFS detectado nesta maquina; adotando o modo rustfs (sem instalar/atualizar)."
+    fi
+  fi
 }
 
 # Endpoint default do storage: o MESMO host do portal (o path do bucket entra
