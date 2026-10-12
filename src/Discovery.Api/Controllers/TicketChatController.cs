@@ -30,7 +30,8 @@ public class TicketChatController(
     ITicketAccessGuard accessGuard,
     ITicketQueryService ticketQueryService,
     IAttachmentService attachmentService,
-    IAttachmentRepository attachmentRepository) : ControllerBase
+    IAttachmentRepository attachmentRepository,
+    ITicketChatPresenceService presenceService) : ControllerBase
 {
     private const string ChatEntityType = "TicketChat";
 
@@ -80,6 +81,39 @@ public class TicketChatController(
 
         var result = await mediator.Send(new GetTicketChatMessagesQuery(sessionId, afterSequence, limit), ct);
         return result.ToActionResult();
+    }
+
+    // ── Presença (janela do chat aberta) ──────────────────────────────────
+
+    /// <summary>
+    /// Heartbeat: o atendente está com a janela do chat deste chamado aberta e
+    /// visível. Enquanto a presença estiver válida, o servidor NÃO cria
+    /// notificação de nova mensagem do usuário final (sino + Web Push) — o
+    /// atendente já está lendo a conversa na frente dele.
+    /// </summary>
+    [HttpPost("presence")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> TouchPresence(Guid ticketId, CancellationToken ct)
+    {
+        if (CurrentUserId is not { } userId)
+            return Unauthorized();
+
+        if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.View, ct))
+            return NotFound();
+
+        await presenceService.TouchAsync(userId, ticketId, ct);
+        return NoContent();
+    }
+
+    /// <summary>Limpa a presença (janela fechada, aba oculta ou ao desmontar a tela).</summary>
+    [HttpDelete("presence")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> ClearPresence(Guid ticketId, CancellationToken ct)
+    {
+        if (CurrentUserId is { } userId)
+            await presenceService.ClearAsync(userId, ticketId, ct);
+
+        return NoContent();
     }
 
     // ── Ações do atendente ────────────────────────────────────────────────

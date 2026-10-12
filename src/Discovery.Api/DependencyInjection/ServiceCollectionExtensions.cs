@@ -62,6 +62,8 @@ internal static class ServiceCollectionExtensions
             typeof(IJwtService),
             typeof(ISecretProtector),
             typeof(IRedisService),
+            // Presenca do chat e um estado de processo unico (singleton).
+            typeof(ITicketChatPresenceService),
         };
 
         // Register only interfaces with a single implementation (avoids ambiguity and multi-implementation patterns)

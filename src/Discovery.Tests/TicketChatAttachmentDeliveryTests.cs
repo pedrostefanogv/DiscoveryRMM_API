@@ -100,6 +100,7 @@ public class TicketChatAttachmentDeliveryTests
             repository,
             publisher,
             new NoopNotificationService(),
+            new NotViewingPresenceService(),
             Options.Create(new TicketChatOptions()),
             NullLogger<SendTicketChatMessageCommandHandler>.Instance);
 
@@ -224,6 +225,15 @@ public class TicketChatAttachmentDeliveryTests
         public Task<IReadOnlyList<TicketChatSession>> GetExpiredPendingAsync(DateTime nowUtc, int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatSession>> GetInactiveActiveAsync(DateTime cutoffUtc, int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatSession>> GetActiveForClosedTicketsAsync(int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    /// <summary>Atendente não está vendo o chat: o caminho de notificação segue normal.</summary>
+    private sealed class NotViewingPresenceService : ITicketChatPresenceService
+    {
+        public int TtlSeconds => 75;
+        public Task TouchAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ClearAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<bool> IsViewingAsync(Guid userId, Guid ticketId, CancellationToken cancellationToken = default) => Task.FromResult(false);
     }
 
     private sealed class NoopNotificationService : INotificationService

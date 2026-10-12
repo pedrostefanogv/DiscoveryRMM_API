@@ -119,6 +119,12 @@ builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionMana
 builder.Services.AddScoped<IAgentTransferService, AgentTransferService>();
 builder.Services.AddSingleton(TimeProvider.System);
 
+// Presenca de visualizacao do chat de suporte: singleton porque o estado
+// ("quem esta com a janela da conversa aberta agora") e por PROCESSO, nao por
+// request. E o que impede o sino/Web Push de avisar uma mensagem que o
+// atendente ja esta lendo na janela do chat (ver SendTicketChatMessageCommandHandler).
+builder.Services.AddSingleton<ITicketChatPresenceService, TicketChatPresenceService>();
+
 // Static catalog of report datasets (singleton — content is fixed)
 builder.Services.AddSingleton<IReportDatasetCatalogProvider, ReportDatasetCatalogProvider>();
 
