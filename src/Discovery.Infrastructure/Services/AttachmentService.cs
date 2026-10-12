@@ -30,6 +30,13 @@ public class AttachmentService : IAttachmentService
     // nginx (client_max_body_size 10240m): sem isso o fluxo pre-assinado recusava
     // qualquer arquivo acima de 100 MB antes mesmo de chegar ao storage.
     private const long MaxFileSizeBytes = 10L * 1024 * 1024 * 1024; // 10 GiB
+
+    // O S3/RustFS RECUSA um PUT único acima de 5 GiB (limite do protocolo, nao
+    // do bucket). Enquanto o multipart nao estiver ligado, o fluxo pre-assinado
+    // aqui e sempre PUT unico: aceitar ate 10 GiB so transferiria o erro para o
+    // storage ou para o proxy. Quando o multipart entrar, este caminho continua
+    // valendo apenas para o trecho pequeno.
+    private const long MaxSinglePutBytes = 5L * 1024 * 1024 * 1024; // 5 GiB
     private static readonly HashSet<string> AllowedMimeTypes = new()
     {
         // Documentos
@@ -93,6 +100,11 @@ public class AttachmentService : IAttachmentService
         if (fileSizeBytes > MaxFileSizeBytes)
             throw new InvalidOperationException(
                 $"File size {fileSizeBytes} bytes exceeds maximum {MaxFileSizeBytes} bytes");
+
+        if (fileSizeBytes > MaxSinglePutBytes)
+            throw new InvalidOperationException(
+                $"File size {fileSizeBytes} bytes exceeds the single-PUT limit of {MaxSinglePutBytes} bytes. " +
+                "Arquivos maiores exigem upload multipart.");
 
         var attachmentId = IdGenerator.NewId();
         var objectKey = ComposeObjectKey(clientId, entityType, entityId, attachmentId, fileName);

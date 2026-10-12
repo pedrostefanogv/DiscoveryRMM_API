@@ -315,14 +315,19 @@ public sealed class SendTicketChatMessageCommandHandler(
             return Result<TicketChatMessageDto>.Failure(Error.Conflict("session_not_active"));
 
         var body = (cmd.Body ?? string.Empty).Trim();
-        if (body.Length == 0)
-            return Result<TicketChatMessageDto>.Failure(Error.Validation("body", "a mensagem não pode ser vazia."));
-        if (body.Length > options.Value.MaxMessageLength)
-            return Result<TicketChatMessageDto>.Failure(Error.Validation("body", $"a mensagem deve ter no máximo {options.Value.MaxMessageLength} caracteres."));
 
         var attachmentIds = cmd.AttachmentIds?.Distinct().ToArray() ?? [];
         if (attachmentIds.Length > options.Value.MaxAttachmentsPerMessage)
             return Result<TicketChatMessageDto>.Failure(Error.Validation("attachmentIds", $"no máximo {options.Value.MaxAttachmentsPerMessage} anexos por mensagem."));
+
+        // BUG CORRIGIDO: mensagem SÓ com anexo (print sem legenda) era recusada
+        // como "a mensagem não pode ser vazia". As duas UIs permitem enviar
+        // apenas o arquivo, então o print/imagem do suporte nunca saía daqui — o
+        // usuário final recebia erro de envio em vez da imagem.
+        if (body.Length == 0 && attachmentIds.Length == 0)
+            return Result<TicketChatMessageDto>.Failure(Error.Validation("body", "a mensagem não pode ser vazia."));
+        if (body.Length > options.Value.MaxMessageLength)
+            return Result<TicketChatMessageDto>.Failure(Error.Validation("body", $"a mensagem deve ter no máximo {options.Value.MaxMessageLength} caracteres."));
 
         if (!TryParseAuthorKind(cmd.AuthorKind, out var authorKind))
             return Result<TicketChatMessageDto>.Failure(Error.Validation("authorKind", "authorKind inválido."));

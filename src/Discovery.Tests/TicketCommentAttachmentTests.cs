@@ -120,6 +120,66 @@ public class TicketCommentAttachmentTests
     }
 
     [Test]
+    public async Task GetAllAttachments_MergesBothOrigins_AndPaginatesByCursor()
+    {
+        await using var db = CreateDb();
+        var ticket = NewTicket();
+        var commentA = NewComment(ticket.Id, "com anexo");
+        var commentB = NewComment(ticket.Id, "outro com anexo");
+        db.AddRange(ticket, commentA, commentB);
+
+        var repository = new Attachment
+        {
+            Id = Guid.NewGuid(),
+            EntityType = "Ticket",
+            EntityId = ticket.Id,
+            FileName = "repositorio.zip",
+            ContentType = "application/zip",
+            SizeBytes = 4096,
+            UploadedBy = "Atendente",
+            CreatedAt = DateTime.UtcNow.AddMinutes(-30),
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var commentAttachmentA = NewCommentAttachment(commentA.Id, "print-a.png");
+        commentAttachmentA.CreatedAt = DateTime.UtcNow.AddMinutes(-10);
+        var commentAttachmentB = NewCommentAttachment(commentB.Id, "print-b.png");
+        commentAttachmentB.CreatedAt = DateTime.UtcNow.AddMinutes(-5);
+        db.Attachments.AddRange(repository, commentAttachmentA, commentAttachmentB);
+        await db.SaveChangesAsync();
+
+        var handler = new GetTicketAttachmentsAllQueryHandler(db);
+
+        // Página 1 (limit 2): mais recentes primeiro, com a origem marcada.
+        var first = await handler.Handle(new GetTicketAttachmentsAllQuery(ticket.Id, null, 2), default);
+        Assert.That(first.IsSuccess, Is.True);
+        Assert.That(first.Value!.Items, Has.Count.EqualTo(2));
+        Assert.That(first.Value.Items[0].FileName, Is.EqualTo("print-b.png"));
+        Assert.That(first.Value.Items[0].Origin, Is.EqualTo("comment"));
+        Assert.That(first.Value.Items[0].CommentId, Is.EqualTo(commentB.Id));
+        Assert.That(first.Value.Items[0].CommentAuthor, Is.EqualTo("Atendente"));
+        Assert.That(first.Value.Items[0].CommentDeleted, Is.False);
+        Assert.That(first.Value.HasMore, Is.True);
+        Assert.That(first.Value.NextCursor, Is.Not.Null);
+
+        // Página 2: o anexo do REPOSITÓRIO entra na mesma lista, com origem própria.
+        var second = await handler.Handle(
+            new GetTicketAttachmentsAllQuery(ticket.Id, first.Value.NextCursor, 2), default);
+        Assert.That(second.IsSuccess, Is.True);
+        Assert.That(second.Value!.Items, Has.Count.EqualTo(1));
+        Assert.That(second.Value.Items[0].FileName, Is.EqualTo("repositorio.zip"));
+        Assert.That(second.Value.Items[0].Origin, Is.EqualTo("repository"));
+        Assert.That(second.Value.Items[0].CommentId, Is.Null);
+        Assert.That(second.Value.HasMore, Is.False);
+
+        // Anexo de comentário EXCLUÍDO sai da lista (soft delete em cascata).
+        commentAttachmentA.DeletedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        var afterDelete = await handler.Handle(new GetTicketAttachmentsAllQuery(ticket.Id, null, 50), default);
+        Assert.That(afterDelete.Value!.Items.Select(i => i.FileName),
+            Is.EquivalentTo(new[] { "print-b.png", "repositorio.zip" }));
+    }
+
+    [Test]
     public async Task GetComment_RejectsCommentFromAnotherTicket()
     {
         await using var db = CreateDb();

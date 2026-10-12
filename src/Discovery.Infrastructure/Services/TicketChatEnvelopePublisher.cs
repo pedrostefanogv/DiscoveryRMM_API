@@ -12,6 +12,7 @@ public class TicketChatEnvelopePublisher(
     IAgentMessaging messaging,
     IAgentRepository agentRepository,
     ISiteRepository siteRepository,
+    ITicketChatRepository chatRepository,
     ILogger<TicketChatEnvelopePublisher> logger) : ITicketChatEnvelopePublisher
 {
     /// <summary>Evento canônico do dashboard para atividade de chat (sem corpo).</summary>
@@ -28,7 +29,19 @@ public class TicketChatEnvelopePublisher(
         }, cancellationToken);
 
     public async Task PublishMessageToAgentAsync(TicketChatSession session, TicketChatMessage message, CancellationToken cancellationToken = default)
-        => await PublishToAgentAsync(session, new TicketChatEnvelope
+    {
+        // BUG CORRIGIDO: o envelope rumo ao agent NÃO carregava os anexos
+        // ("AttachmentIds" ficava sempre nulo), apesar de o campo existir no
+        // contrato. Na prática, o print/imagem enviado pelo suporte chegava ao
+        // usuário final SEM o anexo: o caminho em tempo real (NATS) entregava só
+        // o texto e o arquivo só aparecia se a janela do chat fosse fechada e
+        // reaberta, quando o snapshot REST trazia os metadados.
+        //
+        // Os vínculos já foram gravados por AppendMessageAsync na MESMA transação
+        // do comando, então a consulta abaixo enxerga os anexos recém-criados.
+        var attachments = await chatRepository.GetAttachmentsForMessagesAsync([message.Id], cancellationToken);
+
+        await PublishToAgentAsync(session, new TicketChatEnvelope
         {
             EventType = TicketChatEventTypes.Message,
             SessionId = session.Id,
@@ -41,9 +54,13 @@ public class TicketChatEnvelopePublisher(
             AuthorKind = message.AuthorKind.ToString().ToLowerInvariant(),
             AuthorName = message.AuthorName,
             Body = message.Body,
+            AttachmentIds = attachments.Count == 0
+                ? null
+                : attachments.Select(a => a.AttachmentId).ToArray(),
             ClientMessageId = message.ClientMessageId,
             TimestampUtc = message.CreatedAt
         }, cancellationToken);
+    }
 
     public async Task PublishSessionEndedAsync(TicketChatSession session, CancellationToken cancellationToken = default)
         => await PublishToAgentAsync(session, new TicketChatEnvelope

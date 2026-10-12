@@ -377,6 +377,23 @@ public class AgentAuthController : ControllerBase
         return MapResult(result, Ok);
     }
 
+    /// <summary>Lista consolidada e paginada (repositório + conversa) do agent.</summary>
+    [HttpGet("me/tickets/{ticketId:guid}/attachments/all")]
+    public async Task<IActionResult> GetMyTicketAttachmentsAll(
+        Guid ticketId,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        if (await ResolveMyTicketAsync(id, ticketId) is null) return NotFound();
+
+        var result = await _mediator.Send(
+            new GetTicketAttachmentsAllQuery(ticketId, cursor, limit), HttpContext.RequestAborted);
+        return MapResult(result, Ok);
+    }
+
     /// <summary>Baixa um anexo do chamado (stream same-origin autenticado).</summary>
     [HttpGet("me/tickets/{ticketId:guid}/attachments/{attachmentId:guid}/download")]
     public async Task<IActionResult> DownloadMyTicketAttachment(Guid ticketId, Guid attachmentId, CancellationToken ct)

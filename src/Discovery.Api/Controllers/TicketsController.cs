@@ -445,6 +445,25 @@ public class TicketsController(
     }
 
     /// <summary>
+    /// Lista CONSOLIDADA e paginada: repositório do chamado + anexos da conversa,
+    /// com a origem de cada um. É o que a aba Anexos consome (a lista por
+    /// página de comentários omitia anexos de conversas antigas).
+    /// </summary>
+    [HttpGet("{id:guid}/attachments/all")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> GetAllAttachments(
+        Guid id,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 50)
+    {
+        if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
+            return NotFound();
+
+        var result = await mediator.Send(new GetTicketAttachmentsAllQuery(id, cursor, limit));
+        return result.ToActionResult();
+    }
+
+    /// <summary>
     /// Baixa um anexo do ticket. Valida que o anexo pertence a ESTE ticket e
     /// redireciona para a URL pré-assinada do object storage.
     /// </summary>
