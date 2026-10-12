@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Crud.Commands;
 using Discovery.Core.Cqrs.Agents.Crud.Queries;
 using Discovery.Core.DTOs;
+using Discovery.Core.Enums;
 
 namespace Discovery.Core.Cqrs.Agents.Crud.Queries;
 
@@ -23,7 +24,7 @@ public sealed record GetDeletedAgentsQuery(
     bool HasGlobalAccess = true,
     IReadOnlyList<Guid>? AllowedClientIds = null) : IQuery<Result<DeletedAgentsPageDto>>;
 
-public sealed record GetAgentCustomFieldsQuery(Guid AgentId, bool IncludeSecrets = false) : IQuery<Result<IReadOnlyList<CustomFieldValueDto>>>;
+public sealed record GetAgentCustomFieldsQuery(Guid AgentId, bool IncludeSecrets = false, bool IncludeHidden = false) : IQuery<Result<IReadOnlyList<CustomFieldValueDto>>>;
 
 /// <summary>
 /// Schema dos campos customizados do agente para o card do portal: inclui tipo,
@@ -31,5 +32,17 @@ public sealed record GetAgentCustomFieldsQuery(Guid AgentId, bool IncludeSecrets
 /// campos com webRead=true.
 /// </summary>
 public sealed record GetAgentCustomFieldSchemaQuery(Guid AgentId, bool IncludeSecrets = false) : IQuery<Result<IReadOnlyList<CustomFieldSchemaItemDto>>>;
+
+/// <summary>
+/// Mapa dos campos de agente visíveis no portal (webRead, não secretos) com os
+/// valores por agente — usado para a coluna/filtro da lista de agentes sem N+1.
+/// </summary>
+public sealed record GetAgentCustomFieldMapQuery(bool IncludeInactive = false) : IQuery<Result<AgentCustomFieldMapDto>>;
+
+public sealed record AgentCustomFieldMapDefinitionDto(Guid DefinitionId, string Name, string Label, CustomFieldDataType DataType, bool AllowAgentWrite);
+public sealed record AgentCustomFieldMapValueDto(Guid DefinitionId, Guid AgentId, string ValueJson);
+public sealed record AgentCustomFieldMapDto(
+    IReadOnlyList<AgentCustomFieldMapDefinitionDto> Definitions,
+    IReadOnlyList<AgentCustomFieldMapValueDto> Values);
 public sealed record UpsertAgentCustomFieldCommand(Guid AgentId, Guid DefinitionId, string ValueJson, string? UpdatedBy) : ICommand<Result<CustomFieldValueDto>>;
 public sealed record CustomFieldValueDto(Guid DefinitionId, string Name, string Label, string ValueJson);

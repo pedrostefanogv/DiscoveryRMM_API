@@ -148,9 +148,9 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
 
     [HttpGet("{id:guid}/custom-fields")]
     [RequirePermission(ResourceType.Clients, ActionType.View)]
-    public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, CancellationToken ct = default)
+    public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, [FromQuery] bool includeHidden = false, CancellationToken ct = default)
     {
-        var result = await mediator.Send(new GetClientCustomFieldsQuery(id, includeSecrets), ct);
+        var result = await mediator.Send(new GetClientCustomFieldsQuery(id, includeSecrets, includeHidden), ct);
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));

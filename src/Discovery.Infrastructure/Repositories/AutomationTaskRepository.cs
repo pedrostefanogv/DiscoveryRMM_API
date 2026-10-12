@@ -251,6 +251,9 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         // respondendo sucesso (só RequiresApproval mudava).
         existing.NotificationMode = task.NotificationMode;
         existing.ToastTiming = task.ToastTiming;
+        // Mesmo motivo das linhas acima: sem esta cópia o campo do coletor
+        // escolhido na UI seria descartado no PUT.
+        existing.CollectorFieldDefinitionId = task.CollectorFieldDefinitionId;
         existing.AllowDefer = task.AllowDefer;
         existing.CloseProcessesJson = task.CloseProcessesJson;
         existing.UserPromptTimeoutSeconds = task.UserPromptTimeoutSeconds;

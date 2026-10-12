@@ -12,8 +12,9 @@ public interface ICustomFieldService
     Task<CustomFieldDefinition?> UpdateDefinitionAsync(Guid id, UpsertCustomFieldDefinitionInput input, string? updatedBy, CancellationToken cancellationToken = default);
     Task<bool> DeactivateDefinitionAsync(Guid id, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<CustomFieldResolvedValueDto>> GetValuesAsync(CustomFieldScopeType scopeType, Guid? entityId, bool includeSecrets = true, CancellationToken cancellationToken = default);
-    Task<CursorPageDto<CustomFieldResolvedValueDto>> GetValuesPageAsync(CustomFieldScopeType scopeType, Guid? entityId, string? cursor, int limit, bool includeSecrets = true, CancellationToken cancellationToken = default);
+    /// <summary>Valores por entidade. includeHidden=false aplica webRead (card do portal); true = gestão.</summary>
+    Task<IReadOnlyList<CustomFieldResolvedValueDto>> GetValuesAsync(CustomFieldScopeType scopeType, Guid? entityId, bool includeSecrets = true, CancellationToken cancellationToken = default, bool includeHidden = true);
+    Task<CursorPageDto<CustomFieldResolvedValueDto>> GetValuesPageAsync(CustomFieldScopeType scopeType, Guid? entityId, string? cursor, int limit, bool includeSecrets = true, CancellationToken cancellationToken = default, bool includeHidden = true);
     /// <summary>Schema por escopo. visibleOnly=true devolve apenas campos com AllowWebRead (card do portal).</summary>
     Task<IReadOnlyList<CustomFieldSchemaItemDto>> GetSchemaAsync(CustomFieldScopeType scopeType, Guid? entityId, bool includeInactive = false, bool includeSecrets = true, CancellationToken cancellationToken = default, bool visibleOnly = false);
     Task<CustomFieldResolvedValueDto> UpsertValueAsync(UpsertCustomFieldValueInput input, CancellationToken cancellationToken = default);

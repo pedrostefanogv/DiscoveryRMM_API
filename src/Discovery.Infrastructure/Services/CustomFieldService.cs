@@ -202,12 +202,13 @@ public class CustomFieldService : ICustomFieldService
         CustomFieldScopeType scopeType,
         Guid? entityId,
         bool includeSecrets = true,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool includeHidden = true)
     {
         ValidateScopeEntity(scopeType, entityId);
 
         var entityKey = BuildEntityKey(scopeType, entityId);
-        var definitions = await (await BuildDefinitionsQueryAsync(scopeType, entityId, cancellationToken))
+        var definitions = await (await BuildDefinitionsQueryAsync(scopeType, entityId, cancellationToken, includeHidden))
             .OrderBy(definition => definition.Name)
             .ToListAsync(cancellationToken);
 
@@ -263,11 +264,16 @@ public class CustomFieldService : ICustomFieldService
     private async Task<IQueryable<CustomFieldDefinition>> BuildDefinitionsQueryAsync(
         CustomFieldScopeType scopeType,
         Guid? entityId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool includeHidden = true)
     {
         var query = _db.CustomFieldDefinitions
             .AsNoTracking()
             .Where(definition => definition.IsActive);
+
+        // includeHidden=false: só o que o portal deve exibir (webRead).
+        if (!includeHidden)
+            query = query.Where(definition => definition.AllowWebRead);
 
         if (scopeType == CustomFieldScopeType.Ticket && entityId.HasValue)
         {
@@ -304,7 +310,8 @@ public class CustomFieldService : ICustomFieldService
         string? cursor,
         int limit,
         bool includeSecrets = true,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool includeHidden = true)
     {
         ValidateScopeEntity(scopeType, entityId);
 
@@ -312,7 +319,7 @@ public class CustomFieldService : ICustomFieldService
         var entityKey = BuildEntityKey(scopeType, entityId);
 
         // Query definitions with cursor-based pagination on UpdatedAt + Id
-        var definitionsQuery = await BuildDefinitionsQueryAsync(scopeType, entityId, cancellationToken);
+        var definitionsQuery = await BuildDefinitionsQueryAsync(scopeType, entityId, cancellationToken, includeHidden);
 
         if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorUpdatedAtUtc, out var cursorId))
         {
@@ -639,7 +646,15 @@ public class CustomFieldService : ICustomFieldService
 
         await AuditAgentWriteAsync(agentId, definition.Name, input.ValueJson, input.TaskId, input.ScriptId, cancellationToken);
 
-        var updatedBy = string.IsNullOrWhiteSpace(input.UpdatedBy) ? "agent" : input.UpdatedBy.Trim();
+        // Guarda de qual tarefa/script veio a coleta (aparece no card do detalhe);
+        // sem contexto, fica o genérico "agent".
+        var updatedBy = !string.IsNullOrWhiteSpace(input.UpdatedBy)
+            ? input.UpdatedBy.Trim()
+            : input.TaskId.HasValue
+                ? $"task:{input.TaskId.Value:D}"
+                : input.ScriptId.HasValue
+                    ? $"script:{input.ScriptId.Value:D}"
+                    : "agent";
         return await UpsertValueAsync(
             new UpsertCustomFieldValueInput(
                 definition.Id,

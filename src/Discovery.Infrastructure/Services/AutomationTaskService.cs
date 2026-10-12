@@ -31,6 +31,7 @@ public class AutomationTaskService : IAutomationTaskService
     private readonly IClientRepository _clientRepository;
     private readonly IAgentLabelRepository _agentLabelRepository;
     private readonly ILoggingService _loggingService;
+    private readonly ICustomFieldService _customFieldService;
 
     public AutomationTaskService(
         IAutomationTaskRepository taskRepository,
@@ -40,7 +41,8 @@ public class AutomationTaskService : IAutomationTaskService
         ISiteRepository siteRepository,
         IClientRepository clientRepository,
         IAgentLabelRepository agentLabelRepository,
-        ILoggingService loggingService)
+        ILoggingService loggingService,
+        ICustomFieldService customFieldService)
     {
         _taskRepository = taskRepository;
         _auditRepository = auditRepository;
@@ -50,6 +52,7 @@ public class AutomationTaskService : IAutomationTaskService
         _clientRepository = clientRepository;
         _agentLabelRepository = agentLabelRepository;
         _loggingService = loggingService;
+        _customFieldService = customFieldService;
     }
 
     public async Task<CursorPageDto<AutomationTaskSummaryDto>> GetListPageAsync(
@@ -151,12 +154,14 @@ public class AutomationTaskService : IAutomationTaskService
             RequiresApproval = notificationMode == AutomationNotificationMode.Prompt,
             NotificationMode = notificationMode,
             ToastTiming = request.ToastTiming ?? AutomationToastTiming.After,
+            CollectorFieldDefinitionId = request.CollectorFieldDefinitionId,
             AllowDefer = request.AllowDefer,
             CloseProcessesJson = SerializeTags(request.CloseProcesses),
             UserPromptTimeoutSeconds = NormalizePromptTimeout(request.PromptTimeoutSeconds),
             IsActive = request.IsActive
         };
 
+        await ValidateCollectorFieldAsync(task);
         ValidateTask(task);
 
         var created = await _taskRepository.CreateAsync(task);
@@ -237,6 +242,7 @@ public class AutomationTaskService : IAutomationTaskService
         var notificationMode = request.NotificationMode ?? existing.NotificationMode;
         existing.NotificationMode = notificationMode;
         existing.ToastTiming = request.ToastTiming ?? existing.ToastTiming;
+        existing.CollectorFieldDefinitionId = request.CollectorFieldDefinitionId;
         // RequiresApproval derivado do modo (Prompt) — o handler de PUT ja
         // preserva o valor atual quando o campo nao vem no payload.
         existing.RequiresApproval = notificationMode == AutomationNotificationMode.Prompt;
@@ -245,6 +251,7 @@ public class AutomationTaskService : IAutomationTaskService
         existing.UserPromptTimeoutSeconds = NormalizePromptTimeout(request.PromptTimeoutSeconds);
         existing.IsActive = request.IsActive;
 
+        await ValidateCollectorFieldAsync(existing);
         ValidateTask(existing);
 
         await _taskRepository.UpdateAsync(existing);
@@ -608,6 +615,7 @@ public class AutomationTaskService : IAutomationTaskService
                 PromptTimeoutSeconds = NormalizePromptTimeout(task.UserPromptTimeoutSeconds),
                 NotificationMode = task.NotificationMode,
                 ToastTiming = task.ToastTiming,
+                CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
                 TriggerImmediate = task.TriggerImmediate,
                 TriggerRecurring = task.TriggerRecurring,
                 TriggerOnUserLogin = task.TriggerOnUserLogin,
@@ -777,6 +785,26 @@ public class AutomationTaskService : IAutomationTaskService
             return false;
 
         return true;
+    }
+
+    /// <summary>
+    /// Tarefa coletora: o campo destino precisa existir, estar ativo, ser de
+    /// escopo Agente e permitir gravação pelo agente (allowAgentWrite).
+    /// </summary>
+    private async Task ValidateCollectorFieldAsync(AutomationTaskDefinition task)
+    {
+        if (task.CollectorFieldDefinitionId is not Guid collectorId)
+            return;
+
+        var definition = await _customFieldService.GetDefinitionByIdAsync(collectorId);
+        if (definition is null || !definition.IsActive)
+            throw new InvalidOperationException("O campo do coletor não existe ou está inativo.");
+
+        if (definition.ScopeType != CustomFieldScopeType.Agent)
+            throw new InvalidOperationException("Tarefa coletora só pode gravar em campo customizado de escopo Agente.");
+
+        if (!definition.AllowAgentWrite)
+            throw new InvalidOperationException("O campo do coletor precisa permitir gravação pelo agente.");
     }
 
     private static void ValidateTask(AutomationTaskDefinition task)
@@ -1063,6 +1091,7 @@ public class AutomationTaskService : IAutomationTaskService
             PromptTimeoutSeconds = NormalizePromptTimeout(task.UserPromptTimeoutSeconds),
             NotificationMode = task.NotificationMode,
             ToastTiming = task.ToastTiming,
+            CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt
@@ -1086,6 +1115,7 @@ public class AutomationTaskService : IAutomationTaskService
             PromptTimeoutSeconds = NormalizePromptTimeout(task.UserPromptTimeoutSeconds),
             NotificationMode = task.NotificationMode,
             ToastTiming = task.ToastTiming,
+            CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt,
@@ -1131,6 +1161,7 @@ public class AutomationTaskService : IAutomationTaskService
             task.RequiresApproval,
             task.NotificationMode,
             task.ToastTiming,
+            task.CollectorFieldDefinitionId,
             task.AllowDefer,
             CloseProcesses = ParseTags(task.CloseProcessesJson),
             task.UserPromptTimeoutSeconds,

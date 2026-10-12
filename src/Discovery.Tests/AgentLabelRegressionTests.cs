@@ -731,11 +731,11 @@ public class AgentLabelRegressionTests
             => throw new NotSupportedException();
 
         public Task<IReadOnlyList<CustomFieldResolvedValueDto>> GetValuesAsync(
-            CustomFieldScopeType scopeType, Guid? entityId, bool includeSecrets = true, CancellationToken cancellationToken = default)
+            CustomFieldScopeType scopeType, Guid? entityId, bool includeSecrets = true, CancellationToken cancellationToken = default, bool includeHidden = true)
             => throw new NotSupportedException();
 
         public Task<CursorPageDto<CustomFieldResolvedValueDto>> GetValuesPageAsync(
-            CustomFieldScopeType scopeType, Guid? entityId, string? cursor, int limit, bool includeSecrets = true, CancellationToken cancellationToken = default)
+            CustomFieldScopeType scopeType, Guid? entityId, string? cursor, int limit, bool includeSecrets = true, CancellationToken cancellationToken = default, bool includeHidden = true)
             => throw new NotSupportedException();
 
         public Task<IReadOnlyList<CustomFieldSchemaItemDto>> GetSchemaAsync(

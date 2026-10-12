@@ -1,4 +1,5 @@
 using Discovery.Core.Cqrs.AutomationScripts.Commands;
+using Discovery.Core.Cqrs.CustomFields.Queries;
 using Discovery.Core.Cqrs.AutomationScripts.Queries;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -32,6 +33,14 @@ public class AutomationScriptsController(IMediator mediator) : ControllerBase
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto),
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    /// <summary>Campos customizados vinculados a este script (visão reversa).</summary>
+    [HttpGet("{id:guid}/custom-fields")]
+    public async Task<IActionResult> GetCustomFields(Guid id)
+    {
+        var result = await mediator.Send(new ListCustomFieldsQuery(null, false, null, id));
+        return result.ToActionResult();
     }
 
     [HttpPut("{id:guid}")]

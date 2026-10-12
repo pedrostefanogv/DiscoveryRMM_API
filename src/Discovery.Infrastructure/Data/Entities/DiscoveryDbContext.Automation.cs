@@ -88,6 +88,7 @@ public partial class DiscoveryDbContext
             entity.Property(t => t.CloseProcessesJson).HasColumnName("close_processes_json").HasColumnType("jsonb");
             entity.Property(t => t.UserPromptTimeoutSeconds).HasColumnName("user_prompt_timeout_seconds");
             entity.Property(t => t.NotificationMode).HasColumnName("notification_mode").HasConversion<int>();
+            entity.Property(t => t.CollectorFieldDefinitionId).HasColumnName("collector_field_definition_id");
             entity.Property(t => t.ToastTiming).HasColumnName("toast_timing").HasConversion<int>();
             entity.Property(t => t.IsActive).HasColumnName("is_active");
             entity.Property(t => t.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");

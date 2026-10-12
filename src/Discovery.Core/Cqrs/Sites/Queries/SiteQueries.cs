@@ -30,7 +30,7 @@ public sealed record SiteWithClientDto(
     int AgentOnlineCount = 0
 );
 public sealed record GetSiteByIdQuery(Guid ClientId, Guid SiteId) : IQuery<Result<Site>>;
-public sealed record GetSiteCustomFieldsQuery(Guid ClientId, Guid SiteId, bool IncludeSecrets = true) : IQuery<Result<IReadOnlyList<object>>>;
+public sealed record GetSiteCustomFieldsQuery(Guid ClientId, Guid SiteId, bool IncludeSecrets = true, bool IncludeHidden = false) : IQuery<Result<IReadOnlyList<object>>>;
 
 /// <summary>Schema dos campos do site para o card do portal (só webRead).</summary>
 public sealed record GetSiteCustomFieldSchemaQuery(Guid ClientId, Guid SiteId, bool IncludeSecrets = false) : IQuery<Result<IReadOnlyList<CustomFieldSchemaItemDto>>>;

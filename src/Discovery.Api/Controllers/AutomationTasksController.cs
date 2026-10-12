@@ -1,4 +1,5 @@
 using Discovery.Core.Cqrs.AutomationTasks.Commands;
+using Discovery.Core.Cqrs.CustomFields.Queries;
 using Discovery.Core.Cqrs.AutomationTasks.Queries;
 using Discovery.Core.Enums;
 using MediatR;
@@ -67,6 +68,17 @@ public class AutomationTasksController(IMediator mediator) : ControllerBase
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto),
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    /// <summary>
+    /// Campos customizados vinculados a esta tarefa (visão reversa). Fica sob a
+    /// autorização da automação, e não mais sob ServerConfig.
+    /// </summary>
+    [HttpGet("{id:guid}/custom-fields")]
+    public async Task<IActionResult> GetCustomFields(Guid id)
+    {
+        var result = await mediator.Send(new ListCustomFieldsQuery(null, false, id, null));
+        return result.ToActionResult();
     }
 
     [HttpPut("{id:guid}")]

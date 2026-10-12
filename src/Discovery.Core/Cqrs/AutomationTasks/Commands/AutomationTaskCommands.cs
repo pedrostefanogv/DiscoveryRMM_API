@@ -28,6 +28,7 @@ public sealed record CreateAutomationTaskCommand(
     int PromptTimeoutSeconds = 60,
     AutomationNotificationMode? NotificationMode = null,
     AutomationToastTiming? ToastTiming = null,
+    Guid? CollectorFieldDefinitionId = null,
     string? ChangedBy = null,
     string? IpAddress = null,
     string? CorrelationId = null
@@ -58,6 +59,7 @@ public sealed record UpdateAutomationTaskCommand(
     int? PromptTimeoutSeconds = null,
     AutomationNotificationMode? NotificationMode = null,
     AutomationToastTiming? ToastTiming = null,
+    Guid? CollectorFieldDefinitionId = null,
     string? Reason = null,
     string? ChangedBy = null,
     string? IpAddress = null,

@@ -105,7 +105,7 @@ public sealed class GetClientCustomFieldsQueryHandler(
         if (client is null)
             return Result<IReadOnlyList<object>>.Failure(Error.NotFound("Client not found."));
 
-        var values = await customFieldService.GetValuesAsync(CustomFieldScopeType.Client, q.ClientId, q.IncludeSecrets, ct);
+        var values = await customFieldService.GetValuesAsync(CustomFieldScopeType.Client, q.ClientId, q.IncludeSecrets, ct, q.IncludeHidden);
         return Result<IReadOnlyList<object>>.Success(values);
     }
 }

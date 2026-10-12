@@ -156,7 +156,7 @@ public sealed class GetSiteCustomFieldsQueryHandler(
         if (site is null || site.ClientId != q.ClientId)
             return Result<IReadOnlyList<object>>.Failure(Error.NotFound("Site not found."));
 
-        var values = await customFieldService.GetValuesAsync(CustomFieldScopeType.Site, q.SiteId, q.IncludeSecrets, ct);
+        var values = await customFieldService.GetValuesAsync(CustomFieldScopeType.Site, q.SiteId, q.IncludeSecrets, ct, q.IncludeHidden);
         return Result<IReadOnlyList<object>>.Success(values);
     }
 }

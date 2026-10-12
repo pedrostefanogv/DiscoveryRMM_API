@@ -88,9 +88,9 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
     [HttpGet("{id:guid}/custom-fields")]
     [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetCustomFieldValues(
-        Guid clientId, Guid id, [FromQuery] bool includeSecrets = true, CancellationToken ct = default)
+        Guid clientId, Guid id, [FromQuery] bool includeSecrets = true, [FromQuery] bool includeHidden = false, CancellationToken ct = default)
     {
-        var result = await mediator.Send(new GetSiteCustomFieldsQuery(clientId, id, includeSecrets), ct);
+        var result = await mediator.Send(new GetSiteCustomFieldsQuery(clientId, id, includeSecrets, includeHidden), ct);
         return result.Match<IActionResult>(success: Ok, failure: _ => NotFound());
     }
 

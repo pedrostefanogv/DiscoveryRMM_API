@@ -31,6 +31,8 @@ public class AutomationTaskSummaryDto
     public AutomationNotificationMode NotificationMode { get; set; } = AutomationNotificationMode.Silent;
     /// <summary>Momento do toast informativo (Before/After). So se aplica ao modo Toast.</summary>
     public AutomationToastTiming ToastTiming { get; set; } = AutomationToastTiming.After;
+    /// <summary>Campo customizado que recebe a saida da execucao (tarefa coletora).</summary>
+    public Guid? CollectorFieldDefinitionId { get; set; }
     public DateTime LastUpdatedAt { get; set; }
     public bool IsDeleted { get; set; }
     public DateTime? DeletedAt { get; set; }
@@ -152,6 +154,8 @@ public class CreateAutomationTaskRequest
     public AutomationNotificationMode? NotificationMode { get; set; }
     /// <summary>Momento do toast informativo. Ausente = After.</summary>
     public AutomationToastTiming? ToastTiming { get; set; }
+    /// <summary>Campo customizado de agente que recebe a saida da execucao (tarefa coletora).</summary>
+    public Guid? CollectorFieldDefinitionId { get; set; }
     public bool IsActive { get; set; } = true;
 }
 

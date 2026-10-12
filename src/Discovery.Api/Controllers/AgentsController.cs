@@ -194,11 +194,25 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
     }
 
+    /// <summary>
+    /// Mapa dos campos de agente visíveis no portal + valores por agente,
+    /// para a coluna/filtro da lista de agentes.
+    /// </summary>
+    [HttpGet("custom-fields/map")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetCustomFieldMap([FromQuery] bool includeInactive = false, CancellationToken ct = default)
+    {
+        var result = await _mediator.Send(new GetAgentCustomFieldMapQuery(includeInactive), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => BadRequest(new { error = errors[0].Message }));
+    }
+
     [HttpGet("{id:guid}/custom-fields")]
     [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, CancellationToken ct = default)
+    public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, [FromQuery] bool includeHidden = false, CancellationToken ct = default)
     {
-        var result = await _mediator.Send(new GetAgentCustomFieldsQuery(id, includeSecrets), ct);
+        var result = await _mediator.Send(new GetAgentCustomFieldsQuery(id, includeSecrets, includeHidden), ct);
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());

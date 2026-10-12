@@ -192,7 +192,7 @@ public sealed class GetAgentCustomFieldsQueryHandler(
         if (agent is null)
             return Result<IReadOnlyList<CustomFieldValueDto>>.Failure(Error.NotFound("Agent not found."));
 
-        var values = await customFieldService.GetValuesAsync(CustomFieldScopeType.Agent, q.AgentId, q.IncludeSecrets, ct);
+        var values = await customFieldService.GetValuesAsync(CustomFieldScopeType.Agent, q.AgentId, q.IncludeSecrets, ct, q.IncludeHidden);
         var dtos = values.Select(v => new CustomFieldValueDto(v.DefinitionId, v.Name, v.Label, v.ValueJson)).ToList();
         return Result<IReadOnlyList<CustomFieldValueDto>>.Success(dtos);
     }
@@ -218,6 +218,52 @@ public sealed class GetAgentCustomFieldSchemaQueryHandler(
             visibleOnly: true);
 
         return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Success(schema);
+    }
+}
+
+public sealed class GetAgentCustomFieldMapQueryHandler(
+    DiscoveryDbContext db
+) : IRequestHandler<GetAgentCustomFieldMapQuery, Result<AgentCustomFieldMapDto>>
+{
+    public async Task<Result<AgentCustomFieldMapDto>> Handle(GetAgentCustomFieldMapQuery q, CancellationToken ct)
+    {
+        var definitionsQuery = db.CustomFieldDefinitions
+            .AsNoTracking()
+            .Where(definition =>
+                definition.ScopeType == CustomFieldScopeType.Agent
+                && definition.AllowWebRead
+                && !definition.IsSecret);
+
+        if (!q.IncludeInactive)
+            definitionsQuery = definitionsQuery.Where(definition => definition.IsActive);
+
+        var definitions = await definitionsQuery
+            .OrderByDescending(definition => definition.IsPinned)
+            .ThenBy(definition => definition.Label)
+            .Select(definition => new AgentCustomFieldMapDefinitionDto(
+                definition.Id,
+                definition.Name,
+                definition.Label,
+                definition.DataType,
+                definition.AllowAgentWrite))
+            .ToListAsync(ct);
+
+        var definitionIds = definitions.Select(definition => definition.DefinitionId).ToList();
+        var values = definitionIds.Count == 0
+            ? []
+            : await db.CustomFieldValues
+                .AsNoTracking()
+                .Where(value =>
+                    definitionIds.Contains(value.DefinitionId)
+                    && value.ScopeType == CustomFieldScopeType.Agent
+                    && value.EntityId != null)
+                .Select(value => new AgentCustomFieldMapValueDto(
+                    value.DefinitionId,
+                    value.EntityId!.Value,
+                    value.ValueJson))
+                .ToListAsync(ct);
+
+        return Result<AgentCustomFieldMapDto>.Success(new AgentCustomFieldMapDto(definitions, values));
     }
 }
 

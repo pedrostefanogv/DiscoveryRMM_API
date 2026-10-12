@@ -153,6 +153,7 @@ public sealed class CreateAutomationTaskCommandHandler(
             CloseProcesses = cmd.CloseProcesses ?? (IReadOnlyList<string>)[],
             PromptTimeoutSeconds = cmd.PromptTimeoutSeconds,
             NotificationMode = cmd.NotificationMode,
+            CollectorFieldDefinitionId = cmd.CollectorFieldDefinitionId,
             ToastTiming = cmd.ToastTiming,
             IsActive = cmd.IsActive
         };
@@ -233,6 +234,7 @@ public sealed class UpdateAutomationTaskCommandHandler(
             CloseProcesses = cmd.CloseProcesses ?? current.CloseProcesses,
             PromptTimeoutSeconds = cmd.PromptTimeoutSeconds ?? current.PromptTimeoutSeconds,
             NotificationMode = cmd.NotificationMode ?? current.NotificationMode,
+            CollectorFieldDefinitionId = cmd.CollectorFieldDefinitionId ?? current.CollectorFieldDefinitionId,
             ToastTiming = cmd.ToastTiming ?? current.ToastTiming,
             Reason = cmd.Reason
         };

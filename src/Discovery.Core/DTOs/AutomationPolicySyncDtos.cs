@@ -82,6 +82,8 @@ public class AgentAutomationTaskPolicyDto
     public AutomationNotificationMode NotificationMode { get; set; } = AutomationNotificationMode.Silent;
     /// <summary>Momento do toast informativo (Before/After).</summary>
     public AutomationToastTiming ToastTiming { get; set; } = AutomationToastTiming.After;
+    /// <summary>Campo customizado que recebe a saida da execucao (tarefa coletora).</summary>
+    public Guid? CollectorFieldDefinitionId { get; set; }
     public bool TriggerImmediate { get; set; }
     public bool TriggerRecurring { get; set; }
     public bool TriggerOnUserLogin { get; set; }

@@ -70,6 +70,12 @@ public class AutomationTaskDefinition
     /// </summary>
     public AutomationToastTiming ToastTiming { get; set; } = AutomationToastTiming.After;
 
+    /// <summary>
+    /// Tarefa coletora: quando preenchido, o agent grava a saída da execução
+    /// (última linha não vazia) neste campo customizado de escopo Agente.
+    /// </summary>
+    public Guid? CollectorFieldDefinitionId { get; set; }
+
     public bool IsActive { get; set; } = true;
     public DateTime? DeletedAt { get; set; }
 
