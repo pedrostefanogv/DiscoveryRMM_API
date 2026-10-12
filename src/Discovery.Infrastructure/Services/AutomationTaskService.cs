@@ -479,11 +479,12 @@ public class AutomationTaskService : IAutomationTaskService
     {
         _ = cancellationToken;
 
-        var (agent, site, applicable) = await ResolveApplicablePolicyTasksAsync(agentId);
+        var (agent, site, applicableTasks) = await ResolveApplicablePolicyTasksAsync(agentId);
 
-        // Os scripts são carregados uma única vez: entram no fingerprint (versão +
-        // hash do conteúdo) e são reutilizados na montagem dos DTOs.
-        var scriptsById = await LoadScriptsForTasksAsync(applicable);
+        // Tarefas RunScript sem script entregável (inativo/excluído) saem da policy,
+        // e os scripts restantes são carregados uma única vez: entram no fingerprint
+        // (versão + hash do conteúdo) e são reutilizados na montagem dos DTOs.
+        var (applicable, scriptsById) = await LoadDeliverablePolicyInputsAsync(applicableTasks);
         var policyKey = BuildPolicyKey(applicable, scriptsById);
         var fingerprint = ComputeHash(policyKey);
         var policyUpToDate = !string.IsNullOrWhiteSpace(request.KnownPolicyFingerprint)
@@ -575,6 +576,36 @@ public class AutomationTaskService : IAutomationTaskService
     /// RunScript. Compartilhado pelo cálculo do fingerprint (BuildPolicyKey) e
     /// pela montagem dos DTOs — ambos precisam do conteúdo/versão do script.
     /// </summary>
+    /// <summary>
+    /// Prepara a policy: filtra as tarefas RunScript cujo script não é entregável e
+    /// carrega numa única consulta os scripts referenciados pelas demais.
+    ///
+    /// Uma tarefa RunScript cujo script foi desativado/excluído DEPOIS da criação
+    /// continuava indo na policy com Script=null e o agent falhava a execução com
+    /// exit 2 ("script nao resolvido para a tarefa") a cada gatilho. Criar/editar
+    /// tarefa RunScript já exige script ativo (ValidateActionPayloadAsync), então
+    /// este filtro cobre a desativação posterior. A tarefa continua no catálogo —
+    /// só não é entregue enquanto o script não voltar a ficar ativo.
+    /// </summary>
+    private async Task<(List<AutomationTaskDefinition> Tasks, IReadOnlyDictionary<Guid, AutomationScriptDefinition> Scripts)>
+        LoadDeliverablePolicyInputsAsync(IReadOnlyList<AutomationTaskDefinition> applicable)
+    {
+        var scriptsById = await LoadScriptsForTasksAsync(applicable);
+        return (FilterDeliverableTasks(applicable, scriptsById), scriptsById);
+    }
+
+    /// <summary>
+    /// Remove da policy as tarefas RunScript sem script disponível (id ausente ou
+    /// script inativo/excluído). Visível para teste.
+    /// </summary>
+    internal static List<AutomationTaskDefinition> FilterDeliverableTasks(
+        IReadOnlyList<AutomationTaskDefinition> tasks,
+        IReadOnlyDictionary<Guid, AutomationScriptDefinition> scriptsById)
+        => tasks
+            .Where(task => !(task.ActionType == AutomationTaskActionType.RunScript
+                && (!task.ScriptId.HasValue || !scriptsById.ContainsKey(task.ScriptId.Value))))
+            .ToList();
+
     private async Task<IReadOnlyDictionary<Guid, AutomationScriptDefinition>> LoadScriptsForTasksAsync(
         IReadOnlyList<AutomationTaskDefinition> applicable)
     {
@@ -663,10 +694,11 @@ public class AutomationTaskService : IAutomationTaskService
         CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
-        var (agent, _, applicable) = await ResolveApplicablePolicyTasksAsync(agentId);
-        // A prévia usa o MESMO fingerprint do sync: para isso precisa dos scripts
-        // (versão + hash entram na chave) — aqui sem trafegar conteúdo ao browser.
-        var scriptsById = await LoadScriptsForTasksAsync(applicable);
+        var (agent, _, applicableTasks) = await ResolveApplicablePolicyTasksAsync(agentId);
+        // A prévia usa o MESMO fingerprint do sync (mesma lista de tarefas
+        // entregáveis): para isso precisa dos scripts (versão + hash entram na
+        // chave) — aqui sem trafegar conteúdo ao browser.
+        var (applicable, scriptsById) = await LoadDeliverablePolicyInputsAsync(applicableTasks);
         var taskDtos = await BuildTaskPolicyDtosAsync(applicable, includeScriptContent: false, scriptsById);
         var fingerprint = ComputeHash(BuildPolicyKey(applicable, scriptsById));
 
@@ -723,8 +755,8 @@ public class AutomationTaskService : IAutomationTaskService
     public async Task<string> GetPolicyFingerprintForAgentAsync(Guid agentId, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
-        var (_, _, applicable) = await ResolveApplicablePolicyTasksAsync(agentId);
-        var scriptsById = await LoadScriptsForTasksAsync(applicable);
+        var (_, _, applicableTasks) = await ResolveApplicablePolicyTasksAsync(agentId);
+        var (applicable, scriptsById) = await LoadDeliverablePolicyInputsAsync(applicableTasks);
         var policyKey = BuildPolicyKey(applicable, scriptsById);
         return ComputeHash(policyKey);
     }
