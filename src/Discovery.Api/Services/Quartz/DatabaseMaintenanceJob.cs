@@ -125,10 +125,10 @@ public sealed class DatabaseMaintenanceJob : IJob
             foreach (var index in invalidIndexes)
             {
                 if (ct.IsCancellationRequested) break;
-                var sql = settings.ReindexConcurrently
-                    ? $"REINDEX INDEX CONCURRENTLY {Quote(index.Index)}"
-                    : $"REINDEX INDEX {Quote(index.Index)}";
-                await RunOperationAsync(operations, connection, "reindex-invalid", index.Index, sql, logger, ct);
+                await RunReindexAsync(operations, connection, "reindex-invalid", index.Index,
+                    concurrentlySql: $"REINDEX INDEX CONCURRENTLY {Quote(index.Index)}",
+                    plainSql: $"REINDEX INDEX {Quote(index.Index)}",
+                    useConcurrently: settings.ReindexConcurrently, logger, ct);
             }
         }
 
@@ -137,10 +137,10 @@ public sealed class DatabaseMaintenanceJob : IJob
             foreach (var table in targets)
             {
                 if (ct.IsCancellationRequested) break;
-                var sql = settings.ReindexConcurrently
-                    ? $"REINDEX TABLE CONCURRENTLY {Quote(table.Name)}"
-                    : $"REINDEX TABLE {Quote(table.Name)}";
-                await RunOperationAsync(operations, connection, "reindex-table", table.Name, sql, logger, ct);
+                await RunReindexAsync(operations, connection, "reindex-table", table.Name,
+                    concurrentlySql: $"REINDEX TABLE CONCURRENTLY {Quote(table.Name)}",
+                    plainSql: $"REINDEX TABLE {Quote(table.Name)}",
+                    useConcurrently: settings.ReindexConcurrently, logger, ct);
             }
         }
         else if (invalidIndexNames.Count > 0 && settings.ReindexScope == DatabaseReindexScopes.None)
@@ -295,6 +295,26 @@ public sealed class DatabaseMaintenanceJob : IJob
             logger.LogError(ex, "Database maintenance: {Phase} {Target} falhou.", phase, target);
             return false;
         }
+    }
+
+    /// <summary>
+    /// REINDEX com fallback: <c>CONCURRENTLY</c> não é suportado em alguns casos
+    /// (ex.: índice de tabela particionada). Se falhar, tenta a forma bloqueante
+    /// para não deixar o índice inválido sem reparo.
+    /// </summary>
+    private static async Task RunReindexAsync(
+        List<MaintenanceOperation> operations, DbConnection connection,
+        string phase, string target, string concurrentlySql, string plainSql,
+        bool useConcurrently, ILogger logger, CancellationToken ct)
+    {
+        if (!useConcurrently)
+        {
+            await RunOperationAsync(operations, connection, phase, target, plainSql, logger, ct);
+            return;
+        }
+
+        if (!await RunOperationAsync(operations, connection, phase, target, concurrentlySql, logger, ct))
+            await RunOperationAsync(operations, connection, phase + "-fallback", target, plainSql, logger, ct);
     }
 
     private static async Task ExecuteRawAsync(DbConnection connection, string sql, CancellationToken ct)

@@ -247,7 +247,7 @@ public static class QuartzServiceCollectionExtensions
         if (!await scheduler.CheckExists(jobKey))
             return;
 
-        using var scope = services.CreateScope();
+        await using var scope = services.CreateAsyncScope();
         var serverRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
         var server = await serverRepo.GetOrCreateDefaultAsync();
         var settings = DatabaseMaintenanceSettings.Parse(server.RetentionSettingsJson);
