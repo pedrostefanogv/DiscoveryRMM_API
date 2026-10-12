@@ -165,6 +165,17 @@ public class DatabaseMaintenanceSettings
     public int MaxTablesPerRun { get; set; } = 0;
 
     /// <summary>
+    /// Cria índices para foreign keys que não têm índice com a coluna de origem
+    /// como primeira coluna (diagnóstico em <c>GET /admin/database-maintenance/health</c>).
+    /// Criação <c>CONCURRENTLY</c> e idempotente (<c>IF NOT EXISTS</c>), mas ainda
+    /// é mudança de schema — por isso o default é false e a ativação é explícita.
+    /// </summary>
+    public bool CreateMissingForeignKeyIndexes { get; set; } = false;
+
+    /// <summary>Prefixo dos índices de FK criados. Default: "ix".</summary>
+    public string ForeignKeyIndexPrefix { get; set; } = "ix";
+
+    /// <summary>
     /// Normaliza os valores para faixas seguras. Nunca lança: configuração
     /// corrompida cai no default do campo.
     /// </summary>
@@ -181,6 +192,9 @@ public class DatabaseMaintenanceSettings
         LockTimeoutSeconds = Math.Clamp(LockTimeoutSeconds, 0, 3600);
         MaintenanceWorkMemMb = Math.Clamp(MaintenanceWorkMemMb, 16, 4096);
         MaxTablesPerRun = Math.Max(0, MaxTablesPerRun);
+        ForeignKeyIndexPrefix = string.IsNullOrWhiteSpace(ForeignKeyIndexPrefix)
+            ? "ix"
+            : ForeignKeyIndexPrefix.Trim().ToLowerInvariant();
         return this;
     }
 

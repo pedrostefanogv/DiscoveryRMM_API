@@ -25,7 +25,12 @@ public sealed class DatabaseHealthService(
 {
     private const int MaxSamples = 20;
     private const long UnusedIndexMinBytes = 1_048_576;      // 1 MiB
+
+    /// <summary>Tabelas de metadados que não geram constatações (mesma exclusão do job).</summary>
+    private static readonly HashSet<string> ExcludedTables =
+        new(StringComparer.OrdinalIgnoreCase) { "VersionInfo" };
     private const long BloatMinDeadTuples = 1_000;           // ignora tabelas minúsculas
+    private const long NeverVacuumedMinLiveTuples = 1_000;   // ignora tabelas minúsculas
     private const double BloatMinPercent = 20d;
     private static readonly TimeSpan StaleStatsAfter = TimeSpan.FromDays(7);
     private static readonly TimeSpan LongTransactionAfter = TimeSpan.FromMinutes(5);
@@ -64,6 +69,9 @@ public sealed class DatabaseHealthService(
                 ReadUtc(reader, 5),
                 ReadUtc(reader, 6),
                 Convert.ToInt64(reader.GetValue(7))), ct);
+
+        // Metadados (VersionInfo) não são objeto de manutenção nem de diagnóstico.
+        tables = tables.Where(t => !ExcludedTables.Contains(t.Table)).ToList();
 
         var issues = new List<DatabaseHealthIssue>();
 
@@ -107,16 +115,19 @@ public sealed class DatabaseHealthService(
             stale.Count,
             stale.Take(MaxSamples).Select(t => $"{t.Table} — último ANALYZE: {(t.LastAnalyzeUtc?.ToString("u") ?? "nunca")}").ToList()));
 
-        // Nunca vacuumadas (autovacuum pode estar desligado/atrasado).
+        // Nunca vacuumadas (autovacuum pode estar desligado/atrasado). Tabelas
+        // minúsculas/sem tuplas mortas são ignoradas: o contador fica nulo até o
+        // autovacuum agir e em bancos novos isso não é acionável.
         var neverVacuumed = tables
             .Where(t => t.LastVacuumUtc is null && t.LastAutovacuumUtc is null)
+            .Where(t => t.DeadTuples > 0 || t.LiveTuples >= NeverVacuumedMinLiveTuples)
             .ToList();
         issues.Add(new DatabaseHealthIssue(
             DatabaseHealthIssueKeys.NeverVacuumed,
-            "Tabelas nunca vacuumadas",
-            "warning",
+            "Tabelas nunca vacuumadas (com volume relevante)",
+            "info",
             neverVacuumed.Count,
-            neverVacuumed.Take(MaxSamples).Select(t => t.Table).ToList()));
+            neverVacuumed.Take(MaxSamples).Select(t => $"{t.Table} — {t.LiveTuples} linhas vivas, {t.DeadTuples} mortas").ToList()));
 
         // Idade de XID (wraparound).
         var aged = tables.Where(t => t.XidAge >= xidWarnThreshold).OrderByDescending(t => t.XidAge).ToList();
@@ -152,7 +163,11 @@ public sealed class DatabaseHealthService(
 
         // FKs sem índice correspondente.
         var fkWithoutIndex = await QueryAsync(connection, """
-            SELECT con.conrelid::regclass::text AS table_name, con.conname
+            SELECT con.conrelid::regclass::text AS table_name,
+                   con.conname,
+                   (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+                    FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum) AS columns
             FROM pg_constraint con
             JOIN pg_namespace n ON n.oid = con.connamespace
             WHERE con.contype = 'f' AND n.nspname = 'public'
@@ -165,13 +180,20 @@ public sealed class DatabaseHealthService(
               )
             ORDER BY 1, 2
             LIMIT 50
-            """, reader => new { Table = reader.GetString(0), Constraint = reader.GetString(1) }, ct);
+            """, reader => new
+            {
+                Table = reader.GetString(0),
+                Constraint = reader.GetString(1),
+                Columns = reader.IsDBNull(2) ? "" : reader.GetString(2),
+            }, ct);
         issues.Add(new DatabaseHealthIssue(
             DatabaseHealthIssueKeys.ForeignKeysWithoutIndex,
             "Foreign keys sem índice",
             "info",
             fkWithoutIndex.Count,
-            fkWithoutIndex.Take(MaxSamples).Select(f => $"{f.Table}.{f.Constraint}").ToList()));
+            fkWithoutIndex.Take(MaxSamples)
+                .Select(f => $"{f.Table} ({f.Columns}) — {f.Constraint}")
+                .ToList()));
 
         // Transações longas bloqueando o vacuum.
         var longTransactions = await QueryAsync(connection, $"""

@@ -66,6 +66,9 @@ public sealed class DatabaseMaintenanceJob : IJob
         var tables = await DiscoverTablesAsync(connection, ct);
         var invalidIndexes = await DiscoverInvalidIndexesAsync(connection, ct);
         var invalidIndexNames = invalidIndexes.Select(i => i.Index).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var foreignKeysWithoutIndex = settings.CreateMissingForeignKeyIndexes
+            ? await DiscoverForeignKeysWithoutIndexAsync(connection, ct)
+            : new List<ForeignKeyInfo>();
 
         var targets = settings.MaxTablesPerRun > 0
             ? tables.OrderByDescending(t => t.TotalBytes).Take(settings.MaxTablesPerRun).ToList()
@@ -150,6 +153,28 @@ public sealed class DatabaseMaintenanceJob : IJob
                 invalidIndexNames.Count);
         }
 
+        // ── Fase 4b: índices de FK ausentes (opt-in: muda schema) ───────────
+        var createdForeignKeyIndexes = 0;
+        if (settings.CreateMissingForeignKeyIndexes)
+        {
+            foreach (var fk in foreignKeysWithoutIndex)
+            {
+                if (ct.IsCancellationRequested) break;
+                if (fk.Columns.Length == 0 || fk.Columns.Any(c => !SafeIdentifier.IsMatch(c))) continue;
+
+                var indexName = BuildIndexName(settings.ForeignKeyIndexPrefix, fk.Table, fk.Columns);
+                var columns = string.Join(", ", fk.Columns.Select(Quote));
+                var ok = await RunOperationAsync(operations, connection, "create-fk-index", fk.Table,
+                    $"CREATE INDEX CONCURRENTLY IF NOT EXISTS {Quote(indexName)} ON {Quote(fk.Table)} ({columns})",
+                    logger, ct);
+                if (ok) createdForeignKeyIndexes++;
+            }
+
+            logger.LogInformation(
+                "Database maintenance: {Created}/{Total} índices de FK ausentes criados.",
+                createdForeignKeyIndexes, foreignKeysWithoutIndex.Count);
+        }
+
         // ── Fase 5: ANALYZE (só estatística velha) ──────────────────────────
         if (settings.Analyze)
         {
@@ -182,6 +207,8 @@ public sealed class DatabaseMaintenanceJob : IJob
             durationSeconds = Math.Round((finishedAt - startedAt).TotalSeconds, 2),
             tableCount = tables.Count,
             invalidIndexCount = invalidIndexes.Count,
+            missingForeignKeyIndexCount = foreignKeysWithoutIndex.Count,
+            createdForeignKeyIndexCount = createdForeignKeyIndexes,
             successCount,
             errorCount,
             databaseSizeBeforeBytes = sizeBefore,
@@ -198,6 +225,8 @@ public sealed class DatabaseMaintenanceJob : IJob
         double DeadPercent, DateTime? LastAnalyzeUtc, long XidAge);
 
     private sealed record IndexInfo(string Table, string Index);
+
+    private sealed record ForeignKeyInfo(string Table, string Constraint, string[] Columns);
 
     private sealed record MaintenanceOperation(
         string Phase, string Target, bool Ok, long DurationMs, string? Error);
@@ -263,6 +292,57 @@ public sealed class DatabaseMaintenanceJob : IJob
                 indexes.Add(new IndexInfo(table, index));
         }
         return indexes;
+    }
+
+    private static async Task<List<ForeignKeyInfo>> DiscoverForeignKeysWithoutIndexAsync(
+        DbConnection connection, CancellationToken ct)
+    {
+        var foreignKeys = new List<ForeignKeyInfo>();
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT con.conrelid::regclass::text AS table_name,
+                   con.conname,
+                   (SELECT array_agg(a.attname ORDER BY k.ord)
+                    FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum) AS columns
+            FROM pg_constraint con
+            JOIN pg_namespace n ON n.oid = con.connamespace
+            WHERE con.contype = 'f' AND n.nspname = 'public'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM pg_index i
+                  WHERE i.indrelid = con.conrelid
+                    AND i.indisvalid
+                    AND i.indkey[0] = con.conkey[1]
+              )
+            ORDER BY 1, 2
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var table = reader.GetString(0);
+            if (!SafeIdentifier.IsMatch(table))
+                continue;
+            var columns = reader.IsDBNull(2) ? [] : reader.GetFieldValue<string[]>(2);
+            foreignKeys.Add(new ForeignKeyInfo(table, reader.GetString(1), columns));
+        }
+        return foreignKeys;
+    }
+
+    /// <summary>
+    /// Nome do índice derivado da tabela+colunas, respeitando o limite de 63
+    /// caracteres do PostgreSQL (sufixo curto determinístico quando excede).
+    /// </summary>
+    private static string BuildIndexName(string prefix, string table, IReadOnlyList<string> columns)
+    {
+        var raw = $"{prefix}_{table}_{string.Join("_", columns)}".ToLowerInvariant();
+        if (raw.Length <= 63)
+            return raw;
+
+        var hash = Convert.ToHexString(
+            System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(raw)))
+            .ToLowerInvariant()[..8];
+        return raw[..54] + "_" + hash;
     }
 
     // ── Execução ────────────────────────────────────────────────────────────

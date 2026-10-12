@@ -20,6 +20,8 @@ public class DatabaseMaintenanceSettingsTests
         Assert.That(settings.ReindexScope, Is.EqualTo(DatabaseReindexScopes.Invalid));
         Assert.That(settings.VacuumFullScope, Is.EqualTo(DatabaseMaintenanceScopes.Bloated));
         Assert.That(settings.Schedule, Is.EqualTo("0 0 3 ? * SUN"));
+        Assert.That(settings.CreateMissingForeignKeyIndexes, Is.False, "criação de índice muda schema: opt-in");
+        Assert.That(settings.ForeignKeyIndexPrefix, Is.EqualTo("ix"));
     }
 
     [Test]
@@ -92,5 +94,24 @@ public class DatabaseMaintenanceSettingsTests
         Assert.That(settings.MaxTablesPerRun, Is.EqualTo(0));
         Assert.That(settings.ReindexScope, Is.EqualTo(DatabaseReindexScopes.Invalid));
         Assert.That(settings.Schedule, Is.EqualTo("0 0 3 ? * SUN"));
+        Assert.That(settings.ForeignKeyIndexPrefix, Is.EqualTo("ix"));
+    }
+
+    [Test]
+    public void Parse_EnablesForeignKeyIndexCreationAndNormalizesPrefix()
+    {
+        var json = """
+            {
+              "databaseMaintenance": {
+                "createMissingForeignKeyIndexes": true,
+                "foreignKeyIndexPrefix": "  IDX_FK  "
+              }
+            }
+            """;
+
+        var settings = DatabaseMaintenanceSettings.Parse(json);
+
+        Assert.That(settings.CreateMissingForeignKeyIndexes, Is.True);
+        Assert.That(settings.ForeignKeyIndexPrefix, Is.EqualTo("idx_fk"));
     }
 }
