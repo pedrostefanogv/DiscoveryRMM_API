@@ -259,28 +259,38 @@ load_existing_object_storage_defaults() {
 # pelo location do nginx). Usa o dominio do certificado quando existe (HTTPS
 # confiavel); caso contrario cai para o host interno em HTTP.
 resolve_object_storage_default_endpoint() {
-  local domain="${ZEROSSL_CERT_DOMAIN:-${LETSENCRYPT_CERT_DOMAIN:-}}"
-  if [[ -z "$domain" ]]; then
-    domain="$(resolve_fido2_server_domain 2>/dev/null || true)"
-  fi
-  domain="$(normalize_host_without_scheme "$domain")"
-  # Nunca derivar o endpoint PUBLICO para loopback: "https://localhost" e
-  # inalcancavel por agentes/navegadores (o backend recusa assinar nele). Cai
-  # para o host externo e, depois, para o interno.
-  if [[ -n "$domain" ]]; then
-    case "$domain" in
-      localhost|127.*|0.0.0.0|[::1]|::1) ;;
-      *) printf 'https://%s' "$domain"; return ;;
+  # Le do shell E do discovery.env: no modo UPDATE o shell nao tem as variaveis
+  # de dominio (elas vivem no env) e a derivacao falhava com "Nao foi possivel
+  # derivar o endpoint do RustFS". Loopback e sempre descartado (agente/
+  # navegador nao alcancam o localhost do servidor).
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  _os_env() { sudo awk -F= -v k="$1" '$1==k{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true; }
+
+  local candidate https_host=""
+  for candidate in \
+    "$(_os_env ZEROSSL_CERT_DOMAIN)" "$(_os_env LETSENCRYPT_CERT_DOMAIN)" \
+    "${ZEROSSL_CERT_DOMAIN:-}" "${LETSENCRYPT_CERT_DOMAIN:-}" \
+    "$(_os_env Authentication__Fido2__ServerDomain)" \
+    "$(_os_env EXTERNAL_API_HOST)" "${EXTERNAL_API_HOST:-}"; do
+    candidate="$(normalize_host_without_scheme "$candidate")"
+    case "$candidate" in
+      ""|localhost|127.*|0.0.0.0|[::1]|::1) continue ;;
+      *) https_host="$candidate"; break ;;
     esac
+  done
+  if [[ -n "$https_host" ]]; then
+    printf 'https://%s' "$https_host"
+    return
   fi
-  local external_host
-  external_host="$(normalize_host_without_scheme "${EXTERNAL_API_HOST:-}")"
-  case "$external_host" in
-    ""|localhost|127.*|0.0.0.0|[::1]|::1) ;;
-    *) printf 'https://%s' "$external_host"; return ;;
-  esac
-  local internal_host
-  internal_host="$(normalize_host_without_scheme "${INTERNAL_API_HOST:-}")"
+
+  local internal_host=""
+  for candidate in "$(_os_env INTERNAL_API_HOST)" "${INTERNAL_API_HOST:-}"; do
+    candidate="$(normalize_host_without_scheme "$candidate")"
+    case "$candidate" in
+      ""|localhost|127.*|0.0.0.0|[::1]|::1) continue ;;
+      *) internal_host="$candidate"; break ;;
+    esac
+  done
   if [[ -n "$internal_host" ]]; then
     printf 'http://%s' "$internal_host"
     return

@@ -803,8 +803,12 @@ write_site_proxy_config() {
   os_nginx_enabled="${os_nginx_enabled:-y}"
 
   if [[ "$os_mode" == "rustfs" && "$os_nginx_enabled" == "y" && -n "$os_bucket" ]]; then
-    object_storage_location="$(cat <<EOF
-  location ^~ /${os_bucket}/ {
+    # Heredoc CITADO: o bloco tem variaveis do NGINX ($host, $remote_addr...) e
+    # com <<EOF o shell tentaria expandi-las — com `set -u` isso abortava o
+    # write_site_proxy_config ("host: unbound variable") e o location nunca era
+    # gerado. O bucket/limite entram por placeholder, substituidos logo abaixo.
+    object_storage_location="$(cat <<'OSEOF'
+  location ^~ /__OS_BUCKET__/ {
     proxy_pass http://discovery_object_storage_backend;
     proxy_http_version 1.1;
     # SigV4 assina o Host: NAO reescrever para o upstream (invalidaria a URL).
@@ -815,12 +819,14 @@ write_site_proxy_config() {
     # Upload/download de arquivo: sem buffer em disco e com timeout longo.
     proxy_request_buffering off;
     proxy_buffering off;
-    client_max_body_size ${os_max_upload};
+    client_max_body_size __OS_MAX_UPLOAD__;
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
   }
-EOF
+OSEOF
 )"
+    object_storage_location="${object_storage_location//__OS_BUCKET__/$os_bucket}"
+    object_storage_location="${object_storage_location//__OS_MAX_UPLOAD__/$os_max_upload}"
   elif [[ "$os_mode" == "rustfs" ]]; then
     warn "RustFS configurado (bucket ${os_bucket:-definido}) mas a publicacao pelo nginx esta desativada (DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED=${os_nginx_enabled}). URLs pre-assinadas so funcionam na rede interna."
   fi
