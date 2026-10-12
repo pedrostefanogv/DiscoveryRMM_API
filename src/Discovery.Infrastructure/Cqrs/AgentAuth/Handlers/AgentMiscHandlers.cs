@@ -1,5 +1,7 @@
+using System.Text.Json.Nodes;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Misc;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using MediatR;
@@ -115,7 +117,39 @@ public sealed class GetRuntimeCustomFieldsHandler(
     public async Task<Result<object>> Handle(GetRuntimeCustomFieldsQuery q, CancellationToken ct)
     {
         var fields = await customFieldService.GetRuntimeValuesForAgentAsync(q.AgentId, q.TaskId, q.ScriptId, ct);
-        return Result<object>.Success(new { fields });
+
+        // O agent Go desserializa este endpoint como um ARRAY de RuntimeCustomField
+        // ({definitionId,name,label,scopeType:int,valueJson:<raw>,isSecret}).
+        // O wrapper {"fields":[...]} e o enum serializado como string davam
+        // "cannot unmarshal object into Go value of type []" — o agent tratava como
+        // lista vazia silenciosamente e o MDZ_COLLECT era descartado.
+        var payload = fields
+            .Select(field => new AgentRuntimeCustomFieldDto(
+                field.DefinitionId,
+                field.Name,
+                field.Label,
+                (int)field.ScopeType,
+                ParseRuntimeValueJson(field.ValueJson),
+                field.IsSecret))
+            .ToList();
+
+        return Result<object>.Success(payload);
+    }
+
+    private static JsonNode? ParseRuntimeValueJson(string? rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+            return null;
+
+        try
+        {
+            return JsonNode.Parse(rawJson);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Valor malformado não pode derrubar o runtime inteiro; vai como nulo.
+            return null;
+        }
     }
 }
 

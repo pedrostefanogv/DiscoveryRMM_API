@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Discovery.Core.Enums;
 
 namespace Discovery.Core.DTOs;
@@ -78,6 +79,19 @@ public sealed record RuntimeCustomFieldDto(
     string Label,
     CustomFieldScopeType ScopeType,
     string ValueJson,
+    bool IsSecret);
+
+/// <summary>
+/// Item do endpoint de runtime no contrato que o agent Go consome via
+/// json.RawMessage/FieldScopeType: <c>scopeType</c> é numérico e
+/// <c>valueJson</c> vai como JSON bruto (não como string JSON).
+/// </summary>
+public sealed record AgentRuntimeCustomFieldDto(
+    Guid DefinitionId,
+    string Name,
+    string Label,
+    int ScopeType,
+    JsonNode? ValueJson,
     bool IsSecret);
 
 public sealed record CustomFieldAccessBindingDto(

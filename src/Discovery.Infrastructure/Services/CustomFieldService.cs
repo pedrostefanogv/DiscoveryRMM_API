@@ -530,9 +530,21 @@ public class CustomFieldService : ICustomFieldService
                 cancellationToken);
 
         var now = DateTime.UtcNow;
+        var updatedBy = string.IsNullOrWhiteSpace(input.UpdatedBy) ? null : input.UpdatedBy.Trim();
+
+        void ApplyUpdate(CustomFieldValue target)
+        {
+            target.ScopeType = input.ScopeType;
+            target.EntityId = input.EntityId;
+            target.ValueJson = valueJson;
+            target.UpdatedBy = updatedBy;
+            target.UpdatedAt = DateTime.UtcNow;
+        }
+
+        CustomFieldValue resolved;
         if (existing is null)
         {
-            existing = new CustomFieldValue
+            var created = new CustomFieldValue
             {
                 Id = IdGenerator.NewId(),
                 DefinitionId = input.DefinitionId,
@@ -540,22 +552,44 @@ public class CustomFieldService : ICustomFieldService
                 EntityId = input.EntityId,
                 EntityKey = entityKey,
                 ValueJson = valueJson,
-                UpdatedBy = string.IsNullOrWhiteSpace(input.UpdatedBy) ? null : input.UpdatedBy.Trim(),
+                UpdatedBy = updatedBy,
                 CreatedAt = now,
                 UpdatedAt = now
             };
-            _db.CustomFieldValues.Add(existing);
+            _db.CustomFieldValues.Add(created);
+
+            try
+            {
+                await _db.SaveChangesAsync(cancellationToken);
+                resolved = created;
+            }
+            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+            {
+                // Duas execuções concorrentes do mesmo agent/campo: a primeira
+                // inseriu, a segunda caiu no índice único (ux_custom_field_values_
+                // definition_entity). Descarta a entidade que falhou e reaplica
+                // como UPDATE idempotente — antes isso virava HTTP 500 e a coleta
+                // era perdida.
+                _db.Entry(created).State = EntityState.Detached;
+
+                var winner = await _db.CustomFieldValues
+                    .SingleOrDefaultAsync(
+                        value => value.DefinitionId == input.DefinitionId && value.EntityKey == entityKey,
+                        cancellationToken);
+                if (winner is null)
+                    throw;
+
+                ApplyUpdate(winner);
+                await _db.SaveChangesAsync(cancellationToken);
+                resolved = winner;
+            }
         }
         else
         {
-            existing.ScopeType = input.ScopeType;
-            existing.EntityId = input.EntityId;
-            existing.ValueJson = valueJson;
-            existing.UpdatedBy = string.IsNullOrWhiteSpace(input.UpdatedBy) ? null : input.UpdatedBy.Trim();
-            existing.UpdatedAt = now;
+            ApplyUpdate(existing);
+            await _db.SaveChangesAsync(cancellationToken);
+            resolved = existing;
         }
-
-        await _db.SaveChangesAsync(cancellationToken);
 
         // A reavaliacao roda DEPOIS da resposta e em ESCOPO PROPRIO. Antes era
         // fire-and-forget no escopo da requisicao, que e descartado assim que o
@@ -570,8 +604,8 @@ public class CustomFieldService : ICustomFieldService
             definition.Label,
             input.ScopeType,
             input.EntityId,
-            definition.IsSecret ? JsonSerializer.Serialize("***", JsonOptions) : existing.ValueJson,
-            existing.UpdatedAt,
+            definition.IsSecret ? JsonSerializer.Serialize("***", JsonOptions) : resolved.ValueJson,
+            resolved.UpdatedAt,
             definition.IsSecret);
     }
 
@@ -1001,6 +1035,18 @@ public class CustomFieldService : ICustomFieldService
             return [];
 
         return JsonSerializer.Deserialize<List<string>>(optionsJson, JsonOptions) ?? [];
+    }
+
+    // Detecta violação de índice único do PostgreSQL (SQLSTATE 23505) percorrendo
+    // a cadeia de InnerException — o provider Npgsql embrulha em DbUpdateException.
+    private static bool IsUniqueViolation(DbUpdateException ex)
+    {
+        for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            if (inner is Npgsql.PostgresException postgres && postgres.SqlState == "23505")
+                return true;
+        }
+        return false;
     }
 
     private static string NormalizeJson(string rawJson)

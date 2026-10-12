@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Discovery.Core.Cqrs.AgentAuth.Misc;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
@@ -57,6 +58,41 @@ public class AgentCollectedCustomFieldTests
         Assert.That(service.Input.ScriptId, Is.EqualTo(request.ScriptId));
     }
 
+    /// <summary>
+    /// O agent Go desserializa este endpoint como um ARRAY de RuntimeCustomField:
+    /// scopeType numérico e valueJson bruto. O wrapper {"fields":[...]} + enum string
+    /// fazia o agent tratar a resposta como lista vazia.
+    /// </summary>
+    [Test]
+    public async Task RuntimeHandler_ReturnsAgentCompatibleArray()
+    {
+        var definitionId = Guid.Parse("019f665d-06e6-7345-8b86-e82c4ba4a1fb");
+        var service = new CapturingCustomFieldService
+        {
+            RuntimeFields =
+            [
+                new RuntimeCustomFieldDto(
+                    definitionId, "anydesk", "anydeskid", CustomFieldScopeType.Agent, "\"1602799292\"", false)
+            ]
+        };
+
+        var result = await new GetRuntimeCustomFieldsHandler(service)
+            .Handle(new GetRuntimeCustomFieldsQuery(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid()), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+
+        var json = JsonSerializer.Serialize(result.Value, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            Converters = { new JsonStringEnumConverter() }
+        });
+
+        Assert.That(json, Is.EqualTo(
+            "[{\"definitionId\":\"019f665d-06e6-7345-8b86-e82c4ba4a1fb\",\"name\":\"anydesk\",\"label\":\"anydeskid\","
+            + "\"scopeType\":3,\"valueJson\":\"1602799292\",\"isSecret\":false}]"));
+    }
+
     [Test]
     public async Task Handler_RejectsMissingValue()
     {
@@ -72,6 +108,7 @@ public class AgentCollectedCustomFieldTests
     {
         public Guid AgentId { get; private set; }
         public AgentCustomFieldCollectedValueInput? Input { get; private set; }
+        public IReadOnlyList<RuntimeCustomFieldDto> RuntimeFields { get; set; } = [];
 
         public Task<CustomFieldResolvedValueDto> UpsertAgentCollectedValueAsync(
             Guid agentId, AgentCustomFieldCollectedValueInput input, CancellationToken cancellationToken = default)
@@ -121,6 +158,6 @@ public class AgentCollectedCustomFieldTests
             => throw new NotSupportedException();
 
         public Task<IReadOnlyList<RuntimeCustomFieldDto>> GetRuntimeValuesForAgentAsync(Guid agentId, Guid? taskId, Guid? scriptId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+            => Task.FromResult(RuntimeFields);
     }
 }
