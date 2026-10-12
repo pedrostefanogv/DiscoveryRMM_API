@@ -1070,6 +1070,8 @@ public class AppStoreService : IAppStoreService
             ExtractZip = pkg.ExtractZip,
             FileName = pkg.FileName ?? string.Empty,
             FileSizeBytes = pkg.FileSizeBytes,
+            FileContentType = pkg.FileContentType ?? string.Empty,
+            FileChecksum = pkg.FileChecksum ?? string.Empty,
             HasFile = !string.IsNullOrWhiteSpace(pkg.FileObjectKey),
             SilentCommand = silentCommand,
             SilentWithProgressCommand = silentWithProgressCommand,

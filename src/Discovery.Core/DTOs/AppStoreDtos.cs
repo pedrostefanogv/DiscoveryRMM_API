@@ -27,6 +27,12 @@ public class AppCatalogPackageDto
     /// <summary>Tamanho do instalador enviado ao storage.</summary>
     public long? FileSizeBytes { get; set; }
 
+    /// <summary>Tipo MIME do instalador enviado ao storage.</summary>
+    public string FileContentType { get; set; } = string.Empty;
+
+    /// <summary>Checksum (ex.: SHA-256) do instalador, quando informado.</summary>
+    public string FileChecksum { get; set; } = string.Empty;
+
     /// <summary>Indica se o pacote possui arquivo/instalador no object storage.</summary>
     public bool HasFile { get; set; }
 
