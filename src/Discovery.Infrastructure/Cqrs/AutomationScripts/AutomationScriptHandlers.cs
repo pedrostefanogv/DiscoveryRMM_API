@@ -1,4 +1,4 @@
-﻿using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AutomationScripts.Commands;
 using Discovery.Core.Cqrs.AutomationScripts.Queries;
 using Discovery.Core.DTOs;
@@ -26,6 +26,29 @@ public sealed class GetAutomationScriptByIdQueryHandler(IAutomationScriptService
         var s = await svc.GetByIdAsync(q.Id, false, ct);
         if (s is null) return Result<AutomationScriptDetailDto>.Failure(Error.NotFound($"Script {q.Id} not found"));
         return Result<AutomationScriptDetailDto>.Success(s);
+    }
+}
+
+public sealed class GetAutomationScriptAuditQueryHandler(IAutomationScriptService svc) : IRequestHandler<GetAutomationScriptAuditQuery, Result<IReadOnlyList<AutomationScriptAuditDto>>>
+{
+    public async Task<Result<IReadOnlyList<AutomationScriptAuditDto>>> Handle(GetAutomationScriptAuditQuery q, CancellationToken ct)
+    {
+        var audit = await svc.GetAuditAsync(q.Id, q.Limit, ct);
+        return Result<IReadOnlyList<AutomationScriptAuditDto>>.Success(audit);
+    }
+}
+
+public sealed class GetAutomationScriptConsumeQueryHandler(IAutomationScriptService svc) : IRequestHandler<GetAutomationScriptConsumeQuery, Result<AutomationScriptConsumeDto>>
+{
+    public async Task<Result<AutomationScriptConsumeDto>> Handle(GetAutomationScriptConsumeQuery q, CancellationToken ct)
+    {
+        var payload = await svc.GetConsumePayloadAsync(
+            q.Id, q.ChangedBy, q.IpAddress, q.CorrelationId ?? "api", ct);
+
+        if (payload is null)
+            return Result<AutomationScriptConsumeDto>.Failure(Error.NotFound($"Script {q.Id} not found"));
+
+        return Result<AutomationScriptConsumeDto>.Success(payload);
     }
 }
 

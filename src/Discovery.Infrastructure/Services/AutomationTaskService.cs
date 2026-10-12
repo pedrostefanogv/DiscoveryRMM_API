@@ -481,14 +481,23 @@ public class AutomationTaskService : IAutomationTaskService
 
         var (agent, site, applicable) = await ResolveApplicablePolicyTasksAsync(agentId);
 
-        var policyKey = BuildPolicyKey(applicable);
+        // Os scripts são carregados uma única vez: entram no fingerprint (versão +
+        // hash do conteúdo) e são reutilizados na montagem dos DTOs.
+        var scriptsById = await LoadScriptsForTasksAsync(applicable);
+        var policyKey = BuildPolicyKey(applicable, scriptsById);
         var fingerprint = ComputeHash(policyKey);
+        var policyUpToDate = !string.IsNullOrWhiteSpace(request.KnownPolicyFingerprint)
+            && string.Equals(request.KnownPolicyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase);
         // Registra o que o agent recebeu (nos dois ramos): é o que permite à aba
         // "Políticas" dizer se ele está com a policy vigente.
         await RememberDeliveredPolicyAsync(agent, fingerprint);
 
-        if (!string.IsNullOrWhiteSpace(request.KnownPolicyFingerprint)
-            && string.Equals(request.KnownPolicyFingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
+        // O atalho "up-to-date" responde Tasks=[] e NÃO carrega conteúdo de script.
+        // Quando o agent pede o conteúdo explicitamente (sync manual com
+        // IncludeScriptContent), o atalho é ignorado: sem isso um agent que já
+        // conhece o fingerprint nunca conseguiria obter o conteúdo, e a mensagem
+        // "refaca o sync com IncludeScriptContent" seria impossível de cumprir.
+        if (policyUpToDate && !request.IncludeScriptContent)
         {
             await _loggingService.LogDebugAsync(
                 LogType.Automation,
@@ -510,7 +519,7 @@ public class AutomationTaskService : IAutomationTaskService
             };
         }
 
-        var taskDtos = await BuildTaskPolicyDtosAsync(applicable, request.IncludeScriptContent);
+        var taskDtos = await BuildTaskPolicyDtosAsync(applicable, request.IncludeScriptContent, scriptsById);
 
         await _loggingService.LogInfoAsync(
             LogType.Automation,
@@ -530,7 +539,9 @@ public class AutomationTaskService : IAutomationTaskService
 
         return new AgentAutomationPolicySyncResponse
         {
-            UpToDate = false,
+            // policyUpToDate reflete o fingerprint; as Tasks vêm populadas porque o
+            // conteúdo foi pedido explicitamente (atalho up-to-date ignorado acima).
+            UpToDate = policyUpToDate,
             PolicyFingerprint = fingerprint,
             GeneratedAt = DateTime.UtcNow,
             TaskCount = taskDtos.Count,
@@ -560,24 +571,36 @@ public class AutomationTaskService : IAutomationTaskService
     }
 
     /// <summary>
+    /// Carrega numa única consulta todos os scripts referenciados pelas tasks
+    /// RunScript. Compartilhado pelo cálculo do fingerprint (BuildPolicyKey) e
+    /// pela montagem dos DTOs — ambos precisam do conteúdo/versão do script.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<Guid, AutomationScriptDefinition>> LoadScriptsForTasksAsync(
+        IReadOnlyList<AutomationTaskDefinition> applicable)
+    {
+        var scriptIds = applicable
+            .Where(task => task.ActionType == AutomationTaskActionType.RunScript && task.ScriptId.HasValue)
+            .Select(task => task.ScriptId!.Value)
+            .Distinct()
+            .ToList();
+        return scriptIds.Count > 0
+            ? await _scriptRepository.GetByIdsAsync(scriptIds, includeInactive: false)
+            : new Dictionary<Guid, AutomationScriptDefinition>();
+    }
+
+    /// <summary>
     /// Monta os DTOs que o agent recebe (e que a UI de verificação mostra). É o
     /// ponto ÚNICO de mapeamento: policy-sync e prévia usam exatamente a mesma
     /// lista, então o que o operador vê na aba "Políticas" é o que o agent recebe.
     /// </summary>
     private async Task<List<AgentAutomationTaskPolicyDto>> BuildTaskPolicyDtosAsync(
         IReadOnlyList<AutomationTaskDefinition> applicable,
-        bool includeScriptContent)
+        bool includeScriptContent,
+        IReadOnlyDictionary<Guid, AutomationScriptDefinition>? preloadedScripts = null)
     {
-        // Busca TODOS os scripts referenciados numa única consulta: antes era um
-        // GetByIdAsync por política (N+1) tanto no sync quanto na prévia.
-        var scriptIds = applicable
-            .Where(task => task.ActionType == AutomationTaskActionType.RunScript && task.ScriptId.HasValue)
-            .Select(task => task.ScriptId!.Value)
-            .Distinct()
-            .ToList();
-        IReadOnlyDictionary<Guid, AutomationScriptDefinition> scriptsById = scriptIds.Count > 0
-            ? await _scriptRepository.GetByIdsAsync(scriptIds, includeInactive: false)
-            : new Dictionary<Guid, AutomationScriptDefinition>();
+        // Reutiliza os scripts já carregados pelo fingerprint quando possível:
+        // antes o repositório era consultado duas vezes por policy-sync.
+        var scriptsById = preloadedScripts ?? await LoadScriptsForTasksAsync(applicable);
 
         var taskDtos = new List<AgentAutomationTaskPolicyDto>(applicable.Count);
         foreach (var task in applicable)
@@ -643,8 +666,11 @@ public class AutomationTaskService : IAutomationTaskService
     {
         _ = cancellationToken;
         var (agent, _, applicable) = await ResolveApplicablePolicyTasksAsync(agentId);
-        var taskDtos = await BuildTaskPolicyDtosAsync(applicable, includeScriptContent: false);
-        var fingerprint = ComputeHash(BuildPolicyKey(applicable));
+        // A prévia usa o MESMO fingerprint do sync: para isso precisa dos scripts
+        // (versão + hash entram na chave) — aqui sem trafegar conteúdo ao browser.
+        var scriptsById = await LoadScriptsForTasksAsync(applicable);
+        var taskDtos = await BuildTaskPolicyDtosAsync(applicable, includeScriptContent: false, scriptsById);
+        var fingerprint = ComputeHash(BuildPolicyKey(applicable, scriptsById));
 
         return new AgentAutomationPolicyPreviewDto
         {
@@ -700,7 +726,8 @@ public class AutomationTaskService : IAutomationTaskService
     {
         _ = cancellationToken;
         var (_, _, applicable) = await ResolveApplicablePolicyTasksAsync(agentId);
-        var policyKey = BuildPolicyKey(applicable);
+        var scriptsById = await LoadScriptsForTasksAsync(applicable);
+        var policyKey = BuildPolicyKey(applicable, scriptsById);
         return ComputeHash(policyKey);
     }
 
@@ -985,7 +1012,9 @@ public class AutomationTaskService : IAutomationTaskService
     /// (triggers, cron, tags, payload, approval). LastUpdatedAt fica como garantia extra —
     /// qualquer update bumpa o timestamp, mas o fingerprint não deve DEPENDER disso.
     /// </summary>
-    private static string BuildPolicyKey(IReadOnlyList<AutomationTaskDefinition> tasks)
+    private static string BuildPolicyKey(
+        IReadOnlyList<AutomationTaskDefinition> tasks,
+        IReadOnlyDictionary<Guid, AutomationScriptDefinition>? scriptsById = null)
     {
         var builder = new StringBuilder();
         foreach (var task in tasks.OrderBy(task => task.Id))
@@ -1017,8 +1046,21 @@ public class AutomationTaskService : IAutomationTaskService
                 .Append(NormalizePromptTimeout(task.UserPromptTimeoutSeconds)).Append('|')
                 .Append((int)task.NotificationMode).Append('|')
                 .Append((int)task.ToastTiming).Append('|')
-                .Append(task.IsActive ? '1' : '0')
-                .Append(';');
+                .Append(task.IsActive ? '1' : '0');
+            // Conteúdo do script entra no fingerprint: sem isso, editar o conteúdo
+            // de um script não alterava a policy entregue — os agentes continuavam
+            // com conteúdo antigo (ou sem conteúdo algum) até uma mudança de task.
+            if (scriptsById is not null
+                && task.ActionType == AutomationTaskActionType.RunScript
+                && task.ScriptId.HasValue
+                && scriptsById.TryGetValue(task.ScriptId.Value, out var script))
+            {
+                builder
+                    .Append('|').Append(script.Version)
+                    .Append('|').Append(script.LastUpdatedAt.ToUniversalTime().Ticks)
+                    .Append('|').Append(ComputeHash(script.Content));
+            }
+            builder.Append(';');
         }
 
         return builder.ToString();

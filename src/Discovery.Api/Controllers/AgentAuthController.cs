@@ -1027,9 +1027,7 @@ public class AgentAuthController : ControllerBase
             var contentType = string.IsNullOrWhiteSpace(package.FileContentType)
                 ? "application/octet-stream"
                 : package.FileContentType;
-            var fileName = string.IsNullOrWhiteSpace(package.FileName)
-                ? package.PackageId
-                : package.FileName;
+            var fileName = ResolveCustomInstallerFileName(package.FileName, package.FileObjectKey, package.PackageId);
 
             Response.ContentType = contentType;
             Response.Headers["Content-Disposition"] =
@@ -1043,6 +1041,25 @@ public class AgentAuthController : ControllerBase
         {
             return NotFound(new { message = "Arquivo nao encontrado no object storage." });
         }
+    }
+
+    /// <summary>
+    /// Resolve o nome do instalador enviado ao agent. Pacotes custom sem
+    /// <c>file_name</c> cadastrado caíam no fallback pelo packageId, devolvendo
+    /// um arquivo SEM extensão — e o agent não consegue executá-lo (`cmd /C`
+    /// recusa binário sem extensão, mesmo sendo um PE válido). A extensão do
+    /// objeto no storage é usada como pista (o upload já valida a extensão) e o
+    /// packageId só permanece cru quando não há nenhuma informação.
+    /// </summary>
+    internal static string ResolveCustomInstallerFileName(string? fileName, string? fileObjectKey, string packageId)
+    {
+        var name = Path.GetFileName((fileName ?? string.Empty).Trim());
+        if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(Path.GetExtension(name)))
+            return name;
+
+        var baseName = string.IsNullOrWhiteSpace(name) ? packageId : name;
+        var keyExtension = Path.GetExtension(fileObjectKey ?? string.Empty);
+        return string.IsNullOrWhiteSpace(keyExtension) ? baseName : baseName + keyExtension;
     }
 
     [HttpGet("me/custom-fields/runtime")]

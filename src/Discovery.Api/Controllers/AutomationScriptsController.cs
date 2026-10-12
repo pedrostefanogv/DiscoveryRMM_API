@@ -64,4 +64,44 @@ public class AutomationScriptsController(IMediator mediator) : ControllerBase
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
+
+    /// <summary>
+    /// Trilha de auditoria do script (quem mudou o quê e quando). Consumida pelo
+    /// modal "Auditoria do script" e pela página /automation/audit.
+    /// </summary>
+    [HttpGet("{id:guid}/audit")]
+    public async Task<IActionResult> GetAudit(Guid id, [FromQuery] int limit = 50)
+    {
+        var result = await mediator.Send(new GetAutomationScriptAuditQuery(id, Math.Clamp(limit, 1, 200)));
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Payload de consumo do script: conteúdo + hash SHA-256 + ParametersSchemaJson
+    /// e MetadataJson — o mesmo material que o agent recebe — e registra um evento
+    /// "Consumed" na auditoria. Usado para conferir/exportar o script sem executá-lo.
+    /// </summary>
+    [HttpGet("{id:guid}/consume")]
+    public async Task<IActionResult> Consume(Guid id)
+    {
+        var result = await mediator.Send(new GetAutomationScriptConsumeQuery(id, CurrentActor(), ClientIp(), CorrelationId()));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    /// <summary>Ator da ação para auditoria (mesma convenção de AgentLabelsController).</summary>
+    private string CurrentActor()
+        => HttpContext.Items["UserId"] is Guid userId
+            ? $"user:{userId}"
+            : HttpContext.Items["Username"] as string ?? "system";
+
+    private string? ClientIp() => HttpContext.Connection.RemoteIpAddress?.ToString();
+
+    private string CorrelationId()
+        => Request.Headers.TryGetValue("X-Correlation-Id", out var values) && !string.IsNullOrWhiteSpace(values.ToString())
+            ? values.ToString()
+            : "api";
 }

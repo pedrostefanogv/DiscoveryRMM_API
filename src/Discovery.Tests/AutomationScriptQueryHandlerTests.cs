@@ -67,6 +67,43 @@ public class AutomationScriptQueryHandlerTests
         Assert.That(result.Errors[0].Code, Is.EqualTo("NotFound"));
     }
 
+    [Test]
+    public async Task GetAudit_DeveRetornarEventos()
+    {
+        var handler = new GetAutomationScriptAuditQueryHandler(new FakeAutomationScriptService());
+
+        var result = await handler.Handle(new GetAutomationScriptAuditQuery(ScriptId, 50), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value, Has.Count.EqualTo(1));
+        Assert.That(result.Value![0].ChangeType, Is.EqualTo("Created"));
+        Assert.That(result.Value[0].ScriptId, Is.EqualTo(ScriptId));
+    }
+
+    [Test]
+    public async Task Consume_DeveRetornarPayloadComHash()
+    {
+        var handler = new GetAutomationScriptConsumeQueryHandler(new FakeAutomationScriptService());
+
+        var result = await handler.Handle(new GetAutomationScriptConsumeQuery(ScriptId), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.ScriptId, Is.EqualTo(ScriptId));
+        Assert.That(result.Value.Content, Does.Contain("AnyDesk"));
+        Assert.That(result.Value.ContentHashSha256, Is.EqualTo("hash"));
+    }
+
+    [Test]
+    public async Task Consume_Desconhecido_DeveRetornarNotFound()
+    {
+        var handler = new GetAutomationScriptConsumeQueryHandler(new FakeAutomationScriptService());
+
+        var result = await handler.Handle(new GetAutomationScriptConsumeQuery(Guid.NewGuid()), CancellationToken.None);
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Code, Is.EqualTo("NotFound"));
+    }
+
     private sealed class FakeAutomationScriptService : IAutomationScriptService
     {
         private static AutomationScriptDetailDto Detail() => new()
@@ -111,10 +148,47 @@ public class AutomationScriptQueryHandlerTests
 
         public Task<IReadOnlyList<AutomationScriptAuditDto>> GetAuditAsync(
             Guid id, int limit = 100, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            if (id != ScriptId)
+                return Task.FromResult<IReadOnlyList<AutomationScriptAuditDto>>([]);
+
+            IReadOnlyList<AutomationScriptAuditDto> entries =
+            [
+                new AutomationScriptAuditDto
+                {
+                    Id = Guid.Parse("44444444-4444-4444-4444-444444444444"),
+                    ScriptId = ScriptId,
+                    ChangeType = "Created",
+                    Reason = "created",
+                    NewValueJson = "{}",
+                    ChangedAt = DateTime.UtcNow
+                }
+            ];
+            return Task.FromResult(entries);
+        }
 
         public Task<AutomationScriptConsumeDto?> GetConsumePayloadAsync(
             Guid id, string? changedBy, string? ipAddress, string correlationId, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            if (id != ScriptId)
+                return Task.FromResult<AutomationScriptConsumeDto?>(null);
+
+            var detail = Detail();
+            return Task.FromResult<AutomationScriptConsumeDto?>(new AutomationScriptConsumeDto
+            {
+                ScriptId = detail.Id,
+                Name = detail.Name,
+                Version = detail.Version,
+                ScriptType = detail.ScriptType,
+                ExecutionFrequency = detail.ExecutionFrequency,
+                TriggerModes = detail.TriggerModes,
+                Summary = detail.Summary,
+                LastUpdatedAt = detail.LastUpdatedAt,
+                Content = detail.Content,
+                ContentHashSha256 = detail.ContentHashSha256,
+                ParametersSchemaJson = detail.ParametersSchemaJson,
+                MetadataJson = detail.MetadataJson
+            });
+        }
     }
 }
