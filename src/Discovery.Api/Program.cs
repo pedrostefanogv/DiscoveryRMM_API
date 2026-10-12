@@ -415,6 +415,16 @@ catch (Exception ex)
     app.Logger.LogWarning(ex, "Falha ao aplicar o agendamento dos processamentos em segundo plano no startup.");
 }
 
+// Aplica o cron configurado para a manutenção física do banco (DatabaseMaintenance.Schedule).
+try
+{
+    await QuartzServiceCollectionExtensions.ApplyDatabaseMaintenanceScheduleAsync(app.Services);
+}
+catch (Exception ex)
+{
+    app.Logger.LogWarning(ex, "Falha ao aplicar o agendamento da manutenção do banco no startup.");
+}
+
 // Configure the HTTP request pipeline
 var openApiEnabled = builder.Configuration.GetValue("OpenApi:Enabled", app.Environment.IsDevelopment());
 var scalarEnabled = openApiEnabled && builder.Configuration.GetValue("OpenApi:Scalar:Enabled", true);

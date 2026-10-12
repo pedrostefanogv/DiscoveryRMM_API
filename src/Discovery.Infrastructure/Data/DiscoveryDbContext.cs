@@ -127,6 +127,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     // Object Storage & Attachments (genérico para qualquer escopo)
     public DbSet<Attachment> Attachments => Set<Attachment>();
 
+    // Histórico persistido da manutenção física do banco
+    public DbSet<DatabaseMaintenanceRun> DatabaseMaintenanceRuns => Set<DatabaseMaintenanceRun>();
+
     // Identity & Security
     public DbSet<User> Users => Set<User>();
     public DbSet<UserGroup> UserGroups => Set<UserGroup>();
@@ -185,6 +188,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         // Attachments
         ConfigureAttachments(modelBuilder);
 
+        // Histórico da manutenção do banco
+        ConfigureMaintenanceRuns(modelBuilder);
+
         // Remote sessions (acesso remoto nativo)
         ConfigureRemoteSessions(modelBuilder);
 
@@ -214,6 +220,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureAiAssignment(ModelBuilder modelBuilder);
     static partial void ConfigureBackgroundProcessing(ModelBuilder modelBuilder);
     static partial void ConfigureAttachments(ModelBuilder modelBuilder);
+    static partial void ConfigureMaintenanceRuns(ModelBuilder modelBuilder);
     static partial void ConfigureRemoteSessions(ModelBuilder modelBuilder);
     static partial void ConfigureTicketChat(ModelBuilder modelBuilder);
 

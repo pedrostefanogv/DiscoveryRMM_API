@@ -1,3 +1,5 @@
+using System;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Discovery.Core.Configuration;
@@ -66,6 +68,38 @@ public class RetentionSettings
     public DatabaseMaintenanceSettings? DatabaseMaintenance { get; set; }
 }
 
+/// <summary>Escopos de VACUUM FULL aceitos pela configuração.</summary>
+public static class DatabaseMaintenanceScopes
+{
+    /// <summary>Somente tabelas acima do limiar de tuplas mortas (recomendado).</summary>
+    public const string Bloated = "bloated";
+
+    /// <summary>Todas as tabelas (janela de manutenção pesada).</summary>
+    public const string All = "all";
+
+    /// <summary>Desliga a fase (equivale a flag desligada).</summary>
+    public const string None = "none";
+}
+
+/// <summary>Escopos de REINDEX aceitos pela configuração.</summary>
+public static class DatabaseReindexScopes
+{
+    /// <summary>Somente índices inválidos (sempre repara estes, independente da flag).</summary>
+    public const string Invalid = "invalid";
+
+    /// <summary>Todos os índices das tabelas do escopo (janela de manutenção pesada).</summary>
+    public const string All = "all";
+
+    /// <summary>Desliga a fase (índices inválidos continuam sendo reparados).</summary>
+    public const string None = "none";
+}
+
+/// <summary>
+/// Manutenção física do PostgreSQL (VACUUM/REINDEX/ANALYZE/FREEZE) agendada pelo
+/// <c>DatabaseMaintenanceJob</c>. Todos os campos têm default seguro: a rotina
+/// leve (VACUUM ANALYZE) é ligada e as operações com lock exclusivo (VACUUM FULL,
+/// REINDEX de tudo) ficam desligadas até o operador optar por elas.
+/// </summary>
 public class DatabaseMaintenanceSettings
 {
     /// <summary>Enable scheduled database maintenance. Default: true.</summary>
@@ -73,19 +107,110 @@ public class DatabaseMaintenanceSettings
 
     /// <summary>
     /// Quartz cron expression for maintenance window.
-    /// Default: "0 0 3 ? * SUN" (Sunday 3 AM).
+    /// Default: "0 0 3 ? * SUN" (Sunday 3 AM). Aplicada no startup pela API.
     /// </summary>
     public string Schedule { get; set; } = "0 0 3 ? * SUN";
 
-    /// <summary>Run VACUUM FULL on ALL user tables (reclaims disk space, heavy).</summary>
-    public bool VacuumFull { get; set; } = true;
+    /// <summary>
+    /// VACUUM FULL (reescreve a tabela, lock exclusivo). Default: false — só
+    /// ligue para janelas pesadas; use <see cref="VacuumFullScope"/> = "bloated"
+    /// para atingir apenas tabelas com muitas tuplas mortas.
+    /// </summary>
+    public bool VacuumFull { get; set; } = false;
 
-    /// <summary>Run REINDEX on ALL user table indexes (rebuilds fragmented indexes).</summary>
+    /// <summary>Escopo do VACUUM FULL: "bloated" (default) ou "all".</summary>
+    public string VacuumFullScope { get; set; } = DatabaseMaintenanceScopes.Bloated;
+
+    /// <summary>Limiar (%) de tuplas mortas sobre vivas para escolher o VACUUM FULL. Default: 20.</summary>
+    public int VacuumFullBloatPercent { get; set; } = 20;
+
+    /// <summary>Executa a fase de REINDEX (concorrente por default). Default: true.</summary>
     public bool Reindex { get; set; } = true;
 
-    /// <summary>Run ANALYZE on ALL user tables (updates query planner statistics).</summary>
+    /// <summary>
+    /// Escopo do REINDEX: "invalid" (default, só índices quebrados), "all" ou "none".
+    /// Índices inválidos (<c>pg_index.indisvalid = false</c>) são SEMPRE reparados,
+    /// mesmo com a flag desligada — isso é integridade, não tuning.
+    /// </summary>
+    public string ReindexScope { get; set; } = DatabaseReindexScopes.Invalid;
+
+    /// <summary>Usa REINDEX ... CONCURRENTLY (não bloqueia escrita). Default: true.</summary>
+    public bool ReindexConcurrently { get; set; } = true;
+
+    /// <summary>Executa ANALYZE (atualiza estatísticas do planner). Default: true.</summary>
     public bool Analyze { get; set; } = true;
 
-    /// <summary>Run VACUUM ANALYZE on ALL user tables (lighter, non-blocking). Runs after VACUUM FULL.</summary>
-    public bool VacuumAnalyze { get; set; } = false;
+    /// <summary>Só reanalisa tabelas sem estatística recente (dias). Default: 3.</summary>
+    public int AnalyzeStaleAfterDays { get; set; } = 3;
+
+    /// <summary>VACUUM ANALYZE em todas as tabelas (rotina leve, não bloqueia escrita). Default: true.</summary>
+    public bool VacuumAnalyze { get; set; } = true;
+
+    /// <summary>VACUUM (FREEZE) nas tabelas com XID antigo (proteção contra wraparound). Default: true.</summary>
+    public bool VacuumFreeze { get; set; } = true;
+
+    /// <summary>
+    /// Idade mínima de XID (age(relfrozenxid)) para disparar o VACUUM FREEZE.
+    /// Default: 100.000.000 (metade do autovacuum_freeze_max_age padrão de 200M).
+    /// </summary>
+    public long FreezeMinXidAge { get; set; } = 100_000_000;
+
+    /// <summary>lock_timeout por comando, em segundos (falha em vez de travar horas). Default: 5.</summary>
+    public int LockTimeoutSeconds { get; set; } = 5;
+
+    /// <summary>maintenance_work_mem da sessão do job, em MB. Default: 256.</summary>
+    public int MaintenanceWorkMemMb { get; set; } = 256;
+
+    /// <summary>Teto de tabelas processadas por execução (0 = sem limite). Default: 0.</summary>
+    public int MaxTablesPerRun { get; set; } = 0;
+
+    /// <summary>
+    /// Normaliza os valores para faixas seguras. Nunca lança: configuração
+    /// corrompida cai no default do campo.
+    /// </summary>
+    public DatabaseMaintenanceSettings Normalize()
+    {
+        Schedule = string.IsNullOrWhiteSpace(Schedule) ? "0 0 3 ? * SUN" : Schedule.Trim();
+        VacuumFullScope = NormalizeScope(VacuumFullScope, DatabaseMaintenanceScopes.Bloated,
+            [DatabaseMaintenanceScopes.Bloated, DatabaseMaintenanceScopes.All, DatabaseMaintenanceScopes.None]);
+        ReindexScope = NormalizeScope(ReindexScope, DatabaseReindexScopes.Invalid,
+            [DatabaseReindexScopes.Invalid, DatabaseReindexScopes.All, DatabaseReindexScopes.None]);
+        VacuumFullBloatPercent = Math.Clamp(VacuumFullBloatPercent, 1, 1000);
+        AnalyzeStaleAfterDays = Math.Clamp(AnalyzeStaleAfterDays, 0, 3650);
+        FreezeMinXidAge = Math.Clamp(FreezeMinXidAge, 1_000_000, 2_000_000_000);
+        LockTimeoutSeconds = Math.Clamp(LockTimeoutSeconds, 0, 3600);
+        MaintenanceWorkMemMb = Math.Clamp(MaintenanceWorkMemMb, 16, 4096);
+        MaxTablesPerRun = Math.Max(0, MaxTablesPerRun);
+        return this;
+    }
+
+    /// <summary>
+    /// Lê a seção de manutenção do <c>RetentionSettingsJson</c>. JSON vazio ou
+    /// sem a seção devolve os defaults (Enabled = true), alinhado com a
+    /// documentação do campo.
+    /// </summary>
+    public static DatabaseMaintenanceSettings Parse(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json.Trim() == "{}")
+            return new DatabaseMaintenanceSettings();
+
+        try
+        {
+            var settings = JsonSerializer.Deserialize<RetentionSettings>(
+                json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return (settings?.DatabaseMaintenance ?? new DatabaseMaintenanceSettings()).Normalize();
+        }
+        catch (JsonException)
+        {
+            return new DatabaseMaintenanceSettings();
+        }
+    }
+
+    private static string NormalizeScope(string? value, string fallback, string[] allowed)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return fallback;
+        var normalized = value.Trim().ToLowerInvariant();
+        return Array.Exists(allowed, a => a == normalized) ? normalized : fallback;
+    }
 }

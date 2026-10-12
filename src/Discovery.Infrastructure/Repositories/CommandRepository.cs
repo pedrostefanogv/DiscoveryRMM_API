@@ -114,6 +114,7 @@ public class CommandRepository : ICommandRepository
                     command => status == CommandStatus.Completed
                         || status == CommandStatus.Failed
                         || status == CommandStatus.Timeout
+                        || status == CommandStatus.Cancelled
                         ? now
                         : command.CompletedAt));
     }

@@ -91,6 +91,11 @@ public class PendingCommandRedeliveryService(
         var agentRepo = scope.ServiceProvider.GetRequiredService<IAgentRepository>();
         var commandRepo = scope.ServiceProvider.GetRequiredService<ICommandRepository>();
 
+        // A reentrega é cega ao domínio: a guarda (quando registrada) diz se o
+        // comando ainda faz sentido — ex.: convite de chat de uma sessão que já
+        // terminou não pode ser reenviado.
+        var redeliveryGuard = scope.ServiceProvider.GetService<ICommandRedeliveryGuard>();
+
         // Independe do transporte: comando preso além da janela nunca vai chegar.
         await ExpireStaleAsync(scope.ServiceProvider, commandRepo, window, ct);
 
@@ -113,6 +118,37 @@ public class PendingCommandRedeliveryService(
         foreach (var command in candidates)
         {
             ct.ThrowIfCancellationRequested();
+
+            if (redeliveryGuard is not null)
+            {
+                CommandRedeliveryDecision decision;
+                try
+                {
+                    decision = await redeliveryGuard.EvaluateAsync(command, ct);
+                }
+                catch (Exception ex)
+                {
+                    // Falha ao avaliar: NÃO reenvia nesta varredura (fail-closed),
+                    // mas também não encerra o comando — a próxima varredura tenta
+                    // de novo.
+                    logger.LogWarning(ex,
+                        "Falha ao avaliar a reentrega do comando {CommandId}; envio ignorado nesta varredura.",
+                        command.Id);
+                    continue;
+                }
+
+                if (!decision.Allowed)
+                {
+                    var reason = decision.Reason ?? "reentrega bloqueada pela política do comando";
+                    await commandRepo.UpdateStatusAsync(
+                        command.Id, CommandStatus.Cancelled, command.Result, command.ExitCode, reason);
+
+                    logger.LogInformation(
+                        "Reentrega bloqueada para o comando {CommandId} ({CommandType}): {Reason}",
+                        command.Id, CommandTypeWireMapper.ToWireValue(command.CommandType), reason);
+                    continue;
+                }
+            }
 
             try
             {

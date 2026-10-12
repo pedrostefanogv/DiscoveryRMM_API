@@ -1,4 +1,7 @@
 using Discovery.Api.Services.Quartz;
+using Discovery.Core.Configuration;
+using Discovery.Core.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 using Quartz;
 
 namespace Discovery.Api.DependencyInjection;
@@ -138,7 +141,7 @@ public static class QuartzServiceCollectionExtensions
             q.ScheduleJob<DatabaseMaintenanceJob>(trigger => trigger
                 .WithIdentity(DatabaseMaintenanceJob.Key.Name, DatabaseMaintenanceJob.Key.Group)
                 .WithCronSchedule("0 0 3 ? * SUN")
-                .WithDescription("VACUUM, REINDEX, ANALYZE on configured tables"));
+                .WithDescription("VACUUM, REINDEX, ANALYZE, FREEZE conforme DatabaseMaintenanceSettings"));
 
             // ── Agent Labeling Reconciliation: every 10 minutes ────────
             q.ScheduleJob<AgentLabelingReconciliationJob>(trigger => trigger
@@ -229,6 +232,39 @@ public static class QuartzServiceCollectionExtensions
         });
 
         return services;
+    }
+
+    /// <summary>
+    /// Aplica o cron de <c>DatabaseMaintenanceSettings.Schedule</c> ao trigger do
+    /// job de manutenção. Sem isso o horário configurado no banco era ignorado
+    /// (o trigger ficava sempre no default "0 0 3 ? * SUN").
+    /// </summary>
+    public static async Task ApplyDatabaseMaintenanceScheduleAsync(IServiceProvider services)
+    {
+        var scheduler = await services.GetRequiredService<ISchedulerFactory>().GetScheduler();
+        var jobKey = DatabaseMaintenanceJob.Key;
+
+        if (!await scheduler.CheckExists(jobKey))
+            return;
+
+        using var scope = services.CreateScope();
+        var serverRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
+        var server = await serverRepo.GetOrCreateDefaultAsync();
+        var settings = DatabaseMaintenanceSettings.Parse(server.RetentionSettingsJson);
+
+        var existing = (await scheduler.GetTriggersOfJob(jobKey)).Select(t => t.Key).FirstOrDefault();
+        var triggerKey = existing ?? new TriggerKey(jobKey.Name, jobKey.Group);
+        var trigger = TriggerBuilder.Create()
+            .WithIdentity(triggerKey)
+            .ForJob(jobKey)
+            .WithCronSchedule(settings.Schedule)
+            .WithDescription("VACUUM, REINDEX, ANALYZE, FREEZE conforme DatabaseMaintenanceSettings")
+            .Build();
+
+        if (existing is null)
+            await scheduler.ScheduleJob(trigger);
+        else
+            await scheduler.RescheduleJob(triggerKey, trigger);
     }
 
     /// <summary>

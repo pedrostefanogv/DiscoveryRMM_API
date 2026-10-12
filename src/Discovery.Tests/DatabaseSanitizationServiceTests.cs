@@ -1,4 +1,5 @@
 using Discovery.Core.Entities;
+using Discovery.Core.Entities.Identity;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
@@ -34,7 +35,7 @@ public class DatabaseSanitizationServiceTests
         var report = await svc.RunAsync(dryRun: false, checks: [DatabaseSanitizationChecks.InvalidWorkflowState]);
 
         var check = report.Checks.Single();
-        Assert.That(check.Scanned, Is.EqualTo(1));
+        Assert.That(check.Found, Is.EqualTo(1));
         Assert.That(check.Fixed, Is.EqualTo(1));
         Assert.That((await db.Tickets.SingleAsync()).WorkflowStateId, Is.EqualTo(InitialStateId));
         Assert.That(activityLog.RecordedActivities.Any(a =>
@@ -57,7 +58,7 @@ public class DatabaseSanitizationServiceTests
         var report = await svc.RunAsync(dryRun: true, checks: [DatabaseSanitizationChecks.InvalidWorkflowState]);
 
         Assert.That(report.DryRun, Is.True);
-        Assert.That(report.Checks.Single().Scanned, Is.EqualTo(1));
+        Assert.That(report.Checks.Single().Found, Is.EqualTo(1));
         Assert.That(report.Checks.Single().Fixed, Is.EqualTo(0));
         Assert.That((await db.Tickets.SingleAsync()).WorkflowStateId, Is.EqualTo(Guid.Empty));
         Assert.That(activityLog.RecordedActivities, Is.Empty);
@@ -95,7 +96,8 @@ public class DatabaseSanitizationServiceTests
 
         var report = await svc.RunAsync(dryRun: false, checks: [DatabaseSanitizationChecks.OrphanDepartment]);
 
-        Assert.That(report.Checks.Single().Fixed, Is.EqualTo(1));
+        var check = report.Checks.Single();
+        Assert.That(check.Fixed, Is.EqualTo(1), $"examined={check.Examined} found={check.Found} error={check.Error} samples={string.Join("; ", check.Samples)}");
         Assert.That((await db.Tickets.SingleAsync()).DepartmentId, Is.Null);
         Assert.That(activityLog.RecordedActivities.Any(a => a.Type == TicketActivityType.DepartmentChanged), Is.True);
     }
@@ -139,6 +141,166 @@ public class DatabaseSanitizationServiceTests
         Assert.That(updated.SlaExpiresAt, Is.Not.Null);
         Assert.That(updated.SlaFirstResponseExpiresAt, Is.Not.Null);
         Assert.That(updated.FirstResponseSlaStartedAt, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task RunAsync_ExposesExaminedSeparatelyFromFound()
+    {
+        var db = CreateDb();
+        db.WorkflowStates.Add(new WorkflowState { Id = StateId, ClientId = ClientId, Name = "Open", IsInitial = true });
+        db.Tickets.Add(TicketWithState(StateId));       // saudável
+        db.Tickets.Add(TicketWithState(Guid.Empty));    // inconsistente
+        await db.SaveChangesAsync();
+
+        var svc = BuildService(db, new FakeActivityLogService(), new FakeWorkflowRepository(InitialStateId));
+        var report = await svc.RunAsync(dryRun: true, checks: [DatabaseSanitizationChecks.InvalidWorkflowState]);
+
+        var check = report.Checks.Single();
+        Assert.That(check.Examined, Is.EqualTo(2), "avaliados = população inteira, não só os inconsistentes");
+        Assert.That(check.Found, Is.EqualTo(1));
+        Assert.That(check.Fixed, Is.EqualTo(0));
+        Assert.That(report.TotalExamined, Is.EqualTo(2));
+        Assert.That(report.TotalFound, Is.EqualTo(1));
+        Assert.That(report.Truncated, Is.False);
+    }
+
+    [Test]
+    public async Task RunAsync_WhenDepartmentIsFromAnotherClient_ClearsDepartmentAndProfile()
+    {
+        var db = CreateDb();
+        var otherClient = Guid.NewGuid();
+        var departmentId = Guid.NewGuid();
+        db.Departments.Add(new Department { Id = departmentId, Name = "Outro cliente", ClientId = otherClient, IsActive = true });
+        db.WorkflowStates.Add(new WorkflowState { Id = StateId, ClientId = ClientId, Name = "Open", IsInitial = true });
+        var ticket = TicketWithState(StateId);
+        ticket.DepartmentId = departmentId;
+        ticket.WorkflowProfileId = Guid.NewGuid();
+        db.Tickets.Add(ticket);
+        await db.SaveChangesAsync();
+
+        var activityLog = new FakeActivityLogService();
+        var svc = BuildService(db, activityLog, new FakeWorkflowRepository(InitialStateId));
+
+        var report = await svc.RunAsync(dryRun: false, checks: [DatabaseSanitizationChecks.CrossClientDepartment]);
+
+        Assert.That(report.Checks.Single().Fixed, Is.EqualTo(1));
+        var updated = await db.Tickets.SingleAsync();
+        Assert.That(updated.DepartmentId, Is.Null);
+        Assert.That(updated.WorkflowProfileId, Is.Null);
+        Assert.That(activityLog.RecordedActivities.Any(a => a.Type == TicketActivityType.DepartmentChanged), Is.True);
+    }
+
+    [Test]
+    public async Task RunAsync_WhenProfileBelongsToAnotherDepartment_ClearsProfile()
+    {
+        var db = CreateDb();
+        var departmentId = Guid.NewGuid();
+        var otherDepartmentId = Guid.NewGuid();
+        var profileId = Guid.NewGuid();
+        db.Departments.Add(new Department { Id = departmentId, Name = "Compras", IsActive = true });
+        db.WorkflowProfiles.Add(new WorkflowProfile
+        {
+            Id = profileId, DepartmentId = otherDepartmentId, Name = "Outro", SlaHours = 1, IsActive = true,
+        });
+        db.WorkflowStates.Add(new WorkflowState { Id = StateId, ClientId = ClientId, Name = "Open", IsInitial = true });
+        var ticket = TicketWithState(StateId);
+        ticket.DepartmentId = departmentId;
+        ticket.WorkflowProfileId = profileId;
+        db.Tickets.Add(ticket);
+        await db.SaveChangesAsync();
+
+        var svc = BuildService(db, new FakeActivityLogService(), new FakeWorkflowRepository(InitialStateId));
+
+        var report = await svc.RunAsync(dryRun: false, checks: [DatabaseSanitizationChecks.ProfileDepartmentMismatch]);
+
+        Assert.That(report.Checks.Single().Fixed, Is.EqualTo(1));
+        Assert.That((await db.Tickets.SingleAsync()).WorkflowProfileId, Is.Null);
+    }
+
+    [Test]
+    public async Task RunAsync_WhenSlaFieldsAreInconsistent_NormalizesThem()
+    {
+        var db = CreateDb();
+        db.WorkflowStates.Add(new WorkflowState { Id = StateId, ClientId = ClientId, Name = "Open", IsInitial = true });
+        var ticket = TicketWithState(StateId);
+        ticket.SlaPausedSeconds = -5;
+        ticket.FirstResponseSlaStartedAt = null;
+        ticket.SlaFirstResponseExpiresAt = DateTime.UtcNow.AddHours(4);
+        ticket.UpdatedAt = ticket.CreatedAt.AddMinutes(-10);
+        db.Tickets.Add(ticket);
+        await db.SaveChangesAsync();
+
+        var svc = BuildService(db, new FakeActivityLogService(), new FakeWorkflowRepository(InitialStateId));
+
+        var report = await svc.RunAsync(dryRun: false, checks: [DatabaseSanitizationChecks.SlaInconsistent]);
+
+        Assert.That(report.Checks.Single().Fixed, Is.EqualTo(1));
+        var updated = await db.Tickets.SingleAsync();
+        Assert.That(updated.SlaPausedSeconds, Is.EqualTo(0));
+        Assert.That(updated.FirstResponseSlaStartedAt, Is.Not.Null);
+        Assert.That(updated.UpdatedAt, Is.GreaterThanOrEqualTo(updated.CreatedAt));
+    }
+
+    [Test]
+    public async Task RunAsync_WhenRatingOutOfRange_ClearsRatingMetadata()
+    {
+        var db = CreateDb();
+        db.WorkflowStates.Add(new WorkflowState { Id = StateId, ClientId = ClientId, Name = "Open", IsInitial = true });
+        var ticket = TicketWithState(StateId);
+        ticket.Rating = 9;
+        ticket.RatedAt = DateTime.UtcNow;
+        ticket.RatedBy = "teste";
+        db.Tickets.Add(ticket);
+        await db.SaveChangesAsync();
+
+        var svc = BuildService(db, new FakeActivityLogService(), new FakeWorkflowRepository(InitialStateId));
+
+        var report = await svc.RunAsync(dryRun: false, checks: [DatabaseSanitizationChecks.RatingInvalid]);
+
+        Assert.That(report.Checks.Single().Fixed, Is.EqualTo(1));
+        var updated = await db.Tickets.SingleAsync();
+        Assert.That(updated.Rating, Is.Null);
+        Assert.That(updated.RatedAt, Is.Null);
+        Assert.That(updated.RatedBy, Is.Null);
+    }
+
+    [Test]
+    public async Task RunAsync_WhenTransitionPointsToMissingState_RemovesTransition()
+    {
+        var db = CreateDb();
+        db.WorkflowStates.Add(new WorkflowState { Id = StateId, ClientId = ClientId, Name = "Open", IsInitial = true });
+        db.WorkflowTransitions.Add(new WorkflowTransition
+        {
+            Id = Guid.NewGuid(),
+            FromStateId = StateId,
+            ToStateId = Guid.NewGuid(), // não existe
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var svc = BuildService(db, new FakeActivityLogService(), new FakeWorkflowRepository(InitialStateId));
+
+        var report = await svc.RunAsync(dryRun: false, checks: [DatabaseSanitizationChecks.WorkflowTransitionOrphan]);
+
+        Assert.That(report.Checks.Single().Fixed, Is.EqualTo(1));
+        Assert.That(await db.WorkflowTransitions.CountAsync(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task RunAsync_ReportOnlyCheck_ReportsWithoutFixing()
+    {
+        var db = CreateDb();
+        db.Departments.Add(new Department { Id = Guid.NewGuid(), Name = "Sem perfil", IsActive = true });
+        await db.SaveChangesAsync();
+
+        var svc = BuildService(db, new FakeActivityLogService(), new FakeWorkflowRepository(InitialStateId));
+
+        var report = await svc.RunAsync(dryRun: false, checks: [DatabaseSanitizationChecks.DepartmentWithoutProfile]);
+
+        var check = report.Checks.Single();
+        Assert.That(check.Found, Is.EqualTo(1));
+        Assert.That(check.Fixed, Is.EqualTo(0));
+        Assert.That(check.Samples.Count, Is.EqualTo(1));
     }
 
     // ── Helpers ──
@@ -186,6 +348,8 @@ public class DatabaseSanitizationServiceTests
             var allowed = new HashSet<Type>
             {
                 typeof(Ticket), typeof(Department), typeof(WorkflowState), typeof(WorkflowProfile),
+                typeof(WorkflowTransition), typeof(TicketWatcher), typeof(Attachment),
+                typeof(Agent), typeof(Site), typeof(Client), typeof(User),
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -200,6 +364,13 @@ public class DatabaseSanitizationServiceTests
             modelBuilder.Entity<Department>(e => e.HasKey(d => d.Id));
             modelBuilder.Entity<WorkflowState>(e => e.HasKey(s => s.Id));
             modelBuilder.Entity<WorkflowProfile>(e => e.HasKey(p => p.Id));
+            modelBuilder.Entity<WorkflowTransition>(e => e.HasKey(t => t.Id));
+            modelBuilder.Entity<TicketWatcher>(e => e.HasKey(w => w.Id));
+            modelBuilder.Entity<Attachment>(e => e.HasKey(a => a.Id));
+            modelBuilder.Entity<Agent>(e => e.HasKey(a => a.Id));
+            modelBuilder.Entity<Site>(e => e.HasKey(s => s.Id));
+            modelBuilder.Entity<Client>(e => e.HasKey(c => c.Id));
+            modelBuilder.Entity<User>(e => e.HasKey(u => u.Id));
         }
     }
 

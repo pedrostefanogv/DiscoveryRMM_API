@@ -31,7 +31,15 @@ public class DatabaseSanitizationController(IDatabaseSanitizationService sanitiz
         var req = request ?? new SanitizationRequest(DryRun: null, Checks: null);
         // Segurança: ausente/ambíguo = dry-run. Aplicar exige a flag explícita.
         var dryRun = req.DryRun ?? true;
-        var report = await sanitizationService.RunAsync(dryRun, req.Checks, ct);
-        return Ok(report);
+        try
+        {
+            var report = await sanitizationService.RunAsync(dryRun, req.Checks, ct);
+            return Ok(report);
+        }
+        catch (DatabaseSanitizationBusyException ex)
+        {
+            // Outra execução em andamento: conflito, não erro do cliente.
+            return Conflict(new { error = ex.Message });
+        }
     }
 }

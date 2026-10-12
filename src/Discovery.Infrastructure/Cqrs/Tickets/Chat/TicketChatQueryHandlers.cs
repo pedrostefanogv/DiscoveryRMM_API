@@ -23,8 +23,7 @@ public sealed class GetTicketChatStateQueryHandler(ITicketChatRepository chatRep
 
 /// <summary>Snapshot incremental das mensagens.</summary>
 public sealed class GetTicketChatMessagesQueryHandler(
-    ITicketChatRepository chatRepository,
-    IOptions<TicketChatOptions> options)
+    ITicketChatRepository chatRepository)
     : IRequestHandler<GetTicketChatMessagesQuery, Result<IReadOnlyList<TicketChatMessageDto>>>
 {
     public async Task<Result<IReadOnlyList<TicketChatMessageDto>>> Handle(GetTicketChatMessagesQuery query, CancellationToken ct)
