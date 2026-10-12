@@ -73,6 +73,16 @@ public sealed class CommandRedeliveryGuard(
     /// O que a regra preserva: comando de energia criado com o transporte fora
     /// do ar fica Pending com SentAt nulo e continua elegível à reentrega —
     /// senão o restart pedido com o NATS caído nunca chegaria ao agente.
+    ///
+    /// Limitação aceita: Sent indica que o TRANSPORTE DO SERVIDOR estava
+    /// conectado (AgentCommandDispatcher só olha messaging.IsConnected), não que
+    /// aquele agente recebeu. Um comando de energia publicado com o transporte no
+    /// ar mas o agente offline não será reentregue: ele expira pela janela de
+    /// retenção e é encerrado como Timeout ("Não entregue: agente offline além da
+    /// janela de reentrega."), com motivo explícito no histórico e reenvio manual
+    /// pelo operador. Trade-off deliberado — um comando não executado e VISÍVEL é
+    /// melhor que um loop de reinício (54 reboots em ~5h no incidente que
+    /// originou esta regra).
     /// </summary>
     internal static CommandRedeliveryDecision EvaluatePowerRedelivery(AgentCommand command)
     {
