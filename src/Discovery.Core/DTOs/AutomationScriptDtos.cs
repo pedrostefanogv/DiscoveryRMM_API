@@ -10,8 +10,6 @@ public class AutomationScriptSummaryDto
     public string Summary { get; set; } = string.Empty;
     public AutomationScriptType ScriptType { get; set; }
     public string Version { get; set; } = string.Empty;
-    public string ExecutionFrequency { get; set; } = string.Empty;
-    public IReadOnlyList<string> TriggerModes { get; set; } = [];
     public bool IsActive { get; set; }
     public DateTime LastUpdatedAt { get; set; }
     public DateTime CreatedAt { get; set; }
@@ -21,8 +19,6 @@ public class AutomationScriptDetailDto : AutomationScriptSummaryDto
 {
     public string Content { get; set; } = string.Empty;
     public string ContentHashSha256 { get; set; } = string.Empty;
-    public string? ParametersSchemaJson { get; set; }
-    public string? MetadataJson { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
 
@@ -32,14 +28,10 @@ public class AutomationScriptConsumeDto
     public string Name { get; set; } = string.Empty;
     public string Version { get; set; } = string.Empty;
     public AutomationScriptType ScriptType { get; set; }
-    public string ExecutionFrequency { get; set; } = string.Empty;
-    public IReadOnlyList<string> TriggerModes { get; set; } = [];
     public string Summary { get; set; } = string.Empty;
     public DateTime LastUpdatedAt { get; set; }
     public string Content { get; set; } = string.Empty;
     public string ContentHashSha256 { get; set; } = string.Empty;
-    public string? ParametersSchemaJson { get; set; }
-    public string? MetadataJson { get; set; }
 }
 
 public class AutomationScriptPageDto
@@ -76,11 +68,7 @@ public class CreateAutomationScriptRequest
     public string Summary { get; set; } = string.Empty;
     public AutomationScriptType ScriptType { get; set; } = AutomationScriptType.PowerShell;
     public string Version { get; set; } = "1.0.0";
-    public string ExecutionFrequency { get; set; } = "manual";
-    public IReadOnlyList<string> TriggerModes { get; set; } = [];
     public string Content { get; set; } = string.Empty;
-    public string? ParametersSchemaJson { get; set; }
-    public string? MetadataJson { get; set; }
     public bool IsActive { get; set; } = true;
 }
 
@@ -90,11 +78,7 @@ public class UpdateAutomationScriptRequest
     public string Summary { get; set; } = string.Empty;
     public AutomationScriptType ScriptType { get; set; } = AutomationScriptType.PowerShell;
     public string Version { get; set; } = "1.0.0";
-    public string ExecutionFrequency { get; set; } = "manual";
-    public IReadOnlyList<string> TriggerModes { get; set; } = [];
     public string Content { get; set; } = string.Empty;
-    public string? ParametersSchemaJson { get; set; }
-    public string? MetadataJson { get; set; }
     public bool IsActive { get; set; } = true;
     public string? Reason { get; set; }
 }

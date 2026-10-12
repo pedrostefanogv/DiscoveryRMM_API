@@ -620,9 +620,7 @@ public class AutomationTaskService : IAutomationTaskService
                         ScriptType = script.ScriptType,
                         LastUpdatedAt = script.LastUpdatedAt,
                         ContentHashSha256 = ComputeHash(script.Content),
-                        Content = includeScriptContent ? script.Content : null,
-                        ParametersSchemaJson = script.ParametersSchemaJson,
-                        MetadataJson = script.MetadataJson
+                        Content = includeScriptContent ? script.Content : null
                     };
                 }
             }

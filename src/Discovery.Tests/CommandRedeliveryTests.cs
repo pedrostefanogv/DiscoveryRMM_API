@@ -1,6 +1,7 @@
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore;
@@ -103,6 +104,42 @@ public class CommandRedeliveryAgentSelectionTests
 }
 
 /// <summary>
+/// Ação do laço de reentrega a partir do veredito da guarda: o caso histórico
+/// (Block) encerra como Cancelled, mas a guarda pode pedir "ignore sem cancelar"
+/// — é o caso do comando de energia já publicado, que provavelmente já executou
+/// e não pode aparecer como cancelado no histórico.
+/// </summary>
+[TestFixture]
+public class CommandRedeliveryDecisionActionTests
+{
+    [Test]
+    public void AllowedDecisionSends()
+    {
+        Assert.That(
+            Discovery.Api.Services.PendingCommandRedeliveryService.ResolveAction(CommandRedeliveryDecision.Allow),
+            Is.EqualTo(Discovery.Api.Services.PendingCommandRedeliveryService.RedeliveryAction.Send));
+    }
+
+    [Test]
+    public void BlockedDecisionCancelsLikeBefore()
+    {
+        Assert.That(
+            Discovery.Api.Services.PendingCommandRedeliveryService.ResolveAction(CommandRedeliveryDecision.Block("motivo")),
+            Is.EqualTo(Discovery.Api.Services.PendingCommandRedeliveryService.RedeliveryAction.Cancel));
+    }
+
+    [Test]
+    public void IgnoredDecisionDoesNotCancel()
+    {
+        var decision = CommandRedeliveryDecision.Ignore("comando de energia já publicado");
+
+        Assert.That(
+            Discovery.Api.Services.PendingCommandRedeliveryService.ResolveAction(decision),
+            Is.EqualTo(Discovery.Api.Services.PendingCommandRedeliveryService.RedeliveryAction.Ignore));
+    }
+}
+
+/// <summary>
 /// Elegibilidade da reentrega: só comandos NÃO confirmados, de agentes online
 /// agora, sem envio recente e dentro da janela de retenção. É o que impede
 /// reenviar comando já concluído ou bombardeado a cada varredura.
@@ -189,6 +226,24 @@ public class CommandRedeliveryRepositoryTests
 
         Assert.That(result.Select(c => c.Id), Is.EqualTo(new[] { neverSent.Id }),
             "comando criado quando o NATS estava fora precisa ser entregue");
+    }
+
+    [Test]
+    public async Task PowerCommandNeverPublishedIsStillACandidate()
+    {
+        // Sem regressão para o agente offline: o filtro de energia mora na guarda
+        // (só bloqueia depois da primeira publicação). Aqui, na consulta, um
+        // restart nunca publicado continua elegível.
+        await using var db = NewDb();
+        var neverSent = NewCommand(OnlineAgent, CommandStatus.Pending, Now.AddMinutes(-10), null);
+        neverSent.CommandType = CommandType.Restart;
+        db.AgentCommands.Add(neverSent);
+        await db.SaveChangesAsync();
+
+        var result = await Repository(db).GetRedeliveryCandidatesAsync(
+            [OnlineAgent], Now.AddHours(-24), Now.AddMinutes(-5), 100);
+
+        Assert.That(result.Select(c => c.Id), Is.EqualTo(new[] { neverSent.Id }));
     }
 
     [Test]

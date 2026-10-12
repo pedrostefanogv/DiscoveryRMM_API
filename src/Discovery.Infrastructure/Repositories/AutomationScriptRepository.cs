@@ -128,11 +128,7 @@ public class AutomationScriptRepository : IAutomationScriptRepository
         existing.Summary = script.Summary;
         existing.ScriptType = script.ScriptType;
         existing.Version = script.Version;
-        existing.ExecutionFrequency = script.ExecutionFrequency;
-        existing.TriggerModesJson = script.TriggerModesJson;
         existing.Content = script.Content;
-        existing.ParametersSchemaJson = script.ParametersSchemaJson;
-        existing.MetadataJson = script.MetadataJson;
         existing.IsActive = script.IsActive;
         existing.LastUpdatedAt = DateTime.UtcNow;
         existing.UpdatedAt = DateTime.UtcNow;

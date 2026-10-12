@@ -77,9 +77,9 @@ public class AutomationScriptsController(IMediator mediator) : ControllerBase
     }
 
     /// <summary>
-    /// Payload de consumo do script: conteúdo + hash SHA-256 + ParametersSchemaJson
-    /// e MetadataJson — o mesmo material que o agent recebe — e registra um evento
-    /// "Consumed" na auditoria. Usado para conferir/exportar o script sem executá-lo.
+    /// Payload de consumo do script: conteúdo + hash SHA-256 — o mesmo material que
+    /// o agent recebe — e registra um evento "Consumed" na auditoria. Usado para
+    /// conferir/exportar o script sem executá-lo.
     /// </summary>
     [HttpGet("{id:guid}/consume")]
     public async Task<IActionResult> Consume(Guid id)

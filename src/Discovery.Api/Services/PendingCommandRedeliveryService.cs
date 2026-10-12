@@ -84,6 +84,27 @@ public class PendingCommandRedeliveryService(
             .Select(agent => agent.Id)
             .ToArray();
 
+    /// <summary>O que fazer com um candidato depois do veredito da guarda.</summary>
+    internal enum RedeliveryAction
+    {
+        Send,
+        Cancel,
+        Ignore
+    }
+
+    /// <summary>
+    /// Traduz o veredito da guarda na ação do laço. Sem guarda (ou com Allow):
+    /// reenvia. Com Block: encerra como Cancelled (comportamento histórico) —
+    /// exceto quando a própria guarda pede apenas para ignorar
+    /// (<see cref="CommandRedeliveryDecision.MarkTerminal"/> = false).
+    /// </summary>
+    internal static RedeliveryAction ResolveAction(CommandRedeliveryDecision decision)
+        => decision.Allowed
+            ? RedeliveryAction.Send
+            : decision.MarkTerminal
+                ? RedeliveryAction.Cancel
+                : RedeliveryAction.Ignore;
+
     private async Task ProcessAsync(NatsCommandRedeliveryWindow window, CancellationToken ct)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -93,7 +114,7 @@ public class PendingCommandRedeliveryService(
 
         // A reentrega é cega ao domínio: a guarda (quando registrada) diz se o
         // comando ainda faz sentido — ex.: convite de chat de uma sessão que já
-        // terminou não pode ser reenviado.
+        // terminou, ou comando de energia já publicado (reentrega = novo reboot).
         var redeliveryGuard = scope.ServiceProvider.GetService<ICommandRedeliveryGuard>();
 
         // Independe do transporte: comando preso além da janela nunca vai chegar.
@@ -140,13 +161,29 @@ public class PendingCommandRedeliveryService(
                 if (!decision.Allowed)
                 {
                     var reason = decision.Reason ?? "reentrega bloqueada pela política do comando";
-                    await commandRepo.UpdateStatusAsync(
-                        command.Id, CommandStatus.Cancelled, command.Result, command.ExitCode, reason);
 
-                    logger.LogInformation(
-                        "Reentrega bloqueada para o comando {CommandId} ({CommandType}): {Reason}",
-                        command.Id, CommandTypeWireMapper.ToWireValue(command.CommandType), reason);
-                    continue;
+                    switch (ResolveAction(decision))
+                    {
+                        // MarkTerminal=false (ex.: comando de energia já publicado e
+                        // provavelmente já executado — o reboot derruba o agente antes
+                        // do result/ack): ignora o reenvio e mantém o status. Marcar
+                        // Cancelled aqui seria mentir no histórico, dizendo que o
+                        // reboot foi cancelado quando ele aconteceu.
+                        case RedeliveryAction.Ignore:
+                            logger.LogDebug(
+                                "Reentrega ignorada (sem encerrar) para o comando {CommandId} ({CommandType}): {Reason}",
+                                command.Id, CommandTypeWireMapper.ToWireValue(command.CommandType), reason);
+                            continue;
+
+                        case RedeliveryAction.Cancel:
+                            await commandRepo.UpdateStatusAsync(
+                                command.Id, CommandStatus.Cancelled, command.Result, command.ExitCode, reason);
+
+                            logger.LogInformation(
+                                "Reentrega bloqueada para o comando {CommandId} ({CommandType}): {Reason}",
+                                command.Id, CommandTypeWireMapper.ToWireValue(command.CommandType), reason);
+                            continue;
+                    }
                 }
             }
 

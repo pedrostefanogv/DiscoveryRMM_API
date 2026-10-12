@@ -107,6 +107,4 @@ public class AgentAutomationScriptRefDto
     public DateTime LastUpdatedAt { get; set; }
     public string ContentHashSha256 { get; set; } = string.Empty;
     public string? Content { get; set; }
-    public string? ParametersSchemaJson { get; set; }
-    public string? MetadataJson { get; set; }
 }

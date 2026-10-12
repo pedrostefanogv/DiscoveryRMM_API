@@ -70,7 +70,7 @@ public class AutomationScriptService : IAutomationScriptService
     {
         _ = cancellationToken;
 
-        ValidateRequest(request.Name, request.Summary, request.Content, request.TriggerModes);
+        ValidateRequest(request.Name, request.Summary, request.Content);
 
         var script = new AutomationScriptDefinition
         {
@@ -79,11 +79,7 @@ public class AutomationScriptService : IAutomationScriptService
             Summary = request.Summary.Trim(),
             ScriptType = request.ScriptType,
             Version = string.IsNullOrWhiteSpace(request.Version) ? "1.0.0" : request.Version.Trim(),
-            ExecutionFrequency = string.IsNullOrWhiteSpace(request.ExecutionFrequency) ? "manual" : request.ExecutionFrequency.Trim(),
-            TriggerModesJson = SerializeTriggerModes(request.TriggerModes),
             Content = request.Content,
-            ParametersSchemaJson = request.ParametersSchemaJson,
-            MetadataJson = request.MetadataJson,
             IsActive = request.IsActive
         };
 
@@ -111,9 +107,7 @@ public class AutomationScriptService : IAutomationScriptService
                 scriptId = created.Id,
                 scriptName = created.Name,
                 scriptType = created.ScriptType.ToString(),
-                version = created.Version,
-                triggerModes = ParseTriggerModes(created.TriggerModesJson),
-                executionFrequency = created.ExecutionFrequency
+                version = created.Version
             },
             clientId: created.ClientId?.ToString());
 
@@ -130,7 +124,7 @@ public class AutomationScriptService : IAutomationScriptService
     {
         _ = cancellationToken;
 
-        ValidateRequest(request.Name, request.Summary, request.Content, request.TriggerModes);
+        ValidateRequest(request.Name, request.Summary, request.Content);
 
         var existing = await _scriptRepository.GetByIdAsync(id, includeInactive: true);
         if (existing is null)
@@ -143,11 +137,7 @@ public class AutomationScriptService : IAutomationScriptService
         existing.Summary = request.Summary.Trim();
         existing.ScriptType = request.ScriptType;
         existing.Version = string.IsNullOrWhiteSpace(request.Version) ? existing.Version : request.Version.Trim();
-        existing.ExecutionFrequency = string.IsNullOrWhiteSpace(request.ExecutionFrequency) ? "manual" : request.ExecutionFrequency.Trim();
-        existing.TriggerModesJson = SerializeTriggerModes(request.TriggerModes);
         existing.Content = request.Content;
-        existing.ParametersSchemaJson = request.ParametersSchemaJson;
-        existing.MetadataJson = request.MetadataJson;
         existing.IsActive = request.IsActive;
 
         await _scriptRepository.UpdateAsync(existing);
@@ -180,8 +170,7 @@ public class AutomationScriptService : IAutomationScriptService
                 scriptName = updated.Name,
                 scriptType = updated.ScriptType.ToString(),
                 version = updated.Version,
-                active = updated.IsActive,
-                executionFrequency = updated.ExecutionFrequency
+                active = updated.IsActive
             },
             clientId: updated.ClientId?.ToString());
 
@@ -270,14 +259,10 @@ public class AutomationScriptService : IAutomationScriptService
             Name = script.Name,
             Version = script.Version,
             ScriptType = script.ScriptType,
-            ExecutionFrequency = script.ExecutionFrequency,
-            TriggerModes = ParseTriggerModes(script.TriggerModesJson),
             Summary = script.Summary,
             LastUpdatedAt = script.LastUpdatedAt,
             Content = script.Content,
-            ContentHashSha256 = ComputeHash(script.Content),
-            ParametersSchemaJson = script.ParametersSchemaJson,
-            MetadataJson = script.MetadataJson
+            ContentHashSha256 = ComputeHash(script.Content)
         };
 
         await _auditRepository.CreateAsync(new AutomationScriptAudit
@@ -289,8 +274,7 @@ public class AutomationScriptService : IAutomationScriptService
                 script.Id,
                 script.Name,
                 script.Version,
-                script.ScriptType,
-                script.ExecutionFrequency
+                script.ScriptType
             }, JsonOptions),
             ChangedBy = changedBy,
             IpAddress = ipAddress,
@@ -307,15 +291,14 @@ public class AutomationScriptService : IAutomationScriptService
                 correlationId,
                 scriptId = script.Id,
                 scriptName = script.Name,
-                version = script.Version,
-                triggerModes = payload.TriggerModes
+                version = script.Version
             },
             clientId: script.ClientId?.ToString());
 
         return payload;
     }
 
-    private static void ValidateRequest(string name, string summary, string content, IReadOnlyList<string> triggerModes)
+    private static void ValidateRequest(string name, string summary, string content)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new InvalidOperationException("Name is required.");
@@ -334,35 +317,6 @@ public class AutomationScriptService : IAutomationScriptService
 
         if (content.Length > 200000)
             throw new InvalidOperationException("Content size limit exceeded (200000 chars).");
-
-        if (triggerModes is null || triggerModes.Count == 0)
-            throw new InvalidOperationException("At least one trigger mode must be provided.");
-    }
-
-    private static string SerializeTriggerModes(IReadOnlyList<string> triggerModes)
-    {
-        var normalized = triggerModes
-            .Where(mode => !string.IsNullOrWhiteSpace(mode))
-            .Select(mode => mode.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return JsonSerializer.Serialize(normalized, JsonOptions);
-    }
-
-    private static IReadOnlyList<string> ParseTriggerModes(string? triggerModesJson)
-    {
-        if (string.IsNullOrWhiteSpace(triggerModesJson))
-            return [];
-
-        try
-        {
-            return JsonSerializer.Deserialize<List<string>>(triggerModesJson, JsonOptions) ?? [];
-        }
-        catch
-        {
-            return [];
-        }
     }
 
     private static string ComputeHash(string content)
@@ -381,8 +335,6 @@ public class AutomationScriptService : IAutomationScriptService
             Summary = script.Summary,
             ScriptType = script.ScriptType,
             Version = script.Version,
-            ExecutionFrequency = script.ExecutionFrequency,
-            TriggerModes = ParseTriggerModes(script.TriggerModesJson),
             IsActive = script.IsActive,
             LastUpdatedAt = script.LastUpdatedAt,
             CreatedAt = script.CreatedAt
@@ -399,15 +351,11 @@ public class AutomationScriptService : IAutomationScriptService
             Summary = script.Summary,
             ScriptType = script.ScriptType,
             Version = script.Version,
-            ExecutionFrequency = script.ExecutionFrequency,
-            TriggerModes = ParseTriggerModes(script.TriggerModesJson),
             IsActive = script.IsActive,
             LastUpdatedAt = script.LastUpdatedAt,
             CreatedAt = script.CreatedAt,
             Content = script.Content,
             ContentHashSha256 = ComputeHash(script.Content),
-            ParametersSchemaJson = script.ParametersSchemaJson,
-            MetadataJson = script.MetadataJson,
             UpdatedAt = script.UpdatedAt
         };
     }
@@ -422,15 +370,11 @@ public class AutomationScriptService : IAutomationScriptService
             script.Summary,
             script.ScriptType,
             script.Version,
-            script.ExecutionFrequency,
-            TriggerModes = ParseTriggerModes(script.TriggerModesJson),
             script.IsActive,
             script.LastUpdatedAt,
             script.CreatedAt,
             script.UpdatedAt,
-            ContentHashSha256 = ComputeHash(script.Content),
-            script.ParametersSchemaJson,
-            script.MetadataJson
+            ContentHashSha256 = ComputeHash(script.Content)
         };
     }
 }

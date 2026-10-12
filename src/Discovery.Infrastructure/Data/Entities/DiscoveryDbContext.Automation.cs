@@ -24,11 +24,7 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.Summary).HasColumnName("summary").HasMaxLength(2000);
             entity.Property(s => s.ScriptType).HasColumnName("script_type").HasConversion<int>();
             entity.Property(s => s.Version).HasColumnName("version").HasMaxLength(50);
-            entity.Property(s => s.ExecutionFrequency).HasColumnName("execution_frequency").HasMaxLength(100);
-            entity.Property(s => s.TriggerModesJson).HasColumnName("trigger_modes_json").HasColumnType("jsonb");
             entity.Property(s => s.Content).HasColumnName("content").HasColumnType("text");
-            entity.Property(s => s.ParametersSchemaJson).HasColumnName("parameters_schema_json").HasColumnType("jsonb");
-            entity.Property(s => s.MetadataJson).HasColumnName("metadata_json").HasColumnType("jsonb");
             entity.Property(s => s.IsActive).HasColumnName("is_active");
             entity.Property(s => s.LastUpdatedAt).HasColumnName("last_updated_at").HasColumnType("timestamptz");
             entity.Property(s => s.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");

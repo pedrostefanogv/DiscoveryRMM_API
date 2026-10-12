@@ -10,18 +10,20 @@ using NUnit.Framework;
 namespace Discovery.Tests;
 
 /// <summary>
-/// Regressao do console /automation/scripts. O TypeError
-/// "can't access property 'join', e.triggerModes is undefined" acontecia porque os
-/// handlers de listagem/detalhe projetavam o DTO legado AutomationScriptDto
-/// (Id/Name/Description/IsActive/datas) e descartavam triggerModes, summary,
-/// scriptType, version, executionFrequency e content.
+/// Regressao do console /automation/scripts. Os handlers de listagem/detalhe
+/// precisam projetar o DTO completo (Summary/ScriptType/Version e, no detalhe,
+/// Content) — a projeção legada descartava esses campos e quebrava a tela.
+///
+/// Os metadados declarativos (executionFrequency/triggerModes) e os JSONs de
+/// contrato (parametersSchemaJson/metadataJson) foram removidos do contrato: o
+/// resumo não pode voltar a expô-los.
 /// </summary>
 public class AutomationScriptQueryHandlerTests
 {
     private static readonly Guid ScriptId = Guid.Parse("33333333-3333-3333-3333-333333333333");
 
     [Test]
-    public async Task List_DeveExporTriggerModes_E_CamposDoResumo()
+    public async Task List_DeveExporCamposDoResumo_SemMetadadosRemovidos()
     {
         var handler = new ListAutomationScriptsQueryHandler(new FakeAutomationScriptService());
 
@@ -29,31 +31,45 @@ public class AutomationScriptQueryHandlerTests
 
         Assert.That(result.IsSuccess, Is.True);
         var item = result.Value!.Items.Single();
-        Assert.That(item.TriggerModes, Is.EqualTo(new[] { "manual" }));
         Assert.That(item.Summary, Is.EqualTo("Coleta o ID do AnyDesk"));
         Assert.That(item.Version, Is.EqualTo("1.0.0"));
-        Assert.That(item.ExecutionFrequency, Is.EqualTo("manual"));
         Assert.That(item.ScriptType, Is.EqualTo(AutomationScriptType.PowerShell));
 
-        // Contrato de fio consumido pelo console (camelCase): as propriedades precisam existir.
+        // Contrato de fio consumido pelo console (camelCase): as propriedades precisam existir
+        // e as removidas não podem reaparecer.
         var json = JsonSerializer.Serialize(
             result.Value,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-        Assert.That(json, Does.Contain("\"triggerModes\":[\"manual\"]"));
         Assert.That(json, Does.Contain("\"scriptType\":0"));
         Assert.That(json, Does.Contain("\"summary\":\"Coleta o ID do AnyDesk\""));
+        Assert.That(json, Does.Not.Contain("triggerModes"));
+        Assert.That(json, Does.Not.Contain("executionFrequency"));
+        Assert.That(json, Does.Not.Contain("parametersSchemaJson"));
+        Assert.That(json, Does.Not.Contain("metadataJson"));
     }
 
     [Test]
-    public async Task GetById_DeveExporConteudo_E_TriggerModes()
+    public async Task GetById_DeveExporConteudo()
     {
-        var handler = new GetAutomationScriptByIdQueryHandler(new FakeAutomationScriptService());
+        var service = new FakeAutomationScriptService();
+        var handler = new GetAutomationScriptByIdQueryHandler(service);
 
         var result = await handler.Handle(new GetAutomationScriptByIdQuery(ScriptId), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
         Assert.That(result.Value!.Content, Does.Contain("AnyDesk"));
-        Assert.That(result.Value.TriggerModes, Is.EqualTo(new[] { "manual" }));
+    }
+
+    [Test]
+    public async Task GetById_DeveAceitarScriptInativo()
+    {
+        var service = new FakeAutomationScriptService();
+        var handler = new GetAutomationScriptByIdQueryHandler(service);
+
+        await handler.Handle(new GetAutomationScriptByIdQuery(ScriptId), CancellationToken.None);
+
+        Assert.That(service.LastIncludeInactive, Is.True,
+            "o detalhe precisa incluir inativos: o catálogo lista inativos e a edição precisa abri-los");
     }
 
     [Test]
@@ -106,6 +122,8 @@ public class AutomationScriptQueryHandlerTests
 
     private sealed class FakeAutomationScriptService : IAutomationScriptService
     {
+        public bool LastIncludeInactive { get; private set; }
+
         private static AutomationScriptDetailDto Detail() => new()
         {
             Id = ScriptId,
@@ -113,8 +131,6 @@ public class AutomationScriptQueryHandlerTests
             Summary = "Coleta o ID do AnyDesk",
             ScriptType = AutomationScriptType.PowerShell,
             Version = "1.0.0",
-            ExecutionFrequency = "manual",
-            TriggerModes = ["manual"],
             IsActive = true,
             LastUpdatedAt = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow,
@@ -132,7 +148,10 @@ public class AutomationScriptQueryHandlerTests
 
         public Task<AutomationScriptDetailDto?> GetByIdAsync(
             Guid id, bool includeInactive = false, CancellationToken cancellationToken = default)
-            => Task.FromResult(id == ScriptId ? Detail() : null);
+        {
+            LastIncludeInactive = includeInactive;
+            return Task.FromResult(id == ScriptId ? Detail() : null);
+        }
 
         public Task<AutomationScriptDetailDto> CreateAsync(
             CreateAutomationScriptRequest request, string? changedBy, string? ipAddress, string correlationId, CancellationToken cancellationToken = default)
@@ -180,14 +199,10 @@ public class AutomationScriptQueryHandlerTests
                 Name = detail.Name,
                 Version = detail.Version,
                 ScriptType = detail.ScriptType,
-                ExecutionFrequency = detail.ExecutionFrequency,
-                TriggerModes = detail.TriggerModes,
                 Summary = detail.Summary,
                 LastUpdatedAt = detail.LastUpdatedAt,
                 Content = detail.Content,
-                ContentHashSha256 = detail.ContentHashSha256,
-                ParametersSchemaJson = detail.ParametersSchemaJson,
-                MetadataJson = detail.MetadataJson
+                ContentHashSha256 = detail.ContentHashSha256
             });
         }
     }

@@ -23,7 +23,11 @@ public sealed class GetAutomationScriptByIdQueryHandler(IAutomationScriptService
 {
     public async Task<Result<AutomationScriptDetailDto>> Handle(GetAutomationScriptByIdQuery q, CancellationToken ct)
     {
-        var s = await svc.GetByIdAsync(q.Id, false, ct);
+        // includeInactive: o catálogo mostra scripts inativos (filtro "Todos") e as
+        // páginas de detalhe/edição precisam abri-los — antes o GET respondia 404 e
+        // o botão "Editar" de um script inativo não funcionava. O consumo continua
+        // restrito a scripts ativos (GetConsumePayloadAsync usa includeInactive:false).
+        var s = await svc.GetByIdAsync(q.Id, includeInactive: true, ct);
         if (s is null) return Result<AutomationScriptDetailDto>.Failure(Error.NotFound($"Script {q.Id} not found"));
         return Result<AutomationScriptDetailDto>.Success(s);
     }
@@ -65,11 +69,7 @@ public sealed class CreateAutomationScriptCommandHandler(IAutomationScriptServic
             Summary = cmd.Summary,
             ScriptType = cmd.ScriptType,
             Version = cmd.Version,
-            ExecutionFrequency = cmd.ExecutionFrequency,
-            TriggerModes = cmd.TriggerModes,
             Content = cmd.Content,
-            ParametersSchemaJson = cmd.ParametersSchemaJson,
-            MetadataJson = cmd.MetadataJson,
             IsActive = cmd.IsActive
         };
 
@@ -88,11 +88,7 @@ public sealed class UpdateAutomationScriptCommandHandler(IAutomationScriptServic
             Summary = cmd.Summary,
             ScriptType = cmd.ScriptType,
             Version = cmd.Version,
-            ExecutionFrequency = cmd.ExecutionFrequency,
-            TriggerModes = cmd.TriggerModes,
             Content = cmd.Content,
-            ParametersSchemaJson = cmd.ParametersSchemaJson,
-            MetadataJson = cmd.MetadataJson,
             IsActive = cmd.IsActive,
             Reason = cmd.Reason
         };
