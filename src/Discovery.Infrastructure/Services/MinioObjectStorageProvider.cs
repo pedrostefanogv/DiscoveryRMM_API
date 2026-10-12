@@ -19,6 +19,9 @@ public class MinioObjectStorageProvider : IObjectStorageService
     // interno o servidor fala com o storage por loopback, mas a URL entregue ao
     // agente precisa do host publico — a assinatura cobre o Host.
     private readonly IMinioClient _presignClient;
+    // Host efetivo das URLs pre-assinadas: se for loopback, agentes/navegadores
+    // nao alcancam (cada um tentaria o SEU proprio localhost).
+    private readonly bool _presignEndpointIsLoopback;
     private readonly string _bucketName;
     private readonly string _region;
     private readonly ILogger<MinioObjectStorageProvider> _logger;
@@ -54,6 +57,7 @@ public class MinioObjectStorageProvider : IObjectStorageService
             || string.Equals(settings.PresignEndpoint, settings.Endpoint, StringComparison.OrdinalIgnoreCase)
             ? _client
             : BuildClient(settings.PresignEndpoint!, settings, _logger);
+        _presignEndpointIsLoopback = IsLoopbackEndpoint(settings.PresignEndpoint ?? settings.Endpoint);
 
         _logger.LogInformation(
             "MinIO S3-compatible provider initialized: endpoint={Endpoint} bucket={Bucket} presign={PresignEndpoint}",
@@ -158,6 +162,8 @@ public class MinioObjectStorageProvider : IObjectStorageService
         if (ttlHours <= 0)
             throw new ArgumentException("ttlHours must be positive", nameof(ttlHours));
 
+        AssertPresignEndpointReachable();
+
         var args = new PresignedGetObjectArgs()
             .WithBucket(_bucketName)
             .WithObject(objectKey)
@@ -172,6 +178,8 @@ public class MinioObjectStorageProvider : IObjectStorageService
 
         if (ttlMinutes <= 0)
             throw new ArgumentException("ttlMinutes must be positive", nameof(ttlMinutes));
+
+        AssertPresignEndpointReachable();
 
         var args = new PresignedPutObjectArgs()
             .WithBucket(_bucketName)
@@ -317,6 +325,27 @@ public class MinioObjectStorageProvider : IObjectStorageService
             builder = builder.WithHttpClient(httpClient);
 
         return builder.Build();
+    }
+
+    /// <summary>Loopback nao e alcancavel por agentes/navegadores — presign nele quebra o upload.</summary>
+    private static bool IsLoopbackEndpoint(string rawEndpoint)
+    {
+        var (endpoint, _) = NormalizeEndpoint(rawEndpoint);
+        var host = endpoint.Split(':')[0].Trim().ToLowerInvariant();
+        return host is "localhost" or "127.0.0.1" or "::1" or "0.0.0.0"
+            || host.StartsWith("127.", StringComparison.Ordinal);
+    }
+
+    private void AssertPresignEndpointReachable()
+    {
+        if (!_presignEndpointIsLoopback)
+            return;
+
+        throw new InvalidOperationException(
+            "O endpoint do object storage aponta para loopback (localhost/127.0.0.1). " +
+            "Agentes e navegadores nao alcancam o loopback do servidor: configure a URL PUBLICA " +
+            "(ex.: https://tngplacas.com.br) no Endpoint S3 do console — no modo interno o servidor " +
+            "fala com o RustFS por loopback, mas as URLs pre-assinadas usam a URL publica.");
     }
 
     private static (string Endpoint, bool Secure) NormalizeEndpoint(string rawEndpoint)
