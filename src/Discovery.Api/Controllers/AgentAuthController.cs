@@ -1072,12 +1072,12 @@ public class AgentAuthController : ControllerBase
     }
 
     [HttpPost("me/custom-fields/collected")]
-    public async Task<IActionResult> UpsertCollectedCustomField([FromBody] UpsertCollectedCustomFieldCommand cmd, CancellationToken ct)
+    public async Task<IActionResult> UpsertCollectedCustomField([FromBody] AgentCollectedCustomFieldValueRequest request, CancellationToken ct)
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), Ok);
+        return MapResult(await _mediator.Send(new UpsertCollectedCustomFieldCommand(id, request), ct), Ok);
     }
 
     /// <summary>

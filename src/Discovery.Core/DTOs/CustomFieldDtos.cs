@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Discovery.Core.Enums;
 
 namespace Discovery.Core.DTOs;
@@ -44,6 +45,19 @@ public sealed record AgentCustomFieldCollectedValueInput(
     Guid? DefinitionId,
     string? Name,
     string ValueJson,
+    Guid? TaskId,
+    Guid? ScriptId,
+    string? UpdatedBy);
+
+/// <summary>
+/// Payload PLANO enviado pelo agent em POST /agent-auth/me/custom-fields/collected
+/// (é o próprio corpo do request; sem wrapper). <see cref="Value"/> é JSON bruto para
+/// preservar o tipo (string, número, booleano...) exatamente como o script publicou.
+/// </summary>
+public sealed record AgentCollectedCustomFieldValueRequest(
+    Guid? DefinitionId,
+    string? Name,
+    JsonElement? Value,
     Guid? TaskId,
     Guid? ScriptId,
     string? UpdatedBy);

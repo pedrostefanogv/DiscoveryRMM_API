@@ -125,12 +125,19 @@ public sealed class UpsertCollectedCustomFieldHandler(
 {
     public async Task<Result<object>> Handle(UpsertCollectedCustomFieldCommand cmd, CancellationToken ct)
     {
-        // cmd.Request is the raw JSON payload from the agent
-        var inputJson = System.Text.Json.JsonSerializer.Serialize(cmd.Request);
-        var input = System.Text.Json.JsonSerializer.Deserialize<Core.DTOs.AgentCustomFieldCollectedValueInput>(inputJson);
-
-        if (input is null)
+        // O corpo vem plano do agent: {definitionId,name,value,taskId,scriptId}.
+        // GetRawText preserva o JSON do valor (string vira "id", número vira número).
+        var valueJson = cmd.Request.Value?.GetRawText();
+        if (string.IsNullOrWhiteSpace(valueJson))
             return Result<object>.Failure(Error.Validation("customField", "Invalid custom field payload."));
+
+        var input = new Core.DTOs.AgentCustomFieldCollectedValueInput(
+            cmd.Request.DefinitionId,
+            cmd.Request.Name,
+            valueJson,
+            cmd.Request.TaskId,
+            cmd.Request.ScriptId,
+            cmd.Request.UpdatedBy);
 
         var result = await customFieldService.UpsertAgentCollectedValueAsync(cmd.AgentId, input, ct);
         return Result<object>.Success(new { saved = true, definitionId = result.DefinitionId });
