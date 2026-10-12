@@ -26,4 +26,7 @@ public interface IAppPackageRepository
         bool preventDowngrade = false);
 
     Task<AppPackage> UpsertCustomAsync(AppPackage package, CancellationToken cancellationToken = default);
+
+    /// <summary>Remove um pacote custom pelo packageId. Retorna false se não existir.</summary>
+    Task<bool> DeleteCustomAsync(string packageId, CancellationToken cancellationToken = default);
 }

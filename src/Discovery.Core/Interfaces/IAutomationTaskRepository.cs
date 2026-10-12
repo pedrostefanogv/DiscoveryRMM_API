@@ -41,6 +41,9 @@ public interface IAutomationTaskRepository
         Guid? agentId,
         IReadOnlyList<AppApprovalScopeType>? scopeTypes,
         IReadOnlyList<AutomationTaskActionType>? actionTypes);
+    /// <summary>Existe outra tarefa com esta chave (unicidade da chave padronizada)?</summary>
+    Task<bool> ExistsKeyAsync(string key, Guid? excludeId);
+
     Task UpdateAsync(AutomationTaskDefinition task);
     Task DeleteAsync(Guid id);
     Task<AutomationTaskDefinition?> RestoreAsync(Guid id);

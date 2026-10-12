@@ -90,6 +90,8 @@ public partial class DiscoveryDbContext
             entity.Property(t => t.NotificationMode).HasColumnName("notification_mode").HasConversion<int>();
             entity.Property(t => t.CollectorFieldDefinitionId).HasColumnName("collector_field_definition_id");
             entity.Property(t => t.WriteOutputToNote).HasColumnName("write_output_to_note").HasDefaultValue(false);
+            entity.Property(t => t.Key).HasColumnName("key").HasMaxLength(100);
+            entity.HasIndex(t => t.Key).IsUnique().HasDatabaseName("ux_automation_task_definitions_key").HasFilter("key IS NOT NULL");
             entity.Property(t => t.ToastTiming).HasColumnName("toast_timing").HasConversion<int>();
             entity.Property(t => t.IsActive).HasColumnName("is_active");
             entity.Property(t => t.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
@@ -247,6 +249,10 @@ public partial class DiscoveryDbContext
             entity.Property(p => p.IconUrl).HasColumnName("icon_url").HasMaxLength(2000);
             entity.Property(p => p.SiteUrl).HasColumnName("site_url").HasMaxLength(2000);
             entity.Property(p => p.InstallCommand).HasColumnName("install_command").HasMaxLength(1000);
+            entity.Property(p => p.UninstallCommand).HasColumnName("uninstall_command").HasMaxLength(1000);
+            entity.Property(p => p.ExtractZip).HasColumnName("extract_zip");
+            entity.Property(p => p.FileName).HasColumnName("file_name").HasMaxLength(400);
+            entity.Property(p => p.IconObjectKey).HasColumnName("icon_object_key").HasMaxLength(1000);
             entity.Property(p => p.MetadataJson).HasColumnName("metadata_json").HasColumnType("jsonb");
             entity.Property(p => p.FileObjectKey).HasColumnName("file_object_key").HasMaxLength(1000);
             entity.Property(p => p.FileBucket).HasColumnName("file_bucket").HasMaxLength(200);

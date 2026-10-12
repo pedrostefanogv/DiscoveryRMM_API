@@ -7,6 +7,7 @@ using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Services;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 using Discovery.Api;
@@ -76,6 +77,81 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    /// <summary>
+    /// Envia o instalador ou o icone/capa de um pacote custom para o object storage.
+    /// Multipart/form-data com o arquivo no campo "file" e ?kind=installer|icon.
+    /// </summary>
+    [HttpPost("custom/assets")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequestSizeLimit(5_368_709_120)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 5_368_709_120)]
+    public async Task<IActionResult> UploadCustomAsset(
+        [FromServices] ICustomPackageAssetService assets,
+        [FromForm] IFormFile file,
+        [FromQuery] string kind = "installer",
+        CancellationToken ct = default)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(new { errors = new[] { new { Code = "FileRequired", Message = "Arquivo é obrigatório." } } });
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var asset = await assets.UploadAsync(kind, file.FileName, file.ContentType, stream, ct);
+            return Ok(asset);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = ex.Message } } });
+        }
+    }
+
+    /// <summary>
+    /// Serve o icone/capa de um pacote custom. Anonimo de proposito: e usado
+    /// diretamente em tag &lt;img&gt; pela loja, que nao envia o header Authorization.
+    /// Somente imagens sao servidas.
+    /// </summary>
+    [HttpGet("custom/{packageId}/icon")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetCustomIcon(
+        string packageId,
+        [FromServices] IAppPackageRepository packages,
+        [FromServices] ICustomPackageAssetService assets,
+        CancellationToken ct = default)
+    {
+        var package = await packages.GetByInstallationTypeAndPackageIdAsync(
+            AppInstallationType.Custom, packageId, ct);
+
+        if (package is null || string.IsNullOrWhiteSpace(package.IconObjectKey))
+            return NotFound();
+
+        try
+        {
+            var asset = await assets.DownloadAsync(package.IconObjectKey, ct);
+            if (!asset.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                return NotFound();
+
+            return File(asset.Content, asset.ContentType, asset.FileName);
+        }
+        catch
+        {
+            return NotFound();
+        }
+    }
+
+    /// <summary>Remove um pacote custom (e os arquivos no object storage).</summary>
+    [HttpDelete("custom/{packageId}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
+    public async Task<IActionResult> DeleteCustomPackage(string packageId, CancellationToken ct)
+    {
+        var result = await mediator.Send(new DeleteCustomAppPackageCommand(packageId), ct);
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     // ═══════════════════════════════════════════════════════════════

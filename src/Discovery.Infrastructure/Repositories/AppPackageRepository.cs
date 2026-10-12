@@ -220,19 +220,45 @@ public class AppPackageRepository : IAppPackageRepository
         current.IconUrl = package.IconUrl;
         current.SiteUrl = package.SiteUrl;
         current.InstallCommand = package.InstallCommand;
+        current.UninstallCommand = package.UninstallCommand;
+        current.ExtractZip = package.ExtractZip;
+        current.FileName = package.FileName;
+        current.IconObjectKey = package.IconObjectKey;
         current.MetadataJson = package.MetadataJson;
-        current.FileObjectKey = package.FileObjectKey;
-        current.FileBucket = package.FileBucket;
-        current.FilePublicUrl = package.FilePublicUrl;
-        current.FileContentType = package.FileContentType;
-        current.FileSizeBytes = package.FileSizeBytes;
-        current.FileChecksum = package.FileChecksum;
+
+        // Edicao parcial: campos de arquivo/icone so sao sobrescritos quando o
+        // request traz valor novo — assim editar metadados nao apaga o instalador
+        // ja enviado ao storage.
+        current.FileObjectKey = string.IsNullOrWhiteSpace(package.FileObjectKey) ? current.FileObjectKey : package.FileObjectKey;
+        current.FileBucket = string.IsNullOrWhiteSpace(package.FileBucket) ? current.FileBucket : package.FileBucket;
+        current.FilePublicUrl = string.IsNullOrWhiteSpace(package.FilePublicUrl) ? current.FilePublicUrl : package.FilePublicUrl;
+        current.FileContentType = string.IsNullOrWhiteSpace(package.FileContentType) ? current.FileContentType : package.FileContentType;
+        current.FileName = string.IsNullOrWhiteSpace(package.FileName) ? current.FileName : package.FileName;
+        current.FileSizeBytes = package.FileSizeBytes is null or <= 0 ? current.FileSizeBytes : package.FileSizeBytes;
+        current.FileChecksum = string.IsNullOrWhiteSpace(package.FileChecksum) ? current.FileChecksum : package.FileChecksum;
+        current.IconObjectKey = string.IsNullOrWhiteSpace(package.IconObjectKey) ? current.IconObjectKey : package.IconObjectKey;
+
         current.LastUpdated = package.LastUpdated;
         current.UpdatedAt = now;
         current.SyncedAt = now;
 
         await _db.SaveChangesAsync(cancellationToken);
         return current;
+    }
+
+    public async Task<bool> DeleteCustomAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        var normalizedPackageId = NormalizePackageId(packageId, AppInstallationType.Custom);
+        var current = await _db.AppPackages.SingleOrDefaultAsync(
+            x => x.InstallationType == AppInstallationType.Custom && x.PackageId == normalizedPackageId,
+            cancellationToken);
+
+        if (current is null)
+            return false;
+
+        _db.AppPackages.Remove(current);
+        await _db.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     private static string NormalizePackageId(string packageId, AppInstallationType installationType)

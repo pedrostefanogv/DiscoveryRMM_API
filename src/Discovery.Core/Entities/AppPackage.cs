@@ -15,6 +15,19 @@ public class AppPackage
     public string? IconUrl { get; set; }
     public string? SiteUrl { get; set; }
     public string? InstallCommand { get; set; }
+
+    /// <summary>Comando opcional para remover o pacote custom (executado pelo agent).</summary>
+    public string? UninstallCommand { get; set; }
+
+    /// <summary>Indica que o arquivo enviado e um ZIP e deve ser extraido no host antes de instalar.</summary>
+    public bool ExtractZip { get; set; }
+
+    /// <summary>Nome original do instalador (para download e logging no agent).</summary>
+    public string? FileName { get; set; }
+
+    /// <summary>Chave do icone/capa no object storage (servido pela loja).</summary>
+    public string? IconObjectKey { get; set; }
+
     public string? MetadataJson { get; set; }
     public string? FileObjectKey { get; set; }
     public string? FileBucket { get; set; }

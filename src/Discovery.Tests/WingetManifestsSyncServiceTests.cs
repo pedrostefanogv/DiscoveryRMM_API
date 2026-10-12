@@ -47,6 +47,9 @@ public class WingetManifestsSyncServiceTests
 
         public Task<AppPackage> UpsertCustomAsync(AppPackage package, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+
+        public Task<bool> DeleteCustomAsync(string packageId, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 
     private static string RunGit(string workingDir, params string[] args)

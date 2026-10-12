@@ -988,6 +988,42 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetAppStoreEffectiveQuery(id, installationType), ct), Ok);
     }
 
+    /// <summary>
+    /// Baixa o instalador de um pacote custom publicado pelo servidor. Exige o
+    /// token do agent (rota agent-auth) e que o pacote exista no catalogo.
+    /// </summary>
+    [HttpGet("me/app-store/custom/{packageId}/file")]
+    public async Task<IActionResult> DownloadCustomAppFile(
+        string packageId,
+        [FromServices] IAppPackageRepository appPackages,
+        [FromServices] ICustomPackageAssetService assets,
+        CancellationToken ct = default)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        var package = await appPackages.GetByInstallationTypeAndPackageIdAsync(
+            AppInstallationType.Custom, packageId, ct);
+
+        if (package is null || string.IsNullOrWhiteSpace(package.FileObjectKey))
+            return NotFound(new { message = "Instalador nao encontrado para este pacote custom." });
+
+        try
+        {
+            var asset = await assets.DownloadAsync(package.FileObjectKey, ct);
+            var fileName = string.IsNullOrWhiteSpace(package.FileName) ? asset.FileName : package.FileName;
+            var contentType = string.IsNullOrWhiteSpace(asset.ContentType)
+                ? "application/octet-stream"
+                : asset.ContentType;
+            return File(asset.Content, contentType, fileName, enableRangeProcessing: true);
+        }
+        catch
+        {
+            return NotFound(new { message = "Arquivo nao encontrado no object storage." });
+        }
+    }
+
     [HttpGet("me/custom-fields/runtime")]
     public async Task<IActionResult> GetRuntimeCustomFields([FromQuery] Guid? taskId = null, [FromQuery] Guid? scriptId = null, CancellationToken ct = default)
     {

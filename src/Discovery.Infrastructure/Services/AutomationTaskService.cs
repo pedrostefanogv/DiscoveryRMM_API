@@ -156,6 +156,7 @@ public class AutomationTaskService : IAutomationTaskService
             ToastTiming = request.ToastTiming ?? AutomationToastTiming.After,
             CollectorFieldDefinitionId = request.CollectorFieldDefinitionId,
             WriteOutputToNote = request.WriteOutputToNote,
+            Key = NormalizeTaskKey(request.Key, request.Name),
             AllowDefer = request.AllowDefer,
             CloseProcessesJson = SerializeTags(request.CloseProcesses),
             UserPromptTimeoutSeconds = NormalizePromptTimeout(request.PromptTimeoutSeconds),
@@ -163,6 +164,7 @@ public class AutomationTaskService : IAutomationTaskService
         };
 
         await ValidateCollectorFieldAsync(task);
+        await ValidateTaskKeyAsync(task);
         ValidateTask(task);
 
         var created = await _taskRepository.CreateAsync(task);
@@ -245,6 +247,7 @@ public class AutomationTaskService : IAutomationTaskService
         existing.ToastTiming = request.ToastTiming ?? existing.ToastTiming;
         existing.CollectorFieldDefinitionId = request.CollectorFieldDefinitionId;
         existing.WriteOutputToNote = request.WriteOutputToNote;
+        existing.Key = NormalizeTaskKey(request.Key ?? existing.Key, existing.Name);
         // RequiresApproval derivado do modo (Prompt) — o handler de PUT ja
         // preserva o valor atual quando o campo nao vem no payload.
         existing.RequiresApproval = notificationMode == AutomationNotificationMode.Prompt;
@@ -254,6 +257,7 @@ public class AutomationTaskService : IAutomationTaskService
         existing.IsActive = request.IsActive;
 
         await ValidateCollectorFieldAsync(existing);
+        await ValidateTaskKeyAsync(existing);
         ValidateTask(existing);
 
         await _taskRepository.UpdateAsync(existing);
@@ -814,6 +818,36 @@ public class AutomationTaskService : IAutomationTaskService
             throw new InvalidOperationException("O campo do coletor precisa permitir gravação pelo agente.");
     }
 
+    /// <summary>
+    /// Normaliza a chave da tarefa no mesmo padrão das chaves de campo
+    /// customizado: minúsculas, [a-z0-9_-], derivada do nome quando vazia.
+    /// </summary>
+    private static string? NormalizeTaskKey(string? key, string? name)
+    {
+        var candidate = string.IsNullOrWhiteSpace(key) ? name ?? string.Empty : key;
+        var normalized = candidate.Trim().ToLowerInvariant();
+
+        // Mantém apenas o alfabeto permitido; espaços e acentos viram hífen.
+        normalized = System.Text.RegularExpressions.Regex.Replace(normalized, "[^a-z0-9_-]+", "-");
+        normalized = normalized.Trim('-');
+
+        if (normalized.Length == 0)
+            return null;
+
+        return normalized.Length > 100 ? normalized[..100] : normalized;
+    }
+
+    /// <summary>Chave padronizada precisa ser única entre as tarefas.</summary>
+    private async Task ValidateTaskKeyAsync(AutomationTaskDefinition task)
+    {
+        if (string.IsNullOrWhiteSpace(task.Key))
+            return;
+
+        var duplicated = await _taskRepository.ExistsKeyAsync(task.Key, task.Id == Guid.Empty ? null : task.Id);
+        if (duplicated)
+            throw new InvalidOperationException("Já existe uma tarefa com esta chave.");
+    }
+
     private static void ValidateTask(AutomationTaskDefinition task)
     {
         if (string.IsNullOrWhiteSpace(task.Name))
@@ -1100,6 +1134,7 @@ public class AutomationTaskService : IAutomationTaskService
             ToastTiming = task.ToastTiming,
             CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
             WriteOutputToNote = task.WriteOutputToNote,
+            Key = task.Key,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt
@@ -1125,6 +1160,7 @@ public class AutomationTaskService : IAutomationTaskService
             ToastTiming = task.ToastTiming,
             CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
             WriteOutputToNote = task.WriteOutputToNote,
+            Key = task.Key,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt,
@@ -1172,6 +1208,7 @@ public class AutomationTaskService : IAutomationTaskService
             task.ToastTiming,
             task.CollectorFieldDefinitionId,
             task.WriteOutputToNote,
+            task.Key,
             task.AllowDefer,
             CloseProcesses = ParseTags(task.CloseProcessesJson),
             task.UserPromptTimeoutSeconds,

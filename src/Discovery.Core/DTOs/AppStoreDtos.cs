@@ -15,6 +15,21 @@ public class AppCatalogPackageDto
     public string Icon { get; set; } = string.Empty;
     public string InstallCommand { get; set; } = string.Empty;
 
+    /// <summary>Comando de desinstalação (pacotes custom).</summary>
+    public string UninstallCommand { get; set; } = string.Empty;
+
+    /// <summary>Arquivo enviado é ZIP e deve ser extraído no host.</summary>
+    public bool ExtractZip { get; set; }
+
+    /// <summary>Nome original do instalador enviado ao storage.</summary>
+    public string FileName { get; set; } = string.Empty;
+
+    /// <summary>Tamanho do instalador enviado ao storage.</summary>
+    public long? FileSizeBytes { get; set; }
+
+    /// <summary>Indica se o pacote possui arquivo/instalador no object storage.</summary>
+    public bool HasFile { get; set; }
+
     /// <summary>Switches para instalação silenciosa (fallback: SilentWithProgressCommand → InstallCommand).</summary>
     public string SilentCommand { get; set; } = string.Empty;
 
@@ -56,13 +71,33 @@ public class UpsertCustomAppCatalogPackageRequest
     public string? IconUrl { get; set; }
     public string? SiteUrl { get; set; }
     public string? InstallCommand { get; set; }
+    public string? UninstallCommand { get; set; }
+    public bool ExtractZip { get; set; }
     public string? MetadataJson { get; set; }
     public string? FileObjectKey { get; set; }
     public string? FileBucket { get; set; }
     public string? FilePublicUrl { get; set; }
     public string? FileContentType { get; set; }
+    public string? FileName { get; set; }
     public long? FileSizeBytes { get; set; }
     public string? FileChecksum { get; set; }
+
+    /// <summary>Chave do icone/capa no object storage (opcional).</summary>
+    public string? IconObjectKey { get; set; }
+}
+
+/// <summary>Asset (instalador ou icone) enviado ao object storage para um pacote custom.</summary>
+public class CustomPackageAssetDto
+{
+    public string ObjectKey { get; set; } = string.Empty;
+    public string Bucket { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public long SizeBytes { get; set; }
+    public string? Checksum { get; set; }
+
+    /// <summary>URL relativa para servir o asset (icone) pela API.</summary>
+    public string? Url { get; set; }
 }
 
 public class AppApprovalRuleResolvedDto
@@ -87,6 +122,21 @@ public class EffectiveApprovedAppDto
     public string Publisher { get; set; } = string.Empty;
     public string Version { get; set; } = string.Empty;
     public string InstallCommand { get; set; } = string.Empty;
+
+    /// <summary>Comando de desinstalação (pacotes custom).</summary>
+    public string UninstallCommand { get; set; } = string.Empty;
+
+    /// <summary>Arquivo do pacote é ZIP e deve ser extraído no host pelo agent.</summary>
+    public bool ExtractZip { get; set; }
+
+    /// <summary>Nome do instalador para download pelo agent.</summary>
+    public string FileName { get; set; } = string.Empty;
+
+    /// <summary>Tamanho do instalador em bytes.</summary>
+    public long? FileSizeBytes { get; set; }
+
+    /// <summary>URL (relativa) para o agent baixar o instalador autenticado.</summary>
+    public string FileUrl { get; set; } = string.Empty;
 
     /// <summary>Switches para instalação silenciosa (fallback: SilentWithProgressCommand → InstallCommand).</summary>
     public string SilentCommand { get; set; } = string.Empty;

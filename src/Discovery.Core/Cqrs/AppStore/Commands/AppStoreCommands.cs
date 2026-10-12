@@ -20,8 +20,15 @@ public sealed record UpsertCustomAppPackageCommand(
     string? FilePublicUrl = null,
     string? FileContentType = null,
     long? FileSizeBytes = null,
-    string? FileChecksum = null
+    string? FileChecksum = null,
+    string? UninstallCommand = null,
+    bool ExtractZip = false,
+    string? FileName = null,
+    string? IconObjectKey = null
 ) : ICommand<Result<AppCatalogPackageDto>>;
+
+/// <summary>Remove um pacote custom da loja (e seus arquivos no object storage).</summary>
+public sealed record DeleteCustomAppPackageCommand(string PackageId) : ICommand<Result<VoidResult>>;
 
 // ── Approval rules ───────────────────────────────────────────────────
 public sealed record UpsertAppApprovalRuleCommand(

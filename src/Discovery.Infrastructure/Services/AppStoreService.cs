@@ -100,17 +100,29 @@ public class AppStoreService : IAppStoreService
         if (string.IsNullOrWhiteSpace(request.Name))
             throw new InvalidOperationException("Name e obrigatorio.");
 
+        var normalizedPackageId = request.PackageId.Trim();
+
+        // Quando ha icone enviado ao storage, a loja serve a imagem pela propria
+        // API (endpoint anonimo /custom/{id}/icon); caso contrario vale a URL externa.
+        var iconUrl = !string.IsNullOrWhiteSpace(request.IconObjectKey)
+            ? $"/api/v1/app-store/custom/{Uri.EscapeDataString(normalizedPackageId)}/icon"
+            : request.IconUrl;
+
         var saved = await _appPackageRepo.UpsertCustomAsync(new Discovery.Core.Entities.AppPackage
         {
             InstallationType = AppInstallationType.Custom,
-            PackageId = request.PackageId,
+            PackageId = normalizedPackageId,
             Name = request.Name.Trim(),
             Publisher = request.Publisher,
             Version = request.Version,
             Description = request.Description,
-            IconUrl = request.IconUrl,
+            IconUrl = iconUrl,
             SiteUrl = request.SiteUrl,
             InstallCommand = request.InstallCommand,
+            UninstallCommand = request.UninstallCommand,
+            ExtractZip = request.ExtractZip,
+            FileName = request.FileName,
+            IconObjectKey = request.IconObjectKey,
             MetadataJson = request.MetadataJson,
             FileObjectKey = request.FileObjectKey,
             FileBucket = request.FileBucket,
@@ -836,19 +848,9 @@ public class AppStoreService : IAppStoreService
 
         var packageIndex = await GetCatalogPackageIndexAsync(installationType, cancellationToken);
 
-        if (installationType != AppInstallationType.Winget && installationType != AppInstallationType.Chocolatey)
-        {
-            return effective
-                .OrderBy(x => x.PackageId)
-                .Select(x => new EffectiveApprovedAppDto
-                {
-                    InstallationType = installationType,
-                    PackageId = x.PackageId,
-                    AutoUpdateEnabled = x.AutoUpdateEnabled,
-                    SourceScope = x.SourceScope
-                })
-                .ToList();
-        }
+        // O catalogo e a fonte de metadata para TODOS os tipos, inclusive Custom:
+        // antes Custom devolvia apenas o packageId, entao o agent recebia o pacote
+        // aprovado sem nome, descricao, comando de instalacao ou arquivo.
         return effective
             .OrderBy(x => x.PackageId)
             .Select(x =>
@@ -874,6 +876,13 @@ public class AppStoreService : IAppStoreService
                     Publisher = package.Publisher,
                     Version = package.Version,
                     InstallCommand = package.InstallCommand,
+                    UninstallCommand = package.UninstallCommand,
+                    ExtractZip = package.ExtractZip,
+                    FileName = package.FileName,
+                    FileSizeBytes = package.FileSizeBytes,
+                    FileUrl = package.HasFile
+                        ? $"/api/v1/agent-auth/me/app-store/custom/{Uri.EscapeDataString(package.Id)}/file"
+                        : string.Empty,
                     SilentCommand = package.SilentCommand,
                     SilentWithProgressCommand = package.SilentWithProgressCommand,
                     InstallerUrlsByArch = package.InstallerUrlsByArch,
@@ -1057,6 +1066,11 @@ public class AppStoreService : IAppStoreService
             Category = category,
             Icon = ResolveIconUrl(pkg.IconUrl, pkg.SiteUrl),
             InstallCommand = pkg.InstallCommand ?? string.Empty,
+            UninstallCommand = pkg.UninstallCommand ?? string.Empty,
+            ExtractZip = pkg.ExtractZip,
+            FileName = pkg.FileName ?? string.Empty,
+            FileSizeBytes = pkg.FileSizeBytes,
+            HasFile = !string.IsNullOrWhiteSpace(pkg.FileObjectKey),
             SilentCommand = silentCommand,
             SilentWithProgressCommand = silentWithProgressCommand,
             LastUpdated = pkg.LastUpdated,
@@ -1081,6 +1095,13 @@ public class AppStoreService : IAppStoreService
             Publisher = package.Publisher,
             Version = package.Version,
             InstallCommand = package.InstallCommand,
+            UninstallCommand = package.UninstallCommand,
+            ExtractZip = package.ExtractZip,
+            FileName = package.FileName,
+            FileSizeBytes = package.FileSizeBytes,
+            FileUrl = package.HasFile
+                ? $"/api/v1/agent-auth/me/app-store/custom/{Uri.EscapeDataString(package.Id)}/file"
+                : string.Empty,
             SilentCommand = package.SilentCommand,
             SilentWithProgressCommand = package.SilentWithProgressCommand,
             InstallerUrlsByArch = package.InstallerUrlsByArch,

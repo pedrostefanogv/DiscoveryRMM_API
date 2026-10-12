@@ -35,6 +35,8 @@ public class AutomationTaskSummaryDto
     public Guid? CollectorFieldDefinitionId { get; set; }
     /// <summary>Grava a saida da execucao como nota no agent.</summary>
     public bool WriteOutputToNote { get; set; }
+    /// <summary>Chave padronizada (normalizada) da tarefa.</summary>
+    public string? Key { get; set; }
     public DateTime LastUpdatedAt { get; set; }
     public bool IsDeleted { get; set; }
     public DateTime? DeletedAt { get; set; }
@@ -160,6 +162,8 @@ public class CreateAutomationTaskRequest
     public Guid? CollectorFieldDefinitionId { get; set; }
     /// <summary>Grava a saida da execucao como nota no agent.</summary>
     public bool WriteOutputToNote { get; set; }
+    /// <summary>Chave padronizada (normalizada [a-z0-9_-]). Ausente = derivada do nome.</summary>
+    public string? Key { get; set; }
     public bool IsActive { get; set; } = true;
 }
 

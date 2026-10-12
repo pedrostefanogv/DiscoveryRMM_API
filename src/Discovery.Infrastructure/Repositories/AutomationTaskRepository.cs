@@ -218,6 +218,15 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         return query;
     }
 
+    /// <inheritdoc />
+    public Task<bool> ExistsKeyAsync(string key, Guid? excludeId)
+    {
+        var normalized = key.Trim().ToLowerInvariant();
+        return _db.AutomationTaskDefinitions
+            .AsNoTracking()
+            .AnyAsync(task => task.Key == normalized && (excludeId == null || task.Id != excludeId.Value));
+    }
+
     public async Task UpdateAsync(AutomationTaskDefinition task)
     {
         var existing = await _db.AutomationTaskDefinitions.SingleOrDefaultAsync(t => t.Id == task.Id);
@@ -255,6 +264,7 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         // escolhido na UI seria descartado no PUT.
         existing.CollectorFieldDefinitionId = task.CollectorFieldDefinitionId;
         existing.WriteOutputToNote = task.WriteOutputToNote;
+        existing.Key = task.Key;
         existing.AllowDefer = task.AllowDefer;
         existing.CloseProcessesJson = task.CloseProcessesJson;
         existing.UserPromptTimeoutSeconds = task.UserPromptTimeoutSeconds;

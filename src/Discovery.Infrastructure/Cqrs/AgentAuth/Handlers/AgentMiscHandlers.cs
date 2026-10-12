@@ -83,9 +83,15 @@ public sealed class GetAppStoreEffectiveHandler(
             publisher = a.Publisher,
             version = a.Version,
             installCommand = a.InstallCommand,
+            uninstallCommand = a.UninstallCommand,
+            extractZip = a.ExtractZip,
+            fileName = a.FileName,
+            fileSizeBytes = a.FileSizeBytes,
+            fileUrl = a.FileUrl,
             silent = a.SilentCommand,
             silentWithProgress = a.SilentWithProgressCommand,
             installerUrlsByArch = a.InstallerUrlsByArch,
+            installerTypesByArch = a.InstallerTypesByArch,
             autoUpdateEnabled = a.AutoUpdateEnabled,
             sourceScope = a.SourceScope
         }).ToList();

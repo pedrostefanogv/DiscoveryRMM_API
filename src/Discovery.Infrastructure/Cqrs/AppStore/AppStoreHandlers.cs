@@ -66,10 +66,58 @@ public sealed class UpsertCustomAppPackageCommandHandler(IAppStoreService svc)
             FilePublicUrl = cmd.FilePublicUrl,
             FileContentType = cmd.FileContentType,
             FileSizeBytes = cmd.FileSizeBytes,
-            FileChecksum = cmd.FileChecksum
+            FileChecksum = cmd.FileChecksum,
+            UninstallCommand = cmd.UninstallCommand,
+            ExtractZip = cmd.ExtractZip,
+            FileName = cmd.FileName,
+            IconObjectKey = cmd.IconObjectKey
         };
         var result = await svc.UpsertCustomCatalogPackageAsync(request, ct);
         return Result<AppCatalogPackageDto>.Success(result);
+    }
+}
+
+public sealed class DeleteCustomAppPackageCommandHandler(
+    IAppPackageRepository repository,
+    ICustomPackageAssetService assets)
+    : IRequestHandler<DeleteCustomAppPackageCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(DeleteCustomAppPackageCommand cmd, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(cmd.PackageId))
+            return Result<VoidResult>.Failure(Error.Validation("packageId", "PackageId e obrigatorio."));
+
+        var package = await repository.GetByInstallationTypeAndPackageIdAsync(
+            AppInstallationType.Custom, cmd.PackageId, ct);
+
+        if (package is null)
+            return Result<VoidResult>.Failure(Error.NotFound($"Pacote custom '{cmd.PackageId}' nao encontrado."));
+
+        // Best-effort: a linha do catalogo e a fonte de verdade; uma falha ao
+        // remover o objeto no storage nao deve impedir o delete do pacote.
+        await TryDeleteAssetAsync(assets, package.FileObjectKey, ct);
+        await TryDeleteAssetAsync(assets, package.IconObjectKey, ct);
+
+        await repository.DeleteCustomAsync(package.PackageId, ct);
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+
+    private static async Task TryDeleteAssetAsync(
+        ICustomPackageAssetService assets,
+        string? objectKey,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(objectKey))
+            return;
+
+        try
+        {
+            await assets.DeleteAsync(objectKey, ct);
+        }
+        catch
+        {
+            // Ignorado de proposito: objeto orfao no storage nao quebra o delete.
+        }
     }
 }
 

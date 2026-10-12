@@ -77,6 +77,12 @@ public class AutomationTaskDefinition
     public Guid? CollectorFieldDefinitionId { get; set; }
 
     /// <summary>
+    /// Chave padronizada (normalizada [a-z0-9_-]) derivada do nome — mesmo
+    /// conceito de chave dos campos customizados.
+    /// </summary>
+    public string? Key { get; set; }
+
+    /// <summary>
     /// Quando true, a saída da execução é gravada como uma nota no agent
     /// (histórico do agente) — útil para coleta/relatório mais amplo.
     /// </summary>
