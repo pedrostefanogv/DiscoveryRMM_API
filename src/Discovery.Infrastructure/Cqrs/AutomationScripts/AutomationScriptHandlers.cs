@@ -8,24 +8,24 @@ using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.AutomationScripts;
 
-public sealed class ListAutomationScriptsQueryHandler(IAutomationScriptService svc) : IRequestHandler<ListAutomationScriptsQuery, Result<CursorPageDto<AutomationScriptDto>>>
+public sealed class ListAutomationScriptsQueryHandler(IAutomationScriptService svc) : IRequestHandler<ListAutomationScriptsQuery, Result<CursorPageDto<AutomationScriptSummaryDto>>>
 {
-    public async Task<Result<CursorPageDto<AutomationScriptDto>>> Handle(ListAutomationScriptsQuery q, CancellationToken ct)
+    public async Task<Result<CursorPageDto<AutomationScriptSummaryDto>>> Handle(ListAutomationScriptsQuery q, CancellationToken ct)
     {
+        // Devolve a página do serviço como está: a projeção legada descartava
+        // triggerModes/summary/scriptType/version e quebrava o console.
         var page = await svc.GetListPageAsync(q.ClientId, true, q.Cursor, q.Limit, ct);
-        var dtos = page.Items.Select(s => new AutomationScriptDto(s.Id, s.Name, "Script", s.IsActive, s.CreatedAt, s.CreatedAt)).ToList();
-        return Result<CursorPageDto<AutomationScriptDto>>.Success(
-            new CursorPageDto<AutomationScriptDto>(dtos.AsReadOnly(), dtos.Count, page.Cursor, page.NextCursor, page.HasMore, page.Limit));
+        return Result<CursorPageDto<AutomationScriptSummaryDto>>.Success(page);
     }
 }
 
-public sealed class GetAutomationScriptByIdQueryHandler(IAutomationScriptService svc) : IRequestHandler<GetAutomationScriptByIdQuery, Result<AutomationScriptDto>>
+public sealed class GetAutomationScriptByIdQueryHandler(IAutomationScriptService svc) : IRequestHandler<GetAutomationScriptByIdQuery, Result<AutomationScriptDetailDto>>
 {
-    public async Task<Result<AutomationScriptDto>> Handle(GetAutomationScriptByIdQuery q, CancellationToken ct)
+    public async Task<Result<AutomationScriptDetailDto>> Handle(GetAutomationScriptByIdQuery q, CancellationToken ct)
     {
         var s = await svc.GetByIdAsync(q.Id, false, ct);
-        if (s is null) return Result<AutomationScriptDto>.Failure(Error.NotFound($"Script {q.Id} not found"));
-        return Result<AutomationScriptDto>.Success(new AutomationScriptDto(s.Id, s.Name, "Script", s.IsActive, s.CreatedAt, s.CreatedAt));
+        if (s is null) return Result<AutomationScriptDetailDto>.Failure(Error.NotFound($"Script {q.Id} not found"));
+        return Result<AutomationScriptDetailDto>.Success(s);
     }
 }
 

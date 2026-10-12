@@ -220,6 +220,9 @@ file sealed class NotConfiguredObjectStorageProvider : IObjectStorageService
     public Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
+    public Task DownloadToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
     public Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
@@ -263,6 +266,9 @@ file sealed class DeferredObjectStorageProvider : IObjectStorageService
 
     public async Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).DownloadAsync(objectKey, cancellationToken);
+
+    public async Task DownloadToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).DownloadToAsync(objectKey, destination, cancellationToken);
 
     public async Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).ExistsAsync(objectKey, cancellationToken);

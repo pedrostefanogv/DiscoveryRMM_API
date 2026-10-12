@@ -329,11 +329,13 @@ public class AttachmentService : IAttachmentService
                 attachmentId, attachment.FileName);
 
             var storageService = await GetStorageServiceAsync(cancellationToken);
-            var stream = await storageService.DownloadAsync(
+
+            // Streaming (memória constante): o DownloadAsync bufferiza o arquivo
+            // inteiro em MemoryStream e derruba a API por OOM em anexos grandes.
+            return await ObjectStorageStream.OpenReadAsync(
+                storageService,
                 attachment.StorageObjectKey,
                 cancellationToken);
-
-            return stream;
         }
         catch (Exception ex)
         {

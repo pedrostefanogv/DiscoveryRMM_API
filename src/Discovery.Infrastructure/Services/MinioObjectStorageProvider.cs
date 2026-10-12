@@ -118,6 +118,21 @@ public class MinioObjectStorageProvider : IObjectStorageService
         return DownloadAsyncInternal(objectKey, memoryStream, cancellationToken);
     }
 
+    public async Task DownloadToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default)
+    {
+        ValidateObjectKey(objectKey);
+        ArgumentNullException.ThrowIfNull(destination);
+
+        // O callback do SDK entrega o stream do objeto; copiamos para o destino
+        // em blocos — memória constante, independente do tamanho do arquivo.
+        var getArgs = new GetObjectArgs()
+            .WithBucket(_bucketName)
+            .WithObject(objectKey)
+            .WithCallbackStream((stream, token) => stream.CopyToAsync(destination, 81920, token));
+
+        await _client.GetObjectAsync(getArgs, cancellationToken);
+    }
+
     public Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default)
     {
         ValidateObjectKey(objectKey);

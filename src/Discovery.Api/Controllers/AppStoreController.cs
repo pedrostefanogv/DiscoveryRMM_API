@@ -96,6 +96,9 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         if (file is null || file.Length == 0)
             return BadRequest(new { errors = new[] { new { Code = "FileRequired", Message = "Arquivo é obrigatório." } } });
 
+        if (file.Length > CustomPackageAssetService.MaxAssetBytes)
+            return BadRequest(new { errors = new[] { new { Code = "FileTooLarge", Message = $"Arquivo excede o limite de {CustomPackageAssetService.MaxAssetBytes / (1024L * 1024 * 1024)} GiB." } } });
+
         try
         {
             await using var stream = file.OpenReadStream();

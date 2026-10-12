@@ -34,6 +34,14 @@ public interface IObjectStorageService
     Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Copia o conteúdo do objeto para o stream de destino SEM bufferizar o
+    /// objeto inteiro em memória. Use para arquivos grandes (ex.: instaladores
+    /// de centenas de MB/GB): o DownloadAsync carrega tudo em MemoryStream e
+    /// causa OOM no processo da API.
+    /// </summary>
+    Task DownloadToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Verificar se um objeto existe no storage.
     /// </summary>
     Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default);

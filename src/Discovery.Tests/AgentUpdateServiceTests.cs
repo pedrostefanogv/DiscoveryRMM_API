@@ -802,6 +802,13 @@ public class AgentUpdateServiceTests
             var data = _objects[objectKey].Bytes;
             return Task.FromResult<Stream>(new MemoryStream(data, writable: false));
         }
+
+        public Task DownloadToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default)
+        {
+            DownloadedKeys.Add(objectKey);
+            var data = _objects[objectKey].Bytes;
+            return destination.WriteAsync(data, cancellationToken).AsTask();
+        }
         public Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task DeleteAsync(string objectKey, CancellationToken cancellationToken = default)
         {

@@ -72,13 +72,24 @@ public sealed class UpsertCustomAppPackageCommandHandler(IAppStoreService svc)
             FileName = cmd.FileName,
             IconObjectKey = cmd.IconObjectKey
         };
-        var result = await svc.UpsertCustomCatalogPackageAsync(request, ct);
-        return Result<AppCatalogPackageDto>.Success(result);
+        try
+        {
+            var result = await svc.UpsertCustomCatalogPackageAsync(request, ct);
+            return Result<AppCatalogPackageDto>.Success(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Validação do serviço (PackageId/Name/InstallCommand) deve virar 400
+            // com a mensagem, não um 500 genérico.
+            return Result<AppCatalogPackageDto>.Failure(Error.Validation("customPackage", ex.Message));
+        }
     }
 }
 
 public sealed class DeleteCustomAppPackageCommandHandler(
     IAppPackageRepository repository,
+    IAppApprovalRuleRepository approvalRules,
+    IAppStoreService appStore,
     ICustomPackageAssetService assets)
     : IRequestHandler<DeleteCustomAppPackageCommand, Result<VoidResult>>
 {
@@ -93,6 +104,11 @@ public sealed class DeleteCustomAppPackageCommandHandler(
         if (package is null)
             return Result<VoidResult>.Failure(Error.NotFound($"Pacote custom '{cmd.PackageId}' nao encontrado."));
 
+        // Remove as regras de aprovação do pacote ANTES de apagar a linha: sem
+        // isso ficariam órfãs e voltariam a valer se o mesmo packageId fosse
+        // recriado. O histórico de auditoria é preservado (RuleId vira null).
+        await DeleteApprovalRulesAsync(approvalRules, appStore, package.PackageId, ct);
+
         // Best-effort: a linha do catalogo e a fonte de verdade; uma falha ao
         // remover o objeto no storage nao deve impedir o delete do pacote.
         await TryDeleteAssetAsync(assets, package.FileObjectKey, ct);
@@ -100,6 +116,41 @@ public sealed class DeleteCustomAppPackageCommandHandler(
 
         await repository.DeleteCustomAsync(package.PackageId, ct);
         return Result<VoidResult>.Success(VoidResult.Value);
+    }
+
+    private static async Task DeleteApprovalRulesAsync(
+        IAppApprovalRuleRepository approvalRules,
+        IAppStoreService appStore,
+        string packageId,
+        CancellationToken ct)
+    {
+        IReadOnlyList<Discovery.Core.Entities.AppApprovalRule> rules;
+        try
+        {
+            rules = await approvalRules.GetByPackageAsync(AppInstallationType.Custom, packageId);
+        }
+        catch
+        {
+            // Falha ao listar regras não pode impedir a exclusão do pacote.
+            return;
+        }
+
+        foreach (var rule in rules)
+        {
+            try
+            {
+                await appStore.DeleteRuleAsync(
+                    rule.Id,
+                    "Pacote custom excluído da loja.",
+                    changedBy: null,
+                    ipAddress: null,
+                    ct);
+            }
+            catch
+            {
+                // best-effort: uma regra que não puder ser removida não bloqueia o delete.
+            }
+        }
     }
 
     private static async Task TryDeleteAssetAsync(

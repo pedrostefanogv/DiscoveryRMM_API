@@ -990,18 +990,22 @@ public class AgentAuthController : ControllerBase
 
     /// <summary>
     /// Baixa o instalador de um pacote custom publicado pelo servidor. Exige o
-    /// token do agent (rota agent-auth) e que o pacote exista no catalogo.
+    /// token do agent, que o pacote exista no catalogo E que esteja liberado
+    /// pela politica da loja para o escopo do agent (sem isso qualquer agent
+    /// autenticado baixaria o instalador de um pacote nao aprovado).
     /// </summary>
     [HttpGet("me/app-store/custom/{packageId}/file")]
     public async Task<IActionResult> DownloadCustomAppFile(
         string packageId,
         [FromServices] IAppPackageRepository appPackages,
         [FromServices] ICustomPackageAssetService assets,
+        [FromServices] IAppStoreService appStoreService,
         CancellationToken ct = default)
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
-        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        var (agent, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
+        if (agent is null) return Unauthorized();
 
         var package = await appPackages.GetByInstallationTypeAndPackageIdAsync(
             AppInstallationType.Custom, packageId, ct);
@@ -1009,16 +1013,33 @@ public class AgentAuthController : ControllerBase
         if (package is null || string.IsNullOrWhiteSpace(package.FileObjectKey))
             return NotFound(new { message = "Instalador nao encontrado para este pacote custom." });
 
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        var approved = await appStoreService.IsPackageApprovedAsync(
+            site?.ClientId, agent.SiteId, agent.Id, AppInstallationType.Custom, package.PackageId, ct);
+
+        if (!approved)
+            return NotFound(new { message = "Pacote custom nao aprovado para este agent." });
+
         try
         {
-            var asset = await assets.DownloadAsync(package.FileObjectKey, ct);
-            var fileName = string.IsNullOrWhiteSpace(package.FileName) ? asset.FileName : package.FileName;
-            var contentType = string.IsNullOrWhiteSpace(asset.ContentType)
+            // Stream direto para o corpo da resposta: o arquivo pode ter GBs e
+            // NÃO pode ser bufferizado em memória (causava OOM kill da API).
+            var contentType = string.IsNullOrWhiteSpace(package.FileContentType)
                 ? "application/octet-stream"
-                : asset.ContentType;
-            return File(asset.Content, contentType, fileName, enableRangeProcessing: true);
+                : package.FileContentType;
+            var fileName = string.IsNullOrWhiteSpace(package.FileName)
+                ? package.PackageId
+                : package.FileName;
+
+            Response.ContentType = contentType;
+            Response.Headers["Content-Disposition"] =
+                $"attachment; filename=\"{fileName.Replace("\"", string.Empty)}\"";
+            Response.Headers["Cache-Control"] = "no-store";
+
+            await assets.WriteToAsync(package.FileObjectKey, Response.Body, ct);
+            return new EmptyResult();
         }
-        catch
+        catch (Exception) when (!Response.HasStarted)
         {
             return NotFound(new { message = "Arquivo nao encontrado no object storage." });
         }

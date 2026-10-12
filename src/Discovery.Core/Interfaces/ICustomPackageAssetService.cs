@@ -29,6 +29,16 @@ public interface ICustomPackageAssetService
         string objectKey,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Copia o asset do storage para o stream de destino sem bufferizar o
+    /// arquivo inteiro em memória. Obrigatório para instaladores grandes
+    /// (o DownloadAsync carrega tudo em MemoryStream e derruba a API por OOM).
+    /// </summary>
+    Task WriteToAsync(
+        string objectKey,
+        Stream destination,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Remove um asset do storage pela object key.</summary>
     Task DeleteAsync(
         string objectKey,

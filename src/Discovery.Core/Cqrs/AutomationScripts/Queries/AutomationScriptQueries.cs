@@ -3,7 +3,8 @@ using Discovery.Core.DTOs;
 
 namespace Discovery.Core.Cqrs.AutomationScripts.Queries;
 
-public sealed record ListAutomationScriptsQuery(Guid? ClientId, string? Cursor = null, int Limit = 50) : IQuery<Result<CursorPageDto<AutomationScriptDto>>>;
-public sealed record GetAutomationScriptByIdQuery(Guid Id) : IQuery<Result<AutomationScriptDto>>;
-
-public sealed record AutomationScriptDto(Guid Id, string Name, string? Description, bool IsActive, DateTime CreatedAt, DateTime UpdatedAt);
+// O contrato do console (AutomationScriptsPage) espera o resumo/detalhe completos:
+// summary, scriptType, version, executionFrequency, triggerModes, lastUpdatedAt e (no detalhe) content.
+// A paginação já é produzida por IAutomationScriptService.GetListPageAsync/GetByIdAsync.
+public sealed record ListAutomationScriptsQuery(Guid? ClientId, string? Cursor = null, int Limit = 50) : IQuery<Result<CursorPageDto<AutomationScriptSummaryDto>>>;
+public sealed record GetAutomationScriptByIdQuery(Guid Id) : IQuery<Result<AutomationScriptDetailDto>>;

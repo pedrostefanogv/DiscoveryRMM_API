@@ -232,17 +232,42 @@ public class AgentUpdateService(
         {
             foreach (var artifact in sourceRelease.Artifacts)
             {
-                await using var content = await storage.DownloadAsync(artifact.StorageObjectKey, cancellationToken);
-                await UploadArtifactAsync(
-                    promotedRelease.Id,
-                    artifact.Platform,
-                    artifact.Architecture,
-                    artifact.ArtifactType,
-                    artifact.FileName,
-                    artifact.ContentType,
-                    content,
-                    artifact.SignatureThumbprint,
-                    cancellationToken);
+                // Espelha o artefato via arquivo temporário: memória constante e o
+                // upload exige stream seekable com Length (um stream não-seekable
+                // seria bufferizado inteiro no provider).
+                var tempPath = Path.Combine(Path.GetTempPath(), $"discovery-artifact-{Guid.NewGuid():N}.bin");
+                try
+                {
+                    await using (var content = new FileStream(
+                        tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 81920, useAsync: true))
+                    {
+                        await storage.DownloadToAsync(artifact.StorageObjectKey, content, cancellationToken);
+                        content.Seek(0, SeekOrigin.Begin);
+
+                        await UploadArtifactAsync(
+                            promotedRelease.Id,
+                            artifact.Platform,
+                            artifact.Architecture,
+                            artifact.ArtifactType,
+                            artifact.FileName,
+                            artifact.ContentType,
+                            content,
+                            artifact.SignatureThumbprint,
+                            cancellationToken);
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        if (File.Exists(tempPath))
+                            File.Delete(tempPath);
+                    }
+                    catch
+                    {
+                        // best-effort: arquivo órfão no temp não deve falhar a promoção.
+                    }
+                }
             }
         }
         catch

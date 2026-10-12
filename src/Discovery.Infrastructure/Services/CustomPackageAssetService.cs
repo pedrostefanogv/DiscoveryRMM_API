@@ -49,9 +49,13 @@ public class CustomPackageAssetService : ICustomPackageAssetService
 
         var objectKey = $"app-store/custom/{normalizedKind}s/{Guid.NewGuid():N}/{safeName}";
         var storage = await _storageFactory.CreateObjectStorageServiceAsync(cancellationToken);
+
+        // Calcula o SHA-256 durante o upload (sem segunda passada) para que o
+        // agent possa verificar a integridade do instalador depois de baixar.
+        using var hashing = new HashingReadStream(content, System.Security.Cryptography.HashAlgorithmName.SHA256);
         var stored = await storage.UploadAsync(
             objectKey,
-            content,
+            hashing,
             string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType,
             cancellationToken);
 
@@ -62,7 +66,7 @@ public class CustomPackageAssetService : ICustomPackageAssetService
             ContentType = string.IsNullOrWhiteSpace(stored.ContentType) ? contentType : stored.ContentType,
             FileName = safeName,
             SizeBytes = stored.SizeBytes,
-            Checksum = stored.Checksum
+            Checksum = hashing.GetHashHex()
         };
     }
 
@@ -85,6 +89,17 @@ public class CustomPackageAssetService : ICustomPackageAssetService
                 : metadata!.ContentType,
             FileName = metadata?.GetFileName() ?? Path.GetFileName(objectKey)
         };
+    }
+
+    public async Task WriteToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(objectKey))
+            throw new ArgumentException("ObjectKey é obrigatório.", nameof(objectKey));
+
+        ArgumentNullException.ThrowIfNull(destination);
+
+        var storage = await _storageFactory.CreateObjectStorageServiceAsync(cancellationToken);
+        await storage.DownloadToAsync(objectKey, destination, cancellationToken);
     }
 
     public async Task DeleteAsync(string objectKey, CancellationToken cancellationToken = default)
@@ -111,6 +126,12 @@ public class CustomPackageAssetService : ICustomPackageAssetService
     {
         if (content is null || !content.CanRead)
             throw new InvalidOperationException("Arquivo inválido ou vazio.");
+
+        // Guarda-corpo de tamanho: sem isso o limite existia só no atributo
+        // [RequestSizeLimit] da controller e sumia em chamadas internas.
+        if (content.CanSeek && content.Length > MaxAssetBytes)
+            throw new InvalidOperationException(
+                $"Arquivo excede o limite de {MaxAssetBytes / (1024L * 1024 * 1024)} GiB por asset.");
 
         var extension = Path.GetExtension(fileName);
         if (kind == IconKind)

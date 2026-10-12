@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -27,6 +28,28 @@ public class CustomPackageAssetServiceTests
         Assert.That(asset.ContentType, Is.EqualTo("application/x-msdownload"));
         Assert.That(asset.SizeBytes, Is.EqualTo(2));
         Assert.That(storage.LastKey, Is.EqualTo(asset.ObjectKey));
+
+        // O checksum devolvido deve ser o SHA-256 real do conteúdo — é o valor
+        // que o agent usa para validar a integridade antes de instalar.
+        var expected = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("MZ"))).ToLowerInvariant();
+        Assert.That(asset.Checksum, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public async Task WriteToAsync_UsaStreamingSemBufferizarEmMemoria()
+    {
+        // Regressão: o download do instalador custom já derrubou a API por OOM
+        // porque bufferizava o arquivo inteiro em MemoryStream. O caminho do
+        // agent precisa usar DownloadToAsync (streaming), nunca DownloadAsync.
+        var storage = new CapturingStorageService();
+        var service = new CustomPackageAssetService(new StubStorageFactory(storage));
+
+        using var destination = new MemoryStream();
+        await service.WriteToAsync("app-store/custom/installers/abc/Setup.exe", destination);
+
+        Assert.That(storage.DownloadToCalled, Is.True, "deveria usar DownloadToAsync (streaming)");
+        Assert.That(storage.DownloadCalled, Is.False, "não deveria usar DownloadAsync (buffer em memória)");
+        Assert.That(destination.Length, Is.EqualTo(3));
     }
 
     [Test]
@@ -109,7 +132,20 @@ public class CustomPackageAssetServiceTests
             };
         }
 
-        public Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default) => Task.FromResult<Stream>(new MemoryStream());
+        public bool DownloadCalled { get; private set; }
+        public bool DownloadToCalled { get; private set; }
+
+        public Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default)
+        {
+            DownloadCalled = true;
+            return Task.FromResult<Stream>(new MemoryStream());
+        }
+
+        public async Task DownloadToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default)
+        {
+            DownloadToCalled = true;
+            await destination.WriteAsync(new byte[] { 1, 2, 3 }, cancellationToken);
+        }
         public Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default) => Task.FromResult(true);
         public Task DeleteAsync(string objectKey, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task DeleteByPrefixAsync(string prefix, CancellationToken cancellationToken = default) => Task.CompletedTask;

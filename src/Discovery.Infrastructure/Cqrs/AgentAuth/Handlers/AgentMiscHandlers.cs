@@ -88,6 +88,7 @@ public sealed class GetAppStoreEffectiveHandler(
             fileName = a.FileName,
             fileSizeBytes = a.FileSizeBytes,
             fileUrl = a.FileUrl,
+            fileChecksum = a.FileChecksum,
             silent = a.SilentCommand,
             silentWithProgress = a.SilentWithProgressCommand,
             installerUrlsByArch = a.InstallerUrlsByArch,

@@ -100,6 +100,10 @@ public class AppStoreService : IAppStoreService
         if (string.IsNullOrWhiteSpace(request.Name))
             throw new InvalidOperationException("Name e obrigatorio.");
 
+        // O agent executa este comando para instalar; sem ele o pacote é inútil.
+        if (string.IsNullOrWhiteSpace(request.InstallCommand))
+            throw new InvalidOperationException("InstallCommand e obrigatorio: informe o comando de instalacao do pacote.");
+
         var normalizedPackageId = request.PackageId.Trim();
 
         // Quando ha icone enviado ao storage, a loja serve a imagem pela propria
@@ -883,6 +887,7 @@ public class AppStoreService : IAppStoreService
                     FileUrl = package.HasFile
                         ? $"/api/v1/agent-auth/me/app-store/custom/{Uri.EscapeDataString(package.Id)}/file"
                         : string.Empty,
+                    FileChecksum = package.FileChecksum,
                     SilentCommand = package.SilentCommand,
                     SilentWithProgressCommand = package.SilentWithProgressCommand,
                     InstallerUrlsByArch = package.InstallerUrlsByArch,
@@ -1057,6 +1062,7 @@ public class AppStoreService : IAppStoreService
         return new AppCatalogPackageDto
         {
             Id = pkg.PackageId,
+            InstallationType = pkg.InstallationType,
             Name = pkg.Name,
             Publisher = pkg.Publisher ?? string.Empty,
             Version = pkg.Version ?? string.Empty,
@@ -1104,6 +1110,7 @@ public class AppStoreService : IAppStoreService
             FileUrl = package.HasFile
                 ? $"/api/v1/agent-auth/me/app-store/custom/{Uri.EscapeDataString(package.Id)}/file"
                 : string.Empty,
+            FileChecksum = package.FileChecksum,
             SilentCommand = package.SilentCommand,
             SilentWithProgressCommand = package.SilentWithProgressCommand,
             InstallerUrlsByArch = package.InstallerUrlsByArch,

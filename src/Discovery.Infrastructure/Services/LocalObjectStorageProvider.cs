@@ -88,6 +88,24 @@ public class LocalObjectStorageProvider : IObjectStorageService
     }
 
     /// <summary>
+    /// Copia o arquivo local para o stream de destino sem bufferizar tudo em memória.
+    /// </summary>
+    public async Task DownloadToAsync(
+        string objectKey,
+        Stream destination,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+
+        var filePath = NormalizeObjectKey(objectKey);
+        if (!File.Exists(filePath))
+            throw new FileNotFoundException($"Object {objectKey} not found");
+
+        await using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+        await fileStream.CopyToAsync(destination, 81920, cancellationToken);
+    }
+
+    /// <summary>
     /// Fazer download (ler arquivo do disco local).
     /// </summary>
     public async Task<Stream> DownloadAsync(

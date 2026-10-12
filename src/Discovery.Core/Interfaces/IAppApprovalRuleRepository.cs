@@ -15,6 +15,13 @@ public interface IAppApprovalRuleRepository
         Guid? agentId,
         AppInstallationType installationType,
         string packageId);
+    /// <summary>
+    /// Lista TODAS as regras de um pacote, em qualquer escopo. Usado ao excluir
+    /// um pacote custom para não deixar regras órfãs (que voltariam a valer se o
+    /// mesmo packageId fosse recriado).
+    /// </summary>
+    Task<IReadOnlyList<AppApprovalRule>> GetByPackageAsync(AppInstallationType installationType, string packageId);
+
     Task<AppApprovalRule> CreateAsync(AppApprovalRule rule);
     Task UpdateAsync(AppApprovalRule rule);
     Task DeleteAsync(Guid id);

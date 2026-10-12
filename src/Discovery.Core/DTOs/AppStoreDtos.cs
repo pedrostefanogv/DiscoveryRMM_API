@@ -5,6 +5,14 @@ namespace Discovery.Core.DTOs;
 public class AppCatalogPackageDto
 {
     public string Id { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Origem do pacote (Winget/Chocolatey/Custom). O frontend usava o
+    /// installCommand como heurística quando este campo faltava, classificando
+    /// um pacote Custom com "choco"/"winget" no comando como outro tipo.
+    /// </summary>
+    public AppInstallationType InstallationType { get; set; }
+
     public string Name { get; set; } = string.Empty;
     public string Publisher { get; set; } = string.Empty;
     public string Version { get; set; } = string.Empty;
@@ -100,10 +108,9 @@ public class CustomPackageAssetDto
     public string ContentType { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
     public long SizeBytes { get; set; }
-    public string? Checksum { get; set; }
 
-    /// <summary>URL relativa para servir o asset (icone) pela API.</summary>
-    public string? Url { get; set; }
+    /// <summary>SHA-256 (hex) do arquivo, calculado no upload e verificado pelo agent.</summary>
+    public string? Checksum { get; set; }
 }
 
 public class AppApprovalRuleResolvedDto
@@ -143,6 +150,9 @@ public class EffectiveApprovedAppDto
 
     /// <summary>URL (relativa) para o agent baixar o instalador autenticado.</summary>
     public string FileUrl { get; set; } = string.Empty;
+
+    /// <summary>SHA-256 (hex) do instalador, para o agent verificar a integridade.</summary>
+    public string FileChecksum { get; set; } = string.Empty;
 
     /// <summary>Switches para instalação silenciosa (fallback: SilentWithProgressCommand → InstallCommand).</summary>
     public string SilentCommand { get; set; } = string.Empty;
