@@ -264,10 +264,21 @@ resolve_object_storage_default_endpoint() {
     domain="$(resolve_fido2_server_domain 2>/dev/null || true)"
   fi
   domain="$(normalize_host_without_scheme "$domain")"
+  # Nunca derivar o endpoint PUBLICO para loopback: "https://localhost" e
+  # inalcancavel por agentes/navegadores (o backend recusa assinar nele). Cai
+  # para o host externo e, depois, para o interno.
   if [[ -n "$domain" ]]; then
-    printf 'https://%s' "$domain"
-    return
+    case "$domain" in
+      localhost|127.*|0.0.0.0|[::1]|::1) ;;
+      *) printf 'https://%s' "$domain"; return ;;
+    esac
   fi
+  local external_host
+  external_host="$(normalize_host_without_scheme "${EXTERNAL_API_HOST:-}")"
+  case "$external_host" in
+    ""|localhost|127.*|0.0.0.0|[::1]|::1) ;;
+    *) printf 'https://%s' "$external_host"; return ;;
+  esac
   local internal_host
   internal_host="$(normalize_host_without_scheme "${INTERNAL_API_HOST:-}")"
   if [[ -n "$internal_host" ]]; then
