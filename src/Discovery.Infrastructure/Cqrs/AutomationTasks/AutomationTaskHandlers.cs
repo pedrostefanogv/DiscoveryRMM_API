@@ -22,6 +22,7 @@ public sealed class ListAutomationTasksQueryHandler(IAutomationTaskService svc) 
             clientId: q.ClientId,
             siteId: q.SiteId, agentId: q.AgentId,
             scopeTypes: q.ScopeTypes, actionTypes: q.ActionTypes, labels: q.Labels,
+            triggers: q.Triggers, isActive: q.IsActive,
             q.Cursor, q.Limit, ct);
 
         return Result<CursorPageDto<AutomationTaskSummaryDto>>.Success(page);

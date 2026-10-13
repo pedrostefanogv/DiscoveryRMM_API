@@ -68,6 +68,8 @@ public class AutomationTaskService : IAutomationTaskService
         IReadOnlyList<AppApprovalScopeType>? scopeTypes,
         IReadOnlyList<AutomationTaskActionType>? actionTypes,
         IReadOnlyList<string>? labels,
+        IReadOnlyList<string>? triggers,
+        bool? isActive,
         string? cursor,
         int limit,
         CancellationToken cancellationToken = default)
@@ -84,7 +86,7 @@ public class AutomationTaskService : IAutomationTaskService
 
         var items = await _taskRepository.GetListPageAsync(
             scopeType, scopeId, activeOnly, deletedOnly, includeDeleted,
-            search, clientId, siteId, agentId, scopeTypes, actionTypes, cursor, fetchLimit);
+            search, clientId, siteId, agentId, scopeTypes, actionTypes, triggers, isActive, cursor, fetchLimit);
 
         var filteredItems = labels is { Count: > 0 }
             ? items.Where(task => MatchesTaskLabels(task, labels)).ToList()
@@ -156,6 +158,8 @@ public class AutomationTaskService : IAutomationTaskService
             ToastTiming = request.ToastTiming ?? AutomationToastTiming.After,
             CollectorFieldDefinitionId = request.CollectorFieldDefinitionId,
             WriteOutputToNote = request.WriteOutputToNote,
+            // 0–99 com default por tipo de ação quando o operador não informa.
+            ExecutionOrder = AutomationTaskExecutionOrder.ResolveForCreate(request.ExecutionOrder, request.ActionType),
             Key = NormalizeTaskKey(request.Key, request.Name),
             AllowDefer = request.AllowDefer,
             CloseProcessesJson = SerializeTags(request.CloseProcesses),
@@ -247,6 +251,11 @@ public class AutomationTaskService : IAutomationTaskService
         existing.ToastTiming = request.ToastTiming ?? existing.ToastTiming;
         existing.CollectorFieldDefinitionId = request.CollectorFieldDefinitionId;
         existing.WriteOutputToNote = request.WriteOutputToNote;
+        // Ausente preserva a ordem atual (não reseta para o default ao editar).
+        if (request.ExecutionOrder.HasValue)
+        {
+            existing.ExecutionOrder = AutomationTaskExecutionOrder.ResolveForCreate(request.ExecutionOrder, request.ActionType);
+        }
         existing.Key = NormalizeTaskKey(request.Key ?? existing.Key, existing.Name);
         // RequiresApproval derivado do modo (Prompt) — o handler de PUT ja
         // preserva o valor atual quando o campo nao vem no payload.
@@ -675,6 +684,7 @@ public class AutomationTaskService : IAutomationTaskService
                 ToastTiming = task.ToastTiming,
                 CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
                 WriteOutputToNote = task.WriteOutputToNote,
+                ExecutionOrder = task.ExecutionOrder,
                 TriggerImmediate = task.TriggerImmediate,
                 TriggerRecurring = task.TriggerRecurring,
                 TriggerOnUserLogin = task.TriggerOnUserLogin,
@@ -773,10 +783,10 @@ public class AutomationTaskService : IAutomationTaskService
             .Select(label => label.Label)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var globalTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Global, null, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, cursor: null, limit: 1000);
-        var clientTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Client, site.ClientId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, cursor: null, limit: 1000);
-        var siteTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Site, site.Id, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, cursor: null, limit: 1000);
-        var agentTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Agent, agentId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, cursor: null, limit: 1000);
+        var globalTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Global, null, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, triggers: null, isActive: null, cursor: null, limit: 1000);
+        var clientTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Client, site.ClientId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, triggers: null, isActive: null, cursor: null, limit: 1000);
+        var siteTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Site, site.Id, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, triggers: null, isActive: null, cursor: null, limit: 1000);
+        var agentTasks = await _taskRepository.GetListPageAsync(AppApprovalScopeType.Agent, agentId, activeOnly: true, deletedOnly: false, includeDeleted: false, search: null, clientId: null, siteId: null, agentId: null, scopeTypes: null, actionTypes: null, triggers: null, isActive: null, cursor: null, limit: 1000);
 
         var applicable = globalTasks
             .Concat(clientTasks)
@@ -785,7 +795,9 @@ public class AutomationTaskService : IAutomationTaskService
             .GroupBy(task => task.Id)
             .Select(group => group.First())
             .Where(task => MatchesTagFilters(task, labelSet))
-            .OrderBy(task => task.Id)
+            // Entrega já na ordem de execução (o agent reordena por garantia).
+            .OrderBy(task => task.ExecutionOrder)
+            .ThenBy(task => task.Id)
             .ToList();
 
         return (agent, site, applicable);
@@ -1076,6 +1088,9 @@ public class AutomationTaskService : IAutomationTaskService
                 .Append(NormalizePromptTimeout(task.UserPromptTimeoutSeconds)).Append('|')
                 .Append((int)task.NotificationMode).Append('|')
                 .Append((int)task.ToastTiming).Append('|')
+                // Ordem entra no fingerprint: mudar a ordem precisa re-sincronizar
+                // os agents para que a fila sequencial use o valor novo.
+                .Append(task.ExecutionOrder).Append('|')
                 .Append(task.IsActive ? '1' : '0');
             // Conteúdo do script entra no fingerprint: sem isso, editar o conteúdo
             // de um script não alterava a policy entregue — os agentes continuavam
@@ -1206,6 +1221,7 @@ public class AutomationTaskService : IAutomationTaskService
             ToastTiming = task.ToastTiming,
             CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
             WriteOutputToNote = task.WriteOutputToNote,
+            ExecutionOrder = task.ExecutionOrder,
             Key = task.Key,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
@@ -1232,6 +1248,7 @@ public class AutomationTaskService : IAutomationTaskService
             ToastTiming = task.ToastTiming,
             CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
             WriteOutputToNote = task.WriteOutputToNote,
+            ExecutionOrder = task.ExecutionOrder,
             Key = task.Key,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
@@ -1280,6 +1297,7 @@ public class AutomationTaskService : IAutomationTaskService
             task.ToastTiming,
             task.CollectorFieldDefinitionId,
             task.WriteOutputToNote,
+            task.ExecutionOrder,
             task.Key,
             task.AllowDefer,
             CloseProcesses = ParseTags(task.CloseProcessesJson),

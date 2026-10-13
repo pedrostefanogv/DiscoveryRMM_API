@@ -73,11 +73,13 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         Guid? agentId,
         IReadOnlyList<AppApprovalScopeType>? scopeTypes,
         IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        IReadOnlyList<string>? triggers,
+        bool? isActive,
         string? cursor,
         int limit)
     {
         var safeLimit = Math.Clamp(limit, 1, 500);
-        var query = BuildTaskQuery(scopeType, scopeId, activeOnly, deletedOnly, includeDeleted, search, clientId, siteId, agentId, scopeTypes, actionTypes);
+        var query = BuildTaskQuery(scopeType, scopeId, activeOnly, deletedOnly, includeDeleted, search, clientId, siteId, agentId, scopeTypes, actionTypes, triggers, isActive);
 
         if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorUpdatedAtUtc, out var cursorId))
         {
@@ -104,7 +106,9 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         Guid? siteId,
         Guid? agentId,
         IReadOnlyList<AppApprovalScopeType>? scopeTypes,
-        IReadOnlyList<AutomationTaskActionType>? actionTypes)
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        IReadOnlyList<string>? triggers,
+        bool? isActive)
     {
         var query = _db.AutomationTaskDefinitions.AsNoTracking().AsQueryable();
 
@@ -131,7 +135,7 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         if (activeOnly)
             query = query.Where(t => t.IsActive);
 
-        return ApplyAdvancedFilters(query, search, clientId, siteId, agentId, scopeTypes, actionTypes);
+        return ApplyAdvancedFilters(query, search, clientId, siteId, agentId, scopeTypes, actionTypes, triggers, isActive);
     }
 
     public async Task<int> CountAsync(
@@ -145,7 +149,9 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         Guid? siteId,
         Guid? agentId,
         IReadOnlyList<AppApprovalScopeType>? scopeTypes,
-        IReadOnlyList<AutomationTaskActionType>? actionTypes)
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        IReadOnlyList<string>? triggers,
+        bool? isActive)
     {
         var query = _db.AutomationTaskDefinitions.AsNoTracking().AsQueryable();
 
@@ -176,7 +182,7 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         if (activeOnly)
             query = query.Where(t => t.IsActive);
 
-        query = ApplyAdvancedFilters(query, search, clientId, siteId, agentId, scopeTypes, actionTypes);
+        query = ApplyAdvancedFilters(query, search, clientId, siteId, agentId, scopeTypes, actionTypes, triggers, isActive);
 
         return await query.CountAsync();
     }
@@ -188,7 +194,9 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         Guid? siteId,
         Guid? agentId,
         IReadOnlyList<AppApprovalScopeType>? scopeTypes,
-        IReadOnlyList<AutomationTaskActionType>? actionTypes)
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        IReadOnlyList<string>? triggers,
+        bool? isActive)
     {
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -214,6 +222,24 @@ public class AutomationTaskRepository : IAutomationTaskRepository
 
         if (actionTypes is { Count: > 0 })
             query = query.Where(t => actionTypes.Contains(t.ActionType));
+
+        // Trigger: OR entre as flags selecionadas. Valor desconhecido não casa com nada.
+        if (triggers is { Count: > 0 })
+        {
+            var immediate = Enumerable.Contains(triggers, "Immediate", StringComparer.OrdinalIgnoreCase);
+            var recurring = Enumerable.Contains(triggers, "Recurring", StringComparer.OrdinalIgnoreCase);
+            var onUserLogin = Enumerable.Contains(triggers, "OnUserLogin", StringComparer.OrdinalIgnoreCase);
+            var onAgentCheckIn = Enumerable.Contains(triggers, "OnAgentCheckIn", StringComparer.OrdinalIgnoreCase);
+
+            query = query.Where(t =>
+                (immediate && t.TriggerImmediate)
+                || (recurring && t.TriggerRecurring)
+                || (onUserLogin && t.TriggerOnUserLogin)
+                || (onAgentCheckIn && t.TriggerOnAgentCheckIn));
+        }
+
+        if (isActive.HasValue)
+            query = query.Where(t => t.IsActive == isActive.Value);
 
         return query;
     }
@@ -264,6 +290,7 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         // escolhido na UI seria descartado no PUT.
         existing.CollectorFieldDefinitionId = task.CollectorFieldDefinitionId;
         existing.WriteOutputToNote = task.WriteOutputToNote;
+        existing.ExecutionOrder = task.ExecutionOrder;
         existing.Key = task.Key;
         existing.AllowDefer = task.AllowDefer;
         existing.CloseProcessesJson = task.CloseProcessesJson;

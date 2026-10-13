@@ -18,7 +18,11 @@ public sealed record ListAutomationTasksQuery(
     IReadOnlyList<string>? Labels = null,
     bool ActiveOnly = false,
     bool DeletedOnly = false,
-    bool IncludeDeleted = false) : IQuery<Result<CursorPageDto<AutomationTaskSummaryDto>>>;
+    bool IncludeDeleted = false,
+    // Filtra por trigger: Immediate, Recurring, OnUserLogin, OnAgentCheckIn (OR entre os selecionados).
+    IReadOnlyList<string>? Triggers = null,
+    // Status da tarefa: true = somente ativas, false = somente inativas.
+    bool? IsActive = null) : IQuery<Result<CursorPageDto<AutomationTaskSummaryDto>>>;
 
 public sealed record GetAutomationTaskByIdQuery(Guid Id) : IQuery<Result<AutomationTaskDetailDto>>;
 public sealed record GetAutomationTaskAuditQuery(Guid Id, int Limit = 50) : IQuery<Result<IReadOnlyList<AutomationTaskAuditDto>>>;

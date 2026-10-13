@@ -35,6 +35,8 @@ public class AutomationTaskSummaryDto
     public Guid? CollectorFieldDefinitionId { get; set; }
     /// <summary>Grava a saida da execucao como nota no agent.</summary>
     public bool WriteOutputToNote { get; set; }
+    /// <summary>Ordem de execução no agent (0–99): menor executa primeiro.</summary>
+    public int ExecutionOrder { get; set; } = 50;
     /// <summary>Chave padronizada (normalizada) da tarefa.</summary>
     public string? Key { get; set; }
     public DateTime LastUpdatedAt { get; set; }
@@ -162,6 +164,8 @@ public class CreateAutomationTaskRequest
     public Guid? CollectorFieldDefinitionId { get; set; }
     /// <summary>Grava a saida da execucao como nota no agent.</summary>
     public bool WriteOutputToNote { get; set; }
+    /// <summary>Ordem de execução no agent (0–99). Ausente = default do tipo de ação.</summary>
+    public int? ExecutionOrder { get; set; }
     /// <summary>Chave padronizada (normalizada [a-z0-9_-]). Ausente = derivada do nome.</summary>
     public string? Key { get; set; }
     public bool IsActive { get; set; } = true;

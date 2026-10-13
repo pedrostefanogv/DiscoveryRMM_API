@@ -27,6 +27,8 @@ public interface IAutomationTaskRepository
         Guid? agentId,
         IReadOnlyList<AppApprovalScopeType>? scopeTypes,
         IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        IReadOnlyList<string>? triggers,
+        bool? isActive,
         string? cursor,
         int limit);
     Task<int> CountAsync(
@@ -40,7 +42,9 @@ public interface IAutomationTaskRepository
         Guid? siteId,
         Guid? agentId,
         IReadOnlyList<AppApprovalScopeType>? scopeTypes,
-        IReadOnlyList<AutomationTaskActionType>? actionTypes);
+        IReadOnlyList<AutomationTaskActionType>? actionTypes,
+        IReadOnlyList<string>? triggers,
+        bool? isActive);
     /// <summary>Existe outra tarefa com esta chave (unicidade da chave padronizada)?</summary>
     Task<bool> ExistsKeyAsync(string key, Guid? excludeId);
 

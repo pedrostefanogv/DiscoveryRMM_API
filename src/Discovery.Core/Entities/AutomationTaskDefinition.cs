@@ -88,6 +88,13 @@ public class AutomationTaskDefinition
     /// </summary>
     public bool WriteOutputToNote { get; set; }
 
+    /// <summary>
+    /// Ordem de execução na policy do agent (0–99): o agent executa da menor
+    /// para a maior e, no empate, roda primeiro a tarefa atualizada há mais
+    /// tempo. O default vem do <see cref="AutomationTaskActionType"/>.
+    /// </summary>
+    public int ExecutionOrder { get; set; } = 50;
+
     public bool IsActive { get; set; } = true;
     public DateTime? DeletedAt { get; set; }
 

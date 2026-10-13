@@ -28,11 +28,13 @@ public class AutomationTasksController(IMediator mediator) : ControllerBase
         [FromQuery] IReadOnlyList<string>? labels = null,
         [FromQuery] bool activeOnly = false,
         [FromQuery] bool deletedOnly = false,
-        [FromQuery] bool includeDeleted = false)
+        [FromQuery] bool includeDeleted = false,
+        [FromQuery] IReadOnlyList<string>? triggers = null,
+        [FromQuery] bool? isActive = null)
     {
         var result = await mediator.Send(new ListAutomationTasksQuery(
             clientId, cursor, Math.Clamp(limit, 1, 200), siteId, agentId, scopeType, scopeId, search,
-            scopeTypes, actionTypes, labels, activeOnly, deletedOnly, includeDeleted));
+            scopeTypes, actionTypes, labels, activeOnly, deletedOnly, includeDeleted, triggers, isActive));
         return result.ToActionResult();
     }
 

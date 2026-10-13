@@ -18,6 +18,8 @@ public interface IAutomationTaskService
         IReadOnlyList<AppApprovalScopeType>? scopeTypes,
         IReadOnlyList<AutomationTaskActionType>? actionTypes,
         IReadOnlyList<string>? labels,
+        IReadOnlyList<string>? triggers,
+        bool? isActive,
         string? cursor,
         int limit,
         CancellationToken cancellationToken = default);
