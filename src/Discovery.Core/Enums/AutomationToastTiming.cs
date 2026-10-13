@@ -2,7 +2,7 @@ namespace Discovery.Core.Enums;
 
 /// <summary>
 /// Momento do toast informativo quando <see cref="AutomationNotificationMode.Toast"/>
-/// esta selecionado.
+/// ou <see cref="AutomationNotificationMode.NativeToast"/> esta selecionado.
 /// </summary>
 public enum AutomationToastTiming
 {

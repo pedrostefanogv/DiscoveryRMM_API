@@ -36,6 +36,8 @@ public class AutomationTaskPromptTests
     [TestCase(false, AutomationNotificationMode.Prompt, AutomationNotificationMode.Prompt)]
     [TestCase(false, AutomationNotificationMode.Toast, AutomationNotificationMode.Toast)]
     [TestCase(true, AutomationNotificationMode.Toast, AutomationNotificationMode.Toast)]
+    [TestCase(false, AutomationNotificationMode.NativeToast, AutomationNotificationMode.NativeToast)]
+    [TestCase(true, AutomationNotificationMode.NativeToast, AutomationNotificationMode.NativeToast)]
     public void ResolveNotificationMode_ExplicitWinsAndLegacyFallsBack(
         bool requiresApproval,
         AutomationNotificationMode? explicitMode,
