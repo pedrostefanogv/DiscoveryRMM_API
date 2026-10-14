@@ -497,7 +497,9 @@ max_payload: 4194304
 max_control_line: 16384
 max_connections: 5000
 write_deadline: 5s
-${jetstream_block}${auth_block}${ws_block}
+${jetstream_block}
+${auth_block}
+${ws_block}
 EOF
 
   local needs_restart=0
@@ -610,19 +612,25 @@ install_rustfs_binary() {
   log "RustFS instalado: ${installed_version:-desconhecido}"
 }
 
+# Binario EXCLUSIVO do client do MinIO. Nao usamos o nome "mc" do PATH
+# porque em Debian/Ubuntu ele tambem e o Midnight Commander (TUI): com o MC
+# presente, "mc alias set ..." abria a interface e o instalador ficava travado
+# esperando teclado (0% de CPU, sem output).
+MINIO_MC_BIN="/usr/local/bin/discovery-mc"
+
 ensure_mc_cli() {
-  if command -v mc >/dev/null 2>&1; then return 0; fi
+  if sudo test -x "$MINIO_MC_BIN"; then return 0; fi
   local url tmp
-  for url in "https://dl.min.io/aistor/mc/release/linux-amd64/mc" "https://dl.min.io/client/mc/release/linux-amd64/mc"; do
+  for url in "https://dl.min.io/client/mc/release/linux-amd64/mc" "https://dl.min.io/aistor/mc/release/linux-amd64/mc"; do
     tmp="$(mktemp)"
     if curl -fsSL --connect-timeout 15 --retry 2 -o "$tmp" "$url"; then
-      sudo install -m 0755 -o root -g root "$tmp" /usr/local/bin/mc
+      sudo install -m 0755 -o root -g root "$tmp" "$MINIO_MC_BIN"
       rm -f "$tmp"
       return 0
     fi
     rm -f "$tmp"
   done
-  warn "Nao foi possivel baixar o mc; o bucket sera criado pela propria API no primeiro uso."
+  warn "Nao foi possivel baixar o client do MinIO (mc); o bucket sera criado pela propria API no primeiro uso."
   return 1
 }
 
@@ -635,28 +643,28 @@ create_rustfs_bucket() {
   secret="$(sudo awk -F= '/^RUSTFS_SECRET_KEY=/{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true)"
   [[ -n "$access" && -n "$secret" ]] || return 0
   ensure_mc_cli || return 0
-  mc alias set discovery-local "http://127.0.0.1:${DISCOVERY_OBJECT_STORAGE_PORT:-9000}" "$access" "$secret" >/dev/null 2>&1 || return 0
+  "$MINIO_MC_BIN" alias set discovery-local "http://127.0.0.1:${DISCOVERY_OBJECT_STORAGE_PORT:-9000}" "$access" "$secret" >/dev/null 2>&1 || return 0
 
   # Idempotencia: bucket ja existente e privado nao e recriado/reconfigurado a
   # cada update. So reaplica a politica quando ela nao estiver mais em "none"
   # (ex.: alguem publicou o bucket manualmente).
-  if mc ls "discovery-local/${bucket}" >/dev/null 2>&1; then
+  if "$MINIO_MC_BIN" ls "discovery-local/${bucket}" >/dev/null 2>&1; then
     local policy
-    policy="$(mc anonymous get "discovery-local/${bucket}" 2>/dev/null || true)"
+    policy="$("$MINIO_MC_BIN" anonymous get "discovery-local/${bucket}" 2>/dev/null || true)"
     case "$policy" in
       *none*)
         log "Bucket ${bucket} ja existe e esta privado no RustFS; mantendo sem regravar."
         return 0 ;;
     esac
     warn "Bucket ${bucket} existia com politica diferente de privado; reaplicando."
-    mc anonymous set none "discovery-local/${bucket}" >/dev/null 2>&1 || true
+    "$MINIO_MC_BIN" anonymous set none "discovery-local/${bucket}" >/dev/null 2>&1 || true
     log "Bucket ${bucket} pronto no RustFS (privado)."
     return 0
   fi
 
-  mc mb --ignore-existing "discovery-local/${bucket}" >/dev/null 2>&1 || true
-  mc anonymous set none "discovery-local/${bucket}" >/dev/null 2>&1 || true
-  if mc ls "discovery-local/${bucket}" >/dev/null 2>&1; then
+  "$MINIO_MC_BIN" mb --ignore-existing "discovery-local/${bucket}" >/dev/null 2>&1 || true
+  "$MINIO_MC_BIN" anonymous set none "discovery-local/${bucket}" >/dev/null 2>&1 || true
+  if "$MINIO_MC_BIN" ls "discovery-local/${bucket}" >/dev/null 2>&1; then
     log "Bucket ${bucket} criado no RustFS (privado)."
     return 0
   fi

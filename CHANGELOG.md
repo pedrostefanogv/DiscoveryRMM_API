@@ -72,6 +72,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **Instalação travava em `mc alias set` (Midnight Commander)**: `ensure_mc_cli` aceitava
+  qualquer `mc` do PATH, mas em Debian/Ubuntu `mc` também é o **Midnight Commander** (TUI). O
+  comando abria a interface e ficava esperando teclado (0% CPU, sem output) — a instalação parava
+  logo após o RustFS. O client do MinIO agora é instalado em caminho dedicado
+  (`/usr/local/bin/discovery-mc`) e todas as chamadas usam esse caminho.
+- 🐛 **`/etc/nats-server.conf` inválido (`Parse error on line 13`)**: o `$(cat <<EOF)` remove o
+  newline final de cada bloco e a montagem concatenava `${jetstream_block}${auth_block}`, gerando
+  `}authorization {` na mesma linha — o `nats-server` falhava no restart e ficava `failed`. Os
+  blocos agora são gravados em linhas separadas.
 - 🐛 **Instalador abortava ao escrever o `discovery.env` com `REMOTE_ACCESS_NATS_JWT_SIGNING_KEY:
   unbound variable`**: o heredoc usava a variável sem default e ela nunca é definida (a API lê
   `RemoteAccess__Nats__JwtSigningKey`). Agora a chave é resolvida antes do `tee` — preserva a já
