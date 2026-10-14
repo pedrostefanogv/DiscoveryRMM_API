@@ -62,6 +62,41 @@ public class KnowledgeImageMarkdownTests
     }
 
     [Test]
+    public void TokenWithSize_IsExtractedStrippedAndRemovedInBothForms()
+    {
+        var sized = KnowledgeImageRules.BuildMarkdownToken("print", ImageA, "50%");
+        Assert.That(sized, Is.EqualTo("![print](kbimage:11111111-1111-1111-1111-111111111111 \"w=50%\")"));
+
+        var markdown = Markdown(ImageA) + "\n\n" + sized + "\n\n"
+            + KnowledgeImageRules.BuildMarkdownToken("px", ImageB, "420");
+
+        Assert.That(KnowledgeImageMarkdown.ContainsToken(markdown), Is.True);
+        Assert.That(KnowledgeImageMarkdown.ExtractIds(markdown), Has.Count.EqualTo(2));
+
+        var stripped = KnowledgeImageMarkdown.StripTokens(markdown);
+        Assert.That(stripped, Does.Not.Contain("kbimage"));
+        Assert.That(stripped, Does.Not.Contain("w=50%"));
+
+        // RemoveToken apaga o anexo nas DUAS formas (com e sem tamanho).
+        var removed = KnowledgeImageMarkdown.RemoveToken(markdown, ImageA);
+        Assert.That(removed, Does.Not.Contain(ImageA.ToString("D")));
+        Assert.That(removed, Does.Contain(ImageB.ToString("D")));
+    }
+
+    [TestCase("50%", "50%")]
+    [TestCase("w=50%", "50%")]
+    [TestCase(" 420 ", "420")]
+    [TestCase("w=420", "420")]
+    [TestCase("0%", null)]
+    [TestCase("101%", null)]
+    [TestCase("5000", null)]
+    [TestCase("abc", null)]
+    [TestCase("", null)]
+    [TestCase(null, null)]
+    public void NormalizeSize_AcceptsOnlyBoundedPercentOrPixels(string? raw, string? expected)
+        => Assert.That(KnowledgeImageMarkdown.NormalizeSize(raw), Is.EqualTo(expected));
+
+    [Test]
     public void ContainsToken_DetectsCanonicalTokenFromRules()
     {
         var token = KnowledgeImageRules.BuildMarkdownToken("alt", ImageA);

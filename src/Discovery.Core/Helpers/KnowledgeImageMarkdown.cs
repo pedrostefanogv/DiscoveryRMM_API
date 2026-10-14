@@ -1,25 +1,34 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Discovery.Core.Helpers;
 
 /// <summary>
 /// Utilitários do token de imagem da base de conhecimento
-/// (![alt](kbimage:&lt;attachmentId&gt;)).
+/// (![alt](kbimage:&lt;attachmentId&gt; "w=50%")).
 ///
-/// O token é a referência ESTÁVEL persistida no Markdown: não é URL pública,
-/// não expira e serve tanto ao console quanto ao agente. Tudo que entrega
-/// conteúdo ao LLM (resumos, citações da busca keyword) ou indexa embeddings
-/// precisa passar por aqui para não vazar o token nem poluir o texto.
+/// O token é a referência ESTÁVEL persistida no Markdown: não é URL pública, não
+/// expira e serve tanto ao console quanto ao agente. Tudo que entrega conteúdo ao
+/// LLM (resumos, citações da busca keyword) ou indexa embeddings precisa passar
+/// por aqui para não vazar o token nem poluir o texto.
+///
+/// O tamanho é opcional e vai no TÍTULO do Markdown ("w=50%" ou "w=420"): o
+/// Markdown não tem atributo de largura e HTML cru não é renderizado pelo
+/// react-markdown sem rehype-raw (funcionaria no preview do editor e sumiria na
+/// leitura — pior que não ter).
 /// </summary>
 public static partial class KnowledgeImageMarkdown
 {
     /// <summary>GUID no formato "D" (8-4-4-4-12), maiúsculas ou minúsculas.</summary>
     private const string GuidPattern = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 
-    // Captura o GUID do token COMPLETO (![alt](kbimage:<id>)). O padrão não casa
-    // uma menção textual a "kbimage:<guid>" fora da sintaxe de imagem — era o que
-    // o regex antigo fazia (flag inUse marcada por engano em texto solto).
-    [GeneratedRegex(@"!\[[^\]]*\]\(\s*kbimage:\s*(" + GuidPattern + @")\s*\)", RegexOptions.IgnoreCase)]
+    /// <summary>Título opcional do Markdown: "w=50%" / 'w=420'.</summary>
+    private const string TitlePattern = @"(?:\s+(""[^""]*""|'[^']*'))?";
+
+    // Captura o GUID do token COMPLETO (![alt](kbimage:<id> ["w=..."])) e o
+    // título opcional. Não casa uma menção textual a "kbimage:<guid>" fora da
+    // sintaxe de imagem.
+    [GeneratedRegex(@"!\[[^\]]*\]\(\s*kbimage:\s*(" + GuidPattern + @")" + TitlePattern + @"\s*\)", RegexOptions.IgnoreCase)]
     private static partial Regex TokenRegex();
 
     [GeneratedRegex(@"\n{3,}")]
@@ -38,6 +47,35 @@ public static partial class KnowledgeImageMarkdown
             if (seen.Add(id)) ids.Add(id);
         }
         return ids;
+    }
+
+    /// <summary>
+    /// Normaliza o tamanho aceito no título do token: "w=50%" (1–100) ou
+    /// "w=420" (1–4000 px). Devolve null quando vazio/fora do padrão — nesse caso
+    /// o renderizador usa a largura natural limitada a 100% do container.
+    /// </summary>
+    public static string? NormalizeSize(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+
+        var value = raw.Trim();
+        if (value.StartsWith("w=", StringComparison.OrdinalIgnoreCase))
+            value = value[2..].Trim();
+
+        var isPercent = value.EndsWith('%');
+        var digits = isPercent ? value[..^1] : value;
+
+        if (digits.Length is 0 or > 4) return null;
+        foreach (var c in digits)
+        {
+            if (!char.IsAsciiDigit(c)) return null;
+        }
+
+        var number = int.Parse(digits, CultureInfo.InvariantCulture);
+        if (isPercent)
+            return number is >= 1 and <= 100 ? $"{number}%" : null;
+
+        return number is >= 1 and <= 4000 ? number.ToString(CultureInfo.InvariantCulture) : null;
     }
 
     /// <summary>
@@ -62,7 +100,7 @@ public static partial class KnowledgeImageMarkdown
     {
         if (string.IsNullOrWhiteSpace(markdown)) return markdown ?? string.Empty;
 
-        var token = @"!\[[^\]]*\]\(\s*kbimage:\s*" + attachmentId.ToString("D") + @"\s*\)";
+        var token = @"!\[[^\]]*\]\(\s*kbimage:\s*" + attachmentId.ToString("D") + TitlePattern + @"\s*\)";
 
         var aloneOnLine = Regex.Replace(
             markdown,

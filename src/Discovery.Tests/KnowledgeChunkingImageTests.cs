@@ -20,7 +20,7 @@ public class KnowledgeChunkingImageTests
             Id = Guid.NewGuid(),
             Title = "Trocar toner",
             Content = "## Passo a passo\n\n"
-                + KnowledgeImageRules.BuildMarkdownToken("Tampa aberta", attachmentId)
+                + KnowledgeImageRules.BuildMarkdownToken("Tampa aberta", attachmentId, "50%")
                 + "\n\n"
                 + string.Join(" ", Enumerable.Repeat("remova o toner antigo", 300))
         };
@@ -30,6 +30,8 @@ public class KnowledgeChunkingImageTests
         Assert.That(chunks, Is.Not.Empty);
         Assert.That(chunks.All(c => !c.Content.Contains("kbimage")), Is.True);
         Assert.That(chunks.All(c => !c.Content.Contains(attachmentId.ToString("D"))), Is.True);
+        // O tamanho vai no título do token: também não pode ser indexado.
+        Assert.That(chunks.All(c => !c.Content.Contains("w=50%")), Is.True);
         Assert.That(chunks.Any(c => c.Content.Contains("remova o toner antigo")), Is.True);
     }
 }

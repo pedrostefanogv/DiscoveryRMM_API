@@ -41,6 +41,20 @@ public class KnowledgeImageRulesTests
     }
 
     [Test]
+    public void BuildMarkdownToken_AppendsOnlyValidatedSize()
+    {
+        Assert.That(KnowledgeImageRules.BuildMarkdownToken("x", Guid.Empty, "50%"),
+            Is.EqualTo("![x](kbimage:00000000-0000-0000-0000-000000000000 \"w=50%\")"));
+
+        Assert.That(KnowledgeImageRules.BuildMarkdownToken("x", Guid.Empty, "420"),
+            Is.EqualTo("![x](kbimage:00000000-0000-0000-0000-000000000000 \"w=420\")"));
+
+        // Fora do padrão: token sem tamanho (largura natural).
+        Assert.That(KnowledgeImageRules.BuildMarkdownToken("x", Guid.Empty, "999%"),
+            Is.EqualTo("![x](kbimage:00000000-0000-0000-0000-000000000000)"));
+    }
+
+    [Test]
     public void ReadUrlTtl_IsShortEnoughToLimitLeakedLinks()
         => Assert.That(KnowledgeImageRules.ReadUrlTtlHours, Is.InRange(1, 6));
 }

@@ -57,7 +57,12 @@ public static class KnowledgeImageRules
     /// Token canônico inserido no Markdown. GUID sempre em minúsculas para o
     /// regex do console/agente e a checagem de "já referenciada" baterem.
     /// </summary>
-    public static string BuildMarkdownToken(string? altText, Guid attachmentId)
+    /// <param name="size">
+    /// Tamanho opcional ("50%" ou "420"), gravado no título do Markdown — o
+    /// Markdown não tem atributo de largura e HTML cru não é renderizado pelo
+    /// viewer. Valor fora do padrão é ignorado (largura natural).
+    /// </param>
+    public static string BuildMarkdownToken(string? altText, Guid attachmentId, string? size = null)
     {
         // Sem colchetes/parênteses (quebrariam a sintaxe) e sem quebra de linha
         // (um alt multilinha geraria markdown atípico).
@@ -67,6 +72,10 @@ public static class KnowledgeImageRules
             .Replace("\r", " ")
             .Replace("\n", " ")
             .Trim();
-        return $"![{alt}]({MarkdownScheme}:{attachmentId:D})";
+
+        var normalizedSize = Discovery.Core.Helpers.KnowledgeImageMarkdown.NormalizeSize(size);
+        var title = normalizedSize is null ? string.Empty : $" \"w={normalizedSize}\"";
+
+        return $"![{alt}]({MarkdownScheme}:{attachmentId:D}{title})";
     }
 }
