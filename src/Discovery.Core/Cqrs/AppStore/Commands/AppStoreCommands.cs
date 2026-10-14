@@ -24,7 +24,21 @@ public sealed record UpsertCustomAppPackageCommand(
     string? UninstallCommand = null,
     bool ExtractZip = false,
     string? FileName = null,
-    string? IconObjectKey = null
+    string? IconObjectKey = null,
+    // ── Tipo de comando e detecção (M223) ────────────────────────────
+    // Estes campos chegavam do editor (site) mas NÃO existiam no command, então
+    // o MVC os descartava no binding: o handler montava o request sem eles e o
+    // pacote era salvo com DetectionMode=None e InventorySoftwareId nulo —
+    // "vincular ao inventário" parecia não salvar. Mantidos no fim da lista
+    // posicional para não quebrar chamadas existentes.
+    int InstallCommandKind = 0,
+    int UninstallCommandKind = 0,
+    int DetectionMode = 0,
+    string? InventorySoftwareId = null,
+    string? DetectionName = null,
+    string? DetectionPublisher = null,
+    string? DetectionMinVersion = null,
+    string? DetectionCommand = null
 ) : ICommand<Result<AppCatalogPackageDto>>;
 
 /// <summary>Remove um pacote custom da loja (e seus arquivos no object storage).</summary>

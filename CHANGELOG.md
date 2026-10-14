@@ -54,6 +54,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ClientConfigurationRepository.UpdateAsync` copia campo a campo e não copiava
   `BackgroundProcessingSettingsJson`, que é lido pelo `ConfigurationResolver`. O PATCH/PUT
   do cliente perdia a alteração silenciosamente.
+- 🐛 **Vínculo de detecção do pacote custom não era salvo**: o editor enviava
+  `detectionMode`, `inventorySoftwareId`, `detectionName`, `detectionPublisher`,
+  `detectionMinVersion`, `detectionCommand` e os `*CommandKind`, mas o
+  `UpsertCustomAppPackageCommand` não declarava esses parâmetros — o model binding do
+  MVC descartava o payload e o pacote era gravado com `DetectionMode=None` e vínculo
+  nulo. Os oito campos agora fazem parte do command e são repassados ao serviço.
+- 🐛 **Busca do inventário de software só casava a frase inteira**: a consulta usava um
+  único `ILIKE %texto%`, então "Foxit Editor" não encontrava "Foxit PDF Editor". A busca
+  agora é quebrada em termos e TODOS precisam casar (AND), permitindo também combinar
+  nome, fabricante, versão, hostname, site e cliente. Curingas digitados (`%`, `_`) são
+  escapados.
+- 🐛 **Software duplicado no inventário**: o fingerprint de `software_catalog` incluía
+  `install_id`/`serial`/`source`, voláteis por máquina e por hive de registro — o mesmo
+  produto ganhava uma linha de catálogo por instalação (homolog: 1.857 linhas para 802
+  nomes; 1.305 softwareIds presentes para 705 nomes). A identidade passou a ser o nome
+  normalizado; o upsert consolida as variações, escolhe a **versão mais nova** quando o
+  host expõe o mesmo app em hives 32/64 bits e a **migração M224** funde o catálogo
+  existente, preservando os metadados de atualização (`available_version`,
+  `update_available`, `update_package_id`) e repontando inventário e vínculos de pacotes
+  custom.
+- ✨ **Migração M224** (`M224_ConsolidateSoftwareCatalogIdentity`).
 
 ### Notes
 - A triagem exige a integração de IA habilitada (AIIntegration.Enabled + ChatAIEnabled +

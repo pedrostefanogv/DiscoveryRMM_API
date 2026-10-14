@@ -70,7 +70,17 @@ public sealed class UpsertCustomAppPackageCommandHandler(IAppStoreService svc)
             UninstallCommand = cmd.UninstallCommand,
             ExtractZip = cmd.ExtractZip,
             FileName = cmd.FileName,
-            IconObjectKey = cmd.IconObjectKey
+            IconObjectKey = cmd.IconObjectKey,
+            // Sem estes campos a detecção e o tipo de comando escolhidos no editor
+            // eram descartados (o pacote era salvo com DetectionMode=None).
+            InstallCommandKind = cmd.InstallCommandKind,
+            UninstallCommandKind = cmd.UninstallCommandKind,
+            DetectionMode = cmd.DetectionMode,
+            InventorySoftwareId = cmd.InventorySoftwareId,
+            DetectionName = cmd.DetectionName,
+            DetectionPublisher = cmd.DetectionPublisher,
+            DetectionMinVersion = cmd.DetectionMinVersion,
+            DetectionCommand = cmd.DetectionCommand
         };
         try
         {

@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Discovery.Core.Entities;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
@@ -121,7 +119,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         string? search,
         bool descending)
     {
-        var pattern = BuildSearchPattern(search);
+        var patterns = SoftwareSearchTerms.BuildPatterns(search);
         // Limite superior 501: o handler GetAgentSoftwareQueryHandler pede
         // limit+1 como "probe" de hasMore (500 + 1). Clampear para 500 aqui
         // fazia hasMore nunca ficar true (paginação truncava em 500 itens).
@@ -140,16 +138,22 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                 : query.Where(x => x.inv.Id.CompareTo(cursorId) > 0);
         }
 
-        if (pattern is not null)
+        if (patterns is not null)
         {
-            query = query.Where(x =>
-                (x.inv.Version != null && EF.Functions.ILike(x.inv.Version, pattern)) ||
-                (x.inv.InstallSource != null && EF.Functions.ILike(x.inv.InstallSource, pattern)) ||
-                EF.Functions.ILike(x.catalog.Name, pattern) ||
-                (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, pattern)) ||
-                (x.catalog.InstallId != null && EF.Functions.ILike(x.catalog.InstallId, pattern)) ||
-                (x.catalog.Serial != null && EF.Functions.ILike(x.catalog.Serial, pattern)) ||
-                (x.catalog.Source != null && EF.Functions.ILike(x.catalog.Source, pattern)));
+            // Um Where por termo: EF encadeia com AND, então todos os termos
+            // precisam casar (em qualquer campo). Ver SoftwareSearchTerms.
+            foreach (var pattern in patterns)
+            {
+                var term = pattern;
+                query = query.Where(x =>
+                    (x.inv.Version != null && EF.Functions.ILike(x.inv.Version, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.inv.InstallSource != null && EF.Functions.ILike(x.inv.InstallSource, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    EF.Functions.ILike(x.catalog.Name, term, SoftwareSearchTerms.EscapeCharacter) ||
+                    (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.InstallId != null && EF.Functions.ILike(x.catalog.InstallId, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.Serial != null && EF.Functions.ILike(x.catalog.Serial, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.Source != null && EF.Functions.ILike(x.catalog.Source, term, SoftwareSearchTerms.EscapeCharacter)));
+            }
         }
 
         query = descending
@@ -196,7 +200,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         bool onlyUpdates = false,
         CancellationToken ct = default)
     {
-        var pattern = BuildSearchPattern(search);
+        var patterns = SoftwareSearchTerms.BuildPatterns(search);
         var safePage = Math.Max(1, page);
         var safePageSize = Math.Clamp(pageSize, 1, 2000);
 
@@ -211,16 +215,20 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         if (onlyUpdates)
             query = query.Where(x => x.inv.UpdateAvailable);
 
-        if (pattern is not null)
+        if (patterns is not null)
         {
-            query = query.Where(x =>
-                (x.inv.Version != null && EF.Functions.ILike(x.inv.Version, pattern)) ||
-                (x.inv.InstallSource != null && EF.Functions.ILike(x.inv.InstallSource, pattern)) ||
-                EF.Functions.ILike(x.catalog.Name, pattern) ||
-                (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, pattern)) ||
-                (x.catalog.InstallId != null && EF.Functions.ILike(x.catalog.InstallId, pattern)) ||
-                (x.catalog.Serial != null && EF.Functions.ILike(x.catalog.Serial, pattern)) ||
-                (x.catalog.Source != null && EF.Functions.ILike(x.catalog.Source, pattern)));
+            foreach (var pattern in patterns)
+            {
+                var term = pattern;
+                query = query.Where(x =>
+                    (x.inv.Version != null && EF.Functions.ILike(x.inv.Version, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.inv.InstallSource != null && EF.Functions.ILike(x.inv.InstallSource, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    EF.Functions.ILike(x.catalog.Name, term, SoftwareSearchTerms.EscapeCharacter) ||
+                    (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.InstallId != null && EF.Functions.ILike(x.catalog.InstallId, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.Serial != null && EF.Functions.ILike(x.catalog.Serial, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.Source != null && EF.Functions.ILike(x.catalog.Source, term, SoftwareSearchTerms.EscapeCharacter)));
+            }
         }
 
         var totalCount = await query.CountAsync(ct);
@@ -423,7 +431,9 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             {
                 Name = entry.Name.Trim(),
                 Version = TrimOrNull(entry.Version),
-                Publisher = TrimOrNull(entry.Publisher),
+                // "Sem fabricante" é placeholder legado; normalizar para null evita
+                // que ele tome o lugar do fabricante real no catálogo.
+                Publisher = SoftwareIdentity.NormalizePublisher(entry.Publisher),
                 InstallId = TrimOrNull(entry.InstallId),
                 Serial = TrimOrNull(entry.Serial),
                 Source = TrimOrNull(entry.Source),
@@ -436,9 +446,15 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
             })
             .ToList();
 
+        // Consolida as variações do MESMO produto antes de tocar no banco: o
+        // registro do Windows expõe o mesmo DisplayName em hives 32/64 bits e
+        // com IdentifyingNumber/UninstallString diferentes, e os coletores
+        // (registry × osquery × winget) reaproveitam o mesmo nome. Sem isso,
+        // cada variação virava uma linha de catálogo e o app aparecia
+        // duplicado no inventário com a mesma versão.
         var uniqueByFingerprint = normalized
             .GroupBy(BuildFingerprint)
-            .Select(group => new { Fingerprint = group.Key, Item = group.First() })
+            .Select(group => new { Fingerprint = group.Key, Item = MergeDuplicateEntries(group) })
             .ToList();
 
         var now = DateTime.UtcNow;
@@ -458,6 +474,16 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         var catalogs = catalogList
             .GroupBy(c => c.Fingerprint)
             .ToDictionary(g => g.Key, g => g.First());
+
+        // Catálogos existentes podem ter sido criados em uma coleta em que o
+        // registro ainda não devolvia fabricante/source: completa os campos
+        // vazios com o que o agente mandou agora (as entidades já estão
+        // rastreadas pelo DbContext, então a alteração é persistida no SaveChanges).
+        foreach (var row in uniqueByFingerprint)
+        {
+            if (catalogs.TryGetValue(row.Fingerprint, out var existing))
+                MergeCatalogMetadata(existing, row.Item, now);
+        }
 
         var newFingerprints = new Dictionary<string, SoftwareCatalog>();
         foreach (var row in uniqueByFingerprint)
@@ -501,6 +527,13 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
 
             foreach (var (fingerprint, resolvedCatalog) in resolved)
                 catalogs[fingerprint] = resolvedCatalog;
+
+            // Se algum fingerprint continuar ausente, a falha NÃO era a corrida de
+            // inserção assumida acima (ex.: nome/publisher acima do varchar(300)).
+            // Propagar o erro original é melhor do que estourar KeyNotFoundException
+            // mais adiante, escondendo a causa.
+            if (newFingerprints.Keys.Any(fingerprint => !catalogs.ContainsKey(fingerprint)))
+                throw;
         }
 
         var softwareIds = catalogs.Values.Select(catalog => catalog.Id).ToList();
@@ -566,7 +599,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         string? search,
         bool descending)
     {
-        var pattern = BuildSearchPattern(search);
+        var patterns = SoftwareSearchTerms.BuildPatterns(search);
         var safeLimit = Math.Clamp(limit, 1, 500);
 
         var query =
@@ -591,20 +624,24 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         if (siteId.HasValue)
             query = query.Where(x => x.site.Id == siteId.Value);
 
-        if (pattern is not null)
+        if (patterns is not null)
         {
-            query = query.Where(x =>
-                (x.inv.Version != null && EF.Functions.ILike(x.inv.Version, pattern)) ||
-                (x.inv.InstallSource != null && EF.Functions.ILike(x.inv.InstallSource, pattern)) ||
-                EF.Functions.ILike(x.catalog.Name, pattern) ||
-                (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, pattern)) ||
-                (x.catalog.InstallId != null && EF.Functions.ILike(x.catalog.InstallId, pattern)) ||
-                (x.catalog.Serial != null && EF.Functions.ILike(x.catalog.Serial, pattern)) ||
-                (x.catalog.Source != null && EF.Functions.ILike(x.catalog.Source, pattern)) ||
-                EF.Functions.ILike(x.agent.Hostname, pattern) ||
-                (x.agent.DisplayName != null && EF.Functions.ILike(x.agent.DisplayName, pattern)) ||
-                EF.Functions.ILike(x.site.Name, pattern) ||
-                EF.Functions.ILike(x.client.Name, pattern));
+            foreach (var pattern in patterns)
+            {
+                var term = pattern;
+                query = query.Where(x =>
+                    (x.inv.Version != null && EF.Functions.ILike(x.inv.Version, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.inv.InstallSource != null && EF.Functions.ILike(x.inv.InstallSource, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    EF.Functions.ILike(x.catalog.Name, term, SoftwareSearchTerms.EscapeCharacter) ||
+                    (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.InstallId != null && EF.Functions.ILike(x.catalog.InstallId, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.Serial != null && EF.Functions.ILike(x.catalog.Serial, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.Source != null && EF.Functions.ILike(x.catalog.Source, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    EF.Functions.ILike(x.agent.Hostname, term, SoftwareSearchTerms.EscapeCharacter) ||
+                    (x.agent.DisplayName != null && EF.Functions.ILike(x.agent.DisplayName, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    EF.Functions.ILike(x.site.Name, term, SoftwareSearchTerms.EscapeCharacter) ||
+                    EF.Functions.ILike(x.client.Name, term, SoftwareSearchTerms.EscapeCharacter));
+            }
         }
 
         query = descending
@@ -680,7 +717,7 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
         string? search,
         bool descending)
     {
-        var pattern = BuildSearchPattern(search);
+        var patterns = SoftwareSearchTerms.BuildPatterns(search);
         var safeLimit = Math.Clamp(limit, 1, 500);
 
         var query =
@@ -709,12 +746,16 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
                     || (x.catalog.Name == cursorName && x.catalog.Id.CompareTo(cursorId) > 0));
         }
 
-        if (pattern is not null)
+        if (patterns is not null)
         {
-            query = query.Where(x =>
-                EF.Functions.ILike(x.catalog.Name, pattern) ||
-                (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, pattern)) ||
-                (x.catalog.Source != null && EF.Functions.ILike(x.catalog.Source, pattern)));
+            foreach (var pattern in patterns)
+            {
+                var term = pattern;
+                query = query.Where(x =>
+                    EF.Functions.ILike(x.catalog.Name, term, SoftwareSearchTerms.EscapeCharacter) ||
+                    (x.catalog.Publisher != null && EF.Functions.ILike(x.catalog.Publisher, term, SoftwareSearchTerms.EscapeCharacter)) ||
+                    (x.catalog.Source != null && EF.Functions.ILike(x.catalog.Source, term, SoftwareSearchTerms.EscapeCharacter)));
+            }
         }
 
         var grouped = query
@@ -799,27 +840,105 @@ public class AgentSoftwareRepository : IAgentSoftwareRepository
     }
 
     private static string BuildFingerprint(SoftwareInventoryEntry item)
-    {
-        var input = string.Join("|", new[]
-        {
-            Normalize(item.Name),
-            Normalize(item.Publisher),
-            Normalize(item.InstallId),
-            Normalize(item.Serial),
-            Normalize(item.Source)
-        });
+        => SoftwareIdentity.BuildFingerprint(item.Name);
 
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(input));
-        return Convert.ToHexString(hash);
+    /// <summary>
+    /// Consolida entradas que resolvem para o mesmo produto (mesmo nome
+    /// normalizado). Mantém o primeiro valor não vazio de cada campo — o
+    /// agente ordena a lista e a coleta nativa vem antes da do osquery — e
+    /// prefere um fabricante real ao placeholder "Sem fabricante".
+    /// </summary>
+    private static SoftwareInventoryEntry MergeDuplicateEntries(IEnumerable<SoftwareInventoryEntry> entries)
+    {
+        SoftwareInventoryEntry? merged = null;
+
+        foreach (var entry in entries)
+        {
+            if (merged is null)
+            {
+                merged = new SoftwareInventoryEntry
+                {
+                    Name = entry.Name,
+                    Version = entry.Version,
+                    Publisher = entry.Publisher,
+                    InstallId = entry.InstallId,
+                    Serial = entry.Serial,
+                    Source = entry.Source,
+                    InstallDate = entry.InstallDate,
+                    InstallSource = entry.InstallSource,
+                    AvailableVersion = entry.AvailableVersion,
+                    UpdateAvailable = entry.UpdateAvailable,
+                    UpdateSource = entry.UpdateSource,
+                    UpdatePackageId = entry.UpdatePackageId
+                };
+                continue;
+            }
+
+            merged.Version = SoftwareIdentity.PreferNewestVersion(merged.Version, entry.Version);
+            merged.Publisher = PreferPublisher(merged.Publisher, entry.Publisher);
+            merged.InstallId = FirstNonEmpty(merged.InstallId, entry.InstallId);
+            merged.Serial = FirstNonEmpty(merged.Serial, entry.Serial);
+            merged.Source = FirstNonEmpty(merged.Source, entry.Source);
+            merged.InstallDate ??= entry.InstallDate;
+            merged.InstallSource = FirstNonEmpty(merged.InstallSource, entry.InstallSource);
+            merged.AvailableVersion = FirstNonEmpty(merged.AvailableVersion, entry.AvailableVersion);
+            merged.UpdateSource = FirstNonEmpty(merged.UpdateSource, entry.UpdateSource);
+            merged.UpdatePackageId = FirstNonEmpty(merged.UpdatePackageId, entry.UpdatePackageId);
+            merged.UpdateAvailable |= entry.UpdateAvailable;
+        }
+
+        return merged!;
     }
 
-    private static string Normalize(string? value) => (value ?? string.Empty).Trim().ToLowerInvariant();
-
-    private static string? BuildSearchPattern(string? search)
+    /// <summary>
+    /// Completa metadados vazios de um catálogo existente com o que a coleta
+    /// atual trouxe. Nunca sobrescreve valor já preenchido.
+    /// </summary>
+    private static bool MergeCatalogMetadata(SoftwareCatalog catalog, SoftwareInventoryEntry item, DateTime now)
     {
-        if (string.IsNullOrWhiteSpace(search))
-            return null;
+        var dirty = false;
 
-        return $"%{search.Trim()}%";
+        // HasKnownPublisher (e não IsNullOrWhiteSpace) para que o placeholder
+        // legado "Sem fabricante" — gravado por coletas antigas — seja
+        // substituído quando o registro passa a informar o fabricante real.
+        if (!SoftwareIdentity.HasKnownPublisher(catalog.Publisher) && !string.IsNullOrWhiteSpace(item.Publisher))
+        {
+            catalog.Publisher = item.Publisher;
+            dirty = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(catalog.Source) && !string.IsNullOrWhiteSpace(item.Source))
+        {
+            catalog.Source = item.Source;
+            dirty = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(catalog.InstallId) && !string.IsNullOrWhiteSpace(item.InstallId))
+        {
+            catalog.InstallId = item.InstallId;
+            dirty = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(catalog.Serial) && !string.IsNullOrWhiteSpace(item.Serial))
+        {
+            catalog.Serial = item.Serial;
+            dirty = true;
+        }
+
+        if (dirty)
+            catalog.UpdatedAt = now;
+
+        return dirty;
+    }
+
+    private static string? FirstNonEmpty(string? current, string? incoming)
+        => string.IsNullOrWhiteSpace(current) ? incoming : current;
+
+    private static string? PreferPublisher(string? current, string? incoming)
+    {
+        if (!SoftwareIdentity.HasKnownPublisher(current) && SoftwareIdentity.HasKnownPublisher(incoming))
+            return incoming;
+
+        return current;
     }
 }
