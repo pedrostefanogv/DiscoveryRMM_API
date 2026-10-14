@@ -79,6 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **Bootstrap do stream JetStream podia abortar a instalação no último passo**:
+  `ensure_nats_fanout_stream` tentava 15× com backoff 2^n (até ~22 min) e, em qualquer falha, dava
+  `fail` — mesmo a API já garantindo o stream no startup (`NatsFanoutStreamBootstrapService`, com as
+  mesmas configs `Nats__FanoutStream__*`). O download/instalação do `nats` CLI também derrubava tudo
+  se a GitHub API estivesse limitada. Agora o passo é **best-effort** (avisa e segue), tenta 6× com
+  backoff limitado a 16s (~1 min) e não aborta a instalação depois do admin já criado.
 - 🐛 **`/health` respondia 503 com a API saudável (health check do NATS sem credenciais)**: o
   health check montava `NatsOpts.Default` só com URL/timeout, sem `AuthOpts`, então conectava
   anônimo (`User ""`); com o `auth_callout` habilitado o broker devolvia `Authorization Violation`

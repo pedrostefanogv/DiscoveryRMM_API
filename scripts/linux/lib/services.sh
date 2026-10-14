@@ -127,7 +127,7 @@ install_nats_cli() {
     x86_64)  nats_arch="amd64" ;;
     aarch64) nats_arch="arm64" ;;
     armv7l)  nats_arch="arm7" ;;
-    *)       fail "Arquitetura nao suportada para download do nats CLI: $arch" ;;
+    *)       warn "Arquitetura nao suportada para download do nats CLI: $arch"; return 1 ;;
   esac
 
   local tmp_dir; tmp_dir="$(mktemp -d)"
@@ -135,20 +135,38 @@ install_nats_cli() {
   local nats_bin="/usr/local/bin/nats"
   local release_json asset_url nats_path
 
-  release_json="$(curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "https://api.github.com/repos/nats-io/natscli/releases/latest")"
+  # Best-effort: este CLI serve apenas para o bootstrap do stream de fan-out,
+  # que a propria API garante no startup (NatsFanoutStreamBootstrapService).
+  release_json="$(curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "https://api.github.com/repos/nats-io/natscli/releases/latest" 2>/dev/null || true)"
   asset_url="$(printf '%s' "$release_json" | jq -r --arg arch "$nats_arch" '.assets[]?.browser_download_url | select(test("linux-" + $arch + "\\.zip$"))' | head -n 1)"
 
-  [[ -n "$asset_url" && "$asset_url" != "null" ]] || fail "Nao foi possivel localizar asset Linux do nats CLI para arquitetura $nats_arch."
+  if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+    warn "Nao foi possivel localizar o asset Linux do nats CLI ($nats_arch; GitHub API limitada?)."
+    rm -rf "$tmp_dir"
+    return 1
+  fi
 
   log "Baixando nats CLI para bootstrap de streams JetStream..."
-  curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "$asset_url" -o "$nats_zip"
-  unzip -q "$nats_zip" -d "$tmp_dir"
+  if ! curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "$asset_url" -o "$nats_zip"; then
+    warn "Falha ao baixar o nats CLI de $asset_url."
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  if ! unzip -q "$nats_zip" -d "$tmp_dir"; then
+    warn "Pacote do nats CLI invalido (unzip)."
+    rm -rf "$tmp_dir"
+    return 1
+  fi
 
   nats_path="$(cd "$tmp_dir" && find . -type f -name nats | head -n 1)"
   nats_path="${nats_path#./}"
   nats_path="$tmp_dir/$nats_path"
 
-  [[ -f "$nats_path" ]] || fail "Nao foi possivel localizar o binario nats no pacote baixado."
+  if [[ ! -f "$nats_path" ]]; then
+    warn "Nao foi possivel localizar o binario nats no pacote baixado."
+    rm -rf "$tmp_dir"
+    return 1
+  fi
 
   sudo install -m 0755 "$nats_path" "$nats_bin"
   rm -rf "$tmp_dir"
@@ -312,7 +330,13 @@ ensure_nats_fanout_stream() {
     return
   fi
 
-  install_nats_cli
+  # Best-effort: a API garante o stream no startup com as MESMAS configuracoes
+  # (Nats__FanoutStream__*). Sem isso, uma indisponibilidade do CLI/GitHub
+  # abortava a instalacao no ultimo passo, depois do admin ja ter sido criado.
+  if ! install_nats_cli; then
+    warn "nats CLI indisponivel; o stream de fan-out sera garantido pela propria API no startup."
+    return 0
+  fi
 
   local stream_name="${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}"
   local stream_subjects="${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*.agents.command,tenant.*.agents.command}"
@@ -330,7 +354,7 @@ ensure_nats_fanout_stream() {
   }
 
   local attempt delay
-  for attempt in $(seq 1 15); do
+  for attempt in $(seq 1 6); do
     if run_nats_cli stream info "$stream_name" >/dev/null 2>&1; then
       if run_nats_cli stream update "$stream_name" \
         --subjects "$stream_subjects" \
@@ -358,12 +382,15 @@ ensure_nats_fanout_stream() {
         return
       fi
     fi
-    delay=$(( 2 ** (attempt < 7 ? attempt : 7) ))
-    log "Tentativa ${attempt}/15 de bootstrap JetStream falhou; aguardando ${delay}s..."
+    delay=$(( 2 ** (attempt < 4 ? attempt : 4) ))
+    log "Tentativa ${attempt}/6 de bootstrap JetStream falhou; aguardando ${delay}s..."
     sleep "$delay"
   done
 
-  fail "Nao foi possivel criar/atualizar o stream JetStream de fan-out ('${stream_name}')."
+  # Nao falha a instalacao: a API cria/atualiza o stream no startup; aqui e so
+  # um bootstrap antecipado.
+  warn "Nao foi possivel criar/atualizar o stream JetStream de fan-out ('${stream_name}') via CLI; a API garante no startup."
+  return 0
 }
 
 # ── NATS server configuration ──────────────────────────────────────────────
