@@ -249,22 +249,48 @@ ensure_wails3_apt_deps() {
 
 # Resolve versao/major do Wails a partir do go.mod LOCAL do agent (pos-pull).
 # Preenche: WAILS_MAJOR (2|3), WAILS_VERSION, WAILS_BIN (wails|wails3), WAILS_PKG.
+#
+# IMPORTANTE: o clone do agent pertence ao usuario discovery-api e
+# /opt/discovery-agent-src e 0750; o instalador roda como usuario instalador
+# (discovery) e NAO tem leitura direta — sem sudo a deteccao falhava e o
+# instalador caia no fallback fixo, instalando um Wails diferente do que o
+# agent realmente usa (ex.: beta.11 em vez de beta.28).
 resolve_wails_version() {
-  local go_mod="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}/src/go.mod"
-  [[ -r "$go_mod" ]] || go_mod="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}/go.mod"
-  local resolved=""
+  local agent_src="${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}"
+  local -a candidates=(
+    "$agent_src/src/go.mod"
+    "$agent_src/go.mod"
+    "$agent_src/cmd/go.mod"
+    "$agent_src/agent/go.mod"
+    "$agent_src/app/go.mod"
+  )
+  local path
+  while IFS= read -r path; do
+    [[ -n "$path" ]] && candidates+=("$path")
+  done < <(sudo find "$agent_src" -maxdepth 4 -name go.mod -not -path '*/.git/*' 2>/dev/null || true)
+
+  local go_mod="" resolved="" candidate="" line=""
+  for candidate in "${candidates[@]}"; do
+    line="$(sudo grep -hE 'wailsapp/wails/v(2|3)[[:space:]]+v[0-9]' "$candidate" 2>/dev/null | head -n1 || true)"
+    if [[ -n "$line" ]]; then
+      go_mod="$candidate"
+      resolved="$line"
+      break
+    fi
+  done
+
   local version=""
   local major=""
-
-  if [[ -r "$go_mod" ]]; then
-    resolved="$(grep -E 'wailsapp/wails/v(2|3)[[:space:]]+v[0-9]' "$go_mod" | head -n1 || true)"
+  if [[ -n "$resolved" ]]; then
     major="$(printf '%s' "$resolved" | sed -nE 's/.*wailsapp\/wails\/v([23]).*/\1/p')"
     version="$(printf '%s' "$resolved" | sed -nE 's/.*wailsapp\/wails\/v[23][[:space:]]+[[:space:]]*(v[^[:space:]]+).*/\1/p')"
   fi
 
   if [[ -z "$version" ]]; then
-    warn "Versao do wails nao detectada no go.mod do agent ($go_mod); usando fallback ${WAILS_VERSION_FALLBACK}"
+    warn "Versao do wails nao detectada no go.mod do agent (${go_mod:-$agent_src}); usando fallback ${WAILS_VERSION_FALLBACK}"
     major="3"; version="$WAILS_VERSION_FALLBACK"
+  else
+    log "Wails detectado no go.mod do agent ($go_mod): $version"
   fi
 
   WAILS_MAJOR="${major:-3}"

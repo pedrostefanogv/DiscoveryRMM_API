@@ -463,15 +463,47 @@ case "$BOOTSTRAP_BRANCH" in
     ;;
 esac
 
+# A branch existe no remoto? Distingue "branch inexistente" de "falha de
+# rede ao clonar" — sem isso, um erro transitorio do GitHub derrubava o pedido
+# para outra branch (ex.: dev -> release), executando um instalador COMPLETAMENTE
+# diferente do solicitado.
+branch_exists() {
+  local branch="$1"
+  git ls-remote --exit-code --heads "$BOOTSTRAP_REPO_URL" "$branch" >/dev/null 2>&1
+}
+
+# Clona a branch com algumas tentativas: o clone e a etapa mais sensivel a
+# instabilidade de rede e nao deveria trocar de canal por causa disso.
+clone_branch_with_retry() {
+  local branch="$1"
+  local attempt
+  for attempt in 1 2 3; do
+    rm -rf "$BOOTSTRAP_WORKDIR"
+    mkdir -p "$BOOTSTRAP_WORKDIR"
+    if git clone --depth 1 --branch "$branch" "$BOOTSTRAP_REPO_URL" "$BOOTSTRAP_WORKDIR" >/dev/null 2>&1; then
+      return 0
+    fi
+    log "Falha ao clonar '$branch' (tentativa ${attempt}/3)"
+    sleep "$attempt"
+  done
+  return 1
+}
+
 CLONED_BRANCH=""
 INSTALLER_PATH=""
 for candidate in "${clone_candidates[@]}"; do
-  rm -rf "$BOOTSTRAP_WORKDIR"
-  mkdir -p "$BOOTSTRAP_WORKDIR"
-
   log "Tentando bootstrap do canal/branch '$candidate'"
-  if ! git clone --depth 1 --branch "$candidate" "$BOOTSTRAP_REPO_URL" "$BOOTSTRAP_WORKDIR" >/dev/null 2>&1; then
-    log "Canal/branch '$candidate' indisponivel para clone"
+
+  if ! branch_exists "$candidate"; then
+    log "Canal/branch '$candidate' nao existe no repositorio"
+    continue
+  fi
+
+  if ! clone_branch_with_retry "$candidate"; then
+    warn "Falha ao clonar a branch '$candidate' apos 3 tentativas (rede/GitHub)."
+    if [[ "$candidate" == "$BOOTSTRAP_BRANCH" ]]; then
+      fail "Nao foi possivel clonar a branch solicitada '$BOOTSTRAP_BRANCH' (verifique rede/GitHub e tente novamente). O fallback para outra branch foi bloqueado para nao executar um instalador diferente."
+    fi
     continue
   fi
 
@@ -492,13 +524,13 @@ if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
   if [[ "${non_interactive:-0}" -eq 1 ]]; then
     fail "Branch solicitada '$BOOTSTRAP_BRANCH' nao disponivel (fallback para '$CLONED_BRANCH' rejeitado em modo --non-interactive). Use a branch disponivel ou corrija o parametro."
   fi
-  warn "Branch solicitada '$BOOTSTRAP_BRANCH' nao disponivel; fallback para '$CLONED_BRANCH'."
-  echo "Branch '$BOOTSTRAP_BRANCH' nao encontrada. Usar '$CLONED_BRANCH'? (S/n): " >&2
+  warn "Branch solicitada '$BOOTSTRAP_BRANCH' nao existe; fallback para '$CLONED_BRANCH'."
+  echo "Branch '$BOOTSTRAP_BRANCH' nao existe. Usar '$CLONED_BRANCH'? (s/N): " >&2
   # SEM `local` aqui: este trecho roda no top-level do script e `local` fora de
   # funcao falha fatalmente com set -e ("local: can only be used in a function").
   confirm_fallback=""
   read -r confirm_fallback
-  confirm_fallback="$(printf '%s' "${confirm_fallback:-s}" | tr '[:upper:]' '[:lower:]')"
+  confirm_fallback="$(printf '%s' "${confirm_fallback:-n}" | tr '[:upper:]' '[:lower:]')"
   case "$confirm_fallback" in
     s|sim|y|yes) log "Fallback confirmado: usando '$CLONED_BRANCH'." ;;
     *) fail "Instalacao cancelada pelo usuario. Branch '$BOOTSTRAP_BRANCH' nao disponivel." ;;

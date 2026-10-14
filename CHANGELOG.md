@@ -72,6 +72,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **Bootstrap trocava de branch em falha transitória de clone**: um erro de rede no
+  `git clone` da branch pedida fazia o bootstrap cair para outra branch (ex.: `dev` → `release`),
+  executando um instalador **diferente** (o do release é o monolítico antigo, que ainda exige a
+  senha do usuário instalador e aborta). Agora ele distingue “branch inexistente” (`git ls-remote`)
+  de falha de clone, tenta o clone 3× e, se a branch **solicitada** existe mas o clone falha,
+  aborta com mensagem clara em vez de trocar de instalador. O fallback (só quando a branch
+  realmente não existe) passou a ter default **N**.
+- 🐛 **API em crash-loop no primeiro boot: `M130_FixTimestampTimezones` com versão fora do padrão**:
+  era a única das 230 migrations com versão numérica curta (`[Migration(130)]`); as demais usam
+  `[Migration(2026MMDD_NNN)]`. Como 130 é o menor valor, o FluentMigrator rodava essa migration
+  **primeiro** num banco novo, antes de M006 (`CreateTickets`), e o `ALTER TABLE tickets` falhava
+  com `42P01 relation "tickets" does not exist` → exceção não tratada → SIGABRT → `Restart=always`
+  (o instalador abortava em `wait_for_discovery_api_ready` e o admin nunca era criado). A versão
+  passou para `20261215_130` (roda depois de todas) e os `ALTER` agora são idempotentes (só
+  convertem coluna existente que ainda esteja `timestamp without time zone`), preservando bancos
+  onde a versão 130 já havia sido aplicada.
+- 🐛 **Wails instalado em versão diferente da usada pelo agent**: `resolve_wails_version` lia o
+  `go.mod` com `[[ -r ]]` direto, mas o clone do agent pertence a `discovery-api` e
+  `/opt/discovery-agent-src` é `0750` — o instalador roda como usuário instalador (`discovery`) e
+  não conseguia ler o arquivo, caindo no fallback fixo (`v3.0.0-beta.11`) mesmo com o projeto em
+  `v3.0.0-beta.28`. A leitura agora usa `sudo` e a busca considera `src/go.mod`, a raiz e
+  subdiretórios (até 4 níveis), instalando exatamente a versão declarada.
 - 🐛 **Instalação travava em `mc alias set` (Midnight Commander)**: `ensure_mc_cli` aceitava
   qualquer `mc` do PATH, mas em Debian/Ubuntu `mc` também é o **Midnight Commander** (TUI). O
   comando abria a interface e ficava esperando teclado (0% CPU, sem output) — a instalação parava
