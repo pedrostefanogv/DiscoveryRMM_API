@@ -1,4 +1,5 @@
 using Discovery.Api.Filters;
+using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Knowledge.Commands;
 using Discovery.Core.Cqrs.Knowledge.Queries;
 using Discovery.Core.DTOs;
@@ -270,7 +271,10 @@ public class KnowledgeController(
             // O limite vale sobre o tamanho REAL no storage, não o declarado.
             if (attachment.SizeBytes > KnowledgeImageRules.MaxFileSizeBytes)
             {
-                await attachmentService.DeleteAttachmentAsync(attachment.Id, ct);
+                // Recusado por tamanho: remove o OBJETO na hora (não só a linha) —
+                // o arquivo é inválido, não deve ocupar storage nem seguir
+                // acessível pelo link de upload até o TTL do presign.
+                await attachmentService.PermanentlyDeleteAttachmentAsync(attachment.Id, ct);
                 return StatusCode(StatusCodes.Status413RequestEntityTooLarge,
                     new { error = $"Imagem excede o tamanho máximo permitido ({KnowledgeImageRules.MaxFileSizeBytes} bytes)." });
             }
@@ -280,6 +284,11 @@ public class KnowledgeController(
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (ObjectStorageNotConfiguredException ex)
+        {
+            // Mesmo contrato do presigned-upload: storage indisponível é 503.
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -337,7 +346,7 @@ public class KnowledgeController(
 
         try
         {
-            var url = await attachmentService.GetPresignedDownloadUrlAsync(attachment.Id, KnowledgeImageRules.ReadUrlTtlHours, ct);
+            var url = await attachmentService.GetPresignedDownloadUrlAsync(attachment, KnowledgeImageRules.ReadUrlTtlHours, ct);
             return Ok(new KnowledgeImageUrlDto(url, DateTime.UtcNow.AddHours(KnowledgeImageRules.ReadUrlTtlHours)));
         }
         catch (OperationCanceledException)
@@ -430,8 +439,19 @@ public class KnowledgeController(
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.Delete)]
     public async Task<IActionResult> PermanentlyDeleteImage(Guid id, Guid attachmentId, CancellationToken ct)
     {
-        var result = await mediator.Send(
-            new DeleteKnowledgeImageCommand(id, attachmentId, Permanent: true), ct);
+        Result<VoidResult> result;
+        try
+        {
+            result = await mediator.Send(
+                new DeleteKnowledgeImageCommand(id, attachmentId, Permanent: true), ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Storage indisponível/não configurado: nada foi apagado (a linha
+            // continua) — 503 deixa claro que é para tentar de novo depois, em
+            // vez de um 500 que pareceria bug da API.
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = ex.Message });
+        }
 
         return result.Match<IActionResult>(
             success: _ => NoContent(),

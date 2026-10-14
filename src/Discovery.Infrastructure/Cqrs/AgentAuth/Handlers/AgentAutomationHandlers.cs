@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Automation;
 using Discovery.Core.DTOs;
@@ -8,13 +9,30 @@ using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 
+/// <summary>
+/// Opções compartilhadas para desserializar os payloads que o agent envia
+/// dentro do wrapper <c>request</c> (ack/result/policy-sync).
+/// Os enums do agent trafegam como string (ex.: <c>"ForceSync"</c>) — sem o
+/// <see cref="JsonStringEnumConverter"/> o System.Text.Json lança JsonException
+/// e o endpoint responde 500. O converter também aceita números, preservando
+/// compatibilidade com payloads antigos.
+/// </summary>
+internal static class AgentCallbackJson
+{
+    /// <summary>Instância única (thread-safe após configuração).</summary>
+    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
+}
+
 public sealed class SyncAutomationPolicyHandler(
     IAutomationTaskService taskService
 ) : IRequestHandler<SyncAutomationPolicyCommand, Result<object>>
 {
     // Reutiliza a mesma instância de JsonSerializerOptions (thread-safe após configuração)
     // em vez de alocar uma nova a cada chamada de policy-sync (chamada a cada ~5 min por agent).
-    private static readonly JsonSerializerOptions SyncJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions SyncJsonOptions = AgentCallbackJson.Options;
 
     public async Task<Result<object>> Handle(SyncAutomationPolicyCommand cmd, CancellationToken ct)
     {
@@ -122,7 +140,7 @@ public sealed class AckAutomationExecutionHandler(
             ? (AutomationExecutionSourceType)raw
             : AutomationExecutionSourceType.ForceSync;
 
-    private static readonly JsonSerializerOptions SyncJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions SyncJsonOptions = AgentCallbackJson.Options;
 }
 
 public sealed class CompleteAutomationExecutionHandler(
@@ -178,5 +196,5 @@ public sealed class CompleteAutomationExecutionHandler(
             ? (AutomationExecutionSourceType)raw
             : AutomationExecutionSourceType.ForceSync;
 
-    private static readonly JsonSerializerOptions SyncJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions SyncJsonOptions = AgentCallbackJson.Options;
 }

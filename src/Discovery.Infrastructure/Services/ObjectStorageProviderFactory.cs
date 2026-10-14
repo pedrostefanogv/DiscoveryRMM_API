@@ -211,7 +211,7 @@ file sealed class NotConfiguredObjectStorageProvider : IObjectStorageService
         _reason = string.Join("; ", errors);
     }
 
-    private InvalidOperationException NotConfigured() =>
+    private ObjectStorageNotConfiguredException NotConfigured() =>
         new($"Object storage não está configurado e não pode ser usado. Configure o storage em Configurações > Servidor. Detalhes: {_reason}");
 
     public Task<StorageObject> UploadAsync(string objectKey, Stream content, string contentType, CancellationToken cancellationToken = default)

@@ -3,6 +3,7 @@ using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
@@ -478,12 +479,38 @@ public class AttachmentService : IAttachmentService
         var storageService = await GetStorageServiceAsync(cancellationToken);
         await storageService.DeleteAsync(attachment.StorageObjectKey, cancellationToken);
 
-        var removed = await _attachmentRepository.HardDeleteAsync(attachmentId, cancellationToken);
+        bool removed;
+        try
+        {
+            removed = await _attachmentRepository.HardDeleteAsync(attachmentId, cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Corrida (dois DELETE /permanent, ou o job de retenção já removeu a
+            // linha): o objeto já saiu do storage, então tratamos como "já
+            // removido" em vez de devolver 500 num caminho irreversível.
+            _logger.LogWarning(
+                "Attachment {AttachmentId} já havia sido removido do banco (corrida) — objeto do storage já excluído",
+                attachmentId);
+            return false;
+        }
 
-        _logger.LogInformation(
-            "Permanently deleted attachment {AttachmentId} ({ObjectKey}) — object removed from storage",
-            attachmentId,
-            attachment.StorageObjectKey);
+        if (removed)
+        {
+            _logger.LogInformation(
+                "Permanently deleted attachment {AttachmentId} ({ObjectKey}) — object removed from storage",
+                attachmentId,
+                attachment.StorageObjectKey);
+        }
+        else
+        {
+            // Não mentir no log: o objeto foi removido do storage, mas a linha já
+            // não existia (auditoria de hard delete precisa disso).
+            _logger.LogWarning(
+                "Objeto {ObjectKey} removido do storage, mas a linha do anexo {AttachmentId} já não existia",
+                attachment.StorageObjectKey,
+                attachmentId);
+        }
 
         return removed;
     }

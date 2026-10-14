@@ -22,13 +22,12 @@ public static partial class KnowledgeImageMarkdown
     /// <summary>GUID no formato "D" (8-4-4-4-12), maiúsculas ou minúsculas.</summary>
     private const string GuidPattern = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 
-    /// <summary>Título opcional do Markdown: "w=50%" / 'w=420'.</summary>
-    private const string TitlePattern = @"(?:\s+(""[^""]*""|'[^']*'))?";
-
-    // Captura o GUID do token COMPLETO (![alt](kbimage:<id> ["w=..."])) e o
-    // título opcional. Não casa uma menção textual a "kbimage:<guid>" fora da
-    // sintaxe de imagem.
-    [GeneratedRegex(@"!\[[^\]]*\]\(\s*kbimage:\s*(" + GuidPattern + @")" + TitlePattern + @"\s*\)", RegexOptions.IgnoreCase)]
+    // Captura o GUID do token COMPLETO (![alt](kbimage:<id> ["w=..."])) e aceita
+    // QUALQUER sufixo antes do ")" — inclusive título malformado escrito à mão
+    // (ex.: "[...](kbimage:<id> "w=50%" extra)"). Sem essa tolerância o token
+    // escapava do StripTokens (vazando para o LLM) e do ExtractIds (inUse errado).
+    // Não casa uma menção textual a "kbimage:<guid>" fora da sintaxe de imagem.
+    [GeneratedRegex(@"!\[[^\]]*\]\(\s*kbimage:\s*(" + GuidPattern + @")[^)\r\n]*\)", RegexOptions.IgnoreCase)]
     private static partial Regex TokenRegex();
 
     [GeneratedRegex(@"\n{3,}")]
@@ -100,7 +99,7 @@ public static partial class KnowledgeImageMarkdown
     {
         if (string.IsNullOrWhiteSpace(markdown)) return markdown ?? string.Empty;
 
-        var token = @"!\[[^\]]*\]\(\s*kbimage:\s*" + attachmentId.ToString("D") + TitlePattern + @"\s*\)";
+        var token = @"!\[[^\]]*\]\(\s*kbimage:\s*" + attachmentId.ToString("D") + @"[^)\r\n]*\)";
 
         var aloneOnLine = Regex.Replace(
             markdown,

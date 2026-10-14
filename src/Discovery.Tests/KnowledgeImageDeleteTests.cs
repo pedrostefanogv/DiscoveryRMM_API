@@ -53,6 +53,22 @@ public class KnowledgeImageDeleteTests
     }
 
     [Test]
+    public async Task PermanentDelete_WhenStorageFails_LeavesArticleUntouched()
+    {
+        var attachments = new FakeAttachmentRepository(Image());
+        var service = new FakeAttachmentService { ThrowOnPermanent = true };
+        var articles = new FakeArticleRepository(ArticleWithImage());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await new DeleteKnowledgeImageCommandHandler(attachments, service, articles, new FakePageRepository())
+                .Handle(new DeleteKnowledgeImageCommand(ArticleId, AttachmentId, Permanent: true), default));
+
+        // A ordem importa: anexo primeiro, conteúdo depois. Sem isso o artigo já
+        // teria sido gravado sem o token sob um erro 503 (mutação parcial).
+        Assert.That(articles.Updated, Is.Null);
+    }
+
+    [Test]
     public async Task DefaultDelete_IsSoftDelete_AndKeepsRow()
     {
         var attachments = new FakeAttachmentRepository(Image());
@@ -111,6 +127,7 @@ public class KnowledgeImageDeleteTests
     {
         public int SoftDeleteCalls { get; private set; }
         public int PermanentCalls { get; private set; }
+        public bool ThrowOnPermanent { get; init; }
 
         public Task DeleteAttachmentAsync(Guid attachmentId, CancellationToken ct = default)
         {
@@ -121,6 +138,7 @@ public class KnowledgeImageDeleteTests
         public Task<bool> PermanentlyDeleteAttachmentAsync(Guid attachmentId, CancellationToken ct = default)
         {
             PermanentCalls++;
+            if (ThrowOnPermanent) throw new InvalidOperationException("storage fora do ar");
             return Task.FromResult(true);
         }
 

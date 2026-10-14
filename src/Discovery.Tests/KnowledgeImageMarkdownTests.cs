@@ -53,12 +53,38 @@ public class KnowledgeImageMarkdownTests
     }
 
     [Test]
+    public void UnclosedToken_DoesNotSwallowFollowingProse()
+    {
+        // Regressão: o sufixo tolerante era [^)]* (atravessava linhas) e apagava
+        // a prosa até o próximo ")" do documento — inclusive no RemoveToken, que
+        // GRAVA o conteúdo do artigo.
+        var doc = "Antes\n\n![print](kbimage:" + ImageA.ToString("D")
+            + " sem fechar\n\nA senha e secreta (nao compartilhe)\n\nDepois";
+
+        Assert.That(KnowledgeImageMarkdown.StripTokens(doc), Does.Contain("A senha e secreta"));
+        Assert.That(KnowledgeImageMarkdown.RemoveToken(doc, ImageA), Does.Contain("A senha e secreta"));
+    }
+
+    [Test]
     public void RemoveToken_RemovesOnlyTargetImage()
     {
         var removed = KnowledgeImageMarkdown.RemoveToken(Markdown(ImageA, ImageB), ImageA);
 
         Assert.That(KnowledgeImageMarkdown.ContainsToken(removed), Is.True);
         Assert.That(KnowledgeImageMarkdown.ExtractIds(removed), Is.EqualTo(new[] { ImageB }));
+    }
+
+    [Test]
+    public void TokenWithMalformedTitle_IsStillStrippedAndExtracted()
+    {
+        // Título malformado escrito à mão: sem tolerar o sufixo antes do ")", o
+        // token escapava do strip (ia para o LLM) e o inUse ficaria errado.
+        var malformed = "![a](kbimage:" + ImageA.ToString("D") + " \"w=50%\" extra)";
+
+        Assert.That(KnowledgeImageMarkdown.ContainsToken(malformed), Is.True);
+        Assert.That(KnowledgeImageMarkdown.ExtractIds(malformed), Has.Count.EqualTo(1));
+        Assert.That(KnowledgeImageMarkdown.StripTokens(malformed), Does.Not.Contain("kbimage"));
+        Assert.That(KnowledgeImageMarkdown.RemoveToken(malformed, ImageA), Does.Not.Contain("kbimage"));
     }
 
     [Test]

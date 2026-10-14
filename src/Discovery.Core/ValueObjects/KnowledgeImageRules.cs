@@ -64,8 +64,9 @@ public static class KnowledgeImageRules
     /// </param>
     public static string BuildMarkdownToken(string? altText, Guid attachmentId, string? size = null)
     {
-        // Sem colchetes/parênteses (quebrariam a sintaxe) e sem quebra de linha
-        // (um alt multilinha geraria markdown atípico).
+        // Sem colchetes (fechariam o alt e quebrariam a sintaxe) e sem quebra de
+        // linha (um alt multilinha geraria markdown atípico). Parênteses são
+        // inofensivos dentro do alt.
         var alt = (altText ?? string.Empty)
             .Replace("[", string.Empty)
             .Replace("]", string.Empty)

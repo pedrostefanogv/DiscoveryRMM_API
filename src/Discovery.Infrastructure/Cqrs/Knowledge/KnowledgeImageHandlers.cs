@@ -34,12 +34,11 @@ public sealed class DeleteKnowledgeImageCommandHandler(
                 Error.NotFound($"Image {cmd.AttachmentId} not found in article {cmd.ArticleId}"));
         }
 
-        if (cmd.RemoveReferences)
-        {
-            await RemoveFromArticleAsync(cmd.ArticleId, cmd.AttachmentId, ct);
-            await RemoveFromPagesAsync(cmd.ArticleId, cmd.AttachmentId, ct);
-        }
-
+        // ORDEM IMPORTA: o ANEXO primeiro, o CONTEÚDO depois. Se o storage falhar
+        // no hard delete, nada foi alterado — o artigo mantém a referência e o
+        // anexo continua utilizável para nova tentativa. Ao contrário, remover a
+        // referência antes deixaria uma mutação já gravada no artigo (órfã) sob um
+        // erro 503/500.
         if (cmd.Permanent)
         {
             // Sem recuperação: some do storage e do banco (revoga também os links
@@ -48,11 +47,21 @@ public sealed class DeleteKnowledgeImageCommandHandler(
             if (!removed)
                 return Result<VoidResult>.Failure(Error.NotFound($"Image {cmd.AttachmentId} not found"));
 
+            await RemoveReferencesAsync(cmd, ct);
             return Result<VoidResult>.Success(VoidResult.Value);
         }
 
         await attachmentService.DeleteAttachmentAsync(cmd.AttachmentId, ct);
+        await RemoveReferencesAsync(cmd, ct);
         return Result<VoidResult>.Success(VoidResult.Value);
+    }
+
+    private async Task RemoveReferencesAsync(DeleteKnowledgeImageCommand cmd, CancellationToken ct)
+    {
+        if (!cmd.RemoveReferences) return;
+
+        await RemoveFromArticleAsync(cmd.ArticleId, cmd.AttachmentId, ct);
+        await RemoveFromPagesAsync(cmd.ArticleId, cmd.AttachmentId, ct);
     }
 
     private async Task RemoveFromArticleAsync(Guid articleId, Guid attachmentId, CancellationToken ct)
