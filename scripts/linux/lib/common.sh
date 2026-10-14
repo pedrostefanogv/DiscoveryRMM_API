@@ -96,6 +96,14 @@ refresh_sudo_credentials() {
     return
   fi
 
+  # Quando o instalador foi reexecutado como usuario instalador
+  # (bootstrap_root_execution), a senha do sudo chega por SUDO_ASKPASS, porque
+  # nao existe tty para o sudo pedir a senha.
+  if [[ -n "${SUDO_ASKPASS:-}" ]]; then
+    sudo -A -v >/dev/null 2>&1 || fail "sudo nao aceitou a senha do usuario instalador."
+    return
+  fi
+
   if sudo -n -v >/dev/null 2>&1; then
     return
   fi
@@ -112,7 +120,11 @@ start_sudo_keepalive() {
   (
     while true; do
       sleep 60
-      sudo -n -v >/dev/null 2>&1 || exit 1
+      if [[ -n "${SUDO_ASKPASS:-}" ]]; then
+        sudo -A -v >/dev/null 2>&1 || exit 1
+      else
+        sudo -n -v >/dev/null 2>&1 || exit 1
+      fi
     done
   ) &
   SUDO_KEEPALIVE_PID="$!"

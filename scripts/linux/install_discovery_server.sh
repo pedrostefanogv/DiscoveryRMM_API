@@ -17,6 +17,9 @@ MAINTENANCE_MODE=0
 INSTALL_MODE=""
 SUDO_KEEPALIVE_PID=""
 LOG_CONTEXT="install"
+# Args originais preservados para o re-exec como usuario instalador
+# (bootstrap_root_execution), que acontece depois do parsing.
+ORIGINAL_ARGS=("$@")
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -62,6 +65,8 @@ source "$LIB_DIR/services.sh"
 source "$LIB_DIR/certs.sh"
 # shellcheck source=lib/prompts.sh
 source "$LIB_DIR/prompts.sh"
+# shellcheck source=lib/installer_user.sh
+source "$LIB_DIR/installer_user.sh"
 # shellcheck source=lib/deploy.sh
 source "$LIB_DIR/deploy.sh"
 # shellcheck source=lib/modes.sh
@@ -72,6 +77,13 @@ source "$LIB_DIR/modes.sh"
 initialize_log_context_from_requested_mode
 validate_host_os
 require_cmd sudo
+
+# Se executado como root, cria/reutiliza um usuario comum com sudo e reexecuta
+# o instalador como esse usuario (a instalacao nao fica presa ao root).
+if [[ "${EUID}" -eq 0 && "${DISCOVERY_ROOT_BOOTSTRAPPED:-0}" != "1" ]]; then
+  bootstrap_root_execution
+fi
+
 start_sudo_keepalive
 trap cleanup_sudo_keepalive EXIT
 
@@ -117,8 +129,7 @@ main() {
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo; echo "Endereco externo publicado via Cloudflare (ex: api.suaempresa.com)."
     prompt_if_empty EXTERNAL_API_HOST "Hostname externo da API (Cloudflare)"
-    echo "Token do Cloudflare Tunnel para publicar a API."
-    prompt_if_empty CLOUDFLARE_TUNNEL_TOKEN "Cloudflare Tunnel token" 1
+    prompt_cloudflare_tunnel_token
   fi
 
   prompt_tls_certificate_configuration
@@ -128,12 +139,18 @@ main() {
   prompt_object_storage_configuration
 
   wizard_header "Documentacao OpenAPI (Scalar)" "$(wizard_step_label "7/9" "6/8")"
-  echo "Habilite ou nao a documentacao OpenAPI (Scalar) na API."
-  echo "Se OpenAPI estiver desativado, os endpoints /openapi e /scalar ficam indisponiveis."
+  echo "OpenAPI publica o contrato da API em /openapi/{versao}.json (rota anonima)."
+  echo "Scalar e a UI interativa em /scalar que consome esse contrato e inclui o"
+  echo "console 'Try it out' para chamar a API pelo navegador (tambem anonima)."
+  echo "Em servidor publico as duas rotas ficam expostas sem login: habilite apenas"
+  echo "se precisar mesmo publicar a documentacao/console externamente."
+  echo "Se OpenAPI estiver desativado, /openapi e /scalar ficam indisponiveis."
   echo "----------------------------------------"
-  prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI/Scalar? (y/N)" 0 "n"
+  prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI (contrato)? (y/N)" 0 "n"
   normalize_openapi_enabled
-  prompt_if_empty OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (y/N)" 0 "$OPENAPI_ENABLED"
+  # A UI do Scalar e exposicao extra em producao: padrao seguro = N, mesmo com
+  # o contrato OpenAPI habilitado (digite y para habilitar).
+  prompt_if_empty OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (y/N)" 0 "n"
   normalize_openapi_scalar_enabled
 
   wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "8/9" "7/8")"

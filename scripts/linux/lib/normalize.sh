@@ -32,6 +32,47 @@ normalize_openapi_scalar_enabled() {
   esac
 }
 
+# O painel da Cloudflare entrega o token embutido em um comando. Extrai o token
+# de um texto colado: comando com `--token <valor>`, comando com o token solto,
+# ou o proprio token. Nao executa nada do texto colado.
+extract_cloudflare_tunnel_token() {
+  local raw="${1:-}"
+  local token=""
+
+  # 1) Formato explicito `--token <valor>` (com ou sem quotes).
+  if [[ "$raw" =~ --token[=\ ]+\"?([A-Za-z0-9._-]+)\"? ]]; then
+    token="${BASH_REMATCH[1]}"
+  fi
+
+  # 2) Fallback: primeiro token no formato do Cloudflare (comeca com "eyJ").
+  if [[ -z "$token" ]]; then
+    token="$(printf '%s' "$raw" | grep -oE 'eyJ[A-Za-z0-9_.-]{20,}' | head -n 1 || true)"
+  fi
+
+  # 3) Ultimo recurso: primeira palavra nao vazia (token puro colado).
+  if [[ -z "$token" ]]; then
+    token="$(printf '%s' "$raw" | tr -s '[:space:]' '\n' | grep -v '^$' | head -n 1 || true)"
+  fi
+
+  token="${token%\"}"; token="${token#\"}"
+  token="${token%\'}"; token="${token#\'}"
+  printf '%s' "$token"
+}
+
+is_valid_cloudflare_tunnel_token() {
+  local token="${1:-}"
+  [[ "$token" =~ ^eyJ[A-Za-z0-9_.-]{20,}$ ]]
+}
+
+# Normaliza/revalida CLOUDFLARE_TUNNEL_TOKEN (aceita o comando colado do painel).
+normalize_cloudflare_tunnel_token() {
+  local raw="${CLOUDFLARE_TUNNEL_TOKEN:-}"
+  CLOUDFLARE_TUNNEL_TOKEN="$(extract_cloudflare_tunnel_token "$raw")"
+  if ! is_valid_cloudflare_tunnel_token "$CLOUDFLARE_TUNNEL_TOKEN"; then
+    fail "CLOUDFLARE_TUNNEL_TOKEN invalido. Informe o token (comeca com 'eyJ') ou o comando do cloudflared que o contem."
+  fi
+}
+
 normalize_zerossl_auto_renew_enabled() {
   local normalized
   normalized="$(printf '%s' "${ZEROSSL_AUTO_RENEW_ENABLED:-1}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -59,6 +100,16 @@ normalize_nats_settings() {
   NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$NATS_PASSWORD}"
   NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-\$SYS.REQ.USER.AUTH}"
   NATS_AUTH_CALLOUT_ENABLED="${NATS_AUTH_CALLOUT_ENABLED:-1}"
+
+  # Aceita y/n (padrao dos prompts de wizard) alem de 1/0/true/false.
+  local normalized_callout
+  normalized_callout="$(printf '%s' "$NATS_AUTH_CALLOUT_ENABLED" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$normalized_callout" in
+    1|true|yes|y|sim|s) NATS_AUTH_CALLOUT_ENABLED="1" ;;
+    0|false|no|n|nao)   NATS_AUTH_CALLOUT_ENABLED="0" ;;
+    *) fail "NATS_AUTH_CALLOUT_ENABLED invalido: ${NATS_AUTH_CALLOUT_ENABLED}. Use y/n (ou 1/0)." ;;
+  esac
+
   NATS_WS_PORT="${NATS_WS_PORT:-8081}"
   NATS_WS_HOST="${NATS_WS_HOST:-127.0.0.1}"
   NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-false}"

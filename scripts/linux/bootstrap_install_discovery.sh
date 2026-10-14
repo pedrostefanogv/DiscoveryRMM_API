@@ -507,4 +507,13 @@ if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && ! installer_supports_mainten
   fail "A branch '$CLONED_BRANCH' nao possui suporte ao modo maintenance. Informe --branch dev/beta (com suporte) ou execute scripts/linux/install_discovery_server.sh --mode maintenance em um checkout atualizado."
 fi
 
+# Quando executado como root, o instalador reexecuta como usuario instalador
+# (bootstrap_root_execution). O checkout temporario (mktemp -d) nasce 0700 do
+# root; sem liberar a leitura, o usuario instalador nao consegue carregar o
+# instalador nem os libs.
+if [[ "$EUID" -eq 0 && -n "$BOOTSTRAP_WORKDIR" && -d "$BOOTSTRAP_WORKDIR" ]]; then
+  chmod a+rx "$BOOTSTRAP_WORKDIR" 2>/dev/null || true
+  chmod -R a+rX "$BOOTSTRAP_WORKDIR" 2>/dev/null || true
+fi
+
 exec_installer "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"

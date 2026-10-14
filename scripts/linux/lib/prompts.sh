@@ -186,6 +186,62 @@ prompt_nats_password() {
   NATS_PASSWORD="$input"
 }
 
+# ── Cloudflare Tunnel ──────────────────────────────────────────────────────
+
+# O painel da Cloudflare nao exibe o token "puro": ele entrega um comando ja
+# montado (cloudflared tunnel run --token ... / cloudflared service install ...).
+# Aceitamos o comando inteiro e extraimos o token; o token puro tambem vale.
+prompt_cloudflare_tunnel_token() {
+  if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+    normalize_cloudflare_tunnel_token
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    fail "Variavel obrigatoria ausente para modo nao interativo: CLOUDFLARE_TUNNEL_TOKEN"
+  fi
+
+  echo "O painel da Cloudflare mostra o token dentro de um comando, por exemplo:"
+  echo "  sudo cloudflared service install eyJhIjoi..."
+  echo "  cloudflared tunnel run --token eyJhIjoi..."
+  echo "Cole o comando completo (ou so o token); o instalador extrai o token."
+  echo "----------------------------------------"
+
+  while true; do
+    local input=""
+    read -r -s -p "Cloudflare Tunnel token/comando (entrada oculta): " input
+    printf '\n'
+    # Um paste do painel costuma trazer 2-3 linhas (service install + tunnel run).
+    # Consumir o restante evita que elas sejam lidas como resposta do proximo prompt.
+    drain_cloudflare_tunnel_paste
+
+    local extracted
+    extracted="$(extract_cloudflare_tunnel_token "$input")"
+    if is_valid_cloudflare_tunnel_token "$extracted"; then
+      printf -v CLOUDFLARE_TUNNEL_TOKEN '%s' "$extracted"
+      return
+    fi
+
+    echo "Nao foi possivel identificar o token do Cloudflare no texto informado." >&2
+    echo "Cole a linha que contem '--token eyJ...' ou o proprio token (comeca com 'eyJ')." >&2
+  done
+}
+
+# Descarta as linhas remanescentes de um paste multi-linha do painel da
+# Cloudflare (somente enquanto elas pertencem claramente ao bloco colado).
+drain_cloudflare_tunnel_paste() {
+  local line=""
+  # Timeout pequeno (nao-zero): com `-t 0` o bash apenas checa disponibilidade
+  # SEM consumir a linha, o que deixaria o while em loop infinito.
+  while IFS= read -r -t 0.05 line; do
+    case "$line" in
+      *cloudflared*|*--token*|*eyJ*) continue ;;
+      *) break ;;
+    esac
+  done
+  return 0
+}
+
 # ── NATS configuration wizard ──────────────────────────────────────────────
 
 prompt_nats_configuration() {
@@ -204,7 +260,8 @@ prompt_nats_configuration() {
   prompt_if_empty NATS_AUTH_PASSWORD "Senha de bypass da API no NATS" 1 "$NATS_PASSWORD"
   prompt_if_empty NATS_BIND_HOST "Host de bind do NATS (ex: 0.0.0.0 ou 127.0.0.1)" 0 "0.0.0.0"
   prompt_if_empty NATS_MONITOR_HOST "Host do monitor HTTP do NATS (porta 8222)" 0 "127.0.0.1"
-  prompt_if_empty NATS_AUTH_CALLOUT_ENABLED "Habilitar NATS auth callout? (1/0)" 0 "1"
+  # Aceita y/n (padrao dos demais prompts); normalize_nats_settings converte para 1/0.
+  prompt_if_empty NATS_AUTH_CALLOUT_ENABLED "Habilitar NATS auth callout? (y/n)" 0 "y"
   prompt_if_empty NATS_AUTH_CALLOUT_SUBJECT "Subject do auth callout" 0 "\$SYS.REQ.USER.AUTH"
 }
 
@@ -217,7 +274,11 @@ load_existing_remote_session_defaults() {
     return
   fi
   local env_file="/etc/discovery-api/discovery.env"
-  sudo test -f "$env_file" 2>/dev/null || return
+  # `return 0` explicito: sem isso a funcao devolve 1 quando ainda nao existe
+  # discovery.env (instalacao nova) e, por estar sob `set -e`, o chamador
+  # (prompt_remote_session_duration) aborta o instalador em silencio logo
+  # apos a etapa do NATS.
+  sudo test -f "$env_file" 2>/dev/null || return 0
   local minutes
   minutes="$(sudo awk -F= '/^RemoteDebug__MaxSessionDurationMinutes=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
   if [[ "$minutes" =~ ^[0-9]+$ ]] && (( minutes > 0 )); then
@@ -481,6 +542,8 @@ print_prerequisite_plan_summary() {
   done
 }
 
+# Revisao final: apresenta TODOS os campos coletados antes de executar a
+# instalacao. Segredos nunca sao exibidos — apenas se estao definidos/gerados.
 print_selected_configuration_summary() {
   local internal_portal_host="" internal_portal_url="" primary_portal_host="" primary_portal_url=""
   internal_portal_host="$(resolve_internal_portal_domain)"
@@ -488,57 +551,127 @@ print_selected_configuration_summary() {
   primary_portal_host="$(resolve_fido2_server_domain)"
   primary_portal_url="$(build_portal_access_url "$primary_portal_host")"
 
+  local install_user_display
+  if [[ -n "${DISCOVERY_INSTALL_USER:-}" ]]; then
+    install_user_display="$DISCOVERY_INSTALL_USER"
+  else
+    install_user_display="$(id -un 2>/dev/null || echo desconhecido)"
+  fi
+  local install_user_password_display="nao definida"
+  if [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]]; then
+    if [[ "${DISCOVERY_INSTALL_USER_PASSWORD_AUTO:-0}" -eq 1 ]]; then
+      install_user_password_display="gerada automaticamente (anote a senha exibida no inicio)"
+    else
+      install_user_password_display="definida pelo operador"
+    fi
+  fi
+
   echo "Resumo das configuracoes selecionadas:"
-  echo "- Branch: $DISCOVERY_GIT_BRANCH"
-  echo "- Repo API: $DISCOVERY_GIT_REPO"
-  echo "- Repo Agent: $DISCOVERY_AGENT_GIT_REPO"
-  echo "- Repo Site: $DISCOVERY_SITE_GIT_REPO"
-  echo "- Access mode: $ACCESS_MODE"
-  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
-    echo "- Host interno: $INTERNAL_API_HOST"
+  echo "- Usuario instalador (sudo): $install_user_display"
+  echo "- Senha do usuario instalador: $install_user_password_display"
+  echo "- Branch: ${DISCOVERY_GIT_BRANCH:-}"
+  echo "- Repo API: ${DISCOVERY_GIT_REPO:-}"
+  echo "- Repo Agent: ${DISCOVERY_AGENT_GIT_REPO:-}"
+  echo "- Repo Site: ${DISCOVERY_SITE_GIT_REPO:-}"
+  echo "- Runtime .NET: ${DISCOVERY_DOTNET_RUNTIME:-<auto>}"
+  echo "- Modo de acesso: ${ACCESS_MODE:-}"
+  if [[ "${ACCESS_MODE:-}" == "internal" || "${ACCESS_MODE:-}" == "hybrid" ]]; then
+    echo "- Host interno: ${INTERNAL_API_HOST:-}"
     if [[ -n "$internal_portal_url" ]]; then echo "- Portal interno: $internal_portal_url"; fi
   fi
-  if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
-    echo "- Host externo: $EXTERNAL_API_HOST"
-    echo "- Portal externo: https://$EXTERNAL_API_HOST/"
+  if [[ "${ACCESS_MODE:-}" == "external" || "${ACCESS_MODE:-}" == "hybrid" ]]; then
+    echo "- Host externo: ${EXTERNAL_API_HOST:-}"
+    echo "- Portal externo: https://${EXTERNAL_API_HOST:-}/"
+    if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+      echo "- Cloudflare Tunnel: token capturado (${#CLOUDFLARE_TUNNEL_TOKEN} caracteres; nao exibido)"
+    else
+      echo "- Cloudflare Tunnel: token nao informado"
+    fi
   fi
   if [[ -n "$primary_portal_url" ]]; then
     echo "- Portal web principal: $primary_portal_url"
   else
     echo "- Portal web: publicado no mesmo host da API via Nginx"
   fi
-  if [[ "${OPENAPI_ENABLED:-0}" == "1" ]]; then
-    echo "- OpenAPI: habilitado"
-    if [[ "${OPENAPI_SCALAR_ENABLED:-$OPENAPI_ENABLED}" == "1" ]]; then echo "- Scalar: habilitado"; else echo "- Scalar: desativado"; fi
-  else
-    echo "- OpenAPI: desativado"; echo "- Scalar: desativado"
-  fi
-  echo "- PostgreSQL DB: $POSTGRES_DB"; echo "- PostgreSQL user: $POSTGRES_USER"
+  echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
+  case "${TLS_CERT_PROVIDER:-self-signed}" in
+    zerossl-acme)
+      echo "-   dominio: ${ZEROSSL_CERT_DOMAIN:-$(resolve_fido2_server_domain)}"
+      echo "-   SANs: ${ZEROSSL_CERT_ALT_DOMAINS:-<nenhum>}"
+      echo "-   renovacao automatica: $( [[ "${ZEROSSL_AUTO_RENEW_ENABLED:-1}" == "1" ]] && echo habilitada || echo desabilitada )"
+      ;;
+    letsencrypt-acme)
+      echo "-   dominio: ${LETSENCRYPT_CERT_DOMAIN:-$(resolve_fido2_server_domain)}"
+      echo "-   SANs: ${LETSENCRYPT_CERT_ALT_DOMAINS:-<nenhum>}"
+      echo "-   renovacao automatica: $( [[ "${LETSENCRYPT_AUTO_RENEW_ENABLED:-1}" == "1" ]] && echo habilitada || echo desabilitada )"
+      ;;
+  esac
+  case "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" in
+    rustfs)
+      echo "- Storage de arquivos: RustFS local"
+      echo "  - bucket: ${DISCOVERY_OBJECT_STORAGE_BUCKET:-discovery-files}"
+      echo "  - endpoint publico: ${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-<auto>}"
+      echo "  - regiao: ${DISCOVERY_OBJECT_STORAGE_REGION:-us-east-1} | versao RustFS: ${RUSTFS_VERSION:-1.0.1}"
+      echo "  - publicar bucket pelo nginx: ${DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED:-y}"
+      ;;
+    external)
+      echo "- Storage de arquivos: provedor externo S3"
+      echo "  - bucket: ${DISCOVERY_OBJECT_STORAGE_BUCKET:-}"
+      echo "  - endpoint: ${DISCOVERY_OBJECT_STORAGE_ENDPOINT:-}"
+      echo "  - regiao: ${DISCOVERY_OBJECT_STORAGE_REGION:-us-east-1}"
+      if [[ -n "${DISCOVERY_OBJECT_STORAGE_ACCESS_KEY:-}" ]]; then
+        echo "  - credenciais: informadas (nao exibidas)"
+      else
+        echo "  - credenciais: ausentes"
+      fi
+      ;;
+    *)
+      echo "- Storage de arquivos: nao configurado nesta execucao"
+      ;;
+  esac
+  echo "- OpenAPI (contrato /openapi): $( [[ "${OPENAPI_ENABLED:-0}" == "1" ]] && echo habilitado || echo desativado )"
+  echo "- Scalar (UI /scalar em producao): $( [[ "${OPENAPI_SCALAR_ENABLED:-${OPENAPI_ENABLED:-0}}" == "1" ]] && echo habilitado || echo desativado )"
+  echo "- PostgreSQL: database=${POSTGRES_DB:-} usuario=${POSTGRES_USER:-}"
   if [[ "${POSTGRES_PASSWORD_AUTO:-0}" -eq 1 ]]; then
     echo "- PostgreSQL senha: gerada automaticamente (veja /etc/discovery-api/discovery.env)"
-  else echo "- PostgreSQL senha: informada"; fi
-  if [[ "${NATS_USER_AUTO:-0}" -eq 1 ]]; then echo "- NATS user: $NATS_USER (gerado automaticamente)"; else echo "- NATS user: $NATS_USER"; fi
+  else
+    echo "- PostgreSQL senha: informada pelo operador"
+  fi
+  if [[ "${NATS_USER_AUTO:-0}" -eq 1 ]]; then
+    echo "- NATS usuario: ${NATS_USER:-} (gerado automaticamente)"
+  else
+    echo "- NATS usuario: ${NATS_USER:-}"
+  fi
   if [[ "${NATS_PASSWORD_AUTO:-0}" -eq 1 ]]; then
     echo "- NATS senha: gerada automaticamente (veja /etc/discovery-api/discovery.env)"
-  else echo "- NATS senha: informada"; fi
-  echo "- NATS auth user: $NATS_AUTH_USER"
-  echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
-  if [[ "${TLS_CERT_PROVIDER:-self-signed}" == "zerossl-acme" ]]; then
-    echo "- TLS dominio: ${ZEROSSL_CERT_DOMAIN:-$(resolve_fido2_server_domain)}"
+  else
+    echo "- NATS senha: informada pelo operador"
   fi
-  if [[ "${TLS_CERT_PROVIDER:-self-signed}" == "letsencrypt-acme" ]]; then
-    echo "- TLS dominio: ${LETSENCRYPT_CERT_DOMAIN:-$(resolve_fido2_server_domain)}"
+  echo "- NATS auth user (bypass da API): ${NATS_AUTH_USER:-}"
+  echo "- NATS bind: ${NATS_BIND_HOST:-0.0.0.0} | monitor HTTP: ${NATS_MONITOR_HOST:-127.0.0.1}"
+  if [[ "${NATS_AUTH_CALLOUT_ENABLED:-1}" == "1" ]]; then
+    echo "- NATS auth callout: habilitado (subject ${NATS_AUTH_CALLOUT_SUBJECT:-\$SYS.REQ.USER.AUTH})"
+  else
+    echo "- NATS auth callout: desativado"
   fi
+  echo "- NATS JetStream: $( [[ "${NATS_JS_ENABLED:-1}" == "1" ]] && echo habilitado || echo desativado )"
+  echo "- Sessao remota (maxima): ${REMOTE_SESSION_MAX_DURATION_HOURS:-1} hora(s)"
+  echo "- Build para updates manuais: $( [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]] && echo limpo || echo incremental )"
+  echo "- Diretorios: API=${DISCOVERY_API_BASE:-/opt/discovery-api} | Site=${DISCOVERY_SITE_BASE:-/opt/discovery-site} | Agent src=${DISCOVERY_AGENT_SRC:-/opt/discovery-agent-src}"
   if [[ -n "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}" ]]; then
     if [[ "${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN_AUTO:-0}" -eq 1 ]]; then
       echo "- Admin bootstrap login: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN (gerado automaticamente)"
-    else echo "- Admin bootstrap login: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"; fi
+    else
+      echo "- Admin bootstrap login: $DISCOVERY_BOOTSTRAP_ADMIN_LOGIN"
+    fi
   elif [[ "$NON_INTERACTIVE" -eq 0 ]]; then
     echo "- Admin bootstrap login: sera solicitado na etapa final (apos API pronta)"
   fi
   if [[ "${DISCOVERY_BOOTSTRAP_ADMIN_PASSWORD_AUTO:-1}" -eq 1 ]]; then
     echo "- Admin bootstrap senha: gerada automaticamente pelo recover-admin"
-  else echo "- Admin bootstrap senha: informada pelo operador"; fi
+  else
+    echo "- Admin bootstrap senha: informada pelo operador"
+  fi
 }
 
 # ── Object storage (anexos/prints) ─────────────────────────────────────────
@@ -607,13 +740,17 @@ prompt_object_storage_configuration() {
 confirm_installation() {
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then return; fi
 
-  wizard_header "Confirmacao" "$(wizard_step_label "10/10" "9/9")"
+  wizard_header "Revisao final" "$(wizard_step_label "10/10" "9/9")"
+  echo "Revise TODOS os campos abaixo antes de executar. Nada foi alterado no servidor ainda."
+  echo "----------------------------------------"
   print_selected_configuration_summary
+  echo
+  echo "Pre-requisitos/acoes que serao executados:"
   print_prerequisite_plan_summary
   echo
 
   local confirm
-  read -r -p "Confirmar e iniciar instalacao com as acoes acima? (s/N): " confirm
+  read -r -p "Confirma os dados e inicia a instalacao? (s/N): " confirm
   confirm="$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   case "$confirm" in
     s|sim|y|yes) ;;

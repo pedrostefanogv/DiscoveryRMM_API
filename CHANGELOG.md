@@ -49,7 +49,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ✅ **Testes**: NUnit (scorer, extração de sinais, métricas por atendente, fluxos de decisão
   da triagem) e Vitest (card de decisão no detalhe do chamado).
 
+### Added
+- 🧰 **Usuário instalador (com sudo) no instalador do servidor**: quando o instalador roda
+  como root, ele cria/reutiliza um usuário comum (padrão `discovery`), define a senha (que é
+  também a senha do sudo), libera o checkout temporário e reexecuta a instalação como esse
+  usuário — a instalação deixa de ficar presa ao root. O sudo no processo filho usa
+  `SUDO_ASKPASS`, então nada trava pedindo senha. No modo `--non-interactive` o fluxo é
+  opt-in: sem `DISCOVERY_INSTALL_USER_PASSWORD` o instalador segue como root.
+- 📋 **Revisão final antes de executar**: o instalador agora imprime **todos** os campos
+  coletados (usuário instalador, branch, repositórios, runtime, modo de acesso, hosts/portal,
+  token do Cloudflare capturado, TLS, storage, OpenAPI/Scalar, PostgreSQL, NATS completo,
+  sessão remota, build e diretórios) e pede confirmação explícita antes de alterar o servidor.
+  Segredos nunca são exibidos — apenas se estão definidos/gerados.
+
 ### Fixed
+- 🐛 **Prompt da senha do usuário instalador abortava com Enter em branco**: agora a senha é
+  obrigatória de forma explícita, aceita senha gerada (mostrada uma única vez), re-pergunta em
+  caso de senha curta ou divergente e não encerra mais o instalador.
+- 🐛 **Instalador abortava em silêncio logo após a etapa do NATS**: em instalação nova,
+  `load_existing_remote_session_defaults` devolvia 1 enquanto
+  `/etc/discovery-api/discovery.env` ainda não existia e, sob `set -e`, o chamador
+  (`prompt_remote_session_duration`) encerrava o instalador sem nenhuma mensagem — o
+  prompt "Subject do auth callout" era o último a aparecer. Agora o loader retorna 0
+  explicitamente e o wizard segue para as etapas seguintes.
+- 🔧 **Token do Cloudflare Tunnel aceito como comando colado**: o painel da Cloudflare não
+  mostra o token puro, e sim um comando (`cloudflared tunnel run --token eyJ...` ou
+  `cloudflared service install eyJ...`). O instalador agora extrai o token do texto
+  colado, valida o formato, aceita também o token puro e descarta o restante de um paste
+  multi-linha para não consumir a resposta do próximo prompt.
+- 🔧 **Prompts mais consistentes no instalador**: `OPENAPI_SCALAR_ENABLED` (UI do Scalar
+  em produção) passa a ter padrão `n` em vez de exibir `0`, e
+  `NATS_AUTH_CALLOUT_ENABLED` passa a aceitar `y/n` (padrão `y`), normalizado para
+  `1/0` antes de gerar o env do NATS.
 - 🐛 **Override de background processing por cliente era descartado**: o
   `ClientConfigurationRepository.UpdateAsync` copia campo a campo e não copiava
   `BackgroundProcessingSettingsJson`, que é lido pelo `ConfigurationResolver`. O PATCH/PUT
