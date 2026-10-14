@@ -72,6 +72,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **Instalador falhava no fim do wizard com `NATS_JS_FANOUT_STREAM_ENABLED=1 exige
+  NATS_JS_ENABLED=1`**: quando o host já tinha um `nats-server.conf` sem o bloco `jetstream` (ex.:
+  pacote do SO ou sobra de tentativa anterior), o instalador inferia `NATS_JS_ENABLED=0` mas
+  mantinha o fan-out no default `1`, abortando depois do último prompt. Agora o fan-out segue o
+  `NATS_JS_ENABLED` quando não é definido explicitamente, a inferência de JetStream a partir da
+  conf só vale ao adotar uma instalação existente (`discovery.env` presente) e há aviso quando o
+  JetStream fica desabilitado. A falha explícita permanece apenas se o operador definir os dois
+  valores de forma contraditória.
 - 🐛 **Prompt da senha do usuário instalador abortava com Enter em branco**: agora a senha é
   obrigatória de forma explícita, aceita senha gerada (mostrada uma única vez), re-pergunta em
   caso de senha curta/divergente e não encerra mais o instalador. A senha é validada (8–128

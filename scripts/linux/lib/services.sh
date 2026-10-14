@@ -202,7 +202,9 @@ load_existing_nats_defaults() {
   local env_file="/etc/discovery-api/discovery.env"
   local nats_conf; nats_conf="$(resolve_nats_conf_path)"
 
+  local env_exists=0
   if sudo test -f "$env_file"; then
+    env_exists=1
     NATS_AUTH_USER="${NATS_AUTH_USER:-$(env_file_get "Nats__AuthUser" "$env_file")}"
     NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$(env_file_get "Nats__AuthPassword" "$env_file")}"
     local existing_callout_enabled
@@ -243,7 +245,12 @@ load_existing_nats_defaults() {
     NATS_BIND_HOST="${NATS_BIND_HOST:-$(sudo sed -n 's/^listen:[[:space:]]*\([^:]*\):[0-9][0-9]*.*/\1/p' "$nats_conf" | head -n 1)}"
     NATS_MONITOR_HOST="${NATS_MONITOR_HOST:-$(sudo sed -n 's/^http:[[:space:]]*\([^:]*\):[0-9][0-9]*.*/\1/p' "$nats_conf" | head -n 1)}"
     NATS_AUTH_CALLOUT_ISSUER="${NATS_AUTH_CALLOUT_ISSUER:-$(sudo sed -n 's/^[[:space:]]*issuer:[[:space:]]*"\([^"]*\)".*/\1/p' "$nats_conf" | head -n 1)}"
-    if [[ -z "${NATS_JS_ENABLED:-}" ]]; then
+    # So infere JetStream de uma conf existente quando estamos adotando uma
+    # instalacao Discovery (discovery.env presente). Numa instalacao nova, uma
+    # conf generica sem bloco "jetstream" (ex.: pacote do SO ou sobra de uma
+    # tentativa anterior) zerava o NATS_JS_ENABLED e derrubava o wizard no
+    # final; a conf e reescrita por setup_nats de qualquer forma.
+    if [[ -z "${NATS_JS_ENABLED:-}" && "$env_exists" -eq 1 ]]; then
       if sudo grep -Eq '^[[:space:]]*jetstream[[:space:]]*\{' "$nats_conf"; then NATS_JS_ENABLED="1"
       else NATS_JS_ENABLED="0"; fi
     fi
