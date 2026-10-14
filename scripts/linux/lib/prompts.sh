@@ -685,7 +685,87 @@ print_selected_configuration_summary() {
 # caminho do bucket e publicado pelo nginx (mesmo host do portal) para as URLs
 # pre-assinadas funcionarem tambem para agentes fora da maquina.
 #
-# Default "skip": apertar Enter NAO instala nada — instalar exige digitar "1".
+# Default "rustfs": apertar Enter instala o RustFS local. "3" adia (nao instala
+# nem altera nada). Entrada invalida NUNCA encerra o instalador: a pergunta e
+# repetida ate vir um valor aceito.
+
+is_valid_object_storage_bucket() {
+  [[ "${1:-}" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]]
+}
+
+is_valid_object_storage_endpoint() {
+  [[ "${1:-}" =~ ^(https?://)?[A-Za-z0-9.-]+(:[0-9]{2,5})?$ ]]
+}
+
+# prompt_validated_value <VAR> <texto> <default> <validador> <mensagem de erro>
+# Repete a pergunta enquanto o valor for vazio ou reprovado pelo validador.
+# Para valores vindos de env/--config, falha com mensagem clara (nao ha o que
+# perguntar).
+prompt_validated_value() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_value="${3:-}"
+  local validator="$4"
+  local error_text="$5"
+  local current_value="${!var_name:-}"
+
+  if [[ -n "$current_value" ]]; then
+    "$validator" "$current_value" || fail "$error_text"
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "$default_value" ]]; then
+      printf -v "$var_name" '%s' "$default_value"
+      "$validator" "$default_value" || fail "$error_text"
+      return
+    fi
+    fail "Variavel obrigatoria ausente para modo nao interativo: $var_name"
+  fi
+
+  local input=""
+  while true; do
+    if [[ -n "$default_value" ]]; then
+      read -r -p "$prompt_text [$default_value]: " input
+      input="${input:-$default_value}"
+    else
+      read -r -p "$prompt_text: " input
+    fi
+    input="$(printf '%s' "$input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [[ -n "$input" ]] && "$validator" "$input"; then
+      printf -v "$var_name" '%s' "$input"
+      return
+    fi
+    echo "$error_text" >&2
+  done
+}
+
+# Selecao do modo de storage. Default rustfs; valores fora de 1/2/3 (ou dos
+# nomes) sao re-perguntados em vez de derrubar o instalador.
+prompt_object_storage_mode() {
+  if [[ -n "${DISCOVERY_OBJECT_STORAGE_MODE:-}" ]]; then
+    return
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    DISCOVERY_OBJECT_STORAGE_MODE="rustfs"
+    return
+  fi
+
+  local input=""
+  while true; do
+    read -r -p "Storage de arquivos (1/2/3 ou rustfs/external/skip) [rustfs]: " input
+    input="${input:-rustfs}"
+    input="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$input" in
+      1|local|rustfs) DISCOVERY_OBJECT_STORAGE_MODE="rustfs"; return ;;
+      2|external|s3)  DISCOVERY_OBJECT_STORAGE_MODE="external"; return ;;
+      3|skip|none)    DISCOVERY_OBJECT_STORAGE_MODE="skip"; return ;;
+      *) echo "Opcao invalida: '$input'. Use 1 (RustFS local), 2 (provedor externo) ou 3 (configurar depois)." >&2 ;;
+    esac
+  done
+}
+
 prompt_object_storage_configuration() {
   load_existing_object_storage_defaults
   wizard_header "Storage de arquivos (anexos/prints)" "$(wizard_step_label "8/10" "6/9")"
@@ -693,9 +773,9 @@ prompt_object_storage_configuration() {
   echo "2) Provedor externo  - S3 compativel ja existente (R2/S3/MinIO/...)."
   echo "3) Configurar depois - nao instala e nao altera nada."
   echo "----------------------------------------"
-  prompt_if_empty DISCOVERY_OBJECT_STORAGE_MODE "Storage de arquivos (1/2/3 ou rustfs/external/skip)" 0 "skip"
+  prompt_object_storage_mode
 
-  case "$(printf '%s' "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" | tr '[:upper:]' '[:lower:]')" in
+  case "$(printf '%s' "${DISCOVERY_OBJECT_STORAGE_MODE:-rustfs}" | tr '[:upper:]' '[:lower:]')" in
     1|local|rustfs) DISCOVERY_OBJECT_STORAGE_MODE="rustfs" ;;
     2|external|s3)  DISCOVERY_OBJECT_STORAGE_MODE="external" ;;
     3|skip|none)    DISCOVERY_OBJECT_STORAGE_MODE="skip" ;;
@@ -705,9 +785,14 @@ prompt_object_storage_configuration() {
     echo
     echo "RustFS: o bucket fica em /opt/rustfs/data e o servico escuta apenas em loopback."
     echo "O nginx publica o caminho do bucket no MESMO host do portal (sem DNS novo)."
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_BUCKET "Nome do bucket" 0 "discovery-files"
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_ENDPOINT \
-      "Endpoint publico do storage (host ou https://host, SEM path)" 0 "$(resolve_object_storage_default_endpoint)"
+    prompt_validated_value DISCOVERY_OBJECT_STORAGE_BUCKET "Nome do bucket" "discovery-files" \
+      is_valid_object_storage_bucket \
+      "Bucket invalido: use minusculas, digitos, ponto e hifen (3-63, sem comecar/terminar com ponto ou hifen)."
+    prompt_validated_value DISCOVERY_OBJECT_STORAGE_ENDPOINT \
+      "Endpoint publico do storage (host ou https://host, SEM path)" \
+      "$(resolve_object_storage_default_endpoint)" \
+      is_valid_object_storage_endpoint \
+      "Endpoint invalido: use host[:porta] ou http(s)://host[:porta], SEM path."
     prompt_if_empty DISCOVERY_OBJECT_STORAGE_REGION "Regiao S3" 0 "us-east-1"
     prompt_if_empty RUSTFS_VERSION "Versao do RustFS a instalar (fixa, sem auto-update)" 0 "1.0.1"
     prompt_if_empty DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED "Publicar o bucket pelo nginx? (y/N)" 0 "y"
@@ -717,8 +802,13 @@ prompt_object_storage_configuration() {
   elif [[ "$DISCOVERY_OBJECT_STORAGE_MODE" == "external" ]]; then
     echo
     echo "Provedor externo: informe endpoint/bucket/credenciais. Nada sera instalado nesta maquina."
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_ENDPOINT "Endpoint do storage (host ou http(s)://host[:porta], SEM path)"
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_BUCKET "Nome do bucket"
+    prompt_validated_value DISCOVERY_OBJECT_STORAGE_ENDPOINT \
+      "Endpoint do storage (host ou http(s)://host[:porta], SEM path)" "" \
+      is_valid_object_storage_endpoint \
+      "Endpoint invalido: use host[:porta] ou http(s)://host[:porta], SEM path."
+    prompt_validated_value DISCOVERY_OBJECT_STORAGE_BUCKET "Nome do bucket" "" \
+      is_valid_object_storage_bucket \
+      "Bucket invalido: use minusculas, digitos, ponto e hifen (3-63, sem comecar/terminar com ponto ou hifen)."
     prompt_if_empty DISCOVERY_OBJECT_STORAGE_REGION "Regiao S3" 0 "us-east-1"
     prompt_if_empty DISCOVERY_OBJECT_STORAGE_ACCESS_KEY "Access key"
     prompt_if_empty DISCOVERY_OBJECT_STORAGE_SECRET_KEY "Secret key" 1

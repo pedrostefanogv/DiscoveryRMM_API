@@ -62,6 +62,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sessão remota, build e diretórios) e pede confirmação explícita antes de alterar o servidor.
   Segredos nunca são exibidos — apenas se estão definidos/gerados.
 
+### Changed
+- 🗄️ **RustFS passa a ser o padrão do storage**: no passo "Storage de arquivos", apertar Enter
+  agora instala o **RustFS local** (antes o padrão era `skip`). Digitar `3` continua adiando a
+  configuração. No modo `--non-interactive` o padrão também é `rustfs`; use
+  `DISCOVERY_OBJECT_STORAGE_MODE="skip"` para não instalar/alterar nada.
+- 🔁 **Entrada inválida não derruba mais o instalador no storage**: valor fora de 1/2/3 (ou
+  dos nomes) e bucket/endpoint inválidos agora são **re-perguntados**, em vez de encerrar o
+  script com erro de normalização.
+
 ### Fixed
 - 🐛 **Prompt da senha do usuário instalador abortava com Enter em branco**: agora a senha é
   obrigatória de forma explícita, aceita senha gerada (mostrada uma única vez), re-pergunta em
