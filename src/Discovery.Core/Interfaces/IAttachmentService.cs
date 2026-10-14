@@ -104,6 +104,14 @@ public interface IAttachmentService
     Task DeleteAttachmentAsync(Guid attachmentId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Exclusão DEFINITIVA: remove o objeto do storage AGORA e a linha do banco.
+    /// Diferente do soft delete (purgado em 30 dias), não há recuperação — e os
+    /// links pré-assinados já emitidos deixam de funcionar porque o arquivo não
+    /// existe mais. Devolve false quando o anexo não existe.
+    /// </summary>
+    Task<bool> PermanentlyDeleteAttachmentAsync(Guid attachmentId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Listar todos os anexos de uma entidade específica.
     /// </summary>
     /// <param name="entityType">Tipo de entidade</param>

@@ -459,6 +459,36 @@ public class AttachmentService : IAttachmentService
     }
 
     /// <summary>
+    /// Exclusão definitiva de um anexo (objeto no storage + linha no banco).
+    /// </summary>
+    public async Task<bool> PermanentlyDeleteAttachmentAsync(
+        Guid attachmentId,
+        CancellationToken cancellationToken = default)
+    {
+        if (attachmentId == Guid.Empty)
+            throw new ArgumentException("AttachmentId cannot be empty", nameof(attachmentId));
+
+        var attachment = await _attachmentRepository.GetByIdAsync(attachmentId, cancellationToken);
+        if (attachment is null)
+            return false;
+
+        // Storage PRIMEIRO: se falhar, a linha continua e o anexo segue visível
+        // (o usuário tenta de novo). Apagar a linha antes deixaria um objeto órfão
+        // impossível de rastrear depois.
+        var storageService = await GetStorageServiceAsync(cancellationToken);
+        await storageService.DeleteAsync(attachment.StorageObjectKey, cancellationToken);
+
+        var removed = await _attachmentRepository.HardDeleteAsync(attachmentId, cancellationToken);
+
+        _logger.LogInformation(
+            "Permanently deleted attachment {AttachmentId} ({ObjectKey}) — object removed from storage",
+            attachmentId,
+            attachment.StorageObjectKey);
+
+        return removed;
+    }
+
+    /// <summary>
     /// Listar todos os anexos de uma entidade específica.
     /// </summary>
     public async Task<List<Attachment>> GetAttachmentsForEntityAsync(

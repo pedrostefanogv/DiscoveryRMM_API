@@ -421,6 +421,25 @@ public class KnowledgeController(
         return referenced;
     }
 
+    /// <summary>
+    /// Exclusão DEFINITIVA de uma imagem: remove o objeto do storage agora e a
+    /// linha do banco. Sem recuperação e revoga links pré-assinados vigentes —
+    /// por isso exige permissão de exclusão (não a de edição).
+    /// </summary>
+    [HttpDelete("{id:guid}/images/{attachmentId:guid}/permanent")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Delete)]
+    public async Task<IActionResult> PermanentlyDeleteImage(Guid id, Guid attachmentId, CancellationToken ct)
+    {
+        var result = await mediator.Send(
+            new DeleteKnowledgeImageCommand(id, attachmentId, Permanent: true), ct);
+
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
     /// <summary>Carrega a imagem garantindo que pertence a ESTE artigo (anti-IDOR).</summary>
     private async Task<Attachment?> FindImageAsync(Guid articleId, Guid attachmentId, CancellationToken ct)
     {

@@ -40,6 +40,17 @@ public sealed class DeleteKnowledgeImageCommandHandler(
             await RemoveFromPagesAsync(cmd.ArticleId, cmd.AttachmentId, ct);
         }
 
+        if (cmd.Permanent)
+        {
+            // Sem recuperação: some do storage e do banco (revoga também os links
+            // pré-assinados vigentes, porque o arquivo deixa de existir).
+            var removed = await attachmentService.PermanentlyDeleteAttachmentAsync(cmd.AttachmentId, ct);
+            if (!removed)
+                return Result<VoidResult>.Failure(Error.NotFound($"Image {cmd.AttachmentId} not found"));
+
+            return Result<VoidResult>.Success(VoidResult.Value);
+        }
+
         await attachmentService.DeleteAttachmentAsync(cmd.AttachmentId, ct);
         return Result<VoidResult>.Success(VoidResult.Value);
     }
