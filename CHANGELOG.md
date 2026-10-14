@@ -72,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **Instalador abortava ao escrever o `discovery.env` com `REMOTE_ACCESS_NATS_JWT_SIGNING_KEY:
+  unbound variable`**: o heredoc usava a variável sem default e ela nunca é definida (a API lê
+  `RemoteAccess__Nats__JwtSigningKey`). Agora a chave é resolvida antes do `tee` — preserva a já
+  gravada no env (regerar invalidaria sessões de acesso remoto em andamento) e gera uma nova
+  (64 caracteres) apenas quando não existe nenhuma.
 - 🐛 **Instalador abortava em `nsJSON`/dotnet por diretórios fixos em `/tmp`**: o passo do plugin
   NSIS fazia `sudo mkdir -p /tmp/nsJSON-1.1.1.1` (dono root) e em seguida `unzip` como usuário
   instalador — o `unzip` não conseguia escrever (`Permission denied`) e, sob `set -e`, a instalação

@@ -430,6 +430,21 @@ write_environment_file() {
     sudo cp -f /etc/discovery-api/discovery.env "/etc/discovery-api/discovery.env.bak-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
   fi
 
+  # Chave de assinatura JWT do RemoteAccess. Precisa ser resolvida ANTES do tee:
+  # o heredoc expande a variavel e, sem default, ${REMOTE_ACCESS_NATS_JWT_SIGNING_KEY}
+  # abortava a instalacao com "unbound variable" (set -u). Preserva a chave ja
+  # gravada no discovery.env (regerar invalidaria sessoes de acesso remoto em
+  # andamento) e so gera uma nova quando nao existe nenhuma.
+  local remote_access_nats_jwt_signing_key="${REMOTE_ACCESS_NATS_JWT_SIGNING_KEY:-}"
+  if [[ -z "$remote_access_nats_jwt_signing_key" ]] \
+     && sudo test -f /etc/discovery-api/discovery.env; then
+    remote_access_nats_jwt_signing_key="$(sudo awk -F= '/^RemoteAccess__Nats__JwtSigningKey=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+  fi
+  if [[ -z "$remote_access_nats_jwt_signing_key" ]]; then
+    remote_access_nats_jwt_signing_key="$(generate_random_password 64)"
+    log "RemoteAccess: chave JWT de sessao gerada e gravada no discovery.env."
+  fi
+
   sudo tee /etc/discovery-api/discovery.env >/dev/null <<EOF
 ASPNETCORE_ENVIRONMENT=Production
 ASPNETCORE_URLS=http://127.0.0.1:8080
@@ -547,7 +562,7 @@ RemoteAccess__DefaultTtlMinutes=${REMOTE_ACCESS_DEFAULT_TTL_MINUTES:-30}
 RemoteAccess__MaxSessionDurationMinutes=${REMOTE_ACCESS_MAX_SESSION_DURATION_MINUTES:-$remote_session_max_minutes}
 RemoteAccess__MaxConcurrentSessionsPerAgent=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_AGENT:-1}
 RemoteAccess__MaxConcurrentSessionsPerUser=${REMOTE_ACCESS_MAX_CONCURRENT_SESSIONS_PER_USER:-5}
-RemoteAccess__Nats__JwtSigningKey=${REMOTE_ACCESS_NATS_JWT_SIGNING_KEY}
+RemoteAccess__Nats__JwtSigningKey=${remote_access_nats_jwt_signing_key}
 RemoteAccess__Nats__FrameSubjectPrefix=${REMOTE_ACCESS_NATS_FRAME_SUBJECT_PREFIX:-remote.session}
 RemoteAccess__Nats__MaxPayloadBytes=${REMOTE_ACCESS_NATS_MAX_PAYLOAD_BYTES:-2097152}
 RemoteAccess__Nats__ExpirationCheckIntervalSeconds=${REMOTE_ACCESS_NATS_EXPIRATION_CHECK_INTERVAL_SECONDS:-15}
