@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Segredos nunca são exibidos — apenas se estão definidos/gerados.
 
 ### Changed
+- 🧹 **Exemplos de ajuda sem domínio de homologação**: os textos do console
+  (`ServerConfigurationPage`, `configurationEditors`) e os comentários de `ObjectStorageOptions`
+  usavam `https://tngplacas.com.br` como exemplo de URL pública; agora usam
+  `https://portal.suaempresa.com.br`.
 - 🔧 **Client do MinIO**: a URL `dl.min.io/client/mc/release/linux-amd64/mc` passou a responder
   **410 Gone**; a ordem foi invertida (`aistor` primeiro, a antiga como fallback) para não deixar
   erro no log a cada instalação.
@@ -79,6 +83,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **"Testar Conexão" acusava "AccessKey é obrigatório" no modo interno (RustFS)**: o teste e a
+  validação liam a configuração **só do banco**, mas no modo interno as credenciais/endpoint vêm do
+  env (`ObjectStorage__*`) — e o console nem exibe esses campos nesse modo, então não havia onde
+  informar. Agora `ValidateConfigurationAsync`/`TestConnectionAsync`/`CreateObjectStorageServiceAsync`
+  usam o mesmo `ResolveSettings` do runtime e, quando as chaves faltam no env, a mensagem diz
+  exatamente onde configurar (`ObjectStorage__AccessKey/__SecretKey` no discovery.env).
+- 🐛 **`Nats__FanoutStream__Subjects__1` colado com `Nats__FanoutStream__MaxAge` no `discovery.env`**:
+  `build_fanout_subject_lines` termina com `printf '%s'` e é chamada em command substitution — que
+  remove o `\n` final. Resultado no env real: `Subjects__1=tenant.*.agents.commandNats__FanoutStream__MaxAge=24h`
+  (subject global corrompido e `MaxAge` ausente; o log da API mostrava exatamente isso no stream
+  `DISCOVERY_FANOUT_COMMANDS`). As duas chamadas agora re-adicionam o `\n`.
+- 🐛 **Credenciais do RustFS não iam para o `discovery.env`** (console acusava "AccessKey/SecretKey
+  obrigatórios" e o storage interno ficava inválido): `setup_object_storage_rustfs` carregava as
+  credenciais geradas em `/etc/default/rustfs` para as variáveis de shell, mas nada persistia isso
+  no `discovery.env` — o `write_environment_file` roda ANTES de o RustFS existir, e o
+  `update_object_storage_environment_file` só era chamado nos modos update/manutenção. A instalação
+  completa agora chama `update_object_storage_environment_file` logo após o RustFS, antes de
+  `configure_object_storage_in_database` e do start da API.
+- 🐛 **Senha do admin digitada no wizard só era validada no ÚLTIMO passo**: se ela não atendesse à
+  política da API (`Authentication:PasswordPolicy`), o `--recover-admin` falhava com "Password policy
+  failed" *depois* de tudo instalado — e o instalador abortava sem criar o admin. O prompt agora
+  valida (mínimo — lido do próprio discovery.env, default 12 — e maiúscula/dígito/especial) e
+  **re-pergunta** em vez de abortar; Enter continua deixando o `--recover-admin` gerar a senha.
 - 🐛 **Bootstrap do stream JetStream podia abortar a instalação no último passo**:
   `ensure_nats_fanout_stream` tentava 15× com backoff 2^n (até ~22 min) e, em qualquer falha, dava
   `fail` — mesmo a API já garantindo o stream no startup (`NatsFanoutStreamBootstrapService`, com as

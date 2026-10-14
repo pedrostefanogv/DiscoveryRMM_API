@@ -91,6 +91,26 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
         };
     }
 
+    /// <summary>
+    /// No modo interno (RustFS do servidor) as credenciais vem do ENV do projeto
+    /// (ObjectStorage__AccessKey/__SecretKey), nao do banco — e o console esconde
+    /// esses campos nesse modo. Sem esta mensagem o operador recebia apenas
+    /// "AccessKey e obrigatorio" e nao tinha onde informar o valor.
+    /// </summary>
+    private List<string> InternalModeMissingCredentialsErrors(ServerConfiguration serverConfig)
+    {
+        var options = _objectStorageOptions.Value;
+        if (!options.IsInternal && !serverConfig.ObjectStorageInternal)
+            return [];
+
+        var errors = new List<string>();
+        if (string.IsNullOrWhiteSpace(options.AccessKey))
+            errors.Add("Modo interno (RustFS): ObjectStorage__AccessKey nao definido no discovery.env do servidor (rode a opcao RustFS do instalador ou defina a chave).");
+        if (string.IsNullOrWhiteSpace(options.SecretKey))
+            errors.Add("Modo interno (RustFS): ObjectStorage__SecretKey nao definido no discovery.env do servidor (rode a opcao RustFS do instalador ou defina a chave).");
+        return errors;
+    }
+
     private static string FirstNonEmpty(params string?[] values)
     {
         foreach (var value in values)
@@ -119,6 +139,9 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
             await _serverConfigRepository.GetOrCreateDefaultAsync();
         var settings = ResolveSettings(config);
         var errors = settings.Validate();
+        var internalErrors = InternalModeMissingCredentialsErrors(config);
+        if (internalErrors.Count > 0)
+            errors = internalErrors;
         if (errors.Count > 0)
         {
             _logger.LogWarning(
@@ -141,8 +164,13 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     public async Task<List<string>> ValidateConfigurationAsync()
     {
         var config = await _serverConfigRepository.GetOrCreateDefaultAsync();
-        var settings = ObjectStorageSettingsFromServerConfiguration(config);
-        return settings.Validate();
+        // Usa o MESMO resolvedor do runtime: no modo interno as credenciais/endpoint
+        // vem do env (ObjectStorage__*), nao do banco. Antes esta validacao lia so o
+        // banco e acusava "AccessKey e obrigatorio" num modo em que o console nem
+        // exibe esses campos.
+        var settings = ResolveSettings(config);
+        var internalErrors = InternalModeMissingCredentialsErrors(config);
+        return internalErrors.Count > 0 ? internalErrors : settings.Validate();
     }
 
     /// <summary>
@@ -153,6 +181,9 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
         var config = await _serverConfigRepository.GetOrCreateDefaultAsync();
         var settings = ResolveSettings(config);
         var validationErrors = settings.Validate();
+        var internalErrors = InternalModeMissingCredentialsErrors(config);
+        if (internalErrors.Count > 0)
+            validationErrors = internalErrors;
 
         if (validationErrors.Count > 0)
         {

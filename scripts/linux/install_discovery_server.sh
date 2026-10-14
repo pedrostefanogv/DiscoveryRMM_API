@@ -243,6 +243,15 @@ main() {
   if [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" == "rustfs" ]]; then
     setup_object_storage_rustfs
   fi
+  # Persiste o bloco de storage no discovery.env AGORA: setup_object_storage_rustfs
+  # acabou de carregar as credenciais geradas em /etc/default/rustfs, e o
+  # write_environment_file (que roda antes) ainda nao as tinha. Sem esta chamada o
+  # env fica sem DISCOVERY_OBJECT_STORAGE_ACCESS_KEY/SECRET_KEY (e ObjectStorage__*),
+  # o CLI --set-object-storage grava config incompleta no banco e o console acusa
+  # "AccessKey/SecretKey obrigatorios". Nos modos update/manutencao isto ja era feito.
+  if [[ "${DISCOVERY_OBJECT_STORAGE_MODE:-skip}" != "skip" ]]; then
+    update_object_storage_environment_file
+  fi
   # Update e sempre manual: remove qualquer automacao remanescente de versoes antigas.
   remove_selfupdate_automation
   write_systemd_service

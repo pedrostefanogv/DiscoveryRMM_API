@@ -7,7 +7,7 @@ namespace Discovery.Core.Configuration;
 /// endpoints vem do env do projeto (discovery.env -> ObjectStorage__*). O
 /// servidor fala com o storage pelo ENDPOINT INTERNO (loopback) e as URLs
 /// pre-assinadas entregues aos agentes usam o ENDPOINT PUBLICO do servidor
-/// (ex.: https://tngplacas.com.br), que e o host que o nginx publica.
+/// (ex.: https://portal.suaempresa.com.br), que e o host que o nginx publica.
 /// </summary>
 public class ObjectStorageOptions
 {
@@ -19,7 +19,7 @@ public class ObjectStorageOptions
     /// <summary>Endpoint usado pelo SERVIDOR (loopback), ex.: 127.0.0.1:9000.</summary>
     public string InternalEndpoint { get; set; } = string.Empty;
 
-    /// <summary>Endpoint publico usado nas URLs pre-assinadas, ex.: https://tngplacas.com.br.</summary>
+    /// <summary>Endpoint publico usado nas URLs pre-assinadas, ex.: https://portal.suaempresa.com.br.</summary>
     public string PublicEndpoint { get; set; } = string.Empty;
 
     public string Bucket { get; set; } = string.Empty;

@@ -408,6 +408,10 @@ write_environment_file() {
 
   local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
   local fanout_subject_lines; fanout_subject_lines="$(build_fanout_subject_lines)"
+  # O command substitution remove o \n final: sem re-adicionar, o ultimo
+  # Subjects__N cola na linha seguinte (Nats__FanoutStream__MaxAge=...),
+  # corrompendo o subject e perdendo o MaxAge no discovery.env.
+  [[ -n "$fanout_subject_lines" ]] && fanout_subject_lines+=$'\n'
 
   # Preserva o opt-in de update do SO. Ele nao vem do ambiente do instalador
   # (o discovery.env nao e carregado), entao precisa ser lido do arquivo ANTES
@@ -1406,6 +1410,10 @@ update_nats_environment_file() {
   nats_server_external_host="$(normalize_host_without_scheme "${NATS_SERVER_HOST_EXTERNAL:-${EXTERNAL_API_HOST:-${INTERNAL_API_HOST:-}}}")"
   local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
   local fanout_subject_lines; fanout_subject_lines="$(build_fanout_subject_lines)"
+  # O command substitution remove o \n final: sem re-adicionar, o ultimo
+  # Subjects__N cola na linha seguinte (Nats__FanoutStream__MaxAge=...),
+  # corrompendo o subject e perdendo o MaxAge no discovery.env.
+  [[ -n "$fanout_subject_lines" ]] && fanout_subject_lines+=$'\n'
 
   cat >> "$tmp_file" <<EOF
 # Credenciais ficam em Nats__AuthUser/Nats__AuthPassword — nunca na URL.

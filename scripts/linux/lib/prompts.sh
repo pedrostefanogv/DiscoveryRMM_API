@@ -433,6 +433,8 @@ prepare_bootstrap_admin_login() {
     echo "Informe o usuario administrador do primeiro acesso."
     echo "Se deixar em branco, o instalador gera um login temporario automaticamente."
     echo "A senha tambem pode ficar em branco para ser gerada pelo recover-admin."
+    echo "Se digitar, ela precisa atender a politica da API (minimo 12 caracteres,"
+    echo "com maiuscula, numero e caractere especial) — senao sera pedida de novo."
     echo "----------------------------------------"
 
     if [[ -n "$existing_login" ]]; then
@@ -442,8 +444,39 @@ prepare_bootstrap_admin_login() {
       read -r -p "Usuario administrador inicial [gerar automaticamente]: " login_input
     fi
 
-    read -r -s -p "Senha administrativa inicial [gerar automaticamente]: " password_input
-    printf '\n'
+    # Mesma politica da API (Authentication:PasswordPolicy; defaults: 12 chars,
+    # maiuscula, digito e especial). Sem isso, uma senha curta so era recusada
+    # pelo --recover-admin no ULTIMO passo da instalacao — depois de tudo mais
+    # instalado — e abortava o bootstrap do admin.
+    local policy_min policy_upper policy_digit policy_special
+    policy_min="$(sudo awk -F= '/^Authentication__PasswordPolicy__MinLength=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+    policy_upper="$(sudo awk -F= '/^Authentication__PasswordPolicy__RequireUppercase=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+    policy_digit="$(sudo awk -F= '/^Authentication__PasswordPolicy__RequireDigit=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+    policy_special="$(sudo awk -F= '/^Authentication__PasswordPolicy__RequireSpecialChar=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
+    policy_min="${policy_min:-12}"
+    [[ "$policy_min" =~ ^[0-9]+$ ]] || policy_min=12
+
+    while true; do
+      read -r -s -p "Senha administrativa inicial [gerar automaticamente]: " password_input
+      printf '\n'
+
+      # Enter = deixa o --recover-admin gerar uma senha forte.
+      [[ -z "$password_input" ]] && break
+
+      local policy_reason=""
+      if (( ${#password_input} < policy_min )); then
+        policy_reason="no minimo ${policy_min} caracteres"
+      elif [[ "${policy_upper,,}" != "false" && ! "$password_input" =~ [A-Z] ]]; then
+        policy_reason="pelo menos uma letra maiuscula"
+      elif [[ "${policy_digit,,}" != "false" && ! "$password_input" =~ [0-9] ]]; then
+        policy_reason="pelo menos um numero"
+      elif [[ "${policy_special,,}" != "false" && ! "$password_input" =~ [^A-Za-z0-9] ]]; then
+        policy_reason="pelo menos um caractere especial"
+      fi
+      [[ -z "$policy_reason" ]] && break
+
+      echo "Senha recusada pela politica da API (${policy_reason}). Tente novamente ou pressione Enter para gerar automaticamente." >&2
+    done
 
     if [[ -n "$login_input" ]]; then
       DISCOVERY_BOOTSTRAP_ADMIN_LOGIN="$login_input"
