@@ -108,12 +108,13 @@ public class AgentAutomationCallbackPayloadTests
         Assert.That(result.IsSuccess, Is.True, "result com SourceType string deve ser aceito");
         Assert.That(repo.ResultCommandId, Is.EqualTo(commandId));
         Assert.That(repo.UpsertSourceType, Is.EqualTo(AutomationExecutionSourceType.SoftwareUpdate));
-        Assert.That(repo.UpsertStatus, Is.EqualTo(AutomationExecutionStatus.Completed));
+        // O status terminal é aplicado pelo UpdateResult (a ordem upsert→update é
+        // coberta em AutomationExecutionCallbackOrderingTests).
         Assert.That(repo.ResultExitCode, Is.EqualTo(0));
     }
 
     [Test]
-    public async Task Result_Failure_WithStringSourceType_IsRecordedAsFailed()
+    public async Task Result_Failure_WithStringSourceType_IsAccepted()
     {
         var repo = new CapturingReportRepo();
 
@@ -127,7 +128,8 @@ public class AgentAutomationCallbackPayloadTests
 
         Assert.That(result.IsSuccess, Is.True);
         Assert.That(repo.UpsertSourceType, Is.EqualTo(AutomationExecutionSourceType.Scheduled));
-        Assert.That(repo.UpsertStatus, Is.EqualTo(AutomationExecutionStatus.Failed));
+        Assert.That(repo.UpsertStatus, Is.EqualTo(AutomationExecutionStatus.Dispatched),
+            "o upsert grava só o placeholder; o desfecho (Completed/Failed) vem do UpdateResult");
     }
 
     private sealed class CapturingReportRepo : IAutomationExecutionReportRepository

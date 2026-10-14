@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.DTOs;
@@ -10,6 +11,22 @@ namespace Discovery.Infrastructure.Repositories;
 
 public class AutomationExecutionReportRepository : IAutomationExecutionReportRepository
 {
+    /// <summary>
+    /// Estado terminal nunca regride. Fonte única da guarda usada pelos UPDATEs
+    /// condicionais (ack/result): callbacks podem chegar fora de ordem — o agent
+    /// mantém fila persistente de callbacks e reenvia o ack após uma
+    /// indisponibilidade da API, então um ack tardio não pode rebaixar uma
+    /// execução Completed/Failed/Cancelled de volta para Acknowledged (isso
+    /// mostrava a execução como não concluída e permitia reprocessar o result).
+    /// </summary>
+    internal static readonly Expression<Func<AutomationExecutionReport, bool>> NotTerminal =
+        x => x.Status != AutomationExecutionStatus.Completed
+             && x.Status != AutomationExecutionStatus.Failed
+             && x.Status != AutomationExecutionStatus.Cancelled;
+
+    /// <summary>Mesma guarda em memória, para os curto-circuitos de idempotência.</summary>
+    private static readonly Func<AutomationExecutionReport, bool> NotTerminalFunc = NotTerminal.Compile();
+
     private readonly DiscoveryDbContext _db;
     private readonly IAgentRepository _agentRepository;
     private readonly ISiteRepository _siteRepository;
@@ -140,8 +157,11 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
 
         if (existing is not null)
         {
-            // Não regride status (ex.: Acknowledged → Dispatched).
-            if (status > existing.Status || existing.Status == AutomationExecutionStatus.Dispatched)
+            // Terminal é definitivo (Failed=3 > Completed=2 na ordem do enum, então
+            // comparar só numericamente permitia um result duplicado com desfecho
+            // diferente trocar a execução já encerrada). Fora isso, só avança:
+            // Dispatched → Acknowledged → Completed/Failed.
+            if (NotTerminalFunc(existing) && status > existing.Status)
             {
                 existing.Status = status;
                 existing.UpdatedAt = DateTime.UtcNow;
@@ -179,10 +199,15 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
     {
         var report = await _db.AutomationExecutionReports
             .AsNoTracking()
-            .SingleOrDefaultAsync(x => x.CommandId == commandId);
+            .OrderByDescending(x => x.CreatedAt)
+            .FirstOrDefaultAsync(x => x.CommandId == commandId);
 
-        await _db.AutomationExecutionReports
+        // UPDATE condicional ao estado terminal: um ack que chega depois do
+        // result (fila de callbacks do agent reenviada quando a API volta) não
+        // pode regredir a execução nem republicar o evento de ack.
+        var affected = await _db.AutomationExecutionReports
             .Where(x => x.CommandId == commandId)
+            .Where(NotTerminal)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(x => x.TaskId, _ => taskId)
                 .SetProperty(x => x.ScriptId, _ => scriptId)
@@ -192,7 +217,7 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
                 .SetProperty(x => x.CorrelationId, x => correlationId ?? x.CorrelationId)
                 .SetProperty(x => x.UpdatedAt, _ => DateTime.UtcNow));
 
-        if (report is not null)
+        if (affected > 0 && report is not null)
             await PublishDashboardEventAsync("AutomationExecutionAcknowledged", report.AgentId, commandId, AutomationExecutionStatus.Acknowledged, taskId, scriptId, correlationId ?? report.CorrelationId);
     }
 
@@ -200,15 +225,13 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
     {
         var report = await _db.AutomationExecutionReports
             .AsNoTracking()
-            .SingleOrDefaultAsync(x => x.CommandId == commandId);
+            .OrderByDescending(x => x.CreatedAt)
+            .FirstOrDefaultAsync(x => x.CommandId == commandId);
 
         // Idempotência: o mesmo comando pode reportar o resultado por dois
         // caminhos (NATS e endpoint de automação). Não reaplica nem republica
         // o evento quando o report já está em estado terminal.
-        if (report is not null
-            && (report.Status == AutomationExecutionStatus.Completed
-                || report.Status == AutomationExecutionStatus.Failed
-                || report.Status == AutomationExecutionStatus.Cancelled))
+        if (report is not null && !NotTerminalFunc(report))
         {
             return;
         }
@@ -216,10 +239,8 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
         // Filtro de status no próprio UPDATE: torna a idempotência atômica
         // mesmo com NATS e endpoint de automação reportando em paralelo.
         var affected = await _db.AutomationExecutionReports
-            .Where(x => x.CommandId == commandId
-                && x.Status != AutomationExecutionStatus.Completed
-                && x.Status != AutomationExecutionStatus.Failed
-                && x.Status != AutomationExecutionStatus.Cancelled)
+            .Where(x => x.CommandId == commandId)
+            .Where(NotTerminal)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(x => x.TaskId, _ => taskId)
                 .SetProperty(x => x.ScriptId, _ => scriptId)
@@ -242,25 +263,22 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
     {
         var report = await _db.AutomationExecutionReports
             .AsNoTracking()
-            .SingleOrDefaultAsync(x => x.CommandId == commandId);
+            .OrderByDescending(x => x.CreatedAt)
+            .FirstOrDefaultAsync(x => x.CommandId == commandId);
 
         if (report is null)
             return;
 
         // Idempotência: resultado já aplicado (NATS + endpoint de automação).
-        if (report.Status == AutomationExecutionStatus.Completed
-            || report.Status == AutomationExecutionStatus.Failed
-            || report.Status == AutomationExecutionStatus.Cancelled)
+        if (!NotTerminalFunc(report))
             return;
 
         var finalStatus = success ? AutomationExecutionStatus.Completed : AutomationExecutionStatus.Failed;
 
         // UPDATE condicional ao status terminal: atômico contra corrida NATS x HTTP.
         var affected = await _db.AutomationExecutionReports
-            .Where(x => x.CommandId == commandId
-                && x.Status != AutomationExecutionStatus.Completed
-                && x.Status != AutomationExecutionStatus.Failed
-                && x.Status != AutomationExecutionStatus.Cancelled)
+            .Where(x => x.CommandId == commandId)
+            .Where(NotTerminal)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(x => x.ResultMetadataJson, _ => resultMetadataJson)
                 .SetProperty(x => x.ResultReceivedAt, _ => resultReceivedAt)

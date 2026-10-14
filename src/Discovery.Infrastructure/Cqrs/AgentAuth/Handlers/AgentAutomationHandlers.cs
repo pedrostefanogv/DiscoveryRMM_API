@@ -100,6 +100,15 @@ public sealed class AckAutomationExecutionHandler(
         var payload = DeserializeAck(cmd.Request, cmd);
         var sourceType = MapSourceType((int)payload.SourceType);
 
+        // Upsert PRIMEIRO: execuções automáticas (sem comando dispatchado pelo
+        // servidor) ainda não têm registro. O UpdateAck só grava metadados e
+        // publica o evento de ack quando a linha já existe, então invertendo a
+        // ordem o payload do ack (stage/task/trigger/política PSADT) deixa de
+        // ser descartado no caminho normal iniciado pelo agent.
+        await reportRepo.UpsertPolicyExecutionAsync(
+            cmd.AgentId, cmd.CommandId, payload.TaskId, payload.ScriptId, sourceType,
+            AutomationExecutionStatus.Acknowledged, cmd.CorrelationId);
+
         await reportRepo.UpdateAckAsync(
             cmd.CommandId,
             payload.TaskId,
@@ -107,12 +116,6 @@ public sealed class AckAutomationExecutionHandler(
             payload.MetadataJson,
             DateTime.UtcNow,
             cmd.CorrelationId);
-
-        // Upsert garante que execuções automáticas (sem comando dispatchado pelo servidor)
-        // também tenham um registro de execução para ack/result.
-        await reportRepo.UpsertPolicyExecutionAsync(
-            cmd.AgentId, cmd.CommandId, payload.TaskId, payload.ScriptId, sourceType,
-            AutomationExecutionStatus.Acknowledged, cmd.CorrelationId);
 
         return Result<VoidResult>.Success(VoidResult.Value);
     }
@@ -152,6 +155,15 @@ public sealed class CompleteAutomationExecutionHandler(
         var payload = DeserializeResult(cmd.Request, cmd);
         var sourceType = MapSourceType((int)payload.SourceType);
 
+        // Upsert PRIMEIRO, com status não-terminal: garante a linha para que o
+        // UpdateResult grave exit code / erro / metadados (senão, quando o result
+        // chega antes de qualquer ack, o payload era descartado e o evento do
+        // dashboard não era publicado). O status terminal é aplicado no
+        // UpdateResult, que também é a guarda de idempotência.
+        await reportRepo.UpsertPolicyExecutionAsync(
+            cmd.AgentId, cmd.CommandId, payload.TaskId, payload.ScriptId, sourceType,
+            AutomationExecutionStatus.Dispatched, cmd.CorrelationId);
+
         await reportRepo.UpdateResultAsync(
             cmd.CommandId,
             payload.TaskId,
@@ -161,11 +173,6 @@ public sealed class CompleteAutomationExecutionHandler(
             payload.ErrorMessage,
             payload.MetadataJson,
             DateTime.UtcNow,
-            cmd.CorrelationId);
-
-        await reportRepo.UpsertPolicyExecutionAsync(
-            cmd.AgentId, cmd.CommandId, payload.TaskId, payload.ScriptId, sourceType,
-            payload.Success ? AutomationExecutionStatus.Completed : AutomationExecutionStatus.Failed,
             cmd.CorrelationId);
 
         return Result<VoidResult>.Success(VoidResult.Value);
