@@ -22,6 +22,14 @@ public interface IAppStoreService
         UpsertCustomAppCatalogPackageRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Remove o instalador publicado do pacote custom (best-effort no object storage)
+    /// mantendo o pacote. Retorna <c>false</c> se o pacote não existir ou não for Custom.
+    /// </summary>
+    Task<bool> DeleteCustomPackageFileAsync(
+        string packageId,
+        CancellationToken cancellationToken = default);
+
     Task<AppApprovalRuleResolvedDto> UpsertRuleAsync(
         AppApprovalScopeType scopeType,
         Guid? scopeId,

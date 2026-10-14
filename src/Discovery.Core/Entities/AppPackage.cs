@@ -19,6 +19,33 @@ public class AppPackage
     /// <summary>Comando opcional para remover o pacote custom (executado pelo agent).</summary>
     public string? UninstallCommand { get; set; }
 
+    /// <summary>Forma de execução do comando de instalação (comando único / script CMD / PowerShell).</summary>
+    public AppCommandKind InstallCommandKind { get; set; }
+
+    /// <summary>Forma de execução do comando de desinstalação (comando único / script CMD / PowerShell).</summary>
+    public AppCommandKind UninstallCommandKind { get; set; }
+
+    /// <summary>Estratégia de detecção de instalação usada pelo agent.</summary>
+    public AppDetectionMode DetectionMode { get; set; }
+
+    /// <summary>
+    /// softwareId (Guid) do app vinculado no catálogo de inventário. Sem FK de
+    /// proposito: excluir o app do inventario nao pode travar a loja.
+    /// </summary>
+    public string? InventorySoftwareId { get; set; }
+
+    /// <summary>Nome do software para o agent casar com o inventario LOCAL (componente da deteccao).</summary>
+    public string? DetectionName { get; set; }
+
+    /// <summary>Fabricante do software para o agent casar com o inventario local (opcional).</summary>
+    public string? DetectionPublisher { get; set; }
+
+    /// <summary>Versao minima aceita na deteccao por inventario (opcional).</summary>
+    public string? DetectionMinVersion { get; set; }
+
+    /// <summary>Comando PowerShell de deteccao (exit 0 = ja instalado).</summary>
+    public string? DetectionCommand { get; set; }
+
     /// <summary>Indica que o arquivo enviado e um ZIP e deve ser extraido no host antes de instalar.</summary>
     public bool ExtractZip { get; set; }
 

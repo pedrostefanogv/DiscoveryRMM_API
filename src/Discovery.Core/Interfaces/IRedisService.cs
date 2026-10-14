@@ -4,6 +4,13 @@ public interface IRedisService
 {
     bool IsConnected { get; }
 
+    /// <summary>
+    /// Latência de um PING no Redis, em milissegundos. Retorna null quando o
+    /// backend não implementa/está indisponível. Implementação padrão devolve
+    /// null para não quebrar fakes de teste existentes.
+    /// </summary>
+    Task<int?> PingAsync(CancellationToken ct = default) => Task.FromResult<int?>(null);
+
     Task<string?> GetAsync(string key);
 
     Task<long> IncrementAsync(string key);

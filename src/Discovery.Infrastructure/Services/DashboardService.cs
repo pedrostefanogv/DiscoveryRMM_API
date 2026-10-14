@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
@@ -116,7 +117,10 @@ public class DashboardService : IDashboardService
             }
         }
 
-        var agentsOffline = agentsOfflinePersisted + agentsStale;
+        // "Stale" tem barra/tile proprios no dashboard: somar aqui inflava o
+        // "Offline" e fazia a soma dos segmentos passar do total de agentes
+        // (denominador errado nas barras de saude).
+        var agentsOffline = agentsOfflinePersisted;
         var onlineGraceSeconds = await ResolveReportedGraceSecondsAsync(level, clientId, siteId, graceBySite);
 
         var scopedCommands = BuildScopedCommandsQuery(level, clientId, siteId).Where(c => c.CreatedAt >= windowStartUtc);
@@ -260,10 +264,26 @@ public class DashboardService : IDashboardService
         if (ids.Length == 0)
             return [];
 
-        var tasks = ids.Select(async id => new
+        // Leitura com concorrencia limitada: o Task.WhenAll anterior disparava um
+        // GET por agente ao mesmo tempo. Em frotas grandes isso vira um burst de
+        // centenas/milhares de comandos no Redis a cada janela de cache.
+        const int maxConcurrency = 16;
+        using var throttle = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        var tasks = ids.Select(async id =>
         {
-            AgentId = id,
-            Entry = await _heartbeatCache.GetHeartbeatAsync(id, cancellationToken)
+            await throttle.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return new
+                {
+                    AgentId = id,
+                    Entry = await _heartbeatCache.GetHeartbeatAsync(id, cancellationToken).ConfigureAwait(false)
+                };
+            }
+            finally
+            {
+                throttle.Release();
+            }
         });
 
         var results = await Task.WhenAll(tasks);
@@ -299,21 +319,37 @@ public class DashboardService : IDashboardService
         return server.AgentOnlineGraceSeconds;
     }
 
+    // Single-flight por chave: N usuarios/abas abrindo o painel com o cache frio
+    // executavam N agregacoes completas (varias contagens no banco) ao mesmo tempo.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> SummaryGates = new();
+
     private async Task<DashboardSummaryDto> GetOrCreateSummaryAsync(
         string cacheKey,
         Func<Task<DashboardSummaryDto>> factory,
         CancellationToken cancellationToken)
     {
-        _ = cancellationToken;
-
         var cached = await TryGetCachedSummaryAsync(cacheKey);
         if (cached is not null)
             return cached;
 
-        var summary = await factory();
-        var payload = JsonSerializer.Serialize(summary, JsonOptions);
-        await _redisService.SetAsync(cacheKey, payload, AbsoluteCacheTtlSeconds);
-        return summary;
+        var gate = SummaryGates.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Double-check: outra request pode ter populado o cache enquanto esperavamos.
+            cached = await TryGetCachedSummaryAsync(cacheKey);
+            if (cached is not null)
+                return cached;
+
+            var summary = await factory().ConfigureAwait(false);
+            var payload = JsonSerializer.Serialize(summary, JsonOptions);
+            await _redisService.SetAsync(cacheKey, payload, AbsoluteCacheTtlSeconds);
+            return summary;
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private async Task<DashboardSummaryDto?> TryGetCachedSummaryAsync(string cacheKey)
@@ -445,7 +481,7 @@ public class DashboardService : IDashboardService
     }
 
     private static int ToWindowHours(TimeSpan window)
-        => (int)Math.Clamp(Math.Round(window.TotalHours), 1, 168);
+        => DashboardCacheKeys.NormalizeWindowHours(window);
 
     private readonly record struct AgentStatusProjection(Guid Id, Guid SiteId, AgentStatus Status, DateTime? LastSeenAt);
 

@@ -157,6 +157,22 @@ public class AppStoreController(IMediator mediator) : ControllerBase
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
+    /// <summary>
+    /// Remove apenas o instalador publicado de um pacote custom (mantém o pacote e o
+    /// ícone), permitindo enviar outro arquivo em seguida. 204 em caso de sucesso.
+    /// </summary>
+    [HttpDelete("custom/{packageId}/file")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public async Task<IActionResult> DeleteCustomPackageFile(string packageId, CancellationToken ct)
+    {
+        var result = await mediator.Send(new DeleteCustomAppPackageFileCommand(packageId), ct);
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // Sync
     // ═══════════════════════════════════════════════════════════════

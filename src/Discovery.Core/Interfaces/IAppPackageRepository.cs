@@ -29,4 +29,12 @@ public interface IAppPackageRepository
 
     /// <summary>Remove um pacote custom pelo packageId. Retorna false se não existir.</summary>
     Task<bool> DeleteCustomAsync(string packageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Zera o instalador do pacote custom (FileObjectKey, FileBucket, FilePublicUrl,
+    /// FileContentType, FileSizeBytes, FileChecksum e FileName). Retorna um snapshot
+    /// do estado ANTERIOR (com a object key para o handler apagar o objeto no
+    /// storage) ou <c>null</c> se o pacote não existir ou não for Custom.
+    /// </summary>
+    Task<AppPackage?> ClearCustomFileAsync(string packageId, CancellationToken cancellationToken = default);
 }

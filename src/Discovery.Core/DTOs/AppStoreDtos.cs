@@ -26,6 +26,34 @@ public class AppCatalogPackageDto
     /// <summary>Comando de desinstalação (pacotes custom).</summary>
     public string UninstallCommand { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Tipo do comando de instalação (AppCommandKind): 0 comando único, 1 script CMD/BAT,
+    /// 2 script PowerShell. Int no wire para o JSON sair numérico (o
+    /// JsonStringEnumConverter global serializaria o enum como string).
+    /// </summary>
+    public int InstallCommandKind { get; set; }
+
+    /// <summary>Tipo do comando de desinstalação (AppCommandKind).</summary>
+    public int UninstallCommandKind { get; set; }
+
+    /// <summary>Modo de detecção (AppDetectionMode): 0 nenhum, 1 vínculo com inventário, 2 comando.</summary>
+    public int DetectionMode { get; set; }
+
+    /// <summary>softwareId (Guid) do app vinculado no catálogo de inventário.</summary>
+    public string? InventorySoftwareId { get; set; }
+
+    /// <summary>Nome do software para o agent casar com o inventário local.</summary>
+    public string? DetectionName { get; set; }
+
+    /// <summary>Fabricante do software para o agent casar com o inventário local.</summary>
+    public string? DetectionPublisher { get; set; }
+
+    /// <summary>Versão mínima aceita na detecção por inventário.</summary>
+    public string? DetectionMinVersion { get; set; }
+
+    /// <summary>Comando PowerShell de detecção (exit 0 = já instalado).</summary>
+    public string? DetectionCommand { get; set; }
+
     /// <summary>Arquivo enviado é ZIP e deve ser extraído no host.</summary>
     public bool ExtractZip { get; set; }
 
@@ -86,6 +114,31 @@ public class UpsertCustomAppCatalogPackageRequest
     public string? SiteUrl { get; set; }
     public string? InstallCommand { get; set; }
     public string? UninstallCommand { get; set; }
+
+    /// <summary>Tipo do comando de instalação (AppCommandKind): 0 comando único, 1 CMD/BAT, 2 PowerShell.</summary>
+    public int InstallCommandKind { get; set; }
+
+    /// <summary>Tipo do comando de desinstalação (AppCommandKind).</summary>
+    public int UninstallCommandKind { get; set; }
+
+    /// <summary>Modo de detecção (AppDetectionMode): 0 nenhum, 1 vínculo com inventário, 2 comando.</summary>
+    public int DetectionMode { get; set; }
+
+    /// <summary>softwareId (Guid) do app vinculado no catálogo de inventário (sem FK no servidor).</summary>
+    public string? InventorySoftwareId { get; set; }
+
+    /// <summary>Snapshot do nome do software no inventário (usado pelo agent).</summary>
+    public string? DetectionName { get; set; }
+
+    /// <summary>Snapshot do fabricante do software no inventário (usado pelo agent).</summary>
+    public string? DetectionPublisher { get; set; }
+
+    /// <summary>Versão mínima aceita na detecção por inventário.</summary>
+    public string? DetectionMinVersion { get; set; }
+
+    /// <summary>Comando PowerShell de detecção (exit 0 = já instalado).</summary>
+    public string? DetectionCommand { get; set; }
+
     public bool ExtractZip { get; set; }
     public string? MetadataJson { get; set; }
     public string? FileObjectKey { get; set; }
@@ -138,6 +191,30 @@ public class EffectiveApprovedAppDto
 
     /// <summary>Comando de desinstalação (pacotes custom).</summary>
     public string UninstallCommand { get; set; } = string.Empty;
+
+    /// <summary>Tipo do comando de instalação (AppCommandKind).</summary>
+    public int InstallCommandKind { get; set; }
+
+    /// <summary>Tipo do comando de desinstalação (AppCommandKind).</summary>
+    public int UninstallCommandKind { get; set; }
+
+    /// <summary>Modo de detecção (AppDetectionMode): 0 nenhum, 1 vínculo com inventário, 2 comando.</summary>
+    public int DetectionMode { get; set; }
+
+    /// <summary>softwareId (Guid) do app vinculado no catálogo de inventário.</summary>
+    public string? InventorySoftwareId { get; set; }
+
+    /// <summary>Nome do software no inventário local, usado pelo agent para detecção.</summary>
+    public string? DetectionName { get; set; }
+
+    /// <summary>Fabricante do software no inventário local (opcional).</summary>
+    public string? DetectionPublisher { get; set; }
+
+    /// <summary>Versão mínima aceita na detecção por inventário (opcional).</summary>
+    public string? DetectionMinVersion { get; set; }
+
+    /// <summary>Comando PowerShell de detecção (exit 0 = já instalado).</summary>
+    public string? DetectionCommand { get; set; }
 
     /// <summary>Arquivo do pacote é ZIP e deve ser extraído no host pelo agent.</summary>
     public bool ExtractZip { get; set; }

@@ -14,6 +14,7 @@ public class AppStoreService : IAppStoreService
     private readonly ISiteRepository _siteRepository;
     private readonly IAgentRepository _agentRepository;
     private readonly IAppPackageRepository _appPackageRepo;
+    private readonly ICustomPackageAssetService _customAssets;
 
     public AppStoreService(
         IAppApprovalRuleRepository approvalRepo,
@@ -21,7 +22,8 @@ public class AppStoreService : IAppStoreService
         IConfigurationResolver configurationResolver,
         ISiteRepository siteRepository,
         IAgentRepository agentRepository,
-        IAppPackageRepository appPackageRepo)
+        IAppPackageRepository appPackageRepo,
+        ICustomPackageAssetService customAssets)
     {
         _approvalRepo = approvalRepo;
         _auditService = auditService;
@@ -29,6 +31,7 @@ public class AppStoreService : IAppStoreService
         _siteRepository = siteRepository;
         _agentRepository = agentRepository;
         _appPackageRepo = appPackageRepo;
+        _customAssets = customAssets;
     }
 
     public async Task<AppCatalogSearchResultDto> SearchCatalogAsync(
@@ -104,6 +107,28 @@ public class AppStoreService : IAppStoreService
         if (string.IsNullOrWhiteSpace(request.InstallCommand))
             throw new InvalidOperationException("InstallCommand e obrigatorio: informe o comando de instalacao do pacote.");
 
+        // Tipo do comando: 0 Command (cmd /C), 1 CmdScript (.cmd), 2 PowerShellScript (.ps1).
+        var installCommandKind = NormalizeCommandKind(request.InstallCommandKind, "InstallCommandKind");
+        var uninstallCommandKind = NormalizeCommandKind(request.UninstallCommandKind, "UninstallCommandKind");
+
+        // Deteccao: cada modo exige os campos que o agent precisa para decidir se ja
+        // esta instalado. Sem eles a deteccao nunca daria evidencia positiva.
+        var detectionMode = NormalizeDetectionMode(request.DetectionMode);
+        var inventorySoftwareId = TrimToNull(request.InventorySoftwareId);
+        var detectionName = TrimToNull(request.DetectionName);
+        var detectionPublisher = TrimToNull(request.DetectionPublisher);
+        var detectionMinVersion = TrimToNull(request.DetectionMinVersion);
+        var detectionCommand = TrimToNull(request.DetectionCommand);
+
+        if (detectionMode == AppDetectionMode.InventoryLink && detectionName is null)
+            throw new InvalidOperationException("DetectionName e obrigatorio quando DetectionMode=InventoryLink.");
+
+        if (detectionMode == AppDetectionMode.Command && detectionCommand is null)
+            throw new InvalidOperationException("DetectionCommand e obrigatorio quando DetectionMode=Command.");
+
+        if (request.DetectionCommand is { Length: > 2000 })
+            throw new InvalidOperationException("DetectionCommand excede o limite de 2000 caracteres.");
+
         var normalizedPackageId = request.PackageId.Trim();
 
         // Quando ha icone enviado ao storage, a loja serve a imagem pela propria
@@ -124,6 +149,14 @@ public class AppStoreService : IAppStoreService
             SiteUrl = request.SiteUrl,
             InstallCommand = request.InstallCommand,
             UninstallCommand = request.UninstallCommand,
+            InstallCommandKind = installCommandKind,
+            UninstallCommandKind = uninstallCommandKind,
+            DetectionMode = detectionMode,
+            InventorySoftwareId = inventorySoftwareId,
+            DetectionName = detectionName,
+            DetectionPublisher = detectionPublisher,
+            DetectionMinVersion = detectionMinVersion,
+            DetectionCommand = detectionCommand,
             ExtractZip = request.ExtractZip,
             FileName = request.FileName,
             IconObjectKey = request.IconObjectKey,
@@ -138,6 +171,34 @@ public class AppStoreService : IAppStoreService
         }, cancellationToken);
 
         return MapUnifiedToDto(saved);
+    }
+
+    public async Task<bool> DeleteCustomPackageFileAsync(
+        string packageId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(packageId))
+            return false;
+
+        var previous = await _appPackageRepo.ClearCustomFileAsync(packageId.Trim(), cancellationToken);
+        if (previous is null)
+            return false;
+
+        // Best-effort: a linha do catalogo e a fonte de verdade; uma falha ao
+        // remover o objeto no storage nao deve impedir a exclusao do instalador.
+        if (!string.IsNullOrWhiteSpace(previous.FileObjectKey))
+        {
+            try
+            {
+                await _customAssets.DeleteAsync(previous.FileObjectKey, cancellationToken);
+            }
+            catch
+            {
+                // Objeto orfao no storage nao quebra a operacao.
+            }
+        }
+
+        return true;
     }
 
     public async Task<AppApprovalRuleResolvedDto> UpsertRuleAsync(
@@ -559,6 +620,31 @@ public class AppStoreService : IAppStoreService
             : packageId.Trim();
     }
 
+    /// <summary>Valida e converte o tipo de comando vindo do request (int no wire).</summary>
+    private static AppCommandKind NormalizeCommandKind(int value, string field)
+    {
+        if (!Enum.IsDefined(typeof(AppCommandKind), value))
+            throw new InvalidOperationException(
+                $"{field} invalido: use 0 (comando unico), 1 (script CMD/BAT) ou 2 (script PowerShell).");
+
+        return (AppCommandKind)value;
+    }
+
+    /// <summary>Valida e converte o modo de deteccao vindo do request (int no wire).</summary>
+    private static AppDetectionMode NormalizeDetectionMode(int value)
+    {
+        if (!Enum.IsDefined(typeof(AppDetectionMode), value))
+            throw new InvalidOperationException(
+                "DetectionMode invalido: use 0 (nenhuma), 1 (vinculo com inventario) ou 2 (comando).");
+
+        return (AppDetectionMode)value;
+    }
+
+    private static string? TrimToNull(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
     private async Task<AppStorePolicyType> ResolvePolicyForScopeAsync(
         ScopeContext scopeContext,
         CancellationToken cancellationToken)
@@ -881,6 +967,14 @@ public class AppStoreService : IAppStoreService
                     Version = package.Version,
                     InstallCommand = package.InstallCommand,
                     UninstallCommand = package.UninstallCommand,
+                    InstallCommandKind = package.InstallCommandKind,
+                    UninstallCommandKind = package.UninstallCommandKind,
+                    DetectionMode = package.DetectionMode,
+                    InventorySoftwareId = package.InventorySoftwareId,
+                    DetectionName = package.DetectionName,
+                    DetectionPublisher = package.DetectionPublisher,
+                    DetectionMinVersion = package.DetectionMinVersion,
+                    DetectionCommand = package.DetectionCommand,
                     ExtractZip = package.ExtractZip,
                     FileName = package.FileName,
                     FileSizeBytes = package.FileSizeBytes,
@@ -1073,6 +1167,14 @@ public class AppStoreService : IAppStoreService
             Icon = ResolveIconUrl(pkg.IconUrl, pkg.SiteUrl),
             InstallCommand = pkg.InstallCommand ?? string.Empty,
             UninstallCommand = pkg.UninstallCommand ?? string.Empty,
+            InstallCommandKind = (int)pkg.InstallCommandKind,
+            UninstallCommandKind = (int)pkg.UninstallCommandKind,
+            DetectionMode = (int)pkg.DetectionMode,
+            InventorySoftwareId = pkg.InventorySoftwareId,
+            DetectionName = pkg.DetectionName,
+            DetectionPublisher = pkg.DetectionPublisher,
+            DetectionMinVersion = pkg.DetectionMinVersion,
+            DetectionCommand = pkg.DetectionCommand,
             ExtractZip = pkg.ExtractZip,
             FileName = pkg.FileName ?? string.Empty,
             FileSizeBytes = pkg.FileSizeBytes,
@@ -1104,6 +1206,14 @@ public class AppStoreService : IAppStoreService
             Version = package.Version,
             InstallCommand = package.InstallCommand,
             UninstallCommand = package.UninstallCommand,
+            InstallCommandKind = package.InstallCommandKind,
+            UninstallCommandKind = package.UninstallCommandKind,
+            DetectionMode = package.DetectionMode,
+            InventorySoftwareId = package.InventorySoftwareId,
+            DetectionName = package.DetectionName,
+            DetectionPublisher = package.DetectionPublisher,
+            DetectionMinVersion = package.DetectionMinVersion,
+            DetectionCommand = package.DetectionCommand,
             ExtractZip = package.ExtractZip,
             FileName = package.FileName,
             FileSizeBytes = package.FileSizeBytes,

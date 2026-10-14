@@ -160,6 +160,18 @@ builder.Services.AddSingleton<WingetManifestParser>();
 // Sync de catálogo em background (singleton: mantém estado de jobs/último resultado entre requests)
 builder.Services.AddSingleton<AppCatalogBackgroundSyncService>();
 
+// ── Observabilidade de plataforma (singletons) ─────────────────────────────
+// Telemetria NATS: probe TCP + RTT cacheados e atualizados em background; o
+// endpoint do dashboard nunca faz I/O de rede por request com o cache quente.
+builder.Services.AddSingleton<Discovery.Infrastructure.Services.Realtime.NatsTelemetryService>();
+builder.Services.AddHostedService<Discovery.Infrastructure.Services.Realtime.NatsTelemetryRefreshService>();
+
+// Object storage (S3): contadores PASSIVOS (custo zero no S3) + health ativa
+// cacheada com single-flight e circuit breaker. Nenhuma listagem/varredura e
+// disparada por request — inclusive quando o S3 e externo.
+builder.Services.AddSingleton<Discovery.Infrastructure.Services.ObjectStorage.ObjectStorageTelemetry>();
+builder.Services.AddSingleton<Discovery.Infrastructure.Services.ObjectStorage.ObjectStorageHealthService>();
+
 builder.Services.AddHttpClient("AiChat", client =>
 {
     // B16: antes 60s, que cobria o corpo do stream e matava modelos de

@@ -3,6 +3,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Core.ValueObjects;
+using Discovery.Infrastructure.Services.ObjectStorage;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -24,6 +25,7 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     private readonly ILoggerFactory _loggerFactory;
     private readonly ISecretProtector _secretProtector;
     private readonly IOptions<ObjectStorageOptions> _objectStorageOptions;
+    private readonly ObjectStorageTelemetry? _telemetry;
 
     public ObjectStorageProviderFactory(
         IServerConfigurationRepository serverConfigRepository,
@@ -31,7 +33,8 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
         ILogger<ObjectStorageProviderFactory> logger,
         ILoggerFactory loggerFactory,
         ISecretProtector secretProtector,
-        IOptions<ObjectStorageOptions> objectStorageOptions)
+        IOptions<ObjectStorageOptions> objectStorageOptions,
+        ObjectStorageTelemetry? telemetry = null)
     {
         _serverConfigRepository = serverConfigRepository ?? throw new ArgumentNullException(nameof(serverConfigRepository));
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
@@ -39,6 +42,7 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _secretProtector = secretProtector ?? throw new ArgumentNullException(nameof(secretProtector));
         _objectStorageOptions = objectStorageOptions ?? throw new ArgumentNullException(nameof(objectStorageOptions));
+        _telemetry = telemetry;
     }
 
     /// <summary>
@@ -171,7 +175,13 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     private IObjectStorageService CreateMinioStorageService(ObjectStorageSettings settings)
     {
         var childLogger = _loggerFactory.CreateLogger<MinioObjectStorageProvider>();
-        return new MinioObjectStorageProvider(settings, childLogger);
+        var service = new MinioObjectStorageProvider(settings, childLogger);
+
+        // Decorator de metricas PASSIVAS: nao faz nenhuma chamada adicional ao S3,
+        // apenas mede as operacoes que a aplicacao ja executa.
+        return _telemetry is null
+            ? service
+            : new InstrumentedObjectStorageProvider(service, _telemetry);
     }
 
     /// <summary>

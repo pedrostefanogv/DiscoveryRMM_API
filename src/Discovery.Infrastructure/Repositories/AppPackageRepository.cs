@@ -217,13 +217,29 @@ public class AppPackageRepository : IAppPackageRepository
         current.Publisher = package.Publisher;
         current.Version = package.Version;
         current.Description = package.Description;
-        current.IconUrl = package.IconUrl;
+        // IconUrl: quando o icone esta no object storage, a URL publica e derivada
+        // pela API (endpoint anonimo /custom/{id}/icon). Um request que nao manda
+        // IconUrl (ex.: edicao que so muda metadados) nao pode zerar essa derivacao
+        // enquanto a chave existir — senao o catalogo fica sem icone mesmo com o
+        // objeto publicado no storage. O IconObjectKey tambem e preservado abaixo.
+        var iconObjectKeyAfterSave = string.IsNullOrWhiteSpace(package.IconObjectKey)
+            ? current.IconObjectKey
+            : package.IconObjectKey;
+        current.IconUrl = string.IsNullOrWhiteSpace(package.IconUrl) && !string.IsNullOrWhiteSpace(iconObjectKeyAfterSave)
+            ? current.IconUrl
+            : package.IconUrl;
         current.SiteUrl = package.SiteUrl;
         current.InstallCommand = package.InstallCommand;
         current.UninstallCommand = package.UninstallCommand;
+        current.InstallCommandKind = package.InstallCommandKind;
+        current.UninstallCommandKind = package.UninstallCommandKind;
+        current.DetectionMode = package.DetectionMode;
+        current.InventorySoftwareId = package.InventorySoftwareId;
+        current.DetectionName = package.DetectionName;
+        current.DetectionPublisher = package.DetectionPublisher;
+        current.DetectionMinVersion = package.DetectionMinVersion;
+        current.DetectionCommand = package.DetectionCommand;
         current.ExtractZip = package.ExtractZip;
-        current.FileName = package.FileName;
-        current.IconObjectKey = package.IconObjectKey;
         current.MetadataJson = package.MetadataJson;
 
         // Edicao parcial: campos de arquivo/icone so sao sobrescritos quando o
@@ -236,7 +252,7 @@ public class AppPackageRepository : IAppPackageRepository
         current.FileName = string.IsNullOrWhiteSpace(package.FileName) ? current.FileName : package.FileName;
         current.FileSizeBytes = package.FileSizeBytes is null or <= 0 ? current.FileSizeBytes : package.FileSizeBytes;
         current.FileChecksum = string.IsNullOrWhiteSpace(package.FileChecksum) ? current.FileChecksum : package.FileChecksum;
-        current.IconObjectKey = string.IsNullOrWhiteSpace(package.IconObjectKey) ? current.IconObjectKey : package.IconObjectKey;
+        current.IconObjectKey = iconObjectKeyAfterSave;
 
         current.LastUpdated = package.LastUpdated;
         current.UpdatedAt = now;
@@ -259,6 +275,45 @@ public class AppPackageRepository : IAppPackageRepository
         _db.AppPackages.Remove(current);
         await _db.SaveChangesAsync(cancellationToken);
         return true;
+    }
+
+    public async Task<AppPackage?> ClearCustomFileAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        var normalizedPackageId = NormalizePackageId(packageId, AppInstallationType.Custom);
+        var current = await _db.AppPackages.SingleOrDefaultAsync(
+            x => x.InstallationType == AppInstallationType.Custom && x.PackageId == normalizedPackageId,
+            cancellationToken);
+
+        if (current is null)
+            return null;
+
+        // Snapshot do estado ANTERIOR: o handler precisa da object key para apagar
+        // o objeto no storage depois que a linha deixa de referencia-lo.
+        var previous = new AppPackage
+        {
+            Id = current.Id,
+            InstallationType = current.InstallationType,
+            PackageId = current.PackageId,
+            FileObjectKey = current.FileObjectKey,
+            FileBucket = current.FileBucket,
+            FilePublicUrl = current.FilePublicUrl,
+            FileContentType = current.FileContentType,
+            FileSizeBytes = current.FileSizeBytes,
+            FileChecksum = current.FileChecksum,
+            FileName = current.FileName
+        };
+
+        current.FileObjectKey = null;
+        current.FileBucket = null;
+        current.FilePublicUrl = null;
+        current.FileContentType = null;
+        current.FileSizeBytes = null;
+        current.FileChecksum = null;
+        current.FileName = null;
+        current.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return previous;
     }
 
     private static string NormalizePackageId(string packageId, AppInstallationType installationType)

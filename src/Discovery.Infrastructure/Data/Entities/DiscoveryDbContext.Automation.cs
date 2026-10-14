@@ -249,6 +249,14 @@ public partial class DiscoveryDbContext
             entity.Property(p => p.SiteUrl).HasColumnName("site_url").HasMaxLength(2000);
             entity.Property(p => p.InstallCommand).HasColumnName("install_command").HasMaxLength(1000);
             entity.Property(p => p.UninstallCommand).HasColumnName("uninstall_command").HasMaxLength(1000);
+            entity.Property(p => p.InstallCommandKind).HasColumnName("install_command_kind").HasConversion<int>();
+            entity.Property(p => p.UninstallCommandKind).HasColumnName("uninstall_command_kind").HasConversion<int>();
+            entity.Property(p => p.DetectionMode).HasColumnName("detection_mode").HasConversion<int>();
+            entity.Property(p => p.InventorySoftwareId).HasColumnName("inventory_software_id").HasMaxLength(64);
+            entity.Property(p => p.DetectionName).HasColumnName("detection_name").HasMaxLength(500);
+            entity.Property(p => p.DetectionPublisher).HasColumnName("detection_publisher").HasMaxLength(500);
+            entity.Property(p => p.DetectionMinVersion).HasColumnName("detection_min_version").HasMaxLength(100);
+            entity.Property(p => p.DetectionCommand).HasColumnName("detection_command").HasMaxLength(2000);
             entity.Property(p => p.ExtractZip).HasColumnName("extract_zip");
             entity.Property(p => p.FileName).HasColumnName("file_name").HasMaxLength(400);
             entity.Property(p => p.IconObjectKey).HasColumnName("icon_object_key").HasMaxLength(1000);

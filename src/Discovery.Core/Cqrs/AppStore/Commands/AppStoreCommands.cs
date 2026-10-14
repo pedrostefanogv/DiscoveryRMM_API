@@ -30,6 +30,12 @@ public sealed record UpsertCustomAppPackageCommand(
 /// <summary>Remove um pacote custom da loja (e seus arquivos no object storage).</summary>
 public sealed record DeleteCustomAppPackageCommand(string PackageId) : ICommand<Result<VoidResult>>;
 
+/// <summary>
+/// Remove apenas o instalador publicado do pacote custom (mantém o pacote e o
+/// ícone). Usado pelo editor para excluir o arquivo e enviar outro em seguida.
+/// </summary>
+public sealed record DeleteCustomAppPackageFileCommand(string PackageId) : ICommand<Result<VoidResult>>;
+
 // ── Approval rules ───────────────────────────────────────────────────
 public sealed record UpsertAppApprovalRuleCommand(
     AppApprovalScopeType ScopeType,

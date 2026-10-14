@@ -50,6 +50,9 @@ public class WingetManifestsSyncServiceTests
 
         public Task<bool> DeleteCustomAsync(string packageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+
+        public Task<AppPackage?> ClearCustomFileAsync(string packageId, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 
     private static string RunGit(string workingDir, params string[] args)

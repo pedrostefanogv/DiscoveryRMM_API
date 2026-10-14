@@ -19,6 +19,23 @@ public class RedisService : IRedisService
 
     public bool IsConnected => _connection?.IsConnected ?? false;
 
+    public async Task<int?> PingAsync(CancellationToken ct = default)
+    {
+        if (!IsConnected) return null;
+
+        try
+        {
+            var db = _connection.GetDatabase();
+            var latency = await db.PingAsync();
+            return (int)Math.Round(latency.TotalMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error pinging Redis");
+            return null;
+        }
+    }
+
     public async Task<string?> GetAsync(string key)
     {
         try
