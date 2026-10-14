@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Discovery.Core.Entities;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Caching.Memory;
@@ -407,9 +408,13 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
             var totalTokens = 0;
             foreach (var chunk in kbChunks)
             {
-                var chunkText = chunk.ChunkContent.Length > 800
-                    ? chunk.ChunkContent[..800] + "..."
-                    : chunk.ChunkContent;
+                // Chunks indexados ANTES da limpeza de tokens ainda carregam
+                // ![alt](kbimage:<id>) e não há reindexação retroativa: limpar aqui
+                // evita entregar o identificador do anexo ao LLM.
+                var chunkContent = KnowledgeImageMarkdown.StripTokens(chunk.ChunkContent);
+                var chunkText = chunkContent.Length > 800
+                    ? chunkContent[..800] + "..."
+                    : chunkContent;
 
                 var estimatedTokens = (int)(chunkText.Split(' ').Length * 1.3);
                 if (totalTokens + estimatedTokens > ClampKbContextTokens(aiSettings)) break;

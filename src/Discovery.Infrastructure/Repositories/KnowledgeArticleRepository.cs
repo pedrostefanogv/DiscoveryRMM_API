@@ -17,6 +17,11 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             .Include(a => a.Chunks)
             .FirstOrDefaultAsync(a => a.Id == id && a.DeletedAt == null, ct);
 
+    public async Task<KnowledgeArticle?> GetWithoutChunksAsync(Guid id, CancellationToken ct = default)
+        => await db.KnowledgeArticles
+            .AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Id == id && a.DeletedAt == null, ct);
+
     public async Task<KnowledgeArticle> CreateAsync(KnowledgeArticle article, CancellationToken ct = default)
     {
         article.Id = IdGenerator.NewId();

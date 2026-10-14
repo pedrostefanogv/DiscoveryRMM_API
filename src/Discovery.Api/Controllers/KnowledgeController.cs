@@ -2,7 +2,11 @@ using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Knowledge.Commands;
 using Discovery.Core.Cqrs.Knowledge.Queries;
 using Discovery.Core.DTOs;
+using Discovery.Core.Entities;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
+using Discovery.Core.Interfaces;
+using Discovery.Core.ValueObjects;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,8 +16,15 @@ namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/knowledge")]
-public class KnowledgeController(IMediator mediator) : ControllerBase
+public class KnowledgeController(
+    IMediator mediator,
+    IAttachmentService attachmentService,
+    IAttachmentRepository attachmentRepository,
+    IKnowledgeArticleRepository articleRepository,
+    IKnowledgeArticlePageRepository pageRepository) : ControllerBase
 {
+    private string Username => HttpContext.Items["Username"] as string ?? "api";
+
     [HttpGet]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
     public async Task<IActionResult> GetAll(
@@ -167,4 +178,300 @@ public class KnowledgeController(IMediator mediator) : ControllerBase
         var result = await mediator.Send(new DeleteArticlePageCommand(id, pageId), ct);
         return result.Match<IActionResult>(success: _ => NoContent(), failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
+
+    // ── Imagens do artigo (privadas) ──────────────────────────────────
+    //
+    // O Markdown guarda ![alt](kbimage:<attachmentId>): referência estável, sem
+    // URL pública e sem URL pré-assinada persistida (que expiraria junto com o
+    // link). Toda leitura passa por endpoint autenticado com checagem de
+    // proprietário (EntityType + EntityId): o bucket nunca é exposto. O console
+    // resolve o token para uma URL pré-assinada CURTA no momento da exibição; o
+    // agente tem rota agent-auth própria (bytes + cache offline).
+
+    /// <summary>Prepara o PUT direto no storage para uma imagem do artigo.</summary>
+    [HttpPost("{id:guid}/images/presigned-upload")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    public async Task<IActionResult> PrepareImageUpload(Guid id, [FromBody] PresignedUploadRequestDto req, CancellationToken ct)
+    {
+        // Leitura leve: os endpoints de imagem só usam ClientId/Content/Id, nunca
+        // os chunks/embeddings do artigo.
+        var article = await articleRepository.GetWithoutChunksAsync(id, ct);
+        if (article is null) return NotFound(new { error = "Artigo não encontrado." });
+
+        if (req is null || string.IsNullOrWhiteSpace(req.FileName) || string.IsNullOrWhiteSpace(req.ContentType))
+            return BadRequest(new { error = "Nome e tipo da imagem são obrigatórios." });
+
+        if (!KnowledgeImageRules.IsAllowedContentType(req.ContentType))
+            return BadRequest(new { error = $"Tipo de imagem não permitido: {req.ContentType}." });
+
+        if (!KnowledgeImageRules.IsAllowedSize(req.SizeBytes))
+            return BadRequest(new { error = $"Tamanho de imagem inválido. Máximo: {KnowledgeImageRules.MaxFileSizeBytes} bytes." });
+
+        try
+        {
+            var result = await attachmentService.PreparePresignedUploadAsync(
+                KnowledgeImageRules.EntityType,
+                id,
+                article.ClientId,
+                req.FileName,
+                req.ContentType,
+                req.SizeBytes,
+                KnowledgeImageRules.UploadUrlTtlMinutes,
+                ct);
+
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Único caso possível aqui é o storage não configurado (o tamanho já
+            // foi validado acima) — o próprio provider devolve a mensagem.
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Finaliza o upload e persiste a imagem do artigo.</summary>
+    [HttpPost("{id:guid}/images/complete-upload")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    public async Task<IActionResult> CompleteImageUpload(Guid id, [FromBody] KnowledgeCompleteUploadRequestDto req, CancellationToken ct)
+    {
+        // Leitura leve: os endpoints de imagem só usam ClientId/Content/Id, nunca
+        // os chunks/embeddings do artigo.
+        var article = await articleRepository.GetWithoutChunksAsync(id, ct);
+        if (article is null) return NotFound(new { error = "Artigo não encontrado." });
+
+        if (req is null || req.AttachmentId == Guid.Empty || string.IsNullOrWhiteSpace(req.ObjectKey))
+            return BadRequest(new { error = "Dados do upload incompletos." });
+
+        if (!KnowledgeImageRules.IsAllowedContentType(req.ContentType))
+            return BadRequest(new { error = $"Tipo de imagem não permitido: {req.ContentType}." });
+
+        if (!KnowledgeImageRules.IsAllowedSize(req.SizeBytes))
+            return BadRequest(new { error = $"Tamanho de imagem inválido. Máximo: {KnowledgeImageRules.MaxFileSizeBytes} bytes." });
+
+        try
+        {
+            // Autor sempre o usuário autenticado (nunca o body).
+            var attachment = await attachmentService.CompletePresignedUploadAsync(
+                req.AttachmentId,
+                KnowledgeImageRules.EntityType,
+                id,
+                article.ClientId,
+                req.FileName,
+                req.ContentType,
+                req.SizeBytes,
+                req.ObjectKey,
+                Username,
+                ct);
+
+            // O limite vale sobre o tamanho REAL no storage, não o declarado.
+            if (attachment.SizeBytes > KnowledgeImageRules.MaxFileSizeBytes)
+            {
+                await attachmentService.DeleteAttachmentAsync(attachment.Id, ct);
+                return StatusCode(StatusCodes.Status413RequestEntityTooLarge,
+                    new { error = $"Imagem excede o tamanho máximo permitido ({KnowledgeImageRules.MaxFileSizeBytes} bytes)." });
+            }
+
+            return Ok(ToImageResponse(attachment));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Lista as imagens do artigo já com URL pré-assinada curta e o indicador de
+    /// uso no conteúdo — é o que a galeria do editor e o viewer consomem.
+    /// </summary>
+    [HttpGet("{id:guid}/images")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    public async Task<IActionResult> GetImages(Guid id, CancellationToken ct)
+    {
+        // Leitura leve: os endpoints de imagem só usam ClientId/Content/Id, nunca
+        // os chunks/embeddings do artigo.
+        var article = await articleRepository.GetWithoutChunksAsync(id, ct);
+        if (article is null) return NotFound(new { error = "Artigo não encontrado." });
+
+        var attachments = await attachmentService.GetAttachmentsForEntityAsync(KnowledgeImageRules.EntityType, id, ct);
+        // inUse precisa olhar o artigo E as sub-páginas: a imagem pode ser usada
+        // só numa página interna e, sem isso, apareceria como órfã.
+        var referenced = await CollectReferencedImageIdsAsync(article, ct);
+
+        var items = new List<KnowledgeImageResponseDto>(attachments.Count);
+        foreach (var attachment in attachments)
+        {
+            string? url = null;
+            DateTime? urlExpiresAtUtc = null;
+            try
+            {
+                url = await attachmentService.GetPresignedDownloadUrlAsync(attachment, KnowledgeImageRules.ReadUrlTtlHours, ct);
+                urlExpiresAtUtc = DateTime.UtcNow.AddHours(KnowledgeImageRules.ReadUrlTtlHours);
+            }
+            catch (Exception)
+            {
+                // Storage indisponível não pode derrubar a galeria: o item vai sem
+                // URL e a UI mostra o placeholder.
+            }
+
+            items.Add(ToImageResponse(attachment, url, urlExpiresAtUtc, referenced.Contains(attachment.Id)));
+        }
+
+        return Ok(items);
+    }
+
+    /// <summary>Renova a URL pré-assinada de uma imagem (expirou na tela).</summary>
+    [HttpGet("{id:guid}/images/{attachmentId:guid}/url")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    public async Task<IActionResult> GetImageUrl(Guid id, Guid attachmentId, CancellationToken ct)
+    {
+        var attachment = await FindImageAsync(id, attachmentId, ct);
+        if (attachment is null) return NotFound(new { error = "Imagem não encontrada neste artigo." });
+
+        try
+        {
+            var url = await attachmentService.GetPresignedDownloadUrlAsync(attachment.Id, KnowledgeImageRules.ReadUrlTtlHours, ct);
+            return Ok(new KnowledgeImageUrlDto(url, DateTime.UtcNow.AddHours(KnowledgeImageRules.ReadUrlTtlHours)));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Qualquer falha do provider/storage vira 503 (a listagem e o stream
+            // já fazem isso): 500 sugeriria bug da API para o cliente.
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = "Não foi possível gerar a URL da imagem." });
+        }
+    }
+
+    /// <summary>
+    /// Stream autenticado da imagem (fallback do viewer e base para o agente).
+    /// Sem Authorization não há imagem: é isto que substitui a URL pública.
+    /// </summary>
+    [HttpGet("{id:guid}/images/{attachmentId:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    public async Task<IActionResult> DownloadImage(Guid id, Guid attachmentId, CancellationToken ct)
+    {
+        var attachment = await FindImageAsync(id, attachmentId, ct);
+        if (attachment is null) return NotFound();
+
+        try
+        {
+            var stream = await attachmentService.DownloadAttachmentAsync(attachmentId, ct);
+            var contentType = string.IsNullOrWhiteSpace(attachment.ContentType)
+                ? "application/octet-stream"
+                : attachment.ContentType;
+
+            // Imagem privada: cache só no cliente, nunca em proxy compartilhado.
+            Response.Headers["Cache-Control"] = "private, max-age=300";
+            // O Content-Type vem do anexo (declarado no upload): sem nosniff um
+            // arquivo poliglota poderia ser interpretado como outro tipo.
+            Response.Headers["X-Content-Type-Options"] = "nosniff";
+            return File(stream, contentType);
+        }
+        catch (FileNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (Exception)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Não foi possível baixar a imagem." });
+        }
+    }
+
+    /// <summary>Exclui a imagem e, por padrão, a referência no conteúdo.</summary>
+    [HttpDelete("{id:guid}/images/{attachmentId:guid}")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    public async Task<IActionResult> DeleteImage(Guid id, Guid attachmentId, CancellationToken ct)
+    {
+        var result = await mediator.Send(new DeleteKnowledgeImageCommand(id, attachmentId), ct);
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    /// <summary>
+    /// IDs de imagem referenciados no artigo + sub-páginas (campo inUse da galeria).
+    /// </summary>
+    private async Task<HashSet<Guid>> CollectReferencedImageIdsAsync(KnowledgeArticle article, CancellationToken ct)
+    {
+        var referenced = KnowledgeImageMarkdown.ExtractIds(article.Content).ToHashSet();
+        var pages = await pageRepository.ListByArticleAsync(article.Id, ct);
+        foreach (var page in pages)
+        {
+            foreach (var imageId in KnowledgeImageMarkdown.ExtractIds(page.Content))
+                referenced.Add(imageId);
+        }
+
+        return referenced;
+    }
+
+    /// <summary>Carrega a imagem garantindo que pertence a ESTE artigo (anti-IDOR).</summary>
+    private async Task<Attachment?> FindImageAsync(Guid articleId, Guid attachmentId, CancellationToken ct)
+    {
+        var attachment = await attachmentRepository.GetByIdAsync(attachmentId, ct);
+        if (attachment is null
+            || attachment.IsDeleted
+            || !string.Equals(attachment.EntityType, KnowledgeImageRules.EntityType, StringComparison.OrdinalIgnoreCase)
+            || attachment.EntityId != articleId)
+        {
+            return null;
+        }
+
+        return attachment;
+    }
+
+    private static KnowledgeImageResponseDto ToImageResponse(
+        Attachment attachment,
+        string? url = null,
+        DateTime? urlExpiresAtUtc = null,
+        bool inUse = false)
+        => new(
+            attachment.Id,
+            attachment.FileName,
+            attachment.ContentType,
+            attachment.SizeBytes,
+            attachment.CreatedAt,
+            attachment.UploadedBy,
+            url,
+            urlExpiresAtUtc,
+            inUse);
 }
+
+/// <summary>Complete-upload de imagem (sem UploadedBy: o autor vem do token).</summary>
+public record KnowledgeCompleteUploadRequestDto(
+    Guid AttachmentId,
+    string ObjectKey,
+    string FileName,
+    string ContentType,
+    long SizeBytes);
+
+/// <summary>Imagem do artigo devolvida ao console. Url é pré-assinada e curta.</summary>
+public record KnowledgeImageResponseDto(
+    Guid Id,
+    string FileName,
+    string ContentType,
+    long SizeBytes,
+    DateTime CreatedAt,
+    string? UploadedBy,
+    string? Url,
+    DateTime? UrlExpiresAtUtc,
+    bool InUse);
+
+/// <summary>URL pré-assinada de leitura renovada sob demanda.</summary>
+public record KnowledgeImageUrlDto(string Url, DateTime ExpiresAtUtc);

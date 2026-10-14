@@ -23,6 +23,8 @@ namespace Discovery.Api.Services.Quartz;
 /// - Old automation execution reports
 /// - Old agent label change history
 /// - Itens antigos da fila da triagem por IA (a decisão permanece em ticket_assignment_decisions)
+/// - Anexos soft-deletados antigos (arquivo no object storage + linha) — inclui
+///   as imagens de artigos da base de conhecimento excluídas pelo editor
 ///
 /// Schedule: daily at 3:30 AM (0 30 3 * * ?)
 /// </summary>
@@ -149,6 +151,25 @@ public sealed class DataRetentionJob : IJob
         if (aiQueueDeleted > 0)
             logger.LogInformation("DataRetention: deleted {Count} ai assignment queue items.", aiQueueDeleted);
         results["aiAssignmentQueue"] = aiQueueDeleted;
+
+        // 10. Anexos soft-deletados antigos: remove o OBJETO do object storage e a
+        //     linha. Era o único ponto que faltava — DeleteAttachmentAsync só marca
+        //     deleted_at, então anexo excluído (inclusive imagem de artigo da KB)
+        //     continuava ocupando espaço e recuperável para sempre.
+        const int softDeletedAttachmentRetentionDays = 30;
+        try
+        {
+            var attachmentService = scope.ServiceProvider.GetRequiredService<IAttachmentService>();
+            var attachmentsDeleted = await attachmentService.PermanentlyDeleteExpiredAttachmentsAsync(
+                softDeletedAttachmentRetentionDays, ct);
+            if (attachmentsDeleted > 0)
+                logger.LogInformation("DataRetention: {Count} soft-deleted attachment(s) permanently removed.", attachmentsDeleted);
+            results["attachments"] = attachmentsDeleted;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "DataRetention: falha ao remover anexos soft-deletados antigos.");
+        }
 
         var totalDeleted = results.Values.Sum();
         logger.LogInformation("DataRetention completed. Total purged: {Total} records across {Tables} tables.",

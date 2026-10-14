@@ -161,7 +161,7 @@ public class KnowledgeMcpTool(
             article_id = r.ArticleId,
             title = r.ArticleTitle,
             section = r.SectionTitle,
-            content = r.ChunkContent.Length > 600 ? r.ChunkContent[..600] + "..." : r.ChunkContent,
+            content = TruncateContent(r.ChunkContent),
             score = keywordScore ?? Math.Round(1.0 - r.Distance, 4).ToString("F4"),
             scope = GetScope(r.ArticleClientId, r.ArticleSiteId),
             source_line = keywordScore is not null ? "keyword" : "semantic",
@@ -195,7 +195,7 @@ public class KnowledgeMcpTool(
                 article_id = a.Id,
                 title = a.Title,
                 section = (string?)null,
-                content = a.Content.Length > 600 ? a.Content[..600] + "..." : a.Content,
+                content = TruncateContent(a.Content),
                 score = (string?)null,
                 scope = GetScope(a.ClientId, a.SiteId),
                 source_line = "keyword",
@@ -208,13 +208,25 @@ public class KnowledgeMcpTool(
             article_id = a.Id,
             title = a.Title,
             section = (string?)null,
-            content = a.Content.Length > 600 ? a.Content[..600] + "..." : a.Content,
+            content = TruncateContent(a.Content),
             score = (string?)null,
             scope = GetScope(a.ClientId, a.SiteId),
             source_line = "keyword",
             internal_url = BuildArticleUrl(a.Id),
             citation = FormattableString.Invariant($"[Fonte: {a.Title}]")
         };
+    }
+
+    /// <summary>
+    /// Trecho entregue ao LLM: sem os tokens de imagem (![alt](kbimage:...)).
+    /// O modelo não deve receber/repetir esse identificador nem prometer abrir
+    /// uma imagem que ele não consegue ver (a visão fica fora do escopo desta
+    /// fase — a imagem é exibida no app, não pelo LLM).
+    /// </summary>
+    private static string TruncateContent(string? content)
+    {
+        var plain = KnowledgeImageMarkdown.StripTokens(content);
+        return plain.Length > 600 ? plain[..600] + "..." : plain;
     }
 
     /// <summary>Deep link interno que abre o artigo direto no app (card do chat).</summary>

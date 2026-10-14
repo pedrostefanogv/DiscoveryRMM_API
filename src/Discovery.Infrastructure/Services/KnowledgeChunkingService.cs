@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Discovery.Core.Entities;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Infrastructure.Services;
@@ -206,7 +207,11 @@ public class KnowledgeChunkingService : IKnowledgeChunkingService
 
     private static string StripMarkdown(string md)
     {
-        var t = HeaderRegex.Replace(md, "$1");
+        // Imagens primeiro: o regex de LINK mais abaixo transformaria
+        // ![alt](kbimage:<id>) em "!alt" (sobrando o "!"), e imagem não é
+        // conteúdo indexável/embedável de qualquer forma.
+        var t = KnowledgeImageMarkdown.StripTokens(md);
+        t = HeaderRegex.Replace(t, "$1");
         t = Regex.Replace(t, @"\*{1,3}(.+?)\*{1,3}", "$1");
         t = Regex.Replace(t, @"_{1,3}(.+?)_{1,3}", "$1");
         t = Regex.Replace(t, @"`{1,3}[^`]*`{1,3}", "[codigo]");

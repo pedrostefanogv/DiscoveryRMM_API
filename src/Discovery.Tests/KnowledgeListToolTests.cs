@@ -127,6 +127,8 @@ public class KnowledgeListToolTests
             => Task.FromResult(Total);
 
         public Task<KnowledgeArticle?> GetByIdAsync(Guid id, CancellationToken ct = default) => throw new NotImplementedException();
+
+        public Task<KnowledgeArticle?> GetWithoutChunksAsync(Guid id, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<KnowledgeArticle> CreateAsync(KnowledgeArticle article, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<KnowledgeArticle> UpdateAsync(KnowledgeArticle article, CancellationToken ct = default) => throw new NotImplementedException();
         public Task DeleteAsync(Guid id, CancellationToken ct = default) => throw new NotImplementedException();

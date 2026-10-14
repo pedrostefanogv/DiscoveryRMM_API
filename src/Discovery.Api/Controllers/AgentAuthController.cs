@@ -18,7 +18,9 @@ using Discovery.Core.Cqrs.Tickets.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.ValueObjects;
 using MediatR;
 using Discovery.Api.Filters;
 using Microsoft.AspNetCore.Authorization;
@@ -43,6 +45,7 @@ public class AgentAuthController : ControllerBase
     private readonly IP2pService _p2pService;
     private readonly IAttachmentService _attachmentService;
     private readonly IAttachmentRepository _attachmentRepository;
+    private readonly IKnowledgeArticleRepository _knowledgeArticleRepository;
     private readonly INotificationService _notificationService;
     private readonly ILogger<AgentAuthController> _logger;
 
@@ -59,6 +62,7 @@ public class AgentAuthController : ControllerBase
         IP2pService p2pService,
         IAttachmentService attachmentService,
         IAttachmentRepository attachmentRepository,
+        IKnowledgeArticleRepository knowledgeArticleRepository,
         INotificationService notificationService,
         ILogger<AgentAuthController> logger)
     {
@@ -74,6 +78,7 @@ public class AgentAuthController : ControllerBase
         _p2pService = p2pService;
         _attachmentService = attachmentService;
         _attachmentRepository = attachmentRepository;
+        _knowledgeArticleRepository = knowledgeArticleRepository;
         _notificationService = notificationService;
         _logger = logger;
     }
@@ -966,6 +971,58 @@ public class AgentAuthController : ControllerBase
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
         return MapResult(await _mediator.Send(new GetKnowledgeArticlePagesQuery(id, articleId), ct), Ok);
+    }
+
+    /// <summary>
+    /// Bytes de uma imagem de artigo (o webview não tem o token do agente, então
+    /// o download acontece no processo Go, que devolve data URL à UI).
+    ///
+    /// Diferente do anexo de chamado (isolado por Ticket.AgentId), aqui a
+    /// autorização é a VISIBILIDADE DO ARTIGO: o agente só alcança imagem de
+    /// artigo PUBLICADO no seu escopo (site → client → global), a mesma regra da
+    /// listagem de artigos. Sem isso o id do anexo vira uma URL pública de fato.
+    /// </summary>
+    [HttpGet("knowledge/images/{attachmentId:guid}")]
+    public async Task<IActionResult> GetKnowledgeImage(Guid attachmentId, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (agent, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        if (agent is null) return NotFound();
+
+        var attachment = await _attachmentRepository.GetByIdAsync(attachmentId, ct);
+        if (attachment is null
+            || attachment.IsDeleted
+            || !string.Equals(attachment.EntityType, KnowledgeImageRules.EntityType, StringComparison.OrdinalIgnoreCase))
+        {
+            return NotFound();
+        }
+
+        // Leitura leve: aqui só importam status/escopo, não os chunks/embeddings.
+        var article = await _knowledgeArticleRepository.GetWithoutChunksAsync(attachment.EntityId, ct);
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        if (!KnowledgeArticleScope.IsVisibleToAgent(article, site?.ClientId, agent.SiteId))
+            return NotFound();
+
+        try
+        {
+            var stream = await _attachmentService.DownloadAttachmentAsync(attachmentId, ct);
+            var contentType = string.IsNullOrWhiteSpace(attachment.ContentType)
+                ? "application/octet-stream"
+                : attachment.ContentType;
+
+            Response.Headers["Cache-Control"] = "private, max-age=300";
+            // Content-Type declarado no upload: nosniff impede interpretação
+            // alternativa (ex.: poliglota servido como HTML).
+            Response.Headers["X-Content-Type-Options"] = "nosniff";
+            return File(stream, contentType);
+        }
+        catch (FileNotFoundException) { return NotFound(); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (Exception)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Não foi possível baixar a imagem." });
+        }
     }
 
     // ── Misc ──────────────────────────────────────────────────────────────

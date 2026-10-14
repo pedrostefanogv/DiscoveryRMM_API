@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -114,7 +115,11 @@ public class KnowledgeListMcpTool(
     {
         if (string.IsNullOrWhiteSpace(content)) return string.Empty;
 
-        foreach (var raw in content.Split('\n'))
+        // Sem os tokens de imagem: um artigo que começa com ![alt](kbimage:...)
+        // teria esse id como "resumo" e o LLM o repetiria para o usuário.
+        var plain = KnowledgeImageMarkdown.StripTokens(content);
+
+        foreach (var raw in plain.Split('\n'))
         {
             var line = raw.Trim().TrimStart('#', '*', '-', ' ', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.').Trim();
             if (line.Length == 0) continue;

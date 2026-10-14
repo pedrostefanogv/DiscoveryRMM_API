@@ -6,6 +6,13 @@ namespace Discovery.Core.Interfaces;
 public interface IKnowledgeArticleRepository
 {
     Task<KnowledgeArticle?> GetByIdAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Leitura leve, SEM chunks/embeddings, para checagens de existência, escopo
+    /// e status. Carregar todos os chunks (vetores de 1536 dims) a cada download
+    /// de imagem era desperdício de memória e CPU.
+    /// </summary>
+    Task<KnowledgeArticle?> GetWithoutChunksAsync(Guid id, CancellationToken ct = default);
     Task<KnowledgeArticle> CreateAsync(KnowledgeArticle article, CancellationToken ct = default);
     Task<KnowledgeArticle> UpdateAsync(KnowledgeArticle article, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default); // soft delete

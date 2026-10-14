@@ -6,8 +6,10 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Core.ValueObjects;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Knowledge;
@@ -86,9 +88,12 @@ public sealed class SearchKbSuggestionsQueryHandler(IKnowledgeSearchService sear
     {
         return hits.Select(h =>
         {
-            var excerpt = h.Chunk is not null
-                ? (h.Chunk.ChunkContent.Length > 300 ? h.Chunk.ChunkContent[..300] + "..." : h.Chunk.ChunkContent)
-                : (h.Article.Content.Length > 300 ? h.Article.Content[..300] + "..." : h.Article.Content);
+            // Sem os tokens de imagem: o excerpt vai para a IA/chat e não deve
+            // carregar o identificador interno do anexo (chunks antigos, indexados
+            // antes da limpeza, ainda podem conter o token).
+            var excerptSource = KnowledgeImageMarkdown.StripTokens(
+                h.Chunk is not null ? h.Chunk.ChunkContent : h.Article.Content);
+            var excerpt = excerptSource.Length > 300 ? excerptSource[..300] + "..." : excerptSource;
 
             return new KbSearchResult(
                 h.Article.Id, h.Article.Title,
@@ -398,11 +403,18 @@ public sealed class UnpublishKnowledgeArticleCommandHandler(IKnowledgeArticleRep
     }
 }
 
-public sealed class DeleteKnowledgeArticleCommandHandler(IKnowledgeArticleRepository repo)
+public sealed class DeleteKnowledgeArticleCommandHandler(
+    IKnowledgeArticleRepository repo,
+    IAttachmentRepository attachmentRepository)
     : IRequestHandler<DeleteKnowledgeArticleCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteKnowledgeArticleCommand cmd, CancellationToken ct)
     {
+        // Imagens do artigo entram em soft delete junto com ele: o objeto no
+        // storage é removido depois pelo job de retenção (PermanentlyDelete...).
+        // Sem isso as imagens ficariam órfãs e acessíveis por quem guardou o id.
+        await attachmentRepository.SoftDeleteByEntityAsync(KnowledgeImageRules.EntityType, cmd.Id, ct);
+
         await repo.DeleteAsync(cmd.Id, ct);
         return Result<VoidResult>.Success(VoidResult.Value);
     }

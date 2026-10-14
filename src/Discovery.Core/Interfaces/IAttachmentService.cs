@@ -84,6 +84,19 @@ public interface IAttachmentService
     Task<string> GetPresignedDownloadUrlAsync(Guid attachmentId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gerar URL pré-assinada de download com TTL explícito (em horas).
+    /// Necessário para imagens da base de conhecimento, cujo link precisa ser
+    /// curto (vaza em DevTools/histórico) em vez das 24h do padrão antigo.
+    /// </summary>
+    Task<string> GetPresignedDownloadUrlAsync(Guid attachmentId, int ttlHours, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gerar URL pré-assinada a partir de um anexo JÁ carregado, sem re-consultar
+    /// o banco por item (galerias/listas usam isto).
+    /// </summary>
+    Task<string> GetPresignedDownloadUrlAsync(Attachment attachment, int ttlHours, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Deletar um anexo (soft delete - marca com DeletedAt).
     /// </summary>
     /// <param name="attachmentId">ID do anexo</param>

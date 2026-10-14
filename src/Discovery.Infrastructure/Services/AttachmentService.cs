@@ -180,6 +180,14 @@ public class AttachmentService : IAttachmentService
             return existingAttachment;
         }
 
+        // O objectKey vem do cliente: confere que ele pertence a ESTA entidade
+        // antes de consultar o storage. Sem isso um "complete" com a key de outro
+        // upload adota o objeto alheio (linha nova apontando para o mesmo objeto)
+        // e o job de retenção acaba apagando o arquivo de quem realmente subiu.
+        var expectedPrefix = ComposeObjectKeyPrefix(clientId, entityType, entityId, attachmentId);
+        if (!objectKey.StartsWith(expectedPrefix, StringComparison.Ordinal))
+            throw new InvalidOperationException("ObjectKey não pertence a esta entidade.");
+
         var storageService = await GetStorageServiceAsync(cancellationToken);
         var exists = await storageService.ExistsAsync(objectKey, cancellationToken);
         if (!exists)
@@ -347,12 +355,50 @@ public class AttachmentService : IAttachmentService
     /// <summary>
     /// Gerar URL pré-assinada para download de um anexo.
     /// </summary>
+    public Task<string> GetPresignedDownloadUrlAsync(
+        Guid attachmentId,
+        CancellationToken cancellationToken = default)
+        // 24h é o TTL histórico dos anexos de ticket; imagens da base de
+        // conhecimento usam o overload com TTL curto (KnowledgeImageRules).
+        => GetPresignedDownloadUrlAsync(attachmentId, ttlHours: 24, cancellationToken);
+
+    /// <summary>
+    /// Variante para anexo já carregado: evita N re-consultas ao montar a
+    /// galeria do artigo (o item já veio de GetAttachmentsForEntityAsync).
+    /// </summary>
+    public async Task<string> GetPresignedDownloadUrlAsync(
+        Attachment attachment,
+        int ttlHours,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(attachment);
+
+        if (attachment.Id == Guid.Empty)
+            throw new ArgumentException("AttachmentId cannot be empty", nameof(attachment));
+
+        if (ttlHours <= 0)
+            throw new ArgumentException("ttlHours must be positive", nameof(ttlHours));
+
+        if (attachment.IsDeleted)
+            throw new InvalidOperationException($"Attachment {attachment.Id} has been deleted");
+
+        var storageService = await GetStorageServiceAsync(cancellationToken);
+        return await storageService.GetPresignedDownloadUrlAsync(
+            attachment.StorageObjectKey,
+            ttlHours,
+            cancellationToken);
+    }
+
     public async Task<string> GetPresignedDownloadUrlAsync(
         Guid attachmentId,
+        int ttlHours,
         CancellationToken cancellationToken = default)
     {
         if (attachmentId == Guid.Empty)
             throw new ArgumentException("AttachmentId cannot be empty", nameof(attachmentId));
+
+        if (ttlHours <= 0)
+            throw new ArgumentException("ttlHours must be positive", nameof(ttlHours));
 
         try
         {
@@ -363,11 +409,10 @@ public class AttachmentService : IAttachmentService
             if (attachment.IsDeleted)
                 throw new InvalidOperationException($"Attachment {attachmentId} has been deleted");
 
-            _logger.LogInformation("Generating presigned URL for attachment {AttachmentId}",
-                attachmentId);
-
-            // Use 24 horas como padrão (pode ser configurável via ServerConfiguration)
-            var ttlHours = 24;
+            _logger.LogInformation(
+                "Generating presigned URL for attachment {AttachmentId} (ttl {TtlHours}h)",
+                attachmentId,
+                ttlHours);
 
             var storageService = await GetStorageServiceAsync(cancellationToken);
             var url = await storageService.GetPresignedDownloadUrlAsync(
@@ -504,6 +549,20 @@ public class AttachmentService : IAttachmentService
         var attachmentGuid = Guid.NewGuid().ToString("N");
 
         return ComposeObjectKey(clientId, entityType, entityId, attachmentGuid, safeName);
+    }
+
+    /// <summary>
+    /// Prefixo canônico da chave de um anexo (sem o nome do arquivo). É o que
+    /// permite validar o objectKey devolvido pelo cliente sem depender do nome
+    /// sanitizado do arquivo.
+    /// </summary>
+    private static string ComposeObjectKeyPrefix(Guid? clientId, string entityType, Guid entityId, Guid attachmentId)
+    {
+        var scopePrefix = clientId.HasValue && clientId != Guid.Empty
+            ? $"clients/{clientId:N}/"
+            : "global/";
+
+        return $"{scopePrefix}{entityType.ToLowerInvariant()}/{entityId:N}/attachments/{attachmentId:N}/";
     }
 
     private string ComposeObjectKey(
