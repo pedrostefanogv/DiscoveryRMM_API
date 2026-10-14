@@ -37,7 +37,7 @@ public class WingetPackageRepository : IWingetPackageRepository
 
         var items = await query
             .OrderBy(x => x.Name)
-            .ThenBy(x => x.PackageId)
+            .ThenBy(x => x.Id)
             .Take(limit + 1)
             .ToListAsync(cancellationToken);
 

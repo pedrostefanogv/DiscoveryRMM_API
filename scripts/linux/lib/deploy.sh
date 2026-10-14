@@ -355,13 +355,43 @@ write_environment_file() {
   # para que o deploy nao resete o certificado para self-signed.
   load_existing_tls_defaults
 
+  # C-fix (502 via Cloudflare em 14/10): o UPDATE roda em shell limpo e nao tem
+  # ACCESS_MODE/hosts/dominio. Sem reler o que ja esta no discovery.env, estas
+  # chaves eram regravadas vazias e o server_name do nginx caia em
+  # "localhost 127.0.0.1" -> catch-all return 444 -> Cloudflare 502.
+  _existing_env_value() {
+    sudo awk -F= -v k="$1" '$1==k{sub("^[^=]*=","");print;exit}' \
+      /etc/discovery-api/discovery.env 2>/dev/null || true
+  }
+  ACCESS_MODE="${ACCESS_MODE:-$(_existing_env_value ACCESS_MODE)}"
+  DISCOVERY_FIDO2_SERVER_DOMAIN="${DISCOVERY_FIDO2_SERVER_DOMAIN:-$(_existing_env_value DISCOVERY_FIDO2_SERVER_DOMAIN)}"
+  INTERNAL_API_HOST="${INTERNAL_API_HOST:-$(_existing_env_value INTERNAL_API_HOST)}"
+  EXTERNAL_API_HOST="${EXTERNAL_API_HOST:-$(_existing_env_value EXTERNAL_API_HOST)}"
+
   local public_host
   if [[ "$ACCESS_MODE" == "external" ]]; then public_host="$EXTERNAL_API_HOST"
   elif [[ "$ACCESS_MODE" == "hybrid" ]]; then public_host="$EXTERNAL_API_HOST"
   else public_host="$INTERNAL_API_HOST"; fi
 
+  # C-fix: instalacoes antigas nao persistiram os hosts, entao num update o
+  # public_host acima ficava vazio e a gravacao apagava
+  # AgentPackage__PublicApiServer (quebra o download/update do agent). Recupera
+  # do que ja esta no discovery.env.
+  if [[ -z "$public_host" ]]; then
+    public_host="$(_existing_env_value AgentPackage__PublicApiServer)"
+    [[ -z "$public_host" ]] && public_host="$(_existing_env_value Authentication__Fido2__ServerDomain)"
+  fi
+
   local fido2_server_domain; fido2_server_domain="$(resolve_fido2_server_domain)"
   local fido2_server_name="${DISCOVERY_FIDO2_SERVER_NAME:-Discovery RMM}"
+
+  # Nunca persistir "localhost" como DISCOVERY_FIDO2_SERVER_DOMAIN: ele vira valor
+  # explicito no proximo update e travaria o server_name no catch-all (444/502).
+  local env_fido2_domain="$fido2_server_domain"
+  if [[ -z "$env_fido2_domain" || "$env_fido2_domain" == "localhost" ]]; then
+    env_fido2_domain="${DISCOVERY_FIDO2_SERVER_DOMAIN:-}"
+    [[ "$env_fido2_domain" == "localhost" ]] && env_fido2_domain=""
+  fi
   local nats_server_external_host
   nats_server_external_host="$(normalize_host_without_scheme "${NATS_SERVER_HOST_EXTERNAL:-$public_host}")"
   local nats_use_wss_external="${NATS_USE_WSS_EXTERNAL:-false}"
@@ -531,6 +561,13 @@ DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}
 DISCOVERY_CLEAN_BUILD=${DISCOVERY_CLEAN_BUILD:-1}
 # Opt-in do update do SO (lido tambem por apply_system_updates em install.sh).
 DISCOVERY_APPLY_SYSTEM_UPDATES=${apply_system_updates_value}
+# Relidas pelo instalador no UPDATE: write_site_proxy_config monta o server_name
+# do nginx a partir delas. Persistir evita repetir o incidente do catch-all 444
+# (dominio real nao casava e a Cloudflare devolvia 502).
+ACCESS_MODE=${ACCESS_MODE:-internal}
+DISCOVERY_FIDO2_SERVER_DOMAIN=${env_fido2_domain}
+INTERNAL_API_HOST=${INTERNAL_API_HOST:-}
+EXTERNAL_API_HOST=${EXTERNAL_API_HOST:-}
 DISCOVERY_SITE_API_URL=${DISCOVERY_SITE_API_URL}
 DISCOVERY_SITE_REALTIME_PROVIDER=${DISCOVERY_SITE_REALTIME_PROVIDER}
 DISCOVERY_SITE_NATS_ENABLED=${DISCOVERY_SITE_NATS_ENABLED}

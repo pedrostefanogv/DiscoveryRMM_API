@@ -148,6 +148,15 @@ public static class CursorPaginationHelper
     }
 
     /// <summary>Aplica cláusula WHERE para cursor tipo Name + Id (Name asc, Id asc).</summary>
+    /// <remarks>
+    /// REGRESSÃO CONHECIDA: as sobrecargas <c>string.Compare(a, b, StringComparison)</c> e
+    /// <c>string.Equals(a, b, StringComparison)</c> NÃO são traduzidas pelo EF Core/Npgsql — a
+    /// consulta inteira era rejeitada com "The LINQ expression 'x' could not be translated"
+    /// (HTTP 400 na página 2+ do catálogo). Por isso aqui usamos operadores relacionais, que o
+    /// provider traduz para <c>a.name &gt; @name</c> / <c>a.id &gt; @id</c>.
+    /// A comparação também precisa respeitar a MESMA ordenação do ORDER BY (colação do banco),
+    /// então ordenar por Id (não por outra coluna) é parte do contrato deste cursor.
+    /// </remarks>
     public static IQueryable<T> ApplyNameCursor<T>(
         IQueryable<T> query,
         string? cursorName,
@@ -163,27 +172,37 @@ public static class CursorPaginationHelper
 
         var param = nameSelector.Parameters[0];
 
-        // string.Compare(name, targetName, OrdinalIgnoreCase) > 0
-        var compareCall = Expression.Call(
-            typeof(string).GetMethod(nameof(string.Compare), [typeof(string), typeof(string), typeof(StringComparison)])!,
-            nameSelector.Body, targetName,
-            Expression.Constant(StringComparison.OrdinalIgnoreCase));
+        // idSelector é uma lambda independente e carrega o PRÓPRIO parâmetro. Sem
+        // reescrevê-lo para o parâmetro do nameSelector, o predicado gerado teria dois
+        // parâmetros distintos e o EF rejeitaria tudo em VisitParameter — exatamente
+        // "The LINQ expression 'x' could not be translated" (HTTP 400 na página 2+).
+        var idBody = idSelector.Parameters[0] == param
+            ? idSelector.Body
+            : new ParameterRebinder(idSelector.Parameters[0], param).Visit(idSelector.Body);
 
-        var nameGreater = Expression.GreaterThan(compareCall, Expression.Constant(0));
+        // name.CompareTo(targetName) > 0  →  a.name > @name
+        var nameGreater = Expression.GreaterThan(
+            Expression.Call(
+                nameSelector.Body,
+                typeof(string).GetMethod(nameof(string.CompareTo), [typeof(string)])!,
+                targetName),
+            Expression.Constant(0));
 
-        // name == targetName (OrdinalIgnoreCase) AND id > targetId
-        var nameEqualsCall = Expression.Call(
-            typeof(string).GetMethod(nameof(string.Equals), [typeof(string), typeof(string), typeof(StringComparison)])!,
-            nameSelector.Body, targetName,
-            Expression.Constant(StringComparison.OrdinalIgnoreCase));
-
-        var idGreater = Expression.GreaterThan(idSelector.Body, targetId);
-        var nameEqualsAndIdGreater = Expression.AndAlso(nameEqualsCall, idGreater);
+        // name == targetName AND id > targetId
+        var nameEquals = Expression.Equal(nameSelector.Body, targetName);
+        var idGreater = Expression.GreaterThan(idBody, targetId);
 
         var predicate = Expression.Lambda<Func<T, bool>>(
-            Expression.OrElse(nameGreater, nameEqualsAndIdGreater), param);
+            Expression.OrElse(nameGreater, Expression.AndAlso(nameEquals, idGreater)), param);
 
         return query.Where(predicate);
+    }
+
+    /// <summary>Troca um parâmetro por outro dentro de uma árvore de expressão.</summary>
+    private sealed class ParameterRebinder(ParameterExpression from, ParameterExpression to) : ExpressionVisitor
+    {
+        protected override Expression VisitParameter(ParameterExpression node)
+            => node == from ? to : base.VisitParameter(node);
     }
 
     // ── Type D: long (DownloadCount) + Id (Guid) — para Chocolatey ──────────

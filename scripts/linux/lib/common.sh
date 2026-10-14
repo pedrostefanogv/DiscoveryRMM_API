@@ -290,6 +290,31 @@ resolve_fido2_server_domain() {
     resolved="$(normalize_host_without_scheme "${INTERNAL_API_HOST:-}")"
   fi
 
+  # C-fix (instalacao atras de tunel Cloudflare — 502 no 14/10): no UPDATE o shell
+  # roda limpo e esta instalacao nao tem ACCESS_MODE/hosts nem dominio de
+  # certificado persistidos. Sem este fallback a funcao devolvia "localhost", o
+  # server_name do nginx renderizava apenas "localhost 127.0.0.1" e o catch-all
+  # (server_name _; return 444) descartava TODO o trafego do dominio real — a
+  # Cloudflare traduzia o EOF em 502. O dominio continua persistido no
+  # discovery.env pelas chaves da propria API; mesmo criterio (descarta loopback)
+  # usado em resolve_object_storage_default_endpoint.
+  if [[ -z "$resolved" || "$resolved" == "localhost" || "$resolved" == 127.* \
+        || "$resolved" == "0.0.0.0" || "$resolved" == "::1" || "$resolved" == "[::1]" ]]; then
+    local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+    local candidate
+    for candidate in \
+      "$(sudo awk -F= -v k=Authentication__Fido2__ServerDomain '$1==k{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true)" \
+      "$(sudo awk -F= -v k=AgentPackage__PublicApiServer '$1==k{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true)"; do
+      candidate="$(normalize_host_without_scheme "$candidate")"
+      if [[ -z "$candidate" || "$candidate" == "localhost" || "$candidate" == 127.* \
+            || "$candidate" == "0.0.0.0" || "$candidate" == "::1" || "$candidate" == "[::1]" ]]; then
+        continue
+      fi
+      resolved="$candidate"
+      break
+    done
+  fi
+
   if [[ -z "$resolved" ]]; then
     resolved="localhost"
   fi
