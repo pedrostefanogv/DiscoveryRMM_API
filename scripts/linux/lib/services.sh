@@ -621,7 +621,10 @@ MINIO_MC_BIN="/usr/local/bin/discovery-mc"
 ensure_mc_cli() {
   if sudo test -x "$MINIO_MC_BIN"; then return 0; fi
   local url tmp
-  for url in "https://dl.min.io/client/mc/release/linux-amd64/mc" "https://dl.min.io/aistor/mc/release/linux-amd64/mc"; do
+  # Ordem: o path antigo (dl.min.io/client/mc) passou a responder 410 Gone
+  # (verificado em 2026-10); o atual (aistor) responde 200. O antigo fica como
+  # fallback caso o path volte a existir.
+  for url in "https://dl.min.io/aistor/mc/release/linux-amd64/mc" "https://dl.min.io/client/mc/release/linux-amd64/mc"; do
     tmp="$(mktemp)"
     if curl -fsSL --connect-timeout 15 --retry 2 -o "$tmp" "$url"; then
       sudo install -m 0755 -o root -g root "$tmp" "$MINIO_MC_BIN"

@@ -63,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Segredos nunca são exibidos — apenas se estão definidos/gerados.
 
 ### Changed
+- 🔧 **Client do MinIO**: a URL `dl.min.io/client/mc/release/linux-amd64/mc` passou a responder
+  **410 Gone**; a ordem foi invertida (`aistor` primeiro, a antiga como fallback) para não deixar
+  erro no log a cada instalação.
 - 📦 **npm atualizado após instalar o Node**: o pacote do Node 22 traz npm 10.x; o instalador
   agora roda `npm install -g npm@${DISCOVERY_NPM_VERSION:-latest}` depois de validar o Node (default
   `latest`, fixável por `DISCOVERY_NPM_VERSION` no env/config). Falha nesse passo é aviso, não
@@ -76,6 +79,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **Instalador abortava com a API saudável em máquina lenta**: `wait_for_discovery_api_ready`
+  esperava apenas 60×2s = 2 min, mas o primeiro start roda ~230 migrations + seeds antes de abrir
+  o `/health`; e, com `Restart=always`, o `systemctl is-failed` nunca dispara (a unit fica em
+  `activating (auto-restart)`), então o instalador esperava os 2 min cheios mesmo em crash-loop.
+  Agora espera até 6 min e aborta em ~15s ao detectar 3 restarts (`NRestarts`), imprimindo os logs.
+- 🐛 **`server_configurations.nats_web_socket_external_url` não existia no banco (drift EF×migrations)**:
+  a propriedade é mapeada no EF Core (ServerConfiguration.NatsWebSocketExternalUrl), mas nenhuma
+  migration criava a coluna — em banco novo a API subia e falhava em runtime
+  (`42703: column s.nats_web_socket_external_url does not exist`, via ServerConfigurationRepository
+  → ReportService → ReportGenerationJob), reiniciando em loop e abortando o bootstrap
+  administrativo (sem admin criado). Nova migração **M225** adiciona a coluna
+  (`text NOT NULL DEFAULT ''`, mesmo padrão da vizinha `nats_server_host_external`). Varredura dos
+  21 arquivos de mapeamento do DbContext confirmou ser a **única** coluna faltante.
 - 🐛 **API em crash-loop por `ALTER COLUMN artifact_id TYPE uuid` sem `USING` (M091)**:
   a migration alterava `p2p_artifact_presence.artifact_id` de `varchar(512)` para `uuid` com
   `AlterColumn(...).AsGuid()`, e o Postgres recusa o cast automático (`42804: column "artifact_id"

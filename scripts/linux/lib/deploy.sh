@@ -919,9 +919,13 @@ OSEOF
 # ── Admin recovery ─────────────────────────────────────────────────────────
 
 wait_for_discovery_api_ready() {
-  local max_attempts="${1:-60}"
+  # 6 minutos: o PRIMEIRO start roda ~230 migrations + seeds antes de abrir o
+  # /health, e em maquina lenta isso passa dos 2 minutos do default antigo
+  # (o instalador abortava mesmo com a API indo ficar saudavel).
+  local max_attempts="${1:-180}"
   local sleep_seconds="${2:-2}"
-  local attempt
+  local max_restarts="${DISCOVERY_API_MAX_RESTARTS_BEFORE_FAIL:-3}"
+  local attempt restarts
   local health_url="http://127.0.0.1:8080/health"
 
   log "Aguardando discovery-api concluir o startup em ${health_url}"
@@ -932,6 +936,17 @@ wait_for_discovery_api_ready() {
       return 0
     fi
     if sudo systemctl is-failed --quiet discovery-api; then break; fi
+
+    # Com Restart=always o systemd NUNCA marca a unit como "failed" (fica em
+    # activating/auto-restart), entao o is-failed acima nao detecta crash-loop.
+    # O contador NRestarts so cresce quando o processo morre: 3 mortes ja
+    # indicam erro de startup e nao vale esperar os 6 minutos.
+    restarts="$(sudo systemctl show -p NRestarts --value discovery-api 2>/dev/null || echo 0)"
+    if [[ "$restarts" =~ ^[0-9]+$ ]] && (( restarts >= max_restarts )); then
+      warn "discovery-api reiniciou ${restarts}x sem ficar saudavel; abortando a espera."
+      break
+    fi
+
     sleep "$sleep_seconds"
   done
 
