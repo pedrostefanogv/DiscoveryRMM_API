@@ -69,13 +69,50 @@ public sealed class GetAppStoreEffectiveHandler(
         var enabled = serverConfig.AppStorePolicy != Core.Enums.AppStorePolicyType.Disabled;
 
         if (!enabled)
-            return Result<object>.Success(new { enabled = false, policy = policy.ToString(), installationType = q.InstallationType, count = 0, items = Array.Empty<object>() });
+            return Result<object>.Success(new
+            {
+                enabled = false,
+                policy = policy.ToString(),
+                installationType = q.InstallationType,
+                count = 0,
+                pageSize = 0,
+                hasMore = false,
+                nextCursor = "",
+                items = Array.Empty<object>()
+            });
 
         // Busca os apps efetivos aprovados para o escopo do agent
         var apps = await appStoreService.GetEffectiveAppsAsync(clientId, agent.SiteId, agent.Id,
             Enum.TryParse<Core.Enums.AppInstallationType>(q.InstallationType, true, out var instType) ? instType : Core.Enums.AppInstallationType.Winget,
             ct);
-        var items = apps.Select(a => new
+
+        // Ordem determinística: o agent reusa o cursor entre requisições, então a
+        // lista precisa sair sempre na mesma sequência.
+        var ordered = apps
+            .OrderBy(a => a.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(a => a.InstallationType)
+            .ToList();
+        var total = ordered.Count;
+
+        var start = 0;
+        var effectivePageSize = 0;
+        if (q.Paged)
+        {
+            if (!AppStoreEffectivePagination.TryDecodeCursor(q.Cursor, out start))
+                return Result<object>.Failure(Error.Validation("cursor", "Cursor inválido para a paginação da app-store."));
+            effectivePageSize = AppStoreEffectivePagination.NormalizePageSize(q.PageSize);
+            if (start > total)
+                start = total;
+        }
+
+        // Modo legado (sem paginação): uma única página com a coleção completa —
+        // comportamento preservado para os agents já instalados que enviam apenas
+        // pageSize e têm limite de 20 páginas no cliente.
+        var end = q.Paged ? Math.Min(start + effectivePageSize, total) : total;
+        var slice = ordered.Skip(start).Take(Math.Max(end - start, 0));
+
+        var items = slice.Select(a => new
         {
             installationType = a.InstallationType,
             packageId = a.PackageId,
@@ -107,12 +144,20 @@ public sealed class GetAppStoreEffectiveHandler(
             sourceScope = a.SourceScope
         }).ToList();
 
+        var hasMore = q.Paged && end < total;
+        var nextCursor = hasMore ? AppStoreEffectivePagination.EncodeCursor(end) : "";
+
         return Result<object>.Success(new
         {
             enabled,
             policy = policy.ToString(),
             installationType = q.InstallationType,
-            count = items.Count,
+            // count é o TOTAL da política (não o tamanho da página): é o número
+            // que interessa para diagnóstico no agent.
+            count = total,
+            pageSize = effectivePageSize,
+            hasMore,
+            nextCursor,
             items
         });
     }

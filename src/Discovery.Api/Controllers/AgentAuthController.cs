@@ -1036,13 +1036,24 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetAgentIdentityQuery(id)), Ok);
     }
 
+    /// <summary>
+    /// Política efetiva da app-store para o agent. Quando <paramref name="paged"/>
+    /// é true a resposta é paginada (pageSize + cursor opaco + hasMore/nextCursor);
+    /// sem ele, mantém-se a resposta única com a coleção completa para os agents
+    /// já instalados.
+    /// </summary>
     [HttpGet("me/app-store")]
-    public async Task<IActionResult> GetAppStoreEffective([FromQuery] string installationType = "Winget", CancellationToken ct = default)
+    public async Task<IActionResult> GetAppStoreEffective(
+        [FromQuery] string installationType = "Winget",
+        [FromQuery] bool paged = false,
+        [FromQuery] int pageSize = 0,
+        [FromQuery] string? cursor = null,
+        CancellationToken ct = default)
     {
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(new GetAppStoreEffectiveQuery(id, installationType), ct), Ok);
+        return MapResult(await _mediator.Send(new GetAppStoreEffectiveQuery(id, installationType, paged, pageSize, cursor), ct), Ok);
     }
 
     /// <summary>
