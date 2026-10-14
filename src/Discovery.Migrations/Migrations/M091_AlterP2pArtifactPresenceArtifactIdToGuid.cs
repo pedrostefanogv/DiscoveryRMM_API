@@ -21,9 +21,13 @@ public class M091_AlterP2pArtifactPresenceArtifactIdToGuid : Migration
         // Trunca dados da janela atual (efêmeros, TTL 2h)
         Delete.FromTable("p2p_artifact_presence").AllRows();
 
-        // Altera coluna de varchar para uuid
-        Alter.Table("p2p_artifact_presence")
-            .AlterColumn("artifact_id").AsGuid().NotNullable();
+        // Altera coluna de varchar para uuid.
+        // Postgres NAO faz cast automatico varchar -> uuid (erro 42804
+        // "column artifact_id cannot be cast automatically to type uuid"),
+        // por isso o USING explicito. Os dados foram truncados logo acima
+        // (registros efemeros, TTL 2h), entao a conversao e segura.
+        Execute.Sql("ALTER TABLE p2p_artifact_presence ALTER COLUMN artifact_id TYPE uuid USING artifact_id::uuid;");
+        Execute.Sql("ALTER TABLE p2p_artifact_presence ALTER COLUMN artifact_id SET NOT NULL;");
 
         // Recria PK composta
         Create.PrimaryKey("pk_p2p_artifact_presence")
@@ -43,8 +47,9 @@ public class M091_AlterP2pArtifactPresenceArtifactIdToGuid : Migration
         Delete.PrimaryKey("pk_p2p_artifact_presence").FromTable("p2p_artifact_presence");
         Delete.FromTable("p2p_artifact_presence").AllRows();
 
-        Alter.Table("p2p_artifact_presence")
-            .AlterColumn("artifact_id").AsString(512).NotNullable();
+        // uuid -> varchar tambem exige USING explicito.
+        Execute.Sql("ALTER TABLE p2p_artifact_presence ALTER COLUMN artifact_id TYPE varchar(512) USING artifact_id::text;");
+        Execute.Sql("ALTER TABLE p2p_artifact_presence ALTER COLUMN artifact_id SET NOT NULL;");
 
         Create.PrimaryKey("pk_p2p_artifact_presence")
             .OnTable("p2p_artifact_presence")

@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Segredos nunca são exibidos — apenas se estão definidos/gerados.
 
 ### Changed
+- 📦 **npm atualizado após instalar o Node**: o pacote do Node 22 traz npm 10.x; o instalador
+  agora roda `npm install -g npm@${DISCOVERY_NPM_VERSION:-latest}` depois de validar o Node (default
+  `latest`, fixável por `DISCOVERY_NPM_VERSION` no env/config). Falha nesse passo é aviso, não
+  aborta a instalação.
 - 🗄️ **RustFS passa a ser o padrão do storage**: no passo "Storage de arquivos", apertar Enter
   agora instala o **RustFS local** (antes o padrão era `skip`). Digitar `3` continua adiando a
   configuração. No modo `--non-interactive` o padrão também é `rustfs`; use
@@ -72,6 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **API em crash-loop por `ALTER COLUMN artifact_id TYPE uuid` sem `USING` (M091)**:
+  a migration alterava `p2p_artifact_presence.artifact_id` de `varchar(512)` para `uuid` com
+  `AlterColumn(...).AsGuid()`, e o Postgres recusa o cast automático (`42804: column "artifact_id"
+  cannot be cast automatically to type uuid`) — a API abortava no startup e o instalador parava em
+  `wait_for_discovery_api_ready`. Agora o cast usa `USING artifact_id::uuid` (a tabela é truncada
+  antes; dados efêmeros com TTL 2h) e o `Down()` usa `USING artifact_id::text`.
 - 🐛 **Bootstrap trocava de branch em falha transitória de clone**: um erro de rede no
   `git clone` da branch pedida fazia o bootstrap cair para outra branch (ex.: `dev` → `release`),
   executando um instalador **diferente** (o do release é o monolítico antigo, que ainda exige a

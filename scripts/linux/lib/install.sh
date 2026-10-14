@@ -174,20 +174,49 @@ ensure_nodejs() {
   if command -v node >/dev/null 2>&1; then
     current_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
     if [[ "$current_major" =~ ^[0-9]+$ ]] && (( current_major >= required_major )); then
-      log "Node.js $current_major ja instalado"; return
+      log "Node.js $current_major ja instalado"
+    else
+      log "Node.js atual insuficiente (${current_major:-desconhecido}); atualizando para uma versao suportada"
+      install_nodejs_from_nodesource
     fi
-    log "Node.js atual insuficiente (${current_major:-desconhecido}); atualizando para uma versao suportada"
   else
     log "Instalando Node.js"
+    install_nodejs_from_nodesource
   fi
 
+  command -v node >/dev/null 2>&1 || fail "node nao foi instalado com sucesso"
+  command -v npm  >/dev/null 2>&1 || fail "npm nao foi instalado com sucesso"
+
+  ensure_npm_cli
+}
+
+install_nodejs_from_nodesource() {
   curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --yes --dearmor -o /usr/share/keyrings/nodesource.gpg
   echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list >/dev/null
   sudo apt-get update -y
   sudo apt-get install -y nodejs
+}
 
-  command -v node >/dev/null 2>&1 || fail "node nao foi instalado com sucesso"
-  command -v npm  >/dev/null 2>&1 || fail "npm nao foi instalado com sucesso"
+# O pacote do Node 22 traz npm 10.x, bem atras do atual (12.x). Instala a
+# versao configurada em DISCOVERY_NPM_VERSION (default: latest).
+# Falha aqui NAO derruba a instalacao: o build segue com o npm disponivel.
+ensure_npm_cli() {
+  local desired="${DISCOVERY_NPM_VERSION:-latest}"
+  local before after
+  before="$(npm --version 2>/dev/null || true)"
+
+  log "Instalando/atualizando npm para '$desired' (atual: ${before:-desconhecido})"
+  if ! sudo npm install -g "npm@$desired" >/dev/null 2>&1; then
+    warn "Falha ao instalar/atualizar o npm para '$desired'; mantendo ${before:-a versao do pacote Node}"
+    return 0
+  fi
+
+  after="$(npm --version 2>/dev/null || true)"
+  if [[ -n "$after" && "$after" != "$before" ]]; then
+    log "npm atualizado: ${before:-desconhecido} -> $after"
+  else
+    log "npm ${after:-$desired} instalado"
+  fi
 }
 
 # ── Wails CLI (wails v2 / wails3 v3) ─────────────────────────────────────
