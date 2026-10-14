@@ -79,6 +79,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **`/health` respondia 503 com a API saudável (health check do NATS sem credenciais)**: o
+  health check montava `NatsOpts.Default` só com URL/timeout, sem `AuthOpts`, então conectava
+  anônimo (`User ""`); com o `auth_callout` habilitado o broker devolvia `Authorization Violation`
+  e o health check ficava Unhealthy — o instalador abortava o bootstrap administrativo (sem admin)
+  mesmo com a API de pé. Comprovado no servidor: sem credencial → `-ERR 'Authorization Violation'`;
+  com o usuário/senha do discovery.env → `+OK PONG`. As opções agora saem de um único factory
+  (`NatsOptionsFactory`) usado pela conexão principal e pelo health check.
 - 🐛 **Instalador abortava com a API saudável em máquina lenta**: `wait_for_discovery_api_ready`
   esperava apenas 60×2s = 2 min, mas o primeiro start roda ~230 migrations + seeds antes de abrir
   o `/health`; e, com `Restart=always`, o `systemctl is-failed` nunca dispara (a unit fica em

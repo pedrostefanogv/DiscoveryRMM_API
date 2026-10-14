@@ -21,10 +21,12 @@ public static class HealthChecksServiceCollectionExtensions
         {
             try
             {
+                // Credenciais vem do mesmo factory da conexao principal: sem isso o
+                // health check conectava anonimo e o auth_callout do broker respondia
+                // "Authorization Violation" (ler /health = 503 com a API saudavel).
                 var natsUrl = configuration.GetValue<string>("Nats:Url") ?? "nats://localhost:4222";
-                var opts = NATS.Client.Core.NatsOpts.Default with
+                var opts = NatsOptionsFactory.CreateBase(configuration) with
                 {
-                    Url = natsUrl,
                     ConnectTimeout = TimeSpan.FromSeconds(3)
                 };
 
