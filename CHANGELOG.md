@@ -72,6 +72,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   script com erro de normalização.
 
 ### Fixed
+- 🐛 **Instalador abortava em `nsJSON`/dotnet por diretórios fixos em `/tmp`**: o passo do plugin
+  NSIS fazia `sudo mkdir -p /tmp/nsJSON-1.1.1.1` (dono root) e em seguida `unzip` como usuário
+  instalador — o `unzip` não conseguia escrever (`Permission denied`) e, sob `set -e`, a instalação
+  abortava logo após a confirmação. O mesmo padrão existia em `/tmp/dotnet-install.sh` e
+  `/tmp/packages-microsoft-prod.deb`. Agora os três usam `mktemp -d` (dono do próprio usuário),
+  com extração/limpeza tratadas e sem abortar se o zip falhar.
 - 🐛 **Instalador falhava no fim do wizard com `NATS_JS_FANOUT_STREAM_ENABLED=1 exige
   NATS_JS_ENABLED=1`**: quando o host já tinha um `nats-server.conf` sem o bloco `jetstream` (ex.:
   pacote do SO ou sobra de tentativa anterior), o instalador inferia `NATS_JS_ENABLED=0` mas

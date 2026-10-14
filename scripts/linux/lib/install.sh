@@ -80,26 +80,38 @@ install_nsis_nsjson_plugin() {
   local dll_path="$plugin_dir/nsJSON.dll"
   local version="1.1.1.1"
   local download_url="https://github.com/Pieter-Dewachter/nsJSON/releases/download/v${version}/NsJSON-${version}.zip"
-  local tmp_zip="/tmp/NsJSON-${version}.zip"
-  local tmp_dir="/tmp/nsJSON-${version}"
 
   if [[ -f "$dll_path" ]]; then
     log "nsJSON plugin ja instalado em $dll_path"
     return
   fi
 
+  # Diretorio temporario proprio do usuario (mktemp): o instalador pode rodar
+  # como usuario instalador (bootstrap_root_execution), e sobras fixas em /tmp
+  # criadas por root numa execucao anterior nao sao gravaveis por ele
+  # ("cannot create /tmp/nsJSON-...: Permission denied").
+  local work_dir
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/nsJSON-${version}.XXXXXX")"
+  local tmp_zip="$work_dir/NsJSON-${version}.zip"
+
   log "Baixando nsJSON NSIS plugin v${version} de GitHub..."
   if ! curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 -o "$tmp_zip" "$download_url"; then
     warn "Falha ao baixar nsJSON de $download_url; o build NSIS pode falhar"
+    rm -rf "$work_dir"
     return
   fi
 
-  sudo mkdir -p "$plugin_dir" "$tmp_dir"
-  unzip -qo "$tmp_zip" -d "$tmp_dir"
+  sudo mkdir -p "$plugin_dir"
+  if ! unzip -qo "$tmp_zip" -d "$work_dir"; then
+    warn "Falha ao extrair nsJSON ($tmp_zip); o build NSIS pode falhar"
+    rm -rf "$work_dir"
+    return
+  fi
+
   local extracted_dll
-  extracted_dll=$(find "$tmp_dir" -name 'nsJSON.dll' -path '*/x86-unicode/*' -print -quit)
+  extracted_dll=$(find "$work_dir" -name 'nsJSON.dll' -path '*/x86-unicode/*' -print -quit)
   if [[ -z "$extracted_dll" ]]; then
-    extracted_dll=$(find "$tmp_dir" -name 'nsJSON.dll' -print -quit)
+    extracted_dll=$(find "$work_dir" -name 'nsJSON.dll' -print -quit)
   fi
 
   if [[ -f "$extracted_dll" ]]; then
@@ -110,7 +122,7 @@ install_nsis_nsjson_plugin() {
     warn "nsJSON.dll nao encontrado no zip; build NSIS pode falhar"
   fi
 
-  rm -rf "$tmp_zip" "$tmp_dir"
+  rm -rf "$work_dir"
 }
 
 ensure_dotnet_sdk() {
@@ -119,28 +131,38 @@ ensure_dotnet_sdk() {
   fi
 
   log "Instalando dotnet SDK 10.0"
+
+  # Diretorio temporario do proprio usuario (mktemp): evita caminhos fixos em
+  # /tmp que podem nao ser gravaveis quando o instalador roda como usuario
+  # instalador (arquivos criados por root em execucao anterior, ou o proprio
+  # sudo mkdir deixando o diretorio com dono root).
+  local work_dir
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/dotnet-install.XXXXXX")"
+  local ms_deb="$work_dir/packages-microsoft-prod.deb"
+  local dotnet_installer="$work_dir/dotnet-install.sh"
+
   local ubuntu_version
   # VERSION_ID esta ausente em Debian testing/sid — nunca expandir sem default
   # (set -u abortaria o instalador).
   ubuntu_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")"
   if [[ -z "$ubuntu_version" ]]; then
     log "VERSION_ID ausente em /etc/os-release; usando fallback dotnet-install.sh"
-  elif curl -fsSL --connect-timeout 10 --retry 2 "https://packages.microsoft.com/config/ubuntu/${ubuntu_version}/packages-microsoft-prod.deb" -o /tmp/packages-microsoft-prod.deb; then
-    sudo dpkg -i /tmp/packages-microsoft-prod.deb
-    rm -f /tmp/packages-microsoft-prod.deb
+  elif curl -fsSL --connect-timeout 10 --retry 2 "https://packages.microsoft.com/config/ubuntu/${ubuntu_version}/packages-microsoft-prod.deb" -o "$ms_deb"; then
+    sudo dpkg -i "$ms_deb"
+    rm -f "$ms_deb"
     sudo apt-get update -y
-    if sudo apt-get install -y dotnet-sdk-10.0; then return; fi
+    if sudo apt-get install -y dotnet-sdk-10.0; then rm -rf "$work_dir"; return; fi
     log "Falha no apt para dotnet-sdk-10.0, aplicando fallback com dotnet-install.sh"
   else
     log "Repositorio apt da Microsoft indisponivel para Ubuntu ${ubuntu_version}, aplicando fallback com dotnet-install.sh"
   fi
 
-  curl -fsSL --connect-timeout 10 --retry 2 https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
-  chmod +x /tmp/dotnet-install.sh
+  curl -fsSL --connect-timeout 10 --retry 2 https://dot.net/v1/dotnet-install.sh -o "$dotnet_installer"
+  chmod +x "$dotnet_installer"
   sudo mkdir -p /usr/share/dotnet
-  sudo /tmp/dotnet-install.sh --channel 10.0 --install-dir /usr/share/dotnet
+  sudo "$dotnet_installer" --channel 10.0 --install-dir /usr/share/dotnet
   sudo ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet
-  rm -f /tmp/dotnet-install.sh
+  rm -rf "$work_dir"
 
   command -v dotnet >/dev/null 2>&1 || fail "dotnet nao foi instalado com sucesso"
 }
