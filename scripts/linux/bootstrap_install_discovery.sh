@@ -445,8 +445,10 @@ if [[ -z "${DISCOVERY_DOTNET_RUNTIME:-}" ]]; then
   fi
 fi
 
+BOOTSTRAP_WORKDIR_CREATED=0
 if [[ -z "$BOOTSTRAP_WORKDIR" ]]; then
   BOOTSTRAP_WORKDIR="$(mktemp -d /tmp/discovery-bootstrap.XXXXXX)"
+  BOOTSTRAP_WORKDIR_CREATED=1
 fi
 # Cleanup do diretorio temporario em caso de saida anormal ou sucesso.
 trap 'rm -rf "$BOOTSTRAP_WORKDIR"' EXIT INT TERM
@@ -511,7 +513,7 @@ fi
 # (bootstrap_root_execution). O checkout temporario (mktemp -d) nasce 0700 do
 # root; sem liberar a leitura, o usuario instalador nao consegue carregar o
 # instalador nem os libs.
-if [[ "$EUID" -eq 0 && -n "$BOOTSTRAP_WORKDIR" && -d "$BOOTSTRAP_WORKDIR" ]]; then
+if [[ "$EUID" -eq 0 && "${BOOTSTRAP_WORKDIR_CREATED:-0}" -eq 1 && -n "$BOOTSTRAP_WORKDIR" && -d "$BOOTSTRAP_WORKDIR" ]]; then
   chmod a+rx "$BOOTSTRAP_WORKDIR" 2>/dev/null || true
   chmod -R a+rX "$BOOTSTRAP_WORKDIR" 2>/dev/null || true
 fi

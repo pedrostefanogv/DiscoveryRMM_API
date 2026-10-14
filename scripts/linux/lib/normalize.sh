@@ -40,13 +40,13 @@ extract_cloudflare_tunnel_token() {
   local token=""
 
   # 1) Formato explicito `--token <valor>` (com ou sem quotes).
-  if [[ "$raw" =~ --token[=\ ]+\"?([A-Za-z0-9._-]+)\"? ]]; then
+  if [[ "$raw" =~ --token[=\ ]+\"?([A-Za-z0-9._=-]+)\"? ]]; then
     token="${BASH_REMATCH[1]}"
   fi
 
   # 2) Fallback: primeiro token no formato do Cloudflare (comeca com "eyJ").
   if [[ -z "$token" ]]; then
-    token="$(printf '%s' "$raw" | grep -oE 'eyJ[A-Za-z0-9_.-]{20,}' | head -n 1 || true)"
+    token="$(printf '%s' "$raw" | grep -oE 'eyJ[A-Za-z0-9_.-]{20,}=*' | head -n 1 || true)"
   fi
 
   # 3) Ultimo recurso: primeira palavra nao vazia (token puro colado).
@@ -61,7 +61,7 @@ extract_cloudflare_tunnel_token() {
 
 is_valid_cloudflare_tunnel_token() {
   local token="${1:-}"
-  [[ "$token" =~ ^eyJ[A-Za-z0-9_.-]{20,}$ ]]
+  [[ "$token" =~ ^eyJ[A-Za-z0-9_.-]{20,}=*$ ]]
 }
 
 # Normaliza/revalida CLOUDFLARE_TUNNEL_TOKEN (aceita o comando colado do painel).

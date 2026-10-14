@@ -551,24 +551,27 @@ print_selected_configuration_summary() {
   primary_portal_host="$(resolve_fido2_server_domain)"
   primary_portal_url="$(build_portal_access_url "$primary_portal_host")"
 
-  local install_user_display
+  local install_user_display install_user_password_display=""
   if [[ -n "${DISCOVERY_INSTALL_USER:-}" ]]; then
     install_user_display="$DISCOVERY_INSTALL_USER"
-  else
-    install_user_display="$(id -un 2>/dev/null || echo desconhecido)"
-  fi
-  local install_user_password_display="nao definida"
-  if [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]]; then
-    if [[ "${DISCOVERY_INSTALL_USER_PASSWORD_AUTO:-0}" -eq 1 ]]; then
-      install_user_password_display="gerada automaticamente (anote a senha exibida no inicio)"
+    if [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]]; then
+      if [[ "${DISCOVERY_INSTALL_USER_PASSWORD_AUTO:-0}" -eq 1 ]]; then
+        install_user_password_display="gerada automaticamente (anote a senha exibida no inicio)"
+      else
+        install_user_password_display="definida pelo operador"
+      fi
     else
-      install_user_password_display="definida pelo operador"
+      install_user_password_display="nao definida"
     fi
+  else
+    install_user_display="$(id -un 2>/dev/null || echo desconhecido) (execucao atual, sem troca de usuario)"
   fi
 
   echo "Resumo das configuracoes selecionadas:"
   echo "- Usuario instalador (sudo): $install_user_display"
-  echo "- Senha do usuario instalador: $install_user_password_display"
+  if [[ -n "$install_user_password_display" ]]; then
+    echo "- Senha do usuario instalador: $install_user_password_display"
+  fi
   echo "- Branch: ${DISCOVERY_GIT_BRANCH:-}"
   echo "- Repo API: ${DISCOVERY_GIT_REPO:-}"
   echo "- Repo Agent: ${DISCOVERY_AGENT_GIT_REPO:-}"

@@ -65,7 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - 🐛 **Prompt da senha do usuário instalador abortava com Enter em branco**: agora a senha é
   obrigatória de forma explícita, aceita senha gerada (mostrada uma única vez), re-pergunta em
-  caso de senha curta ou divergente e não encerra mais o instalador.
+  caso de senha curta/divergente e não encerra mais o instalador. A senha é validada (8–128
+  caracteres, sem `:` nem caracteres de controle) e o **nome** do usuário também é re-perguntado
+  quando inválido, em vez de abortar. Se `--config` não for legível pelo usuário instalador, o
+  instalador segue como root (com aviso) para não perder a configuração.
 - 🐛 **Instalador abortava em silêncio logo após a etapa do NATS**: em instalação nova,
   `load_existing_remote_session_defaults` devolvia 1 enquanto
   `/etc/discovery-api/discovery.env` ainda não existia e, sob `set -e`, o chamador

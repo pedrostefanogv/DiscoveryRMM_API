@@ -9,11 +9,26 @@
 # generate_random_password, require_cmd) e as variaveis SCRIPT_PATH e
 # ORIGINAL_ARGS definidas pelo entrypoint (install_discovery_server.sh).
 
+is_valid_installer_user_name() {
+  local user_name="${1:-}"
+  [[ "$user_name" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || return 1
+  [[ "$user_name" != "root" ]] || return 1
+  return 0
+}
+
 validate_installer_user_name() {
   local user_name="${1:-}"
-  [[ "$user_name" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
-    || fail "Nome de usuario invalido: '${user_name}'. Use minusculas, digitos, '_' e '-' (max 32, iniciando por letra ou '_')."
-  [[ "$user_name" != "root" ]] || fail "O usuario instalador nao pode ser root."
+  if ! is_valid_installer_user_name "$user_name"; then
+    fail "Nome de usuario invalido: '${user_name}'. Use minusculas, digitos, '_' e '-' (max 32, iniciando por letra ou '_') e nao use 'root'."
+  fi
+}
+
+validate_installer_user_password() {
+  local user_password="${1:-}"
+  (( ${#user_password} >= 8 )) || fail "Senha do usuario instalador precisa ter pelo menos 8 caracteres."
+  (( ${#user_password} <= 128 )) || fail "Senha do usuario instalador muito longa (max 128 caracteres)."
+  [[ "$user_password" != *:* ]] || fail "Senha do usuario instalador nao pode conter ':' (quebra o chpasswd)."
+  [[ ! "$user_password" =~ [[:cntrl:]] ]] || fail "Senha do usuario instalador nao pode conter caracteres de controle."
 }
 
 prompt_installer_user_name() {
@@ -25,10 +40,15 @@ prompt_installer_user_name() {
   fi
 
   local input=""
-  read -r -p "Nome do usuario instalador (com sudo) [$DISCOVERY_INSTALL_USER]: " input
-  input="$(printf '%s' "${input:-$DISCOVERY_INSTALL_USER}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  DISCOVERY_INSTALL_USER="$input"
-  validate_installer_user_name "$DISCOVERY_INSTALL_USER"
+  while true; do
+    read -r -p "Nome do usuario instalador (com sudo) [$DISCOVERY_INSTALL_USER]: " input
+    input="$(printf '%s' "${input:-$DISCOVERY_INSTALL_USER}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if is_valid_installer_user_name "$input"; then
+      DISCOVERY_INSTALL_USER="$input"
+      return
+    fi
+    echo "Nome invalido: use minusculas, digitos, '_' e '-' (max 32, iniciando por letra) e nao use 'root'. Tente novamente." >&2
+  done
 }
 
 # Senha do usuario instalador — obrigatoria, porque e a senha do sudo dele.
@@ -36,6 +56,7 @@ prompt_installer_user_name() {
 #   - Senha informada: pede confirmacao e repete se estiver curta ou divergente.
 prompt_installer_user_password() {
   if [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]]; then
+    validate_installer_user_password "$DISCOVERY_INSTALL_USER_PASSWORD"
     DISCOVERY_INSTALL_USER_PASSWORD_AUTO="${DISCOVERY_INSTALL_USER_PASSWORD_AUTO:-0}"
     return
   fi
@@ -64,6 +85,14 @@ prompt_installer_user_password() {
 
     if (( ${#input} < 8 )); then
       echo "Senha muito curta (minimo 8 caracteres). Tente novamente." >&2
+      continue
+    fi
+    if (( ${#input} > 128 )); then
+      echo "Senha muito longa (maximo 128 caracteres). Tente novamente." >&2
+      continue
+    fi
+    if [[ "$input" == *:* || "$input" =~ [[:cntrl:]] ]]; then
+      echo "Senha invalida: nao use ':' nem caracteres de controle. Tente novamente." >&2
       continue
     fi
 
@@ -135,6 +164,19 @@ bootstrap_root_execution() {
   fi
 
   prompt_installer_user_name
+
+  # O --config e lido de novo pelo processo reexecutado como usuario
+  # instalador; se nao for legivel, seguimos como root para nao perder a
+  # configuracao (ex.: arquivo 0600 pertencente ao root). Precisa vir depois de
+  # prompt_installer_user_name, que e quem define DISCOVERY_INSTALL_USER.
+  if [[ -n "${CONFIG_FILE:-}" ]]; then
+    if ! id -u "$DISCOVERY_INSTALL_USER" >/dev/null 2>&1 \
+       || ! sudo -u "$DISCOVERY_INSTALL_USER" test -r "$CONFIG_FILE"; then
+      warn "Arquivo --config '$CONFIG_FILE' nao sera legivel pelo usuario '$DISCOVERY_INSTALL_USER'; seguindo como root para preservar a configuracao."
+      return 0
+    fi
+  fi
+
   prompt_installer_user_password
 
   ensure_installer_user_from_root "$DISCOVERY_INSTALL_USER" "$DISCOVERY_INSTALL_USER_PASSWORD"
