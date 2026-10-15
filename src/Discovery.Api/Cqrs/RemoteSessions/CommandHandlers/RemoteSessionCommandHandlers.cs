@@ -162,9 +162,13 @@ public sealed class StartRemoteSessionCommandHandler(
         // Normaliza garantindo barra final no path: navegadores NAO seguem
         // redirect (nginx 308 "/nats" -> "/nats/") no handshake de WebSocket,
         // e o viewer do browser e o unico cliente que usa o path da URL.
-        var natsWsUrl = !string.IsNullOrWhiteSpace(serverConfig.NatsWebSocketExternalUrl)
-            ? Services.NatsWebSocketUrlNormalizer.Normalize(serverConfig.NatsWebSocketExternalUrl)
-            : null;
+        // Configurado no painel OU derivado do host externo (wss://<host>/nats/):
+        // garante natsWsUrl em instalações novas, onde o campo da URL WSS vem
+        // vazio mas o host externo é preenchido pelo instalador.
+        var natsWsUrl = Services.NatsWebSocketUrlNormalizer.Resolve(
+            serverConfig.NatsWebSocketExternalUrl,
+            serverConfig.NatsServerHostExternal,
+            serverConfig.NatsUseWssExternal);
 
         logger.LogInformation("Remote session {SessionId} started for agent {AgentId}", session.Id, cmd.AgentId);
 

@@ -395,6 +395,12 @@ write_environment_file() {
   local nats_server_external_host
   nats_server_external_host="$(normalize_host_without_scheme "${NATS_SERVER_HOST_EXTERNAL:-$public_host}")"
   local nats_use_wss_external="${NATS_USE_WSS_EXTERNAL:-false}"
+  # URL WSS externa devolvida aos viewers do portal (tela/terminal/arquivos/
+  # processos/debug). Vazio = a API deriva de Nats__ServerHostExternal.
+  local nats_ws_external_url="${NATS_WEBSOCKET_EXTERNAL_URL:-}"
+  if [[ -z "$nats_ws_external_url" && "$nats_use_wss_external" == "true" && -n "$nats_server_external_host" ]]; then
+    nats_ws_external_url="wss://${nats_server_external_host}/nats/"
+  fi
 
   local -a web_hosts=("localhost" "127.0.0.1")
   web_hosts+=("$fido2_server_domain")
@@ -518,6 +524,8 @@ Nats__AuthCallout__Subject=${escaped_callout_subject}
 Nats__ServerHostExternal=${nats_server_external_host}
 Nats__ServerHostInternal=127.0.0.1
 Nats__UseWssExternal=${nats_use_wss_external}
+# Vazio = a API deriva wss://<host externo>/nats/ (NatsWebSocketUrlNormalizer).
+Nats__WebSocketExternalUrl=${nats_ws_external_url}
 NATS_JS_ENABLED=${NATS_JS_ENABLED:-1}
 NATS_JS_STORE_DIR=${NATS_JS_STORE_DIR:-${DISCOVERY_OPS_DIR:-/opt/discovery-ops}/nats/jetstream}
 NATS_JS_MAX_MEMORY_STORE=${NATS_JS_MAX_MEMORY_STORE:-64M}
@@ -1445,6 +1453,11 @@ update_nats_environment_file() {
 
   local nats_server_external_host
   nats_server_external_host="$(normalize_host_without_scheme "${NATS_SERVER_HOST_EXTERNAL:-${EXTERNAL_API_HOST:-${INTERNAL_API_HOST:-}}}")"
+  # URL WSS externa devolvida aos viewers (ver NatsWebSocketUrlNormalizer.Resolve).
+  local nats_ws_external_url="${NATS_WEBSOCKET_EXTERNAL_URL:-}"
+  if [[ -z "$nats_ws_external_url" && "${NATS_USE_WSS_EXTERNAL:-false}" == "true" && -n "$nats_server_external_host" ]]; then
+    nats_ws_external_url="wss://${nats_server_external_host}/nats/"
+  fi
   local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
   local fanout_subject_lines; fanout_subject_lines="$(build_fanout_subject_lines)"
   # O command substitution remove o \n final: sem re-adicionar, o ultimo
@@ -1460,6 +1473,8 @@ Nats__AuthPassword=${NATS_AUTH_PASSWORD}
 Nats__ServerHostExternal=${nats_server_external_host}
 Nats__ServerHostInternal=${NATS_SERVER_HOST_INTERNAL:-127.0.0.1}
 Nats__UseWssExternal=${NATS_USE_WSS_EXTERNAL:-false}
+# Vazio = a API deriva wss://<host externo>/nats/ (NatsWebSocketUrlNormalizer).
+Nats__WebSocketExternalUrl=${nats_ws_external_url}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
 Nats__AuthCallout__Subject=${escaped_callout_subject}
 Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}

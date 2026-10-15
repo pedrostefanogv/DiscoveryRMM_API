@@ -34,4 +34,41 @@ public static class NatsWebSocketUrlNormalizer
         // ".../nats" -> ".../nats/" preservando query/fragment.
         return trimmed.Replace(path, path + "/", StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Resolve a URL WSS externa do NATS para os viewers (tela/terminal/arquivos/
+    /// processos e console de debug).
+    ///
+    /// Ordem: 1) valor configurado em NatsWebSocketExternalUrl; 2) DERIVADO do
+    /// NatsServerHostExternal quando NatsUseWssExternal estiver ligado
+    /// ("wss://<host>/nats/").
+    ///
+    /// Por que derivar: em instalações novas o operador preenche o host externo
+    /// (Nats__ServerHostExternal, escrito pelo instalador), mas o campo da URL
+    /// WSS ficava vazio — a API devolvia natsWsUrl = null e o viewer do portal
+    /// não abria o WebSocket ("Conectando ao agent... aguardando NATS"). O mesmo
+    /// nginx que serve o portal publica o NATS em /nats/ no mesmo host, então a
+    /// derivação é sempre válida.
+    /// </summary>
+    public static string? Resolve(string? configuredUrl, string? externalHost, bool useWssExternal)
+    {
+        var normalized = Normalize(configuredUrl);
+        if (!string.IsNullOrWhiteSpace(normalized))
+            return normalized;
+
+        var host = (externalHost ?? string.Empty).Trim();
+        if (!useWssExternal || host.Length == 0)
+            return null;
+
+        // Remove esquema/porta/path caso o campo traga "https://host/" — o host
+        // externo do NATS é sempre host[:porta].
+        if (host.Contains("://"))
+        {
+            if (!Uri.TryCreate(host, UriKind.Absolute, out var parsed))
+                return null;
+            host = parsed.Host;
+        }
+
+        return Normalize($"wss://{host.TrimEnd('/')}/nats/");
+    }
 }

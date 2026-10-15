@@ -4,6 +4,7 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace Discovery.Infrastructure.Repositories;
 
@@ -15,11 +16,13 @@ public class ServerConfigurationRepository : IServerConfigurationRepository
 
     private readonly DiscoveryDbContext _db;
     private readonly IRedisService _redisService;
+    private readonly IConfiguration _configuration;
 
-    public ServerConfigurationRepository(DiscoveryDbContext db, IRedisService redisService)
+    public ServerConfigurationRepository(DiscoveryDbContext db, IRedisService redisService, IConfiguration configuration)
     {
         _db = db;
         _redisService = redisService;
+        _configuration = configuration;
     }
 
     public async Task<ServerConfiguration?> GetAsync()
@@ -56,10 +59,52 @@ public class ServerConfigurationRepository : IServerConfigurationRepository
         if (existing is not null) return existing;
 
         var config = new ServerConfiguration { Id = IdGenerator.NewId() };
+        ApplyNatsEnvironmentDefaults(config);
         _db.ServerConfigurations.Add(config);
         await _db.SaveChangesAsync();
         await CacheAsync(config);
         return config;
+    }
+
+    /// <summary>
+    /// Semeia os campos de NATS a partir da configuração de ambiente do servidor
+    /// (chaves Nats__*, escritas pelo instalador em /etc/discovery-api/discovery.env)
+    /// na PRIMEIRA criação da linha de configuração.
+    ///
+    /// Sem isso, uma instalação nova subia com NatsServerHostExternal e
+    /// NatsWebSocketExternalUrl vazios: os viewers do portal recebiam
+    /// natsWsUrl = null e não abriam o WebSocket do NATS ("Conectando ao agent...
+    /// aguardando NATS"), mesmo com o host externo informado no instalador.
+    /// Quando a URL WSS não vier explícita, ela é derivada do host externo
+    /// (o mesmo nginx do portal publica o NATS em /nats/ no mesmo host).
+    /// Linhas já existentes NÃO são tocadas — o painel continua sendo a fonte
+    /// de verdade depois da primeira gravação.
+    /// </summary>
+    private void ApplyNatsEnvironmentDefaults(ServerConfiguration config)
+    {
+        var nats = _configuration.GetSection("Nats");
+
+        var externalHost = nats["ServerHostExternal"]?.Trim();
+        if (!string.IsNullOrWhiteSpace(externalHost))
+            config.NatsServerHostExternal = externalHost;
+
+        var internalHost = nats["ServerHostInternal"]?.Trim();
+        if (!string.IsNullOrWhiteSpace(internalHost))
+            config.NatsServerHostInternal = internalHost;
+
+        if (bool.TryParse(nats["UseWssExternal"], out var useWssExternal))
+            config.NatsUseWssExternal = useWssExternal;
+
+        var wsExternalUrl = nats["WebSocketExternalUrl"]?.Trim();
+        if (string.IsNullOrWhiteSpace(wsExternalUrl)
+            && config.NatsUseWssExternal
+            && !string.IsNullOrWhiteSpace(config.NatsServerHostExternal))
+        {
+            wsExternalUrl = $"wss://{config.NatsServerHostExternal.Trim().TrimEnd('/')}/nats/";
+        }
+
+        if (!string.IsNullOrWhiteSpace(wsExternalUrl))
+            config.NatsWebSocketExternalUrl = wsExternalUrl;
     }
 
     public async Task UpdateAsync(ServerConfiguration config)
