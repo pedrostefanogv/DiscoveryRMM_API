@@ -403,6 +403,19 @@ public class AppStoreController(
 
         MultipartUploadPartStateDto[] parts;
 
+        // Sessão concluída mas sem as partes gravadas (falha ao salvar a sessão):
+        // se o objeto está no storage, a resposta correta é o asset — e não um 400
+        // por "blocos faltando" numa lista local incompleta.
+        if (session.Completed && session.Parts.Count == 0)
+        {
+            var described = await DescribeCompletedIfPublishedAsync(assets, session, ct);
+            if (described is not null)
+            {
+                await MarkCompletedAsync(redis, session, [], described.Checksum, ct);
+                return Ok(described);
+            }
+        }
+
         try
         {
             if (session.Completed && session.Parts.Count > 0)
