@@ -32,6 +32,23 @@ public class CustomPackageAssetService : ICustomPackageAssetService
     /// <summary>Validade da URL pré-assinada de cada parte (upload longo cabe).</summary>
     public const int PartUrlTtlMinutes = 60;
 
+    /// <summary>Mínimo do S3 para todo bloco que não seja o último.</summary>
+    public const long MinPartBytes = 5L * 1024 * 1024;
+
+    /// <summary>
+    /// Teto RECOMENDADO do bloco no caminho direto (usado para o cliente se
+    /// auto-limitar). O limite prático não é o S3 e sim o proxy: o Cloudflare
+    /// corta requisições longas (~100 s) e o nginx aceita 64m por corpo.
+    /// </summary>
+    public const long MaxPartBytes = 50L * 1024 * 1024;
+
+    /// <summary>
+    /// Limite REAL do S3 por bloco (5 GiB) — é contra ele que a validação do
+    /// complete precisa comparar. Comparar com <see cref="MaxPartBytes"/> (teto
+    /// de proxy, 50 MiB) recusaria um bloco válido de, por exemplo, 100 MiB.
+    /// </summary>
+    public const long S3MaxPartBytes = 5L * 1024 * 1024 * 1024;
+
     private static readonly HashSet<string> AllowedInstallerExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".exe", ".msi", ".msix", ".msixbundle", ".appx", ".zip", ".7z", ".rar",
@@ -281,35 +298,43 @@ public class CustomPackageAssetService : ICustomPackageAssetService
                 throw new InvalidOperationException($"Parte {ordered[index].PartNumber} sem ETag: reenvie esse bloco.");
         }
 
+        // Tolerância intencional: clientes antigos não enviam o tamanho de cada
+        // bloco (o DTO default é 0). Nesse caso as regras de tamanho/soma são
+        // puladas — quem barra de fato é o próprio storage. Contiguidade, ETag e
+        // ordem continuam validados acima.
         var withSizes = ordered.Where(part => part.SizeBytes > 0).ToArray();
         if (withSizes.Length != ordered.Length || sizeBytes <= 0)
             return;
 
-        // O tamanho do bloco é derivado das PRÓPRIAS partes, não da constante
-        // atual: uma sessão aberta antes de mudar o padrão (50 MiB -> 10 MiB)
-        // precisa continuar podendo ser concluída.
-        var partSize = ordered[0].SizeBytes;
-        if (partSize <= 0)
-            return;
-
-        var expectedParts = (int)((sizeBytes + partSize - 1) / partSize);
-        if (ordered.Length != expectedParts)
-            throw new InvalidOperationException(
-                $"Enviamos {ordered.Length} blocos, mas o arquivo de {sizeBytes} bytes exige {expectedParts}.");
-
+        // Regras do protocolo S3 (e não "todos os blocos do mesmo tamanho"): o
+        // cliente pode ADAPTAR o tamanho do bloco durante o envio — começar com um
+        // bloco menor só para medir a velocidade e crescer até 50 MiB, por exemplo.
+        // O que o storage exige é: todos os blocos menos o último com pelo menos
+        // 5 MiB, nenhum acima de 5 GiB, e a soma batendo com o arquivo.
         var total = 0L;
         for (var index = 0; index < ordered.Length; index++)
         {
-            var expected = index == ordered.Length - 1
-                ? sizeBytes - total
-                : partSize;
+            var size = ordered[index].SizeBytes;
+            var isLast = index == ordered.Length - 1;
 
-            if (ordered[index].SizeBytes != expected)
+            if (size <= 0)
+                throw new InvalidOperationException($"Bloco {ordered[index].PartNumber} com tamanho inválido ({size} bytes).");
+
+            if (size > S3MaxPartBytes)
                 throw new InvalidOperationException(
-                    $"Bloco {ordered[index].PartNumber} com {ordered[index].SizeBytes} bytes; esperado {expected}.");
+                    $"Bloco {ordered[index].PartNumber} excede o limite de {S3MaxPartBytes / (1024L * 1024 * 1024)} GiB por bloco do S3.");
 
-            total += ordered[index].SizeBytes;
+            if (!isLast && size < MinPartBytes)
+                throw new InvalidOperationException(
+                    $"Bloco {ordered[index].PartNumber} com {size} bytes: o S3 exige pelo menos " +
+                    $"{MinPartBytes / (1024L * 1024)} MiB em todo bloco que não seja o último.");
+
+            total += size;
         }
+
+        if (total != sizeBytes)
+            throw new InvalidOperationException(
+                $"Os blocos somam {total} bytes, mas o arquivo tem {sizeBytes}. Retome o envio para recuperar o que falta.");
     }
 
     private async Task<string> TryComputeChecksumAsync(

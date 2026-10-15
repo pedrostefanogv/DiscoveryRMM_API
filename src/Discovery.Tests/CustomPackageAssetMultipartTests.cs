@@ -171,6 +171,100 @@ public class CustomPackageAssetMultipartTests
     }
 
     [Test]
+    public async Task Complete_AceitaBlocosDeTamanhosDiferentes()
+    {
+        // Habilita o envio adaptativo no futuro: o completo valida por regra do S3,
+        // não exigindo que todos os blocos tenham o mesmo tamanho.
+        const long dezMiB = 10L * 1024 * 1024;
+        const long cinquentaMiB = 50L * 1024 * 1024;
+        var storage = new MultipartStorage { Content = Encoding.UTF8.GetBytes("x") };
+        var service = new CustomPackageAssetService(new StubStorageFactory(storage));
+
+        var asset = await service.CompleteMultipartUploadAsync(
+            ObjectKeySample, "installer", "Setup.exe", "application/x-msdownload",
+            dezMiB + cinquentaMiB + 7, "upload-abc",
+            [
+                new Discovery.Core.DTOs.MultipartUploadPartStateDto(1, "etag-1", dezMiB),
+                new Discovery.Core.DTOs.MultipartUploadPartStateDto(2, "etag-2", cinquentaMiB),
+                new Discovery.Core.DTOs.MultipartUploadPartStateDto(3, "etag-3", 7),
+            ]);
+
+        Assert.That(asset.ObjectKey, Is.EqualTo(ObjectKeySample));
+        Assert.That(storage.CompletedParts!.Select(p => p.PartNumber), Is.EqualTo(new[] { 1, 2, 3 }));
+    }
+
+    [Test]
+    public async Task Complete_RecusaBlocoIntermediarioMenorQue5MiB()
+    {
+        // Regra do S3: todo bloco que NÃO é o último precisa ter >= 5 MiB.
+        const long dezMiB = 10L * 1024 * 1024;
+        const long umMiB = 1L * 1024 * 1024;
+        var service = new CustomPackageAssetService(new StubStorageFactory(new MultipartStorage()));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.CompleteMultipartUploadAsync(
+                ObjectKeySample, "installer", "Setup.exe", "application/x-msdownload",
+                umMiB + dezMiB, "upload-abc",
+                [
+                    new Discovery.Core.DTOs.MultipartUploadPartStateDto(1, "etag-1", umMiB),
+                    new Discovery.Core.DTOs.MultipartUploadPartStateDto(2, "etag-2", dezMiB),
+                ]));
+
+        Assert.That(ex!.Message, Does.Contain("5 MiB"));
+    }
+
+    [Test]
+    public async Task Complete_AceitaUmUnicoBlocoMenorQue5MiB()
+    {
+        // Um arquivo de um bloco só pode ter qualquer tamanho (regra do S3).
+        var service = new CustomPackageAssetService(new StubStorageFactory(new MultipartStorage()));
+
+        var asset = await service.CompleteMultipartUploadAsync(
+            ObjectKeySample, "installer", "Setup.exe", "application/x-msdownload",
+            1024, "upload-abc",
+            [new Discovery.Core.DTOs.MultipartUploadPartStateDto(1, "etag-1", 1024)]);
+
+        Assert.That(asset.ObjectKey, Is.EqualTo(ObjectKeySample));
+    }
+
+    [Test]
+    public async Task Complete_RecusaSomaDiferenteDoArquivo()
+    {
+        const long dezMiB = 10L * 1024 * 1024;
+        var service = new CustomPackageAssetService(new StubStorageFactory(new MultipartStorage()));
+
+        // Os blocos somam 20 MiB, mas o arquivo declara 30 MiB: envio incompleto.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.CompleteMultipartUploadAsync(
+                ObjectKeySample, "installer", "Setup.exe", "application/x-msdownload",
+                dezMiB * 3, "upload-abc",
+                [
+                    new Discovery.Core.DTOs.MultipartUploadPartStateDto(1, "etag-1", dezMiB),
+                    new Discovery.Core.DTOs.MultipartUploadPartStateDto(2, "etag-2", dezMiB),
+                ]));
+
+        Assert.That(ex!.Message, Does.Contain("somam"));
+    }
+
+    [Test]
+    public async Task Complete_RecusaBlocoAcimaDoLimiteDoS3()
+    {
+        // O teto válido é o do S3 (5 GiB) — não o teto de proxy (50 MiB), que
+        // recusaria blocos legítimos de sessões antigas.
+        const long seisGiB = 6L * 1024 * 1024 * 1024;
+        var service = new CustomPackageAssetService(new StubStorageFactory(new MultipartStorage()));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.CompleteMultipartUploadAsync(
+                ObjectKeySample, "installer", "Setup.exe", "application/x-msdownload",
+                seisGiB, "upload-abc",
+                [new Discovery.Core.DTOs.MultipartUploadPartStateDto(1, "etag-1", seisGiB)]));
+
+        Assert.That(ex!.Message, Does.Contain("5 GiB"));
+        Assert.That(ex!.Message, Does.Not.Contain("0 GiB"), "mensagem não pode ser '0 GiB'");
+    }
+
+    [Test]
     public async Task Complete_ComBlocosFaltando_FalhaAntesDeIrAoStorage()
     {
         var payload = Encoding.UTF8.GetBytes("x");

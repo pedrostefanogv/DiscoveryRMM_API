@@ -277,6 +277,15 @@ public class AppStoreController(
                 partUrlTtlSeconds = session.PartUrlTtlMinutes * 60,
                 fileName = session.FileName,
                 sizeBytes = session.SizeBytes,
+
+                // O cliente pode ADAPTAR o tamanho do bloco no meio do envio (mede
+                // a velocidade no primeiro bloco e cresce até o teto). O complete
+                // valida por regra do S3, não por tamanho fixo — sem este aviso um
+                // cliente novo enviaria blocos de tamanhos diferentes para um
+                // servidor antigo e o complete seria recusado.
+                supportsAdaptiveParts = true,
+                minPartSizeBytes = CustomPackageAssetService.MinPartBytes,
+                maxPartSizeBytes = CustomPackageAssetService.MaxPartBytes,
             });
         }
         catch (InvalidOperationException ex)
@@ -422,11 +431,19 @@ public class AppStoreController(
             // O multipart não existe mais no storage (upload já finalizado antes):
             // se o objeto está lá, a resposta correta é o asset, não um erro.
             var described = await DescribeCompletedIfPublishedAsync(assets, session, ct);
-            if (described is null)
-                throw;
+            if (described is not null)
+            {
+                await MarkCompletedAsync(redis, session, session.Parts, described.Checksum, ct);
+                return Ok(described);
+            }
 
-            await MarkCompletedAsync(redis, session, session.Parts, described.Checksum, ct);
-            return Ok(described);
+            // Sem multipart e sem objeto: o envio não existe mais (expirado ou
+            // descartado). Resposta clara em vez de 500.
+            _logger.LogWarning(ex, "Complete sem multipart/objeto para {UploadId}.", uploadId);
+            return Conflict(new
+            {
+                errors = new[] { new { Code = "UploadGone", Message = "Este envio não existe mais no object storage. Anexe o instalador novamente." } }
+            });
         }
 
         if (parts.Length == 0)
