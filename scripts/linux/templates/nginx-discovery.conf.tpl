@@ -92,7 +92,12 @@ client_max_body_size 64m;
   # termina depois de o storage montar o objeto E a API calcular o SHA-256 do
   # arquivo (passada de leitura). O default de 60s do proxy_read_timeout devolvia
   # 504 no meio de um instalador de vários GiB — com o storage já concluído.
-  location ^~ /api/v1/app-store/custom/assets/multipart/ {
+  #
+  # ATENCAO: o location NAO pode terminar com "/". O nginx (auto_redirect, ligado
+  # por padrao) responde 301 de /multipart para /multipart/ quando o location tem
+  # barra final; o navegador refaz o POST como GET e a API devolve 405. Sem a
+  # barra o location casa /multipart e /multipart/{id} e nao ha redirect.
+  location ^~ /api/v1/app-store/custom/assets/multipart {
     proxy_pass http://discovery_api_backend;
     proxy_http_version 1.1;
     proxy_set_header Connection "";
