@@ -307,6 +307,29 @@ public class LocalObjectStorageProvider : IObjectStorageService
             Errors: ["Local storage provider está desativado. Use o provider S3-compatível (MinIO)."],
             LatencyMs: 0));
 
+    // ── Multipart (envio direto ao storage) ─────────────────────────────────
+    // O provider local nao tem S3/presign: o envio direto por partes so existe
+    // em providers S3-compatíveis (RustFS/MinIO/S3). A API responde 501.
+
+    private static NotSupportedException MultipartNotSupported() => new(
+        "O provider de object storage local nao suporta multipart upload com URLs pre-assinadas. " +
+        "Configure um storage S3-compatível (RustFS/MinIO/S3).");
+
+    public Task<string> CreateMultipartUploadAsync(string objectKey, string contentType, CancellationToken cancellationToken = default)
+        => throw MultipartNotSupported();
+
+    public Task<string> GetPresignedUploadPartUrlAsync(string objectKey, string uploadId, int partNumber, int ttlMinutes, CancellationToken cancellationToken = default)
+        => throw MultipartNotSupported();
+
+    public Task CompleteMultipartUploadAsync(string objectKey, string uploadId, IReadOnlyList<MultipartUploadPart> parts, CancellationToken cancellationToken = default)
+        => throw MultipartNotSupported();
+
+    public Task AbortMultipartUploadAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
+        => throw MultipartNotSupported();
+
+    public Task<IReadOnlyList<MultipartUploadPart>> ListMultipartUploadPartsAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
+        => throw MultipartNotSupported();
+
     /// <summary>
     /// Normalizar object key para caminho local seguro.
     /// Evitar path traversal attacks.

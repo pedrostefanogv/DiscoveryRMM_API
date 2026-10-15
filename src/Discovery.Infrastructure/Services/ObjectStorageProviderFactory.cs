@@ -282,6 +282,21 @@ file sealed class NotConfiguredObjectStorageProvider : IObjectStorageService
     public Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
+    public Task<string> CreateMultipartUploadAsync(string objectKey, string contentType, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<string> GetPresignedUploadPartUrlAsync(string objectKey, string uploadId, int partNumber, int ttlMinutes, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task CompleteMultipartUploadAsync(string objectKey, string uploadId, IReadOnlyList<MultipartUploadPart> parts, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task AbortMultipartUploadAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<IReadOnlyList<MultipartUploadPart>> ListMultipartUploadPartsAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
     public Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(new ObjectStorageTestResult(
             Success: false,
@@ -328,6 +343,21 @@ file sealed class DeferredObjectStorageProvider : IObjectStorageService
 
     public async Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).GetMetadataAsync(objectKey, cancellationToken);
+
+    public async Task<string> CreateMultipartUploadAsync(string objectKey, string contentType, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).CreateMultipartUploadAsync(objectKey, contentType, cancellationToken);
+
+    public async Task<string> GetPresignedUploadPartUrlAsync(string objectKey, string uploadId, int partNumber, int ttlMinutes, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).GetPresignedUploadPartUrlAsync(objectKey, uploadId, partNumber, ttlMinutes, cancellationToken);
+
+    public async Task CompleteMultipartUploadAsync(string objectKey, string uploadId, IReadOnlyList<MultipartUploadPart> parts, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).CompleteMultipartUploadAsync(objectKey, uploadId, parts, cancellationToken);
+
+    public async Task AbortMultipartUploadAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).AbortMultipartUploadAsync(objectKey, uploadId, cancellationToken);
+
+    public async Task<IReadOnlyList<MultipartUploadPart>> ListMultipartUploadPartsAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).ListMultipartUploadPartsAsync(objectKey, uploadId, cancellationToken);
 
     public async Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).TestConnectionAsync(cancellationToken);

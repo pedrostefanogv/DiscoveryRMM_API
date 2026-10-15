@@ -43,6 +43,64 @@ public interface ICustomPackageAssetService
     Task DeleteAsync(
         string objectKey,
         CancellationToken cancellationToken = default);
+
+    // ── Upload multipart DIRETO no storage (instaladores grandes) ────────────
+    //
+    // O arquivo NÃO passa pela API: ela cria o multipart, pré-assina cada bloco
+    // de 50 MiB e o navegador faz PUT direto no RustFS/S3. Vantagens: passa pelo
+    // Cloudflare (blocos pequenos), retomável (o storage guarda as partes até o
+    // complete) e sem custo de memória/disco na API.
+
+    // Doubles de teste que só exercitam o caminho antigo herdam o padrão abaixo.
+
+    /// <summary>Cria o multipart no storage e devolve a sessão de upload.</summary>
+    Task<MultipartUploadSessionDto> BeginMultipartUploadAsync(
+        string kind,
+        string fileName,
+        string contentType,
+        long sizeBytes,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    /// <summary>URL pré-assinada de uma parte (PUT direto no storage).</summary>
+    Task<MultipartUploadPartUrlDto> GetUploadPartUrlAsync(
+        string objectKey,
+        string uploadId,
+        int partNumber,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    /// <summary>Partes já recebidas pelo storage — permite retomar/verificar.</summary>
+    Task<IReadOnlyList<MultipartUploadPartStateDto>> ListUploadedPartsAsync(
+        string objectKey,
+        string uploadId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    /// <summary>
+    /// Finaliza o multipart com os ETags recebidos e devolve o asset pronto
+    /// (mesmo formato do upload único), com SHA-256 calculado pela API.
+    /// </summary>
+    Task<CustomPackageAssetDto> CompleteMultipartUploadAsync(
+        string objectKey,
+        string kind,
+        string fileName,
+        string contentType,
+        long sizeBytes,
+        string uploadId,
+        IReadOnlyList<MultipartUploadPartStateDto> parts,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    /// <summary>Aborta o multipart (o storage descarta as partes enviadas).</summary>
+    Task AbortMultipartUploadAsync(
+        string objectKey,
+        string uploadId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    private const string MultipartNotSupportedMessage =
+        "Upload multipart direto no storage nao esta disponivel neste provider.";
 }
 
 /// <summary>Conteúdo de um asset baixado do storage.</summary>

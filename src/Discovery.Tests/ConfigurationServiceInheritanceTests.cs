@@ -8,6 +8,7 @@ using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Repositories;
 using Discovery.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace Discovery.Tests;
 
@@ -135,11 +136,14 @@ public class ConfigurationServiceInheritanceTests
         return new ConfigurationInheritanceDbContext(options);
     }
 
+    /// <summary>Config vazia: o repositório só usa IConfiguration para semear defaults na 1ª linha.</summary>
+    private static IConfiguration EmptyConfiguration() => new ConfigurationBuilder().Build();
+
     private static ConfigurationService BuildService(DiscoveryDbContext db)
     {
         var redis = new NoopRedisService();
         return new ConfigurationService(
-            new ServerConfigurationRepository(db, redis),
+            new ServerConfigurationRepository(db, redis, EmptyConfiguration()),
             new ClientConfigurationRepository(db),
             new SiteConfigurationRepository(db),
             null!, // ISiteRepository só é usado quando a config do site ainda não existe

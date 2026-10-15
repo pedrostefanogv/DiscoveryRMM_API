@@ -196,6 +196,22 @@ public sealed class InstrumentedObjectStorageProvider(
     public Task<Discovery.Core.ValueObjects.ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
         => MeasureAsync("head", () => inner.TestConnectionAsync(cancellationToken));
 
+    // ── Multipart (envio direto do cliente ao storage) ──────────────────────
+    public Task<string> CreateMultipartUploadAsync(string objectKey, string contentType, CancellationToken cancellationToken = default)
+        => MeasureAsync("multipart-create", () => inner.CreateMultipartUploadAsync(objectKey, contentType, cancellationToken));
+
+    public Task<string> GetPresignedUploadPartUrlAsync(string objectKey, string uploadId, int partNumber, int ttlMinutes, CancellationToken cancellationToken = default)
+        => MeasureAsync("multipart-presign", () => inner.GetPresignedUploadPartUrlAsync(objectKey, uploadId, partNumber, ttlMinutes, cancellationToken));
+
+    public Task CompleteMultipartUploadAsync(string objectKey, string uploadId, IReadOnlyList<Discovery.Core.ValueObjects.MultipartUploadPart> parts, CancellationToken cancellationToken = default)
+        => MeasureAsync("multipart-complete", () => inner.CompleteMultipartUploadAsync(objectKey, uploadId, parts, cancellationToken));
+
+    public Task AbortMultipartUploadAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
+        => MeasureAsync("multipart-abort", () => inner.AbortMultipartUploadAsync(objectKey, uploadId, cancellationToken));
+
+    public Task<IReadOnlyList<Discovery.Core.ValueObjects.MultipartUploadPart>> ListMultipartUploadPartsAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
+        => MeasureAsync("multipart-list", () => inner.ListMultipartUploadPartsAsync(objectKey, uploadId, cancellationToken));
+
     private async Task<T> MeasureAsync<T>(string operation, Func<Task<T>> action)
     {
         telemetry.OperationStarted();

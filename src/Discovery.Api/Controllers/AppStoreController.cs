@@ -224,6 +224,262 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         return NoContent();
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Upload MULTIPART DIRETO no storage (RustFS/S3) — instaladores grandes
+    // ═══════════════════════════════════════════════════════════════════
+    //
+    // O arquivo NÃO passa pela API: ela cria o multipart no storage, pré-assina
+    // cada bloco de 50 MiB e o navegador faz PUT direto na URL assinada. Isso é
+    // o que permite atravessar o Cloudflare (corpo pequeno por requisição) e
+    // RETOMAR o envio de onde parou (o storage guarda as partes até o complete).
+
+    /// <summary>Cria o multipart upload direto no storage.</summary>
+    [HttpPost("custom/assets/multipart")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public async Task<IActionResult> CreateCustomAssetMultipartUpload(
+        [FromBody] CustomAssetMultipartRequest request,
+        [FromServices] ICustomPackageAssetService assets,
+        [FromServices] IRedisService redis,
+        CancellationToken ct)
+    {
+        if (request is null)
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = "Corpo da requisição é obrigatório." } } });
+
+        try
+        {
+            var session = await assets.BeginMultipartUploadAsync(
+                request.Kind ?? "installer",
+                request.FileName ?? string.Empty,
+                request.ContentType ?? "application/octet-stream",
+                request.SizeBytes,
+                ct);
+
+            await SaveMultipartSessionAsync(redis, session);
+
+            return Ok(new
+            {
+                uploadId = session.UploadId,
+                objectKey = session.ObjectKey,
+                partSizeBytes = session.PartSizeBytes,
+                totalParts = (int)((session.SizeBytes + session.PartSizeBytes - 1) / session.PartSizeBytes),
+                partUrlTtlSeconds = session.PartUrlTtlMinutes * 60,
+                fileName = session.FileName,
+                sizeBytes = session.SizeBytes,
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = ex.Message } } });
+        }
+        catch (NotSupportedException ex)
+        {
+            return StatusCode(StatusCodes.Status501NotImplemented, new { errors = new[] { new { Code = "Unsupported", Message = ex.Message } } });
+        }
+    }
+
+    /// <summary>
+    /// Estado do upload + partes já recebidas pelo storage. Usado para RETOMAR
+    /// um envio interrompido (o storage é a fonte de verdade das partes).
+    /// </summary>
+    [HttpGet("custom/assets/multipart/{uploadId}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public async Task<IActionResult> GetCustomAssetMultipartStatus(
+        string uploadId,
+        [FromServices] ICustomPackageAssetService assets,
+        [FromServices] IRedisService redis,
+        CancellationToken ct)
+    {
+        var session = await LoadMultipartSessionAsync(redis, uploadId);
+        if (session is null)
+            return NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sessão de upload não encontrada ou expirada." } } });
+
+        var received = await assets.ListUploadedPartsAsync(session.ObjectKey, session.UploadId, ct);
+        return Ok(BuildStatusResponse(session, received));
+    }
+
+    /// <summary>
+    /// Devolve URLs pré-assinadas para os blocos pedidos (PUT direto no storage).
+    /// Blocos já recebidos podem ser reconferidos com GET do estado.
+    /// </summary>
+    [HttpPost("custom/assets/multipart/{uploadId}/parts")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public async Task<IActionResult> GetCustomAssetMultipartPartUrls(
+        string uploadId,
+        [FromBody] CustomAssetPartUrlRequest? request,
+        [FromServices] ICustomPackageAssetService assets,
+        [FromServices] IRedisService redis,
+        CancellationToken ct)
+    {
+        var session = await LoadMultipartSessionAsync(redis, uploadId);
+        if (session is null)
+            return NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sessão de upload não encontrada ou expirada." } } });
+
+        var totalParts = (int)((session.SizeBytes + session.PartSizeBytes - 1) / session.PartSizeBytes);
+        var requested = (request?.PartNumbers is { Count: > 0 })
+            ? request.PartNumbers.Distinct().OrderBy(x => x).ToArray()
+            : Enumerable.Range(1, totalParts).ToArray();
+
+        if (requested.Any(part => part < 1 || part > totalParts))
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = $"Número de bloco fora do intervalo 1..{totalParts}." } } });
+
+        var urls = new List<MultipartUploadPartUrlDto>(requested.Length);
+        foreach (var part in requested)
+            urls.Add(await assets.GetUploadPartUrlAsync(session.ObjectKey, session.UploadId, part, ct));
+
+        return Ok(new { uploadId, totalParts, parts = urls });
+    }
+
+    /// <summary>
+    /// Finaliza o multipart no storage e devolve o asset pronto (mesmo formato do
+    /// upload único). Sem ETags no corpo, a API usa as partes que o storage tem.
+    /// </summary>
+    [HttpPost("custom/assets/multipart/{uploadId}/complete")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public async Task<IActionResult> CompleteCustomAssetMultipartUpload(
+        string uploadId,
+        [FromBody] CustomAssetMultipartCompleteRequest? request,
+        [FromServices] ICustomPackageAssetService assets,
+        [FromServices] IRedisService redis,
+        CancellationToken ct)
+    {
+        var session = await LoadMultipartSessionAsync(redis, uploadId);
+        if (session is null)
+            return NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sessão de upload não encontrada ou expirada." } } });
+
+        try
+        {
+            var parts = (request?.Parts is { Count: > 0 })
+                ? request.Parts
+                    .Select(part => new MultipartUploadPartStateDto(part.PartNumber, NormalizeETag(part.ETag), part.SizeBytes))
+                    .ToArray()
+                : (await assets.ListUploadedPartsAsync(session.ObjectKey, session.UploadId, ct)).ToArray();
+
+            var asset = await assets.CompleteMultipartUploadAsync(
+                session.ObjectKey,
+                session.Kind,
+                session.FileName,
+                session.ContentType,
+                session.SizeBytes,
+                session.UploadId,
+                parts,
+                ct);
+
+            await redis.DeleteAsync(MultipartSessionKey(uploadId));
+            return Ok(asset);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = ex.Message } } });
+        }
+    }
+
+    /// <summary>Aborta o multipart (o storage descarta as partes enviadas).</summary>
+    [HttpDelete("custom/assets/multipart/{uploadId}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public async Task<IActionResult> AbortCustomAssetMultipartUpload(
+        string uploadId,
+        [FromServices] ICustomPackageAssetService assets,
+        [FromServices] IRedisService redis,
+        CancellationToken ct)
+    {
+        var session = await LoadMultipartSessionAsync(redis, uploadId);
+        if (session is not null)
+        {
+            try
+            {
+                await assets.AbortMultipartUploadAsync(session.ObjectKey, session.UploadId, ct);
+            }
+            catch (Exception)
+            {
+                // best-effort: o importante é liberar a sessão (TTL de 24h no storage).
+            }
+
+            await redis.DeleteAsync(MultipartSessionKey(uploadId));
+        }
+
+        return NoContent();
+    }
+
+    // ── Multipart direto: estado (Redis) e helpers ────────────────────────
+    private sealed class CustomAssetMultipartSession
+    {
+        public string UploadId { get; set; } = string.Empty;
+        public string ObjectKey { get; set; } = string.Empty;
+        public string Kind { get; set; } = "installer";
+        public string FileName { get; set; } = string.Empty;
+        public string ContentType { get; set; } = "application/octet-stream";
+        public long SizeBytes { get; set; }
+        public long PartSizeBytes { get; set; } = 50L * 1024 * 1024;
+        public int PartUrlTtlMinutes { get; set; } = 60;
+    }
+
+    /// <summary>Sessões sobrevivem a restart da API (estado em Redis, TTL 24h).</summary>
+    private static string MultipartSessionKey(string uploadId) => $"appstore:asset-multipart:{uploadId}";
+    private static readonly TimeSpan MultipartSessionTtl = TimeSpan.FromHours(24);
+
+    private static async Task SaveMultipartSessionAsync(IRedisService redis, MultipartUploadSessionDto session)
+    {
+        var state = new CustomAssetMultipartSession
+        {
+            UploadId = session.UploadId,
+            ObjectKey = session.ObjectKey,
+            Kind = session.Kind,
+            FileName = session.FileName,
+            ContentType = session.ContentType,
+            SizeBytes = session.SizeBytes,
+            PartSizeBytes = session.PartSizeBytes,
+            PartUrlTtlMinutes = session.PartUrlTtlMinutes,
+        };
+
+        await redis.SetAsync(MultipartSessionKey(session.UploadId), System.Text.Json.JsonSerializer.Serialize(state), (int)MultipartSessionTtl.TotalSeconds);
+    }
+
+    private static async Task<CustomAssetMultipartSession?> LoadMultipartSessionAsync(IRedisService redis, string uploadId)
+    {
+        if (string.IsNullOrWhiteSpace(uploadId))
+            return null;
+
+        var json = await redis.GetAsync(MultipartSessionKey(uploadId));
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<CustomAssetMultipartSession>(json);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static object BuildStatusResponse(CustomAssetMultipartSession session, IReadOnlyList<MultipartUploadPartStateDto> received)
+    {
+        var totalParts = (int)((session.SizeBytes + session.PartSizeBytes - 1) / session.PartSizeBytes);
+        var receivedNumbers = received.Select(part => part.PartNumber).ToHashSet();
+
+        return new
+        {
+            uploadId = session.UploadId,
+            objectKey = session.ObjectKey,
+            fileName = session.FileName,
+            sizeBytes = session.SizeBytes,
+            partSizeBytes = session.PartSizeBytes,
+            totalParts,
+            partUrlTtlSeconds = session.PartUrlTtlMinutes * 60,
+            receivedBytes = received.Sum(part => part.SizeBytes),
+            receivedParts = received,
+            pendingParts = Enumerable.Range(1, totalParts).Where(part => !receivedNumbers.Contains(part)).ToArray(),
+        };
+    }
+
+    /// <summary>ETag do S3 sempre com aspas no CompleteMultipartUpload.</summary>
+    private static string NormalizeETag(string? etag)
+    {
+        var value = (etag ?? string.Empty).Trim().Trim('"');
+        return '"' + value + '"';
+    }
+
     // ── Upload em partes: estado e helpers ────────────────────────────────
     /// <summary>Bloco padrão de 50 MiB (o edge do Cloudflare recusa ~100 MB+).</summary>
     private const long CustomAssetPartBytes = 50L * 1024 * 1024;
@@ -249,6 +505,35 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         public string? Kind { get; set; }
         public string? FileName { get; set; }
         public string? ContentType { get; set; }
+        public long SizeBytes { get; set; }
+    }
+
+    /// <summary>Corpo do POST que abre o upload multipart DIRETO no storage.</summary>
+    public sealed class CustomAssetMultipartRequest
+    {
+        public string? Kind { get; set; }
+        public string? FileName { get; set; }
+        public string? ContentType { get; set; }
+        public long SizeBytes { get; set; }
+    }
+
+    /// <summary>Corpo do POST que pede URLs pré-assinadas de blocos específicos.</summary>
+    public sealed class CustomAssetPartUrlRequest
+    {
+        public List<int>? PartNumbers { get; set; }
+    }
+
+    /// <summary>Corpo do POST de complete (ETags coletados pelo cliente).</summary>
+    public sealed class CustomAssetMultipartCompleteRequest
+    {
+        public List<CustomAssetMultipartPart>? Parts { get; set; }
+    }
+
+    /// <summary>ETag devolvido pelo storage no PUT de um bloco.</summary>
+    public sealed class CustomAssetMultipartPart
+    {
+        public int PartNumber { get; set; }
+        public string? ETag { get; set; }
         public long SizeBytes { get; set; }
     }
 

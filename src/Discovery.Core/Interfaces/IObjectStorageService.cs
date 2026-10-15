@@ -98,4 +98,64 @@ public interface IObjectStorageService
     /// Não lança exceção — retorna resultado estruturado mesmo em caso de falha.
     /// </summary>
     Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default);
+
+    // ── Multipart Upload (arquivos grandes: envio DIRETO do cliente ao storage) ──
+    //
+    // Fluxo usado pelos instaladores da loja custom (1-10 GiB): o navegador NÃO
+    // envia o arquivo para a API — a API cria o multipart, pré-assina cada parte
+    // (blocos de 50 MiB) e o cliente faz PUT direto no RustFS/S3, que é o único
+    // caminho que passa pelo Cloudflare sem 413 e com retomada real (as partes
+    // ficam no storage até o complete/abort).
+
+    // Implementações que NÃO são S3-compatíveis (provider local e doubles de
+    // teste) herdam o padrão abaixo: falha explícita em vez de silenciosa.
+
+    /// <summary>Cria o multipart upload e devolve o uploadId do storage.</summary>
+    Task<string> CreateMultipartUploadAsync(
+        string objectKey,
+        string contentType,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    /// <summary>
+    /// URL pré-assinada de UMA parte (PUT ?partNumber&amp;uploadId). Assinada
+    /// localmente via SigV4 porque o SDK MinIO 7.0.0 não pré-assina partes.
+    /// </summary>
+    Task<string> GetPresignedUploadPartUrlAsync(
+        string objectKey,
+        string uploadId,
+        int partNumber,
+        int ttlMinutes,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    /// <summary>Finaliza o multipart upload com os ETags das partes recebidas.</summary>
+    Task CompleteMultipartUploadAsync(
+        string objectKey,
+        string uploadId,
+        IReadOnlyList<MultipartUploadPart> parts,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    /// <summary>Aborta o multipart upload (o storage descarta as partes).</summary>
+    Task AbortMultipartUploadAsync(
+        string objectKey,
+        string uploadId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    /// <summary>
+    /// Lista as partes já recebidas pelo storage — fonte de verdade para RETOMAR
+    /// um envio interrompido (inclusive depois de restart da API).
+    /// </summary>
+    Task<IReadOnlyList<MultipartUploadPart>> ListMultipartUploadPartsAsync(
+        string objectKey,
+        string uploadId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(MultipartNotSupportedMessage);
+
+    /// <summary>Mensagem padrão do multipart em providers sem suporte a presign.</summary>
+    private const string MultipartNotSupportedMessage =
+        "O storage configurado nao suporta envio multipart com URLs pre-assinadas " +
+        "(requer um provider S3-compatível: RustFS/MinIO/S3).";
 }

@@ -105,6 +105,30 @@ public static class AwsSigV4Signer
                "&X-Amz-Signature=" + signature;
     }
 
+    /// <summary>
+    /// URL pré-assinada para uma OPERAÇÃO sobre o objeto (POST ?uploads=1, POST
+    /// ?uploadId=…, DELETE ?uploadId=…). O path é codificado aqui — quem chama só
+    /// informa bucket/key e os parâmetros extras.
+    /// </summary>
+    public static string CreatePresignedObjectUrl(
+        string method,
+        Uri endpoint,
+        string bucket,
+        string objectKey,
+        IReadOnlyDictionary<string, string>? query,
+        string accessKey,
+        string secretKey,
+        string region,
+        DateTimeOffset now,
+        int expiresSeconds)
+    {
+        if (string.IsNullOrWhiteSpace(bucket))
+            throw new ArgumentException("bucket is required", nameof(bucket));
+
+        var path = "/" + EncodePathSegment(bucket) + "/" + EncodePath(objectKey);
+        return CreatePresignedUrl(method, endpoint, path, query, accessKey, secretKey, region, now, expiresSeconds);
+    }
+
     /// <summary>URL pré-assinada de UMA parte do upload multipart.</summary>
     public static string CreatePresignedPartUrl(
         Uri endpoint,
@@ -121,14 +145,40 @@ public static class AwsSigV4Signer
         if (partNumber is < 1 or > 10000)
             throw new ArgumentOutOfRangeException(nameof(partNumber));
 
-        var path = "/" + EncodePathSegment(bucket) + "/" + EncodePath(objectKey);
         var query = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["partNumber"] = partNumber.ToString(CultureInfo.InvariantCulture),
             ["uploadId"] = uploadId,
         };
 
-        return CreatePresignedUrl("PUT", endpoint, path, query, accessKey, secretKey, region, now, expiresSeconds);
+        return CreatePresignedObjectUrl("PUT", endpoint, bucket, objectKey, query, accessKey, secretKey, region, now, expiresSeconds);
+    }
+
+    /// <summary>
+    /// URL pré-assinada de ListParts (GET ?uploadId=…). O SDK MinIO 7.0.0 não
+    /// expõe ListParts, então a API lista as partes por essa URL assinada — é o
+    /// que permite retomar um envio de onde parou.
+    /// </summary>
+    public static string CreatePresignedListPartsUrl(
+        Uri endpoint,
+        string bucket,
+        string objectKey,
+        string uploadId,
+        string accessKey,
+        string secretKey,
+        string region,
+        DateTimeOffset now,
+        int expiresSeconds)
+    {
+        if (string.IsNullOrWhiteSpace(uploadId))
+            throw new ArgumentException("uploadId is required", nameof(uploadId));
+
+        var query = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["uploadId"] = uploadId,
+        };
+
+        return CreatePresignedObjectUrl("GET", endpoint, bucket, objectKey, query, accessKey, secretKey, region, now, expiresSeconds);
     }
 
     /// <summary>Codificação RFC3986 exigida pelo SigV4 em query string.</summary>
