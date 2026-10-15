@@ -393,6 +393,109 @@ ensure_nats_fanout_stream() {
   return 0
 }
 
+# ── NATS JetStream: acesso do usuario de servico ao store_dir ──────────────
+#
+# BUG 2026-10-14 (discovery-pstefano/.82): o nats-server roda como usuario
+# "nats", mas o store_dir caiu em /opt/discovery-ops (750, dono discovery-api).
+# Sem permissao de ATRAVESSAR o diretorio pai, TODO consumer de stream falhava
+#     could not create consumer directory - mkdir /opt/discovery-ops/nats:
+#     permission denied (10104)
+# e o JetStream ficava inoperante: sem replay para os comandos fanout e sem
+# persistencia do support chat. A API/agentes so percebiam em runtime
+# ("[nats][jetstream] indisponivel ... fallback core, SEM replay") — nao havia
+# NENHUM erro no update, porque setup_nats() so validava isso na instalacao e o
+# modo --mode update nem chamava setup_nats.
+#
+# Esta funcao detecta e REPARA (idempotente):
+#   1. cria store_dir/parent com dono e grupo do usuario de servico do NATS;
+#   2. garante travessia (x) em TODOS os ancestrais do store_dir — setfacl quando
+#      disponivel (nao abre o diretorio para outros usuarios), com fallback para
+#      chmod o+x preservando o restante do modo;
+#   3. verifica ESCRITA real criando um probe como o usuario do NATS;
+#   4. em modo estrito falha com mensagem acionavel; em --warn-only apenas avisa.
+#
+# Uso: ensure_nats_jetstream_store_access [--warn-only]
+ensure_nats_jetstream_store_access() {
+  local warn_only=0
+  [[ "${1:-}" == "--warn-only" ]] && warn_only=1
+
+  local nats_conf=""
+  nats_conf="$(resolve_nats_conf_path 2>/dev/null || true)"
+
+  # Host sem NATS instalado: nada a verificar.
+  if ! command -v nats-server >/dev/null 2>&1 \
+     && ! systemctl list-unit-files nats-server.service >/dev/null 2>&1 \
+     && [[ ! -f "$nats_conf" ]]; then
+    return 0
+  fi
+
+  local store_dir="${NATS_JS_STORE_DIR:-}"
+  if [[ -z "$store_dir" && -n "$nats_conf" && -f "$nats_conf" ]]; then
+    store_dir="$(sudo sed -n 's/^[[:space:]]*store_dir:[[:space:]]*"\([^"]*\)".*/\1/p' "$nats_conf" | head -n 1)"
+  fi
+  [[ -n "$store_dir" ]] || store_dir="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}/nats/jetstream"
+  # Sem barra final: dirname("/a/b/") devolve "/a" e pularia um nivel na checagem.
+  store_dir="${store_dir%/}"
+
+  local nats_user nats_group
+  nats_user="$(detect_nats_service_user)"
+  nats_group="$(detect_nats_service_group "$nats_user")"
+  if [[ -z "$nats_user" ]]; then
+    log "JetStream: usuario de servico do NATS nao detectado; pulando verificacao do store_dir"
+    return 0
+  fi
+
+  local parent; parent="$(dirname "$store_dir")"
+  sudo install -d -m 750 -o "$nats_user" -g "$nats_group" "$parent" >/dev/null 2>&1 || true
+  sudo install -d -m 750 -o "$nats_user" -g "$nats_group" "$store_dir" >/dev/null 2>&1 || true
+
+  local repaired=0
+
+  # Ancestrais: o usuario do NATS precisa de x (travessia) em cada nivel ate a raiz.
+  local path="$store_dir" ancestor
+  while [[ "$path" != "/" && -n "$path" ]]; do
+    ancestor="$(dirname "$path")"
+    if [[ -d "$ancestor" ]] && ! sudo -u "$nats_user" test -x "$ancestor" >/dev/null 2>&1; then
+      if command -v setfacl >/dev/null 2>&1 \
+         && sudo setfacl -m "u:${nats_user}:--x" "$ancestor" >/dev/null 2>&1; then
+        log "JetStream: travessia liberada via ACL (u:${nats_user}:--x) em $ancestor"
+      else
+        local mode; mode="$(sudo stat -c '%a' "$ancestor" 2>/dev/null || echo '750')"
+        case "$mode" in
+          *[1357]) : ;;  # ultimo digito ja concede x a outros
+          *) sudo chmod o+x "$ancestor" >/dev/null 2>&1 || true ;;
+        esac
+        log "JetStream: travessia liberada via chmod o+x em $ancestor (modo era $mode)"
+      fi
+      repaired=1
+    fi
+    path="$ancestor"
+  done
+
+  # Verificacao de ESCRITA real (traverssia sozinha nao garante consumer/stream).
+  local probe="$store_dir/.discovery-js-write-probe"
+  if ! sudo -u "$nats_user" touch "$probe" >/dev/null 2>&1; then
+    sudo chown -R "$nats_user:$nats_group" "$parent" "$store_dir" >/dev/null 2>&1 || true
+    repaired=1
+  fi
+
+  if sudo -u "$nats_user" touch "$probe" >/dev/null 2>&1; then
+    sudo rm -f "$probe" >/dev/null 2>&1 || true
+    if [[ "$repaired" -eq 1 ]]; then
+      log "JetStream: store_dir reparado e gravavel por $nats_user ($store_dir)"
+      log "JetStream: se o nats-server estava ativo durante o reparo, reinicie (systemctl restart nats-server) para reavaliar consumers"
+    fi
+    return 0
+  fi
+
+  local msg="JetStream inoperante: usuario $nats_user NAO grava em $store_dir (consumers/streams falham em runtime, sem replay de comandos). Verifique a travessia/ACL de todo o caminho ate $store_dir"
+  if [[ "$warn_only" -eq 1 ]]; then
+    log "AVISO: $msg"
+    return 1
+  fi
+  fail "$msg"
+}
+
 # ── NATS server configuration ──────────────────────────────────────────────
 
 setup_nats() {
@@ -407,39 +510,14 @@ setup_nats() {
   local nats_js_store_dir="${NATS_JS_STORE_DIR:-${DISCOVERY_OPS_DIR:-/opt/discovery-ops}/nats/jetstream}"
   local nats_js_max_memory_store="${NATS_JS_MAX_MEMORY_STORE:-64M}"
   local nats_js_max_file_store="${NATS_JS_MAX_FILE_STORE:-512M}"
-  local discovery_ops_dir_effective="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"
 
   local jetstream_block=""
   if [[ "$nats_js_enabled" == "1" ]]; then
-    local nats_service_user nats_service_group
-    nats_service_user="$(detect_nats_service_user)"
-    nats_service_group="$(detect_nats_service_group "$nats_service_user")"
-
-    if [[ "$nats_js_store_dir" == "${discovery_ops_dir_effective}"* ]]; then
-      if sudo test -d "$discovery_ops_dir_effective"; then
-        sudo chmod 751 "$discovery_ops_dir_effective"
-      else
-        if id -u discovery-api >/dev/null 2>&1; then
-          sudo install -d -m 751 -o discovery-api -g discovery-api "$discovery_ops_dir_effective"
-        else
-          sudo install -d -m 751 -o root -g root "$discovery_ops_dir_effective"
-        fi
-      fi
-    fi
-
-    sudo install -d -m 750 -o "$nats_service_user" -g "$nats_service_group" "$(dirname "$nats_js_store_dir")"
-    sudo install -d -m 750 -o "$nats_service_user" -g "$nats_service_group" "$nats_js_store_dir"
-
-    # Garante que o usuario de servico do NATS consegue atravessar o path do store_dir.
-    if ! sudo -u "$nats_service_user" test -d "$nats_js_store_dir" >/dev/null 2>&1; then
-      if [[ "$nats_js_store_dir" == "${discovery_ops_dir_effective}"* ]] && sudo test -d "$discovery_ops_dir_effective"; then
-        sudo chmod 751 "$discovery_ops_dir_effective" || true
-      fi
-    fi
-
-    if ! sudo -u "$nats_service_user" test -d "$nats_js_store_dir" >/dev/null 2>&1; then
-      fail "Usuario de servico do NATS ($nats_service_user) sem acesso ao NATS_JS_STORE_DIR: $nats_js_store_dir"
-    fi
+    # Cria o store_dir e garante TRAVESSIA + ESCRITA do usuario de servico do NATS
+    # em todo o caminho, com auto-reparo (ACL/chmod/chown + probe de escrita).
+    # Antes isso era um chmod 751 pontual no diretorio pai, sem verificacao de
+    # escrita — o que deixava o JetStream quebrado em runtime sem erro no install.
+    ensure_nats_jetstream_store_access
 
     jetstream_block=$(cat <<EOF
 

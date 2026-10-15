@@ -296,6 +296,11 @@ apply_stack_update_only() {
     *) fail "Escopo de update invalido: $update_scope" ;;
   esac
 
+  # JetStream: o update NAO passa por setup_nats, entao o store_dir precisa ser
+  # revalidado/reparado aqui — foi assim que o .82 ficou com o JetStream
+  # inoperante (permission denied em /opt/discovery-ops) sem nenhum erro.
+  ensure_nats_jetstream_store_access --warn-only || true
+
   log "Update da stack concluido (escopo: ${update_scope})"
 }
 
