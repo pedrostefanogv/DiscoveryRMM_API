@@ -11,12 +11,15 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 using Discovery.Api;
+using Discovery.Api.Services;
 
 namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/app-store")]
-public class AppStoreController(IMediator mediator) : ControllerBase
+public class AppStoreController(
+    IMediator mediator,
+    ILogger<AppStoreController> _logger) : ControllerBase
 {
     // ═══════════════════════════════════════════════════════════════
     // Catalog
@@ -89,6 +92,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
     [RequestFormLimits(MultipartBodyLengthLimit = 5_368_709_120)]
     public async Task<IActionResult> UploadCustomAsset(
         [FromServices] ICustomPackageAssetService assets,
+        [FromServices] IRedisService redis,
         [FromForm] IFormFile file,
         [FromQuery] string kind = "installer",
         CancellationToken ct = default)
@@ -103,6 +107,14 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         {
             await using var stream = file.OpenReadStream();
             var asset = await assets.UploadAsync(kind, file.FileName, file.ContentType, stream, ct);
+
+            // Este caminho (arquivo pequeno, corpo único) também publica um objeto
+            // no storage. Registra o índice "concluído" para o serviço de limpeza
+            // poder descartá-lo caso nunca seja vinculado a um pacote — antes esses
+            // arquivos ficavam órfãos para sempre (não tinham sessão/índice).
+            await MultipartUploadSessionStore.SaveCompletedIndexAsync(
+                redis, $"single-{Guid.NewGuid():N}", asset.ObjectKey);
+
             return Ok(asset);
         }
         catch (InvalidOperationException ex)
@@ -112,7 +124,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
     }
 
     /// <summary>
-    /// Abre uma sessão de upload em PARTES (blocos de 50 MiB, padronizado).
+    /// Abre uma sessão de upload em PARTES (blocos de 10 MiB, padronizado).
     /// Necessário para instaladores grandes: o Cloudflare recusa no edge um corpo
     /// único de vários GiB (413), então o cliente envia bloco a bloco e a API
     /// remonta o arquivo antes de publicar no object storage.
@@ -229,7 +241,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
     // ═══════════════════════════════════════════════════════════════════
     //
     // O arquivo NÃO passa pela API: ela cria o multipart no storage, pré-assina
-    // cada bloco de 50 MiB e o navegador faz PUT direto na URL assinada. Isso é
+    // cada bloco de 10 MiB e o navegador faz PUT direto na URL assinada. Isso é
     // o que permite atravessar o Cloudflare (corpo pequeno por requisição) e
     // RETOMAR o envio de onde parou (o storage guarda as partes até o complete).
 
@@ -254,7 +266,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
                 request.SizeBytes,
                 ct);
 
-            await SaveMultipartSessionAsync(redis, session);
+            await SaveMultipartSessionAsync(redis, session, CurrentUserId);
 
             return Ok(new
             {
@@ -289,11 +301,21 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         [FromServices] IRedisService redis,
         CancellationToken ct)
     {
-        var session = await LoadMultipartSessionAsync(redis, uploadId);
+        var session = await LoadOwnedMultipartSessionAsync(redis, uploadId);
         if (session is null)
             return NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sessão de upload não encontrada ou expirada." } } });
 
+        if (session.Completed)
+        {
+            // O multipart não existe mais no storage (foi finalizado): devolver o
+            // estado salvo evita um erro de ListParts na retomada.
+            return Ok(BuildStatusResponse(session, session.Parts, completed: true));
+        }
+
         var received = await assets.ListUploadedPartsAsync(session.ObjectKey, session.UploadId, ct);
+        // Uso = sessão viva: renova o prazo (um envio longo não pode expirar no meio).
+        await RenewMultipartSessionAsync(redis, session, ct);
+
         return Ok(BuildStatusResponse(session, received));
     }
 
@@ -310,9 +332,17 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         [FromServices] IRedisService redis,
         CancellationToken ct)
     {
-        var session = await LoadMultipartSessionAsync(redis, uploadId);
+        var session = await LoadOwnedMultipartSessionAsync(redis, uploadId);
         if (session is null)
             return NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sessão de upload não encontrada ou expirada." } } });
+
+        if (session.Completed)
+        {
+            // O multipart já não existe no storage: assinar blocos dele só faria o
+            // navegador receber 404 em cada PUT. Devolve o estado para o cliente
+            // pular direto para o complete (idempotente).
+            return Conflict(new { errors = new[] { new { Code = "AlreadyCompleted", Message = "Este upload já foi concluído: finalize o vínculo salvando o pacote." } } });
+        }
 
         var totalParts = (int)((session.SizeBytes + session.PartSizeBytes - 1) / session.PartSizeBytes);
         var requested = (request?.PartNumbers is { Count: > 0 })
@@ -322,11 +352,27 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         if (requested.Any(part => part < 1 || part > totalParts))
             return BadRequest(new { errors = new[] { new { Code = "Validation", Message = $"Número de bloco fora do intervalo 1..{totalParts}." } } });
 
-        var urls = new List<MultipartUploadPartUrlDto>(requested.Length);
-        foreach (var part in requested)
-            urls.Add(await assets.GetUploadPartUrlAsync(session.ObjectKey, session.UploadId, part, ct));
+        try
+        {
+            var urls = new List<MultipartUploadPartUrlDto>(requested.Length);
+            foreach (var part in requested)
+                urls.Add(await assets.GetUploadPartUrlAsync(session.ObjectKey, session.UploadId, part, ct));
 
-        return Ok(new { uploadId, totalParts, parts = urls });
+            // Uso = sessão viva: renova o prazo (item D).
+            await RenewMultipartSessionAsync(redis, session, ct);
+
+            return Ok(new { uploadId, totalParts, parts = urls });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Ex.: endpoint do storage em loopback — o cliente recebe a orientação
+            // do que configurar, não um 500 genérico.
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = ex.Message } } });
+        }
+        catch (NotSupportedException ex)
+        {
+            return StatusCode(StatusCodes.Status501NotImplemented, new { errors = new[] { new { Code = "Unsupported", Message = ex.Message } } });
+        }
     }
 
     /// <summary>
@@ -342,18 +388,61 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         [FromServices] IRedisService redis,
         CancellationToken ct)
     {
-        var session = await LoadMultipartSessionAsync(redis, uploadId);
+        var session = await LoadOwnedMultipartSessionAsync(redis, uploadId);
         if (session is null)
             return NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sessão de upload não encontrada ou expirada." } } });
 
+        MultipartUploadPartStateDto[] parts;
+
         try
         {
-            var parts = (request?.Parts is { Count: > 0 })
-                ? request.Parts
+            if (session.Completed && session.Parts.Count > 0)
+            {
+                // O estado gravado na conclusão é a verdade — partes que o cliente
+                // mandou após a conclusão podem estar desatualizadas.
+                parts = session.Parts.ToArray();
+            }
+            else if (request?.Parts is { Count: > 0 })
+            {
+                parts = request.Parts
                     .Select(part => new MultipartUploadPartStateDto(part.PartNumber, NormalizeETag(part.ETag), part.SizeBytes))
-                    .ToArray()
-                : (await assets.ListUploadedPartsAsync(session.ObjectKey, session.UploadId, ct)).ToArray();
+                    .ToArray();
+            }
+            else if (session.Parts.Count > 0)
+            {
+                parts = session.Parts.ToArray();
+            }
+            else
+            {
+                parts = (await assets.ListUploadedPartsAsync(session.ObjectKey, session.UploadId, ct)).ToArray();
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            // O multipart não existe mais no storage (upload já finalizado antes):
+            // se o objeto está lá, a resposta correta é o asset, não um erro.
+            var described = await DescribeCompletedIfPublishedAsync(assets, session, ct);
+            if (described is null)
+                throw;
 
+            await MarkCompletedAsync(redis, session, session.Parts, described.Checksum, ct);
+            return Ok(described);
+        }
+
+        if (parts.Length == 0)
+        {
+            var described = await DescribeCompletedIfPublishedAsync(assets, session, ct);
+            if (described is null)
+                return BadRequest(new { errors = new[] { new { Code = "Validation", Message = "Nenhuma parte recebida: não há o que finalizar." } } });
+
+            await MarkCompletedAsync(redis, session, session.Parts, described.Checksum, ct);
+            return Ok(described);
+        }
+
+        try
+        {
+            // Sessão já concluída (retentativa após resposta perdida): o serviço
+            // detecta que o objeto já existe no storage e devolve o asset.
             var asset = await assets.CompleteMultipartUploadAsync(
                 session.ObjectKey,
                 session.Kind,
@@ -362,9 +451,10 @@ public class AppStoreController(IMediator mediator) : ControllerBase
                 session.SizeBytes,
                 session.UploadId,
                 parts,
+                session.Checksum,
                 ct);
 
-            await redis.DeleteAsync(MultipartSessionKey(uploadId));
+            await MarkCompletedAsync(redis, session, parts, asset.Checksum, ct);
             return Ok(asset);
         }
         catch (InvalidOperationException ex)
@@ -373,54 +463,147 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Renova o prazo da sessão em andamento. Relê antes de gravar: um complete
+    /// concorrente (outra aba) pode ter marcado a sessão como concluída, e
+    /// regravar o snapshot antigo (Completed=false) faria o índice voltar a "em
+    /// andamento" — o serviço de limpeza então não descartaria o objeto e ainda
+    /// tentaria abortar um multipart que não existe mais.
+    /// </summary>
+    private static async Task RenewMultipartSessionAsync(
+        IRedisService redis,
+        MultipartUploadSessionState session,
+        CancellationToken ct)
+    {
+        var current = await MultipartUploadSessionStore.LoadAsync(redis, session.UploadId);
+        if (current is null || current.Completed)
+            return;
+
+        await MultipartUploadSessionStore.SaveAsync(redis, current, MultipartUploadSessionStore.SessionTtl);
+        await MultipartUploadSessionStore.SaveIndexAsync(redis, current.UploadId, current.ObjectKey);
+    }
+
+    /// <summary>Asset de um upload já publicado no storage (null se não existir).</summary>
+    private static async Task<CustomPackageAssetDto?> DescribeCompletedIfPublishedAsync(
+        ICustomPackageAssetService assets,
+        MultipartUploadSessionState session,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await assets.DescribeCompletedAssetAsync(
+                session.ObjectKey, session.FileName, session.Checksum, ct);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Marca a sessão como concluída e libera o índice de limpeza.</summary>
+    private static async Task MarkCompletedAsync(
+        IRedisService redis,
+        MultipartUploadSessionState session,
+        IReadOnlyList<MultipartUploadPartStateDto> parts,
+        string? checksum,
+        CancellationToken ct)
+    {
+        session.Completed = true;
+        if (parts.Count > 0)
+            session.Parts = parts.ToList();
+        session.Checksum = string.IsNullOrWhiteSpace(checksum) ? session.Checksum : checksum;
+
+        await MultipartUploadSessionStore.SaveAsync(redis, session, MultipartUploadSessionStore.CompletedSessionTtl);
+        // O multipart não existe mais, mas o OBJETO existe: o índice passa a
+        // "concluído" e é o que permite descartar o asset caso ele nunca seja
+        // vinculado a um pacote (troca do arquivo antes de salvar, aba fechada).
+        await MultipartUploadSessionStore.SaveCompletedIndexAsync(redis, session.UploadId, session.ObjectKey);
+        await redis.DeleteAsync(MultipartUploadSessionStore.AbortPendingKey(session.UploadId));
+    }
+
     /// <summary>Aborta o multipart (o storage descarta as partes enviadas).</summary>
     [HttpDelete("custom/assets/multipart/{uploadId}")]
     [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
     public async Task<IActionResult> AbortCustomAssetMultipartUpload(
         string uploadId,
         [FromServices] ICustomPackageAssetService assets,
+        [FromServices] IAppPackageRepository packages,
         [FromServices] IRedisService redis,
         CancellationToken ct)
     {
-        var session = await LoadMultipartSessionAsync(redis, uploadId);
-        if (session is not null)
+        var session = await LoadOwnedMultipartSessionAsync(redis, uploadId);
+        if (session is null)
+            return NoContent();
+
+        if (session.Completed)
         {
+            // Upload já finalizado: abortar o multipart não faz sentido — o que se
+            // descarta aqui é o OBJETO publicado que ainda não foi vinculado a um
+            // pacote (trocar o arquivo antes de salvar não pode vazar GiBs).
+            if (await packages.IsAssetObjectKeyReferencedAsync(session.ObjectKey, ct))
+            {
+                return Conflict(new { errors = new[] { new { Code = "Linked", Message = "Este instalador já está vinculado ao pacote. Use \"Excluir instalador\" para removê-lo." } } });
+            }
+
             try
             {
-                await assets.AbortMultipartUploadAsync(session.ObjectKey, session.UploadId, ct);
+                await assets.DeleteAsync(session.ObjectKey, ct);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // best-effort: o importante é liberar a sessão (TTL de 24h no storage).
+                // NÃO apaga sessão/índice: eles são a única pista para o serviço de
+                // limpeza tentar de novo. O cliente também mantém o estado local.
+                _logger.LogWarning(ex, "Falha ao remover o asset {ObjectKey}; mantendo o indice para nova tentativa.", session.ObjectKey);
+                return StatusCode(StatusCodes.Status502BadGateway, new
+                {
+                    errors = new[] { new { Code = "StorageError", Message = "Não foi possível remover o arquivo no object storage. Tente novamente." } }
+                });
             }
 
-            await redis.DeleteAsync(MultipartSessionKey(uploadId));
+            await MultipartUploadSessionStore.DeleteAsync(redis, uploadId);
+            return NoContent();
         }
 
+        try
+        {
+            await assets.AbortMultipartUploadAsync(session.ObjectKey, session.UploadId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Falha ao abortar o multipart {UploadId}; mantendo o indice para nova tentativa.", session.UploadId);
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                errors = new[] { new { Code = "StorageError", Message = "Não foi possível cancelar o envio no object storage. Tente novamente." } }
+            });
+        }
+
+        await MultipartUploadSessionStore.DeleteAsync(redis, uploadId);
         return NoContent();
     }
 
-    // ── Multipart direto: estado (Redis) e helpers ────────────────────────
-    private sealed class CustomAssetMultipartSession
+    /// <summary>Usuário autenticado (preenchido pelo middleware de auth).</summary>
+    private Guid? CurrentUserId
     {
-        public string UploadId { get; set; } = string.Empty;
-        public string ObjectKey { get; set; } = string.Empty;
-        public string Kind { get; set; } = "installer";
-        public string FileName { get; set; } = string.Empty;
-        public string ContentType { get; set; } = "application/octet-stream";
-        public long SizeBytes { get; set; }
-        public long PartSizeBytes { get; set; } = 50L * 1024 * 1024;
-        public int PartUrlTtlMinutes { get; set; } = 60;
+        get
+        {
+            if (HttpContext.Items["UserId"] is Guid uid)
+                return uid;
+
+            // Fallback: sem o item do middleware (caminho de auth alternativo), o
+            // claim ainda identifica o dono — sem isso a sessão nasceria sem dono
+            // e ficaria acessível a qualquer usuário com o uploadId.
+            var claim = User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            return Guid.TryParse(claim, out var claimUserId) ? claimUserId : null;
+        }
     }
 
-    /// <summary>Sessões sobrevivem a restart da API (estado em Redis, TTL 24h).</summary>
-    private static string MultipartSessionKey(string uploadId) => $"appstore:asset-multipart:{uploadId}";
-    private static readonly TimeSpan MultipartSessionTtl = TimeSpan.FromHours(24);
+    // ── Multipart direto: estado em Redis (schema em MultipartUploadSessionStore) ──
 
-    private static async Task SaveMultipartSessionAsync(IRedisService redis, MultipartUploadSessionDto session)
+    private static async Task SaveMultipartSessionAsync(IRedisService redis, MultipartUploadSessionDto session, Guid? userId)
     {
-        var state = new CustomAssetMultipartSession
+        var state = new MultipartUploadSessionState
         {
+            UserId = userId,
             UploadId = session.UploadId,
             ObjectKey = session.ObjectKey,
             Kind = session.Kind,
@@ -431,29 +614,35 @@ public class AppStoreController(IMediator mediator) : ControllerBase
             PartUrlTtlMinutes = session.PartUrlTtlMinutes,
         };
 
-        await redis.SetAsync(MultipartSessionKey(session.UploadId), System.Text.Json.JsonSerializer.Serialize(state), (int)MultipartSessionTtl.TotalSeconds);
+        await MultipartUploadSessionStore.SaveAsync(redis, state, MultipartUploadSessionStore.SessionTtl);
+        // Índice com a object key, com TTL maior: é o que permite o serviço de
+        // limpeza abortar o multipart se a sessão expirar sem finalizar.
+        await MultipartUploadSessionStore.SaveIndexAsync(redis, state.UploadId, state.ObjectKey);
     }
 
-    private static async Task<CustomAssetMultipartSession?> LoadMultipartSessionAsync(IRedisService redis, string uploadId)
+    /// <summary>
+    /// Carrega a sessão validando que ela pertence ao usuário atual. Devolve null
+    /// (-> 404) tanto para sessão inexistente quanto para sessão de terceiros:
+    /// responder 403 revelaria a existência do upload de outro usuário.
+    /// </summary>
+    private async Task<MultipartUploadSessionState?> LoadOwnedMultipartSessionAsync(IRedisService redis, string uploadId)
     {
-        if (string.IsNullOrWhiteSpace(uploadId))
+        var session = await MultipartUploadSessionStore.LoadAsync(redis, uploadId);
+        if (session is null)
             return null;
 
-        var json = await redis.GetAsync(MultipartSessionKey(uploadId));
-        if (string.IsNullOrWhiteSpace(json))
-            return null;
+        if (session.UserId is Guid owner && CurrentUserId is Guid current && owner == current)
+            return session;
 
-        try
-        {
-            return System.Text.Json.JsonSerializer.Deserialize<CustomAssetMultipartSession>(json);
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return null;
-        }
+        // Sessão anterior à vinculação por usuário (upgrade em andamento): aceita
+        // apenas se não houver dono gravado; caso contrário, nega.
+        return session.UserId is null ? session : null;
     }
 
-    private static object BuildStatusResponse(CustomAssetMultipartSession session, IReadOnlyList<MultipartUploadPartStateDto> received)
+    private static object BuildStatusResponse(
+        MultipartUploadSessionState session,
+        IReadOnlyList<MultipartUploadPartStateDto> received,
+        bool completed = false)
     {
         var totalParts = (int)((session.SizeBytes + session.PartSizeBytes - 1) / session.PartSizeBytes);
         var receivedNumbers = received.Select(part => part.PartNumber).ToHashSet();
@@ -461,6 +650,7 @@ public class AppStoreController(IMediator mediator) : ControllerBase
         return new
         {
             uploadId = session.UploadId,
+            completed,
             objectKey = session.ObjectKey,
             fileName = session.FileName,
             sizeBytes = session.SizeBytes,
@@ -481,9 +671,9 @@ public class AppStoreController(IMediator mediator) : ControllerBase
     }
 
     // ── Upload em partes: estado e helpers ────────────────────────────────
-    /// <summary>Bloco padrão de 50 MiB (o edge do Cloudflare recusa ~100 MB+).</summary>
-    private const long CustomAssetPartBytes = 50L * 1024 * 1024;
-    /// <summary>Limite do corpo por bloco (folga de protocolo sobre os 50 MiB).</summary>
+    /// <summary>Bloco padrão de 10 MiB, igual ao upload multipart direto.</summary>
+    private const long CustomAssetPartBytes = 10L * 1024 * 1024;
+    /// <summary>Limite do corpo por bloco (folga de protocolo sobre os 10 MiB).</summary>
     private const long CustomAssetPartLimitBytes = 64L * 1024 * 1024;
     private static readonly TimeSpan CustomAssetUploadTtl = TimeSpan.FromHours(6);
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, CustomAssetUploadSession> CustomAssetUploads = new();

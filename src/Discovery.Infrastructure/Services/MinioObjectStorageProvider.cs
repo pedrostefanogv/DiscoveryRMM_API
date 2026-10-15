@@ -39,9 +39,22 @@ public class MinioObjectStorageProvider : IObjectStorageService
     private readonly Uri _internalBaseUri;
     // Endpoint PUBLICO: usado SO para as URLs pre-assinadas entregues ao cliente.
     private readonly Uri _presignBaseUri;
-    private static readonly HttpClient PresignHttpClient = new()
+    // Cliente HTTP das operacoes multipart assinadas localmente (initiate/
+    // complete/abort/list) e do calculo de checksum. Respeita SslVerify=false,
+    // senao um endpoint interno HTTPS com certificado proprio quebraria aqui
+    // enquanto Upload/Download pelo SDK continuariam funcionando.
+    private readonly HttpClient _presignHttpClient;
+    /// <summary>
+    /// Timeout das operações assinadas. O complete de um objeto montado no
+    /// storage pode demorar (join + cópia interna): 5 min bastava para objetos
+    /// pequenos e derrubava o de vários GiB, que ficava dependendo da retentativa
+    /// idempotente.
+    /// </summary>
+    private static readonly TimeSpan PresignHttpTimeout = TimeSpan.FromMinutes(15);
+
+    private static readonly HttpClient DefaultPresignHttpClient = new()
     {
-        Timeout = TimeSpan.FromMinutes(5)
+        Timeout = PresignHttpTimeout
     };
 
     public MinioObjectStorageProvider(
@@ -76,6 +89,14 @@ public class MinioObjectStorageProvider : IObjectStorageService
             ? _client
             : BuildClient(settings.PresignEndpoint!, settings, _logger);
         _presignEndpointIsLoopback = IsLoopbackEndpoint(settings.PresignEndpoint ?? settings.Endpoint);
+        _presignHttpClient = !settings.SslVerify
+            ? new HttpClient(new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            })
+            { Timeout = PresignHttpTimeout }
+            : DefaultPresignHttpClient;
         _accessKey = settings.AccessKey;
         _secretKey = settings.SecretKey;
         _internalBaseUri = BuildPresignBaseUri(settings.Endpoint);
@@ -240,13 +261,15 @@ public class MinioObjectStorageProvider : IObjectStorageService
         };
 
         var contentTypeFinal = string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType;
-        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Content-Type"] = contentTypeFinal,
-        };
+
+        // Content-Type e header de CONTEUDO: precisa ir no HttpContent (em
+        // request.Headers o TryAddWithoutValidation descarta silenciosamente e o
+        // objeto ficaria com o tipo padrao do storage).
+        var initiateContent = new ByteArrayContent([]);
+        initiateContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentTypeFinal);
 
         var (status, body) = await SendSignedAsync(
-            _internalBaseUri, HttpMethod.Post, objectKey, query, new ByteArrayContent([]), headers, cancellationToken);
+            _internalBaseUri, HttpMethod.Post, objectKey, query, initiateContent, null, cancellationToken);
 
         if (status != HttpStatusCode.OK)
             throw new InvalidOperationException(
@@ -354,29 +377,55 @@ public class MinioObjectStorageProvider : IObjectStorageService
         // ListParts assinado localmente (o SDK nao expoe) no endpoint INTERNO: o
         // proprio storage e a fonte de verdade de quais partes chegaram — e o que
         // permite retomar o envio de onde parou.
-        var query = new Dictionary<string, string>(StringComparer.Ordinal)
+        //
+        // O S3 pagina em 1000 partes: sem seguir IsTruncated/NextPartNumberMarker
+        // um arquivo com mais de ~9,8 GiB (1000 x 10 MiB) apareceria incompleto e
+        // o complete seria recusado.
+        var parts = new List<MultipartUploadPart>();
+        string? marker = null;
+
+        for (var page = 0; page < 100; page++)
         {
-            ["uploadId"] = uploadId,
-        };
+            var query = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["uploadId"] = uploadId,
+                ["max-parts"] = "1000",
+            };
 
-        var (status, xml) = await SendSignedAsync(
-            _internalBaseUri, HttpMethod.Get, objectKey, query, null, null, cancellationToken);
+            if (!string.IsNullOrEmpty(marker))
+                query["part-number-marker"] = marker;
 
-        if (status != HttpStatusCode.OK)
-            throw new InvalidOperationException(
-                $"Falha ao listar as partes do multipart upload ({(int)status} {status}): {Truncate(xml, 300)}");
+            var (status, xml) = await SendSignedAsync(
+                _internalBaseUri, HttpMethod.Get, objectKey, query, null, null, cancellationToken);
 
-        var doc = XDocument.Parse(xml);
-        var ns = doc.Root?.Name.Namespace ?? XNamespace.None;
+            if (status != HttpStatusCode.OK)
+                throw new InvalidOperationException(
+                    $"Falha ao listar as partes do multipart upload ({(int)status} {status}): {Truncate(xml, 300)}");
 
-        return doc.Descendants(ns + "Part")
-            .Select(node => new MultipartUploadPart(
-                PartNumber: int.TryParse(node.Element(ns + "PartNumber")?.Value, out var number) ? number : 0,
-                ETag: (node.Element(ns + "ETag")?.Value ?? string.Empty).Trim('"'),
-                SizeBytes: long.TryParse(node.Element(ns + "Size")?.Value, out var size) ? size : 0))
-            .Where(part => part.PartNumber > 0 && !string.IsNullOrWhiteSpace(part.ETag))
-            .OrderBy(part => part.PartNumber)
-            .ToArray();
+            var doc = XDocument.Parse(xml);
+            var ns = doc.Root?.Name.Namespace ?? XNamespace.None;
+
+            parts.AddRange(doc.Descendants(ns + "Part")
+                .Select(node => new MultipartUploadPart(
+                    PartNumber: int.TryParse(node.Element(ns + "PartNumber")?.Value, out var number) ? number : 0,
+                    ETag: (node.Element(ns + "ETag")?.Value ?? string.Empty).Trim('"'),
+                    SizeBytes: long.TryParse(node.Element(ns + "Size")?.Value, out var size) ? size : 0))
+                .Where(part => part.PartNumber > 0 && !string.IsNullOrWhiteSpace(part.ETag)));
+
+            var truncated = string.Equals(
+                doc.Descendants(ns + "IsTruncated").FirstOrDefault()?.Value?.Trim(),
+                "true",
+                StringComparison.OrdinalIgnoreCase);
+
+            if (!truncated)
+                break;
+
+            marker = doc.Descendants(ns + "NextPartNumberMarker").FirstOrDefault()?.Value?.Trim();
+            if (string.IsNullOrEmpty(marker))
+                break;
+        }
+
+        return parts.OrderBy(part => part.PartNumber).ToArray();
     }
 
     public async Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
@@ -582,7 +631,7 @@ public class MinioObjectStorageProvider : IObjectStorageService
                 request.Headers.TryAddWithoutValidation(header.Key, header.Value);
         }
 
-        using var response = await PresignHttpClient.SendAsync(request, cancellationToken);
+        using var response = await _presignHttpClient.SendAsync(request, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
         return (response.StatusCode, body);

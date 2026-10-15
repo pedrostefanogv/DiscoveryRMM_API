@@ -37,4 +37,11 @@ public interface IAppPackageRepository
     /// storage) ou <c>null</c> se o pacote não existir ou não for Custom.
     /// </summary>
     Task<AppPackage?> ClearCustomFileAsync(string packageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// A object key está referenciada por algum pacote, como INSTALADOR ou como
+    /// ÍCONE? Usado para NÃO descartar um asset já vinculado (e para descartar o
+    /// que foi publicado mas nunca foi salvo no cadastro).
+    /// </summary>
+    Task<bool> IsAssetObjectKeyReferencedAsync(string objectKey, CancellationToken cancellationToken = default);
 }

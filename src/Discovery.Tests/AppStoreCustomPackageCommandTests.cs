@@ -59,6 +59,52 @@ public class AppStoreCustomPackageCommandTests
     private static AppStoreService NewService(DiscoveryDbContext db)
         => new(null!, null!, null!, null!, null!, new AppPackageRepository(db), new NoopAssets());
 
+    private static AppStoreService NewService(DiscoveryDbContext db, ICustomPackageAssetService assets)
+        => new(null!, null!, null!, null!, null!, new AppPackageRepository(db), assets);
+
+    [Test]
+    public async Task Upsert_rejeita_instalador_que_sumiu_do_storage()
+    {
+        // A limpeza descarta uploads não vinculados após 24h. Sem esta checagem o
+        // pacote seria salvo apontando para um objeto inexistente e a instalação
+        // só falharia lá no agent.
+        await using var db = AppPackageTestDbContext.New();
+        var service = NewService(db, new FixedAssetPresenceService(exists: false));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.UpsertCustomCatalogPackageAsync(new UpsertCustomAppCatalogPackageRequest
+            {
+                PackageId = "sumiu",
+                Name = "App XPTO",
+                InstallCommand = "setup.exe /S",
+                FileObjectKey = "app-store/custom/installers/abc/Setup.exe",
+                FileName = "Setup.exe",
+            }, CancellationToken.None));
+
+        Assert.That(ex!.Message, Does.Contain("mais disponível"));
+    }
+
+    [Test]
+    public async Task Upsert_aceita_instalador_presente_no_storage()
+    {
+        await using var db = AppPackageTestDbContext.New();
+        var service = NewService(db, new FixedAssetPresenceService(exists: true));
+
+        var saved = await service.UpsertCustomCatalogPackageAsync(new UpsertCustomAppCatalogPackageRequest
+        {
+            PackageId = "presente",
+            Name = "App XPTO",
+            InstallCommand = "setup.exe /S",
+            FileObjectKey = "app-store/custom/installers/abc/Setup.exe",
+            FileName = "Setup.exe",
+        }, CancellationToken.None);
+
+        Assert.That(saved.Name, Is.EqualTo("App XPTO"));
+        var row = await new AppPackageRepository(db)
+            .GetByInstallationTypeAndPackageIdAsync(AppInstallationType.Custom, "presente");
+        Assert.That(row!.FileObjectKey, Is.EqualTo("app-store/custom/installers/abc/Setup.exe"));
+    }
+
     [Test]
     public void Command_binda_a_deteccao_do_payload_do_editor()
     {
@@ -126,6 +172,74 @@ public class AppStoreCustomPackageCommandTests
         Assert.That(saved!.DetectionMode, Is.EqualTo(AppDetectionMode.Command));
         Assert.That(saved.DetectionCommand, Is.EqualTo("Test-Path 'C:\\Program Files\\XPTO'"));
         Assert.That(saved.InventorySoftwareId, Is.Null);
+    }
+
+    [Test]
+    public async Task Upsert_apaga_o_instalador_substituido()
+    {
+        // Trocar o instalador de um pacote que já tinha arquivo deixava o objeto
+        // antigo no storage para sempre (o índice de limpeza dele já tinha
+        // expirado). O vínculo antigo tem de ser removido no salvamento.
+        await using var db = AppPackageTestDbContext.New();
+        var assets = new FixedAssetPresenceService(exists: true);
+        var service = NewService(db, assets);
+
+        await service.UpsertCustomCatalogPackageAsync(new UpsertCustomAppCatalogPackageRequest
+        {
+            PackageId = "troca",
+            Name = "App XPTO",
+            InstallCommand = "setup.exe /S",
+            FileObjectKey = "app-store/custom/installers/antigo/Setup.exe",
+            FileName = "Setup.exe",
+        }, CancellationToken.None);
+
+        await service.UpsertCustomCatalogPackageAsync(new UpsertCustomAppCatalogPackageRequest
+        {
+            PackageId = "troca",
+            Name = "App XPTO",
+            InstallCommand = "setup.exe /S",
+            FileObjectKey = "app-store/custom/installers/novo/Setup.exe",
+            FileName = "Setup.exe",
+        }, CancellationToken.None);
+
+        Assert.That(assets.DeletedKeys, Does.Contain("app-store/custom/installers/antigo/Setup.exe"));
+        Assert.That(assets.DeletedKeys, Does.Not.Contain("app-store/custom/installers/novo/Setup.exe"));
+    }
+
+    /// <summary>Simula a presença (ou não) do objeto no storage.</summary>
+    private sealed class FixedAssetPresenceService(bool exists) : ICustomPackageAssetService
+    {
+        public List<string> DeletedKeys { get; } = [];
+
+        public Task<CustomPackageAssetDto?> DescribeCompletedAssetAsync(
+            string objectKey, string fileName, string? knownChecksum = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(exists
+                ? new CustomPackageAssetDto
+                {
+                    ObjectKey = objectKey,
+                    Bucket = "discovery-files",
+                    ContentType = "application/x-msdownload",
+                    FileName = fileName,
+                    SizeBytes = 1024,
+                    Checksum = "abc",
+                }
+                : null);
+
+        public Task<CustomPackageAssetDto> UploadAsync(
+            string kind, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<CustomPackageAssetContent> DownloadAsync(string objectKey, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task WriteToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task DeleteAsync(string objectKey, CancellationToken cancellationToken = default)
+        {
+            DeletedKeys.Add(objectKey);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class NoopAssets : ICustomPackageAssetService

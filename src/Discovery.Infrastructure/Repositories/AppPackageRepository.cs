@@ -225,10 +225,19 @@ public class AppPackageRepository : IAppPackageRepository
         var iconObjectKeyAfterSave = string.IsNullOrWhiteSpace(package.IconObjectKey)
             ? current.IconObjectKey
             : package.IconObjectKey;
+        // Ícone armazenado tem prioridade quando o request não traz URL: limpar a
+        // URL externa volta para o endpoint que serve o arquivo do storage (antes
+        // ficava travado na última URL externa, sem como desfazer).
         current.IconUrl = string.IsNullOrWhiteSpace(package.IconUrl) && !string.IsNullOrWhiteSpace(iconObjectKeyAfterSave)
-            ? current.IconUrl
+            ? $"/api/v1/app-store/custom/{Uri.EscapeDataString(current.PackageId)}/icon"
             : package.IconUrl;
-        current.SiteUrl = package.SiteUrl;
+        // SiteUrl/MetadataJson não são gerenciados pelo editor de pacote custom:
+        // preservar quando o request não os traz evita que um "Salvar alterações"
+        // de título/descrição apague tags/categoria/silent command (MetadataJson)
+        // e a home page do pacote.
+        current.SiteUrl = string.IsNullOrWhiteSpace(package.SiteUrl) ? current.SiteUrl : package.SiteUrl;
+        current.MetadataJson = string.IsNullOrWhiteSpace(package.MetadataJson) ? current.MetadataJson : package.MetadataJson;
+
         current.InstallCommand = package.InstallCommand;
         current.UninstallCommand = package.UninstallCommand;
         current.InstallCommandKind = package.InstallCommandKind;
@@ -240,7 +249,6 @@ public class AppPackageRepository : IAppPackageRepository
         current.DetectionMinVersion = package.DetectionMinVersion;
         current.DetectionCommand = package.DetectionCommand;
         current.ExtractZip = package.ExtractZip;
-        current.MetadataJson = package.MetadataJson;
 
         // Edicao parcial: campos de arquivo/icone so sao sobrescritos quando o
         // request traz valor novo — assim editar metadados nao apaga o instalador
@@ -260,6 +268,19 @@ public class AppPackageRepository : IAppPackageRepository
 
         await _db.SaveChangesAsync(cancellationToken);
         return current;
+    }
+
+    public Task<bool> IsAssetObjectKeyReferencedAsync(string objectKey, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(objectKey))
+            return Task.FromResult(false);
+
+        var key = objectKey.Trim();
+        // Ícone também é um asset publicado: checá-lo evita que a limpeza apague
+        // uma imagem em uso.
+        return _db.AppPackages.AnyAsync(
+            p => p.FileObjectKey == key || p.IconObjectKey == key,
+            cancellationToken);
     }
 
     public async Task<bool> DeleteCustomAsync(string packageId, CancellationToken cancellationToken = default)

@@ -17,7 +17,7 @@ public class CustomPackageAssetMultipartTests
     private const string ObjectKeySample = "app-store/custom/installers/abc123/setup.exe";
 
     [Test]
-    public async Task Begin_CriaMultipartNoStorageComBlocoDe50MiB()
+    public async Task Begin_CriaMultipartNoStorageComBlocoDe10MiB()
     {
         var storage = new MultipartStorage();
         var service = new CustomPackageAssetService(new StubStorageFactory(storage));
@@ -29,7 +29,7 @@ public class CustomPackageAssetMultipartTests
         Assert.That(storage.BeginKey, Does.EndWith("Setup XPTO v2.exe"));
         Assert.That(session.UploadId, Is.EqualTo("upload-abc"));
         Assert.That(session.ObjectKey, Is.EqualTo(storage.BeginKey));
-        Assert.That(session.PartSizeBytes, Is.EqualTo(50L * 1024 * 1024));
+        Assert.That(session.PartSizeBytes, Is.EqualTo(10L * 1024 * 1024));
         Assert.That(session.PartUrlTtlMinutes, Is.EqualTo(60));
         Assert.That(session.SizeBytes, Is.EqualTo(1_900_000_000));
         Assert.That(session.Kind, Is.EqualTo("installer"));
@@ -99,16 +99,20 @@ public class CustomPackageAssetMultipartTests
         var storage = new MultipartStorage { Content = payload };
         var service = new CustomPackageAssetService(new StubStorageFactory(storage));
 
+        // Tamanhos coerentes com o bloco padrão de 50 MiB: 1 bloco cheio + resto.
+        const long partSize = CustomPackageAssetService.PartSizeBytes;
+        var declaredSize = partSize + payload.Length;
+
         var asset = await service.CompleteMultipartUploadAsync(
             ObjectKeySample,
             "installer",
             "Setup.exe",
             "application/x-msdownload",
-            payload.Length,
+            declaredSize,
             "upload-abc",
             [
-                new Discovery.Core.DTOs.MultipartUploadPartStateDto(2, "etag-2", 10),
-                new Discovery.Core.DTOs.MultipartUploadPartStateDto(1, "etag-1", 10),
+                new Discovery.Core.DTOs.MultipartUploadPartStateDto(2, "etag-2", payload.Length),
+                new Discovery.Core.DTOs.MultipartUploadPartStateDto(1, "etag-1", partSize),
             ]);
 
         // A ordem enviada ao storage é o que o S3 aceita (partes crescentes).
@@ -142,6 +146,96 @@ public class CustomPackageAssetMultipartTests
         Assert.That(asset.ObjectKey, Is.EqualTo(ObjectKeySample));
         Assert.That(asset.SizeBytes, Is.EqualTo(payload.Length));
         Assert.That(asset.Checksum, Is.Not.Empty);
+    }
+
+    [Test]
+    public async Task Complete_AceitaSessaoAntigaComOutroTamanhoDeBloco()
+    {
+        // Regressão: o padrão do bloco mudou de 50 MiB para 10 MiB, mas sessões
+        // abertas antes (TTL 24h) precisam continuar podendo ser concluídas — a
+        // validação deriva o tamanho das próprias partes, não da constante.
+        const long oldPartSize = 50L * 1024 * 1024;
+        var storage = new MultipartStorage { Content = Encoding.UTF8.GetBytes("x") };
+        var service = new CustomPackageAssetService(new StubStorageFactory(storage));
+
+        var asset = await service.CompleteMultipartUploadAsync(
+            ObjectKeySample, "installer", "Setup.exe", "application/x-msdownload",
+            oldPartSize + 5, "upload-velho",
+            [
+                new Discovery.Core.DTOs.MultipartUploadPartStateDto(1, "etag-1", oldPartSize),
+                new Discovery.Core.DTOs.MultipartUploadPartStateDto(2, "etag-2", 5),
+            ]);
+
+        Assert.That(asset.ObjectKey, Is.EqualTo(ObjectKeySample));
+        Assert.That(storage.CompletedParts!.Select(part => part.PartNumber), Is.EqualTo(new[] { 1, 2 }));
+    }
+
+    [Test]
+    public async Task Complete_ComBlocosFaltando_FalhaAntesDeIrAoStorage()
+    {
+        var payload = Encoding.UTF8.GetBytes("x");
+        var storage = new MultipartStorage { Content = payload };
+        var service = new CustomPackageAssetService(new StubStorageFactory(storage));
+
+        // Faltou o bloco 1 (só veio o 2): o S3 recusaria o complete, então a API
+        // precisa falhar com uma mensagem que diga o que reenviar.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.CompleteMultipartUploadAsync(
+                ObjectKeySample, "installer", "Setup.exe", "application/x-msdownload",
+                CustomPackageAssetService.PartSizeBytes + payload.Length, "upload-abc",
+                [new Discovery.Core.DTOs.MultipartUploadPartStateDto(2, "etag-2", payload.Length)]));
+
+        Assert.That(ex!.Message, Does.Contain("esperava a parte 1"));
+        Assert.That(storage.CompletedParts, Is.Null, "não deve chamar o storage com lista inválida");
+    }
+
+    [Test]
+    public async Task Complete_ComChecksumConhecido_NaoRelaOArquivo()
+    {
+        // Retentativa de um complete cuja resposta se perdeu: o SHA-256 já foi
+        // calculado e reler um instalador de vários GiB é o passo mais caro do
+        // fluxo (e o que estoura o timeout do Cloudflare).
+        var storage = new MultipartStorage { Content = Encoding.UTF8.GetBytes("x") };
+        var service = new CustomPackageAssetService(new StubStorageFactory(storage));
+        const long partSize = CustomPackageAssetService.PartSizeBytes;
+
+        var asset = await service.CompleteMultipartUploadAsync(
+            ObjectKeySample, "installer", "Setup.exe", "application/x-msdownload",
+            partSize + 1, "upload-abc",
+            [
+                new Discovery.Core.DTOs.MultipartUploadPartStateDto(1, "etag-1", partSize),
+                new Discovery.Core.DTOs.MultipartUploadPartStateDto(2, "etag-2", 1),
+            ],
+            knownChecksum: "abc123");
+
+        Assert.That(asset.Checksum, Is.EqualTo("abc123"));
+        Assert.That(storage.DownloadToCalled, Is.False, "não deve reler o arquivo com checksum conhecido");
+    }
+
+    [Test]
+    public async Task DescribeCompletedAsset_DevolveAssetSemRelerOArquivo()
+    {
+        // Retentativa de complete quando o multipart já não existe no storage: a
+        // resposta correta é o asset publicado, sem reenvio nem releitura.
+        var storage = new MultipartStorage { Content = [1, 2, 3] };
+        var service = new CustomPackageAssetService(new StubStorageFactory(storage));
+
+        var described = await service.DescribeCompletedAssetAsync(ObjectKeySample, "Setup.exe", "sha-conhecido");
+
+        Assert.That(described, Is.Not.Null);
+        Assert.That(described!.Checksum, Is.EqualTo("sha-conhecido"));
+        Assert.That(described.SizeBytes, Is.EqualTo(3));
+        Assert.That(described.Bucket, Is.EqualTo("discovery-files"));
+        Assert.That(storage.DownloadToCalled, Is.False, "não deve reler o arquivo para descrever o asset");
+    }
+
+    [Test]
+    public async Task DescribeCompletedAsset_ObjetoInexistente_DevolveNull()
+    {
+        var storage = new MultipartStorage { MetadataMissing = true };
+        var service = new CustomPackageAssetService(new StubStorageFactory(storage));
+
+        Assert.That(await service.DescribeCompletedAssetAsync(ObjectKeySample, "Setup.exe"), Is.Null);
     }
 
     [Test]
@@ -189,6 +283,8 @@ public class CustomPackageAssetMultipartTests
         public byte[] Content { get; init; } = [];
         public IReadOnlyList<MultipartUploadPart> ReceivedParts { get; init; } = [];
         public bool FailComplete { get; init; }
+        /// <summary>Simula objeto ausente no storage.</summary>
+        public bool MetadataMissing { get; init; }
 
         public string? BeginKey { get; private set; }
         public int? LastPartNumber { get; private set; }
@@ -239,7 +335,7 @@ public class CustomPackageAssetMultipartTests
         }
 
         public Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default) =>
-            Task.FromResult<StorageObject?>(new StorageObject
+            Task.FromResult<StorageObject?>(MetadataMissing ? null : new StorageObject
             {
                 ObjectKey = objectKey,
                 Bucket = "discovery-files",

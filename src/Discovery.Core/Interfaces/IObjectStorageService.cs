@@ -103,7 +103,7 @@ public interface IObjectStorageService
     //
     // Fluxo usado pelos instaladores da loja custom (1-10 GiB): o navegador NÃO
     // envia o arquivo para a API — a API cria o multipart, pré-assina cada parte
-    // (blocos de 50 MiB) e o cliente faz PUT direto no RustFS/S3, que é o único
+    // (blocos de 10 MiB) e o cliente faz PUT direto no RustFS/S3, que é o único
     // caminho que passa pelo Cloudflare sem 413 e com retomada real (as partes
     // ficam no storage até o complete/abort).
 

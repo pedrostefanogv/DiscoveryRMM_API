@@ -107,6 +107,35 @@ public class AppStoreService : IAppStoreService
         if (string.IsNullOrWhiteSpace(request.InstallCommand))
             throw new InvalidOperationException("InstallCommand e obrigatorio: informe o comando de instalacao do pacote.");
 
+        // O objeto enviado pode ter sido descartado pela limpeza de uploads não
+        // vinculados (24h): sem esta checagem o pacote ficaria apontando para um
+        // arquivo inexistente e a instalação falharia só no agent.
+        if (!string.IsNullOrWhiteSpace(request.FileObjectKey))
+        {
+            bool? stillExists = null;
+            try
+            {
+                stillExists = await _customAssets.DescribeCompletedAssetAsync(
+                    request.FileObjectKey!, request.FileName ?? "arquivo", null, cancellationToken) is not null;
+            }
+            catch (NotSupportedException)
+            {
+                // Provider sem suporte à checagem (ex.: storage local): segue sem validar.
+                stillExists = null;
+            }
+            catch (InvalidOperationException)
+            {
+                stillExists = null;
+            }
+
+            if (stillExists == false)
+            {
+                throw new InvalidOperationException(
+                    "O arquivo enviado não está mais disponível no object storage. " +
+                    "Uploads que não são vinculados a um pacote são removidos após 24h — anexe o instalador novamente.");
+            }
+        }
+
         // Tipo do comando: 0 Command (cmd /C), 1 CmdScript (.cmd), 2 PowerShellScript (.ps1).
         var installCommandKind = NormalizeCommandKind(request.InstallCommandKind, "InstallCommandKind");
         var uninstallCommandKind = NormalizeCommandKind(request.UninstallCommandKind, "UninstallCommandKind");
@@ -130,6 +159,12 @@ public class AppStoreService : IAppStoreService
             throw new InvalidOperationException("DetectionCommand excede o limite de 2000 caracteres.");
 
         var normalizedPackageId = request.PackageId.Trim();
+
+        // Estado ANTERIOR: trocar o instalador/ícone deixa o objeto antigo no
+        // storage — sem apagá-lo o vazamento é permanente (o índice de limpeza
+        // dele já expirou muito antes de o vínculo ser trocado).
+        var previous = await _appPackageRepo.GetByInstallationTypeAndPackageIdAsync(
+            AppInstallationType.Custom, normalizedPackageId, cancellationToken);
 
         // Quando ha icone enviado ao storage, a loja serve a imagem pela propria
         // API (endpoint anonimo /custom/{id}/icon); caso contrario vale a URL externa.
@@ -170,7 +205,37 @@ public class AppStoreService : IAppStoreService
             LastUpdated = DateTime.UtcNow
         }, cancellationToken);
 
+        await DeleteReplacedAssetAsync(previous?.FileObjectKey, request.FileObjectKey, cancellationToken);
+        await DeleteReplacedAssetAsync(previous?.IconObjectKey, request.IconObjectKey, cancellationToken);
+
         return MapUnifiedToDto(saved);
+    }
+
+    /// <summary>
+    /// Remove do storage o asset que foi SUBSTITUÍDO no cadastro (a linha do
+    /// catálogo já aponta para o novo). Best-effort: uma falha aqui não invalida o
+    /// salvamento — o objeto antigo fica sem referência e o serviço de limpeza o
+    /// remove depois.
+    /// </summary>
+    private async Task DeleteReplacedAssetAsync(
+        string? previousObjectKey,
+        string? newObjectKey,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(previousObjectKey))
+            return;
+
+        if (string.Equals(previousObjectKey, newObjectKey, StringComparison.Ordinal))
+            return;
+
+        try
+        {
+            await _customAssets.DeleteAsync(previousObjectKey, cancellationToken);
+        }
+        catch
+        {
+            // best-effort
+        }
     }
 
     public async Task<bool> DeleteCustomPackageFileAsync(

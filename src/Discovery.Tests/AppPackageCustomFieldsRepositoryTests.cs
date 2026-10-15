@@ -91,6 +91,77 @@ public class AppPackageCustomFieldsRepositoryTests
     }
 
     [Test]
+    public async Task UpsertCustomAsync_limparUrlDoIcone_voltaParaOIconeArmazenado()
+    {
+        // Antes: com IconObjectKey preenchido, limpar a URL externa mantinha a URL
+        // antiga "presa" e não havia como voltar ao ícone do storage.
+        await using var db = NewDb();
+        var repo = new AppPackageRepository(db);
+
+        var package = NewPackage("foxit");
+        package.IconObjectKey = "app-store/custom/icons/abc/logo.png";
+        package.IconUrl = "https://exemplo.invalid/logo.png";
+        await repo.UpsertCustomAsync(package);
+
+        var cleared = NewPackage("foxit");
+        cleared.IconObjectKey = null;
+        cleared.IconUrl = null;
+        var saved = await repo.UpsertCustomAsync(cleared);
+
+        Assert.That(saved.IconObjectKey, Is.EqualTo("app-store/custom/icons/abc/logo.png"));
+        Assert.That(saved.IconUrl, Does.Contain("/api/v1/app-store/custom/foxit/icon"));
+    }
+
+    [Test]
+    public async Task IsAssetObjectKeyReferencedAsync_diz_se_o_asset_esta_vinculado()
+    {
+        // O descarte de assets não vinculados (troca do arquivo antes de salvar)
+        // depende disso: responder errado apagaria o instalador em uso.
+        await using var db = NewDb();
+        var repo = new AppPackageRepository(db);
+
+        var package = NewPackage("foxit");
+        package.FileObjectKey = "app-store/custom/installers/abc/Setup.exe";
+        await repo.UpsertCustomAsync(package);
+
+        Assert.That(await repo.IsAssetObjectKeyReferencedAsync("app-store/custom/installers/abc/Setup.exe"), Is.True);
+        Assert.That(await repo.IsAssetObjectKeyReferencedAsync("app-store/custom/installers/outro/Setup.exe"), Is.False);
+        Assert.That(await repo.IsAssetObjectKeyReferencedAsync("  "), Is.False);
+
+        // Ícone em uso também conta como vinculado (senão a limpeza o apagaria).
+        var withIcon = NewPackage("gimp");
+        withIcon.IconObjectKey = "app-store/custom/icons/xyz/logo.png";
+        await repo.UpsertCustomAsync(withIcon);
+        Assert.That(await repo.IsAssetObjectKeyReferencedAsync("app-store/custom/icons/xyz/logo.png"), Is.True);
+    }
+
+    [Test]
+    public async Task UpsertCustomAsync_preserva_campos_que_o_editor_nao_gerencia()
+    {
+        // Regressão: editar só o título/descrição de um pacote custom apagava a
+        // home page (SiteUrl) e o MetadataJson — que carrega tags, categoria,
+        // licença e os comandos silenciosos usados pela loja.
+        await using var db = NewDb();
+        var repo = new AppPackageRepository(db);
+
+        var package = NewPackage("foxit");
+        package.SiteUrl = "https://foxit.example.com";
+        package.MetadataJson = "{\"tags\":[\"pdf\"],\"category\":\"Documentos\",\"silent\":\"/S\"}";
+        await repo.UpsertCustomAsync(package);
+
+        // Simula o "Salvar alterações" do editor: o request não traz esses campos.
+        var edited = NewPackage("foxit");
+        edited.Name = "Foxit PDF Editor (novo título)";
+        edited.SiteUrl = null;
+        edited.MetadataJson = null;
+        var saved = await repo.UpsertCustomAsync(edited);
+
+        Assert.That(saved.SiteUrl, Is.EqualTo("https://foxit.example.com"));
+        Assert.That(saved.MetadataJson, Does.Contain("\"silent\""));
+        Assert.That(saved.Name, Is.EqualTo("Foxit PDF Editor (novo título)"));
+    }
+
+    [Test]
     public async Task ClearCustomFileAsync_zera_o_instalador_e_devolve_o_estado_anterior()
     {
         await using var db = NewDb();

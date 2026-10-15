@@ -181,8 +181,22 @@ public static class AwsSigV4Signer
         return CreatePresignedObjectUrl("GET", endpoint, bucket, objectKey, query, accessKey, secretKey, region, now, expiresSeconds);
     }
 
-    /// <summary>Codificação RFC3986 exigida pelo SigV4 em query string.</summary>
-    private static string Encode(string value) => Uri.EscapeDataString(value ?? string.Empty);
+    /// <summary>
+    /// Codificação RFC3986 exigida pelo SigV4. `Uri.EscapeDataString` NÃO escapa
+    /// `! * ' ( )` (são unreserved para o .NET, mas reservados para o SigV4): um
+    /// object key com parênteses — comum em instaladores ("setup(1).exe") — geraria
+    /// assinatura divergente e o storage recusaria a URL.
+    /// </summary>
+    private static string Encode(string value)
+    {
+        var escaped = Uri.EscapeDataString(value ?? string.Empty);
+        return escaped
+            .Replace("!", "%21", StringComparison.Ordinal)
+            .Replace("*", "%2A", StringComparison.Ordinal)
+            .Replace("'", "%27", StringComparison.Ordinal)
+            .Replace("(", "%28", StringComparison.Ordinal)
+            .Replace(")", "%29", StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Path do objeto: cada segmento é codificado, mas as "/" permanecem (o S3
@@ -191,8 +205,7 @@ public static class AwsSigV4Signer
     private static string EncodePath(string path)
         => string.Join("/", path.Split('/').Select(EncodePathSegment));
 
-    private static string EncodePathSegment(string segment)
-        => Uri.EscapeDataString(segment);
+    private static string EncodePathSegment(string segment) => Encode(segment);
 
     private static byte[] SigningKey(string secretKey, string dateStamp, string region)
     {

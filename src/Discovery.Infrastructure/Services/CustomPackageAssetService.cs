@@ -17,11 +17,17 @@ public class CustomPackageAssetService : ICustomPackageAssetService
     private const string IconKind = "icon";
 
     // O protocolo S3 recusa PUT único acima de 5 GiB; o upload multipart direto
-    // remove esse teto (limite real = 10000 partes x 50 MiB).
+    // remove esse teto (limite real = 10000 partes x 10 MiB = 100 GiB).
     public const long MaxAssetBytes = 5L * 1024 * 1024 * 1024;
 
-    /// <summary>Bloco padrão do upload multipart direto: 50 MiB (padronizado).</summary>
-    public const long PartSizeBytes = 50L * 1024 * 1024;
+    /// <summary>
+    /// Bloco padrão do upload multipart direto: 10 MiB.
+    /// O limite não é o S3 (5 GiB) e sim o proxy: o Cloudflare corta requisições
+    /// em ~100s, então um bloco de 50 MiB falhava em links abaixo de ~5 Mbps.
+    /// 10 MiB mantém folga confortável e ainda respeita o mínimo de 5 MiB do S3
+    /// para todas as partes menos a última.
+    /// </summary>
+    public const long PartSizeBytes = 10L * 1024 * 1024;
 
     /// <summary>Validade da URL pré-assinada de cada parte (upload longo cabe).</summary>
     public const int PartUrlTtlMinutes = 60;
@@ -158,12 +164,15 @@ public class CustomPackageAssetService : ICustomPackageAssetService
         long sizeBytes,
         string uploadId,
         IReadOnlyList<MultipartUploadPartStateDto> parts,
+        string? knownChecksum = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(objectKey))
             throw new InvalidOperationException("ObjectKey é obrigatório.");
         if (parts is null || parts.Count == 0)
             throw new InvalidOperationException("Nenhuma parte recebida: não há o que finalizar.");
+
+        ValidatePartCoverage(parts, sizeBytes);
 
         var normalizedKind = NormalizeKind(kind);
         var safeName = SanitizeFileName(fileName);
@@ -199,7 +208,10 @@ public class CustomPackageAssetService : ICustomPackageAssetService
 
         // O arquivo foi montado pelo storage (nunca passou pela API): o SHA-256 é
         // calculado numa passada de leitura pelo endpoint interno (loopback).
-        var checksum = await TryComputeChecksumAsync(storage, objectKey, cancellationToken);
+        // Se uma tentativa anterior já calculou, reaproveita (retentativa).
+        var checksum = string.IsNullOrWhiteSpace(knownChecksum)
+            ? await TryComputeChecksumAsync(storage, objectKey, cancellationToken)
+            : knownChecksum!;
 
         return new CustomPackageAssetDto
         {
@@ -209,6 +221,31 @@ public class CustomPackageAssetService : ICustomPackageAssetService
             FileName = safeName,
             SizeBytes = storedSize,
             Checksum = checksum
+        };
+    }
+
+    public async Task<CustomPackageAssetDto?> DescribeCompletedAssetAsync(
+        string objectKey,
+        string fileName,
+        string? knownChecksum = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(objectKey))
+            return null;
+
+        var storage = await _storageFactory.CreateObjectStorageServiceAsync(cancellationToken);
+        var metadata = await storage.GetMetadataAsync(objectKey, cancellationToken);
+        if (metadata is null)
+            return null;
+
+        return new CustomPackageAssetDto
+        {
+            ObjectKey = objectKey,
+            Bucket = metadata.Bucket,
+            ContentType = string.IsNullOrWhiteSpace(metadata.ContentType) ? "application/octet-stream" : metadata.ContentType,
+            FileName = SanitizeFileName(fileName),
+            SizeBytes = metadata.SizeBytes,
+            Checksum = knownChecksum ?? string.Empty,
         };
     }
 
@@ -224,6 +261,57 @@ public class CustomPackageAssetService : ICustomPackageAssetService
         await storage.AbortMultipartUploadAsync(objectKey, uploadId, cancellationToken);
     }
 
+    /// <summary>
+    /// O complete do S3 exige TODAS as partes, numeradas e em ordem. Sem esta
+    /// checagem um cliente com estado local incompleto/corrompido enviaria uma
+    /// lista inválida e o operador receberia um erro cru do storage.
+    /// </summary>
+    private static void ValidatePartCoverage(IReadOnlyList<MultipartUploadPartStateDto> parts, long sizeBytes)
+    {
+        var ordered = parts.OrderBy(part => part.PartNumber).ToArray();
+
+        for (var index = 0; index < ordered.Length; index++)
+        {
+            if (ordered[index].PartNumber != index + 1)
+                throw new InvalidOperationException(
+                    $"Partes inconsistentes: esperava a parte {index + 1} e recebi {ordered[index].PartNumber}. " +
+                    "Retome o envio para recuperar os blocos que faltam.");
+
+            if (string.IsNullOrWhiteSpace(ordered[index].ETag) || ordered[index].ETag.Trim().Trim('"').Length == 0)
+                throw new InvalidOperationException($"Parte {ordered[index].PartNumber} sem ETag: reenvie esse bloco.");
+        }
+
+        var withSizes = ordered.Where(part => part.SizeBytes > 0).ToArray();
+        if (withSizes.Length != ordered.Length || sizeBytes <= 0)
+            return;
+
+        // O tamanho do bloco é derivado das PRÓPRIAS partes, não da constante
+        // atual: uma sessão aberta antes de mudar o padrão (50 MiB -> 10 MiB)
+        // precisa continuar podendo ser concluída.
+        var partSize = ordered[0].SizeBytes;
+        if (partSize <= 0)
+            return;
+
+        var expectedParts = (int)((sizeBytes + partSize - 1) / partSize);
+        if (ordered.Length != expectedParts)
+            throw new InvalidOperationException(
+                $"Enviamos {ordered.Length} blocos, mas o arquivo de {sizeBytes} bytes exige {expectedParts}.");
+
+        var total = 0L;
+        for (var index = 0; index < ordered.Length; index++)
+        {
+            var expected = index == ordered.Length - 1
+                ? sizeBytes - total
+                : partSize;
+
+            if (ordered[index].SizeBytes != expected)
+                throw new InvalidOperationException(
+                    $"Bloco {ordered[index].PartNumber} com {ordered[index].SizeBytes} bytes; esperado {expected}.");
+
+            total += ordered[index].SizeBytes;
+        }
+    }
+
     private async Task<string> TryComputeChecksumAsync(
         IObjectStorageService storage,
         string objectKey,
@@ -235,10 +323,16 @@ public class CustomPackageAssetService : ICustomPackageAssetService
             await storage.DownloadToAsync(objectKey, hashing, cancellationToken);
             return hashing.GetHashHex();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Não invalida um upload que já foi concluído com sucesso no storage:
             // apenas fica sem checksum (o agent cai no fallback de tamanho/ETag).
+            // Mas precisa ficar registrado: sem checksum o pacote perde a
+            // verificação de integridade no agent.
+            _logger?.LogWarning(
+                ex,
+                "Nao foi possivel calcular o SHA-256 de {ObjectKey}: o asset ficara sem checksum.",
+                objectKey);
             return string.Empty;
         }
     }

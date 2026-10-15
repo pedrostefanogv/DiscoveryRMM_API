@@ -37,6 +37,10 @@ public static class BackgroundServicesCollectionExtensions
         services.AddScoped<IAlertDispatchService, AlertDispatchService>();
         services.AddHostedService<AgentPackagePrebuildHostedService>();
 
+        // Limpeza periódica de uploads multipart diretos abandonados (loja custom):
+        // sem isso as partes de um envio de vários GiB ficam no storage para sempre.
+        services.AddHostedService<MultipartUploadJanitorService>();
+
         // Sync ping dispatch (singleton + hosted service pattern, toggleable)
         if (config.SyncPingDispatchEnabled)
         {

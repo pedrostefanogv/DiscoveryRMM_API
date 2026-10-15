@@ -65,9 +65,10 @@ __REDIRECT_RULES__
   ssl_session_tickets off;
 
   # Uploads. Default do nginx e 1m — sem isso todo upload maior falha com 413.
-  # PADRAO 2026-10-15: uploads grandes vao em BLOCOS de 50 MiB (padronizado no
+  # PADRAO 2026-10-15: uploads grandes vao em BLOCOS de 10 MiB (padronizado no
   # console e na API), porque o edge do Cloudflare recusa corpos de centenas de
-  # MB/GB com 413. 64m cobre o bloco + overhead de protocolo.
+  # MB/GB com 413 e corta requisicoes longas (~100s): bloco menor atravessa link
+  # lento. 64m cobre o bloco + overhead de protocolo.
 client_max_body_size 64m;
 
   gzip on;
@@ -85,6 +86,22 @@ client_max_body_size 64m;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  # Upload multipart DIRETO no object storage (loja custom): o "/complete" só
+  # termina depois de o storage montar o objeto E a API calcular o SHA-256 do
+  # arquivo (passada de leitura). O default de 60s do proxy_read_timeout devolvia
+  # 504 no meio de um instalador de vários GiB — com o storage já concluído.
+  location ^~ /api/v1/app-store/custom/assets/multipart/ {
+    proxy_pass http://discovery_api_backend;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 900s;
+    proxy_send_timeout 900s;
   }
 
   # AI Chat stream: SSE long-polling exige timeout alto e sem buffering.

@@ -132,6 +132,27 @@ public class AwsSigV4SignerTests
     }
 
     [Test]
+    public void PresignedPartUrl_EscapaCaracteresQueOdotNetNaoEscapa()
+    {
+        // '!' '*' ''' '(' ')' são unreserved para Uri.EscapeDataString, mas o SigV4
+        // (AWS UriEncode) exige percent-encoding. Sem isso, um instalador chamado
+        // "setup(1).exe" geraria assinatura divergente e o storage recusaria a URL.
+        var url = AwsSigV4Signer.CreatePresignedPartUrl(
+            new Uri("https://tngplacas.com.br"),
+            "discovery-files",
+            "app-store/custom/installers/abc/setup(1)*final!.exe",
+            uploadId: "u+id/=",
+            partNumber: 1,
+            accessKey: AccessKey, secretKey: SecretKey, region: "us-east-1",
+            now: new DateTimeOffset(2026, 10, 11, 22, 0, 0, TimeSpan.Zero),
+            expiresSeconds: 3600);
+
+        Assert.That(url, Does.Contain("setup%281%29%2Afinal%21.exe"), "path precisa escapar ()*!");
+        Assert.That(url, Does.Not.Contain("setup(1)"));
+        Assert.That(url, Does.Contain("uploadId=u%2Bid%2F%3D"), "query precisa escapar + e /");
+    }
+
+    [Test]
     public void PresignedObjectUrl_RejectsEmptyBucket()
     {
         Assert.Throws<ArgumentException>(() => AwsSigV4Signer.CreatePresignedObjectUrl(
