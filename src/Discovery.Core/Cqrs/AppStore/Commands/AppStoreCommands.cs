@@ -50,6 +50,9 @@ public sealed record DeleteCustomAppPackageCommand(string PackageId) : ICommand<
 /// </summary>
 public sealed record DeleteCustomAppPackageFileCommand(string PackageId) : ICommand<Result<VoidResult>>;
 
+/// <summary>Remove o ícone/capa publicado de um pacote custom (mantém o instalador).</summary>
+public sealed record DeleteCustomAppPackageIconCommand(string PackageId) : ICommand<Result<VoidResult>>;
+
 // ── Approval rules ───────────────────────────────────────────────────
 public sealed record UpsertAppApprovalRuleCommand(
     AppApprovalScopeType ScopeType,

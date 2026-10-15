@@ -39,9 +39,23 @@ public interface IAppPackageRepository
     Task<AppPackage?> ClearCustomFileAsync(string packageId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Zera o ícone do pacote custom (IconObjectKey e IconUrl). Retorna um snapshot
+    /// do estado ANTERIOR (com a object key para o handler apagar o objeto no
+    /// storage) ou <c>null</c> se o pacote não existir ou não for Custom.
+    /// </summary>
+    Task<AppPackage?> ClearCustomIconAsync(string packageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// A object key está referenciada por algum pacote, como INSTALADOR ou como
     /// ÍCONE? Usado para NÃO descartar um asset já vinculado (e para descartar o
     /// que foi publicado mas nunca foi salvo no cadastro).
     /// </summary>
     Task<bool> IsAssetObjectKeyReferencedAsync(string objectKey, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Todas as object keys de assets referenciadas por pacotes (instalador OU
+    /// ícone). Usado pela sanitização do object storage: uma consulta evita um
+    /// SELECT por objeto varrido no bucket.
+    /// </summary>
+    Task<IReadOnlySet<string>> GetReferencedAssetKeysAsync(CancellationToken cancellationToken = default);
 }

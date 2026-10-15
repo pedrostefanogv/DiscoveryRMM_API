@@ -225,6 +225,52 @@ public class LocalObjectStorageProvider : IObjectStorageService
     /// <summary>
     /// Gerar URL "pré-assinada" (local: apenas caminho relativo fake).
     /// </summary>
+    /// <summary>
+    /// Lista os arquivos armazenados localmente (mesma semântica do provider S3):
+    /// usado pela manutenção do object storage em desenvolvimento/homolog.
+    /// </summary>
+    public Task<ObjectStorageListing> ListObjectsAsync(
+        string? prefix,
+        int maxObjects,
+        CancellationToken cancellationToken = default)
+    {
+        if (maxObjects <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxObjects), "maxObjects precisa ser positivo.");
+
+        if (!Directory.Exists(_basePath))
+            return Task.FromResult(ObjectStorageListing.Empty);
+
+        var normalizedPrefix = (prefix ?? string.Empty).Replace('\\', '/').TrimStart('/');
+        var items = new List<StorageObjectInfo>();
+        var truncated = false;
+
+        foreach (var filePath in Directory.EnumerateFiles(_basePath, "*", SearchOption.AllDirectories))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var relativeKey = Path.GetRelativePath(_basePath, filePath).Replace(Path.DirectorySeparatorChar, '/');
+            if (normalizedPrefix.Length > 0
+                && !relativeKey.StartsWith(normalizedPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (items.Count >= maxObjects)
+            {
+                truncated = true;
+                break;
+            }
+
+            var info = new FileInfo(filePath);
+            items.Add(new StorageObjectInfo(
+                relativeKey,
+                info.Length,
+                new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero)));
+        }
+
+        return Task.FromResult(new ObjectStorageListing(items, truncated));
+    }
+
     public Task<string> GetPresignedDownloadUrlAsync(
         string objectKey,
         int ttlHours,

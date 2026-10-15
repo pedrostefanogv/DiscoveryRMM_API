@@ -197,6 +197,7 @@ public partial class DiscoveryDbContext
             entity.Property(r => r.PackageId).HasColumnName("package_id").HasMaxLength(300);
             entity.Property(r => r.Action).HasColumnName("action").HasConversion<int>();
             entity.Property(r => r.AutoUpdateEnabled).HasColumnName("auto_update_enabled");
+            entity.Property(r => r.Reason).HasColumnName("reason").HasMaxLength(500);
             entity.Property(r => r.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(r => r.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 

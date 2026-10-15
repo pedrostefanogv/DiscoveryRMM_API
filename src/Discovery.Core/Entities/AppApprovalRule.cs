@@ -16,6 +16,12 @@ public class AppApprovalRule
     public AppApprovalActionType Action { get; set; } = AppApprovalActionType.Allow;
     public bool? AutoUpdateEnabled { get; set; }
 
+    /// <summary>
+    /// Motivo informado ao criar/atualizar a regra (o histórico de cada mudança
+    /// fica em AppApprovalAudit; aqui é o motivo vigente, exibido na listagem).
+    /// </summary>
+    public string? Reason { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

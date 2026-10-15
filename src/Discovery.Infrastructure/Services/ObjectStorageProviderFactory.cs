@@ -282,6 +282,9 @@ file sealed class NotConfiguredObjectStorageProvider : IObjectStorageService
     public Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
+    public Task<ObjectStorageListing> ListObjectsAsync(string? prefix, int maxObjects, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
     public Task<string> CreateMultipartUploadAsync(string objectKey, string contentType, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
@@ -343,6 +346,9 @@ file sealed class DeferredObjectStorageProvider : IObjectStorageService
 
     public async Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).GetMetadataAsync(objectKey, cancellationToken);
+
+    public async Task<ObjectStorageListing> ListObjectsAsync(string? prefix, int maxObjects, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).ListObjectsAsync(prefix, maxObjects, cancellationToken);
 
     public async Task<string> CreateMultipartUploadAsync(string objectKey, string contentType, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).CreateMultipartUploadAsync(objectKey, contentType, cancellationToken);

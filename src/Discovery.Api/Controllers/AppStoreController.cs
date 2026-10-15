@@ -21,6 +21,19 @@ public class AppStoreController(
     IMediator mediator,
     ILogger<AppStoreController> _logger) : ControllerBase
 {
+    /// <summary>
+    /// Usuário autenticado (populado pelo UserAuthMiddleware). O autor da regra
+    /// de aprovação vem SEMPRE daqui — nunca do corpo/query, que seriam
+    /// falsificáveis — para a trilha de auditoria registrar quem realmente fez.
+    /// </summary>
+    private string Username =>
+        HttpContext.Items["Username"] as string
+        ?? HttpContext.Items["UserId"]?.ToString()
+        ?? "api";
+
+    /// <summary>IP de origem da requisição, para a trilha de auditoria.</summary>
+    private string? ClientIp => HttpContext.Connection.RemoteIpAddress?.ToString();
+
     // ═══════════════════════════════════════════════════════════════
     // Catalog
     // ═══════════════════════════════════════════════════════════════
@@ -856,6 +869,22 @@ public class AppStoreController(
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
+    /// <summary>
+    /// Remove apenas o ícone/capa publicado de um pacote custom (mantém o pacote e o
+    /// instalador). O objeto também é apagado do object storage. 204 em caso de sucesso.
+    /// </summary>
+    [HttpDelete("custom/{packageId}/icon")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public async Task<IActionResult> DeleteCustomPackageIcon(string packageId, CancellationToken ct)
+    {
+        var result = await mediator.Send(new DeleteCustomAppPackageIconCommand(packageId), ct);
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // Sync
     // ═══════════════════════════════════════════════════════════════
@@ -955,7 +984,7 @@ public class AppStoreController(
     [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
     public async Task<IActionResult> UpsertApproval([FromBody] UpsertAppApprovalRuleCommand cmd)
     {
-        var result = await mediator.Send(cmd);
+        var result = await mediator.Send(cmd with { ChangedBy = Username, IpAddress = ClientIp });
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
@@ -966,11 +995,10 @@ public class AppStoreController(
     [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
     public async Task<IActionResult> DeleteApproval(
         Guid ruleId,
-        [FromQuery] string? reason = null,
-        [FromQuery] string? changedBy = null,
-        [FromQuery] string? ipAddress = null)
+        [FromQuery] string? reason = null)
     {
-        var result = await mediator.Send(new DeleteAppApprovalRuleCommand(ruleId, reason, changedBy, ipAddress));
+        // ChangedBy/IpAddress vêm do usuário autenticado, não da query.
+        var result = await mediator.Send(new DeleteAppApprovalRuleCommand(ruleId, reason, Username, ClientIp));
         return result.Match<IActionResult>(
             success: _ => NoContent(),
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));

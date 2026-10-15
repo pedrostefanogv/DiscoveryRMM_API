@@ -30,6 +30,15 @@ public interface IAppStoreService
         string packageId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Remove o ícone/capa publicado do pacote custom (best-effort no object
+    /// storage) mantendo o pacote e o instalador. Retorna <c>false</c> se o pacote
+    /// não existir ou não for Custom.
+    /// </summary>
+    Task<bool> DeleteCustomPackageIconAsync(
+        string packageId,
+        CancellationToken cancellationToken = default);
+
     Task<AppApprovalRuleResolvedDto> UpsertRuleAsync(
         AppApprovalScopeType scopeType,
         Guid? scopeId,

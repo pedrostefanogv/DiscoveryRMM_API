@@ -8,6 +8,9 @@ namespace Discovery.Infrastructure.Services;
 
 public class AppStoreService : IAppStoreService
 {
+    /// <summary>Limite de app_approval_rules.reason (varchar(500), migração M226).</summary>
+    private const int MaxReasonLength = 500;
+
     private readonly IAppApprovalRuleRepository _approvalRepo;
     private readonly IAppApprovalAuditService _auditService;
     private readonly IConfigurationResolver _configurationResolver;
@@ -266,6 +269,34 @@ public class AppStoreService : IAppStoreService
         return true;
     }
 
+    public async Task<bool> DeleteCustomPackageIconAsync(
+        string packageId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(packageId))
+            return false;
+
+        var previous = await _appPackageRepo.ClearCustomIconAsync(packageId.Trim(), cancellationToken);
+        if (previous is null)
+            return false;
+
+        // Best-effort: a linha do catalogo e a fonte de verdade; uma falha ao
+        // remover o objeto no storage nao deve impedir a exclusao do icone.
+        if (!string.IsNullOrWhiteSpace(previous.IconObjectKey))
+        {
+            try
+            {
+                await _customAssets.DeleteAsync(previous.IconObjectKey, cancellationToken);
+            }
+            catch
+            {
+                // Objeto orfao no storage nao quebra a operacao.
+            }
+        }
+
+        return true;
+    }
+
     public async Task<AppApprovalRuleResolvedDto> UpsertRuleAsync(
         AppApprovalScopeType scopeType,
         Guid? scopeId,
@@ -280,6 +311,12 @@ public class AppStoreService : IAppStoreService
     {
         var normalizedPackageId = NormalizePackageId(packageId, installationType);
         var (clientId, siteId, agentId) = ResolveScopeIds(scopeType, scopeId);
+        var normalizedReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
+
+        // A coluna app_approval_rules.reason é varchar(500) (M226). Sem esta
+        // validação o INSERT estoura 22001 e o operador recebe um 500 genérico.
+        if (normalizedReason is not null && normalizedReason.Length > MaxReasonLength)
+            throw new InvalidOperationException($"Motivo muito longo: o limite e de {MaxReasonLength} caracteres.");
 
         if (installationType == AppInstallationType.Winget)
         {
@@ -314,7 +351,8 @@ public class AppStoreService : IAppStoreService
                 InstallationType = installationType,
                 PackageId = normalizedPackageId,
                 Action = action,
-                AutoUpdateEnabled = autoUpdateEnabled
+                AutoUpdateEnabled = autoUpdateEnabled,
+                Reason = normalizedReason
             });
 
             await _auditService.LogAsync(
@@ -322,17 +360,20 @@ public class AppStoreService : IAppStoreService
                 created,
                 null,
                 null,
-                reason,
+                normalizedReason,
                 changedBy,
                 ipAddress);
 
-            return ToRuleDto(created);
+            return await EnrichRuleDtoAsync(ToRuleDto(created), cancellationToken);
         }
 
         var oldAction = existing.Action;
         var oldAutoUpdateEnabled = existing.AutoUpdateEnabled;
         existing.Action = action;
         existing.AutoUpdateEnabled = autoUpdateEnabled;
+        // Motivo é opcional: um save sem motivo não apaga o que já estava gravado.
+        if (normalizedReason is not null)
+            existing.Reason = normalizedReason;
         await _approvalRepo.UpdateAsync(existing);
 
         var updated = await _approvalRepo.GetByIdAsync(existing.Id) ?? existing;
@@ -341,10 +382,10 @@ public class AppStoreService : IAppStoreService
             updated,
             oldAction,
             oldAutoUpdateEnabled,
-            reason,
+            normalizedReason,
             changedBy,
             ipAddress);
-        return ToRuleDto(updated);
+        return await EnrichRuleDtoAsync(ToRuleDto(updated), cancellationToken);
     }
 
     public async Task<IReadOnlyList<AppApprovalRuleResolvedDto>> GetRulesByScopeAsync(
@@ -353,9 +394,31 @@ public class AppStoreService : IAppStoreService
         AppInstallationType installationType,
         CancellationToken cancellationToken = default)
     {
-        _ = cancellationToken;
         var rules = await _approvalRepo.GetByScopeAsync(scopeType, scopeId, installationType);
-        return rules.Select(ToRuleDto).ToList();
+        var dtos = rules.Select(ToRuleDto).ToList();
+
+        // Nome do pacote para a listagem (a regra guarda só o packageId). Poucas
+        // regras por escopo: uma consulta pontual por regra é aceitável aqui e
+        // evita um join entre as tabelas de catálogo (winget/choco/custom).
+        foreach (var dto in dtos)
+            await EnrichRuleDtoAsync(dto, cancellationToken);
+
+        return dtos;
+    }
+
+    /// <summary>Preenche o nome do pacote no DTO a partir do catálogo.</summary>
+    private async Task<AppApprovalRuleResolvedDto> EnrichRuleDtoAsync(
+        AppApprovalRuleResolvedDto dto,
+        CancellationToken cancellationToken)
+    {
+        var package = await _appPackageRepo.GetByInstallationTypeAndPackageIdAsync(
+            dto.InstallationType,
+            dto.PackageId,
+            cancellationToken);
+        if (package is not null && !string.IsNullOrWhiteSpace(package.Name))
+            dto.PackageName = package.Name;
+
+        return dto;
     }
 
     public async Task DeleteRuleAsync(Guid ruleId, CancellationToken cancellationToken = default)
@@ -1225,6 +1288,7 @@ public class AppStoreService : IAppStoreService
             Name = pkg.Name,
             Publisher = pkg.Publisher ?? string.Empty,
             Version = pkg.Version ?? string.Empty,
+            Architecture = BuildArchitectureLabel(installerUrls.Keys),
             Description = pkg.Description ?? string.Empty,
             Homepage = pkg.SiteUrl ?? string.Empty,
             License = license,
@@ -1378,8 +1442,11 @@ public class AppStoreService : IAppStoreService
             },
             InstallationType = rule.InstallationType,
             PackageId = rule.PackageId,
+            // PackageName é preenchido por EnrichRuleDtoAsync (vem do catálogo).
+            Reason = rule.Reason,
             Action = rule.Action,
             AutoUpdateEnabled = rule.AutoUpdateEnabled,
+            CreatedAt = rule.CreatedAt,
             UpdatedAt = rule.UpdatedAt
         };
     }
@@ -1461,6 +1528,23 @@ public class AppStoreService : IAppStoreService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Rótulo de arquitetura(s) do pacote a partir das chaves de
+    /// installerUrlsByArch (ex.: "x64" ou "arm64, x64"). Vazio quando o pacote
+    /// não publica instalador por arquitetura (custom, por exemplo).
+    /// </summary>
+    private static string BuildArchitectureLabel(IEnumerable<string> architectures)
+    {
+        var normalized = architectures
+            .Where(a => !string.IsNullOrWhiteSpace(a))
+            .Select(a => a.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(a => a, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return normalized.Count == 0 ? string.Empty : string.Join(", ", normalized);
     }
 
     private static IReadOnlyDictionary<string, string> ParseInstallerUrls(JsonElement element)

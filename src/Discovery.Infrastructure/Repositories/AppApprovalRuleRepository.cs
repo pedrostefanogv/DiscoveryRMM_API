@@ -102,6 +102,7 @@ public class AppApprovalRuleRepository : IAppApprovalRuleRepository
 
         existing.Action = rule.Action;
         existing.AutoUpdateEnabled = rule.AutoUpdateEnabled;
+        existing.Reason = rule.Reason;
         existing.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();

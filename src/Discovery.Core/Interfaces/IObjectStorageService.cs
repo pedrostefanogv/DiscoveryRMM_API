@@ -99,6 +99,23 @@ public interface IObjectStorageService
     /// </summary>
     Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Lista os objetos do bucket (opcionalmente por prefixo) devolvendo chave,
+    /// tamanho e data da última modificação — base da manutenção/sanitização do
+    /// object storage (contagem de objetos órfãos e tamanho ocupado).
+    /// Nunca lança por bucket vazio; para no teto de <paramref name="maxObjects"/>.
+    /// </summary>
+    Task<ObjectStorageListing> ListObjectsAsync(
+        string? prefix,
+        int maxObjects,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException(ListNotSupportedMessage);
+
+    /// <summary>Mensagem padrão para providers sem suporte a listagem.</summary>
+    private const string ListNotSupportedMessage =
+        "O storage configurado nao suporta listagem de objetos " +
+        "(requer um provider S3-compatível: RustFS/MinIO/S3 ou o provider local).";
+
     // ── Multipart Upload (arquivos grandes: envio DIRETO do cliente ao storage) ──
     //
     // Fluxo usado pelos instaladores da loja custom (1-10 GiB): o navegador NÃO

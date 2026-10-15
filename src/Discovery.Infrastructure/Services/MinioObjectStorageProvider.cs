@@ -213,6 +213,41 @@ public class MinioObjectStorageProvider : IObjectStorageService
         }
     }
 
+    public async Task<ObjectStorageListing> ListObjectsAsync(string? prefix, int maxObjects, CancellationToken cancellationToken = default)
+    {
+        if (maxObjects <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxObjects), "maxObjects precisa ser positivo.");
+
+        var listArgs = new ListObjectsArgs()
+            .WithBucket(_bucketName)
+            .WithPrefix(prefix ?? string.Empty)
+            .WithRecursive(true);
+
+        var items = new List<StorageObjectInfo>();
+        var truncated = false;
+
+        await foreach (var obj in _client.ListObjectsEnumAsync(listArgs, cancellationToken))
+        {
+            // Marcador de "pasta" (chave terminando em /) não é objeto.
+            if (string.IsNullOrEmpty(obj.Key) || obj.Key.EndsWith('/'))
+                continue;
+
+            if (items.Count >= maxObjects)
+            {
+                truncated = true;
+                break;
+            }
+
+            var lastModified = obj.LastModifiedDateTime is { } modified
+                ? new DateTimeOffset(DateTime.SpecifyKind(modified, DateTimeKind.Utc))
+                : (DateTimeOffset?)null;
+
+            items.Add(new StorageObjectInfo(obj.Key, (long)obj.Size, lastModified));
+        }
+
+        return new ObjectStorageListing(items, truncated);
+    }
+
     public Task<string> GetPresignedDownloadUrlAsync(string objectKey, int ttlHours, CancellationToken cancellationToken = default)
     {
         ValidateObjectKey(objectKey);

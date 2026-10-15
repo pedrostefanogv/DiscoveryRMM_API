@@ -16,6 +16,14 @@ public class AppCatalogPackageDto
     public string Name { get; set; } = string.Empty;
     public string Publisher { get; set; } = string.Empty;
     public string Version { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Arquitetura(s) com instalador publicado (chaves de installerUrlsByArch,
+    /// ex.: "x64" ou "x64, arm64"). Vazio quando o pacote não tem instalador por
+    /// arquitetura (pacotes custom, por exemplo).
+    /// </summary>
+    public string Architecture { get; set; } = string.Empty;
+
     public string Description { get; set; } = string.Empty;
     public string Homepage { get; set; } = string.Empty;
     public string License { get; set; } = string.Empty;
@@ -173,8 +181,16 @@ public class AppApprovalRuleResolvedDto
     public Guid? ScopeId { get; set; }
     public AppInstallationType InstallationType { get; set; }
     public string PackageId { get; set; } = string.Empty;
+
+    /// <summary>Nome do pacote no catálogo (vazio quando o pacote não existe mais).</summary>
+    public string? PackageName { get; set; }
+
+    /// <summary>Motivo informado ao criar/atualizar a regra (pode ser nulo).</summary>
+    public string? Reason { get; set; }
+
     public AppApprovalActionType Action { get; set; }
     public bool? AutoUpdateEnabled { get; set; }
+    public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
 

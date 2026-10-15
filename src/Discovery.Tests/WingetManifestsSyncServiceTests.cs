@@ -51,6 +51,12 @@ public class WingetManifestsSyncServiceTests
         public Task<bool> DeleteCustomAsync(string packageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public Task<AppPackage?> ClearCustomIconAsync(string packageId, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<IReadOnlySet<string>> GetReferencedAssetKeysAsync(CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public Task<AppPackage?> ClearCustomFileAsync(string packageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 

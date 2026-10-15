@@ -196,6 +196,9 @@ public sealed class InstrumentedObjectStorageProvider(
     public Task<Discovery.Core.ValueObjects.ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
         => MeasureAsync("head", () => inner.TestConnectionAsync(cancellationToken));
 
+    public Task<Discovery.Core.ValueObjects.ObjectStorageListing> ListObjectsAsync(string? prefix, int maxObjects, CancellationToken cancellationToken = default)
+        => MeasureAsync("list-objects", () => inner.ListObjectsAsync(prefix, maxObjects, cancellationToken));
+
     // ── Multipart (envio direto do cliente ao storage) ──────────────────────
     public Task<string> CreateMultipartUploadAsync(string objectKey, string contentType, CancellationToken cancellationToken = default)
         => MeasureAsync("multipart-create", () => inner.CreateMultipartUploadAsync(objectKey, contentType, cancellationToken));

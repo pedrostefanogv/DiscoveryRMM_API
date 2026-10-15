@@ -270,6 +270,28 @@ public class AppPackageRepository : IAppPackageRepository
         return current;
     }
 
+    public async Task<IReadOnlySet<string>> GetReferencedAssetKeysAsync(CancellationToken cancellationToken = default)
+    {
+        // Uma única consulta: a sanitização compara isto com os milhares de
+        // objetos do bucket (um SELECT por objeto seria inviável).
+        var keys = await _db.AppPackages.AsNoTracking()
+            .Where(package => package.FileObjectKey != null || package.IconObjectKey != null)
+            .Select(package => new { package.FileObjectKey, package.IconObjectKey })
+            .ToListAsync(cancellationToken);
+
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in keys)
+        {
+            if (!string.IsNullOrWhiteSpace(key.FileObjectKey))
+                referenced.Add(key.FileObjectKey);
+
+            if (!string.IsNullOrWhiteSpace(key.IconObjectKey))
+                referenced.Add(key.IconObjectKey);
+        }
+
+        return referenced;
+    }
+
     public Task<bool> IsAssetObjectKeyReferencedAsync(string objectKey, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(objectKey))
@@ -331,6 +353,37 @@ public class AppPackageRepository : IAppPackageRepository
         current.FileSizeBytes = null;
         current.FileChecksum = null;
         current.FileName = null;
+        current.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return previous;
+    }
+
+    public async Task<AppPackage?> ClearCustomIconAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        var normalizedPackageId = NormalizePackageId(packageId, AppInstallationType.Custom);
+        var current = await _db.AppPackages.SingleOrDefaultAsync(
+            x => x.InstallationType == AppInstallationType.Custom && x.PackageId == normalizedPackageId,
+            cancellationToken);
+
+        if (current is null)
+            return null;
+
+        // Snapshot do estado ANTERIOR: o handler precisa da object key para apagar
+        // o objeto no storage depois que a linha deixa de referenciá-lo.
+        var previous = new AppPackage
+        {
+            Id = current.Id,
+            InstallationType = current.InstallationType,
+            PackageId = current.PackageId,
+            IconObjectKey = current.IconObjectKey,
+            IconUrl = current.IconUrl
+        };
+
+        // IconUrl também sai: quando o ícone veio do storage ela é a URL interna
+        // derivada (/custom/{id}/icon) e ficaria apontando para um objeto apagado.
+        current.IconObjectKey = null;
+        current.IconUrl = null;
         current.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(cancellationToken);

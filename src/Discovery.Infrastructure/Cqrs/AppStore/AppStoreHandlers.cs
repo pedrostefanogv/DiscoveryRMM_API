@@ -199,6 +199,23 @@ public sealed class DeleteCustomAppPackageFileCommandHandler(IAppStoreService sv
     }
 }
 
+public sealed class DeleteCustomAppPackageIconCommandHandler(IAppStoreService svc)
+    : IRequestHandler<DeleteCustomAppPackageIconCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(DeleteCustomAppPackageIconCommand cmd, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(cmd.PackageId))
+            return Result<VoidResult>.Failure(Error.Validation("packageId", "PackageId e obrigatorio."));
+
+        // O service limpa IconObjectKey/IconUrl no catalogo e apaga o objeto no
+        // storage em best-effort; false = pacote inexistente ou nao Custom.
+        var deleted = await svc.DeleteCustomPackageIconAsync(cmd.PackageId, ct);
+        return deleted
+            ? Result<VoidResult>.Success(VoidResult.Value)
+            : Result<VoidResult>.Failure(Error.NotFound($"Pacote custom '{cmd.PackageId}' nao encontrado."));
+    }
+}
+
 // ── Effective apps ───────────────────────────────────────────────────
 
 public sealed class GetAppStoreEffectiveAppsQueryHandler(IAppStoreService svc)
