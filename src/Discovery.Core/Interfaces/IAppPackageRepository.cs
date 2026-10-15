@@ -7,6 +7,16 @@ public interface IAppPackageRepository
 {
     Task<AppPackage?> GetByInstallationTypeAndPackageIdAsync(AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Busca vários pacotes do mesmo tipo em UMA consulta (evita N+1 na listagem
+    /// de regras de aprovação). Pacotes Custom casam sem diferenciar maiúsculas;
+    /// Winget/Chocolatey usam igualdade exata (já gravados em lowercase).
+    /// </summary>
+    Task<IReadOnlyList<AppPackage>> GetByInstallationTypeAndPackageIdsAsync(
+        AppInstallationType installationType,
+        IReadOnlyCollection<string> packageIds,
+        CancellationToken cancellationToken = default);
+
     Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchPageAsync(
         AppInstallationType installationType,
         string? search,

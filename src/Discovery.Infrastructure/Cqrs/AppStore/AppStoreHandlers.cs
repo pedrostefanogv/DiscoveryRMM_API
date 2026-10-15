@@ -260,8 +260,12 @@ public sealed class DeleteAppApprovalRuleCommandHandler(IAppStoreService svc)
 {
     public async Task<Result<VoidResult>> Handle(DeleteAppApprovalRuleCommand cmd, CancellationToken ct)
     {
-        await svc.DeleteRuleAsync(cmd.RuleId, cmd.Reason, cmd.ChangedBy, cmd.IpAddress, ct);
-        return Result<VoidResult>.Success(VoidResult.Value);
+        var deleted = await svc.DeleteRuleAsync(cmd.RuleId, cmd.Reason, cmd.ChangedBy, cmd.IpAddress, ct);
+        // Regra inexistente não é sucesso silencioso: a UI avisava "Regra removida"
+        // para algo que já não existia (duplo clique / lista velha).
+        return deleted
+            ? Result<VoidResult>.Success(VoidResult.Value)
+            : Result<VoidResult>.Failure(Error.NotFound($"Regra '{cmd.RuleId}' nao encontrada."));
     }
 }
 

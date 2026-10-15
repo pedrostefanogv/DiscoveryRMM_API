@@ -1001,7 +1001,13 @@ public class AppStoreController(
         var result = await mediator.Send(new DeleteAppApprovalRuleCommand(ruleId, reason, Username, ClientIp));
         return result.Match<IActionResult>(
             success: _ => NoContent(),
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+            failure: errors =>
+            {
+                var payload = new { errors = errors.Select(e => new { e.Code, e.Message }) };
+                return errors.Any(e => e.Code == "NotFound")
+                    ? NotFound(payload)
+                    : BadRequest(payload);
+            });
     }
 
     // ═══════════════════════════════════════════════════════════════

@@ -138,6 +138,84 @@ public class AppStoreApprovalRuleReasonTests
         Assert.That(rules[0].Reason, Is.Null);
     }
 
+    [Test]
+    public async Task Nome_do_pacote_custom_resolve_sem_diferenciar_maiusculas()
+    {
+        await using var db = ApprovalRuleTestDbContext.New();
+        var approvalRepo = new AppApprovalRuleRepository(db);
+        var packageRepo = new AppPackageRepository(db);
+
+        // Pacote gravado com maiúsculas (cadastro via API/import) e regra com o
+        // id em minúsculas, como o site envia.
+        db.AppPackages.Add(new AppPackage
+        {
+            Id = Guid.NewGuid(),
+            InstallationType = AppInstallationType.Custom,
+            PackageId = "Foxit_Editor",
+            Name = "Foxit Editor",
+            InstallCommand = "\"{{installer}}\" /S",
+        });
+        await db.SaveChangesAsync();
+
+        await approvalRepo.CreateAsync(new AppApprovalRule
+        {
+            ScopeType = AppApprovalScopeType.Global,
+            InstallationType = AppInstallationType.Custom,
+            PackageId = "foxit_editor",
+            Action = AppApprovalActionType.Allow,
+        });
+
+        var service = new AppStoreService(approvalRepo, null!, null!, null!, null!, packageRepo, null!);
+        var rules = await service.GetRulesByScopeAsync(
+            AppApprovalScopeType.Global, null, AppInstallationType.Custom);
+
+        Assert.That(rules, Has.Count.EqualTo(1));
+        Assert.That(rules[0].PackageName, Is.EqualTo("Foxit Editor"));
+    }
+
+    [Test]
+    public void Filtros_em_lote_traduzem_no_Postgres()
+    {
+        // O provider InMemory não valida tradução de LINQ: `ToLower()` dentro de
+        // `Contains` poderia estourar só em produção. ToQueryString() monta o SQL
+        // sem conectar, exercitando a MESMA expressão usada pelo repositório.
+        var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
+            .UseNpgsql(
+                "Host=localhost;Database=discovery_test;Username=postgres;Password=postgres",
+                npgsqlOptions => npgsqlOptions.UseVector())
+            .Options;
+
+        using var db = new DiscoveryDbContext(options);
+
+        var customSql = AppPackageRepository
+            .FilterCustomByPackageIds(db.AppPackages.AsNoTracking(), ["foxit_editor"])
+            .ToQueryString();
+        Assert.That(customSql, Does.Contain("lower("));
+        Assert.That(customSql, Does.Contain("package_id"));
+
+        // Winget/Chocolatey: igualdade simples, preservando o índice único.
+        var wingetSql = AppPackageRepository
+            .FilterByPackageIds(db.AppPackages.AsNoTracking(), AppInstallationType.Winget, ["microsoft.vscode"])
+            .ToQueryString();
+        Assert.That(wingetSql, Does.Not.Contain("lower("));
+        Assert.That(wingetSql, Does.Contain("package_id"));
+    }
+
+    [Test]
+    public async Task Delete_de_regra_inexistente_devolve_false()
+    {
+        await using var db = ApprovalRuleTestDbContext.New();
+        var service = new AppStoreService(
+            new AppApprovalRuleRepository(db), new RecordingAuditService(),
+            null!, null!, null!, new AppPackageRepository(db), null!);
+
+        // O handler converte false em NotFound (a API responde 404); antes a
+        // exclusão de uma regra inexistente devolvia sucesso silencioso.
+        var removed = await service.DeleteRuleAsync(Guid.NewGuid(), "motivo", "ti.user", "10.0.0.9");
+
+        Assert.That(removed, Is.False);
+    }
+
     /// <summary>
     /// Garante que o mapeamento EF continua batendo com a migração M226 (nome e
     /// tamanho da coluna). A M226 é a única fonte do varchar(500); um

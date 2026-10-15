@@ -57,9 +57,11 @@ public interface IAppStoreService
         AppInstallationType installationType,
         CancellationToken cancellationToken = default);
 
-    Task DeleteRuleAsync(Guid ruleId, CancellationToken cancellationToken = default);
+    /// <summary>Remove a regra. Devolve false quando ela não existe (a API responde 404).</summary>
+    Task<bool> DeleteRuleAsync(Guid ruleId, CancellationToken cancellationToken = default);
 
-    Task DeleteRuleAsync(Guid ruleId, string? reason, string? changedBy, string? ipAddress, CancellationToken cancellationToken = default);
+    /// <summary>Remove a regra. Devolve false quando ela não existe (a API responde 404).</summary>
+    Task<bool> DeleteRuleAsync(Guid ruleId, string? reason, string? changedBy, string? ipAddress, CancellationToken cancellationToken = default);
 
     Task<AppApprovalAuditPageDto> GetAuditHistoryAsync(
         AppInstallationType installationType,

@@ -21,6 +21,12 @@ public class AppPackageRepository : IAppPackageRepository
         string packageId,
         CancellationToken cancellationToken = default)
     {
+        // Match EXATO de propósito: este lookup é usado no upsert de pacote
+        // custom para achar o estado anterior e apagar o instalador/ícone
+        // antigos do storage. Se casasse sem case, salvar "Foxit_Editor" quando
+        // existe "foxit_editor" apagaria o arquivo do outro registro e criaria
+        // uma linha duplicada. Quem precisa tolerar caixa usa o lookup em lote
+        // (GetByInstallationTypeAndPackageIdsAsync).
         var normalized = NormalizePackageId(packageId, installationType);
         return await _db.AppPackages
             .AsNoTracking()
@@ -28,6 +34,48 @@ public class AppPackageRepository : IAppPackageRepository
                 x => x.InstallationType == installationType && x.PackageId == normalized,
                 cancellationToken);
     }
+
+    public async Task<IReadOnlyList<AppPackage>> GetByInstallationTypeAndPackageIdsAsync(
+        AppInstallationType installationType,
+        IReadOnlyCollection<string> packageIds,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = packageIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => NormalizePackageId(id, installationType))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (normalized.Count == 0)
+            return [];
+
+        // Custom compara sem case (o ID é digitado com o caso que o operador
+        // quiser); Winget/Chocolatey são gravados em lowercase e usam igualdade
+        // simples — `lower()` na coluna inutilizaria o índice único
+        // (installation_type, package_id).
+        var query = _db.AppPackages.AsNoTracking();
+        var filtered = installationType == AppInstallationType.Custom
+            ? FilterCustomByPackageIds(query, normalized.Select(id => id.ToLowerInvariant()).ToList())
+            : FilterByPackageIds(query, installationType, normalized);
+
+        return await filtered.ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Filtro por lista com igualdade EXATA (Winget/Chocolatey, já gravados em
+    /// lowercase). Separado e público para o teste de tradução conferir o SQL.
+    /// </summary>
+    public static IQueryable<AppPackage> FilterByPackageIds(
+        IQueryable<AppPackage> query,
+        AppInstallationType installationType,
+        IReadOnlyCollection<string> packageIds)
+        => query.Where(x => x.InstallationType == installationType && packageIds.Contains(x.PackageId));
+
+    /// <summary>Filtro por lista IGNORANDO caixa (pacotes Custom).</summary>
+    public static IQueryable<AppPackage> FilterCustomByPackageIds(
+        IQueryable<AppPackage> query,
+        IReadOnlyCollection<string> loweredPackageIds)
+        => query.Where(x => x.InstallationType == AppInstallationType.Custom && loweredPackageIds.Contains(x.PackageId.ToLower()));
 
     public async Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchPageAsync(
         AppInstallationType installationType,

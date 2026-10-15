@@ -364,7 +364,9 @@ public class AppStoreService : IAppStoreService
                 changedBy,
                 ipAddress);
 
-            return await EnrichRuleDtoAsync(ToRuleDto(created), cancellationToken);
+            var createdDto = ToRuleDto(created);
+            await EnrichRuleDtosAsync([createdDto], cancellationToken);
+            return createdDto;
         }
 
         var oldAction = existing.Action;
@@ -385,7 +387,9 @@ public class AppStoreService : IAppStoreService
             normalizedReason,
             changedBy,
             ipAddress);
-        return await EnrichRuleDtoAsync(ToRuleDto(updated), cancellationToken);
+        var updatedDto = ToRuleDto(updated);
+        await EnrichRuleDtosAsync([updatedDto], cancellationToken);
+        return updatedDto;
     }
 
     public async Task<IReadOnlyList<AppApprovalRuleResolvedDto>> GetRulesByScopeAsync(
@@ -397,41 +401,55 @@ public class AppStoreService : IAppStoreService
         var rules = await _approvalRepo.GetByScopeAsync(scopeType, scopeId, installationType);
         var dtos = rules.Select(ToRuleDto).ToList();
 
-        // Nome do pacote para a listagem (a regra guarda só o packageId). Poucas
-        // regras por escopo: uma consulta pontual por regra é aceitável aqui e
-        // evita um join entre as tabelas de catálogo (winget/choco/custom).
-        foreach (var dto in dtos)
-            await EnrichRuleDtoAsync(dto, cancellationToken);
+        // Nome do pacote para a listagem (a regra guarda só o packageId): UMA
+        // consulta por tipo de instalação em vez de uma por regra.
+        await EnrichRuleDtosAsync(dtos, cancellationToken);
 
         return dtos;
     }
 
-    /// <summary>Preenche o nome do pacote no DTO a partir do catálogo.</summary>
-    private async Task<AppApprovalRuleResolvedDto> EnrichRuleDtoAsync(
-        AppApprovalRuleResolvedDto dto,
+    /// <summary>Preenche PackageName nos DTOs a partir do catálogo.</summary>
+    private async Task EnrichRuleDtosAsync(
+        IReadOnlyList<AppApprovalRuleResolvedDto> dtos,
         CancellationToken cancellationToken)
     {
-        var package = await _appPackageRepo.GetByInstallationTypeAndPackageIdAsync(
-            dto.InstallationType,
-            dto.PackageId,
-            cancellationToken);
-        if (package is not null && !string.IsNullOrWhiteSpace(package.Name))
-            dto.PackageName = package.Name;
+        if (dtos.Count == 0)
+            return;
 
-        return dto;
+        foreach (var group in dtos.GroupBy(dto => dto.InstallationType))
+        {
+            var packages = await _appPackageRepo.GetByInstallationTypeAndPackageIdsAsync(
+                group.Key,
+                group.Select(dto => dto.PackageId).ToList(),
+                cancellationToken);
+
+            // Índice sem case: pacote custom pode estar gravado com outro caso.
+            var namesById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var package in packages)
+            {
+                if (!string.IsNullOrWhiteSpace(package.Name))
+                    namesById[package.PackageId] = package.Name;
+            }
+
+            foreach (var dto in group)
+            {
+                if (namesById.TryGetValue(dto.PackageId, out var name))
+                    dto.PackageName = name;
+            }
+        }
     }
 
-    public async Task DeleteRuleAsync(Guid ruleId, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteRuleAsync(Guid ruleId, CancellationToken cancellationToken = default)
     {
-        await DeleteRuleAsync(ruleId, null, null, null, cancellationToken);
+        return await DeleteRuleAsync(ruleId, null, null, null, cancellationToken);
     }
 
-    public async Task DeleteRuleAsync(Guid ruleId, string? reason, string? changedBy, string? ipAddress, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteRuleAsync(Guid ruleId, string? reason, string? changedBy, string? ipAddress, CancellationToken cancellationToken = default)
     {
         _ = cancellationToken;
         var existing = await _approvalRepo.GetByIdAsync(ruleId);
         if (existing is null)
-            return;
+            return false;
 
         await _auditService.LogAsync(
             AppApprovalAuditChangeType.Deleted,
@@ -443,6 +461,7 @@ public class AppStoreService : IAppStoreService
             ipAddress);
 
         await _approvalRepo.DeleteAsync(ruleId);
+        return true;
     }
 
     public async Task<AppApprovalAuditPageDto> GetAuditHistoryAsync(
@@ -1533,19 +1552,36 @@ public class AppStoreService : IAppStoreService
     /// <summary>
     /// Rótulo de arquitetura(s) do pacote a partir das chaves de
     /// installerUrlsByArch (ex.: "x64" ou "arm64, x64"). Vazio quando o pacote
-    /// não publica instalador por arquitetura (custom, por exemplo).
+    /// não publica instalador por arquitetura (custom, por exemplo). "neutral"
+    /// (instalador que serve qualquer arquitetura) é exibido como "todas".
     /// </summary>
     private static string BuildArchitectureLabel(IEnumerable<string> architectures)
     {
-        var normalized = architectures
+        var labels = architectures
             .Where(a => !string.IsNullOrWhiteSpace(a))
-            .Select(a => a.Trim().ToLowerInvariant())
+            .Select(ArchitectureToken)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(a => a, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(ArchitectureSortKey)
+            .ThenBy(a => a, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return normalized.Count == 0 ? string.Empty : string.Join(", ", normalized);
+        return labels.Count == 0 ? string.Empty : string.Join(", ", labels);
     }
+
+    private static string ArchitectureToken(string architecture)
+    {
+        var token = architecture.Trim().ToLowerInvariant();
+        return token == "neutral" ? "todas" : token;
+    }
+
+    private static int ArchitectureSortKey(string label) => label switch
+    {
+        "x64" => 0,
+        "arm64" => 1,
+        "x86" => 2,
+        "todas" => 3,
+        _ => 4,
+    };
 
     private static IReadOnlyDictionary<string, string> ParseInstallerUrls(JsonElement element)
     {

@@ -27,6 +27,11 @@ public class WingetManifestsSyncServiceTests
             AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
+        public Task<IReadOnlyList<AppPackage>> GetByInstallationTypeAndPackageIdsAsync(
+            AppInstallationType installationType, IReadOnlyCollection<string> packageIds,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchPageAsync(
             AppInstallationType installationType, string? search, string? architecture, string? cursor, int limit,
             CancellationToken cancellationToken = default)
