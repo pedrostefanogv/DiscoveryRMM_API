@@ -112,6 +112,184 @@ public class AppStoreController(IMediator mediator) : ControllerBase
     }
 
     /// <summary>
+    /// Abre uma sessão de upload em PARTES (blocos de 50 MiB, padronizado).
+    /// Necessário para instaladores grandes: o Cloudflare recusa no edge um corpo
+    /// único de vários GiB (413), então o cliente envia bloco a bloco e a API
+    /// remonta o arquivo antes de publicar no object storage.
+    /// </summary>
+    [HttpPost("custom/assets/session")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public IActionResult CreateCustomAssetUploadSession([FromBody] CustomAssetUploadRequest request)
+    {
+        var kind = (request?.Kind ?? string.Empty).Trim().ToLowerInvariant();
+        if (kind is not ("installer" or "icon"))
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = "kind deve ser 'installer' ou 'icon'." } } });
+        if (string.IsNullOrWhiteSpace(request!.FileName))
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = "fileName é obrigatório." } } });
+        if (request.SizeBytes <= 0)
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = "sizeBytes deve ser maior que zero." } } });
+        if (request.SizeBytes > CustomPackageAssetService.MaxAssetBytes)
+            return BadRequest(new { errors = new[] { new { Code = "FileTooLarge", Message = $"Arquivo excede o limite de {CustomPackageAssetService.MaxAssetBytes / (1024L * 1024 * 1024)} GiB." } } });
+
+        PruneCustomAssetUploads();
+        var uploadId = Guid.NewGuid().ToString("N");
+        var directory = Path.Combine(CustomAssetUploadsRoot, uploadId);
+        Directory.CreateDirectory(directory);
+        var filePath = Path.Combine(directory, "payload.bin");
+        using (System.IO.File.Create(filePath)) { }
+
+        CustomAssetUploads[uploadId] = new CustomAssetUploadSession
+        {
+            Kind = kind,
+            FileName = request.FileName!,
+            ContentType = string.IsNullOrWhiteSpace(request.ContentType)
+                ? "application/octet-stream"
+                : request.ContentType!,
+            SizeBytes = request.SizeBytes,
+            FilePath = filePath,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+
+        return Ok(new
+        {
+            uploadId,
+            partSizeBytes = CustomAssetPartBytes,
+            totalParts = (int)((request.SizeBytes + CustomAssetPartBytes - 1) / CustomAssetPartBytes),
+        });
+    }
+
+    /// <summary>Recebe um bloco do upload em partes (corpo binário cru, até 64 MiB).</summary>
+    [HttpPut("custom/assets/session/{uploadId}/part/{index:int}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequestSizeLimit(CustomAssetPartLimitBytes)]
+    public async Task<IActionResult> UploadCustomAssetPart(string uploadId, int index, CancellationToken ct)
+    {
+        if (!CustomAssetUploads.TryGetValue(uploadId, out var session))
+            return NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sessão de upload não encontrada ou expirada." } } });
+
+        var offset = (long)index * CustomAssetPartBytes;
+        if (index < 0 || offset >= session.SizeBytes)
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = $"Índice de bloco inválido: {index}." } } });
+
+        var expected = Math.Min(CustomAssetPartBytes, session.SizeBytes - offset);
+        await using (var target = new FileStream(session.FilePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+        {
+            target.Seek(offset, SeekOrigin.Begin);
+            var copied = await CopyAtMostAsync(Request.Body, target, expected, ct);
+            if (copied != expected)
+                return BadRequest(new { errors = new[] { new { Code = "PartSizeMismatch", Message = $"Bloco {index} com {copied} bytes; esperado {expected}." } } });
+        }
+
+        return Ok(new { uploadId, index, bytes = expected });
+    }
+
+    /// <summary>Finaliza o upload em partes e publica o asset no object storage.</summary>
+    [HttpPost("custom/assets/session/{uploadId}/complete")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public async Task<IActionResult> CompleteCustomAssetUpload(
+        string uploadId,
+        [FromServices] ICustomPackageAssetService assets,
+        CancellationToken ct)
+    {
+        if (!CustomAssetUploads.TryRemove(uploadId, out var session))
+            return NotFound(new { errors = new[] { new { Code = "NotFound", Message = "Sessão de upload não encontrada ou expirada." } } });
+
+        try
+        {
+            var info = new FileInfo(session.FilePath);
+            if (!info.Exists || info.Length != session.SizeBytes)
+                return BadRequest(new { errors = new[] { new { Code = "IncompleteUpload", Message = $"Upload incompleto: {info.Length} de {session.SizeBytes} bytes." } } });
+
+            await using var stream = new FileStream(session.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var asset = await assets.UploadAsync(session.Kind, session.FileName, session.ContentType, stream, ct);
+            return Ok(asset);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = ex.Message } } });
+        }
+        finally
+        {
+            TryDeleteCustomAssetUpload(session.FilePath);
+        }
+    }
+
+    /// <summary>Aborta uma sessão de upload em partes e limpa o temporário.</summary>
+    [HttpDelete("custom/assets/session/{uploadId}")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public IActionResult AbortCustomAssetUpload(string uploadId)
+    {
+        if (CustomAssetUploads.TryRemove(uploadId, out var session))
+            TryDeleteCustomAssetUpload(session.FilePath);
+        return NoContent();
+    }
+
+    // ── Upload em partes: estado e helpers ────────────────────────────────
+    /// <summary>Bloco padrão de 50 MiB (o edge do Cloudflare recusa ~100 MB+).</summary>
+    private const long CustomAssetPartBytes = 50L * 1024 * 1024;
+    /// <summary>Limite do corpo por bloco (folga de protocolo sobre os 50 MiB).</summary>
+    private const long CustomAssetPartLimitBytes = 64L * 1024 * 1024;
+    private static readonly TimeSpan CustomAssetUploadTtl = TimeSpan.FromHours(6);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, CustomAssetUploadSession> CustomAssetUploads = new();
+    private static string CustomAssetUploadsRoot => Path.Combine(Path.GetTempPath(), "discovery-asset-uploads");
+
+    private sealed class CustomAssetUploadSession
+    {
+        public string Kind { get; init; } = "installer";
+        public string FileName { get; init; } = string.Empty;
+        public string ContentType { get; init; } = "application/octet-stream";
+        public long SizeBytes { get; init; }
+        public string FilePath { get; init; } = string.Empty;
+        public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>Corpo do POST que abre a sessão de upload em partes.</summary>
+    public sealed class CustomAssetUploadRequest
+    {
+        public string? Kind { get; set; }
+        public string? FileName { get; set; }
+        public string? ContentType { get; set; }
+        public long SizeBytes { get; set; }
+    }
+
+    private static async Task<long> CopyAtMostAsync(Stream source, Stream destination, long maxBytes, CancellationToken ct)
+    {
+        var buffer = new byte[1024 * 1024];
+        long total = 0;
+        while (total < maxBytes)
+        {
+            var toRead = (int)Math.Min(buffer.Length, maxBytes - total);
+            var read = await source.ReadAsync(buffer.AsMemory(0, toRead), ct);
+            if (read <= 0) break;
+            await destination.WriteAsync(buffer.AsMemory(0, read), ct);
+            total += read;
+        }
+        return total;
+    }
+
+    private static void PruneCustomAssetUploads()
+    {
+        var cutoff = DateTimeOffset.UtcNow - CustomAssetUploadTtl;
+        foreach (var entry in CustomAssetUploads)
+        {
+            if (entry.Value.CreatedAt >= cutoff) continue;
+            if (CustomAssetUploads.TryRemove(entry.Key, out var stale))
+                TryDeleteCustomAssetUpload(stale.FilePath);
+        }
+    }
+
+    private static void TryDeleteCustomAssetUpload(string filePath)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+        catch { /* best-effort */ }
+    }
+
+    /// <summary>
     /// Serve o icone/capa de um pacote custom. Anonimo de proposito: e usado
     /// diretamente em tag &lt;img&gt; pela loja, que nao envia o header Authorization.
     /// Somente imagens sao servidas.

@@ -64,11 +64,11 @@ __REDIRECT_RULES__
   ssl_session_timeout 1d;
   ssl_session_tickets off;
 
-  # Uploads (ex.: artefatos de build do agent com RequestSizeLimit de 500MB
-  # na API). Default do nginx e 1m — sem isso, todo upload maior falha com 413.
-  # 10 GB: o console permite anexo de repositorio ate 10 GiB; o nginx precisa
-# aceitar o mesmo teto para nao devolver 413 antes da API.
-client_max_body_size 10240m;
+  # Uploads. Default do nginx e 1m — sem isso todo upload maior falha com 413.
+  # PADRAO 2026-10-15: uploads grandes vao em BLOCOS de 50 MiB (padronizado no
+  # console e na API), porque o edge do Cloudflare recusa corpos de centenas de
+  # MB/GB com 413. 64m cobre o bloco + overhead de protocolo.
+client_max_body_size 64m;
 
   gzip on;
   gzip_types text/css application/javascript application/json image/svg+xml;
