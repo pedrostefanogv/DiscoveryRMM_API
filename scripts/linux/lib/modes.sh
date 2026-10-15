@@ -272,10 +272,20 @@ apply_stack_update_only() {
   set_log_context "update"
   log "Modo de update da stack"
 
+  # JetStream antes de tudo: o reparo de permissões é estado de filesystem e
+  # precisa valer mesmo se o upgrade do SO reiniciar a máquina no meio do update.
+  ensure_nats_jetstream_store_access --warn-only || true
+
   # Atualiza o SO (apt-get update + upgrade) ANTES de qualquer build.
   apply_system_updates
 
   load_update_defaults
+
+  # Revalida o store e sobe o NATS se estiver caído ANTES de atualizar/reiniciar
+  # os componentes. Sem isso a API não conecta no NATS, o health-check falha e o
+  # update aborta sem rollback (ocorrido no .82 em 14/10).
+  ensure_nats_jetstream_store_access --warn-only || true
+  ensure_nats_service_running || true
 
   local update_scope
   update_scope="$(prompt_update_scope)"

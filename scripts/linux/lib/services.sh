@@ -445,6 +445,18 @@ ensure_nats_jetstream_store_access() {
     return 0
   fi
 
+  # Preserva o comportamento original: o diretório de operações pertence ao
+  # discovery-api, mas COM travessia liberada (751). Se ele já existir com modo
+  # fechado, o laço de ancestrais abaixo corrige.
+  local ops_dir="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"; ops_dir="${ops_dir%/}"
+  if [[ "$store_dir" == "$ops_dir"/* ]] && ! sudo test -d "$ops_dir"; then
+    if id -u discovery-api >/dev/null 2>&1; then
+      sudo install -d -m 751 -o discovery-api -g discovery-api "$ops_dir" >/dev/null 2>&1 || true
+    else
+      sudo install -d -m 751 -o root -g root "$ops_dir" >/dev/null 2>&1 || true
+    fi
+  fi
+
   local parent; parent="$(dirname "$store_dir")"
   sudo install -d -m 750 -o "$nats_user" -g "$nats_group" "$parent" >/dev/null 2>&1 || true
   sudo install -d -m 750 -o "$nats_user" -g "$nats_group" "$store_dir" >/dev/null 2>&1 || true
@@ -494,6 +506,35 @@ ensure_nats_jetstream_store_access() {
     return 1
   fi
   fail "$msg"
+}
+
+# ensure_nats_service_running: se o NATS está instalado mas NÃO está ativo
+# (ex.: falhou no boot porque o JetStream não conseguia ler o store_dir), tenta
+# subir e confirma. Roda depois do reparo de permissões, antes de reiniciar a
+# API — sem isso o nats-server fica morto e a API entra em crash loop
+# ("can not connect uris: nats://127.0.0.1:4222"), derrubando o update no
+# health-check sem chance de rollback.
+ensure_nats_service_running() {
+  if ! systemctl list-unit-files nats-server.service >/dev/null 2>&1; then
+    return 0
+  fi
+  if systemctl is-active --quiet nats-server; then
+    return 0
+  fi
+
+  log "NATS inativo; tentando subir o nats-server"
+  sudo systemctl restart nats-server >/dev/null 2>&1 || true
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if systemctl is-active --quiet nats-server; then
+      log "NATS ativo apos reparo"
+      return 0
+    fi
+    sleep 2
+  done
+
+  log "AVISO: nats-server continua inativo — verifique: journalctl -u nats-server -n 50"
+  return 1
 }
 
 # ── NATS server configuration ──────────────────────────────────────────────
