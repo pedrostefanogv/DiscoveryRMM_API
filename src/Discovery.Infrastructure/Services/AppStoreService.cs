@@ -11,6 +11,14 @@ public class AppStoreService : IAppStoreService
     /// <summary>Limite de app_approval_rules.reason (varchar(500), migração M226).</summary>
     private const int MaxReasonLength = 500;
 
+    /// <summary>
+    /// Teto do texto de instalação/desinstalação do pacote custom. A coluna é
+    /// <c>text</c> (migração M227) — scripts PowerShell/CMD reais passam de 9 mil
+    /// caracteres — e este limite de aplicação evita aceitar um corpo sem fim.
+    /// O editor da Loja usa o mesmo valor (COMMAND_MAX).
+    /// </summary>
+    public const int MaxCustomCommandLength = 200_000;
+
     private readonly IAppApprovalRuleRepository _approvalRepo;
     private readonly IAppApprovalAuditService _auditService;
     private readonly IConfigurationResolver _configurationResolver;
@@ -161,6 +169,16 @@ public class AppStoreService : IAppStoreService
         if (request.DetectionCommand is { Length: > 2000 })
             throw new InvalidOperationException("DetectionCommand excede o limite de 2000 caracteres.");
 
+        // O texto do comando é o script inteiro (PowerShell/CMD): o limite é só
+        // uma trava de payload, não uma regra de negócio do tamanho do script.
+        if (request.InstallCommand is { Length: > MaxCustomCommandLength })
+            throw new InvalidOperationException(
+                $"InstallCommand excede o limite de {MaxCustomCommandLength} caracteres.");
+
+        if (request.UninstallCommand is { Length: > MaxCustomCommandLength })
+            throw new InvalidOperationException(
+                $"UninstallCommand excede o limite de {MaxCustomCommandLength} caracteres.");
+
         var normalizedPackageId = request.PackageId.Trim();
 
         // Estado ANTERIOR: trocar o instalador/ícone deixa o objeto antigo no
@@ -219,12 +237,24 @@ public class AppStoreService : IAppStoreService
     /// catálogo já aponta para o novo). Best-effort: uma falha aqui não invalida o
     /// salvamento — o objeto antigo fica sem referência e o serviço de limpeza o
     /// remove depois.
+    ///
+    /// Sem <paramref name="newObjectKey"/> NÃO houve substituição: o editor só
+    /// envia os campos de arquivo quando o operador sobe um arquivo NOVO, e numa
+    /// edição parcial o repositório PRESERVA a chave vinculada (ver
+    /// <c>AppPackageRepository.UpsertCustomAsync</c>). Tratar esse caso como
+    /// "arquivo substituído" apagava do storage o instalador que a linha continuava
+    /// apontando — o pacote ficava publicado sem arquivo e o download no agent
+    /// falhava (HTTP 406/404) sem forma de recuperar o objeto.
     /// </summary>
     private async Task DeleteReplacedAssetAsync(
         string? previousObjectKey,
         string? newObjectKey,
         CancellationToken cancellationToken)
     {
+        // Edição parcial (request sem chave de asset): nada foi substituído.
+        if (string.IsNullOrWhiteSpace(newObjectKey))
+            return;
+
         if (string.IsNullOrWhiteSpace(previousObjectKey))
             return;
 

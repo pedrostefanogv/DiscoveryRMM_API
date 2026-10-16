@@ -1107,6 +1107,15 @@ public class AgentAuthController : ControllerBase
         }
         catch (Exception) when (!Response.HasStarted)
         {
+            // O Content-Type/Content-Disposition do instalador JÁ foram aplicados
+            // à resposta acima. Sem desfazê-los, o MVC tenta escrever o JSON deste
+            // 404 nesse mesmo media type, não encontra output formatter e troca o
+            // status por 406 sem corpo — o agent reportava só "HTTP 406 Not
+            // Acceptable" e a causa real (objeto ausente no storage) ficava
+            // invisível tanto para o operador quanto no log.
+            Response.Headers.Remove("Content-Type");
+            Response.Headers.Remove("Content-Disposition");
+            Response.Headers.Remove("Cache-Control");
             return NotFound(new { message = "Arquivo nao encontrado no object storage." });
         }
     }

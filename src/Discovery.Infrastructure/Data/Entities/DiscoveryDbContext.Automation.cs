@@ -248,8 +248,11 @@ public partial class DiscoveryDbContext
             entity.Property(p => p.Description).HasColumnName("description").HasColumnType("text");
             entity.Property(p => p.IconUrl).HasColumnName("icon_url").HasMaxLength(2000);
             entity.Property(p => p.SiteUrl).HasColumnName("site_url").HasMaxLength(2000);
-            entity.Property(p => p.InstallCommand).HasColumnName("install_command").HasMaxLength(1000);
-            entity.Property(p => p.UninstallCommand).HasColumnName("uninstall_command").HasMaxLength(1000);
+            // text: scripts PowerShell/CMD passam facilmente de 9 mil caracteres
+            // (pacote custom real). O teto é de aplicação — MaxCustomCommandLength
+            // no AppStoreService — para não aceitar um corpo sem fim.
+            entity.Property(p => p.InstallCommand).HasColumnName("install_command").HasColumnType("text");
+            entity.Property(p => p.UninstallCommand).HasColumnName("uninstall_command").HasColumnType("text");
             entity.Property(p => p.InstallCommandKind).HasColumnName("install_command_kind").HasConversion<int>();
             entity.Property(p => p.UninstallCommandKind).HasColumnName("uninstall_command_kind").HasConversion<int>();
             entity.Property(p => p.DetectionMode).HasColumnName("detection_mode").HasConversion<int>();

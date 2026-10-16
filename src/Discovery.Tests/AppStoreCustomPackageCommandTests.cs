@@ -206,6 +206,51 @@ public class AppStoreCustomPackageCommandTests
         Assert.That(assets.DeletedKeys, Does.Not.Contain("app-store/custom/installers/novo/Setup.exe"));
     }
 
+    [Test]
+    public async Task Edicao_parcial_nao_apaga_o_instalador_vinculado()
+    {
+        // Regressão (2026-10-15): o editor só manda fileObjectKey quando o operador
+        // sobe um arquivo NOVO; num "Salvar" de metadados o request chega com a
+        // chave nula e o repositório PRESERVA a chave vinculada (edição parcial).
+        // O serviço tratava isso como "arquivo substituído" e apagava do storage o
+        // instalador que a linha continuava apontando — o pacote ficava publicado
+        // sem arquivo e o download no agent falhava (406 no lugar de 404).
+        await using var db = AppPackageTestDbContext.New();
+        var assets = new FixedAssetPresenceService(exists: true);
+        var service = NewService(db, assets);
+
+        await service.UpsertCustomCatalogPackageAsync(new UpsertCustomAppCatalogPackageRequest
+        {
+            PackageId = "parcial",
+            Name = "App XPTO",
+            InstallCommand = "\"{{installer}}\" /S",
+            FileObjectKey = "app-store/custom/installers/atual/Setup.zip",
+            FileName = "Setup.zip",
+            FileContentType = "application/x-zip-compressed",
+            IconObjectKey = "app-store/custom/icons/atual/logo.png",
+        }, CancellationToken.None);
+
+        // Mesmo pacote, só metadados: request sem as chaves de asset.
+        await service.UpsertCustomCatalogPackageAsync(new UpsertCustomAppCatalogPackageRequest
+        {
+            PackageId = "parcial",
+            Name = "App XPTO (renomeado)",
+            InstallCommand = "\"{{installer}}\" /S",
+        }, CancellationToken.None);
+
+        var row = await new AppPackageRepository(db)
+            .GetByInstallationTypeAndPackageIdAsync(AppInstallationType.Custom, "parcial");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(assets.DeletedKeys, Is.Empty, "edição parcial não pode apagar o asset vinculado");
+            Assert.That(row!.FileObjectKey, Is.EqualTo("app-store/custom/installers/atual/Setup.zip"));
+            Assert.That(row.IconObjectKey, Is.EqualTo("app-store/custom/icons/atual/logo.png"));
+            Assert.That(row.FileContentType, Is.EqualTo("application/x-zip-compressed"));
+            Assert.That(row.Name, Is.EqualTo("App XPTO (renomeado)"));
+        });
+    }
+
     /// <summary>Simula a presença (ou não) do objeto no storage.</summary>
     private sealed class FixedAssetPresenceService(bool exists) : ICustomPackageAssetService
     {

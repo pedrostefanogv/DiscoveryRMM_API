@@ -159,6 +159,37 @@ public class AppStoreCustomPackageFieldsTests
     }
 
     [Test]
+    public async Task UpsertCustomCatalogPackageAsync_script_de_instalacao_longo_e_aceito()
+    {
+        await using var db = NewDb();
+        var service = NewService(db, new CapturingAssets());
+
+        // Script PowerShell real (pacote "Foxit PDF Editor"): ~9,5 mil caracteres.
+        // Antes da M227 a coluna era varchar(1000) e isto era recusado/truncado.
+        var request = NewRequest();
+        request.InstallCommand = new string('x', 9_500);
+
+        var dto = await service.UpsertCustomCatalogPackageAsync(request);
+
+        Assert.That(dto.InstallCommand, Has.Length.EqualTo(9_500));
+    }
+
+    [Test]
+    public async Task UpsertCustomCatalogPackageAsync_command_acima_do_limite_falha()
+    {
+        await using var db = NewDb();
+        var service = NewService(db, new CapturingAssets());
+
+        var request = NewRequest();
+        request.InstallCommand = new string('x', AppStoreService.MaxCustomCommandLength + 1);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await service.UpsertCustomCatalogPackageAsync(request));
+
+        Assert.That(ex!.Message, Does.Contain(AppStoreService.MaxCustomCommandLength.ToString()));
+    }
+
+    [Test]
     [TestCase(-1, 0)]
     [TestCase(3, 0)]
     [TestCase(0, 3)]
