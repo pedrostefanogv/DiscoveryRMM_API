@@ -1072,8 +1072,8 @@ Header binario (big-endian):
 | Direcao     | Agent -> Viewer                                                                                                                                                                  |
 | Publisher   | Agent (Go)                                                                                                                                                                       |
 | Subscriber  | Viewer (browser)                                                                                                                                                                 |
-| Payload     | JSON: `{rootPath: string, status: "ready"}`                                                                                                                                      |
-| Nota        | Publicado pelo agent assim que o subscribe em `files.req` está ativo. O viewer DEVE aguardar este evento antes de enviar o primeiro `list` (evita race do NATS core sem replay). |
+| Payload     | JSON: `{rootPath: string, status: "ready", drives?: DriveInfo[] | null}`                                                                                                     |
+| Nota        | Publicado pelo agent assim que o subscribe em `files.req` está ativo. O viewer DEVE aguardar este evento antes de enviar o primeiro `list` (evita race do NATS core sem replay). `drives` alimenta o seletor de disco (C:, D:, ...); é `null`/`[]` quando o `rootPath` está em subpasta (sandbox restrito). |
 
 #### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.req`
 
@@ -1082,7 +1082,7 @@ Header binario (big-endian):
 | Direcao     | Viewer -> Agent                               |
 | Publisher   | Viewer (browser)                              |
 | Subscriber  | Agent (Go)                                    |
-| Payload     | JSON: `{version: 1, requestId, action: "list" | "get" | "put" | "delete" | "rename" | "mkdir" | "move" | "copy" | "stat", path, newPath?, chunkIndex?, chunkSize?, totalChunks?, data?}` |
+| Payload     | JSON: `{version: 1, requestId, action: "list" | "get" | "put" | "delete" | "rename" | "mkdir" | "move" | "copy" | "stat" | "drives", path, newPath?, chunkIndex?, chunkSize?, totalChunks?, data?}`<br>Nota: `drives` (path vazio) retorna as unidades lógicas do host. |
 
 #### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.resp`
 
@@ -1091,8 +1091,8 @@ Header binario (big-endian):
 | Direcao     | Agent -> Viewer                                                                                                                                                                 |
 | Publisher   | Agent (Go)                                                                                                                                                                      |
 | Subscriber  | Viewer (browser)                                                                                                                                                                |
-| Payload     | JSON: `{version: 1, requestId, success, entries?: [], data?, size?, chunkIndex?, totalChunks?, error?}`                                                                         |
-| Nota        | Transferencia chunked >1MB com suporte a resume. `entries` é sempre serializado (array vazio em diretório vazio). `chunkIndex` usa `*int` — ausência no JSON = arquivo inteiro. |
+| Payload     | JSON: `{version: 1, requestId, success, entries?: [], drives?: [], data?, size?, chunkIndex?, totalChunks?, error?}`                                                          |
+| Nota        | Transferencia chunked >1MB com suporte a resume. `entries` é sempre serializado (array vazio em diretório vazio). `chunkIndex` usa `*int` — ausência no JSON = arquivo inteiro.<br>`drives` (DriveInfo) só vem na ação `drives`.<br>Cada entrada de `entries` pode ter `isHidden` (atributo HIDDEN do Windows — a UI esmaece a linha).<br>Quando o `rootPath` é a raiz de um volume, caminhos em outras unidades (`D:\...`) são aceitos; em subpasta o sandbox continua restrito. |
 
 ### 12.6 Proxy de Rede
 
