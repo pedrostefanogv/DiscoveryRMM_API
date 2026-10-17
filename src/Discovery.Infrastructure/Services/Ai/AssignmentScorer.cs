@@ -16,7 +16,8 @@ public sealed record TechnicianCandidateInput(
     bool AcceptsAiAssignment,
     TechnicianMetricsDto Metrics,
     double Affinity,
-    string? BestAffinityTicketTitle);
+    string? BestAffinityTicketTitle,
+    string? Origin = null);
 
 /// <summary>Sinais do chamado usados na pontuação determinística.</summary>
 public sealed record TicketScoringContext(
@@ -84,7 +85,8 @@ public static class AssignmentScorer
             sla,
             overCapacity,
             metrics.OpenNow,
-            candidate.BestAffinityTicketTitle);
+            candidate.BestAffinityTicketTitle,
+            candidate.Origin);
     }
 
     /// <summary>Ordenação estável: score desc, menos abertos, e UserId como desempate final.</summary>

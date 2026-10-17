@@ -87,5 +87,38 @@ public partial class DiscoveryDbContext
             entity.Property(r => r.StartedBy).HasColumnName("started_by").HasMaxLength(256);
             entity.Property(r => r.RetentionExpiresAt).HasColumnName("retention_expires_at").HasColumnType("timestamptz");
         });
+
+        modelBuilder.Entity<RemoteTerminalRecording>(entity =>
+        {
+            entity.ToTable("remote_terminal_recordings");
+            entity.HasKey(r => r.Id);
+
+            // Uma gravação de terminal por sessão remota.
+            entity.HasIndex(r => r.RemoteSessionId).IsUnique().HasDatabaseName("ix_remote_terminal_recordings_session_id");
+            entity.HasIndex(r => r.RetentionExpiresAt).HasDatabaseName("ix_remote_terminal_recordings_retention_expires_at");
+            entity.HasIndex(r => r.AgentId).HasDatabaseName("ix_remote_terminal_recordings_agent_id");
+
+            entity.Property(r => r.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(r => r.RemoteSessionId).HasColumnName("remote_session_id");
+            entity.Property(r => r.AgentId).HasColumnName("agent_id");
+            entity.Property(r => r.ClientId).HasColumnName("client_id");
+            entity.Property(r => r.Status).HasColumnName("status").HasMaxLength(32);
+            entity.Property(r => r.StartedAt).HasColumnName("started_at").HasColumnType("timestamptz");
+            entity.Property(r => r.LastFrameAt).HasColumnName("last_frame_at").HasColumnType("timestamptz");
+            entity.Property(r => r.CompletedAt).HasColumnName("completed_at").HasColumnType("timestamptz");
+            entity.Property(r => r.Frames).HasColumnName("frames");
+            entity.Property(r => r.Bytes).HasColumnName("bytes");
+            entity.Property(r => r.DroppedFrames).HasColumnName("dropped_frames");
+            entity.Property(r => r.MaxFps).HasColumnName("max_fps");
+            entity.Property(r => r.StorageProvider).HasColumnName("storage_provider").HasConversion<int>();
+            entity.Property(r => r.StorageUrl).HasColumnName("storage_url").HasMaxLength(2048);
+            entity.Property(r => r.RetentionExpiresAt).HasColumnName("retention_expires_at").HasColumnType("timestamptz");
+            entity.Property(r => r.LastError).HasColumnName("last_error").HasMaxLength(2000);
+
+            entity.HasOne(r => r.RemoteSession)
+                .WithMany()
+                .HasForeignKey(r => r.RemoteSessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
     }
 }

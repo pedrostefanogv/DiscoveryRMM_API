@@ -2,6 +2,9 @@ using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.RemoteSessions.Commands;
 using Discovery.Core.Cqrs.RemoteSessions.Queries;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
+using Discovery.Infrastructure.Services.Remote.Recording;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -15,11 +18,19 @@ namespace Discovery.Api.Controllers;
 public class RemoteSessionsController : ControllerBase
 {
     private readonly IMediator _mediator;
+    private readonly ITerminalRecordingService _terminalRecordings;
+    private readonly IScopeContext _scopeContext;
     private readonly ILogger<RemoteSessionsController> _logger;
 
-    public RemoteSessionsController(IMediator mediator, ILogger<RemoteSessionsController> logger)
+    public RemoteSessionsController(
+        IMediator mediator,
+        ITerminalRecordingService terminalRecordings,
+        IScopeContext scopeContext,
+        ILogger<RemoteSessionsController> logger)
     {
         _mediator = mediator;
+        _terminalRecordings = terminalRecordings;
+        _scopeContext = scopeContext;
         _logger = logger;
     }
 
@@ -133,6 +144,102 @@ public class RemoteSessionsController : ControllerBase
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+    // ── Gravação de terminal (NDJSON) ──
+
+    /// <summary>Obtém os metadados da gravação de terminal de uma sessão.</summary>
+    [HttpGet("{agentId:guid}/recording/terminal")]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetTerminalRecording(
+        Guid agentId,
+        [FromQuery] Guid sessionId,
+        CancellationToken ct = default)
+    {
+        if (sessionId == Guid.Empty)
+            return BadRequest(new { error = "sessionId é obrigatório." });
+
+        if (await AuthorizeTerminalRecordingAsync(agentId, sessionId, ActionType.View, ct) is { } denied)
+            return denied;
+
+        var recording = await _terminalRecordings.GetAsync(agentId, sessionId, ct);
+        return recording is null
+            ? NotFound(new { error = "Terminal recording not found." })
+            : Ok(recording);
+    }
+
+    /// <summary>Baixa o NDJSON da gravação de terminal (um frame JSON por linha).</summary>
+    [HttpGet("{agentId:guid}/recording/terminal/download")]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> DownloadTerminalRecording(
+        Guid agentId,
+        [FromQuery] Guid sessionId,
+        CancellationToken ct = default)
+    {
+        if (sessionId == Guid.Empty)
+            return BadRequest(new { error = "sessionId é obrigatório." });
+
+        if (await AuthorizeTerminalRecordingAsync(agentId, sessionId, ActionType.View, ct) is { } denied)
+            return denied;
+
+        var download = await _terminalRecordings.OpenDownloadAsync(agentId, sessionId, ct);
+        if (download is null)
+            return NotFound(new { error = "Terminal recording not found." });
+
+        // Gravação enviada ao S3: 302 para a URL pré-assinada (TTL curto), sem
+        // transmitir o NDJSON pela API. Modo Local continua como stream.
+        if (!string.IsNullOrWhiteSpace(download.S3Url))
+            return Redirect(download.S3Url);
+
+        return File(download.Content!, "application/x-ndjson", download.FileName);
+    }
+
+    /// <summary>Exclui a gravação de terminal (arquivo + metadados).</summary>
+    [HttpDelete("{agentId:guid}/recording/terminal")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
+    public async Task<IActionResult> DeleteTerminalRecording(
+        Guid agentId,
+        [FromQuery] Guid sessionId,
+        CancellationToken ct = default)
+    {
+        if (sessionId == Guid.Empty)
+            return BadRequest(new { error = "sessionId é obrigatório." });
+
+        if (await AuthorizeTerminalRecordingAsync(agentId, sessionId, ActionType.Execute, ct) is { } denied)
+            return denied;
+
+        var deleted = await _terminalRecordings.DeleteAsync(agentId, sessionId, ct);
+        return deleted ? NoContent() : NotFound(new { error = "Terminal recording not found." });
+    }
+
+    /// <summary>
+    /// Autoriza o acesso à gravação de terminal de uma sessão.
+    ///
+    /// Ordem importa: primeiro confirma que a gravação existe (404 quando não existe,
+    /// sem revelar sessões de outros tenants) e só então recorta o tenant — acesso
+    /// global OU permissão no cliente/site da sessão, senão 403. A decisão em si fica
+    /// em <see cref="TerminalRecordingAccessPolicy"/> para ser testável com fakes.
+    /// </summary>
+    private async Task<IActionResult?> AuthorizeTerminalRecordingAsync(
+        Guid agentId,
+        Guid sessionId,
+        ActionType action,
+        CancellationToken ct)
+    {
+        var tenant = await _terminalRecordings.GetTenantAsync(agentId, sessionId, ct);
+        if (tenant is null)
+            return NotFound(new { error = "Terminal recording not found." });
+
+        var access = await _scopeContext.GetAccessAsync(ResourceType.Agents, action);
+        if (!TerminalRecordingAccessPolicy.Allows(access, tenant))
+        {
+            _logger.LogWarning(
+                "[RemoteSession] Acesso negado à gravação de terminal {SessionId} (agent {AgentId}, tenant {ClientId}, site {SiteId})",
+                sessionId, agentId, tenant.ClientId, tenant.SiteId);
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Permissão insuficiente para esta sessão." });
+        }
+
+        return null;
     }
 
     /// <summary>Altera qualidade/codec/FPS de uma sessão ativa. Suporta modo Auto para adaptação dinâmica.</summary>

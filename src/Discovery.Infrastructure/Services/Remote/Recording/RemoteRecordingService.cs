@@ -13,15 +13,18 @@ namespace Discovery.Infrastructure.Services.Remote.Recording;
 public class RemoteRecordingService : IRemoteRecordingService
 {
     private readonly IRemoteSessionRepository _sessionRepo;
+    private readonly ITerminalRecordingService _terminalRecordings;
     private readonly RemoteAccessOptions _options;
     private readonly ILogger<RemoteRecordingService> _logger;
 
     public RemoteRecordingService(
         IRemoteSessionRepository sessionRepo,
+        ITerminalRecordingService terminalRecordings,
         IOptions<RemoteAccessOptions> options,
         ILogger<RemoteRecordingService> logger)
     {
         _sessionRepo = sessionRepo;
+        _terminalRecordings = terminalRecordings;
         _options = options.Value;
         _logger = logger;
     }
@@ -67,6 +70,22 @@ public class RemoteRecordingService : IRemoteRecordingService
 
         if (!session.RecordingEnabled || session.RecordingId == null)
             throw new InvalidOperationException($"Session {sessionId} has no active recording.");
+
+        // WP3: encerra também a gravação incremental do terminal (NDJSON) da
+        // sessão. Best-effort — uma falha aqui não impede o stop da gravação
+        // de tela.
+        try
+        {
+            await _terminalRecordings.FinalizeAsync(
+                sessionId,
+                RemoteTerminalRecordingStatus.Completed,
+                lastError: null,
+                ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Falha ao finalizar a gravação de terminal da sessão {SessionId}", sessionId);
+        }
 
         // Aqui o assembler entraria para montar o arquivo final
         var recording = new RemoteSessionRecording

@@ -153,6 +153,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<RemoteSession> RemoteSessions => Set<RemoteSession>();
     public DbSet<RemoteSessionAudit> RemoteSessionAudits => Set<RemoteSessionAudit>();
     public DbSet<RemoteSessionRecording> RemoteSessionRecordings => Set<RemoteSessionRecording>();
+    public DbSet<RemoteTerminalRecording> RemoteTerminalRecordings => Set<RemoteTerminalRecording>();
 
     // Chat de suporte vinculado ao chamado (Site <-> NATS <-> Agent)
     public DbSet<TicketChatSession> TicketChatSessions => Set<TicketChatSession>();

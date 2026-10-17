@@ -32,4 +32,7 @@ public sealed class DepartmentService : IDepartmentService
 
     public Task<bool> DeleteAsync(Guid id, CancellationToken ct = default)
         => _repo.DeleteAsync(id);
+
+    public Task<bool> HasActiveChildrenAsync(Guid id, CancellationToken ct = default)
+        => _repo.HasActiveChildrenAsync(id, ct);
 }

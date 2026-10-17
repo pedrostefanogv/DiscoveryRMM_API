@@ -7,6 +7,7 @@ using Discovery.Core.Cqrs.Support.Templates;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -431,10 +432,28 @@ public sealed class AddDepartmentMemberCommandHandler(DiscoveryDbContext db)
 {
     public async Task<Result<DepartmentMemberDto>> Handle(AddDepartmentMemberCommand cmd, CancellationToken ct)
     {
-        if (!await db.Departments.AnyAsync(d => d.Id == cmd.DepartmentId, ct))
+        // D13 — valida tenant e estado ativo antes de incluir o membro.
+        var department = await db.Departments.AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == cmd.DepartmentId, ct);
+        if (department is null)
             return Result<DepartmentMemberDto>.Failure(Error.NotFound("Departamento não encontrado."));
-        if (!await db.Users.AnyAsync(u => u.Id == cmd.UserId, ct))
+        if (!department.IsActive)
+            return Result<DepartmentMemberDto>.Failure(Error.Validation(
+                "DepartmentId", "Departamento inativo não aceita novos membros."));
+
+        var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == cmd.UserId, ct);
+        if (user is null)
             return Result<DepartmentMemberDto>.Failure(Error.NotFound("Usuário não encontrado."));
+        if (!user.IsActive)
+            return Result<DepartmentMemberDto>.Failure(Error.Validation(
+                "UserId", "Usuário inativo não pode ser membro de departamento."));
+
+        if (department.ClientId is { } clientId
+            && !await UserHasClientAccessAsync(user.Id, clientId, ct))
+        {
+            return Result<DepartmentMemberDto>.Failure(Error.Validation(
+                "UserId", "Usuário não pertence ao cliente deste departamento (cross-tenant)."));
+        }
 
         var existing = await db.DepartmentMembers
             .FirstOrDefaultAsync(m => m.DepartmentId == cmd.DepartmentId && m.UserId == cmd.UserId, ct);
@@ -456,6 +475,43 @@ public sealed class AddDepartmentMemberCommandHandler(DiscoveryDbContext db)
         db.DepartmentMembers.Add(member);
         await db.SaveChangesAsync(ct);
         return Result<DepartmentMemberDto>.Success(await MapMemberAsync(db, member, ct));
+    }
+
+    /// <summary>
+    /// Acesso do usuário ao cliente: role global (todos os clientes), role do
+    /// cliente, role de um site do cliente ou nenhum role (usuário legado sem
+    /// grupo — mantém o comportamento anterior). Usuário com roles só de OUTROS
+    /// clientes é recusado (cross-tenant).
+    /// </summary>
+    private async Task<bool> UserHasClientAccessAsync(
+        Guid userId, Guid clientId, CancellationToken ct)
+    {
+        var assignments = await db.UserGroupMemberships.AsNoTracking()
+            .Where(m => m.UserId == userId)
+            .Join(db.UserGroupRoles.AsNoTracking(), m => m.GroupId, r => r.GroupId,
+                (m, r) => new { r.ScopeLevel, r.ScopeId })
+            .ToListAsync(ct);
+
+        if (assignments.Count == 0)
+            return true;
+
+        if (assignments.Any(a => a.ScopeLevel == ScopeLevel.Global))
+            return true;
+
+        if (assignments.Any(a => a.ScopeLevel == ScopeLevel.Client && a.ScopeId == clientId))
+            return true;
+
+        var siteIds = assignments
+            .Where(a => a.ScopeLevel == ScopeLevel.Site && a.ScopeId.HasValue)
+            .Select(a => a.ScopeId!.Value)
+            .Distinct()
+            .ToList();
+
+        if (siteIds.Count == 0)
+            return false;
+
+        return await db.Sites.AsNoTracking()
+            .AnyAsync(s => siteIds.Contains(s.Id) && s.ClientId == clientId, ct);
     }
 
     internal static async Task<DepartmentMemberDto> MapMemberAsync(DiscoveryDbContext db, DepartmentMember m, CancellationToken ct)

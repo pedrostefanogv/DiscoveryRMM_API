@@ -43,6 +43,15 @@ public class RecordingStorageCleanupService : IRecordingStorageCleanupService
             .ToListAsync(ct);
 
         await DeleteStorageObjectsAsync(recordings, ct);
+
+        // WP3: os arquivos NDJSON das gravações de terminal também ficam órfãos
+        // no purge do agente (as linhas caem por cascata).
+        var terminalRecordings = await _db.RemoteTerminalRecordings
+            .AsNoTracking()
+            .Where(r => r.AgentId == agentId && r.StorageUrl != null)
+            .ToListAsync(ct);
+
+        await DeleteTerminalObjectsAsync(terminalRecordings, ct);
     }
 
     public async Task<int> CleanupExpiredAsync(DateTime cutoffUtc, CancellationToken ct = default)
@@ -51,22 +60,101 @@ public class RecordingStorageCleanupService : IRecordingStorageCleanupService
             .Where(r => r.RetentionExpiresAt != null && r.RetentionExpiresAt < cutoffUtc)
             .ToListAsync(ct);
 
-        if (expired.Count == 0)
+        // Terminal: a expiração é por linha (started/completed + Retention:DefaultDays),
+        // não pelo cutoff global de MaxDays usado no vídeo.
+        var nowUtc = DateTime.UtcNow;
+        var expiredTerminal = await _db.RemoteTerminalRecordings
+            .Where(r => r.RetentionExpiresAt != null && r.RetentionExpiresAt < nowUtc)
+            .ToListAsync(ct);
+
+        // Rede de segurança: linha que nunca foi finalizada (agent morreu antes do
+        // frame de saída e a varredura não a pegou, ex.: API parada) fica com
+        // RetentionExpiresAt nulo e nunca expiraria. Após DefaultDays ela é tratada
+        // como expirada para não acumular arquivo/linha órfãos.
+        var stuckCutoff = nowUtc.AddDays(-Math.Max(1, _options.Recording.Retention.DefaultDays));
+        var stuckTerminal = await _db.RemoteTerminalRecordings
+            .Where(r => r.RetentionExpiresAt == null && r.StartedAt < stuckCutoff)
+            .ToListAsync(ct);
+
+        if (stuckTerminal.Count > 0)
+        {
+            _logger.LogWarning(
+                "Removendo {Count} gravação(ões) de terminal nunca finalizadas (mais de {Days} dias)",
+                stuckTerminal.Count, _options.Recording.Retention.DefaultDays);
+            expiredTerminal = expiredTerminal.Concat(stuckTerminal).ToList();
+        }
+
+        if (expired.Count == 0 && expiredTerminal.Count == 0)
             return 0;
 
-        await DeleteStorageObjectsAsync(expired, ct);
+        if (expired.Count > 0)
+        {
+            await DeleteStorageObjectsAsync(expired, ct);
 
-        // Evita referência pendurada em remote_sessions.recording_id (não há FK).
-        var sessionIds = expired.Select(r => r.RemoteSessionId).Distinct().ToList();
-        var sessions = await _db.RemoteSessions
-            .Where(s => sessionIds.Contains(s.Id) && s.RecordingId != null)
-            .ToListAsync(ct);
-        foreach (var session in sessions)
-            session.RecordingId = null;
+            // Evita referência pendurada em remote_sessions.recording_id (não há FK).
+            var sessionIds = expired.Select(r => r.RemoteSessionId).Distinct().ToList();
+            var sessions = await _db.RemoteSessions
+                .Where(s => sessionIds.Contains(s.Id) && s.RecordingId != null)
+                .ToListAsync(ct);
+            foreach (var session in sessions)
+                session.RecordingId = null;
 
-        _db.RemoteSessionRecordings.RemoveRange(expired);
+            _db.RemoteSessionRecordings.RemoveRange(expired);
+        }
+
+        await DeleteTerminalObjectsAsync(expiredTerminal, ct);
+        if (expiredTerminal.Count > 0)
+            _db.RemoteTerminalRecordings.RemoveRange(expiredTerminal);
+
         await _db.SaveChangesAsync(ct);
-        return expired.Count;
+        return expired.Count + expiredTerminal.Count;
+    }
+
+    /// <summary>
+    /// Remove o NDJSON da gravação de terminal do(s) storage(s) onde ele está.
+    /// Com StorageProvider=S3 o objeto do bucket também sai (a cópia local pode
+    /// continuar existindo com KeepLocalCopyAfterUpload=true). Objeto
+    /// inexistente no S3 é tolerado: retenção e purge precisam ser idempotentes.
+    /// </summary>
+    private async Task DeleteTerminalObjectsAsync(
+        IReadOnlyList<RemoteTerminalRecording> recordings,
+        CancellationToken ct)
+    {
+        foreach (var recording in recordings)
+        {
+            try
+            {
+                var fullPath = TerminalRecordingStoragePaths.ResolveFullPath(
+                    _options,
+                    recording.RemoteSessionId,
+                    recording.StorageUrl);
+
+                if (File.Exists(fullPath))
+                {
+                    File.Delete(fullPath);
+                    _logger.LogInformation("NDJSON de gravação de terminal removido: {Path}", fullPath);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Falha ao remover o NDJSON da gravação de terminal {RecordingId}", recording.Id);
+            }
+
+            if (recording.StorageProvider != RecordingStorageProvider.S3)
+                continue;
+
+            try
+            {
+                var storage = new TerminalRecordingS3Storage(_options, _logger, _httpClientFactory);
+                await storage.DeleteAsync(
+                    TerminalRecordingS3Storage.BuildKey(recording.RemoteSessionId),
+                    ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Falha ao remover o NDJSON da gravação de terminal {RecordingId} do S3", recording.Id);
+            }
+        }
     }
 
     private async Task DeleteStorageObjectsAsync(IReadOnlyList<RemoteSessionRecording> recordings, CancellationToken ct)

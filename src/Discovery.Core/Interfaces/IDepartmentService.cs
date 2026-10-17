@@ -10,4 +10,11 @@ public interface IDepartmentService
     Task<Department> CreateAsync(Department department, CancellationToken ct = default);
     Task<Department> UpdateAsync(Department department, CancellationToken ct = default);
     Task<bool> DeleteAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Existe filho ativo herdando deste departamento? A implementação padrão
+    /// devolve falso para não quebrar implementações de teste/legadas.
+    /// </summary>
+    Task<bool> HasActiveChildrenAsync(Guid id, CancellationToken ct = default)
+        => Task.FromResult(false);
 }

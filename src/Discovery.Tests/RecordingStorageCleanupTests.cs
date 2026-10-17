@@ -88,6 +88,48 @@ public class RecordingStorageCleanupTests
     }
 
     [Test]
+    public async Task CleanupExpired_RemovesTerminalNdjsonAndRow()
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), $"terminal-cleanup-{Guid.NewGuid():N}");
+        var terminalDir = Path.Combine(basePath, "terminal");
+        Directory.CreateDirectory(terminalDir);
+
+        using var db = CreateDbContext();
+        var session = NewSession(Guid.NewGuid());
+        db.RemoteSessions.Add(session);
+
+        var relativePath = $"{session.Id:N}.ndjson";
+        var localFile = Path.Combine(terminalDir, relativePath);
+        await File.WriteAllTextAsync(localFile, "{\"seq\":1}\n");
+
+        db.RemoteTerminalRecordings.Add(new RemoteTerminalRecording
+        {
+            Id = Guid.NewGuid(),
+            RemoteSessionId = session.Id,
+            AgentId = session.AgentId,
+            ClientId = session.TenantId,
+            Status = RemoteTerminalRecordingStatus.Completed,
+            StartedAt = DateTime.UtcNow.AddHours(-1),
+            CompletedAt = DateTime.UtcNow.AddHours(-1),
+            StorageProvider = RecordingStorageProvider.Local,
+            StorageUrl = relativePath,
+            RetentionExpiresAt = DateTime.UtcNow.AddDays(-1)
+        });
+        await db.SaveChangesAsync();
+
+        var service = new RecordingStorageCleanupService(
+            db, BuildOptions(basePath), new StubHttpClientFactory(new RecordingHandler()), NullLogger<RecordingStorageCleanupService>.Instance);
+
+        var removed = await service.CleanupExpiredAsync(DateTime.UtcNow);
+
+        Assert.That(removed, Is.EqualTo(1));
+        Assert.That(File.Exists(localFile), Is.False);
+        Assert.That(await db.RemoteTerminalRecordings.CountAsync(), Is.EqualTo(0));
+
+        Directory.Delete(basePath, recursive: true);
+    }
+
+    [Test]
     public async Task DeleteForAgent_RemovesOnlyThatAgentsFiles()
     {
         var basePath = Path.Combine(Path.GetTempPath(), $"rec-agent-{Guid.NewGuid():N}");
@@ -170,7 +212,8 @@ public class RecordingStorageCleanupTests
             {
                 typeof(RemoteSession),
                 typeof(RemoteSessionRecording),
-                typeof(RemoteSessionAudit)
+                typeof(RemoteSessionAudit),
+                typeof(RemoteTerminalRecording)
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -191,6 +234,11 @@ public class RecordingStorageCleanupTests
                 entity.Ignore(item => item.Audits);
             });
             modelBuilder.Entity<RemoteSessionRecording>(entity =>
+            {
+                entity.HasKey(item => item.Id);
+                entity.Ignore(item => item.RemoteSession);
+            });
+            modelBuilder.Entity<RemoteTerminalRecording>(entity =>
             {
                 entity.HasKey(item => item.Id);
                 entity.Ignore(item => item.RemoteSession);

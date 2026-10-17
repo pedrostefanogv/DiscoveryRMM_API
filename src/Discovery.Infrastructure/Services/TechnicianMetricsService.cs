@@ -392,31 +392,14 @@ public class TechnicianMetricsService(
     private async Task<Dictionary<Guid, List<Guid>>> LoadSingleScopeTargetsAsync(
         Guid scopeId, CancellationToken ct)
     {
-        var users = new HashSet<Guid>();
+        var scopes = await LoadMemberScopesAsync(ct);
+        var users = scopes.TryGetValue(scopeId, out var members)
+            ? new HashSet<Guid>(members)
+            : [];
 
-        if (scopeId == Guid.Empty)
+        if (scopeId != Guid.Empty)
         {
-            // Escopo global: departamentos sem cliente. Chamados sempre têm cliente.
-            var globalMembers = await db.DepartmentMembers.AsNoTracking()
-                .Where(m => m.IsActive)
-                .Join(db.Departments.AsNoTracking().Where(d => d.ClientId == null),
-                    m => m.DepartmentId, d => d.Id, (m, _) => m.UserId)
-                .ToListAsync(ct);
-
-            foreach (var userId in globalMembers)
-                users.Add(userId);
-        }
-        else
-        {
-            var members = await db.DepartmentMembers.AsNoTracking()
-                .Where(m => m.IsActive)
-                .Join(db.Departments.AsNoTracking().Where(d => d.ClientId == scopeId),
-                    m => m.DepartmentId, d => d.Id, (m, _) => m.UserId)
-                .ToListAsync(ct);
-
-            foreach (var userId in members)
-                users.Add(userId);
-
+            // Chamados sempre têm cliente; o escopo global não tem assignees.
             var assignees = await db.Tickets.AsNoTracking()
                 .Where(t => t.DeletedAt == null && t.AssignedToUserId != null && t.ClientId == scopeId)
                 .Select(t => t.AssignedToUserId!.Value)
@@ -432,11 +415,36 @@ public class TechnicianMetricsService(
             : new Dictionary<Guid, List<Guid>> { [scopeId] = users.ToList() };
     }
 
-    private async Task<Dictionary<Guid, List<Guid>>> LoadScopeTargetsAsync(
-        CancellationToken ct, Guid? onlyScope = null)
+    /// <summary>
+    /// Membros por escopo de cliente (Guid.Empty = global). Inclui a EQUIPE
+    /// EFETIVA (D8): membros do próprio departamento + membros herdados do
+    /// departamento global pai. Departamento/usuário inativo ficam de fora.
+    /// </summary>
+    private async Task<Dictionary<Guid, HashSet<Guid>>> LoadMemberScopesAsync(
+        CancellationToken ct)
     {
-        if (onlyScope is { } scoped)
-            return await LoadSingleScopeTargetsAsync(scoped, ct);
+        var departments = await db.Departments.AsNoTracking()
+            .Where(d => d.IsActive)
+            .Select(d => new { d.Id, d.ClientId, d.InheritFromGlobalId, d.IsActive })
+            .ToListAsync(ct);
+
+        var byId = departments.ToDictionary(d => d.Id);
+
+        // Filhos (departamentos de cliente) por global pai ATIVO.
+        var childrenByGlobal = departments
+            .Where(d => d.ClientId is not null && d.InheritFromGlobalId is { } parentId
+                        && byId.TryGetValue(parentId, out var parent)
+                        && parent.ClientId is null && parent.IsActive)
+            .GroupBy(d => d.InheritFromGlobalId!.Value)
+            .ToDictionary(g => g.Key, g => g.Select(d => d.ClientId!.Value).Distinct().ToList());
+
+        var memberRows = await db.DepartmentMembers.AsNoTracking()
+            .Where(m => m.IsActive)
+            .Join(db.Users.Where(u => u.IsActive), m => m.UserId, u => u.Id, (m, _) => m)
+            .Join(db.Departments.AsNoTracking().Where(d => d.IsActive),
+                m => m.DepartmentId, d => d.Id,
+                (m, d) => new { DepartmentId = d.Id, d.ClientId, m.UserId })
+            .ToListAsync(ct);
 
         var scopes = new Dictionary<Guid, HashSet<Guid>>();
 
@@ -451,14 +459,29 @@ public class TechnicianMetricsService(
             set.Add(userId);
         }
 
-        var memberRows = await db.DepartmentMembers.AsNoTracking()
-            .Where(m => m.IsActive)
-            .Join(db.Departments.AsNoTracking(), m => m.DepartmentId, d => d.Id,
-                (m, d) => new { d.ClientId, m.UserId })
-            .ToListAsync(ct);
-
         foreach (var row in memberRows)
+        {
             Add(row.ClientId, row.UserId);
+
+            // Membro de departamento global também atende cada cliente que herda dele.
+            if (row.ClientId is null
+                && childrenByGlobal.TryGetValue(row.DepartmentId, out var childClients))
+            {
+                foreach (var clientId in childClients)
+                    Add(clientId, row.UserId);
+            }
+        }
+
+        return scopes;
+    }
+
+    private async Task<Dictionary<Guid, List<Guid>>> LoadScopeTargetsAsync(
+        CancellationToken ct, Guid? onlyScope = null)
+    {
+        if (onlyScope is { } scoped)
+            return await LoadSingleScopeTargetsAsync(scoped, ct);
+
+        var scopes = await LoadMemberScopesAsync(ct);
 
         var assigneeRows = await db.Tickets.AsNoTracking()
             .Where(t => t.DeletedAt == null && t.AssignedToUserId != null)
@@ -467,7 +490,15 @@ public class TechnicianMetricsService(
             .ToListAsync(ct);
 
         foreach (var row in assigneeRows)
-            Add(row.ClientId, row.UserId);
+        {
+            var scopeId = row.ClientId ?? Guid.Empty;
+            if (!scopes.TryGetValue(scopeId, out var set))
+            {
+                set = [];
+                scopes[scopeId] = set;
+            }
+            set.Add(row.UserId);
+        }
 
         return scopes.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
     }
@@ -526,9 +557,29 @@ public class TechnicianMetricsService(
         var query = db.DepartmentMembers.AsNoTracking()
             .Join(db.Users.Where(u => u.IsActive), m => m.UserId, u => u.Id, (m, _) => m);
 
-        query = departmentId.HasValue
-            ? query.Where(m => m.DepartmentId == departmentId.Value && m.IsActive)
-            : query.Where(m => m.IsActive);
+        if (departmentId.HasValue)
+        {
+            // D8 — refresh do departamento inclui a equipe efetiva (herdados do global).
+            var departmentIds = new List<Guid> { departmentId.Value };
+
+            var department = await db.Departments.AsNoTracking()
+                .FirstOrDefaultAsync(d => d.Id == departmentId.Value, ct);
+
+            if (department is { IsActive: true, ClientId: not null, InheritFromGlobalId: { } parentId })
+            {
+                var hasGlobalParent = await db.Departments.AsNoTracking()
+                    .AnyAsync(d => d.Id == parentId && d.ClientId == null && d.IsActive, ct);
+
+                if (hasGlobalParent)
+                    departmentIds.Add(parentId);
+            }
+
+            query = query.Where(m => departmentIds.Contains(m.DepartmentId) && m.IsActive);
+        }
+        else
+        {
+            query = query.Where(m => m.IsActive);
+        }
 
         var members = await query.Select(m => m.UserId).Distinct().ToListAsync(ct);
 

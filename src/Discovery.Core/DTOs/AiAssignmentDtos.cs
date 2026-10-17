@@ -93,7 +93,10 @@ public sealed record AssignmentCandidateDto(
     double SlaScore,
     bool OverCapacity,
     int OpenNow,
-    string? BestAffinityTicketTitle);
+    string? BestAffinityTicketTitle,
+    // Origem do candidato na equipe efetiva: "own" ou "inherited:<departmentId>".
+    // Campo aditivo (default null) para não quebrar payloads/consumidores antigos.
+    string? Origin = null);
 
 // ── Decisão ──────────────────────────────────────────────────────────────
 

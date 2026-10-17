@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Discovery.Core.Departments;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -39,24 +40,48 @@ public class AiAssignmentLearningService(
         // Somente departamentos que usam a triagem por IA: competências e pesos
         // alimentam exclusivamente o score da triagem, então rodar o ciclo nos
         // demais seria trabalho diário sem uso (potencialmente em muitos membros).
+        //
+        // O modo de aprendizado é lido da configuração EFETIVA (override próprio
+        // ou herdado do global pai), nunca da coluna base crua: um departamento
+        // que herda "Off" não pode rodar ciclo por causa do valor legado.
         var departments = await db.Departments
             .Where(d => (departmentId == null || d.Id == departmentId.Value)
-                        && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage
-                        && (d.AiSkillLearningMode != (int)AiLearningMode.Off
-                            || d.AiWeightLearningMode != (int)AiLearningMode.Off))
+                        && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage)
             .ToListAsync(ct);
+
+        if (departments.Count == 0)
+            return 0;
+
+        var parentIds = departments
+            .Where(d => d.InheritFromGlobalId is not null)
+            .Select(d => d.InheritFromGlobalId!.Value)
+            .Distinct()
+            .ToList();
+
+        var parents = parentIds.Count == 0
+            ? new Dictionary<Guid, Department>()
+            : await db.Departments.AsNoTracking()
+                .Where(d => parentIds.Contains(d.Id) && d.ClientId == null && d.IsActive)
+                .ToDictionaryAsync(d => d.Id, ct);
 
         var created = 0;
         foreach (var department in departments)
         {
             ct.ThrowIfCancellationRequested();
+
+            parents.TryGetValue(department.InheritFromGlobalId ?? Guid.Empty, out var parent);
+            var settings = DepartmentEffectiveSettingsResolver.Resolve(department, parent);
+            if (settings.AiSkillLearningMode.Value == (int)AiLearningMode.Off
+                && settings.AiWeightLearningMode.Value == (int)AiLearningMode.Off)
+                continue;
+
             try
             {
-                if (department.AiSkillLearningMode != (int)AiLearningMode.Off)
-                    created += await RunSkillCycleAsync(department, ct);
+                if (settings.AiSkillLearningMode.Value != (int)AiLearningMode.Off)
+                    created += await RunSkillCycleAsync(department, settings, ct);
 
-                if (department.AiWeightLearningMode != (int)AiLearningMode.Off)
-                    created += await RunWeightCycleAsync(department, ct);
+                if (settings.AiWeightLearningMode.Value != (int)AiLearningMode.Off)
+                    created += await RunWeightCycleAsync(department, settings, ct);
             }
             catch (Exception ex)
             {
@@ -69,10 +94,24 @@ public class AiAssignmentLearningService(
 
     // ── Competências ─────────────────────────────────────────────────────
 
-    private async Task<int> RunSkillCycleAsync(Department department, CancellationToken ct)
+    private async Task<int> RunSkillCycleAsync(
+        Department department, DepartmentEffectiveSettings settings, CancellationToken ct)
     {
+        // D8 — competências são extraídas da EQUIPE EFETIVA: próprios + herdados
+        // do departamento global pai (um salto, somente pai global/ativo).
+        var departmentIds = new List<Guid> { department.Id };
+
+        if (department.ClientId is not null && department.InheritFromGlobalId is { } parentId)
+        {
+            var hasGlobalParent = await db.Departments.AsNoTracking()
+                .AnyAsync(d => d.Id == parentId && d.ClientId == null && d.IsActive, ct);
+
+            if (hasGlobalParent)
+                departmentIds.Add(parentId);
+        }
+
         var members = await db.DepartmentMembers
-            .Where(m => m.DepartmentId == department.Id && m.IsActive)
+            .Where(m => departmentIds.Contains(m.DepartmentId) && m.IsActive)
             .Join(db.Users.Where(u => u.IsActive), m => m.UserId, u => u.Id, (m, u) => m)
             .ToListAsync(ct);
 
@@ -101,15 +140,15 @@ public class AiAssignmentLearningService(
 
             var existingTags = ParseTags(member.SkillTagsJson);
             var (suggested, evidenceJson) = SkillExtractor.Extract(
-                evidence, existingTags, department.AiSkillMinEvidence,
-                department.AiSkillMaxTags, SkillWindowDays);
+                evidence, existingTags, settings.AiSkillMinEvidence.Value,
+                settings.AiSkillMaxTags.Value, SkillWindowDays);
 
             if (suggested.Count == 0) continue;
 
             // Substitui pendências anteriores do mesmo membro.
             await SupersedeSkillSuggestionsAsync(department.Id, member.UserId, ct);
 
-            var auto = department.AiSkillLearningMode == (int)AiLearningMode.Auto;
+            var auto = settings.AiSkillLearningMode.Value == (int)AiLearningMode.Auto;
             var suggestion = new TechnicianSkillSuggestion
             {
                 Id = Guid.NewGuid(),
@@ -147,11 +186,12 @@ public class AiAssignmentLearningService(
 
     // ── Pesos ────────────────────────────────────────────────────────────
 
-    private async Task<int> RunWeightCycleAsync(Department department, CancellationToken ct)
+    private async Task<int> RunWeightCycleAsync(
+        Department department, DepartmentEffectiveSettings settings, CancellationToken ct)
     {
         if (department.AssignmentStrategy != (int)TicketAssignmentStrategy.AiTriage) return 0;
 
-        var cycleDays = Math.Clamp(department.AiWeightCycleDays, 1, 90);
+        var cycleDays = Math.Clamp(settings.AiWeightCycleDays.Value, 1, 90);
         var windowEnd = DateTime.UtcNow;
         var windowStart = windowEnd.AddDays(-cycleDays);
 
@@ -194,10 +234,11 @@ public class AiAssignmentLearningService(
                 decision.Id, decision.OverriddenAt != null, chosenScores, medians));
         }
 
-        var current = ParseWeights(department.AiAssignmentWeightsJson);
+        // Pesos EFETIVOS (próprio ou herdado do global pai) são a base do ciclo.
+        var current = ParseWeights(settings.AiAssignmentWeightsJson.Value);
         var result = WeightCalibrator.Calibrate(
-            current, samples, department.AiWeightMaxDeltaPerCycle,
-            department.AiWeightMin, department.AiWeightMax, MinimumWeightSamples);
+            current, samples, settings.AiWeightMaxDeltaPerCycle.Value,
+            settings.AiWeightMin.Value, settings.AiWeightMax.Value, MinimumWeightSamples);
 
         if (!result.HasProposal)
         {
@@ -209,7 +250,7 @@ public class AiAssignmentLearningService(
 
         await SupersedeWeightSuggestionsAsync(department.Id, ct);
 
-        var autoApply = department.AiWeightLearningMode == (int)AiLearningMode.Auto;
+        var autoApply = settings.AiWeightLearningMode.Value == (int)AiLearningMode.Auto;
         var suggestion = new AiWeightSuggestion
         {
             Id = Guid.NewGuid(),
@@ -228,7 +269,10 @@ public class AiAssignmentLearningService(
         if (autoApply)
         {
             var previousWeights = department.AiAssignmentWeightsJson;
+            // Grava também no override: sem isso, um departamento que herda os
+            // pesos continuaria lendo o valor do global pai após a aplicação.
             department.AiAssignmentWeightsJson = suggestion.SuggestedWeightsJson;
+            department.AiAssignmentWeightsJsonOverride = suggestion.SuggestedWeightsJson;
             suggestion.DecidedAt = DateTime.UtcNow;
 
             await configurationAudit.LogChangeAsync(
@@ -323,7 +367,10 @@ public class AiAssignmentLearningService(
         var department = await db.Departments.FirstOrDefaultAsync(d => d.Id == departmentId, ct);
         if (department is null) return null;
 
+        // Aplicar a sugestão torna o valor PRÓPRIO do departamento (override),
+        // inclusive quando os pesos atuais vinham do global pai.
         department.AiAssignmentWeightsJson = suggestion.SuggestedWeightsJson;
+        department.AiAssignmentWeightsJsonOverride = suggestion.SuggestedWeightsJson;
         suggestion.Status = StatusApplied;
         suggestion.DecidedAt = DateTime.UtcNow;
         suggestion.DecidedByUserId = actorUserId;

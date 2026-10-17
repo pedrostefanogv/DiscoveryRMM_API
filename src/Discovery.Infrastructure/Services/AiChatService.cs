@@ -368,7 +368,7 @@ public class AiChatService : IAiChatService
     // ══════════════════════════════════════════════════════════════════════════
 
     public Task<LlmResponse> ProcessTicketPromptAsync(string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature, Guid? departmentId = null, CancellationToken ct = default)
-        => ExecuteTicketPromptAsync(systemPrompt, userMessage, siteId, maxTokens, temperature, null, ct);
+        => ExecuteTicketPromptAsync(systemPrompt, userMessage, siteId, maxTokens, temperature, null, null, ct);
 
     /// <summary>
     /// Igual a <see cref="ProcessTicketPromptAsync"/>, mas permite exigir saída
@@ -377,7 +377,18 @@ public class AiChatService : IAiChatService
     public Task<LlmResponse> ProcessTicketPromptJsonAsync(
         string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature,
         string? responseFormat, Guid? departmentId = null, CancellationToken ct = default)
-        => ExecuteTicketPromptAsync(systemPrompt, userMessage, siteId, maxTokens, temperature, responseFormat, ct);
+        => ExecuteTicketPromptAsync(systemPrompt, userMessage, siteId, maxTokens, temperature, responseFormat, null, ct);
+
+    /// <summary>
+    /// Variante multimodal da triagem/consulta de ticket: além do texto, envia os
+    /// prints anexados ao chamado. Se o provedor recusar as imagens (modelo sem
+    /// visão), a chamada é repetida sem elas — a triagem nunca falha por causa do print.
+    /// </summary>
+    public Task<LlmResponse> ProcessTicketPromptJsonAsync(
+        string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature,
+        string? responseFormat, Guid? departmentId, IReadOnlyList<string>? images,
+        CancellationToken ct = default)
+        => ExecuteTicketPromptAsync(systemPrompt, userMessage, siteId, maxTokens, temperature, responseFormat, images, ct);
 
     /// <summary>
     /// Execução única dos prompts de ticket: resolve credenciais/escopo, aplica o
@@ -387,7 +398,7 @@ public class AiChatService : IAiChatService
     /// </summary>
     private async Task<LlmResponse> ExecuteTicketPromptAsync(
         string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature,
-        string? responseFormat, CancellationToken ct)
+        string? responseFormat, IReadOnlyList<string>? images, CancellationToken ct)
     {
         var (aiSettings, clientId) = await ResolveScopeAsync(siteId, ct);
         if (!aiSettings.Enabled || string.IsNullOrWhiteSpace(aiSettings.ApiKey)) throw new InvalidOperationException("IA não configurada.");
@@ -433,10 +444,30 @@ public class AiChatService : IAiChatService
             ReasoningEnabled: aiSettings.ReasoningEnabled,
             ReasoningEffort: aiSettings.ReasoningEffort);
 
+        var imageParts = aiSettings.SendScreenshotImages
+            ? AiChatHelpers.BuildImagePartsFromDataUrls(images)
+            : null;
+
         try
         {
-            var response = await _llmProvider.CompleteAsync(
-                systemPrompt, [new LlmMessage("user", userMessage)], options, ct);
+            LlmResponse response;
+            try
+            {
+                response = await _llmProvider.CompleteAsync(
+                    systemPrompt, [BuildUserMessage(userMessage, imageParts)], options, ct);
+            }
+            catch (Exception ex) when (imageParts is not null
+                                       && ex is not AiUsageLimitException
+                                       && ex is not OperationCanceledException)
+            {
+                // Modelo sem suporte a visão (ou provedor estrito): repete o prompt
+                // só com texto. Perder o print é melhor que perder a triagem.
+                _logger.LogInformation(
+                    "Provedor recusou as imagens do chamado ({Message}); repetindo sem imagens.",
+                    ex.Message);
+                response = await _llmProvider.CompleteAsync(
+                    systemPrompt, [new LlmMessage("user", userMessage)], options, ct);
+            }
 
             if (acquired && response.TokensUsed > 0)
                 await _costControl.RecordUsageAsync(scopeClientId, siteId, response.TokensUsed, ct);
@@ -454,6 +485,24 @@ public class AiChatService : IAiChatService
                 await _costControl.ReleaseAsync(scopeClientId, siteId, aiSettings, ct);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Monta a mensagem do usuário com as imagens do chamado como partes
+    /// multimodais; sem imagens válidas mantém a mensagem textual de sempre.
+    /// </summary>
+    private static LlmMessage BuildUserMessage(
+        string message, List<LlmContentPart>? imageParts)
+    {
+        if (imageParts is null || imageParts.Count == 0)
+            return new LlmMessage("user", message);
+
+        var parts = new List<LlmContentPart>(imageParts.Count + 1)
+        {
+            new("text", Text: message)
+        };
+        parts.AddRange(imageParts);
+        return new LlmMessage("user", message, ContentParts: parts);
     }
 
     // ══════════════════════════════════════════════════════════════════════════

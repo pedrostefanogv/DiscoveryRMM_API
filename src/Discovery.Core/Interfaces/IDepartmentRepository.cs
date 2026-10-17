@@ -43,4 +43,10 @@ public interface IDepartmentRepository
     /// Verifica se existe um departamento com nome para um cliente.
     /// </summary>
     Task<bool> ExistsByNameAsync(Guid? clientId, string name);
+
+    /// <summary>
+    /// Existe departamento ATIVO que herda deste? Usado para bloquear o
+    /// delete/desativação do pai (D6).
+    /// </summary>
+    Task<bool> HasActiveChildrenAsync(Guid id, CancellationToken ct = default);
 }

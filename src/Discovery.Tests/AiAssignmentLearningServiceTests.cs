@@ -259,6 +259,87 @@ public class AiAssignmentLearningServiceTests
         Assert.That(await db.TechnicianSkillSuggestions.AsNoTracking().CountAsync(), Is.EqualTo(0));
     }
 
+    [Test]
+    public async Task SkillCycle_usa_modo_e_limites_efetivos_do_global_pai()
+    {
+        await using var db = CreateDb();
+        var now = DateTime.UtcNow;
+        var user = new User
+        {
+            Id = Guid.NewGuid(), Login = "bia", Email = "bia@x.com",
+            FullName = "Bia", IsActive = true
+        };
+        db.Users.Add(user);
+
+        // O global pai define o modo/limites via override; o filho mantém a
+        // coluna base em Off e o override NULL, portanto herda Auto.
+        var parent = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = null,
+            Name = "Global",
+            IsActive = true,
+            AssignmentStrategy = (int)TicketAssignmentStrategy.AiTriage,
+            AiSkillLearningModeOverride = (int)AiLearningMode.Auto,
+            AiSkillMinEvidenceOverride = 2,
+            AiSkillMaxTagsOverride = 10,
+            AiWeightLearningModeOverride = (int)AiLearningMode.Off,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var child = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = Guid.NewGuid(),
+            Name = "Filho",
+            IsActive = true,
+            InheritFromGlobalId = parent.Id,
+            AssignmentStrategy = (int)TicketAssignmentStrategy.AiTriage,
+            AiSkillLearningMode = (int)AiLearningMode.Off,
+            AiWeightLearningMode = (int)AiLearningMode.Off,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        db.Departments.AddRange(parent, child);
+
+        db.DepartmentMembers.Add(new DepartmentMember
+        {
+            Id = Guid.NewGuid(),
+            DepartmentId = child.Id,
+            UserId = user.Id,
+            IsActive = true,
+            CreatedAt = now
+        });
+
+        for (var i = 0; i < 3; i++)
+        {
+            db.Tickets.Add(new Ticket
+            {
+                Id = Guid.NewGuid(),
+                ClientId = Guid.NewGuid(),
+                WorkflowStateId = Guid.NewGuid(),
+                AssignedToUserId = user.Id,
+                Title = "Falha de rede no switch " + i,
+                Description = "A rede caiu e o switch reiniciou",
+                Category = "Rede",
+                Priority = TicketPriority.Medium,
+                CreatedAt = now.AddDays(-5),
+                UpdatedAt = now.AddDays(-5),
+                ClosedAt = now.AddDays(-4)
+            });
+        }
+
+        await db.SaveChangesAsync();
+
+        var service = BuildService(db, out _);
+        var created = await service.RunCycleAsync(child.Id, null, CancellationToken.None);
+
+        Assert.That(created, Is.EqualTo(1), "o ciclo deve usar o modo efetivo herdado (Auto)");
+        var suggestion = await db.TechnicianSkillSuggestions.AsNoTracking().SingleAsync();
+        Assert.That(suggestion.Status, Is.EqualTo("applied"));
+        Assert.That(suggestion.DepartmentId, Is.EqualTo(child.Id));
+    }
+
     private sealed class FakeConfigurationAudit : IConfigurationAuditService
     {
         public List<(string EntityType, Guid EntityId, string Field, string? OldValue, string? NewValue)> Changes { get; } = [];

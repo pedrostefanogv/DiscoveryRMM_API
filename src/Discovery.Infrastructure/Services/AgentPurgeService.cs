@@ -66,6 +66,8 @@ public class AgentPurgeService : IAgentPurgeService
         "p2p_agent_telemetry",
         "p2p_artifact_presence",
         "agent_monitoring_events",
+        // Antes de remote_sessions: a gravação de terminal referencia a sessão.
+        "remote_terminal_recordings",
         "remote_sessions",
         "entity_notes",
     ];

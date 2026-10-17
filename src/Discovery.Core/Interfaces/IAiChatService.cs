@@ -69,6 +69,26 @@ public interface IAiChatService
         CancellationToken ct = default);
 
     /// <summary>
+    /// Igual a <see cref="ProcessTicketPromptJsonAsync"/>, mas envia também as
+    /// imagens anexadas ao chamado (prints de tela) como conteúdo multimodal.
+    /// A implementação padrão ignora as imagens: implementações/fakes antigos
+    /// continuam válidos sem alteração.
+    /// </summary>
+    /// <param name="images">Data URLs (data:image/...) dos prints do chamado.</param>
+    Task<LlmResponse> ProcessTicketPromptJsonAsync(
+        string systemPrompt,
+        string userMessage,
+        Guid siteId,
+        int maxTokens,
+        double temperature,
+        string? responseFormat,
+        Guid? departmentId,
+        IReadOnlyList<string>? images,
+        CancellationToken ct = default)
+        => ProcessTicketPromptJsonAsync(
+            systemPrompt, userMessage, siteId, maxTokens, temperature, responseFormat, departmentId, ct);
+
+    /// <summary>
     /// Responde via SSE streaming — emite chunks incrementais enquanto o LLM gera tokens.
     /// Suporta tool calls (loop de MCP tools) e RAG departamental.
     /// </summary>

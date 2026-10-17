@@ -13,13 +13,14 @@ public class TicketAssignmentService(
     {
         var dept = await db.Departments.AsNoTracking()
             .FirstOrDefaultAsync(d => d.Id == departmentId, ct);
-        return dept?.AssignmentStrategy;
+        // D4 — departamento inativo não participa da auto-atribuição.
+        return dept is { IsActive: true } ? dept.AssignmentStrategy : null;
     }
 
     public async Task<Guid?> ResolveAssigneeAsync(Guid departmentId, CancellationToken ct = default)
     {
         var dept = await db.Departments.AsNoTracking().FirstOrDefaultAsync(d => d.Id == departmentId, ct);
-        if (dept is null) return null;
+        if (dept is null || !dept.IsActive) return null;
 
         // None: sem auto-atribuição. AiTriage: a triagem por IA roda de forma
         // assíncrona (fila) e decide por conta própria — não é round-robin.

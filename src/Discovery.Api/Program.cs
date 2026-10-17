@@ -137,6 +137,8 @@ builder.Services.AddScoped<RemoteSessionAuditService>();
 builder.Services.AddScoped<RemoteSessionDispatcher>();
 builder.Services.AddHostedService<RemoteSessionLivenessBackgroundService>();
 builder.Services.AddHostedService<RecordingAssemblerService>();
+// WP3: ingestão NATS + persistência incremental do terminal em NDJSON.
+builder.Services.AddTerminalRecordingIngest();
 builder.Services.AddSingleton<Discovery.Infrastructure.Services.Remote.SessionMetricsStore>();
 builder.Services.AddHostedService<Discovery.Infrastructure.Services.Remote.AdaptiveQualityService>();
 builder.Services.Configure<RemoteAccessOptions>(builder.Configuration.GetSection("RemoteAccess"));

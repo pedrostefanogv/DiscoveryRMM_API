@@ -121,6 +121,7 @@ public class AiTicketTriageServiceTests
             new FakeTokenBudget(),
             new DepartmentTeamResolver(db),
             new FakeProcessingConfig(settings ?? new BackgroundProcessingSettings()),
+            new NoopAttachmentImages(),
             NullLogger<AiTicketTriageService>.Instance);
 
     [Test]
@@ -631,6 +632,21 @@ public class AiTicketTriageServiceTests
             await Task.CompletedTask;
             yield break;
         }
+    }
+
+    /// <summary>
+    /// Fonte de imagens vazia: a triagem destes testes é textual. O caminho com
+    /// imagens tem testes próprios em TicketAttachmentImageSourceTests.
+    /// </summary>
+    private sealed class NoopAttachmentImages : ITicketAttachmentImageSource
+    {
+        public int MaxImages => 3;
+
+        public IReadOnlyList<Attachment> SelectImageAttachments(IEnumerable<Attachment> items)
+            => Array.Empty<Attachment>();
+
+        public Task<IReadOnlyList<string>> LoadTicketImagesAsync(Guid ticketId, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
     }
 
     private sealed class TriageTestDbContext(DbContextOptions<DiscoveryDbContext> options) : DiscoveryDbContext(options)

@@ -123,6 +123,7 @@ public partial class DiscoveryDbContext
             entity.HasKey(dept => dept.Id);
             entity.HasIndex(dept => dept.ClientId).HasDatabaseName("ix_departments_client_id");
             entity.HasIndex(dept => dept.IsActive).HasDatabaseName("ix_departments_is_active");
+            entity.HasIndex(dept => dept.InheritFromGlobalId).HasDatabaseName("ix_departments_inherit_from_global_id");
 
             entity.Property(dept => dept.Id).HasColumnName("id").ValueGeneratedNever();
             entity.Property(dept => dept.ClientId).HasColumnName("client_id");
@@ -144,6 +145,16 @@ public partial class DiscoveryDbContext
             entity.Property(dept => dept.AiAssignmentUseAffinity).HasColumnName("ai_assignment_use_affinity");
             entity.Property(dept => dept.AiAssignmentMaxOutputTokens).HasColumnName("ai_assignment_max_output_tokens");
 
+            // Overrides de herança campo a campo (NULL = herda do global).
+            entity.Property(dept => dept.AiAssignmentModeOverride).HasColumnName("ai_assignment_mode_override");
+            entity.Property(dept => dept.AiAssignmentMinConfidenceOverride).HasColumnName("ai_assignment_min_confidence_override").HasColumnType("numeric(4,3)");
+            entity.Property(dept => dept.AiAssignmentFallbackStrategyOverride).HasColumnName("ai_assignment_fallback_strategy_override");
+            entity.Property(dept => dept.AiAssignmentMaxCandidatesOverride).HasColumnName("ai_assignment_max_candidates_override");
+            entity.Property(dept => dept.AiAssignmentWeightsJsonOverride).HasColumnName("ai_assignment_weights_json_override").HasColumnType("jsonb");
+            entity.Property(dept => dept.AiAssignmentInstructionsOverride).HasColumnName("ai_assignment_instructions_override").HasColumnType("text");
+            entity.Property(dept => dept.AiAssignmentUseAffinityOverride).HasColumnName("ai_assignment_use_affinity_override");
+            entity.Property(dept => dept.AiAssignmentMaxOutputTokensOverride).HasColumnName("ai_assignment_max_output_tokens_override");
+
             // Aprendizado (competências e pesos)
             entity.Property(dept => dept.AiSkillLearningMode).HasColumnName("ai_skill_learning_mode");
             entity.Property(dept => dept.AiSkillMinEvidence).HasColumnName("ai_skill_min_evidence");
@@ -153,6 +164,16 @@ public partial class DiscoveryDbContext
             entity.Property(dept => dept.AiWeightCycleDays).HasColumnName("ai_weight_cycle_days");
             entity.Property(dept => dept.AiWeightMin).HasColumnName("ai_weight_min").HasColumnType("numeric(4,3)");
             entity.Property(dept => dept.AiWeightMax).HasColumnName("ai_weight_max").HasColumnType("numeric(4,3)");
+
+            // Overrides dos 8 campos de aprendizado (NULL = herda do global).
+            entity.Property(dept => dept.AiSkillLearningModeOverride).HasColumnName("ai_skill_learning_mode_override");
+            entity.Property(dept => dept.AiSkillMinEvidenceOverride).HasColumnName("ai_skill_min_evidence_override");
+            entity.Property(dept => dept.AiSkillMaxTagsOverride).HasColumnName("ai_skill_max_tags_override");
+            entity.Property(dept => dept.AiWeightLearningModeOverride).HasColumnName("ai_weight_learning_mode_override");
+            entity.Property(dept => dept.AiWeightMaxDeltaPerCycleOverride).HasColumnName("ai_weight_max_delta_per_cycle_override").HasColumnType("numeric(4,3)");
+            entity.Property(dept => dept.AiWeightCycleDaysOverride).HasColumnName("ai_weight_cycle_days_override");
+            entity.Property(dept => dept.AiWeightMinOverride).HasColumnName("ai_weight_min_override").HasColumnType("numeric(4,3)");
+            entity.Property(dept => dept.AiWeightMaxOverride).HasColumnName("ai_weight_max_override").HasColumnType("numeric(4,3)");
             entity.Property(dept => dept.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(dept => dept.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 

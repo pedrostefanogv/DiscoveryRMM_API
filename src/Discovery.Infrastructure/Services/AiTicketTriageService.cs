@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Discovery.Core.Configuration;
+using Discovery.Core.Departments;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -36,6 +37,7 @@ public class AiTicketTriageService(
     IAiTokenBudgetResolver tokenBudgetResolver,
     IDepartmentTeamResolver teamResolver,
     IConfigurationResolver configurationResolver,
+    ITicketAttachmentImageSource attachmentImages,
     ILogger<AiTicketTriageService> logger) : IAiTicketTriageService
 {
     private const double Temperature = 0.2;
@@ -60,7 +62,7 @@ public class AiTicketTriageService(
         if (evaluation is null)
             return NotFoundResult(ticketId);
 
-        var reason = evaluation.Department.AiAssignmentMode == (int)AiAssignmentMode.AutoAssign
+        var reason = evaluation.Settings.AiAssignmentMode.Value == (int)AiAssignmentMode.AutoAssign
             ? "pending_auto"
             : "suggest_only";
 
@@ -204,13 +206,16 @@ public class AiTicketTriageService(
                 var department = await db.Departments.AsNoTracking()
                     .FirstOrDefaultAsync(d => d.Id == item.DepartmentId, ct);
 
-                if (department is null || department.AssignmentStrategy != (int)TicketAssignmentStrategy.AiTriage)
+                if (department is null || !department.IsActive
+                    || department.AssignmentStrategy != (int)TicketAssignmentStrategy.AiTriage)
                 {
                     await queueRepository.MarkSkippedAsync(item.Id, "strategy_changed", ct);
                     continue;
                 }
 
-                if (department.AiAssignmentMode == (int)AiAssignmentMode.AutoAssign)
+                // Config efetiva campo a campo (próprio > global pai > base).
+                var effective = await ResolveEffectiveSettingsAsync(department, ct);
+                if (effective.AiAssignmentMode.Value == (int)AiAssignmentMode.AutoAssign)
                     await ApplyAsync(item.TicketId, null, ct);
                 else
                     await RecommendAsync(item.TicketId, null, ct);
@@ -248,12 +253,15 @@ public class AiTicketTriageService(
     /// </summary>
     private async Task<List<Guid>> ListSweepScopesAsync(int maxScopes, CancellationToken ct)
     {
+        // A varredura usa o modo EFETIVO (pode vir do global pai), não a coluna base.
+        var autoDepartmentIds = await LoadEffectiveAutoAssignDepartmentIdsAsync(null, ct);
+        if (autoDepartmentIds.Count == 0)
+            return [];
+
         var rows = await db.Tickets.AsNoTracking()
-            .Where(t => t.DeletedAt == null && t.AssignedToUserId == null && t.DepartmentId != null)
-            .Join(db.Departments.AsNoTracking().Where(d =>
-                    d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage
-                    && d.AiAssignmentMode == (int)AiAssignmentMode.AutoAssign),
-                t => t.DepartmentId!.Value, d => d.Id,
+            .Where(t => t.DeletedAt == null && t.AssignedToUserId == null && t.DepartmentId != null
+                        && autoDepartmentIds.Contains(t.DepartmentId!.Value))
+            .Join(db.Departments.AsNoTracking(), t => t.DepartmentId!.Value, d => d.Id,
                 (t, d) => new { ClientId = (Guid?)d.ClientId, t.CreatedAt })
             .OrderBy(x => x.CreatedAt)
             .Take(Math.Clamp(maxScopes, 1, 500))
@@ -286,32 +294,16 @@ public class AiTicketTriageService(
             .Where(t => t.DeletedAt == null && t.AssignedToUserId == null
                         && t.DepartmentId != null && t.CreatedAt <= cutoff);
 
-        List<Guid> stale;
-        if (scopeId == Guid.Empty)
-        {
-            stale = await baseQuery
-                .Where(t => db.Departments.Any(d => d.Id == t.DepartmentId!.Value
-                    && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage
-                    && d.AiAssignmentMode == (int)AiAssignmentMode.AutoAssign
-                    && d.ClientId == null))
-                .OrderBy(t => t.CreatedAt)
-                .Select(t => t.Id)
-                .Take(limit)
-                .ToListAsync(ct);
-        }
-        else
-        {
-            var scope = scopeId;
-            stale = await baseQuery
-                .Where(t => db.Departments.Any(d => d.Id == t.DepartmentId!.Value
-                    && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage
-                    && d.AiAssignmentMode == (int)AiAssignmentMode.AutoAssign
-                    && d.ClientId == scope))
-                .OrderBy(t => t.CreatedAt)
-                .Select(t => t.Id)
-                .Take(limit)
-                .ToListAsync(ct);
-        }
+        var autoDepartmentIds = await LoadEffectiveAutoAssignDepartmentIdsAsync(scopeId, ct);
+        if (autoDepartmentIds.Count == 0)
+            return 0;
+
+        var stale = await baseQuery
+            .Where(t => autoDepartmentIds.Contains(t.DepartmentId!.Value))
+            .OrderBy(t => t.CreatedAt)
+            .Select(t => t.Id)
+            .Take(limit)
+            .ToListAsync(ct);
 
         var assigned = 0;
         foreach (var ticketId in stale)
@@ -373,16 +365,20 @@ public class AiTicketTriageService(
             .FirstOrDefaultAsync(d => d.Id == ticket.DepartmentId!.Value, ct);
         if (department is null) return null;
 
-        // Equipe candidata via resolvedor único (ponto de extensão da herança de
-        // departamento — hoje apenas os membros do próprio departamento).
+        // Config de triagem efetiva campo a campo (override próprio > global pai > base).
+        var settings = await ResolveEffectiveSettingsAsync(department, ct);
+
+        // Equipe candidata via resolvedor único: próprios + herdados do global.
         var members = await teamResolver.ResolveMembersAsync(department.Id, ct);
 
         var evaluation = new TriageEvaluation
         {
             Ticket = ticket,
             Department = department,
+            Settings = settings,
             DecisionId = Guid.NewGuid(),
-            MemberNames = members.ToDictionary(m => m.UserId, m => m.DisplayName)
+            MemberNames = members.ToDictionary(m => m.UserId, m => m.DisplayName),
+            MemberOrigins = members.ToDictionary(m => m.UserId, m => (string?)m.Origin)
         };
 
         var eligible = members.Where(m => m.AcceptsAiAssignment).ToList();
@@ -411,7 +407,7 @@ public class AiTicketTriageService(
             .ToList();
         evaluation.MetricsSnapshotAgeMinutes = snapshotAges.Count > 0 ? snapshotAges.Max() : null;
 
-        var affinityHits = department.AiAssignmentUseAffinity
+        var affinityHits = settings.AiAssignmentUseAffinity.Value
             ? await affinityRepository.FindSimilarResolvedAsync(
                 BuildAffinityQuery(ticket), ticket.ClientId, AffinityPoolSize, ct)
             : [];
@@ -435,7 +431,7 @@ public class AiTicketTriageService(
             .ToList());
 
         var context = new TicketScoringContext(difficulty.Level, tags, ticket.Category, medianResolution);
-        var weights = ParseWeights(department.AiAssignmentWeightsJson);
+        var weights = ParseWeights(settings.AiAssignmentWeightsJson.Value);
 
         var candidates = eligible
             .Select(member =>
@@ -453,7 +449,7 @@ public class AiTicketTriageService(
                     new TechnicianCandidateInput(
                         member.UserId, member.DisplayName, ParseSkillTags(member.SkillTagsJson),
                         member.SkillLevel, member.MaxOpenTickets, member.Weight, member.AcceptsAiAssignment,
-                        memberMetrics, affinity.Similarity, affinity.TicketTitle),
+                        memberMetrics, affinity.Similarity, affinity.TicketTitle, member.Origin),
                     context,
                     weights,
                     departmentMaxOpen);
@@ -462,7 +458,7 @@ public class AiTicketTriageService(
 
         var pool = AssignmentScorer
             .Rank(candidates)
-            .Take(Math.Clamp(department.AiAssignmentMaxCandidates, 1, 20))
+            .Take(Math.Clamp(settings.AiAssignmentMaxCandidates.Value, 1, 20))
             .ToList();
 
         evaluation.Candidates = pool;
@@ -479,7 +475,7 @@ public class AiTicketTriageService(
         {
             budget = await tokenBudgetResolver.ResolveForSiteAsync(
                 siteId.Value, AiTokenLimits.DefaultDepartmentOutputTokens,
-                department.AiAssignmentMaxOutputTokens, ct);
+                settings.AiAssignmentMaxOutputTokens.Value, ct);
             evaluation.MaxOutputTokens = budget.MaxOutputTokens;
         }
 
@@ -489,7 +485,7 @@ public class AiTicketTriageService(
             if (siteId is null)
                 throw new InvalidOperationException("Chamado sem site para resolver a configuração de IA.");
 
-            var call = await AskModelAsync(ticket, department, context, pool, siteId.Value, budget!, ct);
+            var call = await AskModelAsync(ticket, department, settings, context, pool, siteId.Value, budget!, ct);
             evaluation.PromptChars = call.PromptChars;
             response = call.Response;
             if (response is not null)
@@ -533,13 +529,13 @@ public class AiTicketTriageService(
                 evaluation.Source = AiAssignmentDecisionSource.FallbackScore;
                 evaluation.Rationale = "A IA escolheu um usuário fora dos candidatos; usado o maior score.";
             }
-            else if (confidence < department.AiAssignmentMinConfidence)
+            else if (confidence < settings.AiAssignmentMinConfidence.Value)
             {
                 evaluation.Source = AiAssignmentDecisionSource.FallbackScore;
                 evaluation.Confidence = confidence;
                 evaluation.RationaleFromModel = response.Rationale;
                 evaluation.Rationale =
-                    $"Confiança da IA ({confidence:0.00}) abaixo do mínimo ({department.AiAssignmentMinConfidence:0.00}); usado o maior score.";
+                    $"Confiança da IA ({confidence:0.00}) abaixo do mínimo ({settings.AiAssignmentMinConfidence.Value:0.00}); usado o maior score.";
                 chosen = fromModel.Score >= top.Score ? fromModel : top;
 
                 evaluation.ChosenUserId = chosen.UserId;
@@ -593,7 +589,8 @@ public class AiTicketTriageService(
     }
 
     private async Task<ModelCallResult> AskModelAsync(
-        Ticket ticket, Department department, TicketScoringContext context,
+        Ticket ticket, Department department, DepartmentEffectiveSettings settings,
+        TicketScoringContext context,
         IReadOnlyList<AssignmentCandidateDto> candidates, Guid siteId,
         AiTokenBudgetDto budget, CancellationToken ct)
     {
@@ -638,17 +635,24 @@ public class AiTicketTriageService(
               .AppendLine();
         }
 
-        if (!string.IsNullOrWhiteSpace(department.AiAssignmentInstructions))
+        if (!string.IsNullOrWhiteSpace(settings.AiAssignmentInstructions.Value))
         {
             sb.AppendLine();
             sb.AppendLine("ORIENTAÇÕES DO GESTOR");
-            sb.AppendLine(department.AiAssignmentInstructions);
+            sb.AppendLine(settings.AiAssignmentInstructions.Value);
         }
 
         var prompt = sb.ToString();
+
+        // Prints anexados ao chamado dão contexto visual à escolha do atendente
+        // (ex.: mensagem de erro na tela). A fonte nunca lança e devolve vazio
+        // quando não há imagem aceita.
+        var images = await attachmentImages.LoadTicketImagesAsync(ticket.Id, ct);
+
         var response = await aiChat.ProcessTicketPromptJsonAsync(
             systemPrompt, prompt, siteId,
-            budget.MaxOutputTokens, Temperature, "json_object", department.Id, ct);
+            budget.MaxOutputTokens, Temperature, "json_object", department.Id,
+            images.Count > 0 ? images : null, ct);
 
         var parsed = ParseResponse(response.Content);
         return new ModelCallResult(
@@ -692,7 +696,7 @@ public class AiTicketTriageService(
             Id = evaluation.DecisionId,
             TicketId = evaluation.Ticket.Id,
             DepartmentId = evaluation.Department.Id,
-            Mode = evaluation.Department.AiAssignmentMode,
+            Mode = evaluation.Settings.AiAssignmentMode.Value,
             StrategySource = evaluation.Source ?? AiAssignmentDecisionSource.FallbackScore,
             Difficulty = evaluation.Difficulty,
             ChosenUserId = evaluation.ChosenUserId,
@@ -762,7 +766,7 @@ public class AiTicketTriageService(
     private async Task ApplyConfiguredFallbackChoiceAsync(TriageEvaluation evaluation, CancellationToken ct)
     {
         var fallbackUserId = await assignmentService.ResolveFallbackAsync(
-            evaluation.Department.Id, evaluation.Department.AiAssignmentFallbackStrategy, ct);
+            evaluation.Department.Id, evaluation.Settings.AiAssignmentFallbackStrategy.Value, ct);
 
         if (!fallbackUserId.HasValue || fallbackUserId.Value == evaluation.ChosenUserId) return;
 
@@ -776,9 +780,12 @@ public class AiTicketTriageService(
         else
         {
             var name = evaluation.MemberNames.TryGetValue(fallbackUserId.Value, out var found) ? found : null;
+            var origin = evaluation.MemberOrigins.TryGetValue(fallbackUserId.Value, out var source)
+                ? source
+                : null;
             evaluation.Candidates = evaluation.Candidates
                 .Append(new AssignmentCandidateDto(
-                    fallbackUserId.Value, name, 0, 0, 0, 0, 0, 0, 0, false, 0, null))
+                    fallbackUserId.Value, name, 0, 0, 0, 0, 0, 0, 0, false, 0, null, origin))
                 .ToList();
             evaluation.Score = 0;
         }
@@ -810,10 +817,11 @@ public class AiTicketTriageService(
 
         var department = await db.Departments.AsNoTracking()
             .FirstOrDefaultAsync(d => d.Id == ticket.DepartmentId!.Value, ct);
-        if (department is null) return false;
+        if (department is null || !department.IsActive) return false;
 
+        var settings = await ResolveEffectiveSettingsAsync(department, ct);
         var assignee = await assignmentService.ResolveFallbackAsync(
-            department.Id, department.AiAssignmentFallbackStrategy, ct);
+            department.Id, settings.AiAssignmentFallbackStrategy.Value, ct);
         if (assignee is null) return false;
 
         ticket.AssignedToUserId = assignee;
@@ -825,7 +833,7 @@ public class AiTicketTriageService(
             Id = Guid.NewGuid(),
             TicketId = ticket.Id,
             DepartmentId = department.Id,
-            Mode = department.AiAssignmentMode,
+            Mode = settings.AiAssignmentMode.Value,
             StrategySource = AiAssignmentDecisionSource.FallbackStrategy,
             Difficulty = 3,
             ChosenUserId = assignee,
@@ -866,6 +874,77 @@ public class AiTicketTriageService(
     private static string BuildAffinityQuery(Ticket ticket)
         => $"{ticket.Title} {ticket.Category}".Trim();
 
+    /// <summary>
+    /// Carrega o global pai (somente ativo/global) e resolve a config efetiva
+    /// campo a campo. Leitura defensiva: vínculo não global/inativo é ignorado.
+    /// </summary>
+    private async Task<DepartmentEffectiveSettings> ResolveEffectiveSettingsAsync(
+        Department department, CancellationToken ct)
+    {
+        Department? parent = null;
+        if (department.ClientId is not null && department.InheritFromGlobalId is { } parentId)
+        {
+            parent = await db.Departments.AsNoTracking()
+                .FirstOrDefaultAsync(d => d.Id == parentId, ct);
+
+            if (parent is not null && (parent.ClientId is not null || !parent.IsActive))
+            {
+                logger?.LogWarning(
+                    "Herança de {DepartmentId} aponta para {ParentId} ({Reason}); usando apenas a configuração própria.",
+                    department.Id, parentId,
+                    parent.ClientId is not null ? "pai não global" : "pai inativo");
+                parent = null;
+            }
+        }
+
+        return DepartmentEffectiveSettingsResolver.Resolve(department, parent);
+    }
+
+    /// <summary>
+    /// Ids de departamentos AiTriage cujo modo EFETIVO é AutoAssign no escopo
+    /// (null = globais). A varredura em lote precisa enxergar o modo herdado.
+    /// </summary>
+    private async Task<HashSet<Guid>> LoadEffectiveAutoAssignDepartmentIdsAsync(
+        Guid? clientScope, CancellationToken ct)
+    {
+        var departments = await db.Departments.AsNoTracking()
+            .Where(d => d.IsActive && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage)
+            .ToListAsync(ct);
+
+        if (departments.Count == 0)
+            return [];
+
+        var parentIds = departments
+            .Where(d => d.InheritFromGlobalId is not null)
+            .Select(d => d.InheritFromGlobalId!.Value)
+            .Distinct()
+            .ToList();
+
+        var parents = await db.Departments.AsNoTracking()
+            .Where(d => parentIds.Contains(d.Id) && d.IsActive && d.ClientId == null)
+            .ToDictionaryAsync(d => d.Id, ct);
+
+        var ids = new HashSet<Guid>();
+        foreach (var department in departments)
+        {
+            // null = todos os escopos; Guid.Empty = somente globais; outro = cliente.
+            if (clientScope is { } scope)
+            {
+                var matches = scope == Guid.Empty
+                    ? department.ClientId is null
+                    : department.ClientId == scope;
+                if (!matches) continue;
+            }
+
+            parents.TryGetValue(department.InheritFromGlobalId ?? Guid.Empty, out var parent);
+            var settings = DepartmentEffectiveSettingsResolver.Resolve(department, parent);
+            if (settings.AiAssignmentMode.Value == (int)AiAssignmentMode.AutoAssign)
+                ids.Add(department.Id);
+        }
+
+        return ids;
+    }
+
     private static string BuildRationale(TriageEvaluation evaluation)
     {
         var parts = new List<string>();
@@ -877,6 +956,8 @@ public class AiTicketTriageService(
         var chosen = evaluation.Candidates.FirstOrDefault(c => c.UserId == evaluation.ChosenUserId);
         if (chosen is not null && chosen.Score > 0)
             parts.Add($"score {chosen.Score:0.00} (skill {chosen.SkillScore:0.00}, afinidade {chosen.AffinityScore:0.00}, {chosen.OpenNow} abertos)");
+        if (chosen?.Origin is { Length: > 0 } origin)
+            parts.Add($"origem do candidato: {origin}");
 
         return string.Join(" | ", parts);
     }
@@ -928,8 +1009,10 @@ public class AiTicketTriageService(
     {
         public required Ticket Ticket { get; init; }
         public required Department Department { get; init; }
+        public required DepartmentEffectiveSettings Settings { get; init; }
         public required Guid DecisionId { get; init; }
         public IReadOnlyDictionary<Guid, string?> MemberNames { get; init; } = new Dictionary<Guid, string?>();
+        public IReadOnlyDictionary<Guid, string?> MemberOrigins { get; init; } = new Dictionary<Guid, string?>();
         public IReadOnlyList<AssignmentCandidateDto> Candidates { get; set; } = [];
         public Guid? ChosenUserId { get; set; }
         public double Confidence { get; set; }

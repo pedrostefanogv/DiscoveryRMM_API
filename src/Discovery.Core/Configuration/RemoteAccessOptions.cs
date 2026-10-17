@@ -101,6 +101,71 @@ public class RemoteAccessRecordingOptions
     public RemoteAccessRecordingS3Options S3 { get; set; } = new();
     public RemoteAccessRecordingRetentionOptions Retention { get; set; } = new();
     public RemoteAccessRecordingFormatOptions Format { get; set; } = new();
+
+    /// <summary>Gravação incremental do terminal (NDJSON).</summary>
+    public RemoteAccessTerminalRecordingOptions Terminal { get; set; } = new();
+}
+
+/// <summary>
+/// Opções da ingestão/gravação do terminal remoto. Os limites são aplicados
+/// por sessão no servidor: o excedente é descartado e contabilizado em
+/// dropped_frames, nunca propagado como exceção para o loop do NATS.
+/// </summary>
+public class RemoteAccessTerminalRecordingOptions
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Máximo de frames aceitos por segundo, por sessão. 0 = ilimitado.</summary>
+    public int MaxFramesPerSecond { get; set; } = 30;
+
+    /// <summary>Máximo de bytes aceitos por segundo, por sessão. 0 = ilimitado.</summary>
+    public int MaxBytesPerSecond { get; set; } = 262_144;
+
+    /// <summary>Tamanho máximo de uma gravação, em bytes. 0 = ilimitado.</summary>
+    public long MaxRecordingBytes { get; set; } = 67_108_864;
+
+    /// <summary>Intervalo de flush do writer e de persistência dos contadores (ms).</summary>
+    public int FlushIntervalMs { get; set; } = 1_000;
+
+    /// <summary>
+    /// Diretório base do NDJSON. Vazio = Recording:Local:BasePath + "/terminal".
+    /// </summary>
+    public string BasePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Intervalo (s) da varredura que finaliza gravações cuja sessão remota já
+    /// não está ativa. Sem ela, uma sessão encerrada sem frame de saída (agent
+    /// caiu, StopRecording não chegou) manteria estado e arquivo abertos até o
+    /// restart da API. 0 desabilita a varredura.
+    /// </summary>
+    public int SweepIntervalSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Idade mínima (s) do último frame para a gravação ser candidata à
+    /// varredura. Evita consultar o banco a cada flush para sessões em uso.
+    /// </summary>
+    public int InactivityGraceSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Envia o NDJSON ao S3 no finalize quando
+    /// <c>RemoteAccess:Recording:StorageProvider</c> == "S3". A gravação sempre
+    /// acontece em disco local (append incremental); o upload é adicional e
+    /// best-effort: falha preserva o arquivo local e grava LastError.
+    /// </summary>
+    public bool UploadToS3 { get; set; } = true;
+
+    /// <summary>
+    /// Mantém o NDJSON local depois de um upload bem-sucedido. Default true:
+    /// o disco continua sendo a cópia de trabalho (download sem S3 e retenção
+    /// local seguem funcionando).
+    /// </summary>
+    public bool KeepLocalCopyAfterUpload { get; set; } = true;
+
+    /// <summary>Timeout de cada tentativa de upload ao S3, em segundos.</summary>
+    public int UploadTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>Número máximo de tentativas de upload (1 = sem retry).</summary>
+    public int UploadMaxAttempts { get; set; } = 3;
 }
 
 public class RemoteAccessRecordingLocalOptions

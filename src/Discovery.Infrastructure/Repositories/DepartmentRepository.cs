@@ -94,6 +94,11 @@ public class DepartmentRepository : IDepartmentRepository
         return true;
     }
 
+    public Task<bool> HasActiveChildrenAsync(Guid id, CancellationToken ct = default)
+        => _db.Set<Department>()
+            .AsNoTracking()
+            .AnyAsync(d => d.InheritFromGlobalId == id && d.IsActive, ct);
+
     public async Task<bool> ExistsByNameAsync(Guid? clientId, string name)
     {
         return await _db.Set<Department>()

@@ -18,7 +18,9 @@ public class Department
     public string? Description { get; set; }
     
     /// <summary>
-    /// Se preenchido, este departamento herda configurações de um global.
+    /// Se preenchido, este departamento herda membros e configurações de triagem
+    /// de um departamento GLOBAL (ClientId = null). A herança é de um único salto:
+    /// departamento global nunca herda e o pai precisa estar ativo.
     /// </summary>
     public Guid? InheritFromGlobalId { get; set; }
     
@@ -60,6 +62,40 @@ public class Department
     /// </summary>
     public int AiAssignmentMaxOutputTokens { get; set; } = 1200;
 
+    // ── Overrides de herança (NULL = herda do global; preenchido = próprio) ──
+    //
+    // As colunas acima continuam sendo o valor-base/legado do registro. As
+    // colunas *_override abaixo definem se o departamento "fala por si": quando
+    // NULL, a configuração efetiva vem do departamento GLOBAL pai (ou do valor
+    // base, se não houver pai). A migration M229 faz backfill copiando o valor
+    // atual das colunas base para os overrides de TODAS as linhas existentes,
+    // preservando o comportamento anterior; só departamentos novos nascem com
+    // override NULL e, portanto, herdando por padrão.
+
+    /// <summary>Override do modo da triagem (0=Sugerir, 1=Atribuir automaticamente).</summary>
+    public int? AiAssignmentModeOverride { get; set; }
+
+    /// <summary>Override da confiança mínima da IA (0..1).</summary>
+    public double? AiAssignmentMinConfidenceOverride { get; set; }
+
+    /// <summary>Override da estratégia de fallback (1=RoundRobin, 2=LeastOpenTickets).</summary>
+    public int? AiAssignmentFallbackStrategyOverride { get; set; }
+
+    /// <summary>Override da quantidade máxima de candidatos.</summary>
+    public int? AiAssignmentMaxCandidatesOverride { get; set; }
+
+    /// <summary>Override das orientações livres do gestor.</summary>
+    public string? AiAssignmentInstructionsOverride { get; set; }
+
+    /// <summary>Override dos pesos por dimensão (JSON).</summary>
+    public string? AiAssignmentWeightsJsonOverride { get; set; }
+
+    /// <summary>Override do uso de afinidade na triagem.</summary>
+    public bool? AiAssignmentUseAffinityOverride { get; set; }
+
+    /// <summary>Override do teto de tokens de saída da triagem.</summary>
+    public int? AiAssignmentMaxOutputTokensOverride { get; set; }
+
     // ── Aprendizado: competências e pesos ────────────────────────────────
 
     /// <summary>Modo do aprendizado de competências (0=Off, 1=Sugerir, 2=Automático).</summary>
@@ -85,6 +121,37 @@ public class Department
 
     /// <summary>Peso máximo permitido por dimensão.</summary>
     public decimal AiWeightMax { get; set; } = 0.50m;
+
+    // ── Overrides de herança do aprendizado (NULL = herda do global) ─────
+    //
+    // Mesmo contrato dos overrides de atribuição acima: a coluna base guarda o
+    // valor legado e o *_override define se o departamento fala por si. A M229
+    // faz o backfill base -> override em TODAS as linhas, preservando o
+    // comportamento anterior; departamentos novos herdam por padrão.
+
+    /// <summary>Override do modo do aprendizado de competências (0=Off, 1=Sugerir, 2=Automático).</summary>
+    public int? AiSkillLearningModeOverride { get; set; }
+
+    /// <summary>Override do mínimo de chamados resolvidos para sugerir competência.</summary>
+    public int? AiSkillMinEvidenceOverride { get; set; }
+
+    /// <summary>Override do máximo de competências sugeridas por atendente.</summary>
+    public int? AiSkillMaxTagsOverride { get; set; }
+
+    /// <summary>Override do modo da recalibração de pesos (0=Off, 1=Sugerir, 2=Automático).</summary>
+    public int? AiWeightLearningModeOverride { get; set; }
+
+    /// <summary>Override do ajuste máximo por dimensão em cada ciclo.</summary>
+    public decimal? AiWeightMaxDeltaPerCycleOverride { get; set; }
+
+    /// <summary>Override da duração do ciclo de calibração, em dias.</summary>
+    public int? AiWeightCycleDaysOverride { get; set; }
+
+    /// <summary>Override do peso mínimo permitido por dimensão.</summary>
+    public decimal? AiWeightMinOverride { get; set; }
+
+    /// <summary>Override do peso máximo permitido por dimensão.</summary>
+    public decimal? AiWeightMaxOverride { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

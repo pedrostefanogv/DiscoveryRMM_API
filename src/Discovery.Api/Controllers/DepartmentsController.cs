@@ -46,9 +46,19 @@ public class DepartmentsController(
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? clientId = null,
-        [FromQuery] bool includeGlobal = true)
+        [FromQuery] bool includeGlobal = true,
+        [FromQuery] bool activeOnly = false)
     {
-        var result = await mediator.Send(new ListDepartmentsQuery(clientId, includeGlobal));
+        // D11 — activeOnly era aceito na query e ignorado na listagem.
+        var result = await mediator.Send(new ListDepartmentsQuery(clientId, includeGlobal, activeOnly));
+        return result.ToActionResult();
+    }
+
+    /// <summary>Somente departamentos globais (ClientId = null) — D12.</summary>
+    [HttpGet("global")]
+    public async Task<IActionResult> GetGlobal([FromQuery] bool activeOnly = false)
+    {
+        var result = await mediator.Send(new ListDepartmentsQuery(null, IncludeGlobal: false, ActiveOnly: activeOnly));
         return result.ToActionResult();
     }
 
@@ -70,7 +80,9 @@ public class DepartmentsController(
         var result = await mediator.Send(cmd);
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto),
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+            failure: errors => errors[0].Code == "Validation"
+                ? UnprocessableEntity(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     [HttpPut("{id:guid}")]
@@ -82,7 +94,9 @@ public class DepartmentsController(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound"
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+                : errors[0].Code == "Validation"
+                    ? UnprocessableEntity(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) })
+                    : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
     }
 
     [HttpDelete("{id:guid}")]
@@ -94,8 +108,19 @@ public class DepartmentsController(
             success: _ => NoContent(),
             failure: errors => errors[0].Code == "NotFound"
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+                : errors[0].Code == "Validation"
+                    ? UnprocessableEntity(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) })
+                    : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
+
+    /// <summary>
+    /// Configuração efetiva de triagem com a origem de cada campo
+    /// (own/inherited-global/default), para o console exibir o selo de herdado.
+    /// </summary>
+    [HttpGet("{id:guid}/effective")]
+    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    public async Task<IActionResult> GetEffectiveConfig(Guid id)
+        => (await mediator.Send(new GetDepartmentEffectiveConfigQuery(id), HttpContext.RequestAborted)).ToActionResult();
 
     // ── Members (round-robin) ────────────────────────────────────────────
 
