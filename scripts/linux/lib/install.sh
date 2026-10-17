@@ -3,29 +3,49 @@
 
 # ── Update de pacotes do sistema (antes de qualquer update da stack) ──────
 
+# Resolve o valor efetivo de DISCOVERY_APPLY_SYSTEM_UPDATES, na prioridade:
+#   1) ambiente do instalador (--config/export);
+#   2) valor ja gravado em discovery.env (instalacao existente: PRESERVA);
+#   3) padrao 1 — NOVAS instalacoes verificam/aplicam os updates do SO.
+# Quando o discovery.env existe mas nao tem a chave (instalacao antiga), o
+# padrao permanece 0 para nao habilitar upgrade de SO sem aviso.
+resolve_apply_system_updates_value() {
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  local value="${DISCOVERY_APPLY_SYSTEM_UPDATES:-}"
+  local default_value="1"
+  if [[ -z "$value" ]] && sudo test -f "$env_file" 2>/dev/null; then
+    default_value="0"
+    value="$(sudo awk -F= '/^DISCOVERY_APPLY_SYSTEM_UPDATES=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+  fi
+  # Tolera CR/espacos (discovery.env editado no Windows): sem isso um "1" com
+  # CR nao casaria o case e cairia no default 0, desabilitando updates.
+  value="$(printf '%s' "$value" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "${value:-$default_value}" in
+    0) printf '0' ;;
+    1) printf '1' ;;
+    *) printf '%s' "$default_value" ;;
+  esac
+}
+
 # Atualiza a lista de pacotes e faz upgrade completo do SO.
-# OPT-IN: roda apenas com DISCOVERY_APPLY_SYSTEM_UPDATES=1 — o apt-get upgrade
-# e lento, pode restartar servicos de infra (postgres/nginx) e travar o update
-# da aplicacao se um pacote problematico aparecer. A ferramenta correta para
-# atualizar o SO e o fluxo de patches do proprio sistema.
+# Roda quando DISCOVERY_APPLY_SYSTEM_UPDATES=1 — padrao das novas instalacoes
+# (ver discovery-install.env.example); defina 0 para pular.
+# O apt-get upgrade e lento, pode restartar servicos de infra (postgres/nginx)
+# e travar o update da aplicacao se um pacote problematico aparecer. A
+# ferramenta correta para atualizar o SO tambem e o fluxo de patches do proprio
+# sistema.
 # --force-confold preserva arquivos de config locais e nunca trava em prompt
 # interativo (DEBIAN_FRONTEND=noninteractive).
 apply_system_updates() {
-  # Prioridade: ambiente (--config do instalador ou export) > discovery.env.
-  #
   # O discovery.env NAO e carregado no ambiente do instalador, e esta funcao
-  # roda ANTES de load_update_defaults. Sem este fallback, definir
-  # DISCOVERY_APPLY_SYSTEM_UPDATES=1 no discovery.env nao tinha efeito nenhum:
-  # o update sempre reportava "pulado". Segue o mesmo precedente do
-  # DISCOVERY_CLEAN_BUILD em modes.sh (le do arquivo quando falta no ambiente).
-  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
-  local apply_updates="${DISCOVERY_APPLY_SYSTEM_UPDATES:-}"
-  if [[ -z "$apply_updates" ]] && sudo test -f "$env_file"; then
-    apply_updates="$(sudo awk -F= '/^DISCOVERY_APPLY_SYSTEM_UPDATES=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
-  fi
+  # roda ANTES de load_update_defaults. O helper le do arquivo quando falta no
+  # ambiente — sem isso, definir DISCOVERY_APPLY_SYSTEM_UPDATES no discovery.env
+  # nao tinha efeito nenhum e o update sempre reportava "pulado".
+  local apply_updates
+  apply_updates="$(resolve_apply_system_updates_value)"
 
-  if [[ "${apply_updates:-0}" != "1" ]]; then
-    log "Update de pacotes do SO pulado (opt-in: defina DISCOVERY_APPLY_SYSTEM_UPDATES=1)."
+  if [[ "$apply_updates" != "1" ]]; then
+    log "Update de pacotes do SO desativado (DISCOVERY_APPLY_SYSTEM_UPDATES=0)."
     return 0
   fi
 

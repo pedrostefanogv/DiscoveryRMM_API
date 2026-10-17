@@ -202,6 +202,11 @@ main() {
   check_disk_space "${DISCOVERY_API_BASE:-/opt/discovery-api}" 2048
   check_disk_space "${DISCOVERY_SITE_BASE:-/opt/discovery-site}" 1024
 
+  # Politica padrao das novas instalacoes: o instalador ja verifica/aplica os
+  # updates do SO (DISCOVERY_APPLY_SYSTEM_UPDATES=1, definido no wizard) e grava
+  # o flag no discovery.env em write_environment_file, para que os updates
+  # manuais seguintes continuem atualizando os pacotes do SO.
+  apply_system_updates
   install_apt_dependencies
   install_nsis_nsjson_plugin
   ensure_dotnet_sdk

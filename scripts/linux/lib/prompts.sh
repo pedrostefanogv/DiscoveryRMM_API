@@ -322,11 +322,45 @@ prompt_selfupdate_settings() {
   echo "  ./scripts/linux/install_discovery_server.sh --mode update"
   echo "  (ou a opcao 3 'Atualizar instalacao existente' do bootstrap)"
   echo "Nao existe atualizacao automatica agendada."
+  echo "PADRAO das novas instalacoes: alem da stack, o instalador tambem verifica"
+  echo "e aplica os updates do SO (apt-get update + upgrade) nesta instalacao e"
+  echo "nos updates manuais seguintes. Para pular os pacotes do SO, use"
+  echo "DISCOVERY_APPLY_SYSTEM_UPDATES=0."
   echo "----------------------------------------"
+
+  # Valor efetivo atual: ambiente (--config/export) > discovery.env (preserva a
+  # escolha de instalacao existente, inclusive 0) > padrao 1 (nova instalacao).
+  # Sem isso, um re-run/reinstalacao reativaria os updates do SO em silencio
+  # mesmo com DISCOVERY_APPLY_SYSTEM_UPDATES=0 gravado.
+  local current_apply_updates="${DISCOVERY_APPLY_SYSTEM_UPDATES:-}"
+  if [[ -z "$current_apply_updates" ]]; then
+    current_apply_updates="$(resolve_apply_system_updates_value)"
+  fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
     DISCOVERY_CLEAN_BUILD="${DISCOVERY_CLEAN_BUILD:-1}"
+    DISCOVERY_APPLY_SYSTEM_UPDATES="${current_apply_updates:-1}"
+    case "$DISCOVERY_APPLY_SYSTEM_UPDATES" in 0|1) ;; *) DISCOVERY_APPLY_SYSTEM_UPDATES="1" ;; esac
     return
+  fi
+
+  # Interativo: Enter mantem o valor atual (S em instalacao nova, N quando ja
+  # estava desabilitado). Um valor explicito no --config/ambiente pula a
+  # pergunta.
+  if [[ -z "${DISCOVERY_APPLY_SYSTEM_UPDATES:-}" ]]; then
+    local apply_updates_default="S"
+    [[ "$current_apply_updates" == "0" ]] && apply_updates_default="N"
+    echo
+    echo "Verificar e instalar tambem os updates do SO (apt-get update + upgrade)?"
+    echo "Vale para esta instalacao e para os updates manuais seguintes."
+    local apply_updates_choice
+    read -r -p "Atualizar o SO automaticamente (S/n) [$apply_updates_default]: " apply_updates_choice
+    apply_updates_choice="${apply_updates_choice:-$apply_updates_default}"
+    apply_updates_choice="$(printf '%s' "$apply_updates_choice" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$apply_updates_choice" in
+      n|nao|não|no|0) DISCOVERY_APPLY_SYSTEM_UPDATES="0" ;;
+      *)          DISCOVERY_APPLY_SYSTEM_UPDATES="1" ;;
+    esac
   fi
 
   if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" ]]; then

@@ -449,14 +449,13 @@ write_environment_file() {
   # corrompendo o subject e perdendo o MaxAge no discovery.env.
   [[ -n "$fanout_subject_lines" ]] && fanout_subject_lines+=$'\n'
 
-  # Preserva o opt-in de update do SO. Ele nao vem do ambiente do instalador
-  # (o discovery.env nao e carregado), entao precisa ser lido do arquivo ANTES
-  # do tee truncar — senao um install completo apagaria a configuracao.
-  local apply_system_updates_value="${DISCOVERY_APPLY_SYSTEM_UPDATES:-}"
-  if [[ -z "$apply_system_updates_value" ]] && sudo test -f /etc/discovery-api/discovery.env; then
-    apply_system_updates_value="$(sudo awk -F= '/^DISCOVERY_APPLY_SYSTEM_UPDATES=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
-  fi
-  case "${apply_system_updates_value:-0}" in 0|1) ;; *) apply_system_updates_value="0" ;; esac
+  # Preserva o update do SO. Ele nao vem do ambiente do instalador (o
+  # discovery.env nao e carregado), entao precisa ser lido do arquivo ANTES do
+  # tee truncar — senao um install completo apagaria a configuracao.
+  # Default: 1 para NOVAS instalacoes (vale ja nesta instalacao e nos updates
+  # seguintes); instalacao existente PRESERVA o valor gravado, inclusive 0.
+  local apply_system_updates_value
+  apply_system_updates_value="$(resolve_apply_system_updates_value)"
 
   # Web Push: resolve/preserva o par VAPID ANTES do tee truncar o arquivo —
   # sem isso um update perderia as chaves e todas as inscricoes de navegador
@@ -567,7 +566,8 @@ DISCOVERY_AGENT_GIT_REPO=${DISCOVERY_AGENT_GIT_REPO:-}
 DISCOVERY_GIT_BRANCH=${DISCOVERY_GIT_BRANCH}
 DISCOVERY_BOOTSTRAP_ADMIN_LOGIN=${DISCOVERY_BOOTSTRAP_ADMIN_LOGIN:-}
 DISCOVERY_CLEAN_BUILD=${DISCOVERY_CLEAN_BUILD:-1}
-# Opt-in do update do SO (lido tambem por apply_system_updates em install.sh).
+# Update do SO (lido tambem por apply_system_updates em install.sh).
+# Padrao "1" nas novas instalacoes; instalacoes existentes preservam o valor.
 DISCOVERY_APPLY_SYSTEM_UPDATES=${apply_system_updates_value}
 # Relidas pelo instalador no UPDATE: write_site_proxy_config monta o server_name
 # do nginx a partir delas. Persistir evita repetir o incidente do catch-all 444
@@ -1569,6 +1569,11 @@ show_summary() {
   fi
   if [[ -n "$primary_portal_host" ]]; then echo "- Hostname MFA/portal: $primary_portal_host"; fi
   echo "- TLS: ${TLS_CERT_PROVIDER:-self-signed}"
+  if [[ "$(resolve_apply_system_updates_value)" == "1" ]]; then
+    echo "- Update do SO: habilitado nos updates manuais (apt-get update + upgrade)"
+  else
+    echo "- Update do SO: desabilitado nos updates manuais (DISCOVERY_APPLY_SYSTEM_UPDATES=0)"
+  fi
   local summary_storage_mode="${DISCOVERY_OBJECT_STORAGE_MODE:-skip}"
   if [[ "$summary_storage_mode" != "skip" ]]; then
     echo "- Storage de objetos: ${summary_storage_mode}"
