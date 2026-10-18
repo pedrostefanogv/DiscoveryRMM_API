@@ -142,6 +142,37 @@ public class AgentSupportChatController(
 
     // ── Anexos ────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Política de anexos do chat (tipos MIME e tamanho máximo) para a JANELA do
+    /// agent.
+    ///
+    /// Por que existe: a janela do chat valida o arquivo ANTES de enviar (e monta
+    /// o filtro do seletor) com a MESMA allowlist que o servidor aplica no presign
+    /// e no complete. Sem esta rota o agent usava um espelho hardcoded e o usuário
+    /// só descobria o tipo proibido depois de tentar enviar.
+    ///
+    /// A AUTORIDADE continua sendo o presign/complete (settings é só a dica de
+    /// UI): desligar anexos aqui não substitui a validação do servidor.
+    /// </summary>
+    [HttpGet("attachment-policy")]
+    public async Task<IActionResult> GetAttachmentPolicy(CancellationToken ct)
+    {
+        if (!TryGetAgentId(out _))
+            return Unauthorized(new { error = "Agent não autenticado." });
+
+        var settingsResult = await mediator.Send(new GetTicketAttachmentSettingsQuery(), ct);
+        if (settingsResult.IsFailure || settingsResult.Value is null)
+            return BadRequest(new { error = "Não foi possível ler a configuração de anexos." });
+
+        var settings = settingsResult.Value;
+        return Ok(new
+        {
+            enabled = settings.Enabled,
+            allowedContentTypes = settings.AllowedContentTypes,
+            maxFileSizeBytes = settings.MaxFileSizeBytes,
+        });
+    }
+
     /// <summary>Prepara upload de anexo do chat (allowlist/tamanho de TicketAttachmentSettings).</summary>
     [HttpPost("sessions/{sessionId:guid}/attachments/presigned-upload")]
     public async Task<IActionResult> PrepareAttachmentUpload(Guid sessionId, [FromBody] AgentPresignedUploadRequest req, CancellationToken ct = default)

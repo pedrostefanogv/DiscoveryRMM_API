@@ -388,6 +388,15 @@ public sealed class RespondTicketChatInviteCommandHandler(
             "timeout" => "timeout",
             "busy" => "busy",
             "offline" => "offline",
+            // Recusas causadas pelo AGENT, não pelo usuário:
+            //   - "replaced": o convite foi substituído por outro mais recente na
+            //     mesma máquina (antes caía em user_denied e o console dizia que o
+            //     usuário tinha recusado um convite que ele nunca viu);
+            //   - "no_ui": não havia interface na máquina para exibir o pedido de
+            //     aceite.
+            // Manter os códigos permite o console explicar a causa real.
+            "replaced" => "replaced",
+            "no_ui" => "no_ui",
             _ => "user_denied"
         };
 }
