@@ -203,6 +203,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         // Remote sessions (acesso remoto nativo)
         ConfigureRemoteSessions(modelBuilder);
 
+        // Política de consentimento de acesso remoto por usuário/grupo
+        ConfigureRemoteConsent(modelBuilder);
+
         // Chat de suporte vinculado ao chamado
         ConfigureTicketChat(modelBuilder);
 
@@ -234,6 +237,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureAttachments(ModelBuilder modelBuilder);
     static partial void ConfigureMaintenanceRuns(ModelBuilder modelBuilder);
     static partial void ConfigureRemoteSessions(ModelBuilder modelBuilder);
+    static partial void ConfigureRemoteConsent(ModelBuilder modelBuilder);
     static partial void ConfigureTicketChat(ModelBuilder modelBuilder);
     static partial void ConfigurePatches(ModelBuilder modelBuilder);
 

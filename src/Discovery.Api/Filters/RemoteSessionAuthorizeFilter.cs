@@ -14,13 +14,20 @@ public class RemoteSessionAuthorizeAttribute : Attribute, IFilterFactory
 {
     public ActionType RequiredAction { get; init; } = ActionType.Execute;
 
+    /// <summary>
+    /// Aceita sessões em pending_consent (status, cancelar espera). Endpoints que
+    /// exigem mídia/credenciais continuam com o default false.
+    /// </summary>
+    public bool AllowPending { get; init; }
+
     public bool IsReusable => false;
 
     public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
         => new RemoteSessionAuthorizeFilter(
             serviceProvider.GetRequiredService<IRemoteSessionManager>(),
             serviceProvider.GetRequiredService<ILogger<RemoteSessionAuthorizeFilter>>(),
-            RequiredAction);
+            RequiredAction,
+            AllowPending);
 }
 
 internal class RemoteSessionAuthorizeFilter : IAsyncActionFilter
@@ -28,15 +35,18 @@ internal class RemoteSessionAuthorizeFilter : IAsyncActionFilter
     private readonly IRemoteSessionManager _sessionManager;
     private readonly ILogger<RemoteSessionAuthorizeFilter> _logger;
     private readonly ActionType _requiredAction;
+    private readonly bool _allowPending;
 
     public RemoteSessionAuthorizeFilter(
         IRemoteSessionManager sessionManager,
         ILogger<RemoteSessionAuthorizeFilter> logger,
-        ActionType requiredAction)
+        ActionType requiredAction,
+        bool allowPending)
     {
         _sessionManager = sessionManager;
         _logger = logger;
         _requiredAction = requiredAction;
+        _allowPending = allowPending;
     }
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
@@ -57,7 +67,8 @@ internal class RemoteSessionAuthorizeFilter : IAsyncActionFilter
         {
             try
             {
-                var session = await _sessionManager.GetActiveForUserAsync(sessionId, userId, context.HttpContext.RequestAborted);
+                var session = await _sessionManager.GetForUserAsync(
+                    sessionId, userId, _allowPending, context.HttpContext.RequestAborted);
                 if (session is null)
                 {
                     // Diagnóstico: buscar a sessão bruta para entender o motivo da falha
@@ -70,6 +81,17 @@ internal class RemoteSessionAuthorizeFilter : IAsyncActionFilter
                             sessionId = sessionId,
                             reason = "session_does_not_exist"
                         });
+                    }
+                    else if (rawSession.Status == Discovery.Core.Enums.RemoteSessionStatus.PendingConsent && !_allowPending)
+                    {
+                        context.Result = new ObjectResult(new
+                        {
+                            error = "Remote session is waiting for user consent.",
+                            sessionId = sessionId,
+                            status = rawSession.Status,
+                            reason = "consent_pending"
+                        })
+                        { StatusCode = StatusCodes.Status409Conflict };
                     }
                     else if (rawSession.Status != "active")
                     {

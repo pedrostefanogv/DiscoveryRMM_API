@@ -76,6 +76,16 @@ public sealed class GetAgentConfigurationHandler(
             ["windowsUpdateEnabled"] = siteConfig?.WindowsUpdateEnabled ?? clientConfig?.WindowsUpdateEnabled ?? serverConfig.WindowsUpdateEnabled,
             ["windowsUpdateScanIntervalMinutes"] = siteConfig?.WindowsUpdateScanIntervalMinutes ?? clientConfig?.WindowsUpdateScanIntervalMinutes ?? serverConfig.WindowsUpdateScanIntervalMinutes,
 
+            // Autorização de acesso remoto (informativo para diagnóstico; a
+            // política efetiva por usuário é resolvida e enviada no start).
+            ["remoteConsent"] = new
+            {
+                mode = (siteConfig?.RemoteConsentMode ?? clientConfig?.RemoteConsentMode ?? serverConfig.RemoteConsentMode).ToString(),
+                timeoutSeconds = siteConfig?.RemoteConsentTimeoutSeconds ?? clientConfig?.RemoteConsentTimeoutSeconds ?? serverConfig.RemoteConsentTimeoutSeconds,
+                timeoutAction = (siteConfig?.RemoteConsentTimeoutAction ?? clientConfig?.RemoteConsentTimeoutAction ?? serverConfig.RemoteConsentTimeoutAction).ToString(),
+                showBanner = siteConfig?.RemoteConsentShowBanner ?? clientConfig?.RemoteConsentShowBanner ?? serverConfig.RemoteConsentShowBanner
+            },
+
             // Update policies (JSON strings)
             ["agentUpdatePolicy"] = TryDeserializeJson(clientConfig?.AgentUpdatePolicyJson ?? serverConfig.AgentUpdatePolicyJson),
 

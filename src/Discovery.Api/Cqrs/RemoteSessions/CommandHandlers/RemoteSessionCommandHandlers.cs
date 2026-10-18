@@ -7,6 +7,8 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.ValueObjects;
+using Discovery.Core.Interfaces.Identity;
 using Discovery.Infrastructure.Services.Remote;
 using MediatR;
 using Microsoft.Extensions.Logging;
@@ -21,6 +23,9 @@ public sealed class StartRemoteSessionCommandHandler(
     IAgentCommandDispatcher dispatcher,
     SpecialCommandPayloadValidator payloadValidator,
     IConfigurationService configurationService,
+    IRemoteConsentPolicyResolver consentResolver,
+    IUserRepository userRepo,
+    IClientRepository clientRepo,
     IOptions<RemoteAccessOptions> options,
     ILogger<StartRemoteSessionCommandHandler> logger
 ) : IRequestHandler<StartRemoteSessionCommand, Result<RemoteSessionResponseDto>>
@@ -62,6 +67,38 @@ public sealed class StartRemoteSessionCommandHandler(
             return Result<RemoteSessionResponseDto>.Failure(Error.Unauthorized("UserId is required to create a session."));
         }
 
+        // ── Política de consentimento (somente desktop) ──
+        // Resolvida no servidor (fonte de verdade); o agente apenas executa.
+        var desktopSession = RemoteConsentPolicy.AppliesTo(cmd.Kind);
+        var policy = desktopSession
+            ? await consentResolver.ResolveAsync(cmd.UserId, tenantId, siteId, ct)
+            : new RemoteConsentPolicy { Mode = RemoteConsentMode.Off };
+
+        var consentRequired = desktopSession && policy.Mode == RemoteConsentMode.Prompt;
+
+        if (desktopSession && policy.Mode != RemoteConsentMode.Off
+            && !AgentSupportsConsent(agent.AgentVersion, options.Value.Consent.MinimumAgentVersion))
+        {
+            logger.LogWarning(
+                "[RemoteSession] Agente {AgentId} versão {Version} não suporta consentimento (mínima {Minimum}) — start recusado",
+                cmd.AgentId, agent.AgentVersion, options.Value.Consent.MinimumAgentVersion);
+            return Result<RemoteSessionResponseDto>.Failure(Error.Conflict(
+                $"agent_update_required: o agente {agent.AgentVersion ?? "desconhecido"} não suporta autorização de acesso remoto. "
+                + $"Atualize para {options.Value.Consent.MinimumAgentVersion} ou superior, ou desligue a política de consentimento."));
+        }
+
+        var consentDeadline = consentRequired
+            ? DateTime.UtcNow.AddSeconds(policy.TimeoutSeconds)
+            : (DateTime?)null;
+
+        var operatorName = await ResolveOperatorNameAsync(cmd.UserId);
+        var client = await clientRepo.GetByIdAsync(tenantId);
+        var consentMessage = RenderConsentTemplate(
+            policy.Message, operatorName, client?.Name, site.Name, agent.Hostname);
+        var bannerText = RenderConsentTemplate(
+            policy.BannerText, operatorName, client?.Name, site.Name, agent.Hostname);
+        var bannerEnabled = desktopSession && policy.Mode != RemoteConsentMode.Off && policy.ShowBanner;
+
         // Se Force=true, mata sessões ativas do agent (incluindo órfãs com UserId vazio).
         // Além de fechar no banco, envia stop ao agent para evitar sessões órfãs no
         // processo (o agent só fecha sessões do mesmo kind no superseded).
@@ -84,7 +121,8 @@ public sealed class StartRemoteSessionCommandHandler(
             // Subject temporário — será substituído pelo canônico após obter sessionId
             session = await sessionManager.CreateSessionAsync(
                 cmd.AgentId, cmd.UserId, tenantId, siteId,
-                cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, "temp", cmd.Force, ct);
+                cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, "temp", cmd.Force, ct,
+                consentRequired, consentDeadline, policy.TopSource());
         }
         catch (InvalidOperationException ex)
         {
@@ -144,7 +182,34 @@ public sealed class StartRemoteSessionCommandHandler(
             // conexão e refina com as netstats do viewer. Sem este flag, o
             // agent interpretava start como MODO MANUAL com o override do
             // perfil (unlimited = 75%) e o card nunca saía de 75%.
-            auto = true
+            auto = true,
+            // Bloco de consentimento: só para desktop. O agente novo executa o
+            // prompt; o antigo é recusado acima (agent_update_required).
+            consent = desktopSession
+                ? new
+                {
+                    required = consentRequired,
+                    mode = policy.Mode == RemoteConsentMode.Prompt
+                        ? "prompt"
+                        : policy.Mode == RemoteConsentMode.NotifyOnly ? "notify" : "off",
+                    deadlineUtc = consentDeadline,
+                    timeoutSeconds = policy.TimeoutSeconds,
+                    timeoutAction = policy.TimeoutAction.ToString().ToLowerInvariant(),
+                    title = "Autorização de acesso remoto",
+                    message = consentMessage,
+                    @operator = operatorName,
+                    policySource = policy.TopSource()
+                }
+                : null,
+            banner = bannerEnabled
+                ? new
+                {
+                    enabled = true,
+                    text = bannerText,
+                    @operator = operatorName,
+                    allowDisconnect = true
+                }
+                : null
         });
 
         if (!payloadValidator.TryNormalize(CommandType.RemoteSessionStart, payload, out var normalizedPayload, out var validationError))
@@ -186,7 +251,51 @@ public sealed class StartRemoteSessionCommandHandler(
             natsWsUrl,
             MaxExpiresAtUtc: maxExpiresAt,
             Liveness: livenessDto,
-            SessionActive: true));
+            SessionActive: true,
+            ConsentRequired: consentRequired,
+            ConsentStatus: consentRequired ? "pending" : "not_required",
+            ConsentDeadlineAtUtc: consentDeadline,
+            ConsentMessage: consentRequired ? consentMessage : null,
+            ConsentPolicySource: desktopSession && policy.Mode != RemoteConsentMode.Off
+                ? policy.TopSource()
+                : null));
+    }
+
+    private static bool AgentSupportsConsent(string? agentVersion, string minimumVersion)
+    {
+        var raw = agentVersion?.Trim() ?? string.Empty;
+        // Builds locais/dev (sem carimbo de versão da release) não podem ser
+        // confundidos com agente antigo: 0.0.0/0.0.0-dev vêm do Wails dev build
+        // do MESMO código. O que bloqueia é uma versão de release anterior.
+        if (raw is "0.0.0" or "0.0.0-dev" || raw.Contains("-dev", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!SemanticVersion.TryParse(raw, out var current)
+            || !SemanticVersion.TryParse(minimumVersion, out var required))
+            return false;
+        return current.CompareTo(required) >= 0;
+    }
+
+    private async Task<string> ResolveOperatorNameAsync(Guid userId)
+    {
+        var user = await userRepo.GetByIdAsync(userId);
+        if (user is null) return "O suporte";
+        return string.IsNullOrWhiteSpace(user.FullName) ? user.Login : user.FullName;
+    }
+
+    private static string RenderConsentTemplate(
+        string template,
+        string operatorName,
+        string? clientName,
+        string siteName,
+        string agentName)
+    {
+        var text = string.IsNullOrWhiteSpace(template) ? "{operator} solicita acesso remoto." : template;
+        return text
+            .Replace("{operator}", operatorName, StringComparison.OrdinalIgnoreCase)
+            .Replace("{client}", clientName ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("{site}", siteName, StringComparison.OrdinalIgnoreCase)
+            .Replace("{agent}", agentName, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -236,11 +345,24 @@ public sealed class StopRemoteSessionCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
 
-        var session = await sessionManager.GetActiveForUserAsync(cmd.SessionId, cmd.UserId, ct);
+        var session = await sessionManager.GetForUserAsync(cmd.SessionId, cmd.UserId, allowPending: true, ct);
         if (session is null) return Result<VoidResult>.Failure(Error.NotFound("Remote session not found or not active."));
 
         if (session.AgentId != cmd.AgentId)
             return Result<VoidResult>.Failure(Error.Validation("AgentId", "Session does not belong to this agent."));
+
+        // Cancelar enquanto aguarda consentimento: encerra a espera no servidor e
+        // envia stop ao agente para fechar o prompt.
+        if (session.Status == RemoteSessionStatus.PendingConsent)
+        {
+            await sessionManager.ApplyConsentDecisionAsync(
+                session.Id, accepted: false, outcome: "stopped-by-server",
+                reason: "stopped_by_operator", promptBackend: null, ct);
+        }
+        else
+        {
+            await sessionManager.CloseSessionAsync(session.Id, "stopped-by-operator", cmd.UserId, ct);
+        }
 
         var payload = JsonSerializer.Serialize(new
         {

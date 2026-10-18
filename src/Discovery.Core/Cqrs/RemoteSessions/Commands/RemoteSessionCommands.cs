@@ -106,7 +106,27 @@ public sealed record RemoteSessionResponseDto(
     DateTime? MaxExpiresAtUtc = null,
     LivenessDto? Liveness = null,
     bool? SessionActive = null,
-    string? EndReason = null
+    string? EndReason = null,
+    bool? ConsentRequired = null,
+    string? ConsentStatus = null,
+    DateTime? ConsentDeadlineAtUtc = null,
+    string? ConsentMessage = null,
+    string? ConsentPolicySource = null
+);
+
+/// <summary>Estado do consentimento de uma sessão de desktop.</summary>
+public sealed record RemoteSessionConsentStatusDto(
+    Guid SessionId,
+    string Status,
+    bool Required,
+    string ConsentStatus,
+    DateTime? DeadlineUtc,
+    DateTime? DecidedAtUtc,
+    string? Outcome,
+    string? Reason,
+    bool? Auto,
+    string? PolicySource,
+    string? PromptBackend
 );
 
 public sealed record LivenessDto(

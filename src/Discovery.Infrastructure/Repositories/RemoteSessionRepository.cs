@@ -23,29 +23,31 @@ public class RemoteSessionRepository : IRemoteSessionRepository
             .AsNoTracking()
             .FirstOrDefaultAsync(s => s.Id == id, ct);
 
+    // "Open" = ocupa vaga/conflito: active + pending_consent. Uma sessão aguardando
+    // autorização já é um recurso reservado no agent.
     public async Task<IEnumerable<RemoteSession>> GetActiveByAgentAsync(Guid agentId, CancellationToken ct = default)
         => await _db.RemoteSessions
             .AsNoTracking()
-            .Where(s => s.AgentId == agentId && s.Status == "active")
+            .Where(s => s.AgentId == agentId && (s.Status == "active" || s.Status == "pending_consent"))
             .OrderByDescending(s => s.StartedAt)
             .ToListAsync(ct);
 
     public async Task<IEnumerable<RemoteSession>> GetActiveByUserAsync(Guid userId, CancellationToken ct = default)
         => await _db.RemoteSessions
             .AsNoTracking()
-            .Where(s => s.UserId == userId && s.Status == "active")
+            .Where(s => s.UserId == userId && (s.Status == "active" || s.Status == "pending_consent"))
             .OrderByDescending(s => s.StartedAt)
             .ToListAsync(ct);
 
     public async Task<int> CountActiveByAgentAsync(Guid agentId, CancellationToken ct = default)
         => await _db.RemoteSessions
             .AsNoTracking()
-            .CountAsync(s => s.AgentId == agentId && s.Status == "active", ct);
+            .CountAsync(s => s.AgentId == agentId && (s.Status == "active" || s.Status == "pending_consent"), ct);
 
     public async Task<int> CountActiveByUserAsync(Guid userId, CancellationToken ct = default)
         => await _db.RemoteSessions
             .AsNoTracking()
-            .CountAsync(s => s.UserId == userId && s.Status == "active", ct);
+            .CountAsync(s => s.UserId == userId && (s.Status == "active" || s.Status == "pending_consent"), ct);
 
     public async Task<RemoteSession> CreateAsync(RemoteSession session, CancellationToken ct = default)
     {
@@ -78,5 +80,11 @@ public class RemoteSessionRepository : IRemoteSessionRepository
         => await _db.RemoteSessions
             .AsNoTracking()
             .Where(s => s.Status == "active" && s.ExpiresAt < before)
+            .ToListAsync(ct);
+
+    public async Task<IEnumerable<RemoteSession>> GetPendingConsentPastDeadlineAsync(DateTime before, CancellationToken ct = default)
+        => await _db.RemoteSessions
+            .AsNoTracking()
+            .Where(s => s.Status == "pending_consent" && s.ConsentDeadlineAt != null && s.ConsentDeadlineAt < before)
             .ToListAsync(ct);
 }

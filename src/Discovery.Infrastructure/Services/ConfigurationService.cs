@@ -419,6 +419,9 @@ public class ConfigurationService : IConfigurationService
         CheckRange(type, config, "InventoryIntervalHours", 1, 168, errors);
         CheckRange(type, config, "AgentHeartbeatIntervalSeconds", 10, 3600, errors);
         CheckRange(type, config, "AgentOnlineGraceSeconds", 60, 3600, errors);
+        CheckRange(type, config, "RemoteConsentTimeoutSeconds", 10, 600, errors);
+        CheckRemoteConsentText(type, config, "RemoteConsentMessage", errors);
+        CheckRemoteConsentText(type, config, "RemoteConsentBannerText", errors);
         CheckRange(type, config, "ObjectStorageUrlTtlHours", 1, 168, errors);
         CheckRange(type, config, "NatsAgentJwtTtlMinutes", 15, 4320, errors);
         CheckRange(type, config, "NatsUserJwtTtlMinutes", 15, 4320, errors);
@@ -450,6 +453,28 @@ public class ConfigurationService : IConfigurationService
         }
 
         return (errors.Count == 0, errors.ToArray());
+    }
+
+    /// <summary>
+    /// Textos de consentimento: limite de 500 caracteres. No servidor vazio é
+    /// rejeitado; em cliente/site vazio/nulo significa "herdar".
+    /// </summary>
+    private static void CheckRemoteConsentText(Type type, object config, string propertyName, List<string> errors)
+    {
+        var prop = type.GetProperty(propertyName,
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+        if (prop is null) return;
+
+        var raw = prop.GetValue(config) as string;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            if (config is ServerConfiguration)
+                errors.Add($"{propertyName} cannot be empty.");
+            return;
+        }
+
+        if (raw.Length > 500)
+            errors.Add($"{propertyName} não pode exceder 500 caracteres.");
     }
 
     /// <summary>

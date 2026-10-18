@@ -24,6 +24,25 @@ public class RemoteAccessOptions
     public RemoteAccessProxyOptions Proxy { get; set; } = new();
     public RemoteAccessQualityOptions Quality { get; set; } = new();
     public RemoteAccessRecordingOptions Recording { get; set; } = new();
+
+    /// <summary>Autorização do usuário do endpoint para sessões de desktop.</summary>
+    public RemoteAccessConsentOptions Consent { get; set; } = new();
+}
+
+/// <summary>
+/// Opções do fluxo de consentimento de acesso remoto (somente desktop).
+/// </summary>
+public class RemoteAccessConsentOptions
+{
+    /// <summary>
+    /// Versão mínima do agente que entende o bloco "consent" no start. Um agente
+    /// antigo ignoraria o bloco e abriria a sessão sem prompt — por isso a API
+    /// recusa o start quando a política exige consentimento e o agente é antigo.
+    /// </summary>
+    public string MinimumAgentVersion { get; set; } = "1.3.0";
+
+    /// <summary>Tolerância (s) após o deadline antes de o sweeper negar uma sessão pending.</summary>
+    public int DecisionGraceSeconds { get; set; } = 30;
 }
 
 public class RemoteAccessNatsOptions

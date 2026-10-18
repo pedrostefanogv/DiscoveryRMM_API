@@ -42,6 +42,13 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.BytesSent).HasColumnName("bytes_sent");
             entity.Property(s => s.Note).HasColumnName("note").HasMaxLength(2000);
 
+            // Consentimento do usuário do computador acessado (desktop).
+            entity.Property(s => s.ConsentRequired).HasColumnName("consent_required");
+            entity.Property(s => s.ConsentDeadlineAt).HasColumnName("consent_deadline_at").HasColumnType("timestamptz");
+            entity.Property(s => s.ConsentDecidedAt).HasColumnName("consent_decided_at").HasColumnType("timestamptz");
+            entity.Property(s => s.ConsentOutcome).HasColumnName("consent_outcome").HasMaxLength(64);
+            entity.Property(s => s.ConsentPolicySource).HasColumnName("consent_policy_source").HasMaxLength(64);
+
             entity.HasOne(s => s.Agent).WithMany().HasForeignKey(s => s.AgentId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(s => s.Recording).WithOne(r => r.RemoteSession).HasForeignKey<RemoteSessionRecording>(r => r.RemoteSessionId);
             entity.HasMany(s => s.Audits).WithOne(a => a.RemoteSession).HasForeignKey(a => a.RemoteSessionId).OnDelete(DeleteBehavior.Cascade);

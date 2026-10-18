@@ -15,4 +15,7 @@ public interface IRemoteSessionRepository
     Task<RemoteSession> CreateAsync(RemoteSession session, CancellationToken ct = default);
     Task<RemoteSession> UpdateAsync(RemoteSession session, CancellationToken ct = default);
     Task<IEnumerable<RemoteSession>> GetExpiredAsync(DateTime before, CancellationToken ct = default);
+
+    /// <summary>Sessões aguardando consentimento cujo prazo já venceu (sweeper).</summary>
+    Task<IEnumerable<RemoteSession>> GetPendingConsentPastDeadlineAsync(DateTime before, CancellationToken ct = default);
 }

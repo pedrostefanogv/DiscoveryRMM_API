@@ -19,7 +19,10 @@ public interface IRemoteSessionManager
         Core.Enums.RemoteCodec codec,
         string natsSubject,
         bool force = false,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool consentRequired = false,
+        DateTime? consentDeadlineAt = null,
+        string? consentPolicySource = null);
 
     /// <summary>Renova o TTL da sessão.</summary>
     Task<RemoteSession> RenewSessionAsync(Guid sessionId, Guid userId, CancellationToken ct = default);
@@ -29,6 +32,24 @@ public interface IRemoteSessionManager
 
     /// <summary>Obtém sessão ativa com validação de usuário.</summary>
     Task<RemoteSession?> GetActiveForUserAsync(Guid sessionId, Guid userId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Obtém sessão do usuário permitindo também pending_consent (status,
+    /// cancelamento e decisão). Ativa continua sendo o caminho padrão.
+    /// </summary>
+    Task<RemoteSession?> GetForUserAsync(Guid sessionId, Guid userId, bool allowPending, CancellationToken ct = default);
+
+    /// <summary>
+    /// Aplica a decisão de consentimento (agente) de forma idempotente.
+    /// </summary>
+    Task<RemoteSession> ApplyConsentDecisionAsync(
+        Guid sessionId,
+        bool accepted,
+        string outcome,
+        string? reason,
+        string? promptBackend,
+        CancellationToken ct = default,
+        bool auto = false);
 
     /// <summary>
     /// Obtém uma sessão pelo ID SEM validação de usuário, para fins de diagnóstico.

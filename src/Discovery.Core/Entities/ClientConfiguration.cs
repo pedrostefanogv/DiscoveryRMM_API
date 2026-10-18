@@ -91,6 +91,26 @@ public class ClientConfiguration
     /// <summary>Intervalo do scan WUA (minutos) neste cliente (null = herda).</summary>
     public int? WindowsUpdateScanIntervalMinutes { get; set; }
 
+    // ============ Autorização de acesso remoto (null = herda servidor) ============
+
+    /// <summary>Modo de consentimento de acesso remoto neste cliente (null = herda).</summary>
+    public RemoteConsentMode? RemoteConsentMode { get; set; }
+
+    /// <summary>Timeout do prompt em segundos (null = herda).</summary>
+    public int? RemoteConsentTimeoutSeconds { get; set; }
+
+    /// <summary>Ação no timeout do prompt (null = herda).</summary>
+    public RemoteConsentTimeoutAction? RemoteConsentTimeoutAction { get; set; }
+
+    /// <summary>Exibe banner local durante a sessão (null = herda).</summary>
+    public bool? RemoteConsentShowBanner { get; set; }
+
+    /// <summary>Mensagem do prompt (null = herda).</summary>
+    public string? RemoteConsentMessage { get; set; }
+
+    /// <summary>Texto do banner local (null = herda).</summary>
+    public string? RemoteConsentBannerText { get; set; }
+
     /// <summary>
     /// Lista de campos bloqueados no nível de cliente (JSON array de nomes de propriedade).
     /// Bloqueia sobrescrita nos sites e agents deste cliente.

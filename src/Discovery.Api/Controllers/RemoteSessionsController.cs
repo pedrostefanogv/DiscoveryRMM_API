@@ -20,17 +20,20 @@ public class RemoteSessionsController : ControllerBase
     private readonly IMediator _mediator;
     private readonly ITerminalRecordingService _terminalRecordings;
     private readonly IScopeContext _scopeContext;
+    private readonly IRemoteSessionManager _sessionManager;
     private readonly ILogger<RemoteSessionsController> _logger;
 
     public RemoteSessionsController(
         IMediator mediator,
         ITerminalRecordingService terminalRecordings,
         IScopeContext scopeContext,
+        IRemoteSessionManager sessionManager,
         ILogger<RemoteSessionsController> logger)
     {
         _mediator = mediator;
         _terminalRecordings = terminalRecordings;
         _scopeContext = scopeContext;
+        _sessionManager = sessionManager;
         _logger = logger;
     }
 
@@ -53,12 +56,17 @@ public class RemoteSessionsController : ControllerBase
         var result = await _mediator.Send(cmd with { AgentId = agentId, UserId = userId, TenantId = tenantId, SiteId = siteId }, ct);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Conflict" => Conflict(new { error = errors[0].Message, code = "agent_update_required" }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     /// <summary>Encerra uma sessão remota ativa.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/stop")]
-    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute, AllowPending = true)]
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> StopSession(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
@@ -94,6 +102,41 @@ public class RemoteSessionsController : ControllerBase
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
     }
 
+    /// <summary>
+    /// Estado do consentimento (o console aguarda a decisão antes de conectar).
+    /// </summary>
+    [HttpGet("{agentId:guid}/{sessionId:guid}/consent")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public async Task<IActionResult> GetConsentStatus(Guid agentId, Guid sessionId, CancellationToken ct = default)
+    {
+        var userId = GetUserId();
+        // Consulta de status aceita QUALQUER estado (inclusive denied/timeout),
+        // desde que a sessão pertença ao usuário. O filtro RemoteSessionAuthorize
+        // só conhece sessões abertas e esconderia justamente a decisão negativa.
+        var session = await _sessionManager.GetRawSessionAsync(sessionId, ct);
+        if (session is null || session.AgentId != agentId || session.UserId != userId)
+            return NotFound(new { error = "Remote session not found." });
+
+        var status = session.Status == Discovery.Core.Enums.RemoteSessionStatus.PendingConsent
+            ? "pending"
+            : session.ConsentDecidedAt is null && !session.ConsentRequired
+                ? "not_required"
+                : session.ConsentOutcome ?? "granted";
+
+        return Ok(new Discovery.Core.Cqrs.RemoteSessions.Commands.RemoteSessionConsentStatusDto(
+            session.Id,
+            session.Status,
+            session.ConsentRequired,
+            status,
+            session.ConsentDeadlineAt,
+            session.ConsentDecidedAt,
+            session.ConsentOutcome,
+            Reason: null,
+            Auto: session.ConsentDecidedAt is not null && session.ConsentOutcome?.StartsWith("timeout", StringComparison.OrdinalIgnoreCase) == true,
+            session.ConsentPolicySource,
+            PromptBackend: null));
+    }
+
     /// <summary>Obtém credenciais NATS (JWT + NKey) para o viewer se conectar ao stream.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/nats-credentials")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
@@ -101,6 +144,9 @@ public class RemoteSessionsController : ControllerBase
     public async Task<IActionResult> GetSessionCredentials(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         var userId = GetUserId();
+        var raw = await _sessionManager.GetRawSessionAsync(sessionId, ct);
+        if (raw is not null && raw.Status == Discovery.Core.Enums.RemoteSessionStatus.PendingConsent)
+            return Conflict(new { error = "Session is waiting for user consent.", reason = "consent_pending" });
         var result = await _mediator.Send(new GetSessionCredentialsQuery(agentId, sessionId, userId), ct);
         return result.Match<IActionResult>(
             success: Ok,

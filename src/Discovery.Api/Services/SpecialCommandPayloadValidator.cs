@@ -201,10 +201,101 @@ public sealed class SpecialCommandPayloadValidator
         out string normalizedPayload,
         out string validationError)
     {
-        // Remote session payloads são JSON simples com action + sessionId + parâmetros.
-        // A validação de schema é feita pelo handler; aqui apenas normalizamos (re-serializamos).
-        normalizedPayload = payload.GetRawText();
+        normalizedPayload = string.Empty;
         validationError = string.Empty;
+
+        if (payload.TryGetProperty("consent", out var consent) && consent.ValueKind != JsonValueKind.Null)
+        {
+            if (consent.ValueKind != JsonValueKind.Object)
+            {
+                validationError = "field 'consent' must be an object or null.";
+                return false;
+            }
+
+            if (consent.TryGetProperty("required", out var required) && required.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                validationError = "field 'consent.required' must be boolean.";
+                return false;
+            }
+
+            if (consent.TryGetProperty("mode", out var mode))
+            {
+                if (mode.ValueKind != JsonValueKind.String
+                    || !TryReadString(mode, out var modeText)
+                    || modeText is not ("off" or "notify" or "notifyonly" or "prompt"))
+                {
+                    validationError = "field 'consent.mode' must be one of: off, notify, prompt.";
+                    return false;
+                }
+            }
+
+            if (consent.TryGetProperty("timeoutSeconds", out var timeout) && timeout.ValueKind != JsonValueKind.Null)
+            {
+                if (timeout.ValueKind != JsonValueKind.Number
+                    || !timeout.TryGetInt32(out var seconds)
+                    || seconds < 10
+                    || seconds > 600)
+                {
+                    validationError = "field 'consent.timeoutSeconds' must be between 10 and 600.";
+                    return false;
+                }
+            }
+
+            if (consent.TryGetProperty("timeoutAction", out var action))
+            {
+                if (action.ValueKind != JsonValueKind.String
+                    || !TryReadString(action, out var actionText)
+                    || actionText is not ("approve" or "deny"))
+                {
+                    validationError = "field 'consent.timeoutAction' must be one of: approve, deny.";
+                    return false;
+                }
+            }
+
+            if (consent.TryGetProperty("deadlineUtc", out var deadline) && deadline.ValueKind != JsonValueKind.Null)
+            {
+                if (deadline.ValueKind != JsonValueKind.String || !DateTime.TryParse(deadline.GetString(), out _))
+                {
+                    validationError = "field 'consent.deadlineUtc' must be an ISO-8601 date or null.";
+                    return false;
+                }
+            }
+
+            if (consent.TryGetProperty("message", out var message) && message.ValueKind != JsonValueKind.Null)
+            {
+                if (message.ValueKind != JsonValueKind.String || (message.GetString()?.Length ?? 0) > 500)
+                {
+                    validationError = "field 'consent.message' must be a string up to 500 chars.";
+                    return false;
+                }
+            }
+        }
+
+        if (payload.TryGetProperty("banner", out var banner) && banner.ValueKind != JsonValueKind.Null)
+        {
+            if (banner.ValueKind != JsonValueKind.Object)
+            {
+                validationError = "field 'banner' must be an object or null.";
+                return false;
+            }
+
+            if (banner.TryGetProperty("enabled", out var enabled) && enabled.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                validationError = "field 'banner.enabled' must be boolean.";
+                return false;
+            }
+
+            if (banner.TryGetProperty("text", out var text) && text.ValueKind != JsonValueKind.Null)
+            {
+                if (text.ValueKind != JsonValueKind.String || (text.GetString()?.Length ?? 0) > 500)
+                {
+                    validationError = "field 'banner.text' must be a string up to 500 chars.";
+                    return false;
+                }
+            }
+        }
+
+        normalizedPayload = payload.GetRawText();
         return true;
     }
 

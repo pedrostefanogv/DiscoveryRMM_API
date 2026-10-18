@@ -129,19 +129,22 @@ public class RemoteSessionLivenessTests
         public Task<RemoteSession?> GetByIdAsync(Guid id, CancellationToken ct = default)
             => Task.FromResult(_sessions.TryGetValue(id, out var s) ? s : null);
 
+        private static bool IsOpen(RemoteSession session) =>
+            session.Status is "active" or "pending_consent";
+
         public Task<IEnumerable<RemoteSession>> GetActiveByAgentAsync(Guid agentId, CancellationToken ct = default)
             => Task.FromResult<IEnumerable<RemoteSession>>(
-                _sessions.Values.Where(s => s.AgentId == agentId && s.Status == "active").ToList());
+                _sessions.Values.Where(s => s.AgentId == agentId && IsOpen(s)).ToList());
 
         public Task<IEnumerable<RemoteSession>> GetActiveByUserAsync(Guid userId, CancellationToken ct = default)
             => Task.FromResult<IEnumerable<RemoteSession>>(
-                _sessions.Values.Where(s => s.UserId == userId && s.Status == "active").ToList());
+                _sessions.Values.Where(s => s.UserId == userId && IsOpen(s)).ToList());
 
         public Task<int> CountActiveByAgentAsync(Guid agentId, CancellationToken ct = default)
-            => Task.FromResult(_sessions.Values.Count(s => s.AgentId == agentId && s.Status == "active"));
+            => Task.FromResult(_sessions.Values.Count(s => s.AgentId == agentId && IsOpen(s)));
 
         public Task<int> CountActiveByUserAsync(Guid userId, CancellationToken ct = default)
-            => Task.FromResult(_sessions.Values.Count(s => s.UserId == userId && s.Status == "active"));
+            => Task.FromResult(_sessions.Values.Count(s => s.UserId == userId && IsOpen(s)));
 
         public Task<RemoteSession> CreateAsync(RemoteSession session, CancellationToken ct = default)
         {
@@ -158,6 +161,12 @@ public class RemoteSessionLivenessTests
         public Task<IEnumerable<RemoteSession>> GetExpiredAsync(DateTime before, CancellationToken ct = default)
             => Task.FromResult<IEnumerable<RemoteSession>>(
                 _sessions.Values.Where(s => s.Status == "active" && s.ExpiresAt < before).ToList());
+
+        public Task<IEnumerable<RemoteSession>> GetPendingConsentPastDeadlineAsync(DateTime before, CancellationToken ct = default)
+            => Task.FromResult<IEnumerable<RemoteSession>>(
+                _sessions.Values.Where(s => s.Status == "pending_consent"
+                    && s.ConsentDeadlineAt.HasValue
+                    && s.ConsentDeadlineAt.Value < before).ToList());
     }
 
     private sealed class FakeAuditRepository : IRemoteSessionAuditRepository

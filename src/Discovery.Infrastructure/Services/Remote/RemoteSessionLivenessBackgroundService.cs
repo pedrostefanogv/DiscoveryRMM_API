@@ -107,6 +107,49 @@ public class RemoteSessionLivenessBackgroundService : BackgroundService
 
         if (expired.Count > 0)
             _logger.LogInformation("Encerradas {Count} sessoes remotas expiradas", expired.Count);
+
+        // ── Consentimento sem decisão ──
+        // O agente deve reportar a decisão dentro do deadline; se ele caiu, ficou
+        // offline ou o prompt travou, o servidor nega a sessão e manda stop para
+        // cancelar o prompt no endpoint.
+        var graceSeconds = Math.Max(0, _options.Consent.DecisionGraceSeconds);
+        var consentCutoff = now.AddSeconds(-graceSeconds);
+        var pending = (await repo.GetPendingConsentPastDeadlineAsync(consentCutoff, ct)).ToList();
+
+        foreach (var session in pending)
+        {
+            session.Status = "denied";
+            session.ConsentOutcome = "timeout-denied";
+            session.ConsentDecidedAt = now;
+            session.ClosedAt = now;
+            session.DurationSeconds = (int)(now - session.StartedAt).TotalSeconds;
+
+            await repo.UpdateAsync(session, ct);
+            await auditService.RecordAsync(
+                session.Id,
+                "consent_timeout_denied",
+                details: $"{{\"deadlineAt\":\"{session.ConsentDeadlineAt:O}\",\"policySource\":\"{session.ConsentPolicySource}\"}}",
+                ct: ct);
+
+            try
+            {
+                var payload = JsonSerializer.Serialize(new { action = "stop", sessionId = session.Id });
+                await dispatcher.DispatchAsync(new AgentCommand
+                {
+                    AgentId = session.AgentId,
+                    CommandType = CommandType.RemoteSessionStop,
+                    Payload = payload,
+                }, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Falha ao enviar stop ao agent para consentimento expirado {SessionId}", session.Id);
+            }
+        }
+
+        if (pending.Count > 0)
+            _logger.LogInformation("Negadas {Count} sessoes sem decisao de consentimento", pending.Count);
     }
 
     private async Task NotifyAgentStopAsync(

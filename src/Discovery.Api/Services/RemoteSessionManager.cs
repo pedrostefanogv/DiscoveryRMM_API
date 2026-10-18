@@ -42,7 +42,10 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         RemoteCodec codec,
         string natsSubject,
         bool force = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool consentRequired = false,
+        DateTime? consentDeadlineAt = null,
+        string? consentPolicySource = null)
     {
         var activeSessions = (await _repo.GetActiveByAgentAsync(agentId, ct)).ToList();
         var activeCount = activeSessions.Count;
@@ -76,16 +79,21 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
             Transport = transport,
             QualityProfile = quality,
             Codec = codec,
-            Status = "active",
+            Status = consentRequired ? RemoteSessionStatus.PendingConsent : RemoteSessionStatus.Active,
             NatsSubject = natsSubject,
             StartedAt = now,
             ExpiresAt = now.AddMinutes(_options.DefaultTtlMinutes),
-            LastActivityAt = now
+            LastActivityAt = now,
+            ConsentRequired = consentRequired,
+            ConsentDeadlineAt = consentDeadlineAt,
+            ConsentPolicySource = consentPolicySource
         };
 
         var created = await _repo.CreateAsync(session, ct);
 
-        await AuditAsync(created.Id, "started", $"{{\"kind\":\"{kind}\",\"transport\":\"{transport}\",\"quality\":\"{quality}\",\"codec\":\"{codec}\"}}", userId.ToString(), null, ct);
+        await AuditAsync(created.Id, consentRequired ? "consent_requested" : "started",
+            $"{{\"kind\":\"{kind}\",\"transport\":\"{transport}\",\"quality\":\"{quality}\",\"codec\":\"{codec}\",\"consentRequired\":{consentRequired.ToString().ToLowerInvariant()}}}",
+            userId.ToString(), null, ct);
 
         _logger.LogInformation("Remote session {SessionId} started for agent {AgentId} by user {UserId}",
             created.Id, agentId, userId);
@@ -149,11 +157,11 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         var session = await _repo.GetByIdAsync(sessionId, ct)
             ?? throw new InvalidOperationException($"Session {sessionId} not found.");
 
-        if (session.Status != "active")
+        if (!RemoteSessionStatus.IsOpen(session.Status))
             return session; // já fechada, idempotente
 
         var now = DateTime.UtcNow;
-        session.Status = "closed";
+        session.Status = RemoteSessionStatus.Closed;
         session.ClosedAt = now;
         session.DurationSeconds = (int)(now - session.StartedAt).TotalSeconds;
 
@@ -167,29 +175,37 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         return updated;
     }
 
-    public async Task<RemoteSession?> GetActiveForUserAsync(Guid sessionId, Guid userId, CancellationToken ct = default)
+    public Task<RemoteSession?> GetActiveForUserAsync(Guid sessionId, Guid userId, CancellationToken ct = default)
+        => GetForUserAsync(sessionId, userId, allowPending: false, ct);
+
+    /// <inheritdoc />
+    public async Task<RemoteSession?> GetForUserAsync(
+        Guid sessionId, Guid userId, bool allowPending, CancellationToken ct = default)
     {
         var session = await _repo.GetByIdAsync(sessionId, ct);
         if (session is null)
         {
             _logger.LogWarning(
-                "[RemoteSession] GetActiveForUserAsync: sessão {SessionId} não encontrada no banco", sessionId);
+                "[RemoteSession] GetForUserAsync: sessão {SessionId} não encontrada no banco", sessionId);
             return null;
         }
 
-        if (session.Status != "active")
+        var expectedStatus = allowPending
+            ? RemoteSessionStatus.IsOpen(session.Status)
+            : session.Status == RemoteSessionStatus.Active;
+        if (!expectedStatus)
         {
             _logger.LogWarning(
-                "[RemoteSession] GetActiveForUserAsync: sessão {SessionId} não está ativa. Status={Status}, UserId={SessionUserId}",
-                sessionId, session.Status, session.UserId);
+                "[RemoteSession] GetForUserAsync: sessão {SessionId} fora do status esperado. Status={Status}, AllowPending={AllowPending}",
+                sessionId, session.Status, allowPending);
             return null;
         }
 
         if (session.UserId == Guid.Empty)
         {
             _logger.LogError(
-                "[RemoteSession] GetActiveForUserAsync: sessão {SessionId} é ÓRFÃ (UserId=Guid.Empty). " +
-                "Provável bug na criação da sessão. AgentId={AgentId}, StartedAt={StartedAt}",
+                "[RemoteSession] GetForUserAsync: sessão {SessionId} é ÓRFÃ (UserId=Guid.Empty). " +
+                "AgentId={AgentId}, StartedAt={StartedAt}",
                 sessionId, session.AgentId, session.StartedAt);
             return null;
         }
@@ -197,12 +213,69 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         if (session.UserId != userId)
         {
             _logger.LogWarning(
-                "[RemoteSession] GetActiveForUserAsync: UserId mismatch. SessionUserId={SessionUserId}, RequestUserId={RequestUserId}, SessionId={SessionId}",
+                "[RemoteSession] GetForUserAsync: UserId mismatch. SessionUserId={SessionUserId}, RequestUserId={RequestUserId}, SessionId={SessionId}",
                 session.UserId, userId, sessionId);
             return null;
         }
 
         return session;
+    }
+
+    /// <inheritdoc />
+    public async Task<RemoteSession> ApplyConsentDecisionAsync(
+        Guid sessionId,
+        bool accepted,
+        string outcome,
+        string? reason,
+        string? promptBackend,
+        CancellationToken ct = default,
+        bool auto = false)
+    {
+        var session = await _repo.GetByIdAsync(sessionId, ct)
+            ?? throw new InvalidOperationException($"Session {sessionId} not found.");
+
+        // Idempotência: o agente pode repetir o POST (retry) e o sweeper pode ter
+        // decidido antes. Devolve o estado atual sem reescrever.
+        if (session.Status != RemoteSessionStatus.PendingConsent)
+            return session;
+
+        var now = DateTime.UtcNow;
+        session.ConsentDecidedAt = now;
+        session.ConsentOutcome = outcome;
+        session.Status = accepted ? RemoteSessionStatus.Active : RemoteSessionStatus.Denied;
+
+        if (!accepted)
+        {
+            session.ClosedAt = now;
+            session.DurationSeconds = (int)(now - session.StartedAt).TotalSeconds;
+        }
+
+        var updated = await _repo.UpdateAsync(session, ct);
+
+        var safeReason = (reason ?? string.Empty).Replace("\"", "'");
+        var safeBackend = (promptBackend ?? string.Empty).Replace("\"", "'");
+        var safeOutcome = (outcome ?? string.Empty).Replace("\"", "'");
+        var auditEvent = accepted
+            ? (outcome.StartsWith("timeout", StringComparison.OrdinalIgnoreCase)
+                ? "consent_timeout_granted"
+                : "consent_granted")
+            : (outcome.StartsWith("timeout", StringComparison.OrdinalIgnoreCase)
+                ? "consent_timeout_denied"
+                : outcome.Equals("stopped-by-server", StringComparison.OrdinalIgnoreCase)
+                    ? "consent_stopped"
+                    : "consent_denied");
+
+        await AuditAsync(
+            sessionId,
+            auditEvent,
+            $"{{\"accepted\":{accepted.ToString().ToLowerInvariant()},\"auto\":{auto.ToString().ToLowerInvariant()},\"outcome\":\"{safeOutcome}\",\"reason\":\"{safeReason}\",\"promptBackend\":\"{safeBackend}\"}}",
+            null, null, ct);
+
+        _logger.LogInformation(
+            "Remote session {SessionId} consent decision: accepted={Accepted} outcome={Outcome} reason={Reason} backend={Backend}",
+            sessionId, accepted, outcome, reason, promptBackend);
+
+        return updated;
     }
 
     /// <inheritdoc />

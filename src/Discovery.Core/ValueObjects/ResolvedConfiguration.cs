@@ -60,6 +60,15 @@ public class ResolvedConfiguration
     public int AgentHeartbeatIntervalSeconds { get; set; }
     public int AgentOnlineGraceSeconds { get; set; }
 
+    // ============ Autorização de acesso remoto (desktop) ============
+
+    public RemoteConsentMode RemoteConsentMode { get; set; }
+    public int RemoteConsentTimeoutSeconds { get; set; }
+    public RemoteConsentTimeoutAction RemoteConsentTimeoutAction { get; set; }
+    public bool RemoteConsentShowBanner { get; set; }
+    public string RemoteConsentMessage { get; set; } = string.Empty;
+    public string RemoteConsentBannerText { get; set; } = string.Empty;
+
     // ============ Metadados da resolução ============
 
     /// <summary>ID do site para o qual a configuração foi resolvida (null = nível cliente ou servidor)</summary>

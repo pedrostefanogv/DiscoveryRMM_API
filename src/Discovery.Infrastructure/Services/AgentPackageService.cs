@@ -781,15 +781,53 @@ public class AgentPackageService : IAgentPackageService
 
     /// <summary>
     /// Returns the NSIS argument that passes the discovery-service.exe binary to
-    /// makensis (ARG_SERVICE_AMD64_BINARY), or null when the binary is absent —
-    /// in which case the installer falls back to standalone mode (Task Scheduler).
+    /// makensis (-DARG_SERVICE_AMD64_BINARY=...).
+    ///
+    /// O project.nsi agora FALHA em tempo de compilação (makensis !error) quando
+    /// o define não é passado, porque um instalador sem discovery-service.exe
+    /// instala a UI em modo standalone, loga "serviço ausente" e ainda reporta
+    /// sucesso — falha silenciosa já observada em campo. Por isso, quando o
+    /// código-fonte do serviço existe neste checkout e o binário não, lançamos
+    /// exceção explícita em vez de deixar o makensis falhar com mensagem opaca.
     /// </summary>
     private string? GetServiceBinaryNsisArg()
     {
         var serviceBinaryPath = GetServiceBinaryPath();
-        return File.Exists(serviceBinaryPath)
-            ? $"-DARG_SERVICE_AMD64_BINARY={serviceBinaryPath}"
-            : null;
+        if (File.Exists(serviceBinaryPath))
+            return $"-DARG_SERVICE_AMD64_BINARY={serviceBinaryPath}";
+
+        // Sem fonte do serviço no checkout: build legado/somente-UI intencional.
+        var serviceSourceExists = Directory.Exists(
+            Path.Combine(GetServiceSourceModuleRoot(), "cmd", "discovery-service"));
+        if (!serviceSourceExists)
+            return null;
+
+        throw new InvalidOperationException(
+            "discovery-service.exe ausente em '" + serviceBinaryPath + "': o instalador NSIS seria " +
+            "gerado sem o serviço Windows (agente em modo standalone). Rode o prebuild do agente " +
+            "(AgentPackage:PrebuildBaseBinary / forceRebuild) ou gere o binário do serviço antes de publicar.");
+    }
+
+    /// <summary>
+    /// Diretório do módulo Go do agente (…/src), usado para localizar o fonte do
+    /// cmd/discovery-service e decidir entre falha dura e build somente-UI.
+    /// </summary>
+    private string GetServiceSourceModuleRoot()
+    {
+        var serviceBinaryPath = GetServiceBinaryPath();
+
+        // GetServiceBinaryPath segue <projectPath>/src/build/bin/discovery-service.exe.
+        var binDir = Path.GetDirectoryName(serviceBinaryPath);
+        if (!string.IsNullOrWhiteSpace(binDir))
+        {
+            var moduleRoot = Path.GetFullPath(Path.Combine(binDir, "..", ".."));
+            if (Directory.Exists(Path.Combine(moduleRoot, "cmd")))
+                return moduleRoot;
+        }
+
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+        return Path.Combine(projectPath, "src");
     }
 
     private string ResolveMakensisPath()

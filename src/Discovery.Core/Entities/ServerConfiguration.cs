@@ -235,6 +235,33 @@ public class ServerConfiguration
     /// <summary>Intervalo do scan WUA no agente (minutos, mínimo 60).</summary>
     public int WindowsUpdateScanIntervalMinutes { get; set; } = 360;
 
+    // ============ Autorização de acesso remoto (somente desktop) ============
+
+    /// <summary>
+    /// Como tratar a conexão de área de trabalho: Off (sem aviso), NotifyOnly
+    /// (avisa e conecta) ou Prompt (solicita autorização e aguarda). Herdado por
+    /// cliente/site e sobrescrito por grupo de usuários/usuário.
+    /// </summary>
+    public RemoteConsentMode RemoteConsentMode { get; set; } = RemoteConsentMode.Prompt;
+
+    /// <summary>Segundos de contagem regressiva do prompt (10–600).</summary>
+    public int RemoteConsentTimeoutSeconds { get; set; } = 60;
+
+    /// <summary>Ação aplicada quando a contagem termina sem decisão do usuário.</summary>
+    public RemoteConsentTimeoutAction RemoteConsentTimeoutAction { get; set; } = RemoteConsentTimeoutAction.Deny;
+
+    /// <summary>Exibe o banner local (operador + tempo + desconectar) durante a sessão de tela.</summary>
+    public bool RemoteConsentShowBanner { get; set; } = true;
+
+    /// <summary>
+    /// Texto do prompt. Placeholders: {operator}, {client}, {site}, {agent}.
+    /// </summary>
+    public string RemoteConsentMessage { get; set; } =
+        "{operator} solicita acesso remoto ao seu computador. Você autoriza?";
+
+    /// <summary>Texto do banner local. Placeholders: {operator}, {client}, {site}, {agent}.</summary>
+    public string RemoteConsentBannerText { get; set; } = "Sessão remota em andamento: {operator}";
+
     // ============ Auditoria ============
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

@@ -211,6 +211,13 @@ public class ConfigurationResolver : IConfigurationResolver
         var heartbeat = ResolveValue("AgentHeartbeatIntervalSeconds", blocked, (int?)null, client?.AgentHeartbeatIntervalSeconds, server.AgentHeartbeatIntervalSeconds);
         var onlineGrace = ResolveValue("AgentOnlineGraceSeconds", blocked, site?.AgentOnlineGraceSeconds, client?.AgentOnlineGraceSeconds, server.AgentOnlineGraceSeconds);
 
+        var consentMode = ResolveValue("RemoteConsentMode", blocked, site?.RemoteConsentMode, client?.RemoteConsentMode, server.RemoteConsentMode);
+        var consentTimeout = ResolveValue("RemoteConsentTimeoutSeconds", blocked, site?.RemoteConsentTimeoutSeconds, client?.RemoteConsentTimeoutSeconds, server.RemoteConsentTimeoutSeconds);
+        var consentAction = ResolveValue("RemoteConsentTimeoutAction", blocked, site?.RemoteConsentTimeoutAction, client?.RemoteConsentTimeoutAction, server.RemoteConsentTimeoutAction);
+        var consentBanner = ResolveValue("RemoteConsentShowBanner", blocked, site?.RemoteConsentShowBanner, client?.RemoteConsentShowBanner, server.RemoteConsentShowBanner);
+        var consentMessage = ResolveStringValue("RemoteConsentMessage", blocked, site?.RemoteConsentMessage, client?.RemoteConsentMessage, server.RemoteConsentMessage);
+        var consentBannerText = ResolveStringValue("RemoteConsentBannerText", blocked, site?.RemoteConsentBannerText, client?.RemoteConsentBannerText, server.RemoteConsentBannerText);
+
         var agentUpdate = ResolveAgentUpdate(site?.AgentUpdatePolicyJson, client?.AgentUpdatePolicyJson, server.AgentUpdatePolicyJson);
         var agentUpdateSource = ResolveObjectSource("AgentUpdatePolicyJson", blocked, site?.AgentUpdatePolicyJson, client?.AgentUpdatePolicyJson);
 
@@ -241,6 +248,12 @@ public class ConfigurationResolver : IConfigurationResolver
             InventoryIntervalHours = inventory.Value,
             AgentHeartbeatIntervalSeconds = heartbeat.Value,
             AgentOnlineGraceSeconds = onlineGrace.Value,
+            RemoteConsentMode = consentMode.Value,
+            RemoteConsentTimeoutSeconds = consentTimeout.Value,
+            RemoteConsentTimeoutAction = consentAction.Value,
+            RemoteConsentShowBanner = consentBanner.Value,
+            RemoteConsentMessage = consentMessage.Value,
+            RemoteConsentBannerText = consentBannerText.Value,
             AgentUpdate = agentUpdate,
             AIIntegration = ai,
             BackgroundProcessing = backgroundProcessing,
@@ -260,6 +273,12 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["InventoryIntervalHours"] = (int)inventory.Source;
         resolved.Inheritance["AgentHeartbeatIntervalSeconds"] = (int)heartbeat.Source;
         resolved.Inheritance["AgentOnlineGraceSeconds"] = (int)onlineGrace.Source;
+        resolved.Inheritance["RemoteConsentMode"] = (int)consentMode.Source;
+        resolved.Inheritance["RemoteConsentTimeoutSeconds"] = (int)consentTimeout.Source;
+        resolved.Inheritance["RemoteConsentTimeoutAction"] = (int)consentAction.Source;
+        resolved.Inheritance["RemoteConsentShowBanner"] = (int)consentBanner.Source;
+        resolved.Inheritance["RemoteConsentMessage"] = (int)consentMessage.Source;
+        resolved.Inheritance["RemoteConsentBannerText"] = (int)consentBannerText.Source;
         resolved.Inheritance["AgentUpdate"] = (int)agentUpdateSource;
         resolved.Inheritance["AIIntegration"] = (int)aiSource;
         resolved.Inheritance["BackgroundProcessing"] = (int)backgroundSource;

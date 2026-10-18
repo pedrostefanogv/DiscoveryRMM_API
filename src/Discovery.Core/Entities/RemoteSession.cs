@@ -59,6 +59,26 @@ public class RemoteSession
     /// <summary>Duração total em segundos (preenchido ao encerrar).</summary>
     public int? DurationSeconds { get; set; }
 
+    // ── Consentimento do usuário do computador acessado (somente desktop) ──
+
+    /// <summary>Esta sessão exigiu autorização do usuário local?</summary>
+    public bool ConsentRequired { get; set; }
+
+    /// <summary>Prazo para a decisão (start + timeout da política).</summary>
+    public DateTime? ConsentDeadlineAt { get; set; }
+
+    /// <summary>Quando o agente reportou a decisão (manual ou automática).</summary>
+    public DateTime? ConsentDecidedAt { get; set; }
+
+    /// <summary>
+    /// Resultado: granted, denied, timeout-granted, timeout-denied,
+    /// no-user-denied, prompt-unavailable, stopped-by-server.
+    /// </summary>
+    public string? ConsentOutcome { get; set; }
+
+    /// <summary>Origem da política aplicada (Server/Client/Site/UserGroup/User).</summary>
+    public string? ConsentPolicySource { get; set; }
+
     /// <summary>Total de frames enviados.</summary>
     public long FramesSent { get; set; }
 
