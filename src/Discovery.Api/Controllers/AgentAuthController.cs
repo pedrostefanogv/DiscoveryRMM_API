@@ -181,6 +181,45 @@ public class AgentAuthController : ControllerBase
     [HttpPut("me/software")]
     public Task<IActionResult> ReportSoftwarePut([FromBody] ReportAgentSoftwareCommand cmd) => ReportSoftwarePost(cmd);
 
+    // ── Windows Update (gerenciador de patches) ──────────────────────────
+
+    /// <summary>Inventário de atualizações do próprio agente (pendentes + snapshot).</summary>
+    [HttpGet("me/windows-updates")]
+    public async Task<IActionResult> GetWindowsUpdates()
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(new Discovery.Core.Cqrs.AgentAuth.Patches.GetAgentWindowsUpdatesQuery(id)), Ok);
+    }
+
+    /// <summary>Upload do inventário de Windows Update (scan WUA + QFE).</summary>
+    [HttpPost("me/windows-updates")]
+    public async Task<IActionResult> ReportWindowsUpdatesPost(
+        [FromBody] Discovery.Core.Cqrs.AgentAuth.Patches.ReportAgentWindowsUpdatesCommand cmd)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, true);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }), _ => Ok(new { Message = "Windows update inventory updated." }));
+    }
+
+    [HttpPut("me/windows-updates")]
+    public Task<IActionResult> ReportWindowsUpdatesPut(
+        [FromBody] Discovery.Core.Cqrs.AgentAuth.Patches.ReportAgentWindowsUpdatesCommand cmd)
+        => ReportWindowsUpdatesPost(cmd);
+
+    /// <summary>Sonda de reinício pendente (endpoint leve, enviado só em mudança).</summary>
+    [HttpPost("me/pending-reboot")]
+    public async Task<IActionResult> ReportPendingReboot(
+        [FromBody] Discovery.Core.Cqrs.AgentAuth.Patches.ReportAgentPendingRebootCommand cmd)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, true);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(cmd with { AgentId = id }), _ => Ok(new { Message = "Pending reboot state updated." }));
+    }
+
     // ── Status ────────────────────────────────────────────────────────────
 
     [HttpGet("me/realtime/status")]

@@ -247,6 +247,71 @@ Os campos de update/gerenciador são preenchidos pelo agent a partir de `winget 
 
 ---
 
+### 2.6 Inventário de Windows Update e comandos de patch (agent-auth)
+
+O agente reporta o inventário de patches (pendentes via WUA, instaladas via QFE)
+e recebe comandos para scan/instalação seletiva. O módulo é opt-out: o servidor
+envia `windowsUpdateEnabled` em `GET /me/configuration` (default true).
+
+**Upload do inventário** — `POST|PUT /api/v1/agent-auth/me/windows-updates`
+
+```json
+{
+  "collectedAt": "2026-01-05T12:00:00Z",
+  "scan": { "status": "ok", "durationMs": 4200, "startedAt": "2026-01-05T11:59:55Z", "errorCode": null },
+  "pendingReboot": { "pending": true, "reasons": ["windows_update"], "checkedAt": "2026-01-05T12:00:00Z" },
+  "updates": [
+    {
+      "updateKey": "guid:3c3f1f1a-1111-2222-3333-444455556666:12",
+      "updateId": "3c3f1f1a-1111-2222-3333-444455556666",
+      "revision": 12,
+      "kbIds": ["KB5034441"],
+      "title": "2026-01 Security Update",
+      "classification": "Security Updates",
+      "severity": "Critical",
+      "isPending": true,
+      "isInstalled": false,
+      "requiresReboot": true,
+      "source": "wua"
+    }
+  ]
+}
+```
+
+Regras:
+- `updateKey` é a chave canônica: `guid:<GUID>:<revisão>` (pendentes) ou `kb:KBxxxx` (instaladas via QFE).
+- `scan.status` ∈ `ok|error|timeout|unsupported`. Em erro **sem** lista, o servidor preserva o inventário anterior.
+- Máximo de 1000 updates por upload; itens inválidos são descartados (não derrubam o lote).
+- `pendingReboot.reasons` aceita `windows_update`, `cbs`, `file_rename`, `computer_rename`, `servicing`.
+
+**Sonda de reinício pendente** — `POST /api/v1/agent-auth/me/pending-reboot`
+
+```json
+{ "pending": true, "reasons": ["windows_update"], "checkedAt": "2026-01-05T12:00:00Z" }
+```
+
+Enviada **somente quando o estado muda** (ou a cada 6h). Alimenta o badge
+"Reinício pendente" em /agents.
+
+**Comando de patch** — wire value `windowsupdate` (CommandType 24)
+
+```json
+{ "action": "scan" }
+{ "action": "install", "updates": [{ "updateKey": "guid:...:12", "updateId": "...", "revision": 12, "kbIds": ["KB5034441"] }],
+  "force": false, "postAction": "none|restart|shutdown", "ttlSeconds": 1800, "issuedAtUtc": "2026-01-05T12:00:00Z" }
+{ "action": "hide" | "unhide", "updateKeys": ["guid:...:12"] }
+{ "action": "policy", "settings": { "noAutoUpdate": 0, "auOptions": 2, "deferQualityUpdates": 1, "deferQualityUpdatesPeriodInDays": 7 } }
+{ "action": "policy-rollback", "backup": { "capturedAt": "...", "values": { } } }
+{ "action": "policy-read" }
+```
+
+Regras do agente:
+- **Nunca instalar por título**: revalidar `updateKey` contra o catálogo atual do WUA (por GUID+revisão, fallback KB).
+- `postAction` é executado **depois** de instalar e só quando o comando ainda está dentro do TTL.
+- Comando com `postAction` restart/shutdown não é reentregue após a primeira publicação (guarda anti-loop de reboot).
+- Resultado (JSON no `output`): `{ success, installed[], failed[], notFound[], rebootRequired, durationMs }`.
+- Comando `policy` devolve `{ success, backup }`; o servidor grava o backup em `patch_os_states` para rollback.
+
 ## 3. Autenticação
 
 Todos os endpoints `/api/v1/agent-auth/*` exigem:

@@ -23,5 +23,7 @@ public enum ResourceType
     // controllers de workflow/SLA/departamentos, que antes só exigiam login).
     Workflow,
     Sla,
-    Departments
+    Departments,
+    // Gerenciador de patches do Windows (inventário WUA, aprovações, instalação).
+    Patches
 }

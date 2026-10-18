@@ -29,7 +29,7 @@ public sealed record CancelAutomationExecutionCommand(
     Guid ExecutionId,
     string? CorrelationId = null) : ICommand<Result<AutomationExecutionDto>>;
 
-public sealed record RefreshAgentDataCommand(Guid AgentId, bool ListeningPorts = false, bool OpenConnections = false, bool Software = false, bool Printers = false, bool Hardware = false, bool StartupItems = false, bool ScheduledTasks = false) : ICommand<Result<VoidResult>>;
+public sealed record RefreshAgentDataCommand(Guid AgentId, bool ListeningPorts = false, bool OpenConnections = false, bool Software = false, bool Printers = false, bool Hardware = false, bool StartupItems = false, bool ScheduledTasks = false, bool WindowsUpdates = false) : ICommand<Result<VoidResult>>;
 
 /// <summary>
 /// Execução de automação/operação de software. Os campos extras alimentam a

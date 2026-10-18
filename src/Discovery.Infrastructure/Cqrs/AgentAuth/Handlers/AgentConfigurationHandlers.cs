@@ -72,6 +72,10 @@ public sealed class GetAgentConfigurationHandler(
             // Inventory
             ["inventoryIntervalHours"] = siteConfig?.InventoryIntervalHours ?? clientConfig?.InventoryIntervalHours ?? serverConfig.InventoryIntervalHours,
 
+            // Gerenciador de patches (Windows Update): kill switch e cadência.
+            ["windowsUpdateEnabled"] = siteConfig?.WindowsUpdateEnabled ?? clientConfig?.WindowsUpdateEnabled ?? serverConfig.WindowsUpdateEnabled,
+            ["windowsUpdateScanIntervalMinutes"] = siteConfig?.WindowsUpdateScanIntervalMinutes ?? clientConfig?.WindowsUpdateScanIntervalMinutes ?? serverConfig.WindowsUpdateScanIntervalMinutes,
+
             // Update policies (JSON strings)
             ["agentUpdatePolicy"] = TryDeserializeJson(clientConfig?.AgentUpdatePolicyJson ?? serverConfig.AgentUpdatePolicyJson),
 

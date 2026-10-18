@@ -206,15 +206,23 @@ public class AiTicketTriageService(
                 var department = await db.Departments.AsNoTracking()
                     .FirstOrDefaultAsync(d => d.Id == item.DepartmentId, ct);
 
-                if (department is null || !department.IsActive
-                    || department.AssignmentStrategy != (int)TicketAssignmentStrategy.AiTriage)
+                if (department is null || !department.IsActive)
                 {
                     await queueRepository.MarkSkippedAsync(item.Id, "strategy_changed", ct);
                     continue;
                 }
 
-                // Config efetiva campo a campo (próprio > global pai > base).
+                // Config efetiva campo a campo (próprio > global pai > base). A
+                // ESTRATÉGIA também é efetiva: um departamento que herda AiTriage
+                // do global precisa continuar na fila em vez de ser descartado
+                // por causa da coluna base legada.
                 var effective = await ResolveEffectiveSettingsAsync(department, ct);
+                if (effective.AssignmentStrategy.Value != (int)TicketAssignmentStrategy.AiTriage)
+                {
+                    await queueRepository.MarkSkippedAsync(item.Id, "strategy_changed", ct);
+                    continue;
+                }
+
                 if (effective.AiAssignmentMode.Value == (int)AiAssignmentMode.AutoAssign)
                     await ApplyAsync(item.TicketId, null, ct);
                 else
@@ -907,8 +915,10 @@ public class AiTicketTriageService(
     private async Task<HashSet<Guid>> LoadEffectiveAutoAssignDepartmentIdsAsync(
         Guid? clientScope, CancellationToken ct)
     {
+        // Carrega todos os ativos e resolve a estratégia EFETIVA: um filho pode
+        // herdar AiTriage do global e não ter o valor na coluna base.
         var departments = await db.Departments.AsNoTracking()
-            .Where(d => d.IsActive && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage)
+            .Where(d => d.IsActive)
             .ToListAsync(ct);
 
         if (departments.Count == 0)
@@ -938,8 +948,11 @@ public class AiTicketTriageService(
 
             parents.TryGetValue(department.InheritFromGlobalId ?? Guid.Empty, out var parent);
             var settings = DepartmentEffectiveSettingsResolver.Resolve(department, parent);
-            if (settings.AiAssignmentMode.Value == (int)AiAssignmentMode.AutoAssign)
+            if (settings.AssignmentStrategy.Value == (int)TicketAssignmentStrategy.AiTriage
+                && settings.AiAssignmentMode.Value == (int)AiAssignmentMode.AutoAssign)
+            {
                 ids.Add(department.Id);
+            }
         }
 
         return ids;

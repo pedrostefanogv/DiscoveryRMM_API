@@ -648,6 +648,113 @@ public class DepartmentHandlersTests
             "a coluna base/legada é preservada");
     }
 
+    [Test]
+    public async Task Update_alias_assignment_strategy_override_volta_a_herdar()
+    {
+        // O console envia SOMENTE assignmentStrategyOverride (null = herdar) ao
+        // desmarcar "Herdar"; o alias precisa limpar o override e preservar a base.
+        var parent = NewDepartment();
+        parent.AssignmentStrategy = 1;
+        parent.AssignmentStrategyOverride = 1;
+        var dept = NewDepartment(clientId: Guid.NewGuid(), parentId: parent.Id);
+        dept.AssignmentStrategy = 2;
+        dept.AssignmentStrategyOverride = 2;
+
+        var service = new FakeDepartmentService(dept, parent);
+        var handler = new UpdateDepartmentCommandHandler(service);
+
+        var result = await handler.Handle(new UpdateDepartmentCommand(
+            Id: dept.Id, Name: null, Description: null,
+            InheritFromGlobalId: OptionalGuid.Unset, SortOrder: null, IsActive: null,
+            AssignmentStrategyOverride: OptionalValue<int>.Set(null)),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(service.Updated!.AssignmentStrategyOverride, Is.Null);
+        Assert.That(service.Updated!.AssignmentStrategy, Is.EqualTo(2),
+            "o alias mexe só no override; a coluna base/legada é preservada");
+
+        var effective = DepartmentEffectiveSettingsResolver.Resolve(service.Updated!, parent);
+        Assert.That(effective.AssignmentStrategy.Value, Is.EqualTo(1),
+            "sem override, a estratégia volta a vir do global pai");
+        Assert.That(effective.AssignmentStrategy.Origin,
+            Is.EqualTo(DepartmentSettingOrigin.InheritedGlobal));
+    }
+
+    [Test]
+    public void Update_command_json_reconhece_assignment_strategy_override()
+    {
+        // Regressão do contrato do console: o campo precisa existir no comando,
+        // senão o System.Text.Json ignora o null e o PUT vira no-op.
+        var id = Guid.NewGuid();
+        var json = $$"""
+        {
+          "id": "{{id}}",
+          "assignmentStrategyOverride": null
+        }
+        """;
+
+        var cmd = JsonSerializer.Deserialize<UpdateDepartmentCommand>(
+            json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+
+        Assert.That(cmd.AssignmentStrategyOverride.IsSet, Is.True);
+        Assert.That(cmd.AssignmentStrategyOverride.Value, Is.Null);
+        Assert.That(cmd.AssignmentStrategy.IsSet, Is.False);
+    }
+
+    [Test]
+    public async Task Update_rejeita_assignment_strategy_fora_da_faixa()
+    {
+        var dept = NewDepartment();
+        var service = new FakeDepartmentService(dept);
+        var handler = new UpdateDepartmentCommandHandler(service);
+
+        var result = await handler.Handle(new UpdateDepartmentCommand(
+            Id: dept.Id, Name: null, Description: null,
+            InheritFromGlobalId: OptionalGuid.Unset, SortOrder: null, IsActive: null,
+            AssignmentStrategy: OptionalValue<int>.Set(99)),
+            CancellationToken.None);
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Code, Is.EqualTo("Validation"));
+        Assert.That(result.Errors[0].Message, Does.Contain("Estratégia de auto-atribuição"));
+        Assert.That(service.Updated, Is.Null);
+    }
+
+    [Test]
+    public async Task Create_rejeita_assignment_strategy_fora_da_faixa()
+    {
+        var service = new FakeDepartmentService();
+        var handler = new CreateDepartmentCommandHandler(service);
+
+        var result = await handler.Handle(
+            new CreateDepartmentCommand(
+                "Depto", null, Guid.NewGuid(), null, 0, AssignmentStrategy: 99),
+            CancellationToken.None);
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Code, Is.EqualTo("Validation"));
+        Assert.That(service.Created, Is.Null);
+    }
+
+    [Test]
+    public async Task Create_departamento_global_descarta_heranca()
+    {
+        // Global nunca herda: o vínculo informado não deve ser gravado.
+        var parent = NewDepartment();
+        var service = new FakeDepartmentService(parent);
+        var handler = new CreateDepartmentCommandHandler(service);
+
+        var result = await handler.Handle(
+            new CreateDepartmentCommand(
+                "Global", null, null, parent.Id, 0, AssignmentStrategy: 1),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(service.Created!.ClientId, Is.Null);
+        Assert.That(service.Created!.InheritFromGlobalId, Is.Null);
+    }
+
     private sealed class FakeConfigurationAudit : IConfigurationAuditService
     {
         public List<(string EntityType, Guid EntityId, string Field, string? OldValue, string? NewValue,

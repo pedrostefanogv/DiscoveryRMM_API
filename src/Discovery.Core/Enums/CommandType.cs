@@ -39,5 +39,9 @@ public enum CommandType
     // Convite de chat de suporte vinculado a um chamado: exibe um modal de
     // confirmação na máquina; o aceite abre uma janela dedicada do chat.
     // Somente o atendente (user-auth) dispara este comando.
-    TicketChatInvite = 23
+    TicketChatInvite = 23,
+
+    // Gerenciador de patches do Windows (WUA): scan, instalação seletiva,
+    // hide/unhide e aplicação/rollback de política de Windows Update.
+    WindowsUpdate = 24
 }

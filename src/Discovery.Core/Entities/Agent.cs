@@ -46,6 +46,14 @@ public class Agent
     /// <summary>Quando a policy vigente (LastPolicyFingerprint) foi entregue/confirmada.</summary>
     public DateTime? LastPolicySyncAt { get; set; }
 
+    // ── Reinício pendente (Windows Update, CBS, renomeação, arquivos em uso) ──
+    /// <summary>Há reinício pendente reportado pela sonda do agente.</summary>
+    public bool PendingReboot { get; set; }
+    /// <summary>Motivos (JSON array): windows_update, cbs, file_rename, computer_rename, servicing.</summary>
+    public string? PendingRebootReasons { get; set; }
+    /// <summary>Instante (UTC) da última sonda que reportou o estado.</summary>
+    public DateTime? PendingRebootCheckedAt { get; set; }
+
     public bool MaintenanceEnabled { get; set; }
     public string? MaintenanceReason { get; set; }
     public DateTime? MaintenanceChangedAt { get; set; }

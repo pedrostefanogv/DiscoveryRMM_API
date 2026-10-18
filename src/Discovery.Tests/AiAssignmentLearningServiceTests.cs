@@ -341,6 +341,63 @@ public class AiAssignmentLearningServiceTests
     }
 
     [Test]
+    public async Task RunCycle_inclui_filho_que_herda_AiTriage_do_global()
+    {
+        // Estrategia de atribuicao tambem e herdada: filho com coluna BASE
+        // RoundRobin que herda AiTriage do global precisa rodar o ciclo de
+        // aprendizado (antes o filtro SQL pela coluna base o descartava).
+        await using var db = CreateDb();
+        var now = DateTime.UtcNow;
+        var user = new User { Id = Guid.NewGuid(), Login = "caio", Email = "caio@x.com", FullName = "Caio", IsActive = true };
+        db.Users.Add(user);
+
+        var parent = new Department
+        {
+            Id = Guid.NewGuid(), ClientId = null, Name = "Global", IsActive = true,
+            AssignmentStrategy = (int)TicketAssignmentStrategy.AiTriage,
+            AiSkillLearningModeOverride = (int)AiLearningMode.Auto,
+            AiSkillMinEvidenceOverride = 2,
+            AiWeightLearningModeOverride = (int)AiLearningMode.Off,
+            CreatedAt = now, UpdatedAt = now
+        };
+        var child = new Department
+        {
+            Id = Guid.NewGuid(), ClientId = Guid.NewGuid(), Name = "Filho", IsActive = true,
+            InheritFromGlobalId = parent.Id,
+            AssignmentStrategy = (int)TicketAssignmentStrategy.RoundRobin,
+            AiSkillLearningMode = (int)AiLearningMode.Off,
+            AiWeightLearningMode = (int)AiLearningMode.Off,
+            CreatedAt = now, UpdatedAt = now
+        };
+        db.Departments.AddRange(parent, child);
+
+        db.DepartmentMembers.Add(new DepartmentMember
+        {
+            Id = Guid.NewGuid(), DepartmentId = child.Id, UserId = user.Id, IsActive = true, CreatedAt = now
+        });
+
+        for (var i = 0; i < 3; i++)
+        {
+            db.Tickets.Add(new Ticket
+            {
+                Id = Guid.NewGuid(), ClientId = Guid.NewGuid(), WorkflowStateId = Guid.NewGuid(),
+                AssignedToUserId = user.Id,
+                Title = "Falha de rede no switch " + i,
+                Description = "A rede caiu e o switch reiniciou",
+                Category = "Rede", Priority = TicketPriority.Medium,
+                CreatedAt = now.AddDays(-5), UpdatedAt = now.AddDays(-5), ClosedAt = now.AddDays(-4)
+            });
+        }
+
+        await db.SaveChangesAsync();
+
+        var service = BuildService(db, out _);
+        var created = await service.RunCycleAsync(child.Id, null, CancellationToken.None);
+
+        Assert.That(created, Is.EqualTo(1), "filho que herda AiTriage deve rodar o ciclo (modo efetivo Auto)");
+    }
+
+    [Test]
     public async Task Sugestao_de_membro_herdado_pode_ser_aplicada()
     {
         // D8: o ciclo de competências enumera a EQUIPE EFETIVA (próprios +

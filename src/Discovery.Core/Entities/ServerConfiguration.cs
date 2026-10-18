@@ -224,6 +224,17 @@ public class ServerConfiguration
     /// </summary>
     public string LockedFieldsJson { get; set; } = "[]";
 
+    // ============ Gerenciador de Patches (Windows Update) ============
+
+    /// <summary>
+    /// Kill switch do gerenciador de patches. Desligado, o agente não roda scan
+    /// nem aceita comando de patch (o inventário existente é preservado).
+    /// </summary>
+    public bool WindowsUpdateEnabled { get; set; } = true;
+
+    /// <summary>Intervalo do scan WUA no agente (minutos, mínimo 60).</summary>
+    public int WindowsUpdateScanIntervalMinutes { get; set; } = 360;
+
     // ============ Auditoria ============
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

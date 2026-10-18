@@ -32,6 +32,7 @@ public static class CommandTypeWireMapper
             CommandType.SoftwareUninstall => "softwareuninstall",
             CommandType.DecommissionAgent => "decommissionagent",
             CommandType.TicketChatInvite => "ticketchatinvite",
+            CommandType.WindowsUpdate => "windowsupdate",
             _ => commandType.ToString().ToLowerInvariant()
         };
     }
@@ -56,6 +57,7 @@ public static class CommandTypeWireMapper
             or CommandType.SoftwareUpdate
             or CommandType.SoftwareUninstall
             or CommandType.DecommissionAgent
-            or CommandType.TicketChatInvite;
+            or CommandType.TicketChatInvite
+            or CommandType.WindowsUpdate;
     }
 }

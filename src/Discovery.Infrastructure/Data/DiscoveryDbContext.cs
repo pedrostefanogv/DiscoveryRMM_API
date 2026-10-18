@@ -90,6 +90,14 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<SlaCalendar> SlaCalendars => Set<SlaCalendar>();
     public DbSet<SlaCalendarHoliday> SlaCalendarHolidays => Set<SlaCalendarHoliday>();
 
+    // Gerenciador de patches do Windows (WUA)
+    public DbSet<AgentWindowsUpdate> AgentWindowsUpdates => Set<AgentWindowsUpdate>();
+    public DbSet<AgentWindowsUpdateSnapshot> AgentWindowsUpdateSnapshots => Set<AgentWindowsUpdateSnapshot>();
+    public DbSet<PatchApproval> PatchApprovals => Set<PatchApproval>();
+    public DbSet<PatchApprovalAudit> PatchApprovalAudits => Set<PatchApprovalAudit>();
+    public DbSet<PatchPolicy> PatchPolicies => Set<PatchPolicy>();
+    public DbSet<PatchOsState> PatchOsStates => Set<PatchOsState>();
+
     // Knowledge Base
     public DbSet<KnowledgeArticle> KnowledgeArticles => Set<KnowledgeArticle>();
     public DbSet<KnowledgeArticlePage> KnowledgeArticlePages => Set<KnowledgeArticlePage>();
@@ -198,6 +206,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         // Chat de suporte vinculado ao chamado
         ConfigureTicketChat(modelBuilder);
 
+        // Gerenciador de patches do Windows (WUA)
+        ConfigurePatches(modelBuilder);
+
         // Fallback convention: ensure any entity/column not explicitly mapped also uses snake_case.
         ApplySnakeCaseFallback(modelBuilder);
     }
@@ -224,6 +235,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureMaintenanceRuns(ModelBuilder modelBuilder);
     static partial void ConfigureRemoteSessions(ModelBuilder modelBuilder);
     static partial void ConfigureTicketChat(ModelBuilder modelBuilder);
+    static partial void ConfigurePatches(ModelBuilder modelBuilder);
 
     private static void ApplySnakeCaseFallback(ModelBuilder modelBuilder)
     {

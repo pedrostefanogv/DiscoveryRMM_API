@@ -205,6 +205,33 @@ public static class QuartzServiceCollectionExtensions
                     .WithDescription("Processa em lotes o backfill (recálculo forçado) dos snapshots de métricas"));
             }
 
+            // ── Gerenciador de Patches (Windows Update) ────────────────
+            var patchAutoInstallEnabled = configuration.GetValue<bool?>("BackgroundJobs:PatchAutoInstall:Enabled") ?? true;
+            if (patchAutoInstallEnabled)
+            {
+                var patchAutoInstallIntervalMinutes = Math.Max(5, configuration
+                    .GetValue<int?>("BackgroundJobs:PatchAutoInstall:IntervalMinutes") ?? 15);
+
+                q.ScheduleJob<PatchAutoInstallJob>(trigger => trigger
+                    .WithIdentity(PatchAutoInstallJob.Key.Name, PatchAutoInstallJob.Key.Group)
+                    .WithSimpleSchedule(s => s
+                        .WithIntervalInMinutes(patchAutoInstallIntervalMinutes)
+                        .RepeatForever())
+                    .WithDescription("Instala patches aprovados dentro da janela de manutenção (opt-in por política)"));
+            }
+
+            var patchMaintenanceEnabled = configuration.GetValue<bool?>("BackgroundJobs:PatchMaintenance:Enabled") ?? true;
+            if (patchMaintenanceEnabled)
+            {
+                var patchMaintenanceHour = Math.Clamp(configuration
+                    .GetValue<int?>("BackgroundJobs:PatchMaintenance:HourUtc") ?? 4, 0, 23);
+
+                q.ScheduleJob<PatchMaintenanceJob>(trigger => trigger
+                    .WithIdentity(PatchMaintenanceJob.Key.Name, PatchMaintenanceJob.Key.Group)
+                    .WithCronSchedule($"0 15 {patchMaintenanceHour} * * ?")
+                    .WithDescription("Expira instalações de patch sem resultado e reconcilia aprovações"));
+            }
+
             // ── Sincronização do agendamento (tick vindo do banco) ─────
             var scheduleSyncEnabled = configuration.GetValue<bool?>("BackgroundJobs:BackgroundProcessingScheduleSync:Enabled") ?? true;
             if (scheduleSyncEnabled)

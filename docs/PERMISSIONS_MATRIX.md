@@ -1,61 +1,62 @@
-# Matriz de Permissões — DiscoveryRMM API
+# Matriz de PermissÃµes â€” DiscoveryRMM API
 
 **Gerado em:** 05/05/2026
 **Branch:** dev
 
-> Esta matriz documenta todos os endpoints da API com seus requisitos de permissão.
-> `Scope` = escopo de autorização aplicado: **G**lobal, de **R**ota, ou **I**nline (manual).
+> Esta matriz documenta todos os endpoints da API com seus requisitos de permissÃ£o.
+> `Scope` = escopo de autorizaÃ§Ã£o aplicado: **G**lobal, de **R**ota, ou **I**nline (manual).
 
 ---
 
-## ResourceType × ActionType
+## ResourceType Ã— ActionType
 
 | ResourceType      | View                                                      | Create            | Edit                                                                          | Delete                                                                                                                     | Execute         |
 | ----------------- | --------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------- |
 | **Agents**        | Labels, info                                              | Regras de label   | Labels, regras                                                                | -                                                                                                                          | -               |
-| **Tickets**       | Listar, detalhes                                          | Criar             | Editar, workflow, comentários                                                 | -                                                                                                                          | -               |
+| **Tickets**       | Listar, detalhes                                          | Criar             | Editar, workflow, comentÃ¡rios                                                 | -                                                                                                                          | -               |
 | **Clients**       | Listar, detalhes                                          | Criar             | Editar, custom fields                                                         | Excluir                                                                                                                    | -               |
-| **Sites**         | ✖ (não tem controller próprio)                            | -                 | -                                                                             | -                                                                                                                          | -               |
+| **Sites**         | âœ– (nÃ£o tem controller prÃ³prio)                            | -                 | -                                                                             | -                                                                                                                          | -               |
 | **Reports**       | Datasets, templates                                       | Criar template    | -                                                                             | -                                                                                                                          | -               |
 | **ServerConfig**  | Todas GETs config                                         | Custom fields     | Todas PUTs/PATCHs config                                                      | Custom fields                                                                                                              | -               |
-| **ClientConfig**  | ✖ (não usado)                                             | -                 | -                                                                             | -                                                                                                                          | -               |
+| **ClientConfig**  | âœ– (nÃ£o usado)                                             | -                 | -                                                                             | -                                                                                                                          | -               |
 | **SiteConfig**    | MeshCentral site                                          | -                 | MeshCentral site                                                              | -                                                                                                                          | -               |
 | **Users**         | Listar, MFA keys                                          | Criar, API tokens | Editar, reset MFA, senha admin                                                | Desativar, revogar token                                                                                                   | -               |
 | **Automation**    | Scripts, tasks                                            | Scripts, tasks    | Scripts, tasks                                                                | Scripts, tasks                                                                                                             | Consumir script |
 | **Deployment**    | Tokens, updates                                           | Tokens, updates   | Tokens, updates                                                               | Revogar token                                                                                                              | -               |
-| **KnowledgeBase** | ✖ (não tem controller)                                    | -                 | -                                                                             | -                                                                                                                          | -               |
-| **AiChat**        | ✔ (`TicketAiController`, `AgentAuthController.AiChat.cs`) | `Execute`         | `/api/v{version}/tickets/{id}/ai/*`, `/api/v{version}/agent-auth/me/ai-chat*` | Agentes autenticados podem usar chat IA; usuários com permissão podem gerar triagem/resumo/sugestão de resposta em tickets |
-| **AppStore**      | Catálogo, diffs                                           | -                 | Custom, approvals, sync                                                       | Remover approval                                                                                                           | -               |
+| **KnowledgeBase** | âœ– (nÃ£o tem controller)                                    | -                 | -                                                                             | -                                                                                                                          | -               |
+| **AiChat**        | âœ” (`TicketAiController`, `AgentAuthController.AiChat.cs`) | `Execute`         | `/api/v{version}/tickets/{id}/ai/*`, `/api/v{version}/agent-auth/me/ai-chat*` | Agentes autenticados podem usar chat IA; usuÃ¡rios com permissÃ£o podem gerar triagem/resumo/sugestÃ£o de resposta em tickets |
+| **AppStore**      | CatÃ¡logo, diffs                                           | -                 | Custom, approvals, sync                                                       | Remover approval                                                                                                           | -               |
 | **Logs**          | Audit, monitoring                                         | -                 | -                                                                             | -                                                                                                                          | Ingest events   |
 | **Dashboard**     | Summaries                                                 | -                 | -                                                                             | -                                                                                                                          | -               |
-| **RemoteDebug**   | ✖ (não tem controller)                                    | -                 | -                                                                             | -                                                                                                                          | -               |
+| **RemoteDebug**   | âœ– (nÃ£o tem controller)                                    | -                 | -                                                                             | -                                                                                                                          | -               |
+| **Patches**       | InventÃ¡rio/overview/aprovaÃ§Ãµes/polÃ­tica                   | -                 | Aprovar/recusar e editar polÃ­tica                                             | Remover aprovaÃ§Ã£o                                                                                                          | Instalar/scan/enforcement no SO |
 
 ---
 
-## Endpoints × Permissões
+## Endpoints Ã— PermissÃµes
 
 ### Agent Install (token de deploy)
 
-| Endpoint                                     | Auth                                         | Permissão                                |
+| Endpoint                                     | Auth                                         | PermissÃ£o                                |
 | -------------------------------------------- | -------------------------------------------- | ---------------------------------------- |
-| `POST /api/v1/agent-install/register`        | `Bearer {deploy_token}` (escopo client/site) | — (sem RBAC; validação por deploy token) |
-| `POST /api/v1/agent-install/{agentId}/token` | `Bearer {deploy_token}` (escopo client/site) | — (sem RBAC; validação por deploy token) |
+| `POST /api/v1/agent-install/register`        | `Bearer {deploy_token}` (escopo client/site) | â€” (sem RBAC; validaÃ§Ã£o por deploy token) |
+| `POST /api/v1/agent-install/{agentId}/token` | `Bearer {deploy_token}` (escopo client/site) | â€” (sem RBAC; validaÃ§Ã£o por deploy token) |
 
 ### Agent Auth (token mdz\_)
 
-| Endpoint                                   | Auth                                | Permissão               |
+| Endpoint                                   | Auth                                | PermissÃ£o               |
 | ------------------------------------------ | ----------------------------------- | ----------------------- |
-| `GET /api/v1/agent-auth/me/configuration`  | `Bearer mdz_{token}` + `X-Agent-ID` | — (identidade do agent) |
-| `POST /api/v1/agent-auth/me/p2p/bootstrap` | `Bearer mdz_{token}` + `X-Agent-ID` | — (identidade do agent) |
-| `GET /api/v1/agent-auth/me/sync-manifest`  | `Bearer mdz_{token}` + `X-Agent-ID` | — (identidade do agent) |
+| `GET /api/v1/agent-auth/me/configuration`  | `Bearer mdz_{token}` + `X-Agent-ID` | â€” (identidade do agent) |
+| `POST /api/v1/agent-auth/me/p2p/bootstrap` | `Bearer mdz_{token}` + `X-Agent-ID` | â€” (identidade do agent) |
+| `GET /api/v1/agent-auth/me/sync-manifest`  | `Bearer mdz_{token}` + `X-Agent-ID` | â€” (identidade do agent) |
 
-### NATS Auth (usuário dashboard)
+### NATS Auth (usuÃ¡rio dashboard)
 
-| Endpoint                                  | Auth                | Permissão                                                    |
+| Endpoint                                  | Auth                | PermissÃ£o                                                    |
 | ----------------------------------------- | ------------------- | ------------------------------------------------------------ |
 | `POST /api/v1/nats-auth/user/credentials` | `[RequireUserAuth]` | `Dashboard.View` (escopo resolvido por `IPermissionService`) |
 
-### NATS ACL (perfil técnico)
+### NATS ACL (perfil tÃ©cnico)
 
 | Perfil          | Subscribe Allow                                                                                                                                                                                                                                  | Publish Allow                                                                                                                                                                 |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -67,40 +68,40 @@
 | --------------------------------------------- | ---------------------------------------------------------- |
 | `POST /api/v1/agent-auth/me/nats-credentials` | **Removido** (fluxo atual: `agent_token` via auth callout) |
 
-### Auth (público)
+### Auth (pÃºblico)
 
-| Endpoint                                  | Auth                             | Permissão           |
+| Endpoint                                  | Auth                             | PermissÃ£o           |
 | ----------------------------------------- | -------------------------------- | ------------------- |
-| `POST /api/v1/auth/login`                 | `[AllowAnonymous]`               | —                   |
-| `POST /api/v1/auth/refresh`               | `[AllowAnonymous]`               | —                   |
-| `POST /api/v1/auth/logout`                | `[RequireUserAuth]`              | — (qualquer sessão) |
-| `POST /api/v1/auth/mfa/fido2/begin`       | `[RequireMfaPending]`            | —                   |
-| `POST /api/v1/auth/mfa/fido2/complete`    | `[RequireMfaPending]`            | —                   |
-| `POST /api/v1/auth/mfa/otp/complete`      | `[RequireMfaPending]`            | —                   |
-| `POST /api/v1/auth/first-access/complete` | `[RequireMfaSetupOrFullSession]` | —                   |
+| `POST /api/v1/auth/login`                 | `[AllowAnonymous]`               | â€”                   |
+| `POST /api/v1/auth/refresh`               | `[AllowAnonymous]`               | â€”                   |
+| `POST /api/v1/auth/logout`                | `[RequireUserAuth]`              | â€” (qualquer sessÃ£o) |
+| `POST /api/v1/auth/mfa/fido2/begin`       | `[RequireMfaPending]`            | â€”                   |
+| `POST /api/v1/auth/mfa/fido2/complete`    | `[RequireMfaPending]`            | â€”                   |
+| `POST /api/v1/auth/mfa/otp/complete`      | `[RequireMfaPending]`            | â€”                   |
+| `POST /api/v1/auth/first-access/complete` | `[RequireMfaSetupOrFullSession]` | â€”                   |
 
-### MFA (registro público, gerenciamento autenticado)
+### MFA (registro pÃºblico, gerenciamento autenticado)
 
-| Endpoint                                   | Auth                                                  | Permissão           |
+| Endpoint                                   | Auth                                                  | PermissÃ£o           |
 | ------------------------------------------ | ----------------------------------------------------- | ------------------- |
-| `GET /api/v1/mfa/keys`                     | `[RequireUserAuth]`                                   | — (próprio usuário) |
-| `POST /api/v1/mfa/fido2/register/begin`    | `[AllowAnonymous]` + `[RequireMfaSetupOrFullSession]` | —                   |
-| `POST /api/v1/mfa/fido2/register/complete` | `[AllowAnonymous]` + `[RequireMfaSetupOrFullSession]` | —                   |
-| `POST /api/v1/mfa/totp/register/begin`     | `[AllowAnonymous]` + `[RequireMfaSetupOrFullSession]` | —                   |
-| `POST /api/v1/mfa/totp/register/complete`  | `[AllowAnonymous]` + `[RequireMfaSetupOrFullSession]` | —                   |
-| `DELETE /api/v1/mfa/keys/{keyId}`          | `[RequireUserAuth]`                                   | — (próprias chaves) |
-| `PATCH /api/v1/mfa/keys/{keyId}/name`      | `[RequireUserAuth]`                                   | — (próprias chaves) |
+| `GET /api/v1/mfa/keys`                     | `[RequireUserAuth]`                                   | â€” (prÃ³prio usuÃ¡rio) |
+| `POST /api/v1/mfa/fido2/register/begin`    | `[AllowAnonymous]` + `[RequireMfaSetupOrFullSession]` | â€”                   |
+| `POST /api/v1/mfa/fido2/register/complete` | `[AllowAnonymous]` + `[RequireMfaSetupOrFullSession]` | â€”                   |
+| `POST /api/v1/mfa/totp/register/begin`     | `[AllowAnonymous]` + `[RequireMfaSetupOrFullSession]` | â€”                   |
+| `POST /api/v1/mfa/totp/register/complete`  | `[AllowAnonymous]` + `[RequireMfaSetupOrFullSession]` | â€”                   |
+| `DELETE /api/v1/mfa/keys/{keyId}`          | `[RequireUserAuth]`                                   | â€” (prÃ³prias chaves) |
+| `PATCH /api/v1/mfa/keys/{keyId}/name`      | `[RequireUserAuth]`                                   | â€” (prÃ³prias chaves) |
 
 ### Users
 
-| Endpoint                                       | Permissão          | Scope |
+| Endpoint                                       | PermissÃ£o          | Scope |
 | ---------------------------------------------- | ------------------ | ----- |
 | `GET /api/v1/users`                            | `Users.View`       | G     |
 | `GET /api/v1/users/{id}`                       | `Users.View`       | G     |
-| `GET /api/v1/users/me`                         | — (próprio perfil) | G     |
-| `PUT /api/v1/users/me`                         | — (próprio perfil) | G     |
-| `GET /api/v1/users/me/security`                | — (próprio perfil) | G     |
-| `POST /api/v1/users/me/change-password`        | — (própria senha)  | G     |
+| `GET /api/v1/users/me`                         | â€” (prÃ³prio perfil) | G     |
+| `PUT /api/v1/users/me`                         | â€” (prÃ³prio perfil) | G     |
+| `GET /api/v1/users/me/security`                | â€” (prÃ³prio perfil) | G     |
+| `POST /api/v1/users/me/change-password`        | â€” (prÃ³pria senha)  | G     |
 | `POST /api/v1/users`                           | `Users.Create`     | G     |
 | `PUT /api/v1/users/{id}`                       | `Users.Edit`       | G     |
 | `POST /api/v1/users/{id}/change-password`      | `Users.Edit`       | G     |
@@ -112,7 +113,7 @@
 
 ### Roles
 
-| Endpoint                                         | Permissão      | Scope |
+| Endpoint                                         | PermissÃ£o      | Scope |
 | ------------------------------------------------ | -------------- | ----- |
 | `GET /api/v1/roles`                              | `Users.View`   | G     |
 | `GET /api/v1/roles/{id}`                         | `Users.View`   | G     |
@@ -126,7 +127,7 @@
 
 ### User Groups
 
-| Endpoint                                               | Permissão      | Scope |
+| Endpoint                                               | PermissÃ£o      | Scope |
 | ------------------------------------------------------ | -------------- | ----- |
 | `GET /api/v1/user-groups`                              | `Users.View`   | G     |
 | `GET /api/v1/user-groups/{id}`                         | `Users.View`   | G     |
@@ -142,15 +143,15 @@
 
 ### API Tokens
 
-| Endpoint                              | Permissão           | Scope |
+| Endpoint                              | PermissÃ£o           | Scope |
 | ------------------------------------- | ------------------- | ----- |
-| `GET /api/v1/api-tokens`              | — (próprios tokens) | G     |
+| `GET /api/v1/api-tokens`              | â€” (prÃ³prios tokens) | G     |
 | `POST /api/v1/api-tokens`             | `Users.Create`      | G     |
 | `DELETE /api/v1/api-tokens/{tokenId}` | `Users.Delete`      | G     |
 
 ### Clients
 
-| Endpoint                                         | Permissão        | Scope |
+| Endpoint                                         | PermissÃ£o        | Scope |
 | ------------------------------------------------ | ---------------- | ----- |
 | `GET /api/v1/clients`                            | `Clients.View`   | G     |
 | `GET /api/v1/clients/{id}`                       | `Clients.View`   | G     |
@@ -162,7 +163,7 @@
 
 ### Tickets
 
-| Endpoint                                                 | Permissão        | Scope |
+| Endpoint                                                 | PermissÃ£o        | Scope |
 | -------------------------------------------------------- | ---------------- | ----- |
 | `GET /api/v1/tickets`                                    | `Tickets.View`   | G     |
 | `GET /api/v1/tickets/by-client/{clientId}`               | `Tickets.View`   | R     |
@@ -178,29 +179,29 @@
 
 #### Chat de suporte vinculado ao chamado
 
-O chat reusa as permissões já existentes do chamado — **não** há permissão nova.
+O chat reusa as permissÃµes jÃ¡ existentes do chamado â€” **nÃ£o** hÃ¡ permissÃ£o nova.
 Todos os endpoints user-auth validam o escopo do chamado
-(`CanAccessTicketAsync`/`ITicketAccessGuard`) além da permissão.
+(`CanAccessTicketAsync`/`ITicketAccessGuard`) alÃ©m da permissÃ£o.
 
-| Endpoint                                                                        | Permissão       | Scope |
+| Endpoint                                                                        | PermissÃ£o       | Scope |
 | ------------------------------------------------------------------------------- | --------------- | ----- |
 | `GET  /api/v1/tickets/{id}/chat/sessions/current`                              | `Tickets.View`  | G     |
 | `GET  /api/v1/tickets/{id}/chat/sessions`                                      | `Tickets.View`  | G     |
 | `GET  /api/v1/tickets/{id}/chat/sessions/{sessionId}/messages`                 | `Tickets.View`  | G     |
 | `GET  /api/v1/tickets/{id}/chat/attachments/{attachmentId}`                    | `Tickets.View`  | G     |
-| `POST /api/v1/tickets/{id}/chat/sessions` (start — **só o atendente**)         | `Tickets.Edit`  | G     |
+| `POST /api/v1/tickets/{id}/chat/sessions` (start â€” **sÃ³ o atendente**)         | `Tickets.Edit`  | G     |
 | `POST /api/v1/tickets/{id}/chat/sessions/{sessionId}/invite/retry`             | `Tickets.Edit`  | G     |
 | `POST /api/v1/tickets/{id}/chat/sessions/{sessionId}/messages`                 | `Tickets.Edit`  | G     |
 | `POST /api/v1/tickets/{id}/chat/sessions/{sessionId}/end`                      | `Tickets.Edit`  | G     |
 | `POST /api/v1/tickets/{id}/chat/sessions/{sessionId}/attachments/*`            | `Tickets.Edit`  | G     |
 
-Lado do agent (`/api/v1/agent-auth/me/support-chat/*`): autenticação por token
-`mdz_` + `X-Agent-ID`; **nenhum** endpoint cria sessão e toda rota valida que a
-sessão pertence ao agent autenticado (404 caso contrário).
+Lado do agent (`/api/v1/agent-auth/me/support-chat/*`): autenticaÃ§Ã£o por token
+`mdz_` + `X-Agent-ID`; **nenhum** endpoint cria sessÃ£o e toda rota valida que a
+sessÃ£o pertence ao agent autenticado (404 caso contrÃ¡rio).
 
 ### Dashboard
 
-| Endpoint                                                          | Permissão        | Scope |
+| Endpoint                                                          | PermissÃ£o        | Scope |
 | ----------------------------------------------------------------- | ---------------- | ----- |
 | `GET /api/v1/dashboard/global/summary`                            | `Dashboard.View` | G     |
 | `GET /api/v1/clients/{clientId}/dashboard/summary`                | `Dashboard.View` | R     |
@@ -208,7 +209,7 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Configurations
 
-| Endpoint                                               | Permissão           | Scope |
+| Endpoint                                               | PermissÃ£o           | Scope |
 | ------------------------------------------------------ | ------------------- | ----- |
 | `GET /api/v1/configurations/server`                    | `ServerConfig.View` | G     |
 | `PUT /api/v1/configurations/server`                    | `ServerConfig.Edit` | G     |
@@ -231,14 +232,14 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Deploy Tokens
 
-| Endpoint                     | Permissão           | Scope |
+| Endpoint                     | PermissÃ£o           | Scope |
 | ---------------------------- | ------------------- | ----- |
 | `GET /api/v1/deploy-tokens`  | `Deployment.View`   | G     |
 | `POST /api/v1/deploy-tokens` | `Deployment.Create` | G     |
 
 ### Reports
 
-| Endpoint                                | Permissão        | Scope |
+| Endpoint                                | PermissÃ£o        | Scope |
 | --------------------------------------- | ---------------- | ----- |
 | `GET /api/v1/reports/datasets`          | `Reports.View`   | G     |
 | `GET /api/v1/reports/layout-schema`     | `Reports.View`   | G     |
@@ -248,7 +249,7 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Departments
 
-| Endpoint                          | Permissão        | Scope |
+| Endpoint                          | PermissÃ£o        | Scope |
 | --------------------------------- | ---------------- | ----- |
 | `GET /api/v1/departments/global`  | `Clients.View`   | G     |
 | `GET /api/v1/departments`         | `Clients.View`   | G     |
@@ -259,7 +260,7 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Custom Fields
 
-| Endpoint                                          | Permissão             | Scope |
+| Endpoint                                          | PermissÃ£o             | Scope |
 | ------------------------------------------------- | --------------------- | ----- |
 | `GET /api/v1/custom-fields`                       | `ServerConfig.View`   | G     |
 | `GET /api/v1/custom-fields/{id}`                  | `ServerConfig.View`   | G     |
@@ -271,7 +272,7 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Auto Ticket Rules
 
-| Endpoint                             | Permissão        | Scope |
+| Endpoint                             | PermissÃ£o        | Scope |
 | ------------------------------------ | ---------------- | ----- |
 | `GET /api/v1/auto-ticket-rules`      | `Tickets.View`   | G     |
 | `GET /api/v1/auto-ticket-rules/{id}` | `Tickets.View`   | G     |
@@ -280,7 +281,7 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Agent Labels
 
-| Endpoint                                         | Permissão        | Scope |
+| Endpoint                                         | PermissÃ£o        | Scope |
 | ------------------------------------------------ | ---------------- | ----- |
 | `GET /api/v1/agent-labels/agents/{agentId}`      | `Agents.View`    | G     |
 | `GET /api/v1/agent-labels/agents/{agentId}/suppressions` | `Agents.View` | G  |
@@ -310,14 +311,14 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Monitoring Events
 
-| Endpoint                                       | Permissão      | Scope |
+| Endpoint                                       | PermissÃ£o      | Scope |
 | ---------------------------------------------- | -------------- | ----- |
 | `POST /api/v1/monitoring-events`               | `Logs.Execute` | G     |
 | `POST /api/v1/monitoring-events/{id}/evaluate` | `Logs.Execute` | G     |
 
 ### Configuration Audit
 
-| Endpoint                                                                | Permissão   | Scope |
+| Endpoint                                                                | PermissÃ£o   | Scope |
 | ----------------------------------------------------------------------- | ----------- | ----- |
 | `GET /api/v1/configuration-audit`                                       | `Logs.View` | G     |
 | `GET /api/v1/configuration-audit/{entityType}/{entityId}`               | `Logs.View` | G     |
@@ -327,7 +328,7 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### App Store
 
-| Endpoint                                      | Permissão         | Scope      |
+| Endpoint                                      | PermissÃ£o         | Scope      |
 | --------------------------------------------- | ----------------- | ---------- |
 | `GET /api/v1/app-store/catalog`               | `AppStore.View`   | G          |
 | `GET /api/v1/app-store/catalog/{packageId}`   | `AppStore.View`   | G          |
@@ -343,7 +344,7 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Automation Scripts
 
-| Endpoint                                      | Permissão            | Scope        |
+| Endpoint                                      | PermissÃ£o            | Scope        |
 | --------------------------------------------- | -------------------- | ------------ |
 | `GET /api/v1/automation/scripts`              | `Automation.View`    | I (clientId) |
 | `GET /api/v1/automation/scripts/{id}`         | `Automation.View`    | I (clientId) |
@@ -355,7 +356,7 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Automation Tasks
 
-| Endpoint                               | Permissão           | Scope         |
+| Endpoint                               | PermissÃ£o           | Scope         |
 | -------------------------------------- | ------------------- | ------------- |
 | `GET /api/v1/automation/tasks`         | `Automation.View`   | I (scopeType) |
 | `GET /api/v1/automation/tasks/{id}`    | `Automation.View`   | I (scopeType) |
@@ -365,37 +366,73 @@ sessão pertence ao agent autenticado (404 caso contrário).
 
 ### Agent Updates
 
-| Endpoint           | Permissão                            | Scope |
+| Endpoint           | PermissÃ£o                            | Scope |
 | ------------------ | ------------------------------------ | ----- |
 | Todos os endpoints | `Deployment.View/Create/Edit/Delete` | G     |
 
 ### MeshCentral
 
-| Endpoint                                                               | Permissão | Scope |
+| Endpoint                                                               | PermissÃ£o | Scope |
 | ---------------------------------------------------------------------- | --------- | ----- |
-| `Users.View/Create/Edit/Delete`, `Agents.Edit`, `SiteConfig.View/Edit` | —         | G     |
+| `Users.View/Create/Edit/Delete`, `Agents.Edit`, `SiteConfig.View/Edit` | â€”         | G     |
 
 ### Admin Background Services
 
-| Endpoint           | Permissão                                  | Scope |
+| Endpoint           | PermissÃ£o                                  | Scope |
 | ------------------ | ------------------------------------------ | ----- |
-| Todos os endpoints | `RequireUserAuth` (sem permissão granular) | G     |
+| Todos os endpoints | `RequireUserAuth` (sem permissÃ£o granular) | G     |
 
 ---
 
 ## Legenda de Scope
 
-| Símbolo | Significado                                                                   |
+| SÃ­mbolo | Significado                                                                   |
 | ------- | ----------------------------------------------------------------------------- |
-| **G**   | `[RequirePermission(X, Y)]` — escopo Global                                   |
-| **R**   | `[RequirePermission(X, Y, ScopeSource.FromRoute)]` — escopo via rota          |
-| **I**   | Verificação inline com `IPermissionService` (escopo dinâmico por query param) |
+| **G**   | `[RequirePermission(X, Y)]` â€” escopo Global                                   |
+| **R**   | `[RequirePermission(X, Y, ScopeSource.FromRoute)]` â€” escopo via rota          |
+| **I**   | VerificaÃ§Ã£o inline com `IPermissionService` (escopo dinÃ¢mico por query param) |
 
 ---
 
 ## Notas
 
-1. **Permissões vazias**: `KnowledgeBase`, `RemoteDebug` não têm controllers implementados ainda.
-2. **Sites**: Não há `SitesController` dedicado — sites são gerenciados via MeshCentral embed.
-3. **AppStore scoped**: Endpoints de approvals/diffs usam escopo dinâmico resolvido por `AppApprovalScopeType` (Global/Client/Site/Agent).
+1. **PermissÃµes vazias**: `KnowledgeBase`, `RemoteDebug` nÃ£o tÃªm controllers implementados ainda.
+2. **Sites**: NÃ£o hÃ¡ `SitesController` dedicado â€” sites sÃ£o gerenciados via MeshCentral embed.
+3. **AppStore scoped**: Endpoints de approvals/diffs usam escopo dinÃ¢mico resolvido por `AppApprovalScopeType` (Global/Client/Site/Agent).
 4. **Automation scoped**: Scripts e tasks resolvem escopo por `clientId` ou `scopeType/scopeId`.
+
+### Patches (Windows Update)
+
+| Endpoint | Permissão | Escopo |
+| --- | --- | --- |
+| `GET /api/v1/patches/overview` | `Patches.View` | Access list |
+| `GET /api/v1/patches/snapshot` | `Patches.View` | Access list |
+| `GET /api/v1/patches/inventory` | `Patches.View` | Access list |
+| `GET /api/v1/patches/inventory/{groupKey}/agents` | `Patches.View` | Access list |
+| `GET /api/v1/patches/pending` | `Patches.View` | Access list |
+| `GET /api/v1/patches/approvals` | `Patches.View` | Global |
+| `GET /api/v1/patches/approvals/audit` | `Patches.View` | Global |
+| `POST /api/v1/patches/approvals` | `Patches.Edit` | Global |
+| `DELETE /api/v1/patches/approvals/{ruleId}` | `Patches.Delete` | Global |
+| `GET /api/v1/patches/policy` | `Patches.View` | Global |
+| `PUT /api/v1/patches/policy` | `Patches.Edit` | Global |
+| `POST /api/v1/patches/scan` | `Patches.Execute` | Access list |
+| `POST /api/v1/patches/install` | `Patches.Execute` | Access list |
+| `GET /api/v1/agents/{id}/windows-updates/page` | `Patches.View` | Agente (access list) |
+| `GET /api/v1/agents/{id}/windows-updates/snapshot` | `Patches.View` | Agente (access list) |
+| `POST /api/v1/agents/{id}/windows-updates/scan` | `Patches.Execute` | Agente (access list) |
+| `POST /api/v1/agents/{id}/windows-updates/{updateKey}/install` | `Patches.Execute` | Agente (access list) |
+| `POST /api/v1/agents/{id}/windows-updates/install-approved` | `Patches.Execute` | Agente (access list) |
+| `POST /api/v1/agents/{id}/windows-updates/{updateKey}/approve` | `Patches.Edit` | Agente (access list) |
+| `POST /api/v1/agents/{id}/windows-updates/{updateKey}/deny` | `Patches.Edit` | Agente (access list) |
+| `POST /api/v1/agents/{id}/windows-updates/bulk` | `Patches.Execute` | Agente (access list) |
+| `POST /api/v1/agents/{id}/windows-updates/os-policy/apply` | `Patches.Execute` | Agente (access list) |
+| `POST /api/v1/agents/{id}/windows-updates/os-policy/rollback` | `Patches.Execute` | Agente (access list) |
+
+**Notas de patches**
+
+- **Seed**: `M231_SeedPatchPermissions` cria `Patches:View|Create|Edit|Delete|Execute`. Admin/Manager recebem tudo; Operator recebe View+Execute; Support/Viewer somente View.
+- **Resolução de aprovação**: Agent → Site → Client → Global; a mais específica vence e, em empate, `Deny` vence `Approve`. Sem regra explícita, a política pode auto-aprovar por severidade/classificação.
+- **Escopo de dados**: todos os endpoints de frota filtram pela access list do usuário (`IScopeContext.GetAccessAsync`); endpoints por agente validam que o cliente do agente está na access list.
+- **Forçar instalação** (`force=true`) exige `Patches.Execute` e grava auditoria (`patch_approval_audits`) com o usuário/IP da requisição.
+- **Enforcement no SO** só é aceito quando a política do escopo está em `OsEnforced`; é best-effort e tem rollback a partir do backup devolvido pelo agente.

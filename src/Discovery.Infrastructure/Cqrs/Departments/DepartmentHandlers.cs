@@ -19,6 +19,14 @@ internal static class DepartmentAiSettingsValidator
         int assignmentStrategy, int mode, double minConfidence,
         int fallbackStrategy, int maxCandidates)
     {
+        // Faixa do enum TicketAssignmentStrategy: 0=None, 1=RoundRobin,
+        // 2=LeastOpenTickets, 3=AiTriage. Sem esta checagem um valor arbitrário
+        // (ex.: 99) era persistido e a atribuição ficava silenciosamente sem efeito.
+        if (assignmentStrategy is < 0 or > 3)
+            return Error.Validation(
+                "AssignmentStrategy",
+                "Estratégia de auto-atribuição inválida (0=Nenhuma, 1=Round-robin, 2=Menos chamados abertos, 3=Triagem por IA).");
+
         if (mode is not ((int)AiAssignmentMode.Suggest) and not ((int)AiAssignmentMode.AutoAssign))
             return Error.Validation("AiAssignmentMode", "Modo da triagem por IA inválido (0=Sugerir, 1=Atribuir automaticamente).");
 
@@ -106,7 +114,9 @@ public sealed class CreateDepartmentCommandHandler(
             Name = cmd.Name,
             Description = cmd.Description,
             ClientId = cmd.ClientId,
-            InheritFromGlobalId = cmd.InheritFromGlobalId,
+            // Departamento global NUNCA herda: um vínculo informado no create é
+            // descartado (a leitura já o ignorava; gravá-lo deixava dado inválido).
+            InheritFromGlobalId = cmd.ClientId is null ? null : cmd.InheritFromGlobalId,
             SortOrder = cmd.SortOrder,
             IsActive = true,
             AssignmentStrategy = cmd.AssignmentStrategy,
@@ -193,7 +203,9 @@ public sealed class UpdateDepartmentCommandHandler(
 
         // D5 — patch semântico: só mexe no vínculo quando o campo veio no corpo;
         // Set(null) desfaz a herança. D1–D4 — o mesmo validador do create.
-        if (cmd.InheritFromGlobalId.IsSet)
+        // Departamento GLOBAL (ClientId null) nunca herda: o vínculo é ignorado
+        // (normalizado para null abaixo) e não passa pelo validador.
+        if (cmd.InheritFromGlobalId.IsSet && dept.ClientId is not null)
         {
             var inheritance = await DepartmentInheritanceValidator.ValidateAsync(
                 dept.Id, cmd.InheritFromGlobalId.Value, service.GetByIdAsync, ct);
@@ -218,7 +230,9 @@ public sealed class UpdateDepartmentCommandHandler(
         if (cmd.Description is not null) dept.Description = cmd.Description;
         if (cmd.InheritFromGlobalId.IsSet)
         {
-            dept.InheritFromGlobalId = cmd.InheritFromGlobalId.Value;
+            dept.InheritFromGlobalId = dept.ClientId is null
+                ? null
+                : cmd.InheritFromGlobalId.Value;
             parentChanged = oldParent != dept.InheritFromGlobalId;
         }
         if (cmd.SortOrder.HasValue) dept.SortOrder = cmd.SortOrder.Value;
@@ -299,6 +313,7 @@ public sealed class UpdateDepartmentCommandHandler(
                 v => dept.AiAssignmentInstructionsOverride = v);
 
         // ── Aliases "*Override" (mesmas colunas; o alias vence) ─────────
+        if (cmd.AssignmentStrategyOverride.IsSet) dept.AssignmentStrategyOverride = cmd.AssignmentStrategyOverride.Value;
         if (cmd.AiAssignmentModeOverride.IsSet) dept.AiAssignmentModeOverride = cmd.AiAssignmentModeOverride.Value;
         if (cmd.AiAssignmentMinConfidenceOverride.IsSet) dept.AiAssignmentMinConfidenceOverride = cmd.AiAssignmentMinConfidenceOverride.Value;
         if (cmd.AiAssignmentFallbackStrategyOverride.IsSet) dept.AiAssignmentFallbackStrategyOverride = cmd.AiAssignmentFallbackStrategyOverride.Value;

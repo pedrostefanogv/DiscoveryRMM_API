@@ -64,6 +64,11 @@ public sealed record UpdateDepartmentCommand(
     OptionalValue<decimal> AiWeightMin = default,
     OptionalValue<decimal> AiWeightMax = default,
     // Aliases explícitos de override (mesmas colunas; NULL limpa).
+    // A estratégia de auto-atribuição também tem alias próprio: o console envia
+    // SOMENTE `assignmentStrategyOverride: null` para voltar a herdar (sem o
+    // campo base). Sem este parâmetro o JSON era ignorado e "Herdar" não fazia
+    // nada no backend.
+    OptionalValue<int> AssignmentStrategyOverride = default,
     OptionalValue<int> AiAssignmentModeOverride = default,
     OptionalValue<double> AiAssignmentMinConfidenceOverride = default,
     OptionalValue<int> AiAssignmentFallbackStrategyOverride = default,

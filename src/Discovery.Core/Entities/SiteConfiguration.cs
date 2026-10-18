@@ -83,6 +83,14 @@ public class SiteConfiguration
     /// <summary>Email de contato do site</summary>
     public string? ContactEmail { get; set; }
 
+    // ============ Gerenciador de Patches (Windows Update) ============
+
+    /// <summary>Kill switch do módulo de patches neste site (null = herda).</summary>
+    public bool? WindowsUpdateEnabled { get; set; }
+
+    /// <summary>Intervalo do scan WUA (minutos) neste site (null = herda).</summary>
+    public int? WindowsUpdateScanIntervalMinutes { get; set; }
+
     /// <summary>
     /// Lista de campos bloqueados no nível de site (JSON array de nomes de propriedade).
     /// Bloqueia sobrescrita nos agents deste site (futuro).

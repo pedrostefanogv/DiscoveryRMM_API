@@ -83,6 +83,14 @@ public class ClientConfiguration
     /// <summary>Janela de tolerancia para considerar o agent online (segundos)</summary>
     public int? AgentOnlineGraceSeconds { get; set; }
 
+    // ============ Gerenciador de Patches (Windows Update) ============
+
+    /// <summary>Kill switch do módulo de patches neste cliente (null = herda).</summary>
+    public bool? WindowsUpdateEnabled { get; set; }
+
+    /// <summary>Intervalo do scan WUA (minutos) neste cliente (null = herda).</summary>
+    public int? WindowsUpdateScanIntervalMinutes { get; set; }
+
     /// <summary>
     /// Lista de campos bloqueados no nível de cliente (JSON array de nomes de propriedade).
     /// Bloqueia sobrescrita nos sites e agents deste cliente.

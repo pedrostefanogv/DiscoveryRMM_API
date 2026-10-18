@@ -1,3 +1,5 @@
+using Discovery.Core.Departments;
+using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
@@ -11,26 +13,54 @@ public class TicketAssignmentService(
 {
     public async Task<int?> GetStrategyAsync(Guid departmentId, CancellationToken ct = default)
     {
-        var dept = await db.Departments.AsNoTracking()
-            .FirstOrDefaultAsync(d => d.Id == departmentId, ct);
-        // D4 — departamento inativo não participa da auto-atribuição.
-        return dept is { IsActive: true } ? dept.AssignmentStrategy : null;
+        // A estratégia EFETIVA (override próprio > global pai > base) decide a
+        // auto-atribuição. Antes só a coluna base era lida, então um departamento
+        // que herdava RoundRobin/LeastOpenTickets do global não atribuía nada.
+        var settings = await ResolveEffectiveSettingsAsync(departmentId, ct);
+        return settings?.AssignmentStrategy.Value;
     }
 
     public async Task<Guid?> ResolveAssigneeAsync(Guid departmentId, CancellationToken ct = default)
     {
-        var dept = await db.Departments.AsNoTracking().FirstOrDefaultAsync(d => d.Id == departmentId, ct);
-        if (dept is null || !dept.IsActive) return null;
+        var settings = await ResolveEffectiveSettingsAsync(departmentId, ct);
+        if (settings is null) return null;
+
+        var strategy = settings.AssignmentStrategy.Value;
 
         // None: sem auto-atribuição. AiTriage: a triagem por IA roda de forma
         // assíncrona (fila) e decide por conta própria — não é round-robin.
-        if (dept.AssignmentStrategy is (int)TicketAssignmentStrategy.None
+        if (strategy is (int)TicketAssignmentStrategy.None
             or (int)TicketAssignmentStrategy.AiTriage)
         {
             return null;
         }
 
-        return await ResolveFallbackAsync(departmentId, dept.AssignmentStrategy, ct);
+        return await ResolveFallbackAsync(departmentId, strategy, ct);
+    }
+
+    /// <summary>
+    /// Configuração efetiva do departamento para a auto-atribuição, ou null
+    /// quando ele não existe/está inativo. Só considera o pai GLOBAL e ATIVO
+    /// (um salto), como o restante da leitura de herança.
+    /// </summary>
+    private async Task<DepartmentEffectiveSettings?> ResolveEffectiveSettingsAsync(
+        Guid departmentId, CancellationToken ct)
+    {
+        var dept = await db.Departments.AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == departmentId, ct);
+
+        // D4 — departamento inativo não participa da auto-atribuição.
+        if (dept is null || !dept.IsActive) return null;
+
+        Department? parent = null;
+        if (dept.ClientId is not null && dept.InheritFromGlobalId is { } parentId
+            && parentId != dept.Id)
+        {
+            parent = await db.Departments.AsNoTracking()
+                .FirstOrDefaultAsync(d => d.Id == parentId && d.ClientId == null && d.IsActive, ct);
+        }
+
+        return DepartmentEffectiveSettingsResolver.Resolve(dept, parent);
     }
 
     /// <summary>

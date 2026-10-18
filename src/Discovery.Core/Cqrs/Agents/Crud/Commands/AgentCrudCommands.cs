@@ -44,7 +44,13 @@ public sealed record AgentDto(
     /// <summary>Usuário logado no Windows (ao vivo pelo heartbeat; senão o último persistido).</summary>
     string? LoggedUser = null,
     /// <summary>Início da sessão interativa atual (só quando há heartbeat ao vivo).</summary>
-    DateTime? LoggedUserSince = null
+    DateTime? LoggedUserSince = null,
+    /// <summary>Reinício pendente (Windows Update, CBS, renomeação, arquivos em uso).</summary>
+    bool PendingReboot = false,
+    /// <summary>Motivos do reinício pendente (JSON array).</summary>
+    string? PendingRebootReasons = null,
+    /// <summary>Instante da última sonda de reinício.</summary>
+    DateTime? PendingRebootCheckedAt = null
 );
 
 /// <summary>Página de agentes na lixeira (soft-deleted), com o clientId já resolvido.</summary>

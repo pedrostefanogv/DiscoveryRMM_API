@@ -8,5 +8,9 @@ public enum AutomationExecutionSourceType
     AgentManual = 3,
     // Operações de software disparadas pelo detalhe do agente (inventário).
     SoftwareUpdate = 4,
-    SoftwareUninstall = 5
+    SoftwareUninstall = 5,
+    // Gerenciador de patches do Windows (WUA).
+    PatchScan = 6,
+    PatchInstall = 7,
+    PatchOsPolicy = 8
 }

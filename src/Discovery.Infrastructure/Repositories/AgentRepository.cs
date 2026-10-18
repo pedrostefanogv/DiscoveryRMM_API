@@ -109,6 +109,11 @@ public class AgentRepository : IAgentRepository
         existingAgent.MaintenanceReason = agent.MaintenanceReason;
         existingAgent.MaintenanceChangedAt = agent.MaintenanceChangedAt;
         existingAgent.MaintenanceChangedByUserId = agent.MaintenanceChangedByUserId;
+        // Reinício pendente (gerenciador de patches): a sonda grava no Agent e o
+        // badge de /agents lê daqui.
+        existingAgent.PendingReboot = agent.PendingReboot;
+        existingAgent.PendingRebootReasons = agent.PendingRebootReasons;
+        existingAgent.PendingRebootCheckedAt = agent.PendingRebootCheckedAt;
         existingAgent.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();

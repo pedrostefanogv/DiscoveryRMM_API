@@ -70,6 +70,13 @@ public class AgentPurgeService : IAgentPurgeService
         "remote_terminal_recordings",
         "remote_sessions",
         "entity_notes",
+        // Gerenciador de patches: inventário, snapshot, aprovações/auditoria
+        // agent-scoped e estado de enforcement no SO.
+        "agent_windows_updates",
+        "agent_windows_update_snapshots",
+        "patch_approvals",
+        "patch_approval_audits",
+        "patch_os_states",
     ];
 
     /// <summary>

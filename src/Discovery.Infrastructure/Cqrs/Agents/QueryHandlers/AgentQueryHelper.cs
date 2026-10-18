@@ -29,7 +29,10 @@ internal static class AgentQueryHelper
         a.CreatedAt,
         a.UpdatedAt,
         null,
-        LoggedUser: a.LoggedUser);
+        LoggedUser: a.LoggedUser,
+        PendingReboot: a.PendingReboot,
+        PendingRebootReasons: a.PendingRebootReasons,
+        PendingRebootCheckedAt: a.PendingRebootCheckedAt);
 
     internal static AgentDto MapToDto(Agent a, HeartbeatCacheEntry? hb)
     {
@@ -67,7 +70,10 @@ internal static class AgentQueryHelper
                 hb.P2pPeers, hb.UptimeSeconds, hb.ProcessCount,
                 hb.UiOnline,
                 hb.IpAddress, hb.Hostname, version, commitHash,
-                hb.LastHeartbeatAt, hb.LastHeartbeatAt));
+                hb.LastHeartbeatAt, hb.LastHeartbeatAt),
+            PendingReboot: a.PendingReboot,
+            PendingRebootReasons: a.PendingRebootReasons,
+            PendingRebootCheckedAt: a.PendingRebootCheckedAt);
 
         return WithLiveLoggedUser(dto, a, hb);
     }

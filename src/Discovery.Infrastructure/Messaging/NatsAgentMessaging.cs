@@ -103,6 +103,20 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                 result.ErrorMessage,
                 result.Output,
                 DateTime.UtcNow);
+
+            // Gerenciador de patches: fecha o inventário (Installed/Failed) e o
+            // snapshot do agente com base no resultado JSON do comando. Opcional
+            // para não derrubar o processamento de resultados se não registrado.
+            var patchResultService = scope.ServiceProvider.GetService<Discovery.Core.Interfaces.IPatchExecutionResultService>();
+            if (patchResultService is not null)
+            {
+                await patchResultService.HandleCommandResultAsync(
+                    result.CommandId,
+                    result.ExitCode,
+                    result.Output,
+                    result.ErrorMessage,
+                    DateTime.UtcNow);
+            }
         }
         catch (Exception ex)
         {

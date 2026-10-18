@@ -110,7 +110,10 @@ public class AiTicketTriageServiceTests
     /// e um membro herdado, ambos elegíveis para a triagem.
     /// </summary>
     private static async Task<(DiscoveryDbContext Db, Ticket Ticket, Department Global,
-        Department Client, User Own, User Inherited)> SeedInheritedTeamAsync()
+        Department Client, User Own, User Inherited)> SeedInheritedTeamAsync(
+        TicketAssignmentStrategy childBase = TicketAssignmentStrategy.AiTriage,
+        int? childOverride = null,
+        bool globalActive = true)
     {
         var db = CreateDb();
         var now = DateTime.UtcNow;
@@ -125,7 +128,7 @@ public class AiTicketTriageServiceTests
             Id = Guid.NewGuid(),
             ClientId = null,
             Name = "Global Suporte",
-            IsActive = true,
+            IsActive = globalActive,
             AssignmentStrategy = (int)TicketAssignmentStrategy.AiTriage,
             AiAssignmentMode = (int)AiAssignmentMode.Suggest,
             CreatedAt = now,
@@ -138,7 +141,8 @@ public class AiTicketTriageServiceTests
             Name = "Suporte Filial",
             InheritFromGlobalId = global.Id,
             IsActive = true,
-            AssignmentStrategy = (int)TicketAssignmentStrategy.AiTriage,
+            AssignmentStrategy = (int)childBase,
+            AssignmentStrategyOverride = childOverride,
             AiAssignmentMode = (int)AiAssignmentMode.Suggest,
             CreatedAt = now,
             UpdatedAt = now
@@ -506,6 +510,37 @@ public class AiTicketTriageServiceTests
 
         var stored = await db.Tickets.AsNoTracking().FirstAsync(t => t.Id == ticket.Id);
         Assert.That(stored.AssignedToUserId, Is.EqualTo(top.Id));
+    }
+
+    [Test]
+    public async Task ProcessDueAsync_ProcessesQueuedItemWhenChildInheritsAiTriage()
+    {
+        // Regressão B3: a estratégia EFETIVA (global pai) manda. O filho tem
+        // base None e override null; antes a fila descartava com "strategy_changed".
+        var (db, ticket, _, client, own, _) = await SeedInheritedTeamAsync(
+            childBase: TicketAssignmentStrategy.None, childOverride: null);
+        await using var _db = db;
+
+        var queue = new FakeQueue();
+        queue.Pending.Add(new AiAssignmentQueueItem
+        {
+            Id = Guid.NewGuid(),
+            TicketId = ticket.Id,
+            DepartmentId = client.Id,
+            Status = AiAssignmentQueueStatus.Pending,
+            Attempts = 0,
+            AvailableAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var service = BuildService(db, new FakeAiChat(own.Id, 0.9), queue);
+        var result = await service.ProcessDueAsync();
+
+        Assert.That(result.Triaged, Is.EqualTo(1));
+        Assert.That(queue.MarkedSkipped, Is.Empty,
+            "o item não pode ser descartado por causa da coluna base None");
+        Assert.That(queue.MarkedDone, Has.Count.EqualTo(1));
     }
 
     [Test]

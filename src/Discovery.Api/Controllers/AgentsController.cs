@@ -414,7 +414,8 @@ public class AgentsController : ControllerBase
             Printers: request.Printers,
             Hardware: request.Hardware,
             StartupItems: request.StartupItems,
-            ScheduledTasks: request.ScheduledTasks
+            ScheduledTasks: request.ScheduledTasks,
+            WindowsUpdates: request.WindowsUpdates
         );
         var result = await _mediator.Send(cmd, ct);
         return result.Match<IActionResult>(

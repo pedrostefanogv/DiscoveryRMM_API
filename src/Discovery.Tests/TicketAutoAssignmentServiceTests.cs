@@ -170,6 +170,140 @@ public class TicketAutoAssignmentServiceTests
         Assert.That(applied, Is.False);
     }
 
+    [Test]
+    public async Task ApplyAfterCreate_AssignsByInheritedRoundRobin()
+    {
+        // B3 — o valor EFETIVO (override > global pai > base) precisa decidir a
+        // atribuição. Antes só a coluna base era lida e o filho herdava "nada".
+        var (db, _, child, userId, ticket) = await SeedInheritedAsync(
+            TicketAssignmentStrategy.RoundRobin, TicketAssignmentStrategy.None, childOverride: null);
+        await using var _db = db;
+
+        var applied = await BuildService(db, new FakeQueue())
+            .ApplyAfterCreateAsync(ticket, CancellationToken.None);
+
+        Assert.That(applied, Is.True);
+        var stored = await db.Tickets.AsNoTracking().FirstAsync(t => t.Id == ticket.Id);
+        Assert.That(stored.AssignedToUserId, Is.EqualTo(userId));
+
+        var strategy = await new TicketAssignmentService(db, new DepartmentTeamResolver(db))
+            .GetStrategyAsync(child.Id);
+        Assert.That(strategy, Is.EqualTo((int)TicketAssignmentStrategy.RoundRobin));
+    }
+
+    [Test]
+    public async Task ApplyAfterCreate_OwnOverrideWinsOverInheritedStrategy()
+    {
+        var (db, _, _, userId, ticket) = await SeedInheritedAsync(
+            TicketAssignmentStrategy.None, TicketAssignmentStrategy.None,
+            childOverride: (int)TicketAssignmentStrategy.LeastOpenTickets);
+        await using var _db = db;
+
+        var applied = await BuildService(db, new FakeQueue())
+            .ApplyAfterCreateAsync(ticket, CancellationToken.None);
+
+        Assert.That(applied, Is.True);
+        var stored = await db.Tickets.AsNoTracking().FirstAsync(t => t.Id == ticket.Id);
+        Assert.That(stored.AssignedToUserId, Is.EqualTo(userId));
+    }
+
+    [Test]
+    public async Task ApplyAfterCreate_IgnoresInheritedStrategyFromInactiveGlobal()
+    {
+        var (db, _, _, _, ticket) = await SeedInheritedAsync(
+            TicketAssignmentStrategy.RoundRobin, TicketAssignmentStrategy.None,
+            childOverride: null, parentActive: false);
+        await using var _db = db;
+
+        var applied = await BuildService(db, new FakeQueue())
+            .ApplyAfterCreateAsync(ticket, CancellationToken.None);
+
+        Assert.That(applied, Is.False, "pai inativo é ignorado; sobra a base None");
+    }
+
+    [Test]
+    public async Task ApplyAfterCreate_WithInheritedAiTriage_Enqueues()
+    {
+        var (db, _, _, _, ticket) = await SeedInheritedAsync(
+            TicketAssignmentStrategy.AiTriage, TicketAssignmentStrategy.None, childOverride: null);
+        await using var _db = db;
+
+        var queue = new FakeQueue();
+        var applied = await BuildService(db, queue).ApplyAfterCreateAsync(ticket, CancellationToken.None);
+
+        Assert.That(applied, Is.True);
+        Assert.That(queue.Enqueued, Has.Count.EqualTo(1));
+    }
+
+    private static async Task<(DiscoveryDbContext Db, Department Global, Department Child,
+        Guid UserId, Ticket Ticket)> SeedInheritedAsync(
+        TicketAssignmentStrategy globalStrategy,
+        TicketAssignmentStrategy childBase,
+        int? childOverride,
+        bool parentActive = true)
+    {
+        var db = CreateDb();
+        var now = DateTime.UtcNow;
+
+        var user = new User
+        {
+            Id = Guid.NewGuid(), Login = "bia", Email = "bia@x.com", FullName = "Bia", IsActive = true
+        };
+        db.Users.Add(user);
+
+        var global = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = null,
+            Name = "Global",
+            IsActive = parentActive,
+            AssignmentStrategy = (int)globalStrategy,
+            AssignmentStrategyOverride = (int)globalStrategy,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        var child = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = Guid.NewGuid(),
+            Name = "Cliente",
+            IsActive = true,
+            InheritFromGlobalId = global.Id,
+            AssignmentStrategy = (int)childBase,
+            AssignmentStrategyOverride = childOverride,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        db.Departments.AddRange(global, child);
+        db.DepartmentMembers.Add(new DepartmentMember
+        {
+            Id = Guid.NewGuid(),
+            DepartmentId = child.Id,
+            UserId = user.Id,
+            IsActive = true,
+            CreatedAt = now
+        });
+
+        var ticket = new Ticket
+        {
+            Id = Guid.NewGuid(),
+            ClientId = child.ClientId!.Value,
+            WorkflowStateId = Guid.NewGuid(),
+            DepartmentId = child.Id,
+            Title = "Chamado herdado",
+            Description = "Descrição",
+            Priority = TicketPriority.Medium,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        db.Tickets.Add(ticket);
+        await db.SaveChangesAsync();
+
+        return (db, global, child, user.Id, ticket);
+    }
+
     private sealed class FakeQueue : IAiAssignmentQueueRepository
     {
         public List<(Guid TicketId, Guid DepartmentId, string? Reason)> Enqueued { get; } = [];

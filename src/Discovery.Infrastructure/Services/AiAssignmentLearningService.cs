@@ -44,9 +44,11 @@ public class AiAssignmentLearningService(
         // O modo de aprendizado é lido da configuração EFETIVA (override próprio
         // ou herdado do global pai), nunca da coluna base crua: um departamento
         // que herda "Off" não pode rodar ciclo por causa do valor legado.
+        // A coluna BASE nao filtra mais aqui: um filho com base RoundRobin que
+        // HERDA AiTriage do global pai precisa entrar no ciclo. O filtro pela
+        // estrategia EFETIVA acontece depois de resolver a heranca (abaixo).
         var departments = await db.Departments
-            .Where(d => (departmentId == null || d.Id == departmentId.Value)
-                        && d.AssignmentStrategy == (int)TicketAssignmentStrategy.AiTriage)
+            .Where(d => departmentId == null || d.Id == departmentId.Value)
             .ToListAsync(ct);
 
         if (departments.Count == 0)
@@ -71,6 +73,12 @@ public class AiAssignmentLearningService(
 
             parents.TryGetValue(department.InheritFromGlobalId ?? Guid.Empty, out var parent);
             var settings = DepartmentEffectiveSettingsResolver.Resolve(department, parent);
+
+            // Estrategia EFETIVA: filho que herda AiTriage do global entra no ciclo
+            // mesmo com a coluna base diferente (e vice-versa).
+            if (settings.AssignmentStrategy.Value != (int)TicketAssignmentStrategy.AiTriage)
+                continue;
+
             if (settings.AiSkillLearningMode.Value == (int)AiLearningMode.Off
                 && settings.AiWeightLearningMode.Value == (int)AiLearningMode.Off)
                 continue;
@@ -189,7 +197,6 @@ public class AiAssignmentLearningService(
     private async Task<int> RunWeightCycleAsync(
         Department department, DepartmentEffectiveSettings settings, CancellationToken ct)
     {
-        if (department.AssignmentStrategy != (int)TicketAssignmentStrategy.AiTriage) return 0;
 
         var cycleDays = Math.Clamp(settings.AiWeightCycleDays.Value, 1, 90);
         var windowEnd = DateTime.UtcNow;

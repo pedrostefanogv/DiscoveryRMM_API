@@ -36,6 +36,12 @@ public sealed class CommandRedeliveryGuard(
         if (IsPowerCommand(command.CommandType))
             return EvaluatePowerRedelivery(command);
 
+        // Instalação de patches com ação de energia (atualizar e reiniciar/
+        // desligar): a entrega derruba o agente que confirmaria o comando. Sem
+        // esta regra o cenário documentado de 54 reboots se repete.
+        if (IsPatchWithPowerAction(command))
+            return EvaluatePowerRedelivery(command);
+
         if (command.CommandType != CommandType.TicketChatInvite)
             return CommandRedeliveryDecision.Allow;
 
@@ -55,6 +61,32 @@ public sealed class CommandRedeliveryGuard(
     /// </summary>
     internal static bool IsPowerCommand(CommandType commandType)
         => commandType is CommandType.Restart or CommandType.Shutdown;
+
+    /// <summary>
+    /// Verdadeiro quando o comando de patch termina com reinício/desligamento
+    /// (payload com postAction restart/shutdown).
+    /// </summary>
+    internal static bool IsPatchWithPowerAction(AgentCommand command)
+    {
+        if (command.CommandType != CommandType.WindowsUpdate || string.IsNullOrWhiteSpace(command.Payload))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(command.Payload);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+            if (!document.RootElement.TryGetProperty("postAction", out var postActionElement) ||
+                postActionElement.ValueKind != JsonValueKind.String)
+                return false;
+            var postAction = postActionElement.GetString()?.Trim().ToLowerInvariant();
+            return postAction is "restart" or "shutdown";
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// Caso real: 1 (um) restart solicitado pelo console virou 54 reboots em ~5h,

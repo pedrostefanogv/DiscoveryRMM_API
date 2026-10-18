@@ -1,0 +1,308 @@
+using System.Globalization;
+using System.Text.Json;
+using Discovery.Core.Cqrs.Patches;
+using Discovery.Core.Entities;
+
+namespace Discovery.Core.Cqrs.AgentAuth.Patches;
+
+/// <summary>
+/// Normaliza o payload de inventário de Windows Update enviado pelo agente.
+///
+/// Regras de segurança: chaves canônicas validadas, KBs normalizados,
+/// listas limitadas (1000 updates / 10 motivos) e campos truncados nos limites
+/// das colunas. Um item inválido é descartado — nunca derruba o upload inteiro.
+/// </summary>
+public static class WindowsUpdateInventoryParser
+{
+    private const int MaxUpdates = 1000;
+    private const int MaxTitle = 500;
+    private const int MaxDescription = 2000;
+    private const int MaxClassification = 80;
+    private const int MaxSeverity = 40;
+    private const int MaxSupportUrl = 1000;
+    private const int MaxSource = 20;
+
+    private static readonly HashSet<string> ScanStatuses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ok", "error", "timeout", "unsupported", "partial"
+    };
+
+    private static readonly HashSet<string> RebootReasons = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "windows_update", "cbs", "file_rename", "computer_rename", "servicing"
+    };
+
+    public static IReadOnlyList<AgentWindowsUpdateEntry> ParseUpdates(object? updates)
+    {
+        var items = ExtractArray(updates);
+        if (items is null)
+            return [];
+
+        var result = new List<AgentWindowsUpdateEntry>();
+        foreach (var item in items.Value.EnumerateArray().Take(MaxUpdates))
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var entry = MapEntry(item);
+            if (entry is not null)
+                result.Add(entry);
+        }
+        return result;
+    }
+
+    public static PatchScanMeta ParseScan(object? scan)
+    {
+        var meta = new PatchScanMeta { Status = "ok" };
+        var element = ExtractObject(scan);
+        if (element is null)
+            return meta;
+
+        var root = element.Value;
+        var status = GetString(root, "status");
+        meta.Status = !string.IsNullOrWhiteSpace(status) && ScanStatuses.Contains(status.Trim())
+            ? status.Trim().ToLowerInvariant()
+            : "ok";
+
+        var errorCode = GetString(root, "errorCode");
+        if (!string.IsNullOrWhiteSpace(errorCode))
+            meta.ErrorCode = Truncate(errorCode, 200);
+
+        if (root.TryGetProperty("durationMs", out var durationElement) &&
+            durationElement.ValueKind == JsonValueKind.Number &&
+            durationElement.TryGetInt32(out var duration) &&
+            duration is >= 0 and <= 3_600_000)
+        {
+            meta.DurationMs = duration;
+        }
+
+        var startedAt = GetString(root, "startedAt");
+        meta.StartedAt = ParseDate(startedAt);
+        return meta;
+    }
+
+    public static PatchPendingRebootMeta? ParsePendingReboot(object? pendingReboot)
+    {
+        var element = ExtractObject(pendingReboot);
+        if (element is null)
+            return null;
+
+        var root = element.Value;
+        var pending = false;
+        if (root.TryGetProperty("pending", out var pendingElement))
+        {
+            pending = pendingElement.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.String => bool.TryParse(pendingElement.GetString(), out var parsed) && parsed,
+                _ => false
+            };
+        }
+
+        var reasons = new List<string>();
+        if (root.TryGetProperty("reasons", out var reasonsElement) &&
+            reasonsElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var reasonElement in reasonsElement.EnumerateArray().Take(10))
+            {
+                if (reasonElement.ValueKind != JsonValueKind.String)
+                    continue;
+                var reason = reasonElement.GetString()?.Trim().ToLowerInvariant();
+                if (!string.IsNullOrWhiteSpace(reason) &&
+                    RebootReasons.Contains(reason) &&
+                    !reasons.Contains(reason, StringComparer.Ordinal))
+                {
+                    reasons.Add(reason);
+                }
+            }
+        }
+
+        var checkedAt = ParseDate(GetString(root, "checkedAt"));
+        return new PatchPendingRebootMeta
+        {
+            Pending = pending,
+            Reasons = reasons,
+            CheckedAt = checkedAt
+        };
+    }
+
+    private static AgentWindowsUpdateEntry? MapEntry(JsonElement item)
+    {
+        var kbIds = PatchJson.ParseStringArray(GetRawString(item, "kbIds"))
+            .Select(NormalizeKb)
+            .Where(kb => kb is not null)
+            .Select(kb => kb!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var updateId = GetString(item, "updateId");
+        var normalizedUpdateId = NormalizeGuid(updateId);
+        var revision = 0;
+        if (item.TryGetProperty("revision", out var revisionElement) &&
+            revisionElement.ValueKind == JsonValueKind.Number &&
+            revisionElement.TryGetInt32(out var parsedRevision) &&
+            parsedRevision >= 0)
+        {
+            revision = parsedRevision;
+        }
+
+        var rawKey = GetString(item, "updateKey");
+        var updateKey = NormalizeUpdateKey(rawKey, normalizedUpdateId, revision, kbIds);
+        if (string.IsNullOrWhiteSpace(updateKey))
+            return null;
+
+        var isInstalled = GetBool(item, "isInstalled");
+        var isPending = GetBool(item, "isPending") || !isInstalled;
+
+        long? maxDownloadSize = null;
+        if (item.TryGetProperty("maxDownloadSize", out var sizeElement) &&
+            sizeElement.ValueKind == JsonValueKind.Number &&
+            sizeElement.TryGetInt64(out var size) &&
+            size >= 0)
+        {
+            maxDownloadSize = size;
+        }
+
+        return new AgentWindowsUpdateEntry
+        {
+            UpdateKey = updateKey,
+            KbIds = kbIds.Count > 0 ? JsonSerializer.Serialize(kbIds) : null,
+            UpdateId = normalizedUpdateId,
+            Revision = revision,
+            Title = Truncate(GetString(item, "title"), MaxTitle) ?? string.Empty,
+            Description = Truncate(GetString(item, "description"), MaxDescription),
+            Classification = Truncate(GetString(item, "classification"), MaxClassification),
+            Categories = GetRawString(item, "categories"),
+            Severity = Truncate(GetString(item, "severity"), MaxSeverity),
+            IsPending = isPending,
+            IsInstalled = isInstalled,
+            IsHidden = GetBool(item, "isHidden"),
+            IsDownloaded = GetBool(item, "isDownloaded"),
+            IsMandatory = GetBool(item, "isMandatory"),
+            RequiresReboot = GetBool(item, "requiresReboot"),
+            MaxDownloadSize = maxDownloadSize,
+            SupportUrl = Truncate(GetString(item, "supportUrl"), MaxSupportUrl),
+            PublishedAt = ParseDate(GetString(item, "publishedAt")),
+            LastDeployedAt = ParseDate(GetString(item, "lastDeployedAt")),
+            InstalledAt = ParseDate(GetString(item, "installedAt")),
+            Source = Truncate(GetString(item, "source"), MaxSource) ?? "wua",
+            Raw = null
+        };
+    }
+
+    private static string? NormalizeUpdateKey(
+        string? rawKey,
+        string? updateId,
+        int revision,
+        IReadOnlyList<string> kbIds)
+    {
+        var key = rawKey?.Trim() ?? string.Empty;
+        if (key.StartsWith("guid:", StringComparison.OrdinalIgnoreCase) && key.Count(ch => ch == ':') == 2)
+            return key.ToLowerInvariant();
+        if (key.StartsWith("kb:", StringComparison.OrdinalIgnoreCase))
+        {
+            var kb = NormalizeKb(key[3..]);
+            return kb is null ? null : "kb:" + kb;
+        }
+
+        if (!string.IsNullOrWhiteSpace(updateId))
+            return "guid:" + updateId + ":" + revision;
+
+        return kbIds.Count > 0 ? "kb:" + kbIds[0] : null;
+    }
+
+    private static string? NormalizeGuid(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        return Guid.TryParse(raw.Trim(), out var guid) ? guid.ToString("D").ToLowerInvariant() : null;
+    }
+
+    private static string? NormalizeKb(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        var value = raw.Trim().ToUpperInvariant().Replace(" ", string.Empty);
+        if (!value.StartsWith("KB", StringComparison.Ordinal))
+            value = "KB" + value;
+        var digits = value[2..];
+        if (digits.Length is < 4 or > 10 || !digits.All(char.IsDigit))
+            return null;
+        return value;
+    }
+
+    private static JsonElement? ExtractArray(object? value)
+    {
+        var element = ToElement(value);
+        return element is { ValueKind: JsonValueKind.Array } ? element : null;
+    }
+
+    private static JsonElement? ExtractObject(object? value)
+    {
+        var element = ToElement(value);
+        return element is { ValueKind: JsonValueKind.Object } ? element : null;
+    }
+
+    private static JsonElement? ToElement(object? value)
+    {
+        if (value is null)
+            return null;
+        if (value is JsonElement element)
+            return element;
+        try
+        {
+            var json = JsonSerializer.Serialize(value);
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? GetRawString(JsonElement item, string property)
+    {
+        if (!item.TryGetProperty(property, out var element) || element.ValueKind != JsonValueKind.Array)
+            return null;
+        return element.GetRawText();
+    }
+
+    private static string? GetString(JsonElement item, string property)
+    {
+        if (!item.TryGetProperty(property, out var element) || element.ValueKind != JsonValueKind.String)
+            return null;
+        return element.GetString();
+    }
+
+    private static bool GetBool(JsonElement item, string property)
+    {
+        if (!item.TryGetProperty(property, out var element))
+            return false;
+        return element.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String => bool.TryParse(element.GetString(), out var parsed) && parsed,
+            _ => false
+        };
+    }
+
+    private static DateTime? ParseDate(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        return DateTime.TryParse(raw, CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed)
+            ? DateTime.SpecifyKind(parsed, DateTimeKind.Utc)
+            : null;
+    }
+
+    private static string? Truncate(string? value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value;
+        var trimmed = value.Trim();
+        return trimmed.Length > maxLength ? trimmed[..maxLength] : trimmed;
+    }
+}

@@ -167,7 +167,7 @@ public sealed class RunAutomationTaskCommandHandler(
     /// header X-Correlation-Id da requisição: sem ele o histórico perdia o vínculo
     /// com a operação disparada na UI.
     /// </summary>
-    internal static async Task CreateReportAsync(IAutomationExecutionReportRepository reportRepo, AgentCommand command, Guid? taskId, Guid? scriptId, AutomationExecutionSourceType sourceType, object metadata, string? correlationId = null)
+    public static async Task CreateReportAsync(IAutomationExecutionReportRepository reportRepo, AgentCommand command, Guid? taskId, Guid? scriptId, AutomationExecutionSourceType sourceType, object metadata, string? correlationId = null)
     {
         await reportRepo.CreateAsync(new AutomationExecutionReport
         {
@@ -285,6 +285,7 @@ public sealed class RefreshAgentDataCommandHandler(
             Hardware = cmd.Hardware,
             StartupItems = cmd.StartupItems,
             ScheduledTasks = cmd.ScheduledTasks,
+            WindowsUpdates = cmd.WindowsUpdates,
             RequestedAt = DateTime.UtcNow
         });
 
