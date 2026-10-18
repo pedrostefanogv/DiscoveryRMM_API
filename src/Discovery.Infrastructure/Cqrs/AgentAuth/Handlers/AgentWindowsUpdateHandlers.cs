@@ -16,6 +16,8 @@ public sealed class ReportAgentWindowsUpdatesHandler(
     IPatchRepository patchRepo,
     IPatchApprovalResolver resolver,
     IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IPatchEventPublisher events,
     ILogger<ReportAgentWindowsUpdatesHandler>? logger = null
 ) : IRequestHandler<ReportAgentWindowsUpdatesCommand, Result<VoidResult>>
 {
@@ -46,6 +48,18 @@ public sealed class ReportAgentWindowsUpdatesHandler(
 
             await patchRepo.ReplaceInventoryAsync(cmd.AgentId, collectedAt.ToUniversalTime(), scan, pendingReboot, entries, ct);
             await resolver.RecomputeForAgentAsync(cmd.AgentId, ct);
+
+            var site = await siteRepo.GetByIdAsync(agent.SiteId);
+            await events.PublishScanCompletedAsync(
+                agent.Id,
+                agent.Hostname,
+                site?.ClientId,
+                agent.SiteId,
+                entries.Count(entry => entry.IsPending),
+                entries.Count(entry => entry.IsInstalled),
+                pendingReboot?.Pending ?? false,
+                scan.Status,
+                ct);
 
             return Result<VoidResult>.Success(VoidResult.Value);
         }

@@ -37,6 +37,15 @@ public sealed record SetAgentWindowsUpdateApprovalCommand(
     Guid? TargetScopeId = null
 ) : ICommand<Result<PatchApprovalDto>>;
 
+public sealed record ApproveAgentPendingWindowsUpdatesCommand(
+    Guid AgentId,
+    PatchApprovalActionType Action,
+    PatchApprovalScopeType Scope,
+    string? Reason,
+    string? ChangedBy,
+    string? IpAddress
+) : ICommand<Result<PatchDispatchDto>>;
+
 public sealed record ApplyAgentPatchOsPolicyCommand(
     Guid AgentId,
     bool HideDenied,

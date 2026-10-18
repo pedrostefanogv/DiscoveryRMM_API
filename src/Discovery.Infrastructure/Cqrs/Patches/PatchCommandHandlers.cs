@@ -180,7 +180,8 @@ public sealed class SetAgentWindowsUpdateApprovalCommandHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
     IPatchRepository patchRepo,
-    IPatchApprovalResolver resolver
+    IPatchApprovalResolver resolver,
+    IPatchEventPublisher events
 ) : IRequestHandler<SetAgentWindowsUpdateApprovalCommand, Result<PatchApprovalDto>>
 {
     public async Task<Result<PatchApprovalDto>> Handle(
@@ -203,7 +204,67 @@ public sealed class SetAgentWindowsUpdateApprovalCommandHandler(
             patchRepo, resolver, agent, site, update, cmd.Scope, cmd.Action,
             cmd.Reason, cmd.ChangedBy, cmd.IpAddress, cmd.TargetScopeId, ct);
 
+        await events.PublishApprovalChangedAsync(
+            agent.Id, agent.Hostname, site.ClientId, site.Id, update.GroupKey,
+            cmd.Action == PatchApprovalActionType.Deny ? "Deny" : "Approve", ct);
+
         return Result<PatchApprovalDto>.Success(dto);
+    }
+}
+
+/// <summary>
+/// Aprova/recusa TODAS as atualizações pendentes do agente de uma vez (ação em
+/// lote da visualização de pendências). A regra é criada no escopo escolhido
+/// (default: somente este agente).
+/// </summary>
+public sealed class ApproveAgentPendingWindowsUpdatesCommandHandler(
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IPatchRepository patchRepo,
+    IPatchApprovalResolver resolver,
+    IPatchEventPublisher events
+) : IRequestHandler<ApproveAgentPendingWindowsUpdatesCommand, Result<PatchDispatchDto>>
+{
+    public async Task<Result<PatchDispatchDto>> Handle(
+        ApproveAgentPendingWindowsUpdatesCommand cmd,
+        CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
+        if (agent is null)
+            return Result<PatchDispatchDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        if (site is null)
+            return Result<PatchDispatchDto>.Failure(Error.NotFound("Site not found."));
+
+        var pending = await patchRepo.GetPendingForAgentAsync(cmd.AgentId, ct);
+        var targets = pending
+            .GroupBy(update => update.GroupKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .Take(200)
+            .ToList();
+
+        if (targets.Count == 0)
+            return Result<PatchDispatchDto>.Failure(Error.Conflict("Nenhuma atualização pendente para este agente."));
+
+        var changed = 0;
+        foreach (var update in targets)
+        {
+            await PatchOperations.SetApprovalAsync(
+                patchRepo, resolver, agent, site, update, cmd.Scope, cmd.Action,
+                cmd.Reason, cmd.ChangedBy, cmd.IpAddress, null, ct);
+            changed++;
+        }
+
+        await events.PublishApprovalChangedAsync(
+            agent.Id, agent.Hostname, site.ClientId, site.Id, "bulk-pending",
+            cmd.Action == PatchApprovalActionType.Deny ? "Deny" : "Approve", ct);
+
+        return Result<PatchDispatchDto>.Success(new PatchDispatchDto(
+            changed, pending.Count - targets.Count, [],
+            cmd.Action == PatchApprovalActionType.Deny
+                ? $"{changed} atualização(ões) recusada(s)."
+                : $"{changed} atualização(ões) aprovada(s)."));
     }
 }
 
@@ -213,7 +274,8 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
     IPatchRepository patchRepo,
     IPatchApprovalResolver resolver,
     IAgentCommandDispatcher dispatcher,
-    IAutomationExecutionReportRepository reportRepo
+    IAutomationExecutionReportRepository reportRepo,
+    IPatchEventPublisher events
 ) : IRequestHandler<BulkAgentWindowsUpdateCommand, Result<PatchDispatchDto>>
 {
     public async Task<Result<PatchDispatchDto>> Handle(
@@ -250,6 +312,10 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
                     cmd.Reason, cmd.ChangedBy, cmd.IpAddress, null, ct);
                 changed++;
             }
+
+            await events.PublishApprovalChangedAsync(
+                agent.Id, agent.Hostname, site.ClientId, site.Id, "bulk",
+                action == "deny" ? "Deny" : "Approve", ct);
 
             return Result<PatchDispatchDto>.Success(new PatchDispatchDto(
                 changed, cmd.UpdateKeys.Count - changed, keys,

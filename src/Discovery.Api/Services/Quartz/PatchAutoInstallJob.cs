@@ -34,6 +34,7 @@ public sealed class PatchAutoInstallJob : IJob
         var patchRepo = scope.ServiceProvider.GetRequiredService<IPatchRepository>();
         var agentRepo = scope.ServiceProvider.GetRequiredService<IAgentRepository>();
         var siteRepo = scope.ServiceProvider.GetRequiredService<ISiteRepository>();
+        var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
         var redis = scope.ServiceProvider.GetRequiredService<IRedisService>();
         var dispatcher = scope.ServiceProvider.GetRequiredService<IAgentCommandDispatcher>();
         var reportRepo = scope.ServiceProvider.GetRequiredService<IAutomationExecutionReportRepository>();
@@ -75,8 +76,14 @@ public sealed class PatchAutoInstallJob : IJob
                 if (policy is null || !policy.AutoInstallEnabled)
                     continue;
 
-                if (!Discovery.Core.Helpers.PatchMaintenanceWindow.IsOpen(policy.MaintenanceWindowJson, now))
+                // Timezone: o JSON da política manda; sem ele, usa o timezone do
+                // site (SiteConfiguration.Timezone) antes de cair para UTC.
+                var siteConfig = await configService.GetSiteConfigAsync(site.Id);
+                if (!Discovery.Core.Helpers.PatchMaintenanceWindow.IsOpen(
+                        policy.MaintenanceWindowJson, now, siteConfig?.Timezone))
+                {
                     continue;
+                }
 
                 var lockKey = $"patch:auto-install:{agent.Id}";
                 if (!await redis.SetIfNotExistsAsync(lockKey, now.ToString("O"), 3600))

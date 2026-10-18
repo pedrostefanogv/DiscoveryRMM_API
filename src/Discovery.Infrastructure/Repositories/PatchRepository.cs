@@ -665,9 +665,11 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 SiteName = group.Key.SiteName,
                 ClientId = group.Key.ClientId,
                 ClientName = group.Key.ClientName,
-                PendingCount = group.Count(),
-                CriticalCount = group.Count(row => row.update.Severity != null &&
-                    EF.Functions.ILike(row.update.Severity, "Critical")),
+                // Pendentes "acionáveis" (recusadas ficam no contador próprio).
+                PendingCount = group.Count(row => row.update.ApprovalState != PatchApprovalState.Denied),
+                CriticalCount = group.Count(row => row.update.ApprovalState != PatchApprovalState.Denied &&
+                    row.update.Severity != null &&
+                    EF.Functions.ILike(row.update.Severity, "critical")),
                 DeniedCount = group.Count(row => row.update.ApprovalState == PatchApprovalState.Denied),
                 PendingReboot = group.Key.PendingReboot,
                 ScanStatus = group.Key.ScanStatus,
@@ -686,21 +688,27 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     {
         var now = DateTime.UtcNow;
 
-        var updateQuery = BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds)
+        var pendingQuery = BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds)
             .Where(row => row.Update.IsPending);
+
+        // Conformidade mede o que está PENDENTE E NÃO BLOQUEADO: um KB recusado
+        // de propósito pelo operador não pode derrubar o percentual da frota
+        // (decisão do produto). Recusados continuam em contador próprio/tile.
+        var actionableQuery = pendingQuery
+            .Where(row => row.Update.ApprovalState != PatchApprovalState.Denied);
 
         var snapshot = new PatchScopeSnapshot
         {
-            TotalPending = await updateQuery.CountAsync(ct),
-            CriticalPending = await updateQuery.CountAsync(row => row.Update.Severity != null &&
+            TotalPending = await actionableQuery.CountAsync(ct),
+            CriticalPending = await actionableQuery.CountAsync(row => row.Update.Severity != null &&
                 EF.Functions.ILike(row.Update.Severity, "critical"), ct),
-            DeniedPending = await updateQuery.CountAsync(row =>
+            DeniedPending = await pendingQuery.CountAsync(row =>
                 row.Update.ApprovalState == PatchApprovalState.Denied, ct),
-            ApprovedPending = await updateQuery.CountAsync(row =>
+            ApprovedPending = await actionableQuery.CountAsync(row =>
                 row.Update.ApprovalState == PatchApprovalState.Approved ||
                 row.Update.ApprovalState == PatchApprovalState.AutoApproved, ct),
-            AgentsWithPending = await updateQuery.Select(row => row.Update.AgentId).Distinct().CountAsync(ct),
-            FailedInstallations24h = await updateQuery.CountAsync(row =>
+            AgentsWithPending = await actionableQuery.Select(row => row.Update.AgentId).Distinct().CountAsync(ct),
+            FailedInstallations24h = await actionableQuery.CountAsync(row =>
                 row.Update.Status == PatchUpdateStatus.Failed && row.Update.UpdatedAt >= now.AddHours(-24), ct)
         };
 
@@ -760,7 +768,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     {
         var safeLimit = Math.Clamp(limit, 1, 50);
         return await BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds)
-            .Where(row => row.Update.IsPending)
+            .Where(row => row.Update.IsPending && row.Update.ApprovalState != PatchApprovalState.Denied)
             .GroupBy(row => row.Update.Severity ?? "Unspecified")
             .Select(group => new PatchSeverityCount { Label = group.Key, Count = group.Count() })
             .OrderByDescending(item => item.Count)
@@ -778,7 +786,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     {
         var safeLimit = Math.Clamp(limit, 1, 50);
         return await BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds)
-            .Where(row => row.Update.IsPending)
+            .Where(row => row.Update.IsPending && row.Update.ApprovalState != PatchApprovalState.Denied)
             .GroupBy(row => row.Update.Classification ?? "Unspecified")
             .Select(group => new PatchSeverityCount { Label = group.Key, Count = group.Count() })
             .OrderByDescending(item => item.Count)

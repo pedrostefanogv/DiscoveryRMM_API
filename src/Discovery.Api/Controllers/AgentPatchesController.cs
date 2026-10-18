@@ -179,6 +179,31 @@ public sealed class AgentPatchesController(
             });
     }
 
+    public sealed record ApprovePendingRequest(
+        PatchApprovalActionType Action = PatchApprovalActionType.Approve,
+        PatchApprovalScopeType Scope = PatchApprovalScopeType.Agent,
+        string? Reason = null);
+
+    [HttpPost("approve-pending")]
+    [RequirePermission(ResourceType.Patches, ActionType.Edit)]
+    public async Task<IActionResult> ApprovePending(
+        Guid agentId,
+        [FromBody] ApprovePendingRequest? request = null,
+        CancellationToken ct = default)
+    {
+        var forbidden = await EnsureAgentAccessAsync(agentId, ActionType.Edit);
+        if (forbidden is not null) return forbidden;
+
+        var result = await mediator.Send(new ApproveAgentPendingWindowsUpdatesCommand(
+            agentId,
+            request?.Action ?? PatchApprovalActionType.Approve,
+            request?.Scope ?? PatchApprovalScopeType.Agent,
+            request?.Reason,
+            CurrentUserId(),
+            RemoteIp()), ct);
+        return AcceptedOrError(result);
+    }
+
     [HttpPost("os-policy/apply")]
     [RequirePermission(ResourceType.Patches, ActionType.Execute)]
     public async Task<IActionResult> ApplyOsPolicy(

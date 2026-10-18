@@ -16,6 +16,9 @@ public sealed class PatchExecutionResultService(
     ICommandRepository commandRepo,
     IPatchRepository patchRepo,
     IPatchApprovalResolver resolver,
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IPatchEventPublisher events,
     ILogger<PatchExecutionResultService>? logger = null) : IPatchExecutionResultService
 {
     public async Task HandleCommandResultAsync(
@@ -93,6 +96,18 @@ public sealed class PatchExecutionResultService(
 
         await resolver.RecomputeForAgentAsync(command.AgentId, ct);
         await resolver.RefreshSnapshotCountsAsync(command.AgentId, ct);
+
+        var agent = await agentRepo.GetByIdAsync(command.AgentId);
+        var site = agent is null ? null : await siteRepo.GetByIdAsync(agent.SiteId);
+        await events.PublishInstallCompletedAsync(
+            command.AgentId,
+            agent?.Hostname ?? string.Empty,
+            site?.ClientId,
+            agent?.SiteId,
+            installed.Count,
+            failed.Count,
+            parsed?.RebootRequired ?? false,
+            ct);
 
         logger?.LogInformation(
             "Patch install result: command={CommandId} agent={AgentId} exit={ExitCode} installed={Installed} failed={Failed}",

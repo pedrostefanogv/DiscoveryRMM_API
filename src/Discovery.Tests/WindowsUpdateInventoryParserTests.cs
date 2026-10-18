@@ -106,6 +106,13 @@ public class WindowsUpdateInventoryParserTests
     }
 
     [Test]
+    public void AcceptsPartialScanStatus()
+    {
+        var scan = WindowsUpdateInventoryParser.ParseScan(Json("""{ "status": "partial", "errorCode": "qfe_failed" }"""));
+        Assert.That(scan.Status, Is.EqualTo("partial"));
+    }
+
+    [Test]
     public void UnknownScanStatusFallsBackToOk()
     {
         var scan = WindowsUpdateInventoryParser.ParseScan(Json("""{ "status": "hacked" }"""));

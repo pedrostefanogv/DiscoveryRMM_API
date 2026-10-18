@@ -58,14 +58,19 @@ public static class PatchMaintenanceWindow
         }
     }
 
-    /// <summary>Indica se o instante está dentro da janela (respeitando timezone).</summary>
-    public static bool IsOpen(string? json, DateTime utcNow)
+    /// <summary>
+    /// Indica se o instante está dentro da janela. Quando o JSON não define
+    /// timezone, usa <paramref name="fallbackTimezone"/> (normalmente o timezone
+    /// do site) antes de cair para UTC.
+    /// </summary>
+    public static bool IsOpen(string? json, DateTime utcNow, string? fallbackTimezone = null)
     {
         var window = Parse(json);
         if (window is null)
             return false;
 
-        var localNow = ToLocal(utcNow, window.Timezone);
+        var timezone = string.IsNullOrWhiteSpace(window.Timezone) ? fallbackTimezone : window.Timezone;
+        var localNow = ToLocal(utcNow, timezone);
         var isoDay = localNow.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)localNow.DayOfWeek;
         if (!window.Days.Contains(isoDay))
             return false;

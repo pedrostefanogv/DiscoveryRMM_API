@@ -22,7 +22,12 @@ public sealed class DashboardEventContractNormalizer
         // Chat de suporte vinculado ao chamado: sinal SEM corpo (metadados apenas).
         // O conteúdo das mensagens nunca trafega pelo canal de dashboard — o
         // console busca o delta por REST autenticado e escopado por chamado.
-        "TicketChatActivity"
+        "TicketChatActivity",
+        // Gerenciador de patches do Windows (eventos de alto nível; o console
+        // invalida as queries de patches/agent-updates ao recebê-los).
+        "PatchScanCompleted",
+        "PatchInstallCompleted",
+        "PatchApprovalChanged"
     };
 
     // REMOVE_AFTER_2026-06-01
