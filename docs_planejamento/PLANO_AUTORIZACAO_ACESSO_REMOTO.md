@@ -15,8 +15,9 @@ Campos: `RemoteConsentMode` (Off/NotifyOnly/Prompt), `RemoteConsentTimeoutSecond
 `RemoteConsentMessage`, `RemoteConsentBannerText`.
 
 Overrides de usuário/grupo ficam em `remote_consent_policy_overrides` e podem ser
-escopados por cliente/site. `LockedFieldsJson` bloqueia níveis inferiores,
-inclusive overrides.
+escopados por cliente/site (a página do console expõe cliente e site opcionais).
+`LockedFieldsJson` bloqueia níveis inferiores, inclusive overrides. Ao excluir
+um usuário ou grupo, os overrides correspondentes são removidos.
 
 **Rollout:** instalações existentes recebem a coluna em **Off** (comportamento
 atual preservado). Instalações novas e o default de fábrica da entidade são

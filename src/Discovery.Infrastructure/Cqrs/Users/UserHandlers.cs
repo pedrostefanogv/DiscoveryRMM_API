@@ -8,7 +8,9 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
+using Discovery.Infrastructure.Data;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
 
 // Alias explícito: Discovery.Core.DTOs.Users também define um tipo chamado UserDto,
 // o que tornaria a importação direta ambígua com o UserDto do CQRS.
@@ -134,7 +136,8 @@ public sealed class UpdateUserCommandHandler(
 }
 
 public sealed class DeleteUserCommandHandler(
-    IUserRepository repo
+    IUserRepository repo,
+    DiscoveryDbContext db
 ) : IRequestHandler<DeleteUserCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteUserCommand cmd, CancellationToken ct)
@@ -147,6 +150,14 @@ public sealed class DeleteUserCommandHandler(
         user.IsActive = false;
         user.UpdatedAt = DateTime.UtcNow;
         await repo.UpdateAsync(user);
+
+        // Overrides de consentimento são vinculados ao sujeito: sem o usuário
+        // ativo eles nunca mais se aplicam. Limpa para não deixar linha órfã
+        // (e para o mesmo id reativado não herdar política antiga).
+        await db.RemoteConsentPolicyOverrides
+            .Where(item => item.SubjectType == Discovery.Core.Enums.RemoteConsentSubjectType.User
+                && item.SubjectId == user.Id)
+            .ExecuteDeleteAsync(ct);
 
         return Result<VoidResult>.Success(VoidResult.Value);
     }

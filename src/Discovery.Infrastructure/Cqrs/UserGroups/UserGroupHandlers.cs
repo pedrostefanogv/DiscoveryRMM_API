@@ -62,7 +62,8 @@ public sealed class UpdateUserGroupCommandHandler(
 
 public sealed class DeleteUserGroupCommandHandler(
     IUserGroupService service,
-    IPermissionService permissions
+    IPermissionService permissions,
+    Discovery.Infrastructure.Data.DiscoveryDbContext db
 ) : IRequestHandler<DeleteUserGroupCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteUserGroupCommand cmd, CancellationToken ct)
@@ -71,7 +72,15 @@ public sealed class DeleteUserGroupCommandHandler(
 
         // O grupo deixa de existir: as atribuições de role dele não podem mais valer.
         if (deleted)
+        {
             await permissions.InvalidateAllCacheAsync();
+
+            // Overrides de consentimento do grupo não fazem mais sentido.
+            await db.RemoteConsentPolicyOverrides
+                .Where(item => item.SubjectType == Discovery.Core.Enums.RemoteConsentSubjectType.UserGroup
+                    && item.SubjectId == cmd.Id)
+                .ExecuteDeleteAsync(ct);
+        }
 
         return deleted
             ? Result<VoidResult>.Success(VoidResult.Value)
