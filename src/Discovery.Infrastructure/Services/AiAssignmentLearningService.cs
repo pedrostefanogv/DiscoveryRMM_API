@@ -322,8 +322,10 @@ public class AiAssignmentLearningService(
             .FirstOrDefaultAsync(s => s.Id == suggestionId && s.DepartmentId == departmentId, ct);
         if (suggestion is null || suggestion.Status != StatusPending) return null;
 
-        var member = await db.DepartmentMembers
-            .FirstOrDefaultAsync(m => m.DepartmentId == departmentId && m.UserId == suggestion.UserId, ct);
+        // D8 — o ciclo extrai competências da EQUIPE EFETIVA, portanto a sugestão
+        // pode ser de um membro HERDADO (vínculo no global pai). Resolver o
+        // vínculo pela equipe efetiva permite aplicar a sugestão nesse caso.
+        var member = await ResolveMembershipAsync(departmentId, suggestion.UserId, ct);
         if (member is null) return null;
 
         var tags = ParseTags(suggestion.SuggestedTagsJson);
@@ -393,6 +395,37 @@ public class AiAssignmentLearningService(
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Localiza o vínculo do usuário na EQUIPE EFETIVA do departamento (D8):
+    /// primeiro no próprio departamento; se o usuário só existe no departamento
+    /// GLOBAL pai (membro herdado), devolve o vínculo do pai — mesma leitura
+    /// defensiva do <c>DepartmentTeamResolver</c> (um salto, pai global e ativo).
+    /// </summary>
+    private async Task<DepartmentMember?> ResolveMembershipAsync(
+        Guid departmentId, Guid userId, CancellationToken ct)
+    {
+        var own = await db.DepartmentMembers
+            .FirstOrDefaultAsync(m => m.DepartmentId == departmentId && m.UserId == userId, ct);
+        if (own is not null)
+            return own;
+
+        var parentId = await db.Departments.AsNoTracking()
+            .Where(d => d.Id == departmentId && d.ClientId != null)
+            .Select(d => d.InheritFromGlobalId)
+            .FirstOrDefaultAsync(ct);
+
+        if (parentId is not { } globalId)
+            return null;
+
+        var parentIsUsable = await db.Departments.AsNoTracking()
+            .AnyAsync(d => d.Id == globalId && d.ClientId == null && d.IsActive, ct);
+        if (!parentIsUsable)
+            return null;
+
+        return await db.DepartmentMembers
+            .FirstOrDefaultAsync(m => m.DepartmentId == globalId && m.UserId == userId, ct);
+    }
 
     private async Task SupersedeSkillSuggestionsAsync(Guid departmentId, Guid userId, CancellationToken ct)
     {

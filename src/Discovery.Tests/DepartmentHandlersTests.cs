@@ -63,6 +63,29 @@ public class DepartmentHandlersTests
     }
 
     [Test]
+    public async Task Update_do_vinculo_registra_auditoria_com_antes_e_depois()
+    {
+        // B4 — auditoria: alteração do vínculo de herança grava antes/depois.
+        var parent = NewDepartment();
+        var dept = NewDepartment(clientId: Guid.NewGuid());
+        var service = new FakeDepartmentService(dept, parent);
+        var audit = new FakeConfigurationAudit();
+        var handler = new UpdateDepartmentCommandHandler(service, audit);
+
+        var result = await handler.Handle(
+            new UpdateDepartmentCommand(
+                dept.Id, null, null, OptionalGuid.Set(parent.Id), null, null),
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(audit.Changes, Has.Count.EqualTo(1));
+        Assert.That(audit.Changes[0].EntityType, Is.EqualTo("Department"));
+        Assert.That(audit.Changes[0].Field, Is.EqualTo("InheritFromGlobalId"));
+        Assert.That(audit.Changes[0].OldValue, Is.Null);
+        Assert.That(audit.Changes[0].NewValue, Is.EqualTo(parent.Id.ToString()));
+    }
+
+    [Test]
     public async Task Delete_bloqueado_quando_ha_filho_ativo()
     {
         var dept = NewDepartment();
@@ -105,6 +128,39 @@ public class DepartmentHandlersTests
         Assert.That(all.Value!, Has.Count.EqualTo(2));
         Assert.That(onlyActive.Value!, Has.Count.EqualTo(1));
         Assert.That(onlyActive.Value![0].Id, Is.EqualTo(active.Id));
+    }
+
+    [Test]
+    public async Task List_sem_clientId_devolve_so_globais_por_padrao()
+    {
+        // Comportamento histórico preservado: sem clientId e sem allClients a
+        // listagem devolve apenas os globais (D11).
+        var global = NewDepartment();
+        var client = NewDepartment(clientId: Guid.NewGuid());
+        var service = new FakeDepartmentService(global, client);
+        var handler = new ListDepartmentsQueryHandler(service);
+
+        var result = await handler.Handle(new ListDepartmentsQuery(null), CancellationToken.None);
+
+        Assert.That(result.Value!.Select(d => d.Id), Is.EqualTo(new[] { global.Id }));
+    }
+
+    [Test]
+    public async Task List_com_allClients_devolve_globais_e_clientes()
+    {
+        // Filtro de escopo "todos" do console: a API não tem clientId, então a
+        // união precisa ser pedida explicitamente (D11 / B3).
+        var global = NewDepartment();
+        var clientA = NewDepartment(clientId: Guid.NewGuid());
+        var clientB = NewDepartment(clientId: Guid.NewGuid());
+        var service = new FakeDepartmentService(global, clientA, clientB);
+        var handler = new ListDepartmentsQueryHandler(service);
+
+        var result = await handler.Handle(
+            new ListDepartmentsQuery(null, AllClients: true), CancellationToken.None);
+
+        Assert.That(result.Value!.Select(d => d.Id),
+            Is.EquivalentTo(new[] { global.Id, clientA.Id, clientB.Id }));
     }
 
     [Test]
@@ -476,6 +532,33 @@ public class DepartmentHandlersTests
         Assert.That(service.Created, Is.Null);
     }
 
+    private sealed class FakeConfigurationAudit : IConfigurationAuditService
+    {
+        public List<(string EntityType, Guid EntityId, string Field, string? OldValue, string? NewValue)> Changes { get; } = [];
+
+        public Task LogChangeAsync(string entityType, Guid entityId, string fieldName,
+            string? oldValue, string? newValue, string? reason = null, string? changedBy = null, string? ipAddress = null)
+        {
+            Changes.Add((entityType, entityId, fieldName, oldValue, newValue));
+            return Task.CompletedTask;
+        }
+
+        public Task<IEnumerable<ConfigurationAudit>> GetEntityHistoryAsync(string entityType, Guid entityId, int limit = 100)
+            => Task.FromResult<IEnumerable<ConfigurationAudit>>([]);
+
+        public Task<IEnumerable<ConfigurationAudit>> GetRecentChangesAsync(int days = 90, int limit = 1000)
+            => Task.FromResult<IEnumerable<ConfigurationAudit>>([]);
+
+        public Task<IEnumerable<ConfigurationAudit>> GetChangesByUserAsync(string username, int limit = 100)
+            => Task.FromResult<IEnumerable<ConfigurationAudit>>([]);
+
+        public Task<IEnumerable<ConfigurationAudit>> GetFieldHistoryAsync(string entityType, Guid entityId, string fieldName)
+            => Task.FromResult<IEnumerable<ConfigurationAudit>>([]);
+
+        public Task<IEnumerable<ConfigurationAudit>> GetAuditReportAsync(DateTime startDate, DateTime endDate)
+            => Task.FromResult<IEnumerable<ConfigurationAudit>>([]);
+    }
+
     private sealed class FakeTeamResolver(params DepartmentTeamMember[] members)
         : IDepartmentTeamResolver
     {
@@ -503,6 +586,9 @@ public class DepartmentHandlersTests
         public Task<IReadOnlyList<Department>> GetGlobalAsync(CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<Department>>(
                 _departments.Where(d => d.ClientId == null).ToList());
+
+        public Task<IReadOnlyList<Department>> GetAllAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Department>>(_departments.ToList());
 
         public Task<Department?> GetByIdAsync(Guid id, CancellationToken ct = default)
             => Task.FromResult(_departments.FirstOrDefault(d => d.Id == id));

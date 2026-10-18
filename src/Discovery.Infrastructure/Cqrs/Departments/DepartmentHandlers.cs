@@ -484,9 +484,13 @@ public sealed class ListDepartmentsQueryHandler(
 {
     public async Task<Result<IReadOnlyList<DepartmentDto>>> Handle(ListDepartmentsQuery q, CancellationToken ct)
     {
-        var deps = q.ClientId.HasValue
-            ? await service.GetByClientAsync(q.ClientId.Value, q.IncludeGlobal, ct)
-            : await service.GetGlobalAsync(ct);
+        // D11 — sem clientId a listagem devolvia só os globais; o filtro de
+        // escopo "todos" do console pede explicitamente a união de todos.
+        var deps = q.AllClients
+            ? await service.GetAllAsync(ct)
+            : q.ClientId.HasValue
+                ? await service.GetByClientAsync(q.ClientId.Value, q.IncludeGlobal, ct)
+                : await service.GetGlobalAsync(ct);
 
         // D11 — o filtro activeOnly era aceito na query e ignorado na listagem.
         if (q.ActiveOnly)

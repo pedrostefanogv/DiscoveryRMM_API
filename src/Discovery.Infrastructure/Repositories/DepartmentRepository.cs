@@ -28,6 +28,16 @@ public class DepartmentRepository : IDepartmentRepository
             .ToListAsync();
     }
 
+    public async Task<List<Department>> GetAllAsync()
+    {
+        return await _db.Set<Department>()
+            .AsNoTracking()
+            .OrderBy(d => d.ClientId == null ? 0 : 1)
+            .ThenBy(d => d.SortOrder)
+            .ThenBy(d => d.Name)
+            .ToListAsync();
+    }
+
     public async Task<List<Department>> GetByClientAsync(Guid clientId, bool includeGlobal = true)
     {
         IQueryable<Department> query = _db.Set<Department>().AsNoTracking();

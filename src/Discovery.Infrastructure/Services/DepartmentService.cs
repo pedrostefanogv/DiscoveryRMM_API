@@ -21,6 +21,12 @@ public sealed class DepartmentService : IDepartmentService
         return deps.AsReadOnly();
     }
 
+    public async Task<IReadOnlyList<Department>> GetAllAsync(CancellationToken ct = default)
+    {
+        var deps = await _repo.GetAllAsync();
+        return deps.AsReadOnly();
+    }
+
     public Task<Department?> GetByIdAsync(Guid id, CancellationToken ct = default)
         => _repo.GetByIdAsync(id);
 

@@ -47,10 +47,14 @@ public class DepartmentsController(
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? clientId = null,
         [FromQuery] bool includeGlobal = true,
-        [FromQuery] bool activeOnly = false)
+        [FromQuery] bool activeOnly = false,
+        [FromQuery] bool allClients = false)
     {
-        // D11 — activeOnly era aceito na query e ignorado na listagem.
-        var result = await mediator.Send(new ListDepartmentsQuery(clientId, includeGlobal, activeOnly));
+        // D11 — activeOnly era aceito na query e ignorado na listagem; allClients
+        // é o filtro "todos os escopos" do console (sem ele a listagem sem
+        // clientId devolve apenas os globais, como antes).
+        var result = await mediator.Send(
+            new ListDepartmentsQuery(clientId, includeGlobal, activeOnly, allClients));
         return result.ToActionResult();
     }
 

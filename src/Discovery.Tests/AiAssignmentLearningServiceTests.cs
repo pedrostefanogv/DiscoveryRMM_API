@@ -340,6 +340,100 @@ public class AiAssignmentLearningServiceTests
         Assert.That(suggestion.DepartmentId, Is.EqualTo(child.Id));
     }
 
+    [Test]
+    public async Task Sugestao_de_membro_herdado_pode_ser_aplicada()
+    {
+        // D8: o ciclo de competências enumera a EQUIPE EFETIVA (próprios +
+        // herdados do global pai). No modo Sugerir, a sugestão do membro herdado
+        // precisa poder ser aplicada — o vínculo dele está no global, não no
+        // filho (antes: ApplySkillSuggestionAsync devolvia null e a API 404).
+        await using var db = CreateDb();
+        var now = DateTime.UtcNow;
+
+        var user = new User
+        {
+            Id = Guid.NewGuid(), Login = "herdado", Email = "herdado@x.com",
+            FullName = "Herdado", IsActive = true
+        };
+        db.Users.Add(user);
+
+        var parent = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = null,
+            Name = "Global",
+            IsActive = true,
+            AssignmentStrategy = (int)TicketAssignmentStrategy.AiTriage,
+            AiSkillLearningMode = (int)AiLearningMode.Suggest,
+            AiSkillMinEvidence = 2,
+            AiSkillMaxTags = 10,
+            AiWeightLearningMode = (int)AiLearningMode.Off,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var child = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = Guid.NewGuid(),
+            Name = "Filho",
+            IsActive = true,
+            InheritFromGlobalId = parent.Id,
+            AssignmentStrategy = (int)TicketAssignmentStrategy.AiTriage,
+            AiSkillLearningMode = (int)AiLearningMode.Off,
+            AiWeightLearningMode = (int)AiLearningMode.Off,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        db.Departments.AddRange(parent, child);
+
+        // Só o global tem o vínculo do usuário (o filho herda a equipe).
+        db.DepartmentMembers.Add(new DepartmentMember
+        {
+            Id = Guid.NewGuid(),
+            DepartmentId = parent.Id,
+            UserId = user.Id,
+            IsActive = true,
+            CreatedAt = now
+        });
+
+        for (var i = 0; i < 3; i++)
+        {
+            db.Tickets.Add(new Ticket
+            {
+                Id = Guid.NewGuid(),
+                ClientId = Guid.NewGuid(),
+                WorkflowStateId = Guid.NewGuid(),
+                AssignedToUserId = user.Id,
+                Title = "Falha de rede no switch " + i,
+                Description = "A rede caiu e o switch reiniciou",
+                Category = "Rede",
+                Priority = TicketPriority.Medium,
+                CreatedAt = now.AddDays(-5),
+                UpdatedAt = now.AddDays(-5),
+                ClosedAt = now.AddDays(-4)
+            });
+        }
+
+        await db.SaveChangesAsync();
+
+        var service = BuildService(db, out _);
+        var created = await service.RunCycleAsync(child.Id, null, CancellationToken.None);
+        Assert.That(created, Is.EqualTo(1), "o membro herdado entra no ciclo do filho");
+
+        var pending = await service.GetSuggestionsAsync(child.Id, CancellationToken.None);
+        Assert.That(pending.Skills, Has.Count.EqualTo(1));
+
+        var applied = await service.ApplySkillSuggestionAsync(
+            child.Id, pending.Skills[0].Id, Guid.NewGuid(), CancellationToken.None);
+
+        Assert.That(applied, Is.Not.Null, "sugestão de membro herdado é aplicável");
+        var member = await db.DepartmentMembers.AsNoTracking()
+            .SingleAsync(m => m.UserId == user.Id);
+        Assert.That(member.SkillTagsJson, Does.Contain("rede"));
+        Assert.That(member.DepartmentId, Is.EqualTo(parent.Id),
+            "as competências são gravadas no vínculo do global (dono do membro)");
+    }
+
     private sealed class FakeConfigurationAudit : IConfigurationAuditService
     {
         public List<(string EntityType, Guid EntityId, string Field, string? OldValue, string? NewValue)> Changes { get; } = [];

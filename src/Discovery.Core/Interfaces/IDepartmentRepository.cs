@@ -13,6 +13,13 @@ public interface IDepartmentRepository
     /// Obtém todos os departamentos globais (ClientId = null).
     /// </summary>
     Task<List<Department>> GetGlobalAsync();
+
+    /// <summary>
+    /// Obtém TODOS os departamentos (globais + de todos os clientes). Usado pela
+    /// listagem do console quando o filtro de escopo é "todos" (D11) — sem
+    /// clientId a listagem antiga devolvia apenas os globais.
+    /// </summary>
+    Task<List<Department>> GetAllAsync();
     
     /// <summary>
     /// Obtém departamentos de um cliente, opcionalmente incluindo globais herdáveis.
