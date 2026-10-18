@@ -346,6 +346,99 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
             ("author", "Autor", "string", false),
             ("updatedAt", "Atualizado em", "datetime", false));
 
+
+        Add("windowsUpdates", 24, "Atualizações do Windows",
+            "Inventário de patches (KB) por agente: pendentes, instaladas, recusadas, severidade, classificação e reinício. Use o filtro onlyPending=true para a lista de pendências.",
+            ["clientId", "clientName", "siteId", "siteName", "agentId", "agentHostname", "automaticLabels",
+             "updateKey", "kbIds", "kbId", "title", "classification", "severity",
+             "isPending", "isInstalled", "isHidden", "requiresReboot",
+             "approvalState", "approvalSource", "status",
+             "publishedAt", "reportedAt", "installedAt", "installResultCode", "installError", "supportUrl"],
+            JoinAgentClientSite,
+            ["siteId", "agentId", "updateKey", "kb", "severity", "status", "approvalState", "onlyPending", "from", "to"],
+            ("agentId", "Agente", "guid", true),
+            ("agentHostname", "Hostname", "string", false),
+            ("updateKey", "Chave da atualização", "string", false),
+            ("kbIds", "KBs", "string", false),
+            ("title", "Título", "string", false),
+            ("classification", "Classificação", "string", false),
+            ("severity", "Severidade", "string", false),
+            ("isPending", "Pendente", "boolean", false),
+            ("isInstalled", "Instalada", "boolean", false),
+            ("requiresReboot", "Requer reinício", "boolean", false),
+            ("approvalState", "Aprovação", "string", false),
+            ("status", "Status", "string", false),
+            ("reportedAt", "Reportada em", "datetime", false),
+            ("publishedAt", "Publicada em", "datetime", false),
+            ("installedAt", "Instalada em", "datetime", false));
+
+        Add("patchCompliance", 25, "Conformidade de Patches (por agente)",
+            "Uma linha por agente: pendências acionáveis, críticas, recusadas, aprovadas, instaladas, status do scan e reinício pendente.",
+            ["clientId", "clientName", "siteId", "siteName", "agentId", "agentHostname", "agentDisplayName",
+             "automaticLabels", "status", "osName", "osVersion", "agentVersion",
+             "pendingCount", "criticalCount", "deniedCount", "approvedCount", "installedCount",
+             "pendingReboot", "pendingRebootReasons", "scanStatus", "lastScanAt", "lastSeenAt"],
+            JoinAgentClientSite,
+            ["siteId", "agentId", "pendingReboot", "scanStatus", "onlyWithPending", "from", "to", "orderBy"],
+            ("agentId", "Agente", "guid", true),
+            ("agentHostname", "Hostname", "string", false),
+            ("pendingCount", "Pendentes", "number", false),
+            ("criticalCount", "Críticas", "number", false),
+            ("deniedCount", "Recusadas", "number", false),
+            ("approvedCount", "Aprovadas", "number", false),
+            ("installedCount", "Instaladas", "number", false),
+            ("pendingReboot", "Reinício pendente", "boolean", false),
+            ("scanStatus", "Status do scan", "string", false),
+            ("lastScanAt", "Último scan", "datetime", false));
+
+        Add("patchApprovals", 26, "Aprovações de Patches",
+            "Regras de aprovação/recusa de atualizações por escopo (Global, Cliente, Site, Agente).",
+            ["scopeType", "scopeId", "clientId", "siteId", "agentId", "updateKey", "kbId",
+             "action", "reason", "createdBy", "updatedBy", "createdAt", "updatedAt"],
+            ["clientId", "siteId", "agentId"],
+            ["scopeType", "action", "updateKey", "kb", "changedBy", "from", "to"],
+            ("scopeType", "Escopo", "string", false),
+            ("updateKey", "Atualização", "string", false),
+            ("kbId", "KB", "string", false),
+            ("action", "Ação", "string", false),
+            ("reason", "Motivo", "string", false),
+            ("updatedBy", "Alterado por", "string", false),
+            ("updatedAt", "Atualizada em", "datetime", false));
+
+        Add("patchApprovalAudit", 27, "Auditoria de Aprovações de Patches",
+            "Histórico de criação/alteração/remoção de aprovações, com usuário, IP e motivo.",
+            ["changeType", "scopeType", "scopeId", "clientId", "siteId", "agentId",
+             "updateKey", "kbId", "oldAction", "newAction", "reason",
+             "changedBy", "ipAddress", "changedAt"],
+            ["clientId", "siteId", "agentId"],
+            ["changeType", "scopeType", "action", "updateKey", "kb", "changedBy", "from", "to"],
+            ("changeType", "Tipo de mudança", "string", false),
+            ("scopeType", "Escopo", "string", false),
+            ("updateKey", "Atualização", "string", false),
+            ("newAction", "Nova ação", "string", false),
+            ("changedBy", "Alterado por", "string", false),
+            ("changedAt", "Alterado em", "datetime", false));
+
+        Add("agents", 28, "Agentes (inventário e estado)",
+            "Frota de agentes com status online/offline/manutenção, SO, versão, último contato, usuário logado e reinício pendente.",
+            ["clientId", "clientName", "siteId", "siteName", "agentId", "hostname", "displayName",
+             "automaticLabels", "status", "maintenance", "maintenanceReason",
+             "osName", "osVersion", "agentVersion", "commitHash",
+             "lastIpAddress", "loggedUser", "lastSeenAt",
+             "zeroTouchPending", "pendingReboot", "pendingRebootReasons",
+             "pendingRebootCheckedAt", "createdAt"],
+            JoinAgentClientSite,
+            ["siteId", "agentId", "status", "osName", "pendingReboot", "zeroTouchPending", "maintenance", "from", "to", "orderBy"],
+            ("agentId", "Agente", "guid", true),
+            ("hostname", "Hostname", "string", false),
+            ("status", "Status", "string", false),
+            ("osName", "SO", "string", false),
+            ("osVersion", "Versão do SO", "string", false),
+            ("agentVersion", "Versão do agente", "string", false),
+            ("loggedUser", "Usuário logado", "string", false),
+            ("lastSeenAt", "Último contato", "datetime", false),
+            ("pendingReboot", "Reinício pendente", "boolean", false));
+
         return items.AsReadOnly();
     }
 
@@ -374,6 +467,11 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
         "ticketEscalations" => "esc",
         "customFields" => "cf",
         "knowledgeBase" => "kb",
+        "windowsUpdates" => "wu",
+        "patchCompliance" => "pcomp",
+        "patchApprovals" => "pappr",
+        "patchApprovalAudit" => "paud",
+        "agents" => "agt",
         _ => key[..Math.Min(3, key.Length)]
     };
 
@@ -411,6 +509,13 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
         var f when f.Contains("Breached", StringComparison.Ordinal) => "boolean",
         var f when f.Contains("Shared", StringComparison.Ordinal) => "boolean",
         var f when f.Contains("Default", StringComparison.Ordinal) => "boolean",
+        var f when f.Equals("pendingReboot", StringComparison.OrdinalIgnoreCase) => "boolean",
+        var f when f.Equals("requiresReboot", StringComparison.OrdinalIgnoreCase) => "boolean",
+        var f when f.Equals("maintenance", StringComparison.OrdinalIgnoreCase) => "boolean",
+        var f when f.Equals("zeroTouchPending", StringComparison.OrdinalIgnoreCase) => "boolean",
+        var f when f.Equals("isPending", StringComparison.OrdinalIgnoreCase) => "boolean",
+        var f when f.Equals("isInstalled", StringComparison.OrdinalIgnoreCase) => "boolean",
+        var f when f.Equals("isHidden", StringComparison.OrdinalIgnoreCase) => "boolean",
         var f when f.EndsWith("Id", StringComparison.Ordinal) => "guid",
         _ => "string"
     };
@@ -418,8 +523,13 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
     private static string InferFilterType(string filter) => filter switch
     {
         "from" or "to" => "date",
-        "severity" or "status" or "state" => "enum",
+        "severity" or "status" or "state" or "scanStatus" or "approvalState"
+            or "action" or "scopeType" or "changeType" => "enum",
         "port" or "threshold" or "escalationLevel" => "number",
+        "pendingReboot" or "onlyPending" or "onlyWithPending" or "zeroTouchPending"
+            or "maintenance" => "boolean",
+        "orderBy" => "enum",
+        "kb" or "updateKey" or "changedBy" or "osName" => "string",
         var f when f.EndsWith("Id", StringComparison.Ordinal) => "guid",
         _ => "string"
     };

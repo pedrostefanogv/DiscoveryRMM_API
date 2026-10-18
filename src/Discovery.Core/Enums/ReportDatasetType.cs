@@ -25,5 +25,12 @@ public enum ReportDatasetType
     TicketEscalations = 20,
     CustomFields = 21,
     KnowledgeBase = 22,
-    TicketAnswers = 23
+    TicketAnswers = 23,
+    // Gerenciador de Patches do Windows (WUA) e fontes correlatas.
+    WindowsUpdates = 24,
+    PatchCompliance = 25,
+    PatchApprovals = 26,
+    PatchApprovalAudit = 27,
+    // Inventário/estado dos agentes (fonte que faltava para relatórios de frota).
+    Agents = 28
 }

@@ -11,7 +11,7 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace Discovery.Infrastructure.Services;
 
-public class ReportDatasetQueryService : IReportDatasetQueryService
+public partial class ReportDatasetQueryService : IReportDatasetQueryService
 {
     private const int DefaultLimit = 1000;
     private const int MaxLimit = 10000;
@@ -67,6 +67,11 @@ public class ReportDatasetQueryService : IReportDatasetQueryService
             ReportDatasetType.CustomFields => await QueryCustomFieldsAsync(clientId, filters, cancellationToken),
             ReportDatasetType.TicketAnswers => await QueryTicketAnswersAsync(clientId, filters, cancellationToken),
             ReportDatasetType.KnowledgeBase => await QueryKnowledgeBaseAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.WindowsUpdates => await QueryWindowsUpdatesAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.PatchCompliance => await QueryPatchComplianceAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.PatchApprovals => await QueryPatchApprovalsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.PatchApprovalAudit => await QueryPatchApprovalAuditAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.Agents => await QueryAgentsAsync(clientId, filters, cancellationToken),
             _ => new ReportQueryResult { Columns = ["message"], Rows = [new Dictionary<string, object?> { ["message"] = "Dataset not supported." }] }
         };
     }

@@ -12,8 +12,8 @@ public class ReportDatasetCatalogProviderTests
         var catalog = _provider.GetAll();
 
         Assert.That(catalog, Is.Not.Null);
-        // 23 datasets originais + ticketAnswers (respostas do questionário).
-        Assert.That(catalog.Count, Is.EqualTo(24));
+        // 23 datasets originais + ticketAnswers + 5 novos (patches/agentes).
+        Assert.That(catalog.Count, Is.EqualTo(29));
     }
 
     [Test]
@@ -80,6 +80,8 @@ public class ReportDatasetCatalogProviderTests
             "agentInventoryComposite", "agentLabels", "automationExecutions",
             "agentMonitoringEvents", "p2pTelemetry", "agentDisks",
             "networkAdapters", "listeningPorts", "printers",
+            // Patches/agentes: fontes novas precisam expor agentId/hostname.
+            "windowsUpdates", "patchCompliance", "agents",
         };
 
         foreach (var key in agentJoinedKeys)

@@ -362,7 +362,9 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
 
 public sealed class CreatePatchApprovalCommandHandler(
     IPatchRepository patchRepo,
-    IPatchApprovalResolver resolver
+    IPatchApprovalResolver resolver,
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo
 ) : IRequestHandler<CreatePatchApprovalCommand, Result<PatchApprovalDto>>
 {
     public async Task<Result<PatchApprovalDto>> Handle(CreatePatchApprovalCommand cmd, CancellationToken ct)
@@ -379,12 +381,37 @@ public sealed class CreatePatchApprovalCommandHandler(
         Guid? clientId = null;
         Guid? siteId = null;
         Guid? agentId = null;
+
+        // Popula os ids de cliente/site/agente em todos os níveis: os relatórios
+        // filtram regras por clientId e a auditoria usa o escopo completo. Sem
+        // isto, uma regra de Site ficava com client_id NULL e sumia do relatório
+        // de um cliente específico.
         if (cmd.ScopeType == PatchApprovalScopeType.Client)
+        {
             clientId = cmd.ScopeId;
+        }
         else if (cmd.ScopeType == PatchApprovalScopeType.Site)
-            siteId = cmd.ScopeId;
+        {
+            var site = cmd.ScopeId.HasValue ? await siteRepo.GetByIdAsync(cmd.ScopeId.Value) : null;
+            if (site is null)
+                return Result<PatchApprovalDto>.Failure(Error.NotFound("Site not found."));
+            siteId = site.Id;
+            clientId = site.ClientId;
+        }
         else if (cmd.ScopeType == PatchApprovalScopeType.Agent)
-            agentId = cmd.ScopeId;
+        {
+            var agent = cmd.ScopeId.HasValue ? await agentRepo.GetByIdAsync(cmd.ScopeId.Value) : null;
+            if (agent is null)
+                return Result<PatchApprovalDto>.Failure(Error.NotFound("Agent not found."));
+
+            var site = await siteRepo.GetByIdAsync(agent.SiteId);
+            if (site is null)
+                return Result<PatchApprovalDto>.Failure(Error.NotFound("Site not found."));
+
+            agentId = agent.Id;
+            siteId = site.Id;
+            clientId = site.ClientId;
+        }
 
         var kbId = key.StartsWith("kb:", StringComparison.OrdinalIgnoreCase) ? key[3..] : null;
         var existing = await patchRepo.GetApprovalAsync(cmd.ScopeType, cmd.ScopeId, key, ct);

@@ -73,3 +73,31 @@ public enum AutomationExecutionsOrderBy
     Status = 2,
     ExitCode = 3
 }
+
+public enum WindowsUpdatesOrderBy
+{
+    AgentHostname = 0,
+    Severity = 1,
+    Title = 2,
+    ReportedAt = 3,
+    PublishedAt = 4,
+    SiteName = 5
+}
+
+public enum PatchComplianceOrderBy
+{
+    AgentHostname = 0,
+    SiteName = 1,
+    PendingCount = 2,
+    CriticalCount = 3,
+    LastScanAt = 4
+}
+
+public enum AgentsOrderBy
+{
+    Hostname = 0,
+    SiteName = 1,
+    Status = 2,
+    LastSeenAt = 3,
+    OsName = 4
+}

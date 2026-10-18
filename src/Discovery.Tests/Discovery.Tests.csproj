@@ -29,6 +29,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Discovery.Core\Discovery.Core.csproj" />
+    <ProjectReference Include="..\Discovery.Migrations\Discovery.Migrations.csproj" />
     <ProjectReference Include="..\Discovery.Infrastructure\Discovery.Infrastructure.csproj" />
     <ProjectReference Include="..\Discovery.Api\Discovery.Api.csproj" />
   </ItemGroup>
