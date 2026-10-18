@@ -44,5 +44,10 @@ public record AgentHeartbeat(
     string? LoggedUser = null,
 
     // Início da sessão interativa atual (UTC). Null quando desconhecido.
-    DateTime? LoggedUserSince = null
+    DateTime? LoggedUserSince = null,
+
+    // Quantas UIs companion estão conectadas ao serviço (agregado). Aditivo:
+    // ausente em agentes antigos e no modo standalone. Complementa UiOnline
+    // (bool) para o console distinguir 1 UI de 2+ sessões simultâneas.
+    int? UiOnlineCount = null
 );

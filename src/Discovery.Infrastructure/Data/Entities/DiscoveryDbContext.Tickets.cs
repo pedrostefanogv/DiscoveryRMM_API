@@ -133,6 +133,7 @@ public partial class DiscoveryDbContext
             entity.Property(dept => dept.SortOrder).HasColumnName("sort_order");
             entity.Property(dept => dept.IsActive).HasColumnName("is_active");
             entity.Property(dept => dept.AssignmentStrategy).HasColumnName("assignment_strategy");
+            entity.Property(dept => dept.AssignmentStrategyOverride).HasColumnName("assignment_strategy_override");
             entity.Property(dept => dept.RoundRobinLastUserId).HasColumnName("round_robin_last_user_id");
 
             // Triagem por IA

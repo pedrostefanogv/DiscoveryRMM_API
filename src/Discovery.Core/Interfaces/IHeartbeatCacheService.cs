@@ -89,4 +89,7 @@ public class HeartbeatCacheEntry
 
     // Início da sessão interativa atual (UTC), quando reportado.
     public DateTime? LoggedUserSince { get; init; }
+
+    /// <summary>Quantas UIs companion estão conectadas ao serviço (agregado).</summary>
+    public int? UiOnlineCount { get; init; }
 }

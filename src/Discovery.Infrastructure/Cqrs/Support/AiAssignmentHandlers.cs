@@ -47,7 +47,8 @@ internal static class AssignmentDecisionMapper
 
 public sealed class GetDepartmentAssignmentTeamMetricsQueryHandler(
     DiscoveryDbContext db,
-    ITechnicianMetricsService metricsService)
+    ITechnicianMetricsService metricsService,
+    IDepartmentTeamResolver? teamResolver = null)
     : IRequestHandler<GetDepartmentAssignmentTeamMetricsQuery, Result<IReadOnlyList<DepartmentMemberProfileDto>>>
 {
     public async Task<Result<IReadOnlyList<DepartmentMemberProfileDto>>> Handle(
@@ -63,7 +64,11 @@ public sealed class GetDepartmentAssignmentTeamMetricsQueryHandler(
             return Result<IReadOnlyList<DepartmentMemberProfileDto>>.Failure(
                 Error.NotFound("Departamento não encontrado."));
 
-        var members = await db.DepartmentMembers.AsNoTracking()
+        // B2 — a tela lista a EQUIPE EFETIVA. Os vínculos PRÓPRIOS continuam
+        // vindo direto da tabela (preserva inclusive os inativos, como antes) e
+        // os HERDADOS do global pai ativo vêm do resolvedor único, o mesmo usado
+        // pelo round-robin e pela triagem por IA.
+        var ownMembers = await db.DepartmentMembers.AsNoTracking()
             .Where(m => m.DepartmentId == q.DepartmentId)
             .OrderBy(m => m.CreatedAt)
             .Select(m => new
@@ -79,7 +84,24 @@ public sealed class GetDepartmentAssignmentTeamMetricsQueryHandler(
             })
             .ToListAsync(ct);
 
-        var userIds = members.Select(m => m.UserId).ToList();
+        var ownIds = ownMembers.Select(m => m.UserId).ToHashSet();
+        var members = ownMembers
+            .Select(m => new MemberProfileRow(
+                m.UserId, m.IsActive, m.CreatedAt, m.SkillTagsJson, m.SkillLevel,
+                m.MaxOpenTickets, m.Weight, m.AcceptsAiAssignment, "own"))
+            .ToList();
+
+        if (teamResolver is not null)
+        {
+            var inherited = await teamResolver.ResolveMembersAsync(q.DepartmentId, ct);
+            members.AddRange(inherited
+                .Where(m => !ownIds.Contains(m.UserId))
+                .Select(m => new MemberProfileRow(
+                    m.UserId, true, m.MemberSince, m.SkillTagsJson, m.SkillLevel,
+                    m.MaxOpenTickets, m.Weight, m.AcceptsAiAssignment, m.Origin)));
+        }
+
+        var userIds = members.Select(m => m.UserId).Distinct().ToList();
         var users = await db.Users.AsNoTracking()
             .Where(u => userIds.Contains(u.Id))
             .Select(u => new { u.Id, u.FullName, u.Login })
@@ -103,10 +125,22 @@ public sealed class GetDepartmentAssignmentTeamMetricsQueryHandler(
             m.MaxOpenTickets,
             m.Weight,
             m.AcceptsAiAssignment,
-            metrics.TryGetValue(m.UserId, out var found) ? found : null)).ToList();
+            metrics.TryGetValue(m.UserId, out var found) ? found : null,
+            m.Origin)).ToList();
 
         return Result<IReadOnlyList<DepartmentMemberProfileDto>>.Success(dtos);
     }
+
+    private sealed record MemberProfileRow(
+        Guid UserId,
+        bool IsActive,
+        DateTime CreatedAt,
+        string? SkillTagsJson,
+        int SkillLevel,
+        int? MaxOpenTickets,
+        decimal Weight,
+        bool AcceptsAiAssignment,
+        string Origin);
 
     internal static IReadOnlyList<string> ParseSkillTags(string? json)
     {
@@ -122,7 +156,9 @@ public sealed class GetDepartmentAssignmentTeamMetricsQueryHandler(
     }
 }
 
-public sealed class UpdateDepartmentMemberProfileCommandHandler(DiscoveryDbContext db)
+public sealed class UpdateDepartmentMemberProfileCommandHandler(
+    DiscoveryDbContext db,
+    IDepartmentTeamResolver? teamResolver = null)
     : IRequestHandler<UpdateDepartmentMemberProfileCommand, Result<DepartmentMemberProfileDto>>
 {
     public async Task<Result<DepartmentMemberProfileDto>> Handle(
@@ -142,6 +178,21 @@ public sealed class UpdateDepartmentMemberProfileCommandHandler(DiscoveryDbConte
 
         var member = await db.DepartmentMembers
             .FirstOrDefaultAsync(m => m.DepartmentId == cmd.DepartmentId && m.UserId == cmd.UserId, ct);
+
+        // B2 — membro que só existe na equipe efetiva (herdado do global pai)
+        // NÃO pode ser editado por aqui: a ação é rejeitada com mensagem clara,
+        // em vez de alterar silenciosamente os dados do departamento global.
+        if ((member is null || !member.IsActive) && teamResolver is not null)
+        {
+            var inherited = (await teamResolver.ResolveMembersAsync(cmd.DepartmentId, ct))
+                .FirstOrDefault(m => m.UserId == cmd.UserId
+                    && m.Origin.StartsWith("inherited", StringComparison.OrdinalIgnoreCase));
+            if (inherited is not null)
+                return Result<DepartmentMemberProfileDto>.Failure(Error.Validation(
+                    "UserId",
+                    "Membro herdado do departamento global: o perfil é gerenciado no departamento global."));
+        }
+
         if (member is null)
             return Result<DepartmentMemberProfileDto>.Failure(Error.NotFound("Membro não encontrado."));
 
@@ -180,7 +231,8 @@ public sealed class UpdateDepartmentMemberProfileCommandHandler(DiscoveryDbConte
             member.MaxOpenTickets,
             member.Weight,
             member.AcceptsAiAssignment,
-            null));
+            null,
+            "own"));
     }
 }
 

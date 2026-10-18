@@ -110,6 +110,8 @@ public sealed class CreateDepartmentCommandHandler(
             SortOrder = cmd.SortOrder,
             IsActive = true,
             AssignmentStrategy = cmd.AssignmentStrategy,
+            // Criação não grava override: departamento novo herda do pai ativo.
+            AssignmentStrategyOverride = null,
             AiAssignmentMode = cmd.AiAssignmentMode,
             AiAssignmentMinConfidence = cmd.AiAssignmentMinConfidence,
             AiAssignmentFallbackStrategy = cmd.AiAssignmentFallbackStrategy,
@@ -153,7 +155,7 @@ public sealed class CreateDepartmentCommandHandler(
             await audit.LogChangeAsync(
                 "Department", created.Id, "InheritFromGlobalId",
                 null, created.InheritFromGlobalId?.ToString(),
-                reason: "department_create", changedBy: null);
+                reason: "department_create", changedBy: cmd.ChangedBy);
         }
 
         return Result<DepartmentDto>.Success(Map(created));
@@ -175,7 +177,7 @@ public sealed class CreateDepartmentCommandHandler(
         d.AiSkillLearningModeOverride, d.AiSkillMinEvidenceOverride,
         d.AiSkillMaxTagsOverride, d.AiWeightLearningModeOverride,
         d.AiWeightMaxDeltaPerCycleOverride, d.AiWeightCycleDaysOverride,
-        d.AiWeightMinOverride, d.AiWeightMaxOverride);
+        d.AiWeightMinOverride, d.AiWeightMaxOverride, d.AssignmentStrategyOverride);
 }
 
 public sealed class UpdateDepartmentCommandHandler(
@@ -221,7 +223,13 @@ public sealed class UpdateDepartmentCommandHandler(
         }
         if (cmd.SortOrder.HasValue) dept.SortOrder = cmd.SortOrder.Value;
         if (cmd.IsActive.HasValue) dept.IsActive = cmd.IsActive.Value;
-        if (cmd.AssignmentStrategy.HasValue) dept.AssignmentStrategy = cmd.AssignmentStrategy.Value;
+
+        // Estratégia de auto-atribuição com patch semântico (valor = próprio,
+        // null explícito = volta a herdar do global pai, ausente = mantém).
+        if (cmd.AssignmentStrategy.IsSet)
+            ApplyInt(cmd.AssignmentStrategy, v => dept.AssignmentStrategy = v,
+                () => dept.AssignmentStrategyOverride = null,
+                v => dept.AssignmentStrategyOverride = v);
 
         // ── 16 campos com o NOME BASE (console) ──────────────────────────
         // Valor -> próprio (base + override). Null explícito -> limpa o
@@ -316,7 +324,7 @@ public sealed class UpdateDepartmentCommandHandler(
         var validationParent = await LoadUsableParentAsync(service, dept, ct);
         var effective = DepartmentEffectiveSettingsResolver.Resolve(dept, validationParent);
         var validation = DepartmentAiSettingsValidator.Validate(
-            dept.AssignmentStrategy, effective.AiAssignmentMode.Value,
+            effective.AssignmentStrategy.Value, effective.AiAssignmentMode.Value,
             effective.AiAssignmentMinConfidence.Value,
             effective.AiAssignmentFallbackStrategy.Value, effective.AiAssignmentMaxCandidates.Value)
             ?? DepartmentAiSettingsValidator.ValidateLearning(
@@ -337,14 +345,19 @@ public sealed class UpdateDepartmentCommandHandler(
                 await audit.LogChangeAsync(
                     "Department", updated.Id, "InheritFromGlobalId",
                     oldParent?.ToString(), updated.InheritFromGlobalId?.ToString(),
-                    reason: "department_update", changedBy: null);
+                    reason: "department_update", changedBy: cmd.ChangedBy);
             }
 
-            if (oldActive && !updated.IsActive)
+            // B1 — a transição de IsActive é auditada nos DOIS sentidos, com
+            // antes/depois explícitos (antes só o desligamento era registrado).
+            if (oldActive != updated.IsActive)
             {
                 await audit.LogChangeAsync(
-                    "Department", updated.Id, "IsActive", "true", "false",
-                    reason: "department_deactivate", changedBy: null);
+                    "Department", updated.Id, "IsActive",
+                    oldActive ? "true" : "false",
+                    updated.IsActive ? "true" : "false",
+                    reason: updated.IsActive ? "department_activate" : "department_deactivate",
+                    changedBy: cmd.ChangedBy);
             }
         }
 
@@ -465,12 +478,12 @@ public sealed class DeleteDepartmentCommandHandler(
             await audit.LogChangeAsync(
                 "Department", cmd.Id, "InheritFromGlobalId",
                 dept.InheritFromGlobalId?.ToString(), null,
-                reason: "department_delete", changedBy: null);
+                reason: "department_delete", changedBy: cmd.ChangedBy);
             if (dept.IsActive)
             {
                 await audit.LogChangeAsync(
                     "Department", cmd.Id, "IsActive", "true", "false",
-                    reason: "department_delete", changedBy: null);
+                    reason: "department_delete", changedBy: cmd.ChangedBy);
             }
         }
 
@@ -569,6 +582,7 @@ public sealed class GetDepartmentEffectiveConfigQueryHandler(
             AiWeightCycleDays = MapSetting(settings.AiWeightCycleDays),
             AiWeightMin = MapSetting(settings.AiWeightMin),
             AiWeightMax = MapSetting(settings.AiWeightMax),
+            AssignmentStrategy = MapSetting(settings.AssignmentStrategy),
             Config = config,
             Origins = origins,
             Team = team,
@@ -576,7 +590,7 @@ public sealed class GetDepartmentEffectiveConfigQueryHandler(
         });
     }
 
-    /// <summary>Monta os objetos camelCase do console a partir dos 16 campos.</summary>
+    /// <summary>Monta os objetos camelCase do console a partir dos 17 campos.</summary>
     private static (IReadOnlyDictionary<string, object?> Config, IReadOnlyDictionary<string, string> Origins)
         BuildConfig(DepartmentEffectiveSettings s)
     {
@@ -597,7 +611,8 @@ public sealed class GetDepartmentEffectiveConfigQueryHandler(
             ["aiWeightMaxDeltaPerCycle"] = s.AiWeightMaxDeltaPerCycle.Value,
             ["aiWeightCycleDays"] = s.AiWeightCycleDays.Value,
             ["aiWeightMin"] = s.AiWeightMin.Value,
-            ["aiWeightMax"] = s.AiWeightMax.Value
+            ["aiWeightMax"] = s.AiWeightMax.Value,
+            ["assignmentStrategy"] = s.AssignmentStrategy.Value
         };
 
         var origins = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -617,7 +632,8 @@ public sealed class GetDepartmentEffectiveConfigQueryHandler(
             ["aiWeightMaxDeltaPerCycle"] = OriginOf(s.AiWeightMaxDeltaPerCycle),
             ["aiWeightCycleDays"] = OriginOf(s.AiWeightCycleDays),
             ["aiWeightMin"] = OriginOf(s.AiWeightMin),
-            ["aiWeightMax"] = OriginOf(s.AiWeightMax)
+            ["aiWeightMax"] = OriginOf(s.AiWeightMax),
+            ["assignmentStrategy"] = OriginOf(s.AssignmentStrategy)
         };
 
         return (config, origins);

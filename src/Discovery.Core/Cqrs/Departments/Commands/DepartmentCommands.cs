@@ -19,7 +19,11 @@ public sealed record CreateDepartmentCommand(
     int AiAssignmentMaxOutputTokens = 1200,
     int AiSkillLearningMode = 1, int AiSkillMinEvidence = 3, int AiSkillMaxTags = 12,
     int AiWeightLearningMode = 1, decimal AiWeightMaxDeltaPerCycle = 0.10m,
-    int AiWeightCycleDays = 7, decimal AiWeightMin = 0.05m, decimal AiWeightMax = 0.50m
+    int AiWeightCycleDays = 7, decimal AiWeightMin = 0.05m, decimal AiWeightMax = 0.50m,
+    // Ator do request (usuário autenticado) gravado na auditoria. O controller
+    // sobrescreve este valor com o usuário do HttpContext; fica no comando para
+    // não acoplar a camada de Infrastructure ao ASP.NET.
+    string? ChangedBy = null
 ) : ICommand<Result<DepartmentDto>>;
 
 /// <summary>
@@ -36,7 +40,11 @@ public sealed record CreateDepartmentCommand(
 public sealed record UpdateDepartmentCommand(
     Guid Id, string? Name, string? Description,
     // Patch semântico: ausente = mantém; Set(null) = desfaz a herança (D5).
-    OptionalGuid InheritFromGlobalId, int? SortOrder, bool? IsActive, int? AssignmentStrategy = null,
+    OptionalGuid InheritFromGlobalId, int? SortOrder, bool? IsActive,
+    // Estratégia de auto-atribuição com o MESMO patch semântico dos demais
+    // campos: ausente = mantém; valor = próprio (base + override); null
+    // explícito = limpa o override e volta a herdar do global pai.
+    OptionalValue<int> AssignmentStrategy = default,
     // 8 campos de atribuição (nome base do console).
     OptionalValue<int> AiAssignmentMode = default,
     OptionalValue<double> AiAssignmentMinConfidence = default,
@@ -71,10 +79,13 @@ public sealed record UpdateDepartmentCommand(
     OptionalValue<decimal> AiWeightMaxDeltaPerCycleOverride = default,
     OptionalValue<int> AiWeightCycleDaysOverride = default,
     OptionalValue<decimal> AiWeightMinOverride = default,
-    OptionalValue<decimal> AiWeightMaxOverride = default
+    OptionalValue<decimal> AiWeightMaxOverride = default,
+    // Ator do request (usuário autenticado) gravado na auditoria.
+    string? ChangedBy = null
 ) : ICommand<Result<DepartmentDto>>;
 
-public sealed record DeleteDepartmentCommand(Guid Id) : ICommand<Result<VoidResult>>;
+public sealed record DeleteDepartmentCommand(Guid Id, string? ChangedBy = null)
+    : ICommand<Result<VoidResult>>;
 
 public sealed record DepartmentDto(
     Guid Id, Guid? ClientId, string Name, string? Description,
@@ -96,5 +107,7 @@ public sealed record DepartmentDto(
     int? AiSkillLearningModeOverride = null, int? AiSkillMinEvidenceOverride = null,
     int? AiSkillMaxTagsOverride = null, int? AiWeightLearningModeOverride = null,
     decimal? AiWeightMaxDeltaPerCycleOverride = null, int? AiWeightCycleDaysOverride = null,
-    decimal? AiWeightMinOverride = null, decimal? AiWeightMaxOverride = null
+    decimal? AiWeightMinOverride = null, decimal? AiWeightMaxOverride = null,
+    // Override da estratégia de auto-atribuição (aditivo; null = herda do global).
+    int? AssignmentStrategyOverride = null
 );

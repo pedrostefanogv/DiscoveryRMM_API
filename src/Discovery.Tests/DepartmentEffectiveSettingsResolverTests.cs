@@ -182,6 +182,7 @@ public class DepartmentEffectiveSettingsResolverTests
         dept.AiWeightCycleDays = 14; dept.AiWeightCycleDaysOverride = 14;
         dept.AiWeightMin = 0.10m; dept.AiWeightMinOverride = 0.10m;
         dept.AiWeightMax = 0.60m; dept.AiWeightMaxOverride = 0.60m;
+        dept.AssignmentStrategy = 3; dept.AssignmentStrategyOverride = 3;
 
         var settings = DepartmentEffectiveSettingsResolver.Resolve(dept, parent);
 
@@ -202,8 +203,9 @@ public class DepartmentEffectiveSettingsResolverTests
         Assert.That(settings.AiWeightCycleDays.Value, Is.EqualTo(14));
         Assert.That(settings.AiWeightMin.Value, Is.EqualTo(0.10m));
         Assert.That(settings.AiWeightMax.Value, Is.EqualTo(0.60m));
+        Assert.That(settings.AssignmentStrategy.Value, Is.EqualTo(3));
 
-        // Todos os 16 campos têm origem própria depois do backfill.
+        // Todos os 17 campos têm origem própria depois do backfill.
         var origins = new[]
         {
             settings.AiAssignmentMode.Origin, settings.AiAssignmentMinConfidence.Origin,
@@ -213,10 +215,51 @@ public class DepartmentEffectiveSettingsResolverTests
             settings.AiSkillLearningMode.Origin, settings.AiSkillMinEvidence.Origin,
             settings.AiSkillMaxTags.Origin, settings.AiWeightLearningMode.Origin,
             settings.AiWeightMaxDeltaPerCycle.Origin, settings.AiWeightCycleDays.Origin,
-            settings.AiWeightMin.Origin, settings.AiWeightMax.Origin
+            settings.AiWeightMin.Origin, settings.AiWeightMax.Origin,
+            settings.AssignmentStrategy.Origin
         };
-        Assert.That(origins, Has.Length.EqualTo(16));
+        Assert.That(origins, Has.Length.EqualTo(17));
         Assert.That(origins, Is.All.EqualTo(DepartmentSettingOrigin.Own));
+    }
+
+    [Test]
+    public void AssignmentStrategy_override_vence_e_null_herda()
+    {
+        // B3 — 17º campo: estratégia de auto-atribuição herda como os demais.
+        var parent = Global(Guid.NewGuid());
+        parent.AssignmentStrategy = 3;
+        parent.AssignmentStrategyOverride = 3;
+
+        var own = ClientDepartment(Guid.NewGuid(), parent.Id);
+        own.AssignmentStrategy = 1;
+        own.AssignmentStrategyOverride = 1;
+
+        var ownSettings = DepartmentEffectiveSettingsResolver.Resolve(own, parent);
+        Assert.That(ownSettings.AssignmentStrategy.Value, Is.EqualTo(1));
+        Assert.That(ownSettings.AssignmentStrategy.Origin, Is.EqualTo(DepartmentSettingOrigin.Own));
+        Assert.That(ownSettings.AssignmentStrategy.SourceDepartmentId, Is.EqualTo(own.Id));
+
+        var inheriting = ClientDepartment(Guid.NewGuid(), parent.Id);
+        inheriting.AssignmentStrategy = 1; // base/legado não vence o global
+        inheriting.AssignmentStrategyOverride = null;
+
+        var inheritedSettings = DepartmentEffectiveSettingsResolver.Resolve(inheriting, parent);
+        Assert.That(inheritedSettings.AssignmentStrategy.Value, Is.EqualTo(3));
+        Assert.That(inheritedSettings.AssignmentStrategy.Origin,
+            Is.EqualTo(DepartmentSettingOrigin.InheritedGlobal));
+        Assert.That(inheritedSettings.AssignmentStrategy.SourceDepartmentId, Is.EqualTo(parent.Id));
+    }
+
+    [Test]
+    public void AssignmentStrategy_sem_pai_usa_o_valor_base()
+    {
+        var dept = ClientDepartment(Guid.NewGuid(), parentId: null);
+        dept.AssignmentStrategy = 2;
+
+        var settings = DepartmentEffectiveSettingsResolver.Resolve(dept, null);
+
+        Assert.That(settings.AssignmentStrategy.Value, Is.EqualTo(2));
+        Assert.That(settings.AssignmentStrategy.Origin, Is.EqualTo(DepartmentSettingOrigin.Default));
     }
 
     [Test]

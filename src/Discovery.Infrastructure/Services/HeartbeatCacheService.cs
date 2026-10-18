@@ -138,7 +138,8 @@ public class HeartbeatCacheService : IHeartbeatCacheService
                 UiOnline = heartbeat.UiOnline,
                 // ── Usuário logado (sessão interativa) ──
                 LoggedUser = heartbeat.LoggedUser,
-                LoggedUserSince = heartbeat.LoggedUserSince
+                LoggedUserSince = heartbeat.LoggedUserSince,
+                UiOnlineCount = heartbeat.UiOnlineCount
             };
 
             var json = JsonSerializer.Serialize(entry, JsonOptions);

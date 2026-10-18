@@ -81,7 +81,9 @@ public class DepartmentsController(
     [RequirePermission(ResourceType.Departments, ActionType.Edit)]
     public async Task<IActionResult> Create([FromBody] CreateDepartmentCommand cmd)
     {
-        var result = await mediator.Send(cmd);
+        // B1 — o ator da auditoria é SEMPRE o usuário autenticado do request,
+        // nunca o valor vindo do corpo.
+        var result = await mediator.Send(cmd with { ChangedBy = Username });
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto),
             failure: errors => errors[0].Code == "Validation"
@@ -93,7 +95,7 @@ public class DepartmentsController(
     [RequirePermission(ResourceType.Departments, ActionType.Edit)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateDepartmentCommand cmd)
     {
-        var result = await mediator.Send(cmd with { Id = id });
+        var result = await mediator.Send(cmd with { Id = id, ChangedBy = Username });
         return result.Match<IActionResult>(
             success: Ok,
             failure: errors => errors[0].Code == "NotFound"
@@ -107,7 +109,7 @@ public class DepartmentsController(
     [RequirePermission(ResourceType.Departments, ActionType.Edit)]
     public async Task<IActionResult> Delete(Guid id)
     {
-        var result = await mediator.Send(new DeleteDepartmentCommand(id));
+        var result = await mediator.Send(new DeleteDepartmentCommand(id, Username));
         return result.Match<IActionResult>(
             success: _ => NoContent(),
             failure: errors => errors[0].Code == "NotFound"
@@ -156,10 +158,23 @@ public class DepartmentsController(
     [RequirePermission(ResourceType.Departments, ActionType.Edit)]
     public async Task<IActionResult> UpdateMemberProfile(
         Guid id, Guid userId, [FromBody] UpdateDepartmentMemberProfileRequest request)
-        => (await mediator.Send(new UpdateDepartmentMemberProfileCommand(
+    {
+        var result = await mediator.Send(new UpdateDepartmentMemberProfileCommand(
                 id, userId, request.SkillTags, request.SkillLevel, request.MaxOpenTickets,
                 request.Weight, request.AcceptsAiAssignment, request.ClearMaxOpenTickets),
-            HttpContext.RequestAborted)).ToActionResult();
+            HttpContext.RequestAborted);
+
+        if (result.IsSuccess)
+            return Ok(result.Value);
+
+        // B2 — membro herdado é gerenciado no global pai: 422 (não 400/404) para
+        // o console diferenciar "não é seu" de payload inválido. Os demais erros
+        // seguem o mapeamento padrão de ResultExtensions.
+        var errors = result.Errors.Select(e => new { e.Code, e.Message, e.Field }).ToList();
+        return result.Errors[0].Code == "Validation"
+            ? UnprocessableEntity(new { errors })
+            : result.ToActionResult();
+    }
 
     /// <summary>Força o recálculo dos snapshots de métricas usados pela triagem.</summary>
     [HttpPost("{id:guid}/assignment/metrics/refresh")]

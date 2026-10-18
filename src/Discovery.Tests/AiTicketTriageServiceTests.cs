@@ -105,6 +105,154 @@ public class AiTicketTriageServiceTests
         return (db, ticket, department, top, other);
     }
 
+    /// <summary>
+    /// B4 — departamento de cliente herdando um global ATIVO: um membro próprio
+    /// e um membro herdado, ambos elegíveis para a triagem.
+    /// </summary>
+    private static async Task<(DiscoveryDbContext Db, Ticket Ticket, Department Global,
+        Department Client, User Own, User Inherited)> SeedInheritedTeamAsync()
+    {
+        var db = CreateDb();
+        var now = DateTime.UtcNow;
+        var clientId = Guid.NewGuid();
+
+        var own = new User { Id = Guid.NewGuid(), Login = "own", Email = "own@x.com", FullName = "Own", IsActive = true };
+        var inherited = new User { Id = Guid.NewGuid(), Login = "inherited", Email = "inh@x.com", FullName = "Inherited", IsActive = true };
+        db.Users.AddRange(own, inherited);
+
+        var global = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = null,
+            Name = "Global Suporte",
+            IsActive = true,
+            AssignmentStrategy = (int)TicketAssignmentStrategy.AiTriage,
+            AiAssignmentMode = (int)AiAssignmentMode.Suggest,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var client = new Department
+        {
+            Id = Guid.NewGuid(),
+            ClientId = clientId,
+            Name = "Suporte Filial",
+            InheritFromGlobalId = global.Id,
+            IsActive = true,
+            AssignmentStrategy = (int)TicketAssignmentStrategy.AiTriage,
+            AiAssignmentMode = (int)AiAssignmentMode.Suggest,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        db.Departments.AddRange(global, client);
+
+        db.DepartmentMembers.AddRange(
+            new DepartmentMember
+            {
+                Id = Guid.NewGuid(),
+                DepartmentId = client.Id,
+                UserId = own.Id,
+                IsActive = true,
+                SkillTagsJson = JsonSerializer.Serialize(new[] { "rede" }),
+                SkillLevel = 3,
+                AcceptsAiAssignment = true,
+                CreatedAt = now.AddMinutes(-2)
+            },
+            new DepartmentMember
+            {
+                Id = Guid.NewGuid(),
+                DepartmentId = global.Id,
+                UserId = inherited.Id,
+                IsActive = true,
+                SkillTagsJson = JsonSerializer.Serialize(new[] { "vpn" }),
+                SkillLevel = 3,
+                AcceptsAiAssignment = true,
+                CreatedAt = now.AddMinutes(-1)
+            });
+
+        db.Sites.Add(new Site
+        {
+            Id = Guid.NewGuid(),
+            ClientId = clientId,
+            Name = "Matriz",
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+
+        var ticket = new Ticket
+        {
+            Id = Guid.NewGuid(),
+            ClientId = clientId,
+            WorkflowStateId = Guid.NewGuid(),
+            DepartmentId = client.Id,
+            Title = "VPN nao conecta",
+            Description = "A VPN da filial cai ao conectar no servidor de arquivos",
+            Priority = TicketPriority.High,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        db.Tickets.Add(ticket);
+        await db.SaveChangesAsync();
+
+        return (db, ticket, global, client, own, inherited);
+    }
+
+    private static List<AssignmentCandidateDto> ReadCandidates(TicketAssignmentDecision decision)
+        => JsonSerializer.Deserialize<List<AssignmentCandidateDto>>(
+            decision.CandidatesJson!,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+
+    [Test]
+    public async Task RoundRobin_e_triagem_IA_usam_a_mesma_equipe_efetiva()
+    {
+        var (db, ticket, _, client, own, inherited) = await SeedInheritedTeamAsync();
+        await using var _db = db;
+
+        var resolver = new DepartmentTeamResolver(db);
+        var effectiveTeam = (await resolver.ResolveMembersAsync(client.Id))
+            .Select(m => m.UserId).ToList();
+        Assert.That(effectiveTeam, Is.EquivalentTo(new[] { own.Id, inherited.Id }),
+            "a equipe efetiva é a união de próprios + herdados");
+
+        // Round-robin: duas chamadas percorrem a equipe efetiva inteira.
+        var assignment = new TicketAssignmentService(db, resolver);
+        var first = await assignment.ResolveFallbackAsync(
+            client.Id, (int)TicketAssignmentStrategy.RoundRobin);
+        var second = await assignment.ResolveFallbackAsync(
+            client.Id, (int)TicketAssignmentStrategy.RoundRobin);
+
+        Assert.That(new[] { first!.Value, second!.Value },
+            Is.EquivalentTo(effectiveTeam),
+            "o round-robin enxerga próprios e herdados");
+
+        // Triagem por IA: os candidatos da decisão são exatamente a mesma equipe.
+        var triage = BuildService(db, new FakeAiChat(inherited.Id, 0.9));
+        await triage.PreviewAsync(ticket.Id);
+
+        var decision = await db.TicketAssignmentDecisions.AsNoTracking().SingleAsync();
+        var aiCandidates = ReadCandidates(decision).Select(c => c.UserId).ToList();
+
+        Assert.That(aiCandidates, Is.EquivalentTo(effectiveTeam),
+            "round-robin e triagem por IA compartilham o mesmo resolvedor/equipe");
+    }
+
+    [Test]
+    public async Task CandidatesJson_registra_origem_own_e_inherited()
+    {
+        var (db, ticket, global, _, own, inherited) = await SeedInheritedTeamAsync();
+        await using var _db = db;
+
+        var triage = BuildService(db, new FakeAiChat(inherited.Id, 0.9));
+        await triage.PreviewAsync(ticket.Id);
+
+        var decision = await db.TicketAssignmentDecisions.AsNoTracking().SingleAsync();
+        var candidates = ReadCandidates(decision);
+
+        Assert.That(candidates.Single(c => c.UserId == own.Id).Origin, Is.EqualTo("own"));
+        Assert.That(candidates.Single(c => c.UserId == inherited.Id).Origin,
+            Is.EqualTo($"inherited:{global.Id}"));
+    }
+
     private static AiTicketTriageService BuildService(
         DiscoveryDbContext db, IAiChatService aiChat,
         FakeQueue? queue = null, BackgroundProcessingSettings? settings = null)

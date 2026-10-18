@@ -67,7 +67,10 @@ public sealed record DepartmentMemberProfileDto(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] int? MaxOpenTickets,
     decimal Weight,
     bool AcceptsAiAssignment,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] TechnicianMetricsDto? Metrics);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] TechnicianMetricsDto? Metrics,
+    // Origem do vínculo na equipe efetiva: "own" (próprio) ou
+    // "inherited:<departmentId>" (herdado do global pai). Campo aditivo.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] string? Origin = "own");
 
 public sealed record UpdateDepartmentMemberProfileRequest(
     IReadOnlyList<string>? SkillTags = null,

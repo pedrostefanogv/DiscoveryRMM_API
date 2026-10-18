@@ -29,8 +29,9 @@ public sealed record DepartmentEffectiveMemberDto(
 /// Configuração efetiva do departamento (GET /departments/{id}/effective).
 ///
 /// Shape ADITIVO: os 16 campos flat (<see cref="AiAssignmentMode"/>, ...,
-/// <see cref="AiWeightMax"/>) continuam para compatibilidade; o console novo
-/// consome também <see cref="Config"/> (16 valores camelCase),
+/// <see cref="AiWeightMax"/>) continuam para compatibilidade, além do 17º
+/// <see cref="AssignmentStrategy"/>; o console novo consome também
+/// <see cref="Config"/> (17 valores camelCase),
 /// <see cref="Origins"/> (origem por campo como string), <see cref="Team"/>
 /// (equipe efetiva), <see cref="Warnings"/> e os metadados de herança.
 /// </summary>
@@ -65,8 +66,11 @@ public sealed record DepartmentEffectiveConfigDto
     public DepartmentEffectiveSettingDto<decimal> AiWeightMin { get; init; } = null!;
     public DepartmentEffectiveSettingDto<decimal> AiWeightMax { get; init; } = null!;
 
+    /// <summary>17º campo: estratégia de auto-atribuição efetiva (aditivo).</summary>
+    public DepartmentEffectiveSettingDto<int> AssignmentStrategy { get; init; } = null!;
+
     // ── Shape novo consumido pelo console ────────────────────────────────
-    /// <summary>16 valores efetivos em camelCase (chaves iguais aos nomes do PUT).</summary>
+    /// <summary>17 valores efetivos em camelCase (chaves iguais aos nomes do PUT).</summary>
     public IReadOnlyDictionary<string, object?> Config { get; init; }
         = new Dictionary<string, object?>();
 

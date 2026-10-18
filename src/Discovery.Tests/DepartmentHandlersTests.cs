@@ -247,10 +247,13 @@ public class DepartmentHandlersTests
         Assert.That(result.IsSuccess, Is.True);
         var dto = result.Value!;
 
-        // Shape novo: 16 valores + 16 origens em camelCase.
-        Assert.That(dto.Config, Has.Count.EqualTo(16));
-        Assert.That(dto.Origins, Has.Count.EqualTo(16));
+        // Shape novo: 17 valores + 17 origens em camelCase (B3 adiciona a
+        // estratégia de auto-atribuição ao conjunto herdável).
+        Assert.That(dto.Config, Has.Count.EqualTo(17));
+        Assert.That(dto.Origins, Has.Count.EqualTo(17));
         Assert.That(dto.Config["aiAssignmentMode"], Is.EqualTo(1));
+        Assert.That(dto.Config["assignmentStrategy"], Is.EqualTo(0));
+        Assert.That(dto.Origins["assignmentStrategy"], Is.EqualTo("inherited-global"));
         Assert.That(dto.Config["aiSkillLearningMode"], Is.EqualTo(2));
         Assert.That(dto.Config["aiWeightMax"], Is.EqualTo(0.50m));
         Assert.That(dto.Origins["aiAssignmentMode"], Is.EqualTo("inherited-global"));
@@ -258,7 +261,9 @@ public class DepartmentHandlersTests
         // Com pai global utilizável, campo sem override no filho é herdado.
         Assert.That(dto.Origins["aiWeightMax"], Is.EqualTo("inherited-global"));
 
-        // Campos flat continuam (compatibilidade) e cobrem os 16.
+        // Campos flat continuam (compatibilidade) e cobrem os 17.
+        Assert.That(dto.AssignmentStrategy.Value, Is.EqualTo(0));
+        Assert.That(dto.AssignmentStrategy.Origin, Is.EqualTo("inherited-global"));
         Assert.That(dto.AiAssignmentMode.Value, Is.EqualTo(1));
         Assert.That(dto.AiAssignmentMode.Origin, Is.EqualTo("inherited-global"));
         Assert.That(dto.AiSkillLearningMode.Value, Is.EqualTo(2));
@@ -532,14 +537,126 @@ public class DepartmentHandlersTests
         Assert.That(service.Created, Is.Null);
     }
 
+    [Test]
+    public async Task Create_registra_o_ator_do_request_na_auditoria()
+    {
+        // B1 — o usuário do request chega pelo comando e é gravado como ator.
+        var service = new FakeDepartmentService();
+        var audit = new FakeConfigurationAudit();
+        var handler = new CreateDepartmentCommandHandler(service, audit);
+
+        var result = await handler.Handle(
+            new CreateDepartmentCommand("Depto", null, Guid.NewGuid(), null, 0)
+                with { ChangedBy = "maria.silva" },
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(audit.Changes, Has.Count.EqualTo(1));
+        Assert.That(audit.Changes[0].ChangedBy, Is.EqualTo("maria.silva"));
+    }
+
+    [Test]
+    public async Task Update_registra_ator_e_transicao_de_IsActive_com_antes_e_depois()
+    {
+        // B1 — desligamento auditado com antes/depois e ator do request.
+        var dept = NewDepartment();
+        var service = new FakeDepartmentService(dept);
+        var audit = new FakeConfigurationAudit();
+        var handler = new UpdateDepartmentCommandHandler(service, audit);
+
+        var result = await handler.Handle(
+            new UpdateDepartmentCommand(
+                dept.Id, null, null, OptionalGuid.Unset, null, IsActive: false)
+                with { ChangedBy = "joao.pereira" },
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        var change = audit.Changes.Single(c => c.Field == "IsActive");
+        Assert.That(change.OldValue, Is.EqualTo("true"));
+        Assert.That(change.NewValue, Is.EqualTo("false"));
+        Assert.That(change.Reason, Is.EqualTo("department_deactivate"));
+        Assert.That(change.ChangedBy, Is.EqualTo("joao.pereira"));
+    }
+
+    [Test]
+    public async Task Update_registra_a_reativacao_de_IsActive()
+    {
+        // B1 — a transição inversa (inativo -> ativo) também é auditada.
+        var dept = NewDepartment(active: false);
+        var service = new FakeDepartmentService(dept);
+        var audit = new FakeConfigurationAudit();
+        var handler = new UpdateDepartmentCommandHandler(service, audit);
+
+        var result = await handler.Handle(
+            new UpdateDepartmentCommand(
+                dept.Id, null, null, OptionalGuid.Unset, null, IsActive: true)
+                with { ChangedBy = "ana.souza" },
+            CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        var change = audit.Changes.Single(c => c.Field == "IsActive");
+        Assert.That(change.OldValue, Is.EqualTo("false"));
+        Assert.That(change.NewValue, Is.EqualTo("true"));
+        Assert.That(change.Reason, Is.EqualTo("department_activate"));
+        Assert.That(change.ChangedBy, Is.EqualTo("ana.souza"));
+    }
+
+    [Test]
+    public async Task Delete_registra_o_ator_do_request_na_auditoria()
+    {
+        var dept = NewDepartment();
+        var service = new FakeDepartmentService(dept);
+        var audit = new FakeConfigurationAudit();
+        var handler = new DeleteDepartmentCommandHandler(service, audit);
+
+        var result = await handler.Handle(
+            new DeleteDepartmentCommand(dept.Id, "carla.mendes"), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(audit.Changes, Is.Not.Empty);
+        Assert.That(audit.Changes.Select(c => c.ChangedBy), Is.All.EqualTo("carla.mendes"));
+    }
+
+    [Test]
+    public async Task Update_assignment_strategy_grava_override_e_null_volta_a_herdar()
+    {
+        // B3 — mesmo patch semântico dos demais 16 campos.
+        var dept = NewDepartment();
+        var service = new FakeDepartmentService(dept);
+        var handler = new UpdateDepartmentCommandHandler(service);
+
+        var applied = await handler.Handle(new UpdateDepartmentCommand(
+            Id: dept.Id, Name: null, Description: null,
+            InheritFromGlobalId: OptionalGuid.Unset, SortOrder: null, IsActive: null,
+            AssignmentStrategy: OptionalValue<int>.Set(2)),
+            CancellationToken.None);
+
+        Assert.That(applied.IsSuccess, Is.True);
+        Assert.That(service.Updated!.AssignmentStrategy, Is.EqualTo(2));
+        Assert.That(service.Updated!.AssignmentStrategyOverride, Is.EqualTo(2));
+
+        var cleared = await handler.Handle(new UpdateDepartmentCommand(
+            Id: dept.Id, Name: null, Description: null,
+            InheritFromGlobalId: OptionalGuid.Unset, SortOrder: null, IsActive: null,
+            AssignmentStrategy: OptionalValue<int>.Set(null)),
+            CancellationToken.None);
+
+        Assert.That(cleared.IsSuccess, Is.True);
+        Assert.That(service.Updated!.AssignmentStrategyOverride, Is.Null,
+            "null explícito volta a herdar do global pai");
+        Assert.That(service.Updated!.AssignmentStrategy, Is.EqualTo(2),
+            "a coluna base/legada é preservada");
+    }
+
     private sealed class FakeConfigurationAudit : IConfigurationAuditService
     {
-        public List<(string EntityType, Guid EntityId, string Field, string? OldValue, string? NewValue)> Changes { get; } = [];
+        public List<(string EntityType, Guid EntityId, string Field, string? OldValue, string? NewValue,
+            string? Reason, string? ChangedBy)> Changes { get; } = [];
 
         public Task LogChangeAsync(string entityType, Guid entityId, string fieldName,
             string? oldValue, string? newValue, string? reason = null, string? changedBy = null, string? ipAddress = null)
         {
-            Changes.Add((entityType, entityId, fieldName, oldValue, newValue));
+            Changes.Add((entityType, entityId, fieldName, oldValue, newValue, reason, changedBy));
             return Task.CompletedTask;
         }
 

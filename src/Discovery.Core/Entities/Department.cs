@@ -27,8 +27,15 @@ public class Department
     public int SortOrder { get; set; } = 0;
     public bool IsActive { get; set; } = true;
 
-    /// <summary>Estratégia de auto-atribuição (0=None, 1=RoundRobin, 2=LeastOpenTickets).</summary>
+    /// <summary>Estratégia de auto-atribuição (0=None, 1=RoundRobin, 2=LeastOpenTickets, 3=AiTriage).</summary>
     public int AssignmentStrategy { get; set; } = 0;
+
+    /// <summary>
+    /// Override da estratégia de auto-atribuição. NULL = herda a estratégia do
+    /// departamento GLOBAL pai (quando o vínculo é utilizável); preenchido =
+    /// o próprio valor vence. A M229 faz o backfill base -> override.
+    /// </summary>
+    public int? AssignmentStrategyOverride { get; set; }
 
     /// <summary>Último usuário atribuído (cursor do round-robin).</summary>
     public Guid? RoundRobinLastUserId { get; set; }

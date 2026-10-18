@@ -44,7 +44,10 @@ public sealed record DepartmentEffectiveSettings(
     DepartmentEffectiveSetting<decimal> AiWeightMaxDeltaPerCycle,
     DepartmentEffectiveSetting<int> AiWeightCycleDays,
     DepartmentEffectiveSetting<decimal> AiWeightMin,
-    DepartmentEffectiveSetting<decimal> AiWeightMax);
+    DepartmentEffectiveSetting<decimal> AiWeightMax,
+    // 17º campo: estratégia de auto-atribuição (0=None, 1=RoundRobin,
+    // 2=LeastOpenTickets, 3=AiTriage). Fica no fim para ser ADITIVO ao record.
+    DepartmentEffectiveSetting<int> AssignmentStrategy);
 
 /// <summary>
 /// Resolvedor PURO (sem I/O) da configuração efetiva de triagem. O chamador
@@ -112,6 +115,9 @@ public static class DepartmentEffectiveSettingsResolver
                 ownId, parentId),
             Decimal(department.AiWeightMaxOverride, department.AiWeightMax,
                 parent, parent?.AiWeightMaxOverride, parent?.AiWeightMax ?? 0.50m,
+                ownId, parentId),
+            Int(department.AssignmentStrategyOverride, department.AssignmentStrategy,
+                parent, parent?.AssignmentStrategyOverride, parent?.AssignmentStrategy ?? 0,
                 ownId, parentId));
     }
 

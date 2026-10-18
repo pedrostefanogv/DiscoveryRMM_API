@@ -414,7 +414,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 heartbeat.ProcessCount,
                                 heartbeat.UiOnline,
                                 heartbeat.LoggedUser,
-                                heartbeat.LoggedUserSince
+                                heartbeat.LoggedUserSince,
+                                heartbeat.UiOnlineCount
                             };
 
                             var dashboardMessage = DashboardEventMessage.Create(
