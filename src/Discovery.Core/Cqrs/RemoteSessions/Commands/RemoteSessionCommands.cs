@@ -111,7 +111,11 @@ public sealed record RemoteSessionResponseDto(
     string? ConsentStatus = null,
     DateTime? ConsentDeadlineAtUtc = null,
     string? ConsentMessage = null,
-    string? ConsentPolicySource = null
+    string? ConsentPolicySource = null,
+    // Ação padrão da política (approve|deny) e operador — o console mostra ao
+    // solicitante o que acontece se o usuário não responder.
+    string? ConsentTimeoutAction = null,
+    string? ConsentOperator = null
 );
 
 /// <summary>Estado do consentimento de uma sessão de desktop.</summary>

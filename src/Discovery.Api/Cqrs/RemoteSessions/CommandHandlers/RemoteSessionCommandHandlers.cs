@@ -258,7 +258,11 @@ public sealed class StartRemoteSessionCommandHandler(
             ConsentMessage: consentRequired ? consentMessage : null,
             ConsentPolicySource: desktopSession && policy.Mode != RemoteConsentMode.Off
                 ? policy.TopSource()
-                : null));
+                : null,
+            ConsentTimeoutAction: consentRequired
+                ? policy.TimeoutAction.ToString().ToLowerInvariant()
+                : null,
+            ConsentOperator: consentRequired ? operatorName : null));
     }
 
     private static bool AgentSupportsConsent(string? agentVersion, string minimumVersion)

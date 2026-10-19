@@ -102,6 +102,27 @@ public class AgentRemoteSessionsController(
         return Ok(BuildPayload(updated));
     }
 
+    /// <summary>
+    /// Estado autoritativo da sessão (status + consentimento) para o AGENTE.
+    /// Usado no REPLAY do worker (watchdog de crash/logoff): sessão já ACTIVE
+    /// não reexibe o prompt de consentimento; negada/encerrada não é
+    /// "ressuscitada" pelo relançamento.
+    /// </summary>
+    [HttpGet("{sessionId:guid}")]
+    public async Task<IActionResult> GetSession(Guid sessionId, CancellationToken ct = default)
+    {
+        if (!TryGetAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent não autenticado." });
+
+        var raw = await sessionManager.GetRawSessionAsync(sessionId, ct);
+        if (raw is null)
+            return NotFound(new { error = "Remote session not found." });
+        if (raw.AgentId != agentId)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Session does not belong to this agent." });
+
+        return Ok(BuildPayload(raw));
+    }
+
     /// <summary>Encerramento iniciado pelo agente (botão Desconectar do banner).</summary>
     [HttpPost("{sessionId:guid}/stop")]
     public async Task<IActionResult> StopFromAgent(

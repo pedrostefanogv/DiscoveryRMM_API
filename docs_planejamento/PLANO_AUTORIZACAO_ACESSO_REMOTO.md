@@ -32,9 +32,16 @@ parque de agentes para a versão mínima.
    `POST /agent-auth/me/remote-sessions/{id}/consent`.
 4. Servidor marca `active`/`denied`; console faz polling em
    `GET /remote-sessions/{agentId}/{sessionId}/consent` e só então conecta o viewer.
+   Em `denied` o servidor também envia `RemoteSessionStop` ao agente
+   (best-effort), encerrando qualquer worker/prompt pendente.
 5. Sweeper nega pending vencido (`DecisionGraceSeconds`, default 30s).
 6. Botão Desconectar do banner encerra a sessão e reporta
    `POST /agent-auth/me/remote-sessions/{id}/stop`.
+7. Replay do worker (watchdog de crash/logoff): o agente consulta
+   `GET /agent-auth/me/remote-sessions/{id}` e decide sem reabrir o prompt —
+   `active` prossegue (consentimento já autorizado), `pending_consent` mostra
+   prompt, `denied/closed/expired` recusa o start sem prompt. Falha de consulta
+   cai no fluxo normal (prompt), que o servidor ainda valida.
 
 ## Segurança
 - Política decidida no servidor; `debug_config.json` do agente não desliga.

@@ -1,5 +1,6 @@
 using Discovery.Api.Services;
 using Discovery.Core.Configuration;
+using Discovery.Core.Enums;
 using Discovery.Core.Entities;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
@@ -97,6 +98,42 @@ public class RemoteSessionLivenessTests
         Assert.That(updated.Status, Is.EqualTo("closed"));
     }
 
+    [Test]
+    public async Task ApplyConsentDecision_Denied_NotificaAgenteStop()
+    {
+        // Regressão: negar no prompt precisa avisar o agente para encerrar o
+        // worker/prompt — sem isso o serviço local podia relançar o worker e o
+        // prompt reaparecia (e os reportes seguintes davam 409).
+        var session = ActiveSession(DateTime.UtcNow);
+        session.Status = RemoteSessionStatus.PendingConsent;
+        var dispatcher = new CapturingDispatcher();
+        var manager = CreateManager(session, ttlMinutes: 30, maxDurationMinutes: 120, dispatcher: dispatcher);
+
+        var updated = await manager.ApplyConsentDecisionAsync(
+            session.Id, accepted: false, outcome: "denied", reason: "user_denied", promptBackend: "native");
+
+        Assert.That(updated.Status, Is.EqualTo(RemoteSessionStatus.Denied));
+        Assert.That(dispatcher.Commands, Has.Count.EqualTo(1));
+        Assert.That(dispatcher.Commands[0].CommandType, Is.EqualTo(CommandType.RemoteSessionStop));
+        Assert.That(dispatcher.Commands[0].AgentId, Is.EqualTo(session.AgentId));
+        Assert.That(dispatcher.Commands[0].Payload, Does.Contain("\"action\":\"stop\""));
+    }
+
+    [Test]
+    public async Task ApplyConsentDecision_Accepted_NaoEnviaStop()
+    {
+        var session = ActiveSession(DateTime.UtcNow);
+        session.Status = RemoteSessionStatus.PendingConsent;
+        var dispatcher = new CapturingDispatcher();
+        var manager = CreateManager(session, ttlMinutes: 30, maxDurationMinutes: 120, dispatcher: dispatcher);
+
+        var updated = await manager.ApplyConsentDecisionAsync(
+            session.Id, accepted: true, outcome: "granted", reason: "user_allowed", promptBackend: "native");
+
+        Assert.That(updated.Status, Is.EqualTo(RemoteSessionStatus.Active));
+        Assert.That(dispatcher.Commands, Is.Empty);
+    }
+
     private static RemoteSession ActiveSession(DateTime startedAt) => new()
     {
         Id = Guid.NewGuid(),
@@ -107,7 +144,11 @@ public class RemoteSessionLivenessTests
         ExpiresAt = startedAt.AddMinutes(1),
     };
 
-    private static RemoteSessionManager CreateManager(RemoteSession session, int ttlMinutes, int maxDurationMinutes)
+    private static RemoteSessionManager CreateManager(
+        RemoteSession session,
+        int ttlMinutes,
+        int maxDurationMinutes,
+        IAgentCommandDispatcher? dispatcher = null)
     {
         var options = Options.Create(new RemoteAccessOptions
         {
@@ -119,7 +160,25 @@ public class RemoteSessionLivenessTests
             new FakeSessionRepository(session),
             new FakeAuditRepository(),
             options,
-            NullLogger<RemoteSessionManager>.Instance);
+            NullLogger<RemoteSessionManager>.Instance,
+            dispatcher ?? new NoopCommandDispatcher());
+    }
+
+    private sealed class CapturingDispatcher : IAgentCommandDispatcher
+    {
+        public List<AgentCommand> Commands { get; } = new();
+
+        public Task<AgentCommand> DispatchAsync(AgentCommand command, CancellationToken cancellationToken = default)
+        {
+            Commands.Add(command);
+            return Task.FromResult(command);
+        }
+    }
+
+    private sealed class NoopCommandDispatcher : IAgentCommandDispatcher
+    {
+        public Task<AgentCommand> DispatchAsync(AgentCommand command, CancellationToken cancellationToken = default)
+            => Task.FromResult(command);
     }
 
     private sealed class FakeSessionRepository(RemoteSession seed) : IRemoteSessionRepository

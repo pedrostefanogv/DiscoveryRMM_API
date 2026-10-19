@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -18,17 +19,20 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
     private readonly IRemoteSessionAuditRepository _auditRepo;
     private readonly RemoteAccessOptions _options;
     private readonly ILogger<RemoteSessionManager> _logger;
+    private readonly IAgentCommandDispatcher _commandDispatcher;
 
     public RemoteSessionManager(
         IRemoteSessionRepository repo,
         IRemoteSessionAuditRepository auditRepo,
         IOptions<RemoteAccessOptions> options,
-        ILogger<RemoteSessionManager> logger)
+        ILogger<RemoteSessionManager> logger,
+        IAgentCommandDispatcher commandDispatcher)
     {
         _repo = repo;
         _auditRepo = auditRepo;
         _options = options.Value;
         _logger = logger;
+        _commandDispatcher = commandDispatcher;
     }
 
     public async Task<RemoteSession> CreateSessionAsync(
@@ -275,7 +279,42 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
             "Remote session {SessionId} consent decision: accepted={Accepted} outcome={Outcome} reason={Reason} backend={Backend}",
             sessionId, accepted, outcome, reason, promptBackend);
 
+        if (!accepted)
+        {
+            // Além de marcar Denied no servidor, avisa o AGENTE para encerrar
+            // qualquer worker/prompt pendente (mesmo padrão do sweeper de
+            // timeout). Sem isso o serviço local podia manter o worker ativo e
+            // relançá-lo depois da saída, reabrindo o prompt de consentimento.
+            await TryNotifyAgentStopAsync(session);
+        }
+
         return updated;
+    }
+
+    /// <summary>
+    /// Avisa o agente para encerrar o worker/prompt da sessão quando o
+    /// consentimento é negado. Best-effort: falha aqui não altera a decisão já
+    /// persistida (o agente também encerra por conta própria).
+    /// </summary>
+    private async Task TryNotifyAgentStopAsync(RemoteSession session)
+    {
+        try
+        {
+            var payload = JsonSerializer.Serialize(new { action = "stop", sessionId = session.Id });
+            await _commandDispatcher.DispatchAsync(new AgentCommand
+            {
+                AgentId = session.AgentId,
+                CommandType = CommandType.RemoteSessionStop,
+                Payload = payload,
+            }, CancellationToken.None);
+            _logger.LogInformation(
+                "Remote session {SessionId}: stop enviado ao agent após consentimento negado", session.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Falha ao enviar stop ao agent para sessão {SessionId} com consentimento negado", session.Id);
+        }
     }
 
     /// <inheritdoc />
