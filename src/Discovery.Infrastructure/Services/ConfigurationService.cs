@@ -429,7 +429,7 @@ public class ConfigurationService : IConfigurationService
 
         if (config is ServerConfiguration serverConfiguration)
         {
-            var settings = TicketAttachmentSettings.FromJson(serverConfiguration.TicketAttachmentSettingsJson);
+            var settings = TicketAttachmentSettings.FromServerConfiguration(serverConfiguration);
             errors.AddRange(settings.Validate());
             errors.AddRange(ValidateAgentUpdatePolicyJson(serverConfiguration.AgentUpdatePolicyJson, nameof(ServerConfiguration.AgentUpdatePolicyJson)));
 

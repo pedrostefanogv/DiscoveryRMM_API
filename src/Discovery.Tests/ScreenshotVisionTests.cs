@@ -118,17 +118,61 @@ public class ScreenshotVisionTests
     }
 
     [Test]
-    public void BuildImagePartsFromDataUrls_FiltersInvalidAndCapsCount()
+    public void BuildImagePartsFromDataUrls_SendsAllValidImages()
     {
         var data = "data:image/png;base64," + Convert.ToBase64String(new byte[] { 1, 2, 3 });
 
+        // 5 data URLs válidas + entradas inválidas: todas as 5 devem virar partes
+        // (não existe mais teto de 3 imagens por mensagem).
         var parts = AiChatHelpers.BuildImagePartsFromDataUrls(
             new[] { "nao-e-data-url", string.Empty, data, data, data, data, data });
 
         Assert.That(parts, Is.Not.Null);
-        Assert.That(parts!, Has.Count.EqualTo(AiChatHelpers.MaxImagesPerMessage));
+        Assert.That(parts!, Has.Count.EqualTo(5));
         Assert.That(AiChatHelpers.BuildImagePartsFromDataUrls(new[] { "http://host/img.png" }), Is.Null);
         Assert.That(AiChatHelpers.BuildImagePartsFromDataUrls(null), Is.Null);
+    }
+
+    [Test]
+    public void BuildImagePartsFromDataUrls_DropsOnlyOversizedImage()
+    {
+        var data = "data:image/png;base64," + Convert.ToBase64String(new byte[] { 1, 2, 3 });
+        // Uma única imagem acima do teto POR IMAGEM é descartada; as demais seguem.
+        var oversized = "data:image/png;base64," + new string('A', AiChatHelpers.MaxImageBase64Chars);
+
+        var parts = AiChatHelpers.BuildImagePartsFromDataUrls(new[] { data, oversized, data });
+
+        Assert.That(parts, Is.Not.Null);
+        Assert.That(parts!, Has.Count.EqualTo(2));
+    }
+
+    [Test]
+    public void BuildImagePartsFromDataUrlsWithBudget_FiveSmallImagesPass()
+    {
+        var data = "data:image/png;base64," + Convert.ToBase64String(new byte[] { 1, 2, 3 });
+
+        var parts = AiChatHelpers.BuildImagePartsFromDataUrlsWithBudget(
+            Enumerable.Repeat(data, 5), logger: null,
+            AiChatHelpers.MaxTotalImageBase64Chars, out var omitted);
+
+        Assert.That(parts, Is.Not.Null);
+        Assert.That(parts!, Has.Count.EqualTo(5), "5 imagens pequenas cabem no orçamento");
+        Assert.That(omitted, Is.Zero);
+    }
+
+    [Test]
+    public void BuildImagePartsFromDataUrlsWithBudget_StopsWhenTotalExceeded()
+    {
+        var data = "data:image/png;base64," + Convert.ToBase64String(new byte[] { 1, 2, 3 });
+        // Orçamento cabe 2 imagens; as 3 restantes ficam de fora e são contadas.
+        var budget = data.Length * 2 + 1;
+
+        var parts = AiChatHelpers.BuildImagePartsFromDataUrlsWithBudget(
+            Enumerable.Repeat(data, 5), logger: null, budget, out var omitted);
+
+        Assert.That(parts, Is.Not.Null);
+        Assert.That(parts!, Has.Count.EqualTo(2));
+        Assert.That(omitted, Is.EqualTo(3));
     }
 
     [Test]

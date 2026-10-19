@@ -202,9 +202,16 @@ public class AiChatStreamingOrchestrator
     /// Constrói a mensagem do usuário com partes multimodais quando há imagens
     /// anexadas (prints do chat). Sem imagens, comportamento anterior (string).
     /// </summary>
-    private static LlmMessage BuildUserMessageWithImages(string message, List<string>? images)
+    private static LlmMessage BuildUserMessageWithImages(
+        string message, List<string>? images, ILogger? logger, out int omittedImages,
+        int maxImageBase64Chars = 0)
     {
-        var imageParts = AiChatHelpers.BuildImagePartsFromDataUrls(images);
+        // Sem teto de QUANTIDADE: todas as imagens anexadas viram partes
+        // multimodais, respeitando o teto por imagem (configuração de anexos) e
+        // o orçamento total do turno. omittedImages alimenta a nota de sistema.
+        var imageParts = AiChatHelpers.BuildImagePartsFromDataUrlsWithBudget(
+            images, logger, AiChatHelpers.MaxTotalImageBase64Chars, out omittedImages,
+            maxImageBase64Chars);
         if (imageParts is null)
         {
             return new LlmMessage("user", message);
@@ -305,7 +312,8 @@ public class AiChatStreamingOrchestrator
         Guid? departmentId = null,
         string? systemNote = null,
         List<string>? images = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        [EnumeratorCancellation] CancellationToken ct = default,
+        int maxImageBase64Chars = 0)
     {
         var traceId = Activity.Current?.Id ?? Guid.NewGuid().ToString();
         var startTime = DateTime.UtcNow;
@@ -318,6 +326,10 @@ public class AiChatStreamingOrchestrator
         int nextSeq = 1;
         bool setupOk = false;
         string? setupError = null;
+        // Imagens do turno: usados no fallback quando o provedor recusa o payload
+        // multimodal (repete UMA vez sem imagens) e para evitar loop.
+        bool hadImagesForTurn = false;
+        bool retriedWithoutImages = false;
         AIIntegrationSettings? aiSettings = null;
         Guid scopeClientId = Guid.Empty;
         Guid scopeSiteId = Guid.Empty;
@@ -379,13 +391,25 @@ public class AiChatStreamingOrchestrator
             // mensagem de texto e uma nota para avisar o usuário.
             var sendScreenshotImages = images is { Count: > 0 } &&
                 await ShouldSendScreenshotImagesAsync(aiSettings, scopeClientId, scopeSiteId, ct);
+            hadImagesForTurn = sendScreenshotImages && images is { Count: > 0 };
             if (images is { Count: > 0 } && !sendScreenshotImages)
             {
                 llmMessages.Add(new LlmMessage("system",
                     "[SISTEMA] O usuário anexou uma imagem, mas o modelo configurado não tem visão (ou o envio de prints está desabilitado). " +
                     "Avise o usuário que a imagem não pôde ser analisada e peça uma descrição em texto do que aparece na tela."));
             }
-            llmMessages.Add(BuildUserMessageWithImages(message, sendScreenshotImages ? images : null));
+            // A nota de imagens omitidas vem ANTES da mensagem do usuário para o
+            // modelo já saber que o anexo não está completo.
+            var userMessageWithImages = BuildUserMessageWithImages(
+                message, sendScreenshotImages ? images : null, _logger, out var omittedImages,
+                maxImageBase64Chars);
+            if (omittedImages > 0)
+            {
+                llmMessages.Add(new LlmMessage("system",
+                    $"[SISTEMA] {omittedImages} imagem(ns) anexada(s) não puderam ser enviadas (tamanho acima do orçamento do turno). " +
+                    "Avise o usuário e peça que envie menos imagens por vez ou descreva o conteúdo em texto."));
+            }
+            llmMessages.Add(userMessageWithImages);
             setupOk = true;
         }
         catch (Exception ex)
@@ -692,6 +716,34 @@ public class AiChatStreamingOrchestrator
             // encerra o turno com mensagem clara em vez de um done vazio.
             if (providerError is not null)
             {
+                // FALLBACK multimodal: provedor recusou o payload com imagens antes
+                // de emitir qualquer token. Repete UMA única vez o while SEM imagens
+                // (mensagem user vira texto puro + nota de sistema). Sem essa saída o
+                // turno inteiro morria só porque o modelo/provedor não aceita visão.
+                if (hadImagesForTurn && !anyTokenYielded && !retriedWithoutImages)
+                {
+                    retriedWithoutImages = true;
+                    _logger.LogWarning(
+                        "[{TraceId}] Provider recusou as imagens ({Error}); repetindo o turno UMA vez sem imagens.",
+                        traceId, providerError);
+
+                    // Substitui a última mensagem user (a que carrega ContentParts).
+                    for (var i = llmMessages.Count - 1; i >= 0; i--)
+                    {
+                        if (string.Equals(llmMessages[i].Role, "user", StringComparison.OrdinalIgnoreCase))
+                        {
+                            llmMessages[i] = new LlmMessage("user", message);
+                            break;
+                        }
+                    }
+                    llmMessages.Add(new LlmMessage("system",
+                        "[SISTEMA] As imagens não puderam ser processadas pelo provedor; responda com base no texto e peça uma descrição do que aparece na imagem."));
+                    providerError = null;
+                    contentBuilder.Clear();
+                    hasToolCalls = false;
+                    continue;
+                }
+
                 _logger.LogError("[{TraceId}] Provider stream error: {Error}", traceId, providerError);
                 yield return new AiChatStreamChunk(Type: "error", Error: providerError);
                 yield break;

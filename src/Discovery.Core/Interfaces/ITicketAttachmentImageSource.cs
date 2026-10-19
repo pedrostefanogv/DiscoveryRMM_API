@@ -9,9 +9,6 @@ namespace Discovery.Core.Interfaces;
 /// </summary>
 public interface ITicketAttachmentImageSource
 {
-    /// <summary>Máximo de imagens devolvidas por chamado.</summary>
-    int MaxImages { get; }
-
     /// <summary>Seleciona os anexos elegíveis (imagem aceita, dentro do teto).</summary>
     IReadOnlyList<Attachment> SelectImageAttachments(IEnumerable<Attachment> items);
 

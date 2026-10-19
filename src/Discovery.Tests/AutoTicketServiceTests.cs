@@ -759,6 +759,16 @@ public class AutoTicketServiceTests
             int limit = 100)
             => Task.FromResult<IReadOnlyList<AgentAlertDefinition>>([]);
 
+        public Task<IReadOnlyList<AgentAlertDefinition>> GetByAgentScopePageAsync(
+            AlertDefinitionStatus? status,
+            Guid? clientId,
+            Guid? siteId,
+            Guid agentId,
+            Guid? ticketId,
+            string? cursor,
+            int limit)
+            => Task.FromResult<IReadOnlyList<AgentAlertDefinition>>([]);
+
         public Task<IReadOnlyList<AgentAlertDefinition>> GetPendingScheduledAsync(DateTime utcNow)
             => Task.FromResult<IReadOnlyList<AgentAlertDefinition>>([]);
 

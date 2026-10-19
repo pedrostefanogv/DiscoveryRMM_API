@@ -823,8 +823,6 @@ public class AiTicketTriageServiceTests
     /// </summary>
     private sealed class NoopAttachmentImages : ITicketAttachmentImageSource
     {
-        public int MaxImages => 3;
-
         public IReadOnlyList<Attachment> SelectImageAttachments(IEnumerable<Attachment> items)
             => Array.Empty<Attachment>();
 

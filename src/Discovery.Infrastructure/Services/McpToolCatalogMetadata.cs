@@ -81,6 +81,15 @@ public static class McpToolCatalogMetadata
             ["memory.search"] = new("Memória (servidor)",
                 "Use no início de uma conversa NOVA para recordar problemas e soluções de conversas anteriores desta máquina. Cobre o histórico persistente do servidor (não a conversa atual).",
                 20, true),
+            ["get_agent_alerts"] = new("Alertas",
+                "Use quando o usuário perguntar por que a máquina está alertando ou quais avisos recebeu. Lê no servidor o histórico de alertas PSADT do agente do contexto — somente leitura, nunca aceita IDs de escopo do LLM.",
+                30, true),
+            ["get_agent_labels"] = new("Estado da máquina",
+                "Use para explicar por que a máquina está marcada (labels automáticas/manuais, ex.: PROD, NOTURNO). Lê no servidor as labels do agente do contexto; sem parâmetros e somente leitura.",
+                20, true),
+            ["get_agent_metrics_history"] = new("Diagnóstico/histórico",
+                "Use para tendência e picos de CPU/memória/disco (histórico de eventos de monitoramento). Complementa get_performance_snapshot, que mostra só o instante atual. Payload limitado a 200 eventos por chamada.",
+                60, true),
 
             // ── Software (winget) ────────────────────────────────────────────
             ["search_packages"] = new("Software",
@@ -243,6 +252,20 @@ public static class McpToolCatalogMetadata
                 60, true),
             ["rate_ticket"] = new("Chamados",
                 "Use para registrar a avaliação (CSAT) de um chamado encerrado.",
+                30, true),
+
+            // ── Anexos de imagem do AGENTE ───────────────────────────────────
+            // O envio da imagem ao servidor exige autorização do usuário no
+            // chat (consentimento por anexo) — por isso o timeout de 90s cobre
+            // a espera pela decisão + upload, sem ser interativo "puro".
+            ["attach_images_to_ticket"] = new("Chamados",
+                "Use SOMENTE depois que o usuário pedir explicitamente para anexar foto(s) a um chamado. Envia a(s) imagem(ns) capturada(s)/selecionada(s) ao SERVIDOR e vincula ao chamado; a ação passa por consentimento no chat.",
+                90, true),
+            ["attach_images_to_ticket_comment"] = new("Chamados",
+                "Use SOMENTE depois que o usuário pedir explicitamente para anexar foto(s) a um comentário de chamado. Envia a(s) imagem(ns) ao SERVIDOR no comentário indicado; a ação passa por consentimento no chat.",
+                90, true),
+            ["list_ticket_attachments"] = new("Chamados",
+                "Use para listar os anexos de um chamado (nome, tipo, tamanho e autor) antes de anexar ou para conferir o que já foi enviado.",
                 30, true),
 
             // ── Navegação interna ────────────────────────────────────────────

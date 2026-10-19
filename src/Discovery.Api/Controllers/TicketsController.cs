@@ -536,8 +536,9 @@ public class TicketsController(
         if (!settings.IsContentTypeAllowed(req.ContentType))
             return BadRequest(new { error = $"Tipo de arquivo não permitido: {req.ContentType}." });
 
-        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxFileSizeBytes)
-            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxFileSizeBytes} bytes." });
+        // Anexo do CHAMADO = repositório de arquivos grandes (aba Anexos).
+        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxLargeFileSizeBytes)
+            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxLargeFileSizeBytes} bytes." });
 
         var result = await attachmentService.PreparePresignedUploadAsync(
             "Ticket", id, ticket.ClientId, req.FileName, req.ContentType, req.SizeBytes,
@@ -571,8 +572,8 @@ public class TicketsController(
         if (!settings.IsContentTypeAllowed(req.ContentType))
             return BadRequest(new { error = $"Tipo de arquivo não permitido: {req.ContentType}." });
 
-        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxFileSizeBytes)
-            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxFileSizeBytes} bytes." });
+        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxLargeFileSizeBytes)
+            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxLargeFileSizeBytes} bytes." });
 
         try
         {
@@ -583,10 +584,10 @@ public class TicketsController(
                 Username, HttpContext.RequestAborted);
 
             // O limite vale sobre o tamanho REAL no storage (não o declarado).
-            if (attachment.SizeBytes > settings.MaxFileSizeBytes)
+            if (attachment.SizeBytes > settings.MaxLargeFileSizeBytes)
             {
                 await attachmentService.DeleteAttachmentAsync(attachment.Id, HttpContext.RequestAborted);
-                return StatusCode(StatusCodes.Status413RequestEntityTooLarge, new { error = $"Arquivo excede o tamanho máximo permitido ({settings.MaxFileSizeBytes} bytes)." });
+                return StatusCode(StatusCodes.Status413RequestEntityTooLarge, new { error = $"Arquivo excede o tamanho máximo permitido ({settings.MaxLargeFileSizeBytes} bytes)." });
             }
 
             // Anexo do REPOSITÓRIO (arquivo grande): avisa o outro lado. Anexo de

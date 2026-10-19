@@ -70,7 +70,7 @@ public class TicketAttachmentImageSourceTests
     }
 
     [Test]
-    public void Select_LimitsToMaxImagesNewestFirst()
+    public void Select_KeepsAllImagesNewestFirst()
     {
         var now = DateTime.UtcNow;
         var items = Enumerable.Range(0, 5)
@@ -79,8 +79,26 @@ public class TicketAttachmentImageSourceTests
 
         var selected = TicketAttachmentImageSource.SelectImageAttachmentsCore(items);
 
-        Assert.That(selected, Has.Count.EqualTo(TicketAttachmentImageSource.MaxImagesPerPrompt));
+        // Sem teto de quantidade: os 5 anexos são enviados ao modelo.
+        Assert.That(selected, Has.Count.EqualTo(5));
         Assert.That(selected[0].CreatedAt, Is.GreaterThan(selected[^1].CreatedAt));
+    }
+
+    [Test]
+    public void Select_KeepsFiveImagesAndStillRespectsPerFileCap()
+    {
+        var now = DateTime.UtcNow;
+        var items = Enumerable.Range(0, 5)
+            .Select(i => Image("image/png", 1024, createdAt: now.AddMinutes(-i)))
+            .Append(Image("image/png", TicketAttachmentImageSource.MaxBytesPerImage + 1,
+                createdAt: now.AddMinutes(-10)))
+            .ToArray();
+
+        var selected = TicketAttachmentImageSource.SelectImageAttachmentsCore(items);
+
+        Assert.That(selected, Has.Count.EqualTo(5));
+        Assert.That(selected, Has.None.Matches<Attachment>(
+            a => a.SizeBytes > TicketAttachmentImageSource.MaxBytesPerImage));
     }
 
     [Test]

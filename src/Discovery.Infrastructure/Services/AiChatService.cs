@@ -35,6 +35,7 @@ public class AiChatService : IAiChatService
     private readonly IAiCostControlService _costControl;
     private readonly IAiTokenBudgetResolver _tokenBudgetResolver;
     private readonly IConfigurationResolver _configurationResolver;
+    private readonly IConfigurationService _configurationService;
     private readonly IAiCredentialResolver _credentialResolver;
     private readonly AiChatSystemPromptBuilder _promptBuilder;
     private readonly AiChatToolOrchestrator _toolOrchestrator;
@@ -55,6 +56,7 @@ public class AiChatService : IAiChatService
         IAiCostControlService costControl,
         IAiTokenBudgetResolver tokenBudgetResolver,
         IConfigurationResolver configurationResolver,
+        IConfigurationService configurationService,
         IAiCredentialResolver credentialResolver,
         AiChatSystemPromptBuilder promptBuilder,
         AiChatToolOrchestrator toolOrchestrator,
@@ -74,6 +76,7 @@ public class AiChatService : IAiChatService
         _costControl = costControl;
         _tokenBudgetResolver = tokenBudgetResolver;
         _configurationResolver = configurationResolver;
+        _configurationService = configurationService;
         _credentialResolver = credentialResolver;
         _promptBuilder = promptBuilder;
         _toolOrchestrator = toolOrchestrator;
@@ -359,7 +362,29 @@ public class AiChatService : IAiChatService
 
     public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(Guid agentId, string message, Guid? sessionId, Guid? departmentId = null, string? systemNote = null, List<string>? images = null, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var chunk in _streamingOrchestrator.StreamAsync(agentId, message, sessionId, ResolveAiSettingsAsync, departmentId, systemNote, images, ct))
+        // O chat de IA/LLM usa a MESMA configuração de anexos do servidor. O
+        // limite por imagem vira o teto de base64 do payload multimodal (o
+        // controller já validou tipo/tamanho e devolveu erro explícito; este é
+        // o alinhamento técnico para não descartar imagem dentro do limite).
+        var maxImageBase64Chars = 0;
+        if (images is { Count: > 0 })
+        {
+            try
+            {
+                var server = await _configurationService.GetServerConfigAsync();
+                maxImageBase64Chars = AiChatHelpers.Base64CharsForBytes(
+                    TicketAttachmentSettings.FromServerConfiguration(server).MaxFileSizeBytes);
+            }
+            catch (Exception ex)
+            {
+                // Fail-open: o teto técnico padrão continua valendo.
+                _logger.LogDebug(ex, "Falha ao resolver o limite de anexos do chat IA; usando o teto padrão.");
+            }
+        }
+
+        await foreach (var chunk in _streamingOrchestrator.StreamAsync(
+            agentId, message, sessionId, ResolveAiSettingsAsync, departmentId, systemNote,
+            images, ct, maxImageBase64Chars))
             yield return chunk;
     }
 
@@ -444,9 +469,20 @@ public class AiChatService : IAiChatService
             ReasoningEnabled: aiSettings.ReasoningEnabled,
             ReasoningEffort: aiSettings.ReasoningEffort);
 
+        // Todas as imagens do chamado são enviadas (sem teto de quantidade),
+        // respeitando o teto por imagem e o orçamento TOTAL de 32 MiB para a
+        // triagem/consulta de ticket. Descartes são logados (nunca silenciosos).
+        var omittedImages = 0;
         var imageParts = aiSettings.SendScreenshotImages
-            ? AiChatHelpers.BuildImagePartsFromDataUrls(images)
+            ? AiChatHelpers.BuildImagePartsFromDataUrlsWithBudget(
+                images, _logger, AiChatHelpers.MaxTotalTicketImageBase64Chars, out omittedImages)
             : null;
+        if (omittedImages > 0)
+        {
+            _logger.LogWarning(
+                "Triagem/consulta de chamado (site {SiteId}): {Omitted} imagem(ns) do chamado não foram enviadas ao modelo por excederem limites de tamanho.",
+                siteId, omittedImages);
+        }
 
         try
         {

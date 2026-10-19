@@ -201,7 +201,8 @@ public sealed class GetTicketAttachmentSettingsQueryHandler(IConfigurationServic
     public async Task<Result<TicketAttachmentSettings>> Handle(GetTicketAttachmentSettingsQuery q, CancellationToken ct)
     {
         var server = await config.GetServerConfigAsync();
-        var settings = TicketAttachmentSettings.FromJson(server.TicketAttachmentSettingsJson);
+        // Config efetiva: JSON (fonte nova) com fallback às colunas legadas.
+        var settings = TicketAttachmentSettings.FromServerConfiguration(server);
         return Result<TicketAttachmentSettings>.Success(settings);
     }
 }
@@ -213,20 +214,10 @@ public sealed class GetCommentAttachmentSettingsQueryHandler(IConfigurationServi
     {
         var server = await config.GetServerConfigAsync();
 
-        // O nível comentário não passa pelo JSON legado (TicketAttachmentSettingsJson):
-        // ele tem colunas próprias para que o console possa editá-las diretamente.
-        var settings = new TicketAttachmentSettings
-        {
-            Enabled = true,
-            MaxFileSizeBytes = server.AttachmentCommentMaxFileSizeBytes > 0
-                ? server.AttachmentCommentMaxFileSizeBytes
-                : 10L * 1024 * 1024,
-            AllowedContentTypes = (server.AttachmentCommentAllowedContentTypes ?? string.Empty)
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
-        };
-
-        if (settings.AllowedContentTypes.Length == 0)
-            settings.AllowedContentTypes = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+        // Nível conversa: herda a configuração unificada (limite pequeno e
+        // allowlist única). As colunas legadas continuam valendo como fallback
+        // para bases que nunca salvaram o JSON pelo card de Anexos.
+        var settings = TicketAttachmentSettings.FromServerConfiguration(server);
 
         return Result<TicketAttachmentSettings>.Success(settings);
     }
@@ -242,10 +233,18 @@ public sealed class UpdateTicketAttachmentSettingsCommandHandler(IConfigurationS
             return Result<ServerConfiguration>.Failure(
                 errors.Select(error => Error.Validation("TicketAttachmentSettingsJson", error)).ToArray());
 
+        // O JSON é a fonte da verdade a partir do card de Anexos. As colunas
+        // legadas são sincronizadas para não quebrar consumidores antigos (agent
+        // desatualizado, telas que ainda leem AttachmentComment*/AttachmentTicket*).
+        var contentTypesCsv = string.Join(',', cmd.Settings.AllowedContentTypes);
         var updated = await config.PatchServerAsync(
             new Dictionary<string, object>
             {
-                [nameof(ServerConfiguration.TicketAttachmentSettingsJson)] = cmd.Settings.ToJson()
+                [nameof(ServerConfiguration.TicketAttachmentSettingsJson)] = cmd.Settings.ToJson(),
+                [nameof(ServerConfiguration.AttachmentCommentMaxFileSizeBytes)] = cmd.Settings.MaxFileSizeBytes,
+                [nameof(ServerConfiguration.AttachmentCommentAllowedContentTypes)] = contentTypesCsv,
+                [nameof(ServerConfiguration.AttachmentTicketMaxFileSizeBytes)] = cmd.Settings.MaxLargeFileSizeBytes,
+                [nameof(ServerConfiguration.AttachmentTicketAllowedContentTypes)] = contentTypesCsv,
             },
             cmd.ChangedBy);
 

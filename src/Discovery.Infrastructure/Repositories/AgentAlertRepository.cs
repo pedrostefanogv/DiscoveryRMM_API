@@ -62,6 +62,68 @@ public class AgentAlertRepository : IAgentAlertRepository
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<AgentAlertDefinition>> GetByAgentScopePageAsync(
+        AlertDefinitionStatus? status,
+        Guid? clientId,
+        Guid? siteId,
+        Guid agentId,
+        Guid? ticketId,
+        string? cursor,
+        int limit)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var query = _db.AgentAlertDefinitions.AsNoTracking().AsQueryable();
+
+        if (status.HasValue)
+            query = query.Where(a => a.Status == status.Value);
+
+        if (ticketId.HasValue)
+            query = query.Where(a => a.TicketId == ticketId.Value);
+
+        // A máquina precisa ver: (a) alertas com escopo direto do agente;
+        // (b) alertas sem agente, escopados ao site; (c) idem ao cliente.
+        // O filtro AND de GetByFiltersPageAsync não serve para esse OR.
+        if (siteId.HasValue && clientId.HasValue)
+        {
+            var site = siteId.Value;
+            var client = clientId.Value;
+            query = query.Where(a =>
+                a.ScopeAgentId == agentId ||
+                (a.ScopeAgentId == null && (a.ScopeSiteId == site || a.ScopeClientId == client)));
+        }
+        else if (siteId.HasValue)
+        {
+            var site = siteId.Value;
+            query = query.Where(a =>
+                a.ScopeAgentId == agentId ||
+                (a.ScopeAgentId == null && a.ScopeSiteId == site));
+        }
+        else if (clientId.HasValue)
+        {
+            var client = clientId.Value;
+            query = query.Where(a =>
+                a.ScopeAgentId == agentId ||
+                (a.ScopeAgentId == null && a.ScopeClientId == client));
+        }
+        else
+        {
+            query = query.Where(a => a.ScopeAgentId == agentId);
+        }
+
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorCreatedAtUtc, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyCreatedAtCursor(
+                query, cursorCreatedAtUtc, cursorId,
+                alert => alert.CreatedAt, alert => alert.Id);
+        }
+
+        return await query
+            .OrderByDescending(a => a.CreatedAt)
+            .ThenByDescending(a => a.Id)
+            .Take(safeLimit + 1)
+            .ToListAsync();
+    }
+
     public async Task<IReadOnlyList<AgentAlertDefinition>> GetPendingScheduledAsync(DateTime utcNow)
         => await _db.AgentAlertDefinitions
             .AsNoTracking()

@@ -8,10 +8,10 @@ namespace Discovery.Infrastructure.Services.Ai;
 /// Carrega as imagens anexadas a um chamado como data URLs para o modelo
 /// multimodal (triagem por IA e consultas de ticket).
 ///
-/// Regras deliberadamente conservadoras: só tipos de imagem que o contrato de
-/// visão aceita, teto por arquivo e no máximo 3 imagens (o mesmo limite do
-/// chat). Falha de download/storage nunca derruba a triagem — a imagem é
-/// simplesmente omitida e o chamado é analisado pelo texto.
+/// Regras: só tipos de imagem que o contrato de visão aceita e teto por
+/// arquivo. NÃO existe teto de quantidade — todas as imagens anexadas elegíveis
+/// vão para o modelo. Falha de download/storage nunca derruba a triagem — a
+/// imagem é simplesmente omitida e o chamado é analisado pelo texto.
 /// </summary>
 public sealed class TicketAttachmentImageSource(
     IAttachmentService attachments,
@@ -27,14 +27,18 @@ public sealed class TicketAttachmentImageSource(
         "image/gif"
     ];
 
-    /// <summary>Máximo de imagens enviadas por prompt (mesmo teto do chat).</summary>
-    public const int MaxImagesPerPrompt = 3;
+    /// <summary>
+    /// Teto por arquivo (10 MB binários), alinhado ao padrão de anexos da API.
+    /// Acima disso o anexo não vai para o LLM.
+    /// </summary>
+    public const long MaxBytesPerImage = 10 * 1024 * 1024;
 
-    /// <inheritdoc />
-    public int MaxImages => MaxImagesPerPrompt;
-
-    /// <summary>Teto por arquivo. Acima disso o anexo não vai para o LLM.</summary>
-    public const long MaxBytesPerImage = 4 * 1024 * 1024;
+    /// <summary>
+    /// Orçamento TOTAL de bytes de imagem por prompt (32 MiB). Evita baixar e
+    /// enviar dezenas de anexos grandes de uma vez; os mais recentes têm
+    /// prioridade (a seleção já ordena por CreatedAt desc).
+    /// </summary>
+    public const long MaxTotalBytesPerPrompt = 32 * 1024 * 1024;
 
     /// <summary>
     /// Seleciona os anexos que podem virar imagem no prompt: imagem aceita,
@@ -56,7 +60,6 @@ public sealed class TicketAttachmentImageSource(
             .Where(a => a.SizeBytes > 0 && a.SizeBytes <= MaxBytesPerImage)
             .OrderByDescending(a => a.CreatedAt)
             .ThenBy(a => a.Id)
-            .Take(MaxImagesPerPrompt)
             .ToList();
     }
 
@@ -79,9 +82,9 @@ public sealed class TicketAttachmentImageSource(
     }
 
     /// <summary>
-    /// Lê os anexos de imagem do chamado e devolve as data URLs (no máximo
-    /// <see cref="MaxImages"/>). Nunca lança: qualquer falha é logada e o
-    /// resultado sai vazio.
+    /// Lê TODOS os anexos de imagem elegíveis do chamado e devolve as data URLs
+    /// (sem teto de quantidade; cada arquivo respeita o teto por arquivo).
+    /// Nunca lança: qualquer falha é logada e o resultado sai vazio.
     /// </summary>
     public async Task<IReadOnlyList<string>> LoadTicketImagesAsync(
         Guid ticketId, CancellationToken ct = default)
@@ -95,19 +98,55 @@ public sealed class TicketAttachmentImageSource(
             if (selected.Count == 0) return [];
 
             var urls = new List<string>(selected.Count);
-            foreach (var attachment in selected)
+            long totalBytes = 0;
+            var omittedForBudget = 0;
+            for (var i = 0; i < selected.Count; i++)
             {
+                var attachment = selected[i];
                 ct.ThrowIfCancellationRequested();
+
+                // Orçamento total: para de baixar assim que o próximo anexo não
+                // caberia. SizeBytes é uma estimativa do upload; o tamanho real
+                // é conferido depois do download.
+                if (totalBytes + attachment.SizeBytes > MaxTotalBytesPerPrompt)
+                {
+                    omittedForBudget = selected.Count - i;
+                    break;
+                }
+
                 try
                 {
                     await using var stream = await attachments.DownloadAttachmentAsync(attachment.Id, ct);
                     var bytes = await ReadCappedAsync(stream, MaxBytesPerImage, ct);
                     // SizeBytes é informado pelo cliente no upload; o tamanho real
-                    // manda. Arquivo acima do teto depois de lido é descartado.
-                    if (bytes is null) continue;
+                    // manda. Arquivo acima do teto depois de lido é descartado
+                    // com log (nunca silenciosamente).
+                    if (bytes is null)
+                    {
+                        logger.LogWarning(
+                            "Anexo {AttachmentId} do chamado {TicketId} descartado da IA: excede o teto de {MaxBytes} bytes por imagem.",
+                            attachment.Id, ticketId, MaxBytesPerImage);
+                        continue;
+                    }
+
+                    if (totalBytes + bytes.Length > MaxTotalBytesPerPrompt)
+                    {
+                        omittedForBudget = selected.Count - i;
+                        break;
+                    }
 
                     var dataUrl = ToDataUrl(bytes, attachment.ContentType);
-                    if (dataUrl is not null) urls.Add(dataUrl);
+                    if (dataUrl is not null)
+                    {
+                        urls.Add(dataUrl);
+                        totalBytes += bytes.Length;
+                    }
+                    else
+                    {
+                        logger.LogWarning(
+                            "Anexo {AttachmentId} do chamado {TicketId} descartado da IA: tipo {ContentType} não aceito para visão.",
+                            attachment.Id, ticketId, attachment.ContentType);
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -115,6 +154,13 @@ public sealed class TicketAttachmentImageSource(
                         "Falha ao ler o anexo {AttachmentId} do chamado {TicketId} para a IA.",
                         attachment.Id, ticketId);
                 }
+            }
+
+            if (omittedForBudget > 0)
+            {
+                logger.LogWarning(
+                    "Chamado {TicketId}: {Omitted} anexo(s) de imagem ficaram de fora da IA por exceder o orçamento total de {MaxBytes} bytes por prompt.",
+                    ticketId, omittedForBudget, MaxTotalBytesPerPrompt);
             }
 
             return urls;

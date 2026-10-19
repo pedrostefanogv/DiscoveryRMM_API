@@ -403,6 +403,8 @@ public class AgentAuthController : ControllerBase
             enabled = settings.Enabled,
             allowedContentTypes = settings.AllowedContentTypes,
             maxFileSizeBytes = settings.MaxFileSizeBytes,
+            // Repositório de arquivos grandes do chamado (aba Anexos).
+            maxLargeFileSizeBytes = settings.MaxLargeFileSizeBytes,
         });
     }
 
@@ -500,8 +502,9 @@ public class AgentAuthController : ControllerBase
         if (!settings.IsContentTypeAllowed(req.ContentType))
             return BadRequest(new { error = $"Tipo de arquivo não permitido: {req.ContentType}." });
 
-        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxFileSizeBytes)
-            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxFileSizeBytes} bytes." });
+        // Anexo do CHAMADO = repositório de arquivos grandes (aba Anexos).
+        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxLargeFileSizeBytes)
+            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxLargeFileSizeBytes} bytes." });
 
         var result = await _attachmentService.PreparePresignedUploadAsync(
             "Ticket", ticketId, ticket.ClientId, req.FileName, req.ContentType, req.SizeBytes,
@@ -535,8 +538,8 @@ public class AgentAuthController : ControllerBase
         if (req is null || !settings.IsContentTypeAllowed(req.ContentType))
             return BadRequest(new { error = $"Tipo de arquivo não permitido: {req?.ContentType}." });
 
-        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxFileSizeBytes)
-            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxFileSizeBytes} bytes." });
+        if (req.SizeBytes <= 0 || req.SizeBytes > settings.MaxLargeFileSizeBytes)
+            return BadRequest(new { error = $"Tamanho de arquivo inválido. Máximo permitido: {settings.MaxLargeFileSizeBytes} bytes." });
 
         try
         {
@@ -547,10 +550,10 @@ public class AgentAuthController : ControllerBase
                 $"agent:{id}", ct);
 
             // O limite vale sobre o tamanho REAL no storage (nao o declarado).
-            if (attachment.SizeBytes > settings.MaxFileSizeBytes)
+            if (attachment.SizeBytes > settings.MaxLargeFileSizeBytes)
             {
                 await _attachmentService.DeleteAttachmentAsync(attachment.Id, ct);
-                return StatusCode(StatusCodes.Status413RequestEntityTooLarge, new { error = $"Arquivo excede o tamanho máximo permitido ({settings.MaxFileSizeBytes} bytes)." });
+                return StatusCode(StatusCodes.Status413RequestEntityTooLarge, new { error = $"Arquivo excede o tamanho máximo permitido ({settings.MaxLargeFileSizeBytes} bytes)." });
             }
 
             // Anexo de REPOSITORIO enviado pelo agent: avisa o console (badge).
@@ -1254,6 +1257,106 @@ public class AgentAuthController : ControllerBase
 
     // ── AI Chat ───────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Política de anexos aplicada ao chat de IA/LLM. É a MESMA configuração
+    /// global de anexos (TicketAttachmentSettings); o cliente filtra a parte
+    /// que consegue transportar (imagens) usando imageContentTypes.
+    /// </summary>
+    [HttpGet("me/ai-chat/attachment-settings")]
+    public async Task<IActionResult> GetMyAiChatAttachmentSettings()
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        var result = await _mediator.Send(new GetTicketAttachmentSettingsQuery(), HttpContext.RequestAborted);
+        if (result.IsFailure || result.Value is null)
+            return BadRequest(new { error = "Não foi possível ler a configuração de anexos." });
+
+        var settings = result.Value;
+        return Ok(new
+        {
+            enabled = settings.Enabled,
+            maxFileSizeBytes = settings.MaxFileSizeBytes,
+            // Devolve a allowlist COMPLETA: o cliente filtra o que consegue
+            // anexar (imagens). Não devolver só image/* evita a ambiguidade de
+            // "nenhuma imagem permitida" ser confundida com "campo ausente".
+            allowedContentTypes = settings.AllowedContentTypes,
+            imageContentTypes = settings.GetAllowedImageContentTypes(),
+        });
+    }
+
+    /// <summary>
+    /// Valida as imagens anexadas ao chat de IA antes de iniciar o stream.
+    /// A allowlist é a mesma dos anexos de ticket/comentário/suporte e o limite
+    /// por imagem é MaxFileSizeBytes (padrão 10 MB). Falha explícita: o usuário
+    /// recebe o motivo em vez de a imagem ser descartada em silêncio.
+    /// </summary>
+    internal static (string? Error, int StatusCode) ValidateAiChatImages(
+        IReadOnlyList<string> images, TicketAttachmentSettings settings)
+    {
+        var allowed = settings.GetAllowedImageContentTypes();
+        for (var index = 0; index < images.Count; index++)
+        {
+            var label = $"Imagem {index + 1}";
+            var raw = images[index]?.Trim();
+            if (string.IsNullOrEmpty(raw) || !raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                return ($"{label}: formato inválido — anexe a imagem como data URL.", StatusCodes.Status400BadRequest);
+
+            var comma = raw.IndexOf(',');
+            if (comma <= 5 || !raw.AsSpan(5, comma - 5).Contains(";base64", StringComparison.OrdinalIgnoreCase))
+                return ($"{label}: formato inválido — esperado data URL base64.", StatusCodes.Status400BadRequest);
+
+            var header = raw[5..comma];
+            var mime = header.Split(';')[0].Trim().ToLowerInvariant();
+            if (!mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                || !allowed.Contains(mime, StringComparer.OrdinalIgnoreCase))
+            {
+                return ($"{label}: tipo {mime} não permitido nas configurações de anexos.", StatusCodes.Status400BadRequest);
+            }
+
+            var base64 = raw[(comma + 1)..];
+            var decodedBytes = EstimateBase64DecodedBytes(base64);
+            if (decodedBytes <= 0)
+                return ($"{label}: conteúdo base64 inválido.", StatusCodes.Status400BadRequest);
+
+            if (decodedBytes > settings.MaxFileSizeBytes)
+            {
+                return (
+                    $"{label}: {decodedBytes} bytes excedem o limite de {settings.MaxFileSizeBytes} bytes das configurações de anexos.",
+                    StatusCodes.Status413RequestEntityTooLarge);
+            }
+        }
+
+        return (null, StatusCodes.Status200OK);
+    }
+
+    /// <summary>Estimativa barata (sem decodificar) do tamanho binário do base64.</summary>
+    internal static long EstimateBase64DecodedBytes(string base64)
+    {
+        long chars = 0;
+        var padding = 0;
+        foreach (var c in base64)
+        {
+            if (c is ' ' or '\r' or '\n' or '\t') continue;
+            if (c == '=')
+            {
+                padding++;
+                continue;
+            }
+            var valid = c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '+' or '/' or '-' or '_';
+            if (!valid) return 0;
+            chars++;
+        }
+
+        if (chars == 0) return 0;
+        // chars não inclui o padding; a fórmula correta usa o comprimento total
+        // (chars + padding) e subtrai o padding DEPOIS — sem isso o tamanho
+        // decodificado era subestimado em 1-2 bytes nas imagens com padding.
+        var bytes = ((chars + padding) * 3) / 4 - padding;
+        return bytes > 0 ? bytes : 0;
+    }
+
     [HttpPost("me/ai-chat")]
     public async Task<IActionResult> ChatSync([FromBody] ChatSyncCommand cmd, CancellationToken ct)
     {
@@ -1272,6 +1375,10 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(cmd with { AgentId = id }, ct), dto => Accepted(dto));
     }
 
+    // O chat envia TODAS as imagens anexadas (sem teto de quantidade). O default
+    // do Kestrel (~28,6 MB) derrubava com 413 quem anexava várias fotos; 128 MB
+    // cobre ~30 prints de 4 MB. O limite por imagem continua no AiChatHelpers.
+    [RequestSizeLimit(128_000_000)]
     [HttpPost("me/ai-chat/stream")]
     public async Task ChatStream([FromBody] ChatStreamCommand cmd, CancellationToken ct)
     {
@@ -1297,6 +1404,39 @@ public class AgentAuthController : ControllerBase
 
         // Preenche o ClientIp do comando (antes era campo morto no contrato).
         cmd = cmd with { ClientIp = ResolveAgentClientIp() };
+
+        // O chat de IA/LLM usa a MESMA configuração global de anexos. Valida
+        // antes de abrir o SSE: assim o usuário recebe um erro claro (limite ou
+        // tipo) em vez de a imagem ser descartada silenciosamente.
+        if (cmd.Images is { Count: > 0 } imagesToValidate)
+        {
+            var attachmentSettingsResult = await _mediator.Send(
+                new GetTicketAttachmentSettingsQuery(), ct);
+            if (attachmentSettingsResult.IsFailure || attachmentSettingsResult.Value is null)
+            {
+                HttpContext.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await HttpContext.Response.WriteAsJsonAsync(
+                    new { error = "Não foi possível ler a configuração de anexos." }, ct);
+                return;
+            }
+
+            var attachmentSettings = attachmentSettingsResult.Value;
+            if (!attachmentSettings.Enabled)
+            {
+                HttpContext.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await HttpContext.Response.WriteAsJsonAsync(
+                    new { error = "Anexos estão desabilitados nas configurações do servidor." }, ct);
+                return;
+            }
+
+            var (validationError, validationStatus) = ValidateAiChatImages(imagesToValidate, attachmentSettings);
+            if (validationError is not null)
+            {
+                HttpContext.Response.StatusCode = validationStatus;
+                await HttpContext.Response.WriteAsJsonAsync(new { error = validationError }, ct);
+                return;
+            }
+        }
 
         try
         {

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Discovery.Core.DTOs;
 using Discovery.Core.ValueObjects;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -227,16 +228,23 @@ internal static class AiChatHelpers
             string.Equals(c, "image", StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <summary>Máximo de imagens aceitas em uma única mensagem.</summary>
-    public const int MaxImagesPerMessage = 3;
+    /// <summary>
+    /// Teto do payload base64 de CADA imagem (10 MB binários ≈ 14 MB base64).
+    /// Alinhado ao padrão de anexos da API (TicketAttachmentSettings / storage);
+    /// aqui é a última defesa antes de mandar ao provedor.
+    /// </summary>
+    public const int MaxImageBase64Chars = 14 * 1024 * 1024;
 
     /// <summary>
-    /// Teto do payload base64 de cada imagem (≈3 MB binários). Prints maiores
-    /// são descartados pelo agente antes do envio; aqui é a última defesa.
+    /// Teto do total de base64 de imagens por turno de chat (48 MiB). Protege
+    /// memória e provedor quando o usuário anexa muitas imagens de uma vez.
     /// </summary>
-    // 6 MiB: as capturas agora saem em PNG lossless até ~2,9 MB (texto legível),
-    // o que dá ~3,9 MB em base64. Alinhado ao teto do agent.
-    public const int MaxImageBase64Chars = 6 * 1024 * 1024;
+    public const int MaxTotalImageBase64Chars = 48 * 1024 * 1024;
+
+    /// <summary>
+    /// Teto do total de base64 de imagens de chamado/triagem por prompt (32 MiB).
+    /// </summary>
+    public const int MaxTotalTicketImageBase64Chars = 32 * 1024 * 1024;
 
     /// <summary>
     /// Extrai partes multimodais do resultado JSON de uma tool de captura de
@@ -371,20 +379,91 @@ internal static class AiChatHelpers
 
     /// <summary>
     /// Converte data URLs anexadas pelo usuário (campo "images" do request de
-    /// chat) em partes multimodais. Ignora entradas inválidas/grandes.
+    /// chat) em partes multimodais. TODAS as imagens válidas são enviadas — não
+    /// existe teto de QUANTIDADE. Os limites são por imagem
+    /// (<see cref="MaxImageBase64Chars"/>) e total do turno
+    /// (<see cref="MaxTotalImageBase64Chars"/>); descartes são logados e contados
+    /// em <c>omitted</c> (nunca silenciosamente).
     /// </summary>
     public static List<Discovery.Core.Interfaces.LlmContentPart>? BuildImagePartsFromDataUrls(
-        IEnumerable<string>? images)
+        IEnumerable<string>? images, ILogger? logger = null)
+        => BuildImagePartsFromDataUrlsWithBudget(images, logger, MaxTotalImageBase64Chars, out _);
+
+    /// <summary>
+    /// Converte bytes binários no teto de caracteres base64 correspondente
+    /// (arredondado para cima, com folga para o prefixo data URL). Usado para
+    /// alinhar o teto por imagem à configuração de anexos (padrão 10 MB).
+    /// </summary>
+    public static int Base64CharsForBytes(long bytes)
     {
+        if (bytes <= 0) return MaxImageBase64Chars;
+        var chars = (bytes + 2) / 3 * 4 + 64;
+        return chars > int.MaxValue ? int.MaxValue : (int)chars;
+    }
+
+    /// <summary>
+    /// Variante com orçamento total explícito (base64). Percorre TODAS as
+    /// imagens, valida formato/tamanho por imagem, acumula o total e para ao
+    /// estourar <paramref name="maxTotalBase64Chars"/>. <paramref name="omitted"/>
+    /// devolve quantas imagens NÃO foram enviadas (inválidas/grandes/acima do
+    /// orçamento) para o chamador avisar o usuário.
+    /// </summary>
+    public static List<Discovery.Core.Interfaces.LlmContentPart>? BuildImagePartsFromDataUrlsWithBudget(
+        IEnumerable<string>? images, ILogger? logger, int maxTotalBase64Chars, out int omitted,
+        int maxImageBase64Chars = 0)
+    {
+        omitted = 0;
         if (images is null) return null;
+
+        var perImageLimit = maxImageBase64Chars > 0 ? maxImageBase64Chars : MaxImageBase64Chars;
+        var list = images.ToList();
         var parts = new List<Discovery.Core.Interfaces.LlmContentPart>();
-        foreach (var image in images)
+        long totalBase64Chars = 0;
+
+        for (var i = 0; i < list.Count; i++)
         {
-            if (parts.Count >= MaxImagesPerMessage) break;
-            var value = image?.Trim();
-            if (string.IsNullOrEmpty(value) || value.Length > MaxImageBase64Chars) continue;
-            if (!value.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)) continue;
+            var index = i + 1;
+            var value = list[i]?.Trim();
+            if (string.IsNullOrEmpty(value))
+            {
+                omitted++;
+                logger?.LogDebug("Imagem anexada #{Index} ignorada: entrada vazia.", index);
+                continue;
+            }
+            if (value.Length > perImageLimit)
+            {
+                omitted++;
+                logger?.LogWarning(
+                    "Imagem anexada #{Index} descartada: {Length} caracteres base64 excedem o teto por imagem de {MaxChars}.",
+                    index, value.Length, perImageLimit);
+                continue;
+            }
+            if (!value.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+            {
+                omitted++;
+                logger?.LogWarning(
+                    "Imagem anexada #{Index} descartada: formato não é data URL de imagem (data:image/...).",
+                    index);
+                continue;
+            }
+            if (totalBase64Chars + value.Length > maxTotalBase64Chars)
+            {
+                var remaining = list.Count - i;
+                omitted += remaining;
+                logger?.LogWarning(
+                    "Orçamento total de imagens do turno excedido ({Total}/{Max} caracteres base64): {Omitted} imagem(ns) não serão enviadas.",
+                    totalBase64Chars + value.Length, maxTotalBase64Chars, remaining);
+                break;
+            }
+
+            totalBase64Chars += value.Length;
             parts.Add(new Discovery.Core.Interfaces.LlmContentPart("image_url", ImageUrl: value));
+        }
+
+        if (parts.Count > 0)
+        {
+            logger?.LogDebug("Enviando {Count} imagem(ns) anexada(s) ao modelo ({Total} caracteres base64).",
+                parts.Count, totalBase64Chars);
         }
         return parts.Count > 0 ? parts : null;
     }

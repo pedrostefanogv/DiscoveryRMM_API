@@ -18,6 +18,20 @@ public interface IAgentAlertRepository
         int limit = 100);
 
     /// <summary>
+    /// Alertas que se aplicam a uma máquina: escopo direto do agente OU
+    /// escopo de site/cliente (ScopeAgentId nulo) do mesmo tenant.
+    /// Usado pela tool MCP get_agent_alerts.
+    /// </summary>
+    Task<IReadOnlyList<AgentAlertDefinition>> GetByAgentScopePageAsync(
+        AlertDefinitionStatus? status,
+        Guid? clientId,
+        Guid? siteId,
+        Guid agentId,
+        Guid? ticketId,
+        string? cursor,
+        int limit);
+
+    /// <summary>
     /// Retorna alertas com status Scheduled cujo ScheduledAt &lt;= utcNow.
     /// Usado pelo background scheduler para disparar despachos.
     /// </summary>
