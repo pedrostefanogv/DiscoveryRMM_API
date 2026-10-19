@@ -167,6 +167,40 @@ public class WindowsUpdateInventoryParserTests
         Assert.That(state.LastInstallSuccessAt, Is.Not.Null);
     }
 
+    /// <summary>
+    /// O envelope REAL do agente usa os nomes tipados do WindowsUpdateState
+    /// ("lastInstallSuccess"/"signature"). Sem aceitar esses nomes o campo
+    /// aparecia nulo na aba — regressão silenciosa de UI.
+    /// </summary>
+    [Test]
+    public void ParsesStateBlockWithAgentCanonicalFieldNames()
+    {
+        var state = WindowsUpdateInventoryParser.ParseState(Json("""
+        {
+          "supported": true,
+          "serviceState": "running",
+          "wuOnline": true,
+          "policyManaged": false,
+          "wsusServer": "",
+          "rebootPending": true,
+          "rebootReasons": ["file_rename"],
+          "lastInstallSuccess": "2026-10-16T21:09:57Z",
+          "lastInstallTime": "2026-10-16T21:10:02Z",
+          "downloadInProgress": true,
+          "qfeInstalledCount": 4,
+          "recentQfes": ["KB5127690"],
+          "signature": "4bea11c0d1",
+          "checkedAt": "2026-10-19T22:00:00Z"
+        }
+        """));
+
+        Assert.That(state, Is.Not.Null);
+        Assert.That(state!.ServiceState, Is.EqualTo("running"));
+        Assert.That(state.LastInstallSuccessAt, Is.EqualTo(new DateTime(2026, 10, 16, 21, 9, 57, DateTimeKind.Utc)));
+        Assert.That(state.StateHash, Is.EqualTo("4bea11c0d1"));
+        Assert.That(state.DownloadInProgress, Is.True);
+    }
+
     [Test]
     public void UnknownServiceStateIsDroppedButOtherFieldsKept()
     {

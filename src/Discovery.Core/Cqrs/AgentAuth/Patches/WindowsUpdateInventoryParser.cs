@@ -157,9 +157,15 @@ public static class WindowsUpdateInventoryParser
             ServiceState = serviceState,
             WuOnline = GetNullableBool(root, "wuOnline"),
             PolicyManaged = GetNullableBool(root, "policyManaged") ?? GetNullableBool(root, "isPolicyManaged"),
-            LastInstallSuccessAt = ParseDate(GetString(root, "lastInstallSuccessAt") ?? GetString(root, "lastSuccessTime")),
+            // O agente envia os nomes tipados do WindowsUpdateState
+            // (lastInstallSuccess/lastInstallTime/signature); os aliases curtos
+            // existem para compatibilidade com envelopes antigos/experimentais.
+            LastInstallSuccessAt = ParseDate(
+                GetString(root, "lastInstallSuccess")
+                ?? GetString(root, "lastInstallSuccessAt")
+                ?? GetString(root, "lastSuccessTime")),
             DownloadInProgress = GetNullableBool(root, "downloadInProgress") ?? GetNullableBool(root, "isDownloading"),
-            StateHash = Truncate(GetString(root, "hash") ?? GetString(root, "stateHash"), 80),
+            StateHash = Truncate(GetString(root, "signature") ?? GetString(root, "hash") ?? GetString(root, "stateHash"), 80),
             StateChangedAt = ParseDate(GetString(root, "changedAt") ?? GetString(root, "stateChangedAt"))
         };
 

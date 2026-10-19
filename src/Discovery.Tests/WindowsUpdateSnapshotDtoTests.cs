@@ -38,6 +38,8 @@ public class WindowsUpdateSnapshotDtoTests
         Assert.That(dto.LastInstallSuccessAt, Is.Null);
         Assert.That(dto.DownloadInProgress, Is.Null);
         Assert.That(dto.StateChangedAt, Is.Null);
+        // Sem sonda não existe bloco probe (o painel esconde a linha).
+        Assert.That(dto.Probe, Is.Null);
         // Campos antigos seguem iguais.
         Assert.That(dto.PendingCount, Is.EqualTo(2));
         Assert.That(dto.PendingReboot, Is.True);
@@ -65,6 +67,42 @@ public class WindowsUpdateSnapshotDtoTests
         Assert.That(dto.StateHash, Is.EqualTo("h1"));
         Assert.That(dto.StateChangedAt, Is.Not.Null);
         Assert.That(dto.LastInstallSuccessAt, Is.Not.Null);
+    }
+
+    /// <summary>
+    /// O console lê <c>snapshot.probe</c> (service/serviceDisabled/…). Sem este
+    /// bloco a linha de diagnóstico da aba nunca aparecia, mesmo com a sonda
+    /// persistida no snapshot.
+    /// </summary>
+    [Test]
+    public void ProbeBlockMirrorsSiteContract()
+    {
+        var snapshot = Snapshot();
+        snapshot.ServiceState = "disabled";
+        snapshot.PolicyManaged = true;
+        snapshot.DownloadInProgress = true;
+        snapshot.LastInstallSuccessAt = new DateTime(2026, 10, 16, 21, 9, 57, DateTimeKind.Utc);
+
+        var dto = PatchDtoMapper.ToSnapshotDto(snapshot.AgentId, snapshot, 0, 4, 0, 0);
+
+        Assert.That(dto.Probe, Is.Not.Null);
+        Assert.That(dto.Probe!.Service, Is.EqualTo("disabled"));
+        Assert.That(dto.Probe.ServiceDisabled, Is.True);
+        Assert.That(dto.Probe.PolicyManaged, Is.True);
+        Assert.That(dto.Probe.DownloadInProgress, Is.True);
+        Assert.That(dto.Probe.LastInstallSuccessAt, Is.Not.Null);
+    }
+
+    [Test]
+    public void ProbeBlockUsesOnlineServiceAsNotDisabled()
+    {
+        var snapshot = Snapshot();
+        snapshot.ServiceState = "running";
+
+        var dto = PatchDtoMapper.ToSnapshotDto(snapshot.AgentId, snapshot, 0, 4, 0, 0);
+
+        Assert.That(dto.Probe, Is.Not.Null);
+        Assert.That(dto.Probe!.ServiceDisabled, Is.False);
     }
 
     [Test]

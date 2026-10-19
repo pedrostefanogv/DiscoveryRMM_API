@@ -80,7 +80,51 @@ public sealed record AgentWindowsUpdateSnapshotDto(
     public string? StateHash { get; init; }
     /// <summary>Quando a assinatura da sonda mudou pela última vez.</summary>
     public DateTime? StateChangedAt { get; init; }
+
+    /// <summary>
+    /// Bloco <c>probe</c> consumido pela aba "Atualizações" do console.
+    ///
+    /// O site tipa <c>snapshot.probe</c> (service, serviceDisabled, wsus,
+    /// policyManaged, lastInstallResult, lastInstallSuccessAt,
+    /// downloadInProgress, downloadPercent, probedAt). Sem este objeto o painel
+    /// simplesmente não mostra a linha de diagnóstico — por isso ele deriva dos
+    /// campos tipados acima, com nomes idênticos ao contrato do site.
+    /// </summary>
+    public AgentWindowsUpdateProbeDto? Probe
+    {
+        get
+        {
+            if (ServiceState is null && WuOnline is null && PolicyManaged is null &&
+                LastInstallSuccessAt is null && DownloadInProgress is null)
+            {
+                return null;
+            }
+
+            return new AgentWindowsUpdateProbeDto(
+                ServiceState,
+                string.Equals(ServiceState, "disabled", StringComparison.OrdinalIgnoreCase),
+                null,
+                PolicyManaged,
+                null,
+                LastInstallSuccessAt,
+                DownloadInProgress,
+                null,
+                StateChangedAt ?? LastCollectedAt);
+        }
+    }
 }
+
+/// <summary>Sonda de estado exposta ao console (compatível com agentes antigos: tudo null).</summary>
+public sealed record AgentWindowsUpdateProbeDto(
+    string? Service,
+    bool? ServiceDisabled,
+    bool? Wsus,
+    bool? PolicyManaged,
+    int? LastInstallResult,
+    DateTime? LastInstallSuccessAt,
+    bool? DownloadInProgress,
+    int? DownloadPercent,
+    DateTime? ProbedAt);
 
 public sealed record PatchInventoryGroupDto(
     string GroupKey,

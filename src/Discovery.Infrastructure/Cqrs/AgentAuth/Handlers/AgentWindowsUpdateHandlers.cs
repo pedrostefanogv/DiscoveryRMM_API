@@ -120,7 +120,11 @@ public sealed class ReportAgentPendingRebootHandler(
             if (cmd.Pending && reasons.Count == 0)
                 reasons.Add("servicing");
 
-            await patchRepo.UpdateAgentPendingRebootAsync(cmd.AgentId, cmd.Pending, reasons, checkedAt, ct);
+            // pending=false é um estado VÁLIDO (reboot feito/limpo): nunca pode
+            // ser convertido em true por um motivo residual.
+            var pending = cmd.Pending && reasons.Count > 0;
+
+            await patchRepo.UpdateAgentPendingRebootAsync(cmd.AgentId, pending, reasons, checkedAt, ct);
 
             // Sonda de estado (opcional): mantém a aba explicável entre scans caros.
             var serviceState = WindowsUpdateInventoryParser.ParseState(cmd.State);
