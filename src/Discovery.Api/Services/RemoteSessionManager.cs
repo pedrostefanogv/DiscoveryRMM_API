@@ -279,12 +279,13 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
             "Remote session {SessionId} consent decision: accepted={Accepted} outcome={Outcome} reason={Reason} backend={Backend}",
             sessionId, accepted, outcome, reason, promptBackend);
 
-        if (!accepted)
+        // Além de marcar Denied no servidor, avisa o AGENTE para encerrar o
+        // worker/prompt pendente. EXCEÇÃO: "stopped-by-server" vem do
+        // cancelamento do próprio console (StopRemoteSessionCommandHandler), que
+        // já despacha o RemoteSessionStop — avisar aqui geraria comando duplicado.
+        var stoppedByServer = outcome.Equals("stopped-by-server", StringComparison.OrdinalIgnoreCase);
+        if (!accepted && !stoppedByServer)
         {
-            // Além de marcar Denied no servidor, avisa o AGENTE para encerrar
-            // qualquer worker/prompt pendente (mesmo padrão do sweeper de
-            // timeout). Sem isso o serviço local podia manter o worker ativo e
-            // relançá-lo depois da saída, reabrindo o prompt de consentimento.
             await TryNotifyAgentStopAsync(session);
         }
 
@@ -301,12 +302,14 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         try
         {
             var payload = JsonSerializer.Serialize(new { action = "stop", sessionId = session.Id });
+            // Teto curto: o report de consentimento do agente não pode ficar preso no dispatch.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await _commandDispatcher.DispatchAsync(new AgentCommand
             {
                 AgentId = session.AgentId,
                 CommandType = CommandType.RemoteSessionStop,
                 Payload = payload,
-            }, CancellationToken.None);
+            }, cts.Token);
             _logger.LogInformation(
                 "Remote session {SessionId}: stop enviado ao agent após consentimento negado", session.Id);
         }

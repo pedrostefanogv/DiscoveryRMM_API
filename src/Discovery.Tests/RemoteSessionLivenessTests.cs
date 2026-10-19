@@ -134,6 +134,23 @@ public class RemoteSessionLivenessTests
         Assert.That(dispatcher.Commands, Is.Empty);
     }
 
+    [Test]
+    public async Task ApplyConsentDecision_StoppedByServer_NaoDuplicaStop()
+    {
+        // O cancelamento do console ("Cancelar solicitação") já despacha o stop
+        // no StopRemoteSessionCommandHandler; o manager NÃO deve duplicar.
+        var session = ActiveSession(DateTime.UtcNow);
+        session.Status = RemoteSessionStatus.PendingConsent;
+        var dispatcher = new CapturingDispatcher();
+        var manager = CreateManager(session, ttlMinutes: 30, maxDurationMinutes: 120, dispatcher: dispatcher);
+
+        var updated = await manager.ApplyConsentDecisionAsync(
+            session.Id, accepted: false, outcome: "stopped-by-server", reason: "stopped_by_operator", promptBackend: null);
+
+        Assert.That(updated.Status, Is.EqualTo(RemoteSessionStatus.Denied));
+        Assert.That(dispatcher.Commands, Is.Empty);
+    }
+
     private static RemoteSession ActiveSession(DateTime startedAt) => new()
     {
         Id = Guid.NewGuid(),
