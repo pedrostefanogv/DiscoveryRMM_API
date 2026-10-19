@@ -33,20 +33,33 @@ public sealed class ReportAgentWindowsUpdatesHandler(
             var entries = WindowsUpdateInventoryParser.ParseUpdates(cmd.Updates);
             var scan = WindowsUpdateInventoryParser.ParseScan(cmd.Scan);
             var pendingReboot = WindowsUpdateInventoryParser.ParsePendingReboot(cmd.PendingReboot);
+            var serviceState = WindowsUpdateInventoryParser.ParseState(cmd.State);
 
             // "partial" = uma das fontes falhou (ex.: QFE): as listas não podem ser
             // tratadas como remoção. Qualquer status != ok com lista vazia preserva
             // o inventário bom.
             if (entries.Count == 0 && !string.Equals(scan.Status, "ok", StringComparison.OrdinalIgnoreCase))
             {
-                await patchRepo.UpdateScanStatusAsync(cmd.AgentId, scan, pendingReboot, ct);
+                await patchRepo.UpdateScanStatusAsync(cmd.AgentId, scan, pendingReboot, serviceState, ct);
                 logger?.LogInformation(
-                    "Windows Update scan com falha ({Status}/{Error}) para {AgentId}; inventário preservado.",
-                    scan.Status, scan.ErrorCode, cmd.AgentId);
+                    "Windows Update scan com falha ({Status}/{Error}) para {AgentId}; inventário preservado. Sonda: service={Service} online={Online} policy={Policy}.",
+                    scan.Status, scan.ErrorCode, cmd.AgentId,
+                    serviceState?.ServiceState, serviceState?.WuOnline, serviceState?.PolicyManaged);
                 return Result<VoidResult>.Success(VoidResult.Value);
             }
 
-            await patchRepo.ReplaceInventoryAsync(cmd.AgentId, collectedAt.ToUniversalTime(), scan, pendingReboot, entries, ct);
+            // Upload vazio com status "ok" é ambíguo (WUA pode falhar silencioso ou
+            // o serviço estar desabilitado): atualiza metadados/sonda e mantém o
+            // inventário anterior — ReplaceInventoryAsync aplica a mesma guarda.
+            if (entries.Count == 0)
+            {
+                logger?.LogInformation(
+                    "Windows Update upload sem itens (status={Status}) para {AgentId}; inventário preservado. Sonda: service={Service} online={Online}.",
+                    scan.Status, cmd.AgentId, serviceState?.ServiceState, serviceState?.WuOnline);
+            }
+
+            await patchRepo.ReplaceInventoryAsync(
+                cmd.AgentId, collectedAt.ToUniversalTime(), scan, pendingReboot, entries, serviceState, ct);
             await resolver.RecomputeForAgentAsync(cmd.AgentId, ct);
 
             var site = await siteRepo.GetByIdAsync(agent.SiteId);
@@ -71,7 +84,10 @@ public sealed class ReportAgentWindowsUpdatesHandler(
     }
 }
 
-/// <summary>Sonda de reinício pendente (endpoint leve, enviado só em mudança).</summary>
+/// <summary>
+/// Sonda leve do agente (reinício pendente + estado do serviço Windows Update).
+/// Enviada com frequência (minutos), não quando o scan WUA roda.
+/// </summary>
 public sealed class ReportAgentPendingRebootHandler(
     IPatchRepository patchRepo,
     ILogger<ReportAgentPendingRebootHandler>? logger = null
@@ -97,8 +113,20 @@ public sealed class ReportAgentPendingRebootHandler(
                 .Take(10)
                 .ToList();
 
-            var pending = cmd.Pending && reasons.Count > 0;
-            await patchRepo.UpdateAgentPendingRebootAsync(cmd.AgentId, pending, reasons, checkedAt, ct);
+            // Motivos fora da allowlist não derrubam a sonda: o flag `pending`
+            // continua valendo e o motivo desconhecido vira "servicing" (rótulo neutro
+            // usado pelo agente). Antes, pending=true sem motivo reconhecido era
+            // descartado em silêncio e o reinício pendente sumia da UI.
+            if (cmd.Pending && reasons.Count == 0)
+                reasons.Add("servicing");
+
+            await patchRepo.UpdateAgentPendingRebootAsync(cmd.AgentId, cmd.Pending, reasons, checkedAt, ct);
+
+            // Sonda de estado (opcional): mantém a aba explicável entre scans caros.
+            var serviceState = WindowsUpdateInventoryParser.ParseState(cmd.State);
+            if (serviceState is not null)
+                await patchRepo.UpdateServiceStateAsync(cmd.AgentId, serviceState, ct);
+
             return Result<VoidResult>.Success(VoidResult.Value);
         }
         catch (Exception ex)

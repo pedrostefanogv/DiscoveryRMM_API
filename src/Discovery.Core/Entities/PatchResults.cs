@@ -46,6 +46,36 @@ public class PatchPendingRebootMeta
     public DateTime? CheckedAt { get; set; }
 }
 
+/// <summary>
+/// Sonda de estado do serviço Windows Update reportada pelo agente no bloco
+/// opcional <c>state</c> do envelope. Explica na UI os casos em que o scan WUA
+/// não devolve update nenhum (serviço desabilitado, sem rede, política WSUS).
+///
+/// Todos os campos são opcionais: um agente antigo simplesmente não envia o
+/// bloco e o snapshot mantém o último estado conhecido.
+/// </summary>
+public class PatchServiceStateMeta
+{
+    /// <summary>running | stopped | disabled | unknown.</summary>
+    public string? ServiceState { get; set; }
+    public bool? WuOnline { get; set; }
+    public bool? PolicyManaged { get; set; }
+    public DateTime? LastInstallSuccessAt { get; set; }
+    public bool? DownloadInProgress { get; set; }
+    /// <summary>Assinatura/hash da sonda — mudou quando vale a pena novo scan.</summary>
+    public string? StateHash { get; set; }
+    public DateTime? StateChangedAt { get; set; }
+
+    public bool IsEmpty =>
+        ServiceState is null &&
+        WuOnline is null &&
+        PolicyManaged is null &&
+        LastInstallSuccessAt is null &&
+        DownloadInProgress is null &&
+        StateHash is null &&
+        StateChangedAt is null;
+}
+
 /// <summary>Página de updates do agente (paginação por offset).</summary>
 public class AgentWindowsUpdatePageResult
 {

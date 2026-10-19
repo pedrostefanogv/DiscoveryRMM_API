@@ -124,6 +124,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         PatchScanMeta scan,
         PatchPendingRebootMeta? pendingReboot,
         IReadOnlyList<AgentWindowsUpdateEntry> updates,
+        PatchServiceStateMeta? serviceState = null,
         CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
@@ -135,16 +136,39 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             .Select(group => group.First())
             .ToList();
 
-        // Marca tudo como ausente e reativa o que veio no payload.
-        await db.AgentWindowsUpdates
-            .Where(update => update.AgentId == agentId)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(update => update.IsPresent, _ => false)
-                .SetProperty(update => update.UpdatedAt, _ => now), ct);
+        if (validEntries.Count == 0)
+        {
+            // Upload SEM lista: nada disso prova que as atualizações sumiram.
+            // Zera contadores e marca Superseded? Não — o inventário bom fica.
+            // Só os metadados do scan e a sonda de estado são atualizados.
+            await UpdateScanStatusAsync(agentId, scan, pendingReboot, serviceState, ct);
+            return;
+        }
 
+        // Marca tudo como ausente (será reativado o que veio no payload). Em
+        // Postgres o bulk é 1 UPDATE; em providers sem ExecuteUpdate (InMemory dos
+        // testes) cai para o update das próprias entidades — mesmo resultado.
         var existing = await db.AgentWindowsUpdates
             .Where(update => update.AgentId == agentId)
             .ToListAsync(ct);
+
+        if (db.Database.IsRelational())
+        {
+            await db.AgentWindowsUpdates
+                .Where(update => update.AgentId == agentId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(update => update.IsPresent, _ => false)
+                    .SetProperty(update => update.UpdatedAt, _ => now), ct);
+        }
+        else
+        {
+            foreach (var update in existing)
+            {
+                update.IsPresent = false;
+                update.UpdatedAt = now;
+            }
+        }
+
         var existingByKey = existing
             .GroupBy(update => update.UpdateKey, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
@@ -223,6 +247,12 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         var preserveInstalled = string.Equals(scan.Status, "partial", StringComparison.OrdinalIgnoreCase) &&
                                 !validEntries.Any(entry => entry.IsInstalled);
 
+        // Scan "partial" sem NENHUMA linha pendente: a busca WUA pode ter falhado
+        // e a lista de pendentes veio vazia por erro. Marcar Superseded aqui
+        // apagaria pendências reais da aba — preserva e mantém o contador.
+        var preservePending = string.Equals(scan.Status, "partial", StringComparison.OrdinalIgnoreCase) &&
+                              !validEntries.Any(entry => entry.IsPending);
+
         foreach (var row in existing)
         {
             if (row.IsPresent)
@@ -245,6 +275,13 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             if (!row.IsPending)
                 continue;
 
+            if (preservePending)
+            {
+                row.IsPresent = true;
+                row.UpdatedAt = now;
+                continue;
+            }
+
             row.Status = PatchUpdateStatus.Superseded;
             row.UpdatedAt = now;
         }
@@ -261,14 +298,23 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         snapshot.ScanStatus = string.IsNullOrWhiteSpace(scan.Status) ? "ok" : scan.Status;
         snapshot.ScanDurationMs = scan.DurationMs;
         snapshot.ScanError = scan.ErrorCode;
-        snapshot.PendingCount = validEntries.Count(entry => entry.IsPending);
-        snapshot.InstalledCount = validEntries.Count(entry => entry.IsInstalled);
+
+        // Lista parcial (uma das fontes falhou): só aceita contadores que o
+        // agente realmente viu — contagem zero de uma fonte que falhou nunca
+        // sobrescreve o número conhecido (evita "0 pendentes" falso).
+        var isPartial = string.Equals(snapshot.ScanStatus, "partial", StringComparison.OrdinalIgnoreCase);
+        if (!isPartial || validEntries.Any(entry => entry.IsPending))
+            snapshot.PendingCount = validEntries.Count(entry => entry.IsPending);
+        if (!isPartial || validEntries.Any(entry => entry.IsInstalled))
+            snapshot.InstalledCount = validEntries.Count(entry => entry.IsInstalled);
+
         if (pendingReboot is not null)
         {
             snapshot.PendingReboot = pendingReboot.Pending;
             snapshot.PendingRebootReasons = PatchJson.SerializeStringArray(pendingReboot.Reasons?.ToArray());
             snapshot.RebootCheckedAt = pendingReboot.CheckedAt?.ToUniversalTime() ?? now;
         }
+        ApplyServiceState(snapshot, serviceState, now);
         snapshot.UpdatedAt = now;
 
         if (pendingReboot is not null)
@@ -277,10 +323,18 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         await db.SaveChangesAsync(ct);
     }
 
+    public Task UpdateScanStatusAsync(
+        Guid agentId,
+        PatchScanMeta scan,
+        PatchPendingRebootMeta? pendingReboot,
+        CancellationToken ct = default)
+        => UpdateScanStatusAsync(agentId, scan, pendingReboot, null, ct);
+
     public async Task UpdateScanStatusAsync(
         Guid agentId,
         PatchScanMeta scan,
         PatchPendingRebootMeta? pendingReboot,
+        PatchServiceStateMeta? serviceState,
         CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
@@ -295,6 +349,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         snapshot.ScanStatus = string.IsNullOrWhiteSpace(scan.Status) ? "error" : scan.Status;
         snapshot.ScanDurationMs = scan.DurationMs;
         snapshot.ScanError = scan.ErrorCode;
+        ApplyServiceState(snapshot, serviceState, now);
         snapshot.UpdatedAt = now;
 
         if (pendingReboot is not null)
@@ -305,6 +360,25 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             await ApplyAgentPendingRebootAsync(agentId, pendingReboot, now, ct);
         }
 
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateServiceStateAsync(
+        Guid agentId,
+        PatchServiceStateMeta state,
+        CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        var snapshot = await db.AgentWindowsUpdateSnapshots
+            .FirstOrDefaultAsync(item => item.AgentId == agentId, ct);
+        if (snapshot is null)
+        {
+            snapshot = new AgentWindowsUpdateSnapshot { AgentId = agentId };
+            db.AgentWindowsUpdateSnapshots.Add(snapshot);
+        }
+
+        ApplyServiceState(snapshot, state, now);
+        snapshot.UpdatedAt = now;
         await db.SaveChangesAsync(ct);
     }
 
@@ -333,6 +407,34 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             snapshot.UpdatedAt = DateTime.UtcNow;
         }
         await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Grava a sonda de estado (bloco opcional "state"). Campo ausente NUNCA
+    /// zera o valor conhecido: o agente pode ser antigo ou omitir campos.
+    /// </summary>
+    private static void ApplyServiceState(
+        AgentWindowsUpdateSnapshot snapshot,
+        PatchServiceStateMeta? state,
+        DateTime now)
+    {
+        if (state is null || state.IsEmpty)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(state.ServiceState))
+            snapshot.ServiceState = state.ServiceState;
+        if (state.WuOnline.HasValue)
+            snapshot.WuOnline = state.WuOnline.Value;
+        if (state.PolicyManaged.HasValue)
+            snapshot.PolicyManaged = state.PolicyManaged.Value;
+        if (state.LastInstallSuccessAt.HasValue)
+            snapshot.LastInstallSuccessAt = state.LastInstallSuccessAt.Value.ToUniversalTime();
+        if (state.DownloadInProgress.HasValue)
+            snapshot.DownloadInProgress = state.DownloadInProgress.Value;
+        if (!string.IsNullOrWhiteSpace(state.StateHash))
+            snapshot.StateHash = state.StateHash;
+
+        snapshot.StateChangedAt = state.StateChangedAt?.ToUniversalTime() ?? now;
     }
 
     private async Task ApplyAgentPendingRebootAsync(

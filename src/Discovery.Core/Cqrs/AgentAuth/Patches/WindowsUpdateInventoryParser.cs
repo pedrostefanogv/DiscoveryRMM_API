@@ -27,6 +27,12 @@ public static class WindowsUpdateInventoryParser
         "ok", "error", "timeout", "unsupported", "partial"
     };
 
+    /// <summary>Estados do serviço wuauserv aceitos no bloco "state".</summary>
+    private static readonly HashSet<string> ServiceStates = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "running", "stopped", "disabled", "unknown"
+    };
+
     private static readonly HashSet<string> RebootReasons = new(StringComparer.OrdinalIgnoreCase)
     {
         "windows_update", "cbs", "file_rename", "computer_rename", "servicing"
@@ -64,7 +70,9 @@ public static class WindowsUpdateInventoryParser
             ? status.Trim().ToLowerInvariant()
             : "ok";
 
-        var errorCode = GetString(root, "errorCode");
+        // "errorCode" é o nome canônico; "error" é aceito como alias para
+        // agentes que enviem o bloco com o rótulo curto.
+        var errorCode = GetString(root, "errorCode") ?? GetString(root, "error");
         if (!string.IsNullOrWhiteSpace(errorCode))
             meta.ErrorCode = Truncate(errorCode, 200);
 
@@ -124,6 +132,38 @@ public static class WindowsUpdateInventoryParser
             Reasons = reasons,
             CheckedAt = checkedAt
         };
+    }
+
+    /// <summary>
+    /// Bloco opcional <c>state</c> do envelope (sonda de estado do agente).
+    /// Retorna <c>null</c> quando o agente não envia o bloco ou envia algo que
+    /// não é objeto — compatibilidade total com agentes antigos.
+    /// </summary>
+    public static PatchServiceStateMeta? ParseState(object? state)
+    {
+        var element = ExtractObject(state);
+        if (element is null)
+            return null;
+
+        var root = element.Value;
+
+        string? serviceState = null;
+        var rawServiceState = GetString(root, "serviceState") ?? GetString(root, "service");
+        if (!string.IsNullOrWhiteSpace(rawServiceState) && ServiceStates.Contains(rawServiceState.Trim()))
+            serviceState = rawServiceState.Trim().ToLowerInvariant();
+
+        var meta = new PatchServiceStateMeta
+        {
+            ServiceState = serviceState,
+            WuOnline = GetNullableBool(root, "wuOnline"),
+            PolicyManaged = GetNullableBool(root, "policyManaged") ?? GetNullableBool(root, "isPolicyManaged"),
+            LastInstallSuccessAt = ParseDate(GetString(root, "lastInstallSuccessAt") ?? GetString(root, "lastSuccessTime")),
+            DownloadInProgress = GetNullableBool(root, "downloadInProgress") ?? GetNullableBool(root, "isDownloading"),
+            StateHash = Truncate(GetString(root, "hash") ?? GetString(root, "stateHash"), 80),
+            StateChangedAt = ParseDate(GetString(root, "changedAt") ?? GetString(root, "stateChangedAt"))
+        };
+
+        return meta.IsEmpty ? null : meta;
     }
 
     private static AgentWindowsUpdateEntry? MapEntry(JsonElement item)
@@ -285,6 +325,19 @@ public static class WindowsUpdateInventoryParser
             JsonValueKind.False => false,
             JsonValueKind.String => bool.TryParse(element.GetString(), out var parsed) && parsed,
             _ => false
+        };
+    }
+
+    private static bool? GetNullableBool(JsonElement item, string property)
+    {
+        if (!item.TryGetProperty(property, out var element))
+            return null;
+        return element.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String => bool.TryParse(element.GetString(), out var parsed) ? parsed : null,
+            _ => null
         };
     }
 

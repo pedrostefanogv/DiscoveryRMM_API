@@ -119,6 +119,63 @@ public class WindowsUpdateInventoryParserTests
         Assert.That(scan.Status, Is.EqualTo("ok"));
     }
 
+    // ── Bloco opcional "state" (sonda de estado do serviço) ───────────────
+
+    [Test]
+    public void MissingStateBlockIsNull()
+    {
+        Assert.That(WindowsUpdateInventoryParser.ParseState(null), Is.Null);
+        Assert.That(WindowsUpdateInventoryParser.ParseState(Json("{}")), Is.Null);
+        Assert.That(WindowsUpdateInventoryParser.ParseState(Json("[]")), Is.Null);
+    }
+
+    [Test]
+    public void ParsesServiceStateBlock()
+    {
+        var state = WindowsUpdateInventoryParser.ParseState(Json("""
+        {
+          "serviceState": "Disabled",
+          "wuOnline": false,
+          "policyManaged": true,
+          "lastInstallSuccessAt": "2026-10-16T21:09:57Z",
+          "downloadInProgress": true,
+          "hash": "abc123",
+          "changedAt": "2026-10-18T12:00:00Z"
+        }
+        """));
+
+        Assert.That(state, Is.Not.Null);
+        Assert.That(state!.ServiceState, Is.EqualTo("disabled"));
+        Assert.That(state.WuOnline, Is.False);
+        Assert.That(state.PolicyManaged, Is.True);
+        Assert.That(state.LastInstallSuccessAt, Is.Not.Null);
+        Assert.That(state.DownloadInProgress, Is.True);
+        Assert.That(state.StateHash, Is.EqualTo("abc123"));
+        Assert.That(state.StateChangedAt, Is.Not.Null);
+    }
+
+    [Test]
+    public void ServiceStateAcceptsAgentAliases()
+    {
+        var state = WindowsUpdateInventoryParser.ParseState(Json("""
+        { "service": "running", "isDownloading": true, "lastSuccessTime": "2026-10-16T21:09:57Z" }
+        """));
+
+        Assert.That(state, Is.Not.Null);
+        Assert.That(state!.ServiceState, Is.EqualTo("running"));
+        Assert.That(state.DownloadInProgress, Is.True);
+        Assert.That(state.LastInstallSuccessAt, Is.Not.Null);
+    }
+
+    [Test]
+    public void UnknownServiceStateIsDroppedButOtherFieldsKept()
+    {
+        var state = WindowsUpdateInventoryParser.ParseState(Json("""{ "serviceState": "hacked", "wuOnline": true }"""));
+        Assert.That(state, Is.Not.Null);
+        Assert.That(state!.ServiceState, Is.Null);
+        Assert.That(state.WuOnline, Is.True);
+    }
+
     [Test]
     public void FiltersUnknownRebootReasons()
     {

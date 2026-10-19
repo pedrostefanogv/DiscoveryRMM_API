@@ -4,15 +4,23 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Cqrs.Patches;
 
 // ── Agente ────────────────────────────────────────────────────────────────
 
+/// <summary>
+/// Botão "Verificar atualizações" da aba do agente: enfileira o comando
+/// <c>windowsupdate</c> (action=scan) e devolve SEMPRE uma mensagem explicável
+/// para a UI — inclusive quando o agente está offline (o comando é enfileirado
+/// e entregue no próximo heartbeat, mas o usuário precisa saber disso).
+/// </summary>
 public sealed class ScanAgentWindowsUpdatesCommandHandler(
     IAgentRepository agentRepo,
     IAgentCommandDispatcher dispatcher,
-    IAutomationExecutionReportRepository reportRepo
+    IAutomationExecutionReportRepository reportRepo,
+    ILogger<ScanAgentWindowsUpdatesCommandHandler>? logger = null
 ) : IRequestHandler<ScanAgentWindowsUpdatesCommand, Result<PatchDispatchDto>>
 {
     public async Task<Result<PatchDispatchDto>> Handle(ScanAgentWindowsUpdatesCommand cmd, CancellationToken ct)
@@ -21,15 +29,34 @@ public sealed class ScanAgentWindowsUpdatesCommandHandler(
         if (agent is null)
             return Result<PatchDispatchDto>.Failure(Error.NotFound("Agent not found."));
 
+        var online = agent.DeletedAt is null && agent.EffectiveStatus == AgentStatus.Online;
+        if (!online)
+        {
+            logger?.LogInformation(
+                "Scan de Windows Update pedido para agente OFFLINE {AgentId} ({Hostname}) por {User}; comando enfileirado.",
+                agent.Id, agent.Hostname, cmd.CorrelationId);
+        }
+
         var created = await PatchOperations.DispatchAsync(
             dispatcher, reportRepo, cmd.AgentId,
             PatchCommandPayloads.Scan("on-demand"),
             AutomationExecutionSourceType.PatchScan,
-            new { mode = "scan", reason = "on-demand" },
+            new { mode = "scan", reason = "on-demand", online },
             cmd.CorrelationId, ct);
 
+        var message = online
+            ? "Varredura de atualizações enviada ao agente. O resultado aparece aqui em alguns segundos " +
+              "(a varredura completa de Windows Update leva ~10-20s)."
+            : "Agente offline: a varredura foi enfileirada e roda no próximo contato do agente. " +
+              "Os dados exibidos continuam os do último scan. Se o Windows Update estiver desabilitado " +
+              "(serviço wuauserv) ou gerenciado por WSUS, o scan pode não retornar atualizações.";
+
+        logger?.LogInformation(
+            "Scan de Windows Update enfileirado: agent={AgentId} command={CommandId} online={Online} correlation={Correlation}",
+            agent.Id, created.Id, online, cmd.CorrelationId);
+
         return Result<PatchDispatchDto>.Success(new PatchDispatchDto(
-            1, 0, [created.Id], "Varredura de atualizações enviada ao agente."));
+            1, 0, [created.Id], message));
     }
 }
 

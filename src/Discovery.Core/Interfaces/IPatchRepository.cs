@@ -28,12 +28,24 @@ public interface IPatchRepository
 
     Task<IReadOnlyList<AgentWindowsUpdate>> GetPendingForAgentsAsync(IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default);
 
+    /// <summary>
+    /// Substitui o inventário do agente pelo conteúdo do upload.
+    ///
+    /// Regras de preservação (upload parcial/vazio nunca destrói dado bom):
+    /// • lista vazia → só metadados (status/sonda) são atualizados;
+    /// • <c>scan.status = partial</c> sem linha instalada → mantém as instaladas;
+    /// • <c>scan.status = partial</c> sem linha pendente → mantém as pendentes
+    ///   (nunca marca Superseded por silêncio de uma fonte que falhou);
+    /// • contador que a fonte parcial não viu não é zerado;
+    /// • <paramref name="serviceState"/> nulo não apaga o estado conhecido.
+    /// </summary>
     Task ReplaceInventoryAsync(
         Guid agentId,
         DateTime collectedAt,
         PatchScanMeta scan,
         PatchPendingRebootMeta? pendingReboot,
         IReadOnlyList<AgentWindowsUpdateEntry> updates,
+        PatchServiceStateMeta? serviceState = null,
         CancellationToken ct = default);
 
     /// <summary>Atualiza somente os metadados do scan (status/erro/duração).</summary>
@@ -41,6 +53,23 @@ public interface IPatchRepository
         Guid agentId,
         PatchScanMeta scan,
         PatchPendingRebootMeta? pendingReboot,
+        CancellationToken ct = default);
+
+    /// <summary>Atualiza metadados do scan + sonda de estado do serviço.</summary>
+    Task UpdateScanStatusAsync(
+        Guid agentId,
+        PatchScanMeta scan,
+        PatchPendingRebootMeta? pendingReboot,
+        PatchServiceStateMeta? serviceState,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Grava só a sonda de estado do serviço Windows Update (bloco "state").
+    /// Campo ausente no payload não zera o valor conhecido.
+    /// </summary>
+    Task UpdateServiceStateAsync(
+        Guid agentId,
+        PatchServiceStateMeta state,
         CancellationToken ct = default);
 
     Task UpdateAgentPendingRebootAsync(

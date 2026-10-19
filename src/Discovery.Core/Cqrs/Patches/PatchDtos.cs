@@ -45,6 +45,13 @@ public sealed record AgentWindowsUpdatePageDto(
     int PendingCount,
     int InstalledCount);
 
+/// <summary>
+/// Snapshot da aba "Atualizações" do agente.
+///
+/// Parâmetros posicionais até <c>RebootCheckedAt</c>; os campos da sonda de
+/// estado (<c>ServiceState</c>…) são propriedades opcionais no fim do record —
+/// agentes/site novos leem os dois jeitos.
+/// </summary>
 public sealed record AgentWindowsUpdateSnapshotDto(
     Guid AgentId,
     int PendingCount,
@@ -57,7 +64,23 @@ public sealed record AgentWindowsUpdateSnapshotDto(
     DateTime? LastCollectedAt,
     bool PendingReboot,
     IReadOnlyList<string> PendingRebootReasons,
-    DateTime? RebootCheckedAt);
+    DateTime? RebootCheckedAt)
+{
+    /// <summary>running | stopped | disabled | unknown (null = agente antigo).</summary>
+    public string? ServiceState { get; init; }
+    /// <summary>O Windows Update Online respondeu no último scan.</summary>
+    public bool? WuOnline { get; init; }
+    /// <summary>WSUS/GPO gerenciando o Windows Update da máquina.</summary>
+    public bool? PolicyManaged { get; init; }
+    /// <summary>Results\Install\LastSuccessTime.</summary>
+    public DateTime? LastInstallSuccessAt { get; init; }
+    /// <summary>Download de update em andamento (sonda leve).</summary>
+    public bool? DownloadInProgress { get; init; }
+    /// <summary>Assinatura da sonda no último scan (mudou = novo scan).</summary>
+    public string? StateHash { get; init; }
+    /// <summary>Quando a assinatura da sonda mudou pela última vez.</summary>
+    public DateTime? StateChangedAt { get; init; }
+}
 
 public sealed record PatchInventoryGroupDto(
     string GroupKey,
@@ -250,7 +273,18 @@ public static class PatchDtoMapper
             snapshot?.CollectedAt,
             snapshot?.PendingReboot ?? false,
             PatchJson.ParseStringArray(snapshot?.PendingRebootReasons),
-            snapshot?.RebootCheckedAt);
+            snapshot?.RebootCheckedAt)
+        {
+            // Sonda opcional: null quando o agente nunca enviou o bloco "state"
+            // (compatibilidade total com agentes antigos).
+            ServiceState = snapshot?.ServiceState,
+            WuOnline = snapshot?.WuOnline,
+            PolicyManaged = snapshot?.PolicyManaged,
+            LastInstallSuccessAt = snapshot?.LastInstallSuccessAt,
+            DownloadInProgress = snapshot?.DownloadInProgress,
+            StateHash = snapshot?.StateHash,
+            StateChangedAt = snapshot?.StateChangedAt
+        };
     }
 
     public static PatchApprovalDto ToDto(PatchApproval approval) => new(

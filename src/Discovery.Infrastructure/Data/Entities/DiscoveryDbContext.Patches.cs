@@ -87,6 +87,14 @@ public partial class DiscoveryDbContext
             entity.Property(snapshot => snapshot.PendingReboot).HasColumnName("pending_reboot");
             entity.Property(snapshot => snapshot.PendingRebootReasons).HasColumnName("pending_reboot_reasons").HasColumnType("jsonb");
             entity.Property(snapshot => snapshot.RebootCheckedAt).HasColumnName("reboot_checked_at").HasColumnType("timestamptz");
+            // Sonda de estado (bloco opcional "state" do envelope) — M238.
+            entity.Property(snapshot => snapshot.ServiceState).HasColumnName("service_state").HasMaxLength(20);
+            entity.Property(snapshot => snapshot.WuOnline).HasColumnName("wu_online");
+            entity.Property(snapshot => snapshot.PolicyManaged).HasColumnName("policy_managed");
+            entity.Property(snapshot => snapshot.LastInstallSuccessAt).HasColumnName("last_install_success_at").HasColumnType("timestamptz");
+            entity.Property(snapshot => snapshot.DownloadInProgress).HasColumnName("download_in_progress");
+            entity.Property(snapshot => snapshot.StateHash).HasColumnName("state_hash").HasMaxLength(80);
+            entity.Property(snapshot => snapshot.StateChangedAt).HasColumnName("state_changed_at").HasColumnType("timestamptz");
             entity.Property(snapshot => snapshot.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 
             entity.HasOne<Agent>()

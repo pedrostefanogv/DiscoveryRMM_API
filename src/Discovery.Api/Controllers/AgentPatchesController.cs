@@ -23,7 +23,8 @@ public sealed class AgentPatchesController(
     IMediator mediator,
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
-    IScopeContext scopeContext) : ControllerBase
+    IScopeContext scopeContext,
+    ILogger<AgentPatchesController> logger) : ControllerBase
 {
     public sealed record InstallRequest(bool Force = false, string? PostAction = null, string? Reason = null);
     public sealed record InstallApprovedRequest(string? PostAction = null, bool Confirm = false);
@@ -75,6 +76,12 @@ public sealed class AgentPatchesController(
     {
         var forbidden = await EnsureAgentAccessAsync(agentId, ActionType.Execute);
         if (forbidden is not null) return forbidden;
+
+        // Pedido de scan manual: passa a ser visível no log do servidor (antes o
+        // handle do comando era silencioso e o suporte não sabia se saiu).
+        logger.LogInformation(
+            "Scan manual de Windows Update pedido: agent={AgentId} user={User} ip={Ip} reason={Reason} correlation={Correlation}",
+            agentId, CurrentUserId(), RemoteIp(), request?.Reason, CorrelationId());
 
         var result = await mediator.Send(
             new ScanAgentWindowsUpdatesCommand(agentId, CorrelationId()), ct);
@@ -275,15 +282,27 @@ public sealed class AgentPatchesController(
         return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este agente." });
     }
 
+    /// <summary>
+    /// 202 sempre com <c>message</c> legível (a UI mostra direto no toast). Falha
+    /// também devolve <c>error</c> e <c>message</c> com o mesmo texto — a aba
+    /// nunca fica muda quando o comando não sai.
+    /// </summary>
     private IActionResult AcceptedOrError(Discovery.Core.Cqrs.Result<PatchDispatchDto> result)
         => result.Match<IActionResult>(
-            success: dto => Accepted(new { success = true, dispatched = dto.Dispatched, skipped = dto.Skipped, commandIds = dto.CommandIds, message = dto.Message }),
+            success: dto => Accepted(new
+            {
+                success = true,
+                dispatched = dto.Dispatched,
+                skipped = dto.Skipped,
+                commandIds = dto.CommandIds,
+                message = dto.Message
+            }),
             failure: errors => errors[0].Code switch
             {
-                "NotFound" => NotFound(new { error = errors[0].Message }),
-                "Conflict" => Conflict(new { requiresConfirmation = true, error = errors[0].Message }),
-                "Validation" => BadRequest(new { error = errors[0].Message }),
-                _ => BadRequest(new { error = errors[0].Message })
+                "NotFound" => NotFound(new { error = errors[0].Message, message = errors[0].Message }),
+                "Conflict" => Conflict(new { requiresConfirmation = true, error = errors[0].Message, message = errors[0].Message }),
+                "Validation" => BadRequest(new { error = errors[0].Message, message = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message, message = errors[0].Message })
             });
 
     private string? CorrelationId()
