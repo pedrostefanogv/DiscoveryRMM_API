@@ -1,4 +1,5 @@
 using Discovery.Api.Filters;
+using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs.RemoteSessions.Commands;
 using Discovery.Core.Cqrs.RemoteSessions.Queries;
 using Discovery.Core.Enums.Identity;
@@ -7,6 +8,7 @@ using Discovery.Core.Interfaces.Auth;
 using Discovery.Infrastructure.Services.Remote.Recording;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Discovery.Api.Controllers;
 
@@ -22,18 +24,21 @@ public class RemoteSessionsController : ControllerBase
     private readonly IScopeContext _scopeContext;
     private readonly IRemoteSessionManager _sessionManager;
     private readonly ILogger<RemoteSessionsController> _logger;
+    private readonly RemoteAccessOptions _options;
 
     public RemoteSessionsController(
         IMediator mediator,
         ITerminalRecordingService terminalRecordings,
         IScopeContext scopeContext,
         IRemoteSessionManager sessionManager,
+        IOptions<RemoteAccessOptions> options,
         ILogger<RemoteSessionsController> logger)
     {
         _mediator = mediator;
         _terminalRecordings = terminalRecordings;
         _scopeContext = scopeContext;
         _sessionManager = sessionManager;
+        _options = options.Value;
         _logger = logger;
     }
 
@@ -134,7 +139,8 @@ public class RemoteSessionsController : ControllerBase
             Reason: null,
             Auto: session.ConsentDecidedAt is not null && session.ConsentOutcome?.StartsWith("timeout", StringComparison.OrdinalIgnoreCase) == true,
             session.ConsentPolicySource,
-            PromptBackend: null));
+            PromptBackend: null,
+            DecisionGraceSeconds: Math.Max(0, _options.Consent.LateDecisionGraceSeconds)));
     }
 
     /// <summary>Obtém credenciais NATS (JWT + NKey) para o viewer se conectar ao stream.</summary>

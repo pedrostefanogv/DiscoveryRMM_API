@@ -262,7 +262,10 @@ public sealed class StartRemoteSessionCommandHandler(
             ConsentTimeoutAction: consentRequired
                 ? policy.TimeoutAction.ToString().ToLowerInvariant()
                 : null,
-            ConsentOperator: consentRequired ? operatorName : null));
+            ConsentOperator: consentRequired ? operatorName : null,
+            ConsentDecisionGraceSeconds: consentRequired
+                ? Math.Max(0, options.Value.Consent.LateDecisionGraceSeconds)
+                : null));
     }
 
     private static bool AgentSupportsConsent(string? agentVersion, string minimumVersion)

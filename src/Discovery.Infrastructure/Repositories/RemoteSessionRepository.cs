@@ -87,4 +87,19 @@ public class RemoteSessionRepository : IRemoteSessionRepository
             .AsNoTracking()
             .Where(s => s.Status == "pending_consent" && s.ConsentDeadlineAt != null && s.ConsentDeadlineAt < before)
             .ToListAsync(ct);
+
+    public async Task<IEnumerable<RemoteSession>> GetNeverActivatedActiveSessionsAsync(DateTime startedBefore, CancellationToken ct = default)
+        => await _db.RemoteSessions
+            .AsNoTracking()
+            .Where(s => s.Status == "active"
+                && s.StartedAt < startedBefore
+                // LastActivityAt nasce igual a StartedAt; credenciais e /renew
+                // avançam a coluna. Comparação de colunas fica no SQL.
+                && s.LastActivityAt <= s.StartedAt)
+            .ToListAsync(ct);
+
+    public Task TouchActivityAsync(Guid id, DateTime at, CancellationToken ct = default)
+        => _db.RemoteSessions
+            .Where(s => s.Id == id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(s => s.LastActivityAt, at), ct);
 }

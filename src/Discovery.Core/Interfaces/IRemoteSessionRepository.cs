@@ -18,4 +18,13 @@ public interface IRemoteSessionRepository
 
     /// <summary>Sessões aguardando consentimento cujo prazo já venceu (sweeper).</summary>
     Task<IEnumerable<RemoteSession>> GetPendingConsentPastDeadlineAsync(DateTime before, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sessões ACTIVE criadas antes do cutoff e que nunca tiveram atividade do
+    /// viewer (credenciais/renovação). O sweeper fecha essas sessões órfãs.
+    /// </summary>
+    Task<IEnumerable<RemoteSession>> GetNeverActivatedActiveSessionsAsync(DateTime startedBefore, CancellationToken ct = default);
+
+    /// <summary>Marca atividade do viewer (credenciais emitidas) sem sobrescrever o resto da linha.</summary>
+    Task TouchActivityAsync(Guid id, DateTime at, CancellationToken ct = default);
 }

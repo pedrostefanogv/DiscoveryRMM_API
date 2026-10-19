@@ -115,7 +115,10 @@ public sealed record RemoteSessionResponseDto(
     // Ação padrão da política (approve|deny) e operador — o console mostra ao
     // solicitante o que acontece se o usuário não responder.
     string? ConsentTimeoutAction = null,
-    string? ConsentOperator = null
+    string? ConsentOperator = null,
+    // Janela adicional (s) em que o console deve continuar aguardando depois do
+    // deadline: é a mesma em que a API ainda aceita a decisão tardia do agente.
+    int? ConsentDecisionGraceSeconds = null
 );
 
 /// <summary>Estado do consentimento de uma sessão de desktop.</summary>
@@ -130,7 +133,8 @@ public sealed record RemoteSessionConsentStatusDto(
     string? Reason,
     bool? Auto,
     string? PolicySource,
-    string? PromptBackend
+    string? PromptBackend,
+    int? DecisionGraceSeconds = null
 );
 
 public sealed record LivenessDto(

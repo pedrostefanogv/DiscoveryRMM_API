@@ -243,6 +243,18 @@ public class RemoteSessionLivenessTests
                 _sessions.Values.Where(s => s.Status == "pending_consent"
                     && s.ConsentDeadlineAt.HasValue
                     && s.ConsentDeadlineAt.Value < before).ToList());
+
+        public Task<IEnumerable<RemoteSession>> GetNeverActivatedActiveSessionsAsync(DateTime startedBefore, CancellationToken ct = default)
+            => Task.FromResult<IEnumerable<RemoteSession>>(
+                _sessions.Values.Where(s => s.Status == "active"
+                    && s.StartedAt < startedBefore
+                    && s.LastActivityAt <= s.StartedAt).ToList());
+
+        public Task TouchActivityAsync(Guid id, DateTime at, CancellationToken ct = default)
+        {
+            if (_sessions.TryGetValue(id, out var s)) s.LastActivityAt = at;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeAuditRepository : IRemoteSessionAuditRepository

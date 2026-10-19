@@ -1,7 +1,9 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Discovery.Api.Controllers;
 
@@ -15,8 +17,12 @@ namespace Discovery.Api.Controllers;
 [AllowAnonymous]
 public class AgentRemoteSessionsController(
     IRemoteSessionManager sessionManager,
+    IOptions<RemoteAccessOptions> options,
     ILogger<AgentRemoteSessionsController> logger) : ControllerBase
 {
+    private int LateDecisionGraceSeconds =>
+        Math.Max(0, options.Value.Consent.LateDecisionGraceSeconds);
+
     private bool TryGetAgentId(out Guid agentId)
     {
         if (HttpContext.Items["AgentId"] is Guid id)
@@ -80,10 +86,13 @@ public class AgentRemoteSessionsController(
         }
 
         // Aceite muito depois do deadline não pode "ressuscitar" a sessão: o
-        // sweeper pode estar prestes a negá-la. 10s cobrem a latência do report.
+        // sweeper pode estar prestes a negá-la. A janela é a MESMA publicada ao
+        // console (LateDecisionGraceSeconds) para os dois lados não divergirem:
+        // se o console ainda espera, a API ainda aceita; se a API já rejeita, o
+        // console já pode mostrar o erro.
         if (request.Accepted
             && raw.ConsentDeadlineAt.HasValue
-            && raw.ConsentDeadlineAt.Value.AddSeconds(10) < DateTime.UtcNow)
+            && raw.ConsentDeadlineAt.Value.AddSeconds(LateDecisionGraceSeconds) < DateTime.UtcNow)
         {
             logger.LogWarning(
                 "[RemoteConsent] Aceite tardio rejeitado para sessão {SessionId}: deadline {Deadline}",
@@ -148,7 +157,7 @@ public class AgentRemoteSessionsController(
         return NoContent();
     }
 
-    private static object BuildPayload(Discovery.Core.Entities.RemoteSession session) => new
+    private object BuildPayload(Discovery.Core.Entities.RemoteSession session) => new
     {
         sessionId = session.Id,
         status = session.Status,
@@ -161,7 +170,8 @@ public class AgentRemoteSessionsController(
             deadlineUtc = session.ConsentDeadlineAt,
             decidedAtUtc = session.ConsentDecidedAt,
             outcome = session.ConsentOutcome,
-            policySource = session.ConsentPolicySource
+            policySource = session.ConsentPolicySource,
+            lateDecisionGraceSeconds = LateDecisionGraceSeconds
         }
     };
 }

@@ -112,7 +112,12 @@ public class RemoteSessionLivenessBackgroundService : BackgroundService
         // O agente deve reportar a decisão dentro do deadline; se ele caiu, ficou
         // offline ou o prompt travou, o servidor nega a sessão e manda stop para
         // cancelar o prompt no endpoint.
-        var graceSeconds = Math.Max(0, _options.Consent.DecisionGraceSeconds);
+        // O sweeper nunca pode negar antes de a API parar de aceitar decisão
+        // tardia: senão a janela publicada ao console deixa de ser verdadeira.
+        var lateGraceSeconds = Math.Max(0, _options.Consent.LateDecisionGraceSeconds);
+        var graceSeconds = Math.Max(
+            Math.Max(0, _options.Consent.DecisionGraceSeconds),
+            lateGraceSeconds + 5);
         var consentCutoff = now.AddSeconds(-graceSeconds);
         var pending = (await repo.GetPendingConsentPastDeadlineAsync(consentCutoff, ct)).ToList();
 
@@ -150,6 +155,40 @@ public class RemoteSessionLivenessBackgroundService : BackgroundService
 
         if (pending.Count > 0)
             _logger.LogInformation("Negadas {Count} sessoes sem decisao de consentimento", pending.Count);
+
+        // ── Sessões ACTIVE sem viewer (órfãs) ──
+        // Se o console desiste depois do consentimento (aba fechada, timeout,
+        // rede), o agent inicia a sessão mas nenhum viewer pede credenciais.
+        // Sem isso o banner "suporte conectado" fica preso até o TTL (30min) e
+        // a sessão ocupa a vaga do agent. O cutoff usa StartedAt/LastActivityAt:
+        // credenciais emitidas e /renew avançam LastActivityAt.
+        var orphanGraceSeconds = Math.Max(0, _options.OrphanedSessionGraceSeconds);
+        if (orphanGraceSeconds > 0)
+        {
+            var orphanCutoff = now.AddSeconds(-orphanGraceSeconds);
+            var orphans = (await repo.GetNeverActivatedActiveSessionsAsync(orphanCutoff, ct)).ToList();
+
+            foreach (var session in orphans)
+            {
+                session.Status = "closed";
+                session.ClosedAt = now;
+                session.DurationSeconds = (int)(now - session.StartedAt).TotalSeconds;
+
+                await repo.UpdateAsync(session, ct);
+                await auditService.RecordAsync(
+                    session.Id,
+                    "closed_orphan",
+                    details: JsonSerializer.Serialize(new { reason = "viewer-never-connected", graceSeconds = orphanGraceSeconds }),
+                    ct: ct);
+
+                await NotifyAgentStopAsync(dispatcher, session, ct);
+            }
+
+            if (orphans.Count > 0)
+                _logger.LogInformation(
+                    "Encerradas {Count} sessoes remotas sem viewer apos {Grace}s",
+                    orphans.Count, orphanGraceSeconds);
+        }
     }
 
     private async Task NotifyAgentStopAsync(

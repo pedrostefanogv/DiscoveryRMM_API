@@ -19,6 +19,15 @@ public class RemoteAccessOptions
     /// <summary>Máximo de sessões simultâneas por usuário.</summary>
     public int MaxConcurrentSessionsPerUser { get; set; } = 5;
 
+    /// <summary>
+    /// Tempo (s) que uma sessão pode ficar ACTIVE sem o viewer ter pedido
+    /// credenciais/renovado. Cobre a janela entre o grant do consentimento e a
+    /// conexão do viewer; se ninguém conectar, o sweeper fecha a sessão e manda
+    /// stop ao agent (evita banner "suporte conectado" preso por 30min quando o
+    /// console desiste depois do deadline). 0 = desabilita a limpeza.
+    /// </summary>
+    public int OrphanedSessionGraceSeconds { get; set; } = 120;
+
     public RemoteAccessNatsOptions Nats { get; set; } = new();
     public RemoteAccessLivenessOptions Liveness { get; set; } = new();
     public RemoteAccessProxyOptions Proxy { get; set; } = new();
@@ -43,6 +52,16 @@ public class RemoteAccessConsentOptions
 
     /// <summary>Tolerância (s) após o deadline antes de o sweeper negar uma sessão pending.</summary>
     public int DecisionGraceSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Janela (s) após o deadline em que a API ainda aceita a decisão do agente
+    /// e em que o console continua aguardando em vez de falhar. Cobre o atraso
+    /// entre o fim do contador no endpoint e a chegada do POST /consent
+    /// (relógio do agente, timer do prompt e latência de rede). O sweeper só
+    /// nega depois de <see cref="DecisionGraceSeconds"/>; mantenha este valor
+    /// menor que o do sweeper para a decisão tardia nunca disputar com a negação.
+    /// </summary>
+    public int LateDecisionGraceSeconds { get; set; } = 15;
 }
 
 public class RemoteAccessNatsOptions

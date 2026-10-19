@@ -1,6 +1,7 @@
 using System.Reflection;
 using Discovery.Api.Controllers;
 using Discovery.Api.Filters;
+using Discovery.Core.Configuration;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
@@ -10,6 +11,7 @@ using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Discovery.Tests;
 
@@ -282,7 +284,7 @@ public class RemoteSessionsControllerTerminalRecordingAccessTests
     private static RemoteSessionsController BuildController(
         ITerminalRecordingService service,
         IScopeContext scopeContext)
-        => new(new ThrowingMediator(), service, scopeContext, null!, NullLogger<RemoteSessionsController>.Instance)
+        => new(new ThrowingMediator(), service, scopeContext, null!, Options.Create(new RemoteAccessOptions()), NullLogger<RemoteSessionsController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

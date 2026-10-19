@@ -27,6 +27,7 @@ public sealed class GetActiveSessionsQueryHandler(
 
 public sealed class GetSessionCredentialsQueryHandler(
     IRemoteSessionManager sessionManager,
+    IRemoteSessionRepository sessionRepo,
     IConfigurationService configurationService,
     INatsCredentialsService credentialsService
 ) : IRequestHandler<GetSessionCredentialsQuery, Result<SessionCredentialsDto>>
@@ -36,6 +37,10 @@ public sealed class GetSessionCredentialsQueryHandler(
         var session = await sessionManager.GetActiveForUserAsync(query.SessionId, query.UserId, ct);
         if (session is null)
             return Result<SessionCredentialsDto>.Failure(Error.NotFound("Remote session not found or not active."));
+
+        // Sinal de vida do VIEWER no servidor: se as credenciais foram emitidas,
+        // a sessão não é órfã (o sweeper de sessões sem viewer não a fecha).
+        await sessionRepo.TouchActivityAsync(session.Id, DateTime.UtcNow, ct);
 
         var serverConfig = await configurationService.GetServerConfigAsync();
         // Normaliza garantindo barra final no path: navegadores NAO seguem
