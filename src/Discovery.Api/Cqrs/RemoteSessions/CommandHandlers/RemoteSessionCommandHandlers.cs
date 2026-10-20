@@ -472,6 +472,9 @@ public sealed class StartRecordingCommandHandler(
         if (session is null)
             return Result<RecordingResponseDto>.Failure(Error.NotFound("Remote session not found or not active."));
 
+        if (session.AgentId != cmd.AgentId)
+            return Result<RecordingResponseDto>.Failure(Error.Validation("AgentId", "Session does not belong to this agent."));
+
         try
         {
             var recording = await recordingService.StartRecordingAsync(cmd.SessionId, cmd.UserId, ct);
@@ -514,6 +517,9 @@ public sealed class StopRecordingCommandHandler(
         var session = await sessionManager.GetActiveForUserAsync(cmd.SessionId, cmd.UserId, ct);
         if (session is null)
             return Result<RecordingResponseDto>.Failure(Error.NotFound("Remote session not found or not active."));
+
+        if (session.AgentId != cmd.AgentId)
+            return Result<RecordingResponseDto>.Failure(Error.Validation("AgentId", "Session does not belong to this agent."));
 
         try
         {

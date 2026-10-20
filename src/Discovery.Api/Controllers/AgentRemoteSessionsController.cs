@@ -63,6 +63,13 @@ public class AgentRemoteSessionsController(
             : request.Outcome.Trim();
         if (outcome.Length > 64) outcome = outcome[..64];
 
+        // Allowlist de outcomes conhecidos: valores desconhecidos são rejeitados
+        // (o agente antigo pode mandar textos arbitrários; nada disso persiste).
+        string[] allowedOutcomes = ["granted", "denied", "timeout-granted", "timeout-denied", "stopped-by-server"];
+        if (!allowedOutcomes.Contains(outcome, StringComparer.OrdinalIgnoreCase))
+            return BadRequest(new { error = "Outcome inválido.", allowed = allowedOutcomes });
+        outcome = outcome.ToLowerInvariant();
+
         if (raw.Status != RemoteSessionStatus.PendingConsent)
         {
             var alreadyMatches =

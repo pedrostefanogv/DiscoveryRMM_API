@@ -96,7 +96,7 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         var created = await _repo.CreateAsync(session, ct);
 
         await AuditAsync(created.Id, consentRequired ? "consent_requested" : "started",
-            $"{{\"kind\":\"{kind}\",\"transport\":\"{transport}\",\"quality\":\"{quality}\",\"codec\":\"{codec}\",\"consentRequired\":{consentRequired.ToString().ToLowerInvariant()}}}",
+            JsonSerializer.Serialize(new { kind = kind.ToString(), transport = transport.ToString(), quality = quality.ToString(), codec = codec.ToString(), consentRequired }),
             userId.ToString(), null, ct);
 
         _logger.LogInformation("Remote session {SessionId} started for agent {AgentId} by user {UserId}",
@@ -151,7 +151,7 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         session.LastActivityAt = now;
         var updated = await _repo.UpdateAsync(session, ct);
 
-        await AuditAsync(sessionId, "renewed", $"{{\"newExpiresAt\":\"{updated.ExpiresAt:O}\"}}", userId.ToString(), null, ct);
+        await AuditAsync(sessionId, "renewed", JsonSerializer.Serialize(new { newExpiresAt = updated.ExpiresAt }), userId.ToString(), null, ct);
 
         return updated;
     }
@@ -172,7 +172,7 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         var updated = await _repo.UpdateAsync(session, ct);
 
         var actor = actorUserId?.ToString() ?? "system";
-        await AuditAsync(sessionId, "closed", $"{{\"reason\":\"{reason}\",\"durationSec\":{updated.DurationSeconds}}}", actor, null, ct);
+        await AuditAsync(sessionId, "closed", JsonSerializer.Serialize(new { reason, durationSec = updated.DurationSeconds }), actor, null, ct);
 
         _logger.LogInformation("Remote session {SessionId} closed: {Reason}", sessionId, reason);
 
@@ -256,9 +256,6 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
 
         var updated = await _repo.UpdateAsync(session, ct);
 
-        var safeReason = (reason ?? string.Empty).Replace("\"", "'");
-        var safeBackend = (promptBackend ?? string.Empty).Replace("\"", "'");
-        var safeOutcome = (outcome ?? string.Empty).Replace("\"", "'");
         var auditEvent = accepted
             ? (outcome.StartsWith("timeout", StringComparison.OrdinalIgnoreCase)
                 ? "consent_timeout_granted"
@@ -272,7 +269,7 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         await AuditAsync(
             sessionId,
             auditEvent,
-            $"{{\"accepted\":{accepted.ToString().ToLowerInvariant()},\"auto\":{auto.ToString().ToLowerInvariant()},\"outcome\":\"{safeOutcome}\",\"reason\":\"{safeReason}\",\"promptBackend\":\"{safeBackend}\"}}",
+            JsonSerializer.Serialize(new { accepted, auto, outcome, reason, promptBackend }),
             null, null, ct);
 
         _logger.LogInformation(
@@ -359,7 +356,7 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         var updated = await _repo.UpdateAsync(session, ct);
 
         await AuditAsync(sessionId, "quality_changed",
-            $"{{\"quality\":\"{quality}\",\"codec\":\"{updated.Codec}\"}}",
+            JsonSerializer.Serialize(new { quality = quality.ToString(), codec = updated.Codec.ToString() }),
             null, null, ct);
 
         _logger.LogInformation("Remote session {SessionId} quality changed to {Quality}/{Codec}",

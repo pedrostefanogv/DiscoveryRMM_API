@@ -88,6 +88,11 @@ public class RemoteSessionsController : ControllerBase
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> RenewSession(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
+        // Feature flag: renew cria/renova fluxo de acesso — recusado quando o
+        // remote access está desabilitado (stop/close seguem permitidos p/ cleanup).
+        if (!_options.Enabled)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Remote access is disabled." });
+
         var userId = GetUserId();
         var result = await _mediator.Send(new RenewRemoteSessionCommand(agentId, sessionId, userId), ct);
         return result.Match<IActionResult>(
@@ -149,6 +154,11 @@ public class RemoteSessionsController : ControllerBase
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> GetSessionCredentials(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
+        // Feature flag: credenciais NATS habilitam o stream — recusado quando o
+        // remote access está desabilitado.
+        if (!_options.Enabled)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Remote access is disabled." });
+
         var userId = GetUserId();
         var raw = await _sessionManager.GetRawSessionAsync(sessionId, ct);
         if (raw is not null && raw.Status == Discovery.Core.Enums.RemoteSessionStatus.PendingConsent)
@@ -313,9 +323,38 @@ public class RemoteSessionsController : ControllerBase
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> DeleteRecording(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
-        // Exclusão assíncrona via recording service
-        // O handler de delete será implementado junto com o storage completo (Fase 8)
-        return NoContent();
+        // LGPD Art. 18: só o dono da sessão pode excluir a gravação. Sem UserId
+        // resolvido a checagem de dono seria pulada (o filtro RemoteSessionAuthorize
+        // também não valida userId vazio) — recusar antes de qualquer lookup.
+        var userId = GetUserId();
+        if (userId == Guid.Empty)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var session = await _sessionManager.GetRawSessionAsync(sessionId, ct);
+        if (session is null || session.AgentId != agentId || session.UserId != userId)
+            return NotFound(new { error = "Remote session not found." });
+
+        // Autorização scoped (tenant) ANTES de qualquer probe de existência:
+        // 404/501 distintos antes do authorize funcionariam como oráculo de
+        // existência de gravações fora do tenant do chamador.
+        if (await AuthorizeTerminalRecordingAsync(agentId, sessionId, ActionType.Execute, ct) is { } tenantDenied)
+            return tenantDenied;
+
+        // Sem gravação de terminal, a única alternativa seria a gravação de tela
+        // (IRemoteRecordingService), cuja exclusão ainda não remove arquivo/
+        // metadados — responder 501 em vez de um 204 falso (LGPD Art. 18).
+        var terminal = await _terminalRecordings.GetAsync(agentId, sessionId, ct);
+        if (terminal is null)
+        {
+            _logger.LogWarning(
+                "[RemoteSession] Exclusão de gravação não disponível: sessão {SessionId} sem gravação de terminal e IRemoteRecordingService ainda não implementa delete",
+                sessionId);
+            return StatusCode(StatusCodes.Status501NotImplemented,
+                new { error = "Recording deletion is not implemented for this session yet (no terminal recording to delete)." });
+        }
+
+        var deleted = await _terminalRecordings.DeleteAsync(agentId, sessionId, ct);
+        return deleted ? NoContent() : NotFound(new { error = "Terminal recording not found." });
     }
 
     private Guid GetUserId()

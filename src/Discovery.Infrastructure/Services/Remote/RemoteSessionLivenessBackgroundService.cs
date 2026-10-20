@@ -82,6 +82,7 @@ public class RemoteSessionLivenessBackgroundService : BackgroundService
         var repo = scope.ServiceProvider.GetRequiredService<IRemoteSessionRepository>();
         var auditService = scope.ServiceProvider.GetRequiredService<RemoteSessionAuditService>();
         var dispatcher = scope.ServiceProvider.GetRequiredService<IAgentCommandDispatcher>();
+        var sessionManager = scope.ServiceProvider.GetRequiredService<IRemoteSessionManager>();
 
         var now = DateTime.UtcNow;
 
@@ -123,33 +124,24 @@ public class RemoteSessionLivenessBackgroundService : BackgroundService
 
         foreach (var session in pending)
         {
-            session.Status = "denied";
-            session.ConsentOutcome = "timeout-denied";
-            session.ConsentDecidedAt = now;
-            session.ClosedAt = now;
-            session.DurationSeconds = (int)(now - session.StartedAt).TotalSeconds;
-
-            await repo.UpdateAsync(session, ct);
-            await auditService.RecordAsync(
-                session.Id,
-                "consent_timeout_denied",
-                details: $"{{\"deadlineAt\":\"{session.ConsentDeadlineAt:O}\",\"policySource\":\"{session.ConsentPolicySource}\"}}",
-                ct: ct);
-
+            // A negação por timeout passa pelo MESMO caminho da decisão manual
+            // (ApplyConsentDecisionAsync): persiste status/outcome, grava a
+            // auditoria e envia o stop ao agent em um lugar só.
             try
             {
-                var payload = JsonSerializer.Serialize(new { action = "stop", sessionId = session.Id });
-                await dispatcher.DispatchAsync(new AgentCommand
-                {
-                    AgentId = session.AgentId,
-                    CommandType = CommandType.RemoteSessionStop,
-                    Payload = payload,
-                }, ct);
+                await sessionManager.ApplyConsentDecisionAsync(
+                    session.Id,
+                    accepted: false,
+                    outcome: "timeout-denied",
+                    reason: null,
+                    promptBackend: null,
+                    ct,
+                    auto: true);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "Falha ao enviar stop ao agent para consentimento expirado {SessionId}", session.Id);
+                    "Falha ao negar por timeout a sessão {SessionId} (consentimento expirado)", session.Id);
             }
         }
 

@@ -182,8 +182,11 @@ public sealed class TerminalRecordingService : ITerminalRecordingService
         }
 
         // O upload ao S3 é adicional: a exclusão (LGPD) precisa remover a cópia
-        // remota também. Objeto inexistente é tolerado (404 -> false).
-        if (IsS3DownloadEnabled(row.StorageProvider))
+        // remota também. A decisão usa o provider GRAVADO na linha (onde o
+        // objeto realmente foi enviado), não o provider configurado agora —
+        // trocar de Local para S3 não pode impedir a exclusão do objeto.
+        // Objeto inexistente é tolerado (404 -> false).
+        if (row.StorageProvider == RecordingStorageProvider.S3)
         {
             try
             {

@@ -15,11 +15,16 @@ public sealed class GetActiveSessionsQueryHandler(
     public async Task<Result<IEnumerable<ActiveSessionDto>>> Handle(GetActiveSessionsQuery query, CancellationToken ct)
     {
         var sessions = await repo.GetActiveByAgentAsync(query.AgentId, ct);
-        var dtos = sessions.Select(s => new ActiveSessionDto(
-            s.Id, s.AgentId, s.UserId,
-            s.Kind.ToString(), s.Transport.ToString(), s.QualityProfile.ToString(),
-            s.Codec.ToString(), s.Status,
-            s.StartedAt, s.ExpiresAt, s.RecordingEnabled, s.NatsSubject));
+        // Só expõe sessões do próprio usuário (mesmo filtro do GetForUserAsync).
+        var dtos = sessions
+            .Where(s => s.UserId == query.UserId)
+            .Select(s => new ActiveSessionDto(
+                s.Id, s.AgentId, s.UserId,
+                s.Kind.ToString(), s.Transport.ToString(), s.QualityProfile.ToString(),
+                s.Codec.ToString(), s.Status,
+                s.StartedAt, s.ExpiresAt, s.RecordingEnabled,
+                // NatsSubject não é exposto em listagem (só via credenciais da sessão).
+                NatsSubject: null));
 
         return Result<IEnumerable<ActiveSessionDto>>.Success(dtos);
     }
