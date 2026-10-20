@@ -103,6 +103,14 @@ public sealed class TicketChatMaintenanceJob : IJob
             session.EndReason = "invite_timeout";
 
             await repository.UpdateSessionAsync(session, ct);
+
+            // O agent também precisa saber que o convite morreu: o sinal de
+            // dashboard abaixo só chega ao CONSOLE. Sem o envelope durável o
+            // agent seguia em "aguardando confirmação" até o próximo poll REST
+            // (e a janela de chat dele ficava aberta sem conversa).
+            // Vai pelo canal do chat (PublishSupportChatServerAsync), o mesmo
+            // dos demais eventos da sessão.
+            await publisher.PublishSessionDeclinedAsync(session, ct);
             await publisher.PublishSessionStatusSignalAsync(session, ct);
 
             // Conversa avulsa (sem chamado) não tem linha do tempo para auditar.

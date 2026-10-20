@@ -73,6 +73,32 @@ public class TicketChatEnvelopePublisher(
             TimestampUtc = session.EndedAt ?? DateTime.UtcNow
         }, cancellationToken);
 
+    /// <summary>
+    /// Recusa/expiração do convite rumo ao AGENT, no canal durável.
+    ///
+    /// LACUNA CORRIGIDA: o servidor só publicava o SINAL DE DASHBOARD
+    /// (PublishSessionStatusSignalAsync) quando a sessão era recusada. O
+    /// dashboard avisa o console; o agent não o consome, então ele só descobria
+    /// a recusa no próximo poll REST (refresh de 30s) — e o log do agent
+    /// continuava em "aguardando confirmação".
+    ///
+    /// Payload compatível com o encerramento: sessionId + ticketId + reason.
+    /// `EndReason` recebe o STATUS final (declined/expired) e `Reason` o motivo
+    /// granular (user_denied, timeout, no_ui...), para o agent tratar como
+    /// terminal sem precisar de um contrato novo.
+    /// </summary>
+    public async Task PublishSessionDeclinedAsync(TicketChatSession session, CancellationToken cancellationToken = default)
+        => await PublishToAgentAsync(session, new TicketChatEnvelope
+        {
+            EventType = TicketChatEventTypes.SessionDeclined,
+            SessionId = session.Id,
+            TicketId = session.TicketId,
+            AgentId = session.AgentId ?? Guid.Empty,
+            EndReason = session.Status.ToString().ToLowerInvariant(),
+            Reason = session.DeclinedReason ?? session.EndReason,
+            TimestampUtc = DateTime.UtcNow
+        }, cancellationToken);
+
     public async Task PublishActivitySignalAsync(TicketChatSession session, TicketChatMessage message, CancellationToken cancellationToken = default)
         => await PublishSignalAsync(session, new
         {

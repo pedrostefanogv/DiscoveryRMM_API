@@ -53,12 +53,21 @@ public class SupportChatController(
 
     // ── Sessão ────────────────────────────────────────────────────────────
 
-    /// <summary>Sessão pendente/ativa da máquina (HasSession=false quando não há).</summary>
+    /// <summary>
+    /// Sessão da máquina (a mais recente, com QUALQUER status) — HasSession=false
+    /// só quando a máquina nunca teve sessão.
+    ///
+    /// BUG CORRIGIDO: consultava só Pending/Active e devolvia HasSession=false
+    /// assim que a sessão virava Declined. O console ficava com o último snapshot
+    /// "Pending" na tela — o atendente via "Aguardando confirmação" para sempre
+    /// depois do "Agora não" do usuário. O painel precisa receber o DESFECHO
+    /// (Declined/Expired/Ended) para sair da espera.
+    /// </summary>
     [HttpGet("agents/{agentId:guid}/sessions/current")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
     public async Task<IActionResult> GetCurrentForAgent(Guid agentId, CancellationToken ct)
     {
-        var session = await chatRepository.GetCurrentForAgentAsync(agentId, ct);
+        var session = await chatRepository.GetLatestForAgentAsync(agentId, ct);
         if (session is null)
             return Ok(new TicketChatStateDto(false, null));
 

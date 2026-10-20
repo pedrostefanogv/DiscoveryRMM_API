@@ -203,12 +203,19 @@ public class SupportChatAdHocSessionTests
     private sealed class RecordingPublisher : ITicketChatEnvelopePublisher
     {
         public int StatusSignals { get; private set; }
+        public List<TicketChatSessionStatus> DeclinedPublishes { get; } = [];
 
         public Task PublishSessionOpenedAsync(TicketChatSession session, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task PublishMessageToAgentAsync(TicketChatSession session, TicketChatMessage message, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
+
+        public Task PublishSessionDeclinedAsync(TicketChatSession session, CancellationToken cancellationToken = default)
+        {
+            DeclinedPublishes.Add(session.Status);
+            return Task.CompletedTask;
+        }
 
         public Task PublishSessionEndedAsync(TicketChatSession session, CancellationToken cancellationToken = default)
             => Task.CompletedTask;

@@ -52,7 +52,7 @@ public sealed class CommandRedeliveryGuard(
 
         var nowUtc = (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime;
 
-        return EvaluateSession(session, nowUtc);
+        return EvaluateTicketChatInvite(session, nowUtc);
     }
 
     /// <summary>
@@ -131,8 +131,23 @@ public sealed class CommandRedeliveryGuard(
     /// <summary>
     /// Decisão pura (sem I/O) a partir da sessão persistida — pura para ser
     /// testável sem banco.
+    ///
+    /// Semântica: Block (MarkTerminal = true) — o comando de convite é encerrado
+    /// como Cancelled. Isso é CORRETO para o convite: a sessão já morreu
+    /// (recusada/vencida/encerrada) ou o prazo passou, então o convite
+    /// definitivamente não deve ser entregue; marcá-lo como cancelado é a
+    /// verdade do histórico, diferente do reboot do comando de energia (que
+    /// provavelmente JÁ aconteceu e por isso usa Ignore).
+    ///
+    /// Relação com o prazo: InviteExpiresAt é gravado no início da sessão como
+    /// UtcNow + TicketChatOptions.InviteTimeoutSeconds (120s no appsettings).
+    /// O agent só tem 25s de tolerância própria para confirmar o cartão; a
+    /// reentrega do servidor é lenta (RetryGraceSeconds/IntervalSeconds em
+    /// minutos), então na prática o convite vence ANTES de qualquer reentrega
+    /// legítima — o que esta guarda garante é que um convite vencido nunca seja
+    /// reenviado (a janela do chat do usuário não abre "do nada").
     /// </summary>
-    internal static CommandRedeliveryDecision EvaluateSession(TicketChatSession? session, DateTime nowUtc)
+    internal static CommandRedeliveryDecision EvaluateTicketChatInvite(TicketChatSession? session, DateTime nowUtc)
     {
         if (session is null)
             return CommandRedeliveryDecision.Block("sessão de chat não encontrada");

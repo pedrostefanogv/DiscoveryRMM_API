@@ -57,13 +57,20 @@ public sealed class GetTicketChatHistoryQueryHandler(
     }
 }
 
-/// <summary>Sessão pendente/ativa do agent.</summary>
+/// <summary>
+/// Sessão atual do agent: a MAIS RECENTE, com qualquer status.
+///
+/// Antes filtrava Pending/Active e respondia HasSession=false logo após a
+/// recusa; o console mantinha o último snapshot "Pending" congelado. O agent
+/// também usa esta rota no startup para retomar o chat, e o status final
+/// (Declined/Expired/Ended) é o que o faz parar de esperar confirmação.
+/// </summary>
 public sealed class GetAgentActiveChatQueryHandler(ITicketChatRepository chatRepository)
     : IRequestHandler<GetAgentActiveChatQuery, Result<TicketChatStateDto>>
 {
     public async Task<Result<TicketChatStateDto>> Handle(GetAgentActiveChatQuery query, CancellationToken ct)
     {
-        var session = await chatRepository.GetCurrentForAgentAsync(query.AgentId, ct);
+        var session = await chatRepository.GetLatestForAgentAsync(query.AgentId, ct);
         return Result<TicketChatStateDto>.Success(session is null
             ? new TicketChatStateDto(false, null)
             : new TicketChatStateDto(true, TicketChatMapper.MapSession(session)));

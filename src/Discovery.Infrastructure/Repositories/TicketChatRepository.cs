@@ -28,6 +28,20 @@ public class TicketChatRepository(DiscoveryDbContext db) : ITicketChatRepository
             .OrderByDescending(s => s.StartedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
+    public Task<TicketChatSession?> GetLatestForTicketAsync(Guid ticketId, CancellationToken cancellationToken = default)
+        => db.TicketChatSessions
+            .AsNoTracking()
+            .Where(s => s.TicketId == ticketId)
+            .OrderByDescending(s => s.StartedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    public Task<TicketChatSession?> GetLatestForAgentAsync(Guid agentId, CancellationToken cancellationToken = default)
+        => db.TicketChatSessions
+            .AsNoTracking()
+            .Where(s => s.AgentId == agentId)
+            .OrderByDescending(s => s.StartedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
     public async Task AddSessionAsync(TicketChatSession session, CancellationToken cancellationToken = default)
     {
         db.TicketChatSessions.Add(session);

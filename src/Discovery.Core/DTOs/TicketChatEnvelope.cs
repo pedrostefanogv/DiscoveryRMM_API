@@ -11,8 +11,21 @@ public static class TicketChatEventTypes
     /// <summary>Bidirecional: nova mensagem.</summary>
     public const string Message = "Message";
 
-    /// <summary>Servidor -> agent: sessão encerrada (suporte/sistema).</summary>
+    /// <summary>Servidor -> agent: sessão encerrada (suporte/sistema/expiração).</summary>
     public const string SessionEnded = "SessionEnded";
+
+    /// <summary>
+    /// Servidor -> agent: o convite foi RECUSADO/EXPIRADO sem o usuário entrar
+    /// na conversa. Sem este evento o agent só saía do estado "aguardando
+    /// confirmação" por polling REST (refresh de 30s) — se a recusa acontecesse
+    /// no cartão nativo, ele ficava em "waiting" até o próximo ciclo.
+    ///
+    /// O payload carrega os MESMOS campos de um encerramento (sessionId,
+    /// ticketId, reason/endReason) para o agent reaproveitar o caminho que já
+    /// trata status terminal; `reason` traz o declinio (user_denied, timeout,
+    /// no_ui...) e `endReason` replica o status final (declined/expired).
+    /// </summary>
+    public const string SessionDeclined = "SessionDeclined";
 
     /// <summary>Agent -> servidor: resposta ao convite (aceito/recusado).</summary>
     public const string InviteResponse = "InviteResponse";

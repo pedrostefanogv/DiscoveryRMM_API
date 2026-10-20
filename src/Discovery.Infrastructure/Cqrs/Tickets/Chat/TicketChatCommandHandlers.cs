@@ -95,8 +95,14 @@ public sealed class StartTicketChatSessionCommandHandler(
         if (agent.Status != AgentStatus.Online)
             return Result<TicketChatSessionDto>.Failure(Error.Conflict("agent_offline"));
 
-        // Uma sessão por chamado: se já existe pendente/ativa, devolve a atual
+        // Uma sessão por chamado: se já existe PENDENTE/ATIVA, devolve a atual
         // (o atendente reabre a mesma conversa em vez de criar uma paralela).
+        //
+        // Só uma sessão VIVA é reaproveitada: devolver uma Declined/Expired/Ended
+        // fazia o botão "Conversar" do console reabrir uma conversa morta — o
+        // usuário recusava, o atendente clicava de novo e recebia 200 com a
+        // sessão já recusada (o painel seguia em "Aguardando confirmação").
+        // GetCurrentForTicketAsync já filtra Pending/Active.
         var currentForTicket = await chatRepository.GetCurrentForTicketAsync(cmd.TicketId, ct);
         if (currentForTicket is not null)
             return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(currentForTicket));
@@ -178,10 +184,14 @@ public sealed class StartAgentSupportChatSessionCommandHandler(
         if (agent is null || agent.DeletedAt is not null)
             return Result<TicketChatSessionDto>.Failure(Error.NotFound("Agente não encontrado."));
 
-        // Uma sessão por máquina: se já existe pendente/ativa, devolve a atual
+        // Uma sessão por máquina: se já existe PENDENTE/ATIVA, devolve a atual
         // (o atendente reabre a mesma conversa em vez de criar uma paralela).
         // Antes do check de online: a máquina pode ter caído no MEIO da conversa
         // e o atendente ainda precisa retomar o que já existe.
+        //
+        // Declined/Expired/Ended NÃO são reaproveitadas (GetCurrentForAgentAsync
+        // filtra Pending/Active): o "Agora não" do usuário precisa permitir uma
+        // NOVA conversa, senão o atendente reabria uma sessão morta.
         var currentForAgent = await chatRepository.GetCurrentForAgentAsync(agent.Id, ct);
         if (currentForAgent is not null)
             return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(currentForAgent));
@@ -256,12 +266,27 @@ internal static class TicketChatInviteDispatcher
             session.StartedByName ?? string.Empty,
             session.InviteExpiresAt?.ToString("O"));
 
-        await commandDispatcher.DispatchAsync(new AgentCommand
+        // O comando retornado é capturado de propósito: o AgentCommandDispatcher
+        // (Discovery.Api.Services) grava Status=Sent/SentAt quando o publish no
+        // NATS dá certo e deixa Pending quando o transporte está fora do ar.
+        // É esse estado que decide se o convite entra ou não na reentrega
+        // (PendingCommandRedeliveryService) — e a CommandRedeliveryGuard só
+        // reentrega convite de sessão ainda Pending e dentro do prazo.
+        //
+        // A SESSÃO não muda de status aqui: quem a marca como expirada é o job
+        // de manutenção (TicketChatMaintenanceJob) e quem a encerra é o usuário.
+        var dispatched = await commandDispatcher.DispatchAsync(new AgentCommand
         {
             AgentId = session.AgentId.Value,
             CommandType = CommandType.TicketChatInvite,
             Payload = payload
         }, ct);
+
+        // O dispatcher genérico JÁ grava Status=Sent quando o publish deu certo
+        // (e apenas Pending quando o transporte estava caído). Nada a reescrever
+        // aqui — só garantir que o contrato não mudou em silêncio: um comando
+        // Pending é o único caso em que a reentrega entra em ação.
+        _ = dispatched;
     }
 }
 
@@ -335,8 +360,25 @@ public sealed class RespondTicketChatInviteCommandHandler(
         if (session is null || session.AgentId != cmd.AgentId)
             return Result<TicketChatSessionDto>.Failure(Error.NotFound("Sessão de chat não encontrada."));
 
+        // BUG CORRIGIDO: aqui era um `return Result.Success` silencioso. Quando o
+        // usuário clicava "Agora não" e a sessão já tinha saído de Pending (o job
+        // de manutenção a marcou Expired, ou o novo clique chegou depois de outra
+        // recusa/aceite), o servidor respondia 200 OK sem gravar NADA: o agent
+        // logava "reportado ao servidor" e o atendente ficava preso em
+        // "Aguardando confirmação" para sempre.
+        //
+        // Agora a recusa/aceite fora de Pending é CONFLITO explícito
+        // (409 + code session_<status>). O agent trata 409 como "já resolvido" e
+        // NÃO retenta; o console recebe o estado final pela consulta de sessão.
         if (session.Status != TicketChatSessionStatus.Pending)
-            return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(session));
+        {
+            logger.LogInformation(
+                "Support chat session {SessionId} invite response {Outcome} ignored: session is already {Status} (agent {AgentId})",
+                session.Id, cmd.Accepted ? "accepted" : "declined", session.Status, cmd.AgentId);
+
+            return Result<TicketChatSessionDto>.Failure(
+                Error.Conflict($"session_{session.Status.ToString().ToLowerInvariant()}"));
+        }
 
         var now = DateTime.UtcNow;
         if (cmd.Accepted)
@@ -369,6 +411,11 @@ public sealed class RespondTicketChatInviteCommandHandler(
                     null,
                     comment: TicketChatAuditText.Declined(session.DeclinedReason));
             }
+
+            // Avisa o AGENT pelo canal durável do chat (o sinal de dashboard
+            // abaixo só chega ao CONSOLE). Sem este envelope o agent ficava em
+            // "aguardando confirmação" até o próximo poll REST.
+            await envelopePublisher.PublishSessionDeclinedAsync(session, ct);
         }
 
         // O console recebe a mudança de estado (aceite/recusa) imediatamente,
@@ -393,10 +440,15 @@ public sealed class RespondTicketChatInviteCommandHandler(
             //     mesma máquina (antes caía em user_denied e o console dizia que o
             //     usuário tinha recusado um convite que ele nunca viu);
             //   - "no_ui": não havia interface na máquina para exibir o pedido de
-            //     aceite.
+            //     aceite;
+            //   - "user_dismissed": o cartão saiu da tela pela rede de segurança do
+            //     agent após o prazo (ver supportChatInviteCardCloseGuard no agent).
+            //     Sem o código próprio cairia em user_denied e o console diria que o
+            //     usuário recusou — quando ele pode nem ter visto o cartão.
             // Manter os códigos permite o console explicar a causa real.
             "replaced" => "replaced",
             "no_ui" => "no_ui",
+            "user_dismissed" => "user_dismissed",
             _ => "user_denied"
         };
 }

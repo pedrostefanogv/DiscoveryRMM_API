@@ -156,6 +156,7 @@ public class TicketChatAttachmentDeliveryTests
 
     private sealed class RecordingEnvelopePublisher : ITicketChatEnvelopePublisher
     {
+        public List<TicketChatSessionStatus> DeclinedPublishes { get; } = [];
         public List<string> Published { get; } = [];
 
         public Task PublishSessionOpenedAsync(TicketChatSession session, CancellationToken cancellationToken = default)
@@ -167,6 +168,12 @@ public class TicketChatAttachmentDeliveryTests
         public Task PublishMessageToAgentAsync(TicketChatSession session, TicketChatMessage message, CancellationToken cancellationToken = default)
         {
             Published.Add("Message");
+            return Task.CompletedTask;
+        }
+
+        public Task PublishSessionDeclinedAsync(TicketChatSession session, CancellationToken cancellationToken = default)
+        {
+            DeclinedPublishes.Add(session.Status);
             return Task.CompletedTask;
         }
 
@@ -219,6 +226,8 @@ public class TicketChatAttachmentDeliveryTests
         public Task UpdateSessionAsync(TicketChatSession updated, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<TicketChatSession?> GetCurrentForTicketAsync(Guid ticketId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<TicketChatSession?> GetCurrentForAgentAsync(Guid agentId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<TicketChatSession?> GetLatestForAgentAsync(Guid agentId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<TicketChatSession?> GetLatestForTicketAsync(Guid ticketId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task AddSessionAsync(TicketChatSession newSession, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatSession>> GetHistoryAsync(Guid ticketId, int skip, int take, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatMessage>> GetMessagesAsync(Guid session, long afterSequence, int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();

@@ -20,6 +20,13 @@ public interface ITicketChatEnvelopePublisher
     /// <summary>Servidor -> agent: sessão encerrada.</summary>
     Task PublishSessionEndedAsync(TicketChatSession session, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Servidor -> agent: convite recusado ou expirado SEM conversa. Vai no MESMO
+    /// canal durável dos demais envelopes (PublishSupportChatServerAsync), não no
+    /// dashboard — o dashboard só avisa o console, e o agent não o consome.
+    /// </summary>
+    Task PublishSessionDeclinedAsync(TicketChatSession session, CancellationToken cancellationToken = default);
+
     /// <summary>Servidor -> console: sinal de nova mensagem (sem corpo).</summary>
     Task PublishActivitySignalAsync(TicketChatSession session, TicketChatMessage message, CancellationToken cancellationToken = default);
 

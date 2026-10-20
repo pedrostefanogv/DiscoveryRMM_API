@@ -28,6 +28,20 @@ public interface ITicketChatRepository
     /// <summary>Sessão pendente/ativa da máquina (no máximo uma).</summary>
     Task<TicketChatSession?> GetCurrentForAgentAsync(Guid agentId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Sessão de MAIOR StartedAt do chamado, com QUALQUER status (inclui a
+    /// última Declined/Expired/Ended). Usada pelo console para enxergar o
+    /// desfecho: GetCurrentForTicketAsync filtra Pending/Active e devolvia null
+    /// logo após a recusa, congelando o painel em "Aguardando confirmação".
+    ///
+    /// Distinta de <see cref="GetCurrentForTicketAsync"/> de propósito: a
+    /// "atual" continua servindo às decisões de "ocupado"/reaproveitar sessão.
+    /// </summary>
+    Task<TicketChatSession?> GetLatestForTicketAsync(Guid ticketId, CancellationToken cancellationToken = default);
+
+    /// <summary>Sessão de MAIOR StartedAt da máquina, com QUALQUER status.</summary>
+    Task<TicketChatSession?> GetLatestForAgentAsync(Guid agentId, CancellationToken cancellationToken = default);
+
     Task AddSessionAsync(TicketChatSession session, CancellationToken cancellationToken = default);
 
     Task UpdateSessionAsync(TicketChatSession session, CancellationToken cancellationToken = default);

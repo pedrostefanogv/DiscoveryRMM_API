@@ -32,7 +32,7 @@ public class CommandRedeliveryGuardTests
     [Test]
     public void PendingSessionWithinTheInviteWindowIsAllowed()
     {
-        var decision = CommandRedeliveryGuard.EvaluateSession(
+        var decision = CommandRedeliveryGuard.EvaluateTicketChatInvite(
             Session(TicketChatSessionStatus.Pending, Now.AddMinutes(1)), Now);
 
         Assert.That(decision.Allowed, Is.True, decision.Reason);
@@ -41,7 +41,7 @@ public class CommandRedeliveryGuardTests
     [Test]
     public void PendingSessionWithoutExpiryIsAllowed()
     {
-        var decision = CommandRedeliveryGuard.EvaluateSession(
+        var decision = CommandRedeliveryGuard.EvaluateTicketChatInvite(
             Session(TicketChatSessionStatus.Pending, null), Now);
 
         Assert.That(decision.Allowed, Is.True, decision.Reason);
@@ -52,7 +52,7 @@ public class CommandRedeliveryGuardTests
     {
         // Caso real (12/10/2026 02:38:41 UTC): o convite da sessão dd00ef08 chegou
         // 5m54s depois de criado, 4 min após o usuário encerrar a conversa.
-        var decision = CommandRedeliveryGuard.EvaluateSession(
+        var decision = CommandRedeliveryGuard.EvaluateTicketChatInvite(
             Session(TicketChatSessionStatus.Ended, Now.AddMinutes(-4)), Now);
 
         Assert.That(decision.Allowed, Is.False);
@@ -65,7 +65,7 @@ public class CommandRedeliveryGuardTests
     [TestCase(TicketChatSessionStatus.Ended)]
     public void NonPendingSessionsAreBlocked(TicketChatSessionStatus status)
     {
-        var decision = CommandRedeliveryGuard.EvaluateSession(Session(status, Now.AddMinutes(1)), Now);
+        var decision = CommandRedeliveryGuard.EvaluateTicketChatInvite(Session(status, Now.AddMinutes(1)), Now);
 
         Assert.That(decision.Allowed, Is.False);
     }
@@ -73,7 +73,7 @@ public class CommandRedeliveryGuardTests
     [Test]
     public void ExpiredInviteIsBlockedEvenWhilePending()
     {
-        var decision = CommandRedeliveryGuard.EvaluateSession(
+        var decision = CommandRedeliveryGuard.EvaluateTicketChatInvite(
             Session(TicketChatSessionStatus.Pending, Now.AddSeconds(-1)), Now);
 
         Assert.That(decision.Allowed, Is.False);
@@ -83,7 +83,7 @@ public class CommandRedeliveryGuardTests
     [Test]
     public void UnknownSessionIsBlocked()
     {
-        var decision = CommandRedeliveryGuard.EvaluateSession(null, Now);
+        var decision = CommandRedeliveryGuard.EvaluateTicketChatInvite(null, Now);
 
         Assert.That(decision.Allowed, Is.False);
         Assert.That(decision.Reason, Is.EqualTo("sessão de chat não encontrada"));
