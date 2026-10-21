@@ -101,6 +101,7 @@ public class TicketChatAttachmentDeliveryTests
             publisher,
             new NoopNotificationService(),
             new NotViewingPresenceService(),
+            new FallbackNameResolver(),
             Options.Create(new TicketChatOptions()),
             NullLogger<SendTicketChatMessageCommandHandler>.Instance);
 
@@ -234,6 +235,13 @@ public class TicketChatAttachmentDeliveryTests
         public Task<IReadOnlyList<TicketChatSession>> GetExpiredPendingAsync(DateTime nowUtc, int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatSession>> GetInactiveActiveAsync(DateTime cutoffUtc, int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketChatSession>> GetActiveForClosedTicketsAsync(int limit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    /// <summary>Resolver de nome que devolve o fallback (username) — o teste não avalia o nome.</summary>
+    private sealed class FallbackNameResolver : IChatUserNameResolver
+    {
+        public Task<string> ResolveAsync(Guid? userId, string fallback, CancellationToken cancellationToken = default)
+            => Task.FromResult(string.IsNullOrWhiteSpace(fallback) ? "suporte" : fallback.Trim());
     }
 
     /// <summary>Atendente não está vendo o chat: o caminho de notificação segue normal.</summary>

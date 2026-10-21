@@ -95,6 +95,13 @@ public class SupportChatAdHocSessionTests
         return agent;
     }
 
+    /// <summary>Resolver de nome que devolve o fallback (username) — o teste não avalia o nome.</summary>
+    private sealed class FallbackNameResolver : IChatUserNameResolver
+    {
+        public Task<string> ResolveAsync(Guid? userId, string fallback, CancellationToken cancellationToken = default)
+            => Task.FromResult(string.IsNullOrWhiteSpace(fallback) ? "suporte" : fallback.Trim());
+    }
+
     private static StartAgentSupportChatSessionCommandHandler CreateHandler(
         DiscoveryDbContext db,
         CapturingDispatcher dispatcher,
@@ -105,6 +112,7 @@ public class SupportChatAdHocSessionTests
             new SiteRepository(db),
             dispatcher,
             publisher,
+            new FallbackNameResolver(),
             Options.Create(new TicketChatOptions()),
             NullLogger<StartAgentSupportChatSessionCommandHandler>.Instance);
 

@@ -125,6 +125,11 @@ builder.Services.AddSingleton(TimeProvider.System);
 // atendente ja esta lendo na janela do chat (ver SendTicketChatMessageCommandHandler).
 builder.Services.AddSingleton<ITicketChatPresenceService, TicketChatPresenceService>();
 
+// Nome de exibicao do atendente no chat de suporte: singleton porque o cache
+// (TTL curto) so evita a consulta por mensagem quando e compartilhado entre
+// requests — como scoped, cada envio consultaria o cadastro de novo.
+builder.Services.AddSingleton<IChatUserNameResolver, ChatUserNameResolver>();
+
 // Static catalog of report datasets (singleton — content is fixed)
 builder.Services.AddSingleton<IReportDatasetCatalogProvider, ReportDatasetCatalogProvider>();
 

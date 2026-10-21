@@ -64,6 +64,10 @@ internal static class ServiceCollectionExtensions
             typeof(IRedisService),
             // Presenca do chat e um estado de processo unico (singleton).
             typeof(ITicketChatPresenceService),
+            // Resolver de nome de exibicao do chat: o cache (TTL curto) so faz
+            // sentido compartilhado entre requests — como scoped ele nao
+            // pouparia a consulta por mensagem.
+            typeof(IChatUserNameResolver),
         };
 
         // Register only interfaces with a single implementation (avoids ambiguity and multi-implementation patterns)

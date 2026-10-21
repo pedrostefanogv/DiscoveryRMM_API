@@ -275,6 +275,7 @@ public class TicketChatInviteResponseTests
                     new SiteRepository(db),
                     dispatcher,
                     new RecordingPublisher(),
+                    new FallbackNameResolver(),
                     Microsoft.Extensions.Options.Options.Create(new Discovery.Core.Configuration.TicketChatOptions()),
                     NullLogger<StartAgentSupportChatSessionCommandHandler>.Instance)
                 .Handle(new StartAgentSupportChatSessionCommand(agent.Id, null, "Ana"), CancellationToken.None);
@@ -304,6 +305,7 @@ public class TicketChatInviteResponseTests
                     new SiteRepository(db),
                     new CapturingDispatcher(),
                     new RecordingPublisher(),
+                    new FallbackNameResolver(),
                     Microsoft.Extensions.Options.Options.Create(new Discovery.Core.Configuration.TicketChatOptions()),
                     NullLogger<StartAgentSupportChatSessionCommandHandler>.Instance)
                 .Handle(new StartAgentSupportChatSessionCommand(agent.Id, null, "Ana"), CancellationToken.None);
@@ -311,6 +313,13 @@ public class TicketChatInviteResponseTests
             Assert.That(result.Value!.Id, Is.EqualTo(pending.Id), "sessão viva continua sendo reaproveitada");
             Assert.That(db.TicketChatSessions.Count(), Is.EqualTo(1));
         }
+    }
+
+    /// <summary>Resolver de nome que devolve o fallback (username) — o teste não avalia o nome.</summary>
+    private sealed class FallbackNameResolver : IChatUserNameResolver
+    {
+        public Task<string> ResolveAsync(Guid? userId, string fallback, CancellationToken cancellationToken = default)
+            => Task.FromResult(string.IsNullOrWhiteSpace(fallback) ? "suporte" : fallback.Trim());
     }
 
     private sealed class RecordingPublisher : ITicketChatEnvelopePublisher

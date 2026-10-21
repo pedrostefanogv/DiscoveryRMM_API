@@ -75,6 +75,7 @@ public sealed class StartTicketChatSessionCommandHandler(
     IAgentCommandDispatcher commandDispatcher,
     ITicketChatEnvelopePublisher envelopePublisher,
     IActivityLogService activityLog,
+    IChatUserNameResolver userNameResolver,
     IOptions<TicketChatOptions> options,
     ILogger<StartTicketChatSessionCommandHandler> logger)
     : IRequestHandler<StartTicketChatSessionCommand, Result<TicketChatSessionDto>>
@@ -113,6 +114,11 @@ public sealed class StartTicketChatSessionCommandHandler(
             return Result<TicketChatSessionDto>.Failure(Error.Conflict("agent_busy"));
 
         var now = DateTime.UtcNow;
+        // O claim do JWT carrega o LOGIN ("pedrostefanogv"), nao o nome. O
+        // usuario final precisa ver o nome do tecnico ("Pedro Stefano") na
+        // janela do chat — resolve FullName do cadastro, caindo para o que o
+        // controller mandou (username) se o cadastro nao tiver nome.
+        var startedByName = Trim(await userNameResolver.ResolveAsync(cmd.StartedByUserId, cmd.StartedByName ?? string.Empty, ct), 255);
         var session = new TicketChatSession
         {
             Id = Guid.NewGuid(),
@@ -122,7 +128,7 @@ public sealed class StartTicketChatSessionCommandHandler(
             SiteId = ticket.SiteId,
             Status = TicketChatSessionStatus.Pending,
             StartedByUserId = cmd.StartedByUserId,
-            StartedByName = Trim(cmd.StartedByName, 255),
+            StartedByName = startedByName,
             StartedAt = now,
             InviteExpiresAt = now.AddSeconds(Math.Max(30, options.Value.InviteTimeoutSeconds)),
             CreatedAt = now,
@@ -141,7 +147,7 @@ public sealed class StartTicketChatSessionCommandHandler(
             cmd.TicketId,
             TicketActivityType.ChatStarted,
             cmd.StartedByUserId,
-            comment: TicketChatAuditText.Started(cmd.StartedByName));
+            comment: TicketChatAuditText.Started(startedByName));
 
         await TicketChatInviteDispatcher.DispatchAsync(commandDispatcher, session, ticket.Title, ct);
 
@@ -151,7 +157,7 @@ public sealed class StartTicketChatSessionCommandHandler(
 
         logger.LogInformation(
             "Support chat session {SessionId} created for ticket {TicketId} (agent {AgentId}) by {Support}",
-            session.Id, session.TicketId, session.AgentId, session.StartedByName);
+            session.Id, session.TicketId, session.AgentId, startedByName);
 
         return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(session));
     }
@@ -174,6 +180,7 @@ public sealed class StartAgentSupportChatSessionCommandHandler(
     ISiteRepository siteRepository,
     IAgentCommandDispatcher commandDispatcher,
     ITicketChatEnvelopePublisher envelopePublisher,
+    IChatUserNameResolver userNameResolver,
     IOptions<TicketChatOptions> options,
     ILogger<StartAgentSupportChatSessionCommandHandler> logger)
     : IRequestHandler<StartAgentSupportChatSessionCommand, Result<TicketChatSessionDto>>
@@ -201,6 +208,9 @@ public sealed class StartAgentSupportChatSessionCommandHandler(
 
         var site = await siteRepository.GetByIdAsync(agent.SiteId);
         var now = DateTime.UtcNow;
+        // Mesmo motivo do handler vinculado a chamado: o claim traz o login;
+        // o usuario final precisa ver o nome do tecnico.
+        var startedByName = Trim(await userNameResolver.ResolveAsync(cmd.StartedByUserId, cmd.StartedByName ?? string.Empty, ct), 255);
         var session = new TicketChatSession
         {
             Id = Guid.NewGuid(),
@@ -210,7 +220,7 @@ public sealed class StartAgentSupportChatSessionCommandHandler(
             SiteId = agent.SiteId,
             Status = TicketChatSessionStatus.Pending,
             StartedByUserId = cmd.StartedByUserId,
-            StartedByName = Trim(cmd.StartedByName, 255),
+            StartedByName = startedByName,
             StartedAt = now,
             InviteExpiresAt = now.AddSeconds(Math.Max(30, options.Value.InviteTimeoutSeconds)),
             CreatedAt = now,
@@ -230,7 +240,7 @@ public sealed class StartAgentSupportChatSessionCommandHandler(
 
         logger.LogInformation(
             "Ad-hoc support chat session {SessionId} created for agent {AgentId} by {Support}",
-            session.Id, session.AgentId, session.StartedByName);
+            session.Id, session.AgentId, startedByName);
 
         return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(session));
     }
@@ -459,6 +469,7 @@ public sealed class SendTicketChatMessageCommandHandler(
     ITicketChatEnvelopePublisher envelopePublisher,
     INotificationService notificationService,
     ITicketChatPresenceService presenceService,
+    IChatUserNameResolver userNameResolver,
     IOptions<TicketChatOptions> options,
     ILogger<SendTicketChatMessageCommandHandler> logger)
     : IRequestHandler<SendTicketChatMessageCommand, Result<TicketChatMessageDto>>
@@ -491,6 +502,12 @@ public sealed class SendTicketChatMessageCommandHandler(
             return Result<TicketChatMessageDto>.Failure(Error.Validation("authorKind", "authorKind inválido."));
 
         var now = DateTime.UtcNow;
+        // Mesmo motivo dos handlers de inicio: o claim carrega o login do
+        // atendente; resolve o nome de exibicao do cadastro (cacheado) para o
+        // usuario final ver "Pedro Stefano" e nao "pedrostefanogv".
+        var authorName = authorKind == TicketChatAuthorKind.Support
+            ? (await userNameResolver.ResolveAsync(cmd.AuthorUserId, cmd.AuthorName ?? string.Empty, ct)).Trim()
+            : (cmd.AuthorName ?? string.Empty).Trim();
         var message = new TicketChatMessage
         {
             Id = Guid.NewGuid(),
@@ -498,7 +515,7 @@ public sealed class SendTicketChatMessageCommandHandler(
             ClientMessageId = cmd.ClientMessageId is { } provided && provided != Guid.Empty ? provided : Guid.NewGuid(),
             AuthorKind = authorKind,
             AuthorUserId = cmd.AuthorUserId,
-            AuthorName = string.IsNullOrWhiteSpace(cmd.AuthorName) ? null : cmd.AuthorName.Trim(),
+            AuthorName = string.IsNullOrWhiteSpace(authorName) ? null : authorName,
             Body = body,
             CreatedAt = now
         };
