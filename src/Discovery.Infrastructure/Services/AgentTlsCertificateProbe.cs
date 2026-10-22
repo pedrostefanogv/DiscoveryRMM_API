@@ -1,20 +1,22 @@
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using Discovery.Core.Interfaces.Security;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
-namespace Discovery.Api.Services;
+namespace Discovery.Infrastructure.Services;
 
-public interface IAgentTlsCertificateProbe
-{
-    Task<string?> GetExpectedTlsCertHashAsync(CancellationToken cancellationToken = default);
-    Task<string?> GetExpectedTlsCertHashAsync(string probeUrl, string cacheKey, CancellationToken cancellationToken = default);
-    void InvalidateCache(string cacheKey);
-}
-
+/// <summary>
+/// Implementação da sonda de certificado TLS (migrada de Discovery.Api/Services
+/// em 2026-10-21 para permitir o uso pelos handlers de CQRS de Infrastructure —
+/// Infrastructure não pode referenciar Api).
+/// </summary>
 public sealed class AgentTlsCertificateProbe : IAgentTlsCertificateProbe
 {
     public const string ApiCacheKey = "AgentTlsCertHash:Api";
+    public const string NatsCacheKey = "AgentTlsCertHash:Nats";
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
 
     private readonly IConfiguration _configuration;
@@ -31,6 +33,11 @@ public sealed class AgentTlsCertificateProbe : IAgentTlsCertificateProbe
         _logger = logger;
     }
 
+    /// <summary>
+    /// Hash do certificado que os agents veem ao falar com a API (tipicamente
+    /// terminado em nginx/Cloudflare — por isso a sonda dispara contra a URL
+    /// pública configurada, não contra o processo Kestrel).
+    /// </summary>
     public async Task<string?> GetExpectedTlsCertHashAsync(CancellationToken cancellationToken = default)
     {
         var probeUrl = _configuration.GetValue<string>("Security:AgentConnection:TlsCertificateProbeUrl");
@@ -38,6 +45,20 @@ public sealed class AgentTlsCertificateProbe : IAgentTlsCertificateProbe
             return null;
 
         return await GetExpectedTlsCertHashAsync(probeUrl, ApiCacheKey, cancellationToken);
+    }
+
+    /// <summary>
+    /// Hash do certificado do endpoint NATS/WSS publicado aos agents. A URL de
+    /// sonda vem de <c>Security:AgentConnection:NatsTlsCertificateProbeUrl</c>;
+    /// sem configuração, devolve null (agent mantém pin apenas reportado).
+    /// </summary>
+    public async Task<string?> GetExpectedNatsTlsCertHashAsync(CancellationToken cancellationToken = default)
+    {
+        var probeUrl = _configuration.GetValue<string>("Security:AgentConnection:NatsTlsCertificateProbeUrl");
+        if (string.IsNullOrWhiteSpace(probeUrl))
+            return null;
+
+        return await GetExpectedTlsCertHashAsync(probeUrl, NatsCacheKey, cancellationToken);
     }
 
     public async Task<string?> GetExpectedTlsCertHashAsync(string probeUrl, string cacheKey, CancellationToken cancellationToken = default)

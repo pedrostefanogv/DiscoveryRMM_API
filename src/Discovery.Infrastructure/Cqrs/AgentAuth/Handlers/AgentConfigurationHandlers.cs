@@ -5,6 +5,7 @@ using Discovery.Core.Cqrs.AgentAuth.Configuration;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Security;
 using MediatR;
 using Microsoft.Extensions.Logging;
 
@@ -13,7 +14,8 @@ namespace Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 public sealed class GetAgentConfigurationHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
-    IConfigurationService configService
+    IConfigurationService configService,
+    IAgentTlsCertificateProbe tlsProbe
 ) : IRequestHandler<GetAgentConfigurationQuery, Result<object>>
 {
     public async Task<Result<object>> Handle(GetAgentConfigurationQuery q, CancellationToken ct)
@@ -34,6 +36,12 @@ public sealed class GetAgentConfigurationHandler(
         }
 
         // Resolve effective configuration (Site > Client > Server)
+        // Sondas TLS em paralelo (fora do inicializador): cada uma tem timeout de 10s
+        // no cache miss e este handler roda no provisionamento/refresh do agent —
+        // sequenciais dobrariam o pior caso de latência do endpoint.
+        var apiProbeTask = tlsProbe.GetExpectedTlsCertHashAsync(ct);
+        var natsProbeTask = tlsProbe.GetExpectedNatsTlsCertHashAsync(ct);
+
         var effective = new Dictionary<string, object?>
         {
             ["agentId"] = agent.Id.ToString(),
@@ -88,6 +96,11 @@ public sealed class GetAgentConfigurationHandler(
 
             // Update policies (JSON strings)
             ["agentUpdatePolicy"] = TryDeserializeJson(clientConfig?.AgentUpdatePolicyJson ?? serverConfig.AgentUpdatePolicyJson),
+            // Janela de manutenção (reboot/patches) e política de tools MCP do chat:
+            // cascata site > client > server; null/vazio herda. O agent tolera ausência
+            // (defaults: janela off, mode all — compatibilidade com frota existente).
+            ["maintenanceWindow"] = TryDeserializeJson(siteConfig?.MaintenanceWindowJson ?? clientConfig?.MaintenanceWindowJson ?? serverConfig.MaintenanceWindowJson),
+            ["mcpToolPolicy"] = TryDeserializeJson(siteConfig?.McpToolPolicyJson ?? clientConfig?.McpToolPolicyJson ?? serverConfig.McpToolPolicyJson),
 
             // Branding & notification
             ["brandingSettings"] = TryDeserializeJson(serverConfig.BrandingSettingsJson),
@@ -108,8 +121,12 @@ public sealed class GetAgentConfigurationHandler(
             ["retentionSettings"] = TryDeserializeJson(serverConfig.RetentionSettingsJson),
 
             // TLS cert hashes (computed at runtime by the server)
-            ["apiTlsCertHash"] = (string?)null,   // TODO: compute from server certificate
-            ["natsTlsCertHash"] = (string?)null,  // TODO: compute from NATS certificate
+            // C2 (pin de TLS no agent): a sonda observa o certificado publicado no
+            // endpoint público (tipicamente nginx/Cloudflare) e publica o SHA-256.
+            // Hash ausente mantém null — o agent só impõe o pin com enforce=true
+            // COM hash publicado; enforce sem hash é fail-closed (tlsutil.PinnedTLSConfig).
+                        ["apiTlsCertHash"] = await apiProbeTask,
+            ["natsTlsCertHash"] = await natsProbeTask,
         };
 
         return Result<object>.Success(effective);

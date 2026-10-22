@@ -175,6 +175,8 @@ public partial class DiscoveryDbContext
             entity.Property(audit => audit.ChangedAt).HasColumnName("changed_at").HasColumnType("timestamptz");
             entity.Property(audit => audit.IpAddress).HasColumnName("ip_address").HasMaxLength(64);
             entity.Property(audit => audit.EntityVersion).HasColumnName("entity_version");
+            entity.Property(audit => audit.PrevHash).HasColumnName("prev_hash");
+            entity.Property(audit => audit.EntryHash).HasColumnName("entry_hash");
         });
     }
 }

@@ -16,14 +16,24 @@ public static class OutputCacheServiceCollectionExtensions
             options.DefaultExpirationTimeSpan = TimeSpan.FromSeconds(30);
             options.MaximumBodySize = 1024 * 64; // 64 KB
 
+            // Vary por credenciais (Authorization/Cookie): vários handlers são escopados
+            // por usuário (ex.: GET /clients filtra por permissões do chamador). Sem isto
+            // um usuário restrito podia receber a lista global cacheada de outro usuário.
             options.AddBasePolicy(builder => builder
                 .Expire(TimeSpan.FromSeconds(15))
-                .SetVaryByHost(true));
+                .SetVaryByHost(true)
+                .SetVaryByHeader("Authorization", "Cookie"));
 
             // Named policies for different cache durations
-            options.AddPolicy("Short", builder => builder.Expire(TimeSpan.FromSeconds(10)));
-            options.AddPolicy("Medium", builder => builder.Expire(TimeSpan.FromSeconds(30)));
-            options.AddPolicy("Long", builder => builder.Expire(TimeSpan.FromMinutes(5)));
+            options.AddPolicy("Short", builder => builder
+                .Expire(TimeSpan.FromSeconds(10))
+                .SetVaryByHeader("Authorization", "Cookie"));
+            options.AddPolicy("Medium", builder => builder
+                .Expire(TimeSpan.FromSeconds(30))
+                .SetVaryByHeader("Authorization", "Cookie"));
+            options.AddPolicy("Long", builder => builder
+                .Expire(TimeSpan.FromMinutes(5))
+                .SetVaryByHeader("Authorization", "Cookie"));
         });
 
         return services;

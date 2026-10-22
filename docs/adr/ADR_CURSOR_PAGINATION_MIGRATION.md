@@ -101,17 +101,24 @@ public sealed record CursorPageDto<T>(
 | P1 | Agent Alerts (AgentAlertRepository) | Type A | ✅ Concluído |
 | P2 | Automation Scripts (AutomationScriptRepository) | Type A (UpdatedAt) | ✅ Concluído |
 | P3 | Automation Tasks (AutomationTaskRepository) | Type A (UpdatedAt) | ✅ Concluído |
-| P4 | Winget/Chocolatey Packages | Type B | 🔜 Pendente |
-| P5 | AppPackage | Type B | 🔜 Pendente |
+| P4 | Winget/Chocolatey Packages | Type B | ✅ Concluído (AppStoreController usa cursor — `AppStoreController.cs:48,63`) |
+| P5 | AppPackage | Type B | ✅ Concluído (`AppStoreController.cs:1030,1066`) |
 | P6 | P2P distribution/status | Type A | 🔜 Pendente |
 | P7 | Users | Type A | 🔜 Pendente |
-| P8 | AppStore (migrar offset-encoded para cursor real) | Type A | 🔜 Pendente |
+| P8 | AppStore (migrar offset-encoded para cursor real) | Type A | ✅ Concluído |
+
+> **Revisão 2026-10-21 (auditoria):** a auditoria de dívida técnica confirmou em código
+> que P4/P5/P8 já usam cursor — a tabela acima estava desatualizada. **Offsets remanescentes**
+> (única pendência real desta migração): `AgentsController.cs:102-103` (lixeira) e `:342-343`
+> (`/software/page`), `AgentPatchesController.cs:47`, `TicketAssignmentController.cs:56`,
+> `AgentLabelsController.cs:336`. Também há dois estilos convivendo no mesmo recurso
+> (software expõe cursor E offset) — unificar na próxima fase.
 
 ## Artefatos criados
 
 | Artefato | Caminho | Propósito |
 |----------|---------|-----------|
-| ADR (este arquivo) | `docs_planeijamento/ADR_CURSOR_PAGINATION_MIGRATION.md` | Decisão arquitetural |
+| ADR (este arquivo) | `docs/adr/ADR_CURSOR_PAGINATION_MIGRATION.md` | Decisão arquitetural |
 | Helper compartilhado | `src/Discovery.Core/Helpers/CursorPaginationHelper.cs` | Encode/decode + slice + apply cursor (Type A e B) |
 | DTO genérico | `src/Discovery.Core/DTOs/CursorPageDto.cs` | Contrato de página único |
 | Endpoint de exemplo | `GET /api/v*/logs/page` | Já validado nos testes e integrado na UI |

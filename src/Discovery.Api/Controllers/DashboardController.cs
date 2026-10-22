@@ -60,6 +60,18 @@ public class DashboardController : ControllerBase
         return result.ToActionResult();
     }
 
+    [HttpGet("dashboard/service-board")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    public async Task<IActionResult> GetServiceBoard(
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] int limit = 50,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _mediator.Send(new GetServiceBoardQuery(clientId, siteId, limit), cancellationToken);
+        return result.ToActionResult();
+    }
+
     private static bool TryParseWindow(string? window, out TimeSpan parsedWindow, out string? error)
     {
         var normalized = window?.Trim();

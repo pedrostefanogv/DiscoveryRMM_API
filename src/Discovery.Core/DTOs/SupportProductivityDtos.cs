@@ -2,7 +2,8 @@ namespace Discovery.Core.DTOs;
 
 public sealed record TicketMacroDto(
     Guid Id, Guid? ClientId, Guid? DepartmentId, string Name, string? Description,
-    string Content, bool IsActive, string? CreatedBy, DateTime CreatedAt, DateTime UpdatedAt);
+    string Content, bool IsActive, string? CreatedBy, DateTime CreatedAt, DateTime UpdatedAt,
+    IReadOnlyList<RunbookStep>? RunbookSteps = null);
 
 public sealed record TicketTemplateDto(
     Guid Id, Guid? ClientId, Guid? DepartmentId, string Name, string Title, string Description,

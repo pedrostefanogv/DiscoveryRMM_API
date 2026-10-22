@@ -14,4 +14,12 @@ public class AutomationScriptAudit
     public string? IpAddress { get; set; }
     public string? CorrelationId { get; set; }
     public DateTime ChangedAt { get; set; } = DateTime.UtcNow;
+
+    // ============ Hash chain (M241) ============
+
+    /// <summary>Hash da entrada anterior da cadeia deste escopo (null = entrada fora da chain/legado)</summary>
+    public string? PrevHash { get; set; }
+
+    /// <summary>SHA256(prev_head || payload) em hex minúsculas; null = fail-open</summary>
+    public string? EntryHash { get; set; }
 }

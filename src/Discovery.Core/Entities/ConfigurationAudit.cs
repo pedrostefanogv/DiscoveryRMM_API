@@ -39,4 +39,12 @@ public class ConfigurationAudit
     
     /// <summary>Versão da entidade após a mudança</summary>
     public int EntityVersion { get; set; }
+
+    // ============ Hash chain (M241) ============
+
+    /// <summary>Hash da entrada anterior da cadeia deste escopo (null = entrada fora da chain/legado)</summary>
+    public string? PrevHash { get; set; }
+
+    /// <summary>SHA256(prev_head || payload) em hex minúsculas; null = fail-open</summary>
+    public string? EntryHash { get; set; }
 }

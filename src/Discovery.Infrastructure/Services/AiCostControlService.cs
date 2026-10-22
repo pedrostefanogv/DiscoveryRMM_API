@@ -50,12 +50,16 @@ public class AiCostControlService : IAiCostControlService
     private readonly ConcurrentDictionary<string, SlidingWindow> _localRateLimits = new();
     private readonly ConcurrentDictionary<string, DailyBudget> _localBudgets = new();
 
+    private readonly IAiMonthlyCostReader? _monthlyCostReader;
+
     public AiCostControlService(
         IRedisService? redis,
-        ILogger<AiCostControlService> logger)
+        ILogger<AiCostControlService> logger,
+        IAiMonthlyCostReader? monthlyCostReader = null)
     {
         _redis = redis;
         _logger = logger;
+        _monthlyCostReader = monthlyCostReader;
     }
 
     public async Task<bool> TryAcquireAsync(
@@ -64,6 +68,20 @@ public class AiCostControlService : IAiCostControlService
         AIIntegrationSettings settings,
         CancellationToken ct = default)
     {
+        // 0. Orçamento mensal (USD) por cliente — painel de custo IA. Fail-open
+        // quando o budget não está configurado ou o leitor de custo indisponível.
+        if (settings.BudgetUsdMonthly is double monthlyBudget && monthlyBudget > 0 && _monthlyCostReader is not null)
+        {
+            var monthCost = await _monthlyCostReader.GetMonthToDateCostUsdAsync(clientId, ct);
+            if (monthCost is double currentMonthCost && currentMonthCost >= monthlyBudget)
+            {
+                _logger.LogWarning(
+                    "AI monthly budget exceeded for client {ClientId}: {Cost:F2}/{Budget:F2} USD — bloqueando novas chamadas",
+                    clientId, currentMonthCost, monthlyBudget);
+                return false;
+            }
+        }
+
         if (!settings.CostControlEnabled)
             return true;
 

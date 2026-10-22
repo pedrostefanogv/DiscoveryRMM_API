@@ -39,6 +39,12 @@ public class AIIntegrationSettingsOverride
     /// <summary>Máximo de tokens por requisição (null = herda)</summary>
     public int? MaxTokensPerRequest { get; set; }
 
+    /// <summary>
+    /// Orçamento mensal de custo de IA em USD para este escopo (null = herda/servidor).
+    /// Persistido em AIIntegrationSettingsJson (JSON dinâmico — sem migration).
+    /// </summary>
+    public double? BudgetUsdMonthly { get; set; }
+
     /// <summary>Máximo de mensagens de histórico enviadas ao LLM (null = herda)</summary>
     public int? MaxHistoryMessages { get; set; }
 

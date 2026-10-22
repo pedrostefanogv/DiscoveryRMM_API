@@ -134,6 +134,20 @@ public sealed class PatchesController(
         return result.ToActionResult();
     }
 
+    [HttpGet("compliance")]
+    public async Task<IActionResult> GetCompliance(
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] int? scanWindowDays = null,
+        CancellationToken ct = default)
+    {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.View);
+        var result = await mediator.Send(new GetPatchComplianceQuery(
+            clientId, siteId, scanWindowDays ?? 7,
+            access.HasGlobalAccess, access.AllowedClientIds), ct);
+        return result.ToActionResult();
+    }
+
     // ── Aprovações ─────────────────────────────────────────────────────────
 
     [HttpGet("approvals")]

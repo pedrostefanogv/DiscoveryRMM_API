@@ -280,4 +280,17 @@ public class ServerConfiguration
     /// todos os embeddings são invalidados e reprocessados com o novo modelo.
     /// </summary>
     public int CurrentEmbeddingDimensions { get; set; } = 1536;
+
+    /// <summary>
+    /// Janela de manutenção do agent (reboot/patches): JSON
+    /// { enabled, daysOfWeek, startUtc, durationMinutes, rebootGraceSeconds }.
+    /// Null/vazio = herda/usa default (desligado).
+    /// </summary>
+    public string MaintenanceWindowJson { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Política de tools MCP do chat do agent: JSON
+    /// { mode: "all"|"allowlist", allow: [nomes] }. Null/vazio = herda/all.
+    /// </summary>
+    public string McpToolPolicyJson { get; set; } = string.Empty;
 }

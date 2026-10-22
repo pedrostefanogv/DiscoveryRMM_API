@@ -295,6 +295,7 @@ public partial class DiscoveryDbContext
             entity.Property(m => m.Name).HasColumnName("name").HasMaxLength(200);
             entity.Property(m => m.Description).HasColumnName("description").HasMaxLength(1000);
             entity.Property(m => m.Content).HasColumnName("content");
+            entity.Property(m => m.RunbookStepsJson).HasColumnName("runbook_steps_json").HasColumnType("jsonb");
             entity.Property(m => m.IsActive).HasColumnName("is_active");
             entity.Property(m => m.CreatedBy).HasColumnName("created_by").HasMaxLength(255);
             entity.Property(m => m.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");

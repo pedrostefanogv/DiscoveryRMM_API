@@ -49,6 +49,8 @@ public partial class DiscoveryDbContext
             entity.Property(a => a.IpAddress).HasColumnName("ip_address").HasMaxLength(64);
             entity.Property(a => a.CorrelationId).HasColumnName("correlation_id").HasMaxLength(64);
             entity.Property(a => a.ChangedAt).HasColumnName("changed_at").HasColumnType("timestamptz");
+            entity.Property(a => a.PrevHash).HasColumnName("prev_hash");
+            entity.Property(a => a.EntryHash).HasColumnName("entry_hash");
 
             entity.HasOne<AutomationScriptDefinition>().WithMany().HasForeignKey(a => a.ScriptId).OnDelete(DeleteBehavior.Cascade);
         });

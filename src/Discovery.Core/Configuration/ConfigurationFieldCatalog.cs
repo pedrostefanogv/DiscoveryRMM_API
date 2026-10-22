@@ -16,6 +16,8 @@ public static class ConfigurationFieldCatalog
         "AppStorePolicy",
         "InventoryIntervalHours",
         "AgentUpdatePolicyJson",
+        "MaintenanceWindowJson",
+        "McpToolPolicyJson",
         "AIIntegrationSettingsJson",
         "TicketAttachmentSettingsJson",
         "BackgroundProcessingSettingsJson",

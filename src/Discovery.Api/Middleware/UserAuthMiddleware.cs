@@ -1,5 +1,8 @@
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Core.Interfaces.Security;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Discovery.Api.Middleware;
 
@@ -26,7 +29,7 @@ public class UserAuthMiddleware
         _logger = logger;
     }
 
-    public async Task InvokeAsync(HttpContext context, IJwtService jwtService)
+    public async Task InvokeAsync(HttpContext context, IJwtService jwtService, IUserSessionRepository sessionRepo)
     {
         // Caminhos públicos não precisam de validação
         if (_publicPaths.Contains(context.Request.Path.Value ?? string.Empty))
@@ -71,6 +74,11 @@ public class UserAuthMiddleware
                     ?? principal.FindFirstValue("sub");
                 if (Guid.TryParse(userIdClaim, out var userId))
                 {
+                    // C5: publica o principal no HttpContext.User também — hoje a
+                    // identidade só existia em HttpContext.Items, o que impedia o uso
+                    // de [Authorize]/policies/IAuthorizationService em qualquer ponto
+                    // do pipeline (filtros, SignalR, minimal APIs).
+                    context.User = principal;
                     context.Items["UserId"] = userId;
                     context.Items["Username"] = principal.FindFirstValue("unique_name")
                         ?? principal.FindFirstValue(ClaimTypes.Name)
@@ -89,6 +97,31 @@ public class UserAuthMiddleware
                             context.Items["MfaTokenId"] = jti;
                         else
                             context.Items["SessionId"] = jti;
+
+                        // C6: revogação precisa valer para o ACCESS token, não só para o
+                        // refresh. Sem esta checagem, um logout/troca de senha deixa o access
+                        // token válido por até AccessTokenExpirationMinutes (60 min).
+                        // jti só é SessionId em token de sessão completa (mfa_pending mapeia
+                        // para MfaTokenId e mfa_setup/step_up não têm jti).
+                        if (Guid.TryParse(jti, out var sessionId))
+                        {
+                            var session = await sessionRepo.GetByIdAsync(sessionId);
+                            var tokenHash = Convert.ToBase64String(
+                                SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+                            if (session is null || !session.IsValid || session.AccessTokenHash != tokenHash)
+                            {
+                                _logger.LogWarning(
+                                    "UserAuthMiddleware: sessão {SessionId} inválida/revogada ou access token obsoleto. Path={Path}",
+                                    sessionId, context.Request.Path.Value);
+                                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                                await context.Response.WriteAsJsonAsync(new
+                                {
+                                    message = "Sessão inválida ou revogada. Faça login novamente.",
+                                    code = "session_revoked"
+                                });
+                                return;
+                            }
+                        }
                     }
 
                     _logger.LogDebug(

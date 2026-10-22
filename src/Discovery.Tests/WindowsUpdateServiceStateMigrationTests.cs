@@ -49,7 +49,9 @@ public class WindowsUpdateServiceStateMigrationTests
 
         var ours = typeof(M238_AddAgentWindowsUpdateServiceState).GetCustomAttribute<MigrationAttribute>();
         Assert.That(ours, Is.Not.Null);
-        Assert.That(ours!.Version, Is.EqualTo(versions.Max()), "M238 deve ser a migration mais recente");
+        // M241 (audit chain) e M242 (runbook) são mais recentes — a guarda aqui
+        // vira sanidade: a Version da M238 pertence ao conjunto de migrations.
+        Assert.That(versions, Does.Contain(ours!.Version), "Version da M238 deve estar no conjunto de migrations");
     }
 
     [Test]

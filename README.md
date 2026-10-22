@@ -14,8 +14,7 @@
 **Plataforma de gerenciamento remoto de endpoints (RMM) open-source**  
 construída com .NET 10, NATS e PostgreSQL.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/ci.yml?branch=release&label=CI&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/release.yml?branch=release&label=Release&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/release.yml)
+[![Security Scan](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/security-scan.yml?branch=release&label=Security%20Scan&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/security-scan.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
@@ -115,9 +114,10 @@ discovery-rmm-server/
 │   └── Discovery.Migrations/   # FluentMigrator - schema do banco
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml              # Build + Testes
-│       ├── release.yml         # Channel Delivery (beta/lts/release)
+│       ├── security-scan.yml   # Trivy/Dependency Review/Secrets (agendado)
 │       └── security-hotfix.yml # Fast-track para CVEs críticos
+│       # Pendência (auditoria 2026-10-21): ci.yml (build+test) e release.yml
+│       # ainda não existem neste repositório — criar antes de anunciar badges.
 └── docs/                       # Documentação por capacidade
 ```
 
@@ -353,8 +353,7 @@ Distribuído sob a licença MIT. Veja [LICENSE](LICENSE) para mais informações
 **Open-source Remote Monitoring & Management (RMM) platform**  
 built with .NET 10, NATS and PostgreSQL.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/ci.yml?branch=release&label=CI&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/release.yml?branch=release&label=Release&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/release.yml)
+[![Security Scan](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_API/security-scan.yml?branch=release&label=Security%20Scan&logo=githubactions&logoColor=white)](https://github.com/pedrostefanogv/DiscoveryRMM_API/actions/workflows/security-scan.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)

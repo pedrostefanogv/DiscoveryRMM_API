@@ -9,6 +9,13 @@ public class TicketMacro
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string Content { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Runbook executável (M242): JSON com a lista de <see cref="RunbookStep"/>.
+    /// null = macro sem runbook (resposta rápida simples).
+    /// </summary>
+    public string? RunbookStepsJson { get; set; }
+
     public bool IsActive { get; set; } = true;
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }

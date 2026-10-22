@@ -491,13 +491,15 @@ app.UseWebSockets(new WebSocketOptions
     KeepAliveInterval = TimeSpan.FromSeconds(30)
 });
 
+// Middleware de tratamento global de exceções (deve estar no início):
+// cobre também falhas de rate limiter, output cache, CORS e security headers,
+// que antes ficavam FORA do handler e estouravam 500 sem log estruturado.
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+
 app.UseRateLimiter();
 app.UseOutputCache();
 app.UseCors("DefaultApi");
 app.UseSecurityHeaders();
-
-// Middleware de tratamento global de exceções (deve estar no início)
-app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Agent token auth middleware (para rotas /api/agent-auth/*)
 app.UseAgentAuth();

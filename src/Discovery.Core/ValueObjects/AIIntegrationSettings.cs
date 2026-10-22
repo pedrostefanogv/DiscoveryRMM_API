@@ -79,6 +79,13 @@ public class AIIntegrationSettings
     /// <summary>Orçamento diário de tokens por escopo</summary>
     public int TokenBudgetDaily { get; set; } = 200000;
 
+    /// <summary>
+    /// Orçamento mensal de custo de IA em USD por cliente (painel de custo IA).
+    /// null = sem orçamento mensal (fail-open). Quando o custo acumulado do mês
+    /// atingir este valor, novas chamadas de IA do cliente são bloqueadas.
+    /// </summary>
+    public double? BudgetUsdMonthly { get; set; }
+
     /// <summary>Habilita enforcement de controles de custo</summary>
     public bool CostControlEnabled { get; set; } = false;
 

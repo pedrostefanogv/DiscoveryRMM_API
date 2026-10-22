@@ -194,6 +194,29 @@ public class TicketsController(
         return result.Match<IActionResult>(success: r => CreatedAtAction(nameof(GetComments), new { id }, r), failure: NotFound);
     }
 
+    /// <summary>
+    /// Executa o runbook de uma macro no chamado (M242): cada passo dispara o
+    /// script de automação na máquina vinculada ao chamado, aguarda a conclusão
+    /// e anexa a evidência como comentário. Falha de um passo não aborta os demais.
+    /// </summary>
+    [HttpPost("{id:guid}/runbook/execute")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Execute)]
+    public async Task<IActionResult> ExecuteRunbook(Guid id, [FromBody] ExecuteTicketRunbookCommand command)
+    {
+        if (!await CanAccessTicketAsync(id, ActionType.Execute, HttpContext.RequestAborted))
+            return NotFound();
+
+        // Operator sempre vem do token autenticado — nunca do payload do cliente.
+        var result = await mediator.Send(command with { TicketId = id, OperatorId = CurrentUserId, OperatorName = Username }, HttpContext.RequestAborted);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
+    }
+
     [HttpPost("{id:guid}/merge")]
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> MergeTickets(Guid id, [FromBody] MergeTicketsCommand command)

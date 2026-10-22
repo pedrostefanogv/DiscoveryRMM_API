@@ -1,7 +1,9 @@
 using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.ConfigurationAudit.Queries;
+using Discovery.Infrastructure.Services;
 using Discovery.Core.Enums.Identity;
 using MediatR;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -48,5 +50,33 @@ public class ConfigurationAuditController(IMediator mediator) : ControllerBase
     {
         var result = await mediator.Send(new GetAuditReportQuery(startDate, endDate));
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    // ── Hash chain (M241) ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Verifica a hash chain das entradas de auditoria no período, recomputando
+    /// os hashes encadeados. Entradas fora da chain (legado/fail-open) são ignoradas.
+    /// </summary>
+    [HttpGet("chain/verify")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    public async Task<IActionResult> VerifyChain([FromQuery] DateTime? from, [FromQuery] DateTime? to)
+    {
+        var result = await mediator.Send(new VerifyAuditChainQuery(from, to));
+        return result.Match<IActionResult>(success: Ok, failure: BadRequest);
+    }
+
+    /// <summary>
+    /// Exporta as entradas encadeadas no período. format=json (default) ou csv.
+    /// </summary>
+    [HttpGet("chain/export")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    public async Task<IActionResult> ExportChain(
+        [FromQuery] DateTime? from, [FromQuery] DateTime? to, [FromQuery] string format = "json")
+    {
+        var result = await mediator.Send(new ExportAuditChainQuery(from, to, format));
+        return result.Match<IActionResult>(
+            success: export => Content(export.Content, export.Format == "csv" ? "text/csv" : "application/json"),
+            failure: BadRequest);
     }
 }

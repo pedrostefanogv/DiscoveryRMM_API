@@ -35,7 +35,8 @@ public sealed class CreateTicketMacroCommandHandler(DiscoveryDbContext db)
             IsActive = cmd.IsActive,
             CreatedBy = cmd.CreatedBy,
             CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
+            UpdatedAt = DateTime.UtcNow,
+            RunbookStepsJson = cmd.RunbookSteps is { Count: > 0 } ? RunbookStepList.ToJson(cmd.RunbookSteps) : null
         };
         db.TicketMacros.Add(macro);
         await db.SaveChangesAsync(ct);
@@ -44,7 +45,8 @@ public sealed class CreateTicketMacroCommandHandler(DiscoveryDbContext db)
 
     internal static TicketMacroDto MapMacro(TicketMacro m) => new(
         m.Id, m.ClientId, m.DepartmentId, m.Name, m.Description, m.Content, m.IsActive,
-        m.CreatedBy, m.CreatedAt, m.UpdatedAt);
+        m.CreatedBy, m.CreatedAt, m.UpdatedAt,
+        RunbookSteps: RunbookStepList.FromJson(m.RunbookStepsJson));
 }
 
 public sealed class UpdateTicketMacroCommandHandler(DiscoveryDbContext db)
@@ -62,6 +64,10 @@ public sealed class UpdateTicketMacroCommandHandler(DiscoveryDbContext db)
         macro.Description = cmd.Description;
         macro.Content = cmd.Content;
         macro.IsActive = cmd.IsActive;
+        // null no comando = sem alteração do runbook (editores que não mexem no
+        // runbook não o apagam por acidente); lista vazia explicitamente limpa.
+        if (cmd.RunbookSteps is not null)
+            macro.RunbookStepsJson = cmd.RunbookSteps.Count > 0 ? RunbookStepList.ToJson(cmd.RunbookSteps) : null;
         macro.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
         return Result<TicketMacroDto>.Success(CreateTicketMacroCommandHandler.MapMacro(macro));
