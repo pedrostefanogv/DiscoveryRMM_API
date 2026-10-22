@@ -130,11 +130,11 @@ public class SiteConfiguration
     /// { enabled, daysOfWeek, startUtc, durationMinutes, rebootGraceSeconds }.
     /// Null/vazio = herda/usa default (desligado).
     /// </summary>
-    public string MaintenanceWindowJson { get; set; } = string.Empty;
+    public string? MaintenanceWindowJson { get; set; } = string.Empty;
 
     /// <summary>
     /// Política de tools MCP do chat do agent: JSON
     /// { mode: "all"|"allowlist", allow: [nomes] }. Null/vazio = herda/all.
     /// </summary>
-    public string McpToolPolicyJson { get; set; } = string.Empty;
+    public string? McpToolPolicyJson { get; set; } = string.Empty;
 }

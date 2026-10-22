@@ -29,8 +29,8 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int>();
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AgentUpdatePolicyJson).HasColumnName("agent_update_policy_json");
-            entity.Property(config => config.MaintenanceWindowJson).HasColumnName("maintenance_window_json");
-            entity.Property(config => config.McpToolPolicyJson).HasColumnName("mcp_tool_policy_json");
+            entity.Property(config => config.MaintenanceWindowJson).HasColumnName("maintenance_window_json").HasColumnType("jsonb");
+            entity.Property(config => config.McpToolPolicyJson).HasColumnName("mcp_tool_policy_json").HasColumnType("jsonb");
             entity.Property(config => config.AgentHeartbeatIntervalSeconds).HasColumnName("agent_heartbeat_interval_seconds");
             entity.Property(config => config.AgentOnlineGraceSeconds).HasColumnName("agent_online_grace_seconds");
             entity.Property(config => config.BrandingSettingsJson).HasColumnName("branding_settings_json");
@@ -99,8 +99,8 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.BackgroundProcessingSettingsJson).HasColumnName("background_processing_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AgentUpdatePolicyJson).HasColumnName("agent_update_policy_json");
-            entity.Property(config => config.MaintenanceWindowJson).HasColumnName("maintenance_window_json");
-            entity.Property(config => config.McpToolPolicyJson).HasColumnName("mcp_tool_policy_json");
+            entity.Property(config => config.MaintenanceWindowJson).HasColumnName("maintenance_window_json").HasColumnType("jsonb");
+            entity.Property(config => config.McpToolPolicyJson).HasColumnName("mcp_tool_policy_json").HasColumnType("jsonb");
             entity.Property(config => config.AgentHeartbeatIntervalSeconds).HasColumnName("agent_heartbeat_interval_seconds");
             entity.Property(config => config.AgentOnlineGraceSeconds).HasColumnName("agent_online_grace_seconds");
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
@@ -140,8 +140,8 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AgentUpdatePolicyJson).HasColumnName("agent_update_policy_json");
-            entity.Property(config => config.MaintenanceWindowJson).HasColumnName("maintenance_window_json");
-            entity.Property(config => config.McpToolPolicyJson).HasColumnName("mcp_tool_policy_json");
+            entity.Property(config => config.MaintenanceWindowJson).HasColumnName("maintenance_window_json").HasColumnType("jsonb");
+            entity.Property(config => config.McpToolPolicyJson).HasColumnName("mcp_tool_policy_json").HasColumnType("jsonb");
             entity.Property(config => config.AgentOnlineGraceSeconds).HasColumnName("agent_online_grace_seconds");
             entity.Property(config => config.Timezone).HasColumnName("timezone").HasMaxLength(100);
             entity.Property(config => config.Location).HasColumnName("location").HasMaxLength(500);

@@ -286,11 +286,14 @@ public class ServerConfiguration
     /// { enabled, daysOfWeek, startUtc, durationMinutes, rebootGraceSeconds }.
     /// Null/vazio = herda/usa default (desligado).
     /// </summary>
-    public string MaintenanceWindowJson { get; set; } = string.Empty;
+    // Nullable: coluna jsonb nullable no banco e NULL = "herdar do nivel superior".
+    // Ler NULL como string nao-nula causava InvalidCastException no Npgsql (crash
+    // do host no startup apos adicionar a coluna em instalacoes existentes).
+    public string? MaintenanceWindowJson { get; set; } = string.Empty;
 
     /// <summary>
     /// Política de tools MCP do chat do agent: JSON
     /// { mode: "all"|"allowlist", allow: [nomes] }. Null/vazio = herda/all.
     /// </summary>
-    public string McpToolPolicyJson { get; set; } = string.Empty;
+    public string? McpToolPolicyJson { get; set; } = string.Empty;
 }
