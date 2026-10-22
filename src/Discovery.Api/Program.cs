@@ -23,6 +23,7 @@ using Discovery.Infrastructure.Services.Remote;
 using Discovery.Infrastructure.Services.Remote.Audit;
 using Discovery.Infrastructure.Services.Remote.Recording;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.AspNetCore.HttpOverrides;
 using Scalar.AspNetCore;
 
@@ -95,7 +96,13 @@ builder.Services.AddDbContext<DiscoveryDbContext>(options =>
     {
         npgsqlOptions.EnableRetryOnFailure();
         npgsqlOptions.UseVector();
-    }));
+    })
+    // EF warning 10622 (RequiredNavigationWithQueryFilter): o Agent tem query filter
+    // de soft delete e é lado requerido das navegações AgentUpdateEvent, AiChatSession
+    // e RemoteSession. Isso é DELIBERADO — o histórico dessas entidades deve sobreviver
+    // à lixeira do agent (ver comentário em DiscoveryDbContext.CoreEntities.cs, Agent),
+    // portanto o aviso é suprimido explicitamente em vez de espelhar filtros.
+    .ConfigureWarnings(w => w.Ignore(CoreEventId.PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning)));
 
 // Auto-registered DI services (repositories + domain services)
 // Most services in Discovery follow a 1:1 interface-to-implementation pattern.

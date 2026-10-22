@@ -10,7 +10,7 @@ public interface IJwtService
     /// <summary>Gera um token temporário de MFA pending (3 min). Claim: mfa_pending=true.</summary>
     string GenerateMfaPendingToken(Guid userId);
 
-    /// <summary>Gera um token temporário de MFA setup (10 min). Claim: mfa_setup=true.</summary>
+    /// <summary>Gera um token temporário de MFA setup (30 min por padrão; configurável). Claim: mfa_setup=true.</summary>
     string GenerateMfaSetupToken(Guid userId);
 
     /// <summary>

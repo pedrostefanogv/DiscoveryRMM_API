@@ -37,7 +37,7 @@ public class JwtService : IJwtService
         _accessTokenMinutes = section.GetValue<int>("AccessTokenExpirationMinutes", 30);
         _refreshTokenDays = section.GetValue<int>("RefreshTokenExpirationDays", 7);
         _mfaTokenMinutes = section.GetValue<int>("MfaTokenExpirationMinutes", 3);
-        _mfaSetupTokenMinutes = section.GetValue<int>("MfaSetupTokenExpirationMinutes", 10);
+        _mfaSetupTokenMinutes = section.GetValue<int>("MfaSetupTokenExpirationMinutes", 30);
         _stepUpTokenMinutes = section.GetValue<int>("StepUpTokenExpirationMinutes", 5);
 
         var privateKeyPath = section.GetValue<string>("PrivateKeyPath");

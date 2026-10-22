@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Não lançado]
 
+### Fixed
+- 🔑 **recover-admin sincroniza e-mail placeholder**: ao resetar um usuário existente
+  usando um e-mail como `--login`, se o e-mail gravado ainda for o placeholder de
+  criação (`@local.discovery`), ele passa a ser substituído pelo e-mail informado.
+  Antes, o login pelo gmail continuava falhando como `unknown_user`
+  ("Credenciais inválidas") mesmo após o recovery.
+- ⏱️ **Token de setup do primeiro acesso**: validade padrão ampliada de 10 para 30
+  minutos (`MfaSetupTokenExpirationMinutes` no JwtService e `appsettings.json`),
+  evitando o erro "Sua sessão temporária expirou" durante o onboarding + cadastro de MFA.
+- 🧭 **Mensagem de login mais acionável (site)**: "Credenciais inválidas" agora vem com
+  dica de conferir login/e-mail cadastrado e colar a senha sem espaços extras.
+- 🔇 **Suprime o aviso EF 10622** (`PossibleIncorrectRequiredNavigationWithQueryFilterInteraction`)
+  no registro do `DiscoveryDbContext`: o filtro de soft delete do `Agent` com navegações
+  requeridas (`AgentUpdateEvent`, `AiChatSession`, `RemoteSession`) é deliberado — o
+  histórico deve sobreviver à lixeira. O aviso agora é ignorado explicitamente via
+  `ConfigureWarnings`, com comentário apontando a decisão.
+
 ### Added
 - 🏠 **Página inicial do agent (`agentHomeTab`)**: configuração herdável (servidor →
   cliente → site) que define qual aba o painel do agent abre ao iniciar (status, loja,

@@ -258,6 +258,16 @@ internal static class MaintenanceMode
         user.MfaRequired = true;
         user.MustChangePassword = true;
 
+        // Se o operador informou um e-mail como alvo e o e-mail gravado ainda é o
+        // placeholder de criação (@local.discovery), sincroniza. Sem isso, o reset
+        // por "usuario@gmail.com" atualiza a senha, mas o login pelo gmail continua
+        // falhando como unknown_user ("Credenciais inválidas") após o recovery.
+        var isEmailTarget = options.Login.Contains('@');
+        var emailIsPlaceholder = string.IsNullOrWhiteSpace(user.Email)
+            || user.Email.EndsWith("@local.discovery", StringComparison.OrdinalIgnoreCase);
+        if (isEmailTarget && emailIsPlaceholder)
+            user.Email = options.Login.Trim();
+
         if (options.ReactivateUser)
             user.IsActive = true;
 
