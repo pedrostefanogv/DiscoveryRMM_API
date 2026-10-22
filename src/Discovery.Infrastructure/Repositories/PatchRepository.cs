@@ -310,7 +310,9 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
         if (pendingReboot is not null)
         {
-            snapshot.PendingReboot = pendingReboot.Pending;
+            // Mesmo filtro do badge em /agents: só motivos de update acendem
+            // "Reinício pendente"; reasons completos ficam gravados.
+            snapshot.PendingReboot = pendingReboot.Pending && PatchPendingRebootReasons.HasPrimary(pendingReboot.Reasons);
             snapshot.PendingRebootReasons = PatchJson.SerializeStringArray(pendingReboot.Reasons?.ToArray());
             snapshot.RebootCheckedAt = pendingReboot.CheckedAt?.ToUniversalTime() ?? now;
         }
@@ -354,7 +356,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
         if (pendingReboot is not null)
         {
-            snapshot.PendingReboot = pendingReboot.Pending;
+            snapshot.PendingReboot = pendingReboot.Pending && PatchPendingRebootReasons.HasPrimary(pendingReboot.Reasons);
             snapshot.PendingRebootReasons = PatchJson.SerializeStringArray(pendingReboot.Reasons?.ToArray());
             snapshot.RebootCheckedAt = pendingReboot.CheckedAt?.ToUniversalTime() ?? now;
             await ApplyAgentPendingRebootAsync(agentId, pendingReboot, now, ct);
@@ -397,11 +399,14 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         };
         await ApplyAgentPendingRebootAsync(agentId, meta, DateTime.UtcNow, ct);
 
+        // Mesmo filtro do badge: só motivos de update acendem "Reinício pendente".
+        var badgePending = pending && PatchPendingRebootReasons.HasPrimary(reasons);
+
         var snapshot = await db.AgentWindowsUpdateSnapshots
             .FirstOrDefaultAsync(item => item.AgentId == agentId, ct);
         if (snapshot is not null)
         {
-            snapshot.PendingReboot = pending;
+            snapshot.PendingReboot = badgePending;
             snapshot.PendingRebootReasons = PatchJson.SerializeStringArray(reasons.ToArray());
             snapshot.RebootCheckedAt = checkedAt.Kind == DateTimeKind.Utc ? checkedAt : checkedAt.ToUniversalTime();
             snapshot.UpdatedAt = DateTime.UtcNow;
@@ -447,7 +452,10 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         if (agent is null)
             return;
 
-        agent.PendingReboot = meta.Pending;
+        // Badge em /agents: somente motivos principais (updates a instalar).
+        // Motivos residuais (file_rename/computer_rename) ficam gravados nos
+        // reasons para o painel de detalhes, mas não acendem o badge.
+        agent.PendingReboot = meta.Pending && PatchPendingRebootReasons.HasPrimary(meta.Reasons);
         agent.PendingRebootReasons = PatchJson.SerializeStringArray(meta.Reasons?.ToArray());
         agent.PendingRebootCheckedAt = meta.CheckedAt?.ToUniversalTime() ?? now;
         agent.UpdatedAt = now;

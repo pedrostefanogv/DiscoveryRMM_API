@@ -47,6 +47,32 @@ public class PatchPendingRebootMeta
 }
 
 /// <summary>
+/// Motivos de reinício pendente que acionam o badge "Reinício pendente" em
+/// /agents: apenas os ligados a atualizações a instalar (Windows Update, CBS
+/// e servicing). Motivos operacionais residuais — <c>file_rename</c> (arquivos
+/// em uso de qualquer instalador, ex.: OneDrive) e <c>computer_rename</c> —
+/// continuam gravados para o painel de detalhes, mas NÃO acendem o badge:
+/// empurrar o operador a reiniciar por causa deles é falso positivo.
+/// </summary>
+public static class PatchPendingRebootReasons
+{
+    public static readonly HashSet<string> Primary = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "windows_update", "cbs", "servicing"
+    };
+
+    /// <summary>
+    /// Verdadeiro quando ao menos um motivo é "principal" (update). Lista nula
+    /// ou vazia devolve VERDADEIRO de propósito: agente antigo ou motivo fora
+    /// da allowlist não pode APAGAR um pending=true que antes acendia o badge
+    /// (regressão silenciosa). Só motivo residual conhecido filtra.
+    /// </summary>
+    public static bool HasPrimary(IReadOnlyList<string>? reasons)
+        => reasons is null || reasons.Count == 0 ||
+           reasons.Any(reason => Primary.Contains(reason));
+}
+
+/// <summary>
 /// Sonda de estado do serviço Windows Update reportada pelo agente no bloco
 /// opcional <c>state</c> do envelope. Explica na UI os casos em que o scan WUA
 /// não devolve update nenhum (serviço desabilitado, sem rede, política WSUS).

@@ -331,4 +331,87 @@ public class PatchRepositoryInventoryTests
         Assert.That(snapshot.ScanStatus, Is.EqualTo("ok"));
         Assert.That(snapshot.PendingCount, Is.EqualTo(1));
     }
+
+    [Test]
+    public async Task PendingRebootBadgeOnlyForPrimaryReasons()
+    {
+        var (db, agentId) = Seed();
+        await SeedGoodInventoryAsync(db, agentId);
+        var repo = new PatchRepository(db);
+
+        // Motivo residual (arquivos em uso de qualquer instalador): NÃO acende badge.
+        await repo.UpdateAgentPendingRebootAsync(
+            agentId, pending: true, reasons: ["file_rename"], checkedAt: DateTime.UtcNow);
+
+        var agent = await db.Agents.SingleAsync(item => item.Id == agentId);
+        Assert.That(agent.PendingReboot, Is.False, "file_rename não acende o badge em /agents");
+        Assert.That(agent.PendingRebootReasons, Is.Not.Null, "motivo continua gravado para o detalhe");
+
+        var snapshot = await db.AgentWindowsUpdateSnapshots.SingleAsync(item => item.AgentId == agentId);
+        Assert.That(snapshot.PendingReboot, Is.False);
+        Assert.That(snapshot.PendingRebootReasons, Does.Contain("file_rename"));
+    }
+
+    [Test]
+    public async Task PendingRebootBadgeOnForWindowsUpdateReason()
+    {
+        var (db, agentId) = Seed();
+        await SeedGoodInventoryAsync(db, agentId);
+        var repo = new PatchRepository(db);
+
+        // Mixto: update + residual — o principal acende o badge e os reasons
+        // completos ficam gravados para o painel de detalhes.
+        await repo.UpdateAgentPendingRebootAsync(
+            agentId, pending: true, reasons: ["windows_update", "file_rename"], checkedAt: DateTime.UtcNow);
+
+        var agent = await db.Agents.SingleAsync(item => item.Id == agentId);
+        Assert.That(agent.PendingReboot, Is.True, "windows_update acende o badge");
+        Assert.That(agent.PendingRebootReasons, Does.Contain("file_rename"));
+
+        var snapshot = await db.AgentWindowsUpdateSnapshots.SingleAsync(item => item.AgentId == agentId);
+        Assert.That(snapshot.PendingReboot, Is.True);
+    }
+
+    [Test]
+    public async Task ScanPathAppliesSameBadgeFilter()
+    {
+        var (db, agentId) = Seed();
+        await SeedGoodInventoryAsync(db, agentId);
+        var repo = new PatchRepository(db);
+
+        // Scan com sonda de reinício só por file_rename: badge permanece apagado.
+        await repo.UpdateScanStatusAsync(agentId, Scan(), new PatchPendingRebootMeta
+        {
+            Pending = true,
+            Reasons = ["file_rename", "computer_rename"],
+            CheckedAt = DateTime.UtcNow
+        });
+
+        var agent = await db.Agents.SingleAsync(item => item.Id == agentId);
+        Assert.That(agent.PendingReboot, Is.False, "scan path usa o mesmo filtro do badge");
+        Assert.That(agent.PendingRebootReasons, Does.Contain("computer_rename"));
+    }
+
+    [Test]
+    public async Task PendingRebootWithoutReasonsStillLightsBadge()
+    {
+        var (db, agentId) = Seed();
+        await SeedGoodInventoryAsync(db, agentId);
+        var repo = new PatchRepository(db);
+
+        // Agente antigo / motivo fora da allowlist: pending=true sem reasons.
+        // Não pode apagar o badge — só motivo residual CONHECIDO filtra.
+        await repo.UpdateScanStatusAsync(agentId, Scan(), new PatchPendingRebootMeta
+        {
+            Pending = true,
+            Reasons = [],
+            CheckedAt = DateTime.UtcNow
+        });
+
+        var agent = await db.Agents.SingleAsync(item => item.Id == agentId);
+        Assert.That(agent.PendingReboot, Is.True, "pending sem motivo informado preserva o badge");
+
+        var snapshot = await db.AgentWindowsUpdateSnapshots.SingleAsync(item => item.AgentId == agentId);
+        Assert.That(snapshot.PendingReboot, Is.True);
+    }
 }
