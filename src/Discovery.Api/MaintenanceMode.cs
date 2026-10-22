@@ -208,6 +208,7 @@ internal static class MaintenanceMode
         if (!created)
         {
             user = UpdateExistingUser(user, password, passwordService, options);
+            await SyncPlaceholderEmailAsync(user, options, users);
             user = await users.UpdateAsync(user);
         }
 
@@ -232,9 +233,14 @@ internal static class MaintenanceMode
         {
             Id = Guid.NewGuid(),
             Login = login,
-            Email = string.Equals(login, "admin", StringComparison.OrdinalIgnoreCase)
-                ? "admin@local.discovery"
-                : $"{login}@local.discovery",
+            // Alvo informado como e-mail: grava o próprio e-mail (o usuário não foi
+            // encontrado por login OU e-mail, logo o endereço está livre no banco).
+            // Antes, "usuario@gmail.com" virava "usuario@gmail.com@local.discovery".
+            Email = login.Contains('@') && !string.Equals(login, "admin", StringComparison.OrdinalIgnoreCase)
+                ? login.Trim()
+                : string.Equals(login, "admin", StringComparison.OrdinalIgnoreCase)
+                    ? "admin@local.discovery"
+                    : $"{login}@local.discovery",
             FullName = "Administrador Recuperado",
             PasswordHash = hash,
             PasswordSalt = salt,
@@ -258,16 +264,6 @@ internal static class MaintenanceMode
         user.MfaRequired = true;
         user.MustChangePassword = true;
 
-        // Se o operador informou um e-mail como alvo e o e-mail gravado ainda é o
-        // placeholder de criação (@local.discovery), sincroniza. Sem isso, o reset
-        // por "usuario@gmail.com" atualiza a senha, mas o login pelo gmail continua
-        // falhando como unknown_user ("Credenciais inválidas") após o recovery.
-        var isEmailTarget = options.Login.Contains('@');
-        var emailIsPlaceholder = string.IsNullOrWhiteSpace(user.Email)
-            || user.Email.EndsWith("@local.discovery", StringComparison.OrdinalIgnoreCase);
-        if (isEmailTarget && emailIsPlaceholder)
-            user.Email = options.Login.Trim();
-
         if (options.ReactivateUser)
             user.IsActive = true;
 
@@ -278,10 +274,44 @@ internal static class MaintenanceMode
         return user;
     }
 
+    /// <summary>
+    /// Sincroniza o e-mail placeholder (@local.discovery) quando o operador informou
+    /// um e-mail como alvo. Sem isso, o reset por "usuario@gmail.com" atualiza a
+    /// senha, mas o login pelo gmail continua falhando como unknown_user
+    /// ("Credenciais inválidas") após o recovery. users.email tem índice único
+    /// (ix_users_email): se OUTRO usuário já possui o e-mail, o sync é pulado com
+    /// aviso em vez de crashar o recover-admin com DbUpdateException.
+    /// </summary>
+    private static async Task SyncPlaceholderEmailAsync(
+        User user, Options options, IUserRepository users)
+    {
+        if (!options.Login.Contains('@'))
+            return;
+
+        var targetEmail = options.Login.Trim();
+        var emailIsPlaceholder = string.IsNullOrWhiteSpace(user.Email)
+            || user.Email.EndsWith("@local.discovery", StringComparison.OrdinalIgnoreCase);
+        if (!emailIsPlaceholder || string.Equals(user.Email, targetEmail, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var owner = await users.GetByEmailAsync(targetEmail);
+        if (owner is not null && owner.Id != user.Id)
+        {
+            Console.WriteLine(
+                $"WARNING: e-mail '{targetEmail}' ja pertence ao usuario '{owner.Login}'; " +
+                "o e-mail deste usuario NAO foi alterado. Login pelo e-mail continuara " +
+                "resolvendo o outro usuario.");
+            return;
+        }
+
+        user.Email = targetEmail;
+    }
+
     private static void PrintResult(User user, Options options, bool created, string resolvedPassword)
     {
         Console.WriteLine("Admin recovery completed.");
         Console.WriteLine($"Login: {user.Login}");
+        Console.WriteLine($"Email: {user.Email}");
         Console.WriteLine($"User created: {(created ? "yes" : "no")}");
         Console.WriteLine($"MFA reset: {(options.ResetMfa ? "yes" : "no")}");
         Console.WriteLine("All active sessions for this user were revoked.");

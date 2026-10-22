@@ -23,6 +23,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requeridas (`AgentUpdateEvent`, `AiChatSession`, `RemoteSession`) é deliberado — o
   histórico deve sobreviver à lixeira. O aviso agora é ignorado explicitamente via
   `ConfigureWarnings`, com comentário apontando a decisão.
+- 🛡️ **recover-admin não crasha com e-mail em uso**: como `users.email` tem índice único
+  (`ix_users_email`), a sincronização do e-mail placeholder agora verifica antes se OUTRO
+  usuário já possui o endereço; em caso positivo, pula com WARNING em vez de falhar com
+  `DbUpdateException`.
+- 📧 **recover-admin cria usuário com e-mail correto**: bootstrap com alvo e-mail
+  (`--login usuario@gmail.com`) gravava `usuario@gmail.com@local.discovery`; agora grava
+  o próprio e-mail informado (livre por construção, pois o lookup login-ou-e-mail falhou).
+  A saída do recovery também exibe o e-mail efetivo do usuário.
+- 🧪 **Asserção MFA não expulsa mais o usuário por código errado (site)**: um 401 na
+  validação de OTP era sempre tratado como "token temporário não é mais válido",
+  reiniciando o login. Agora "OTP inválido." mantém o usuário na tela para tentar outro
+  código (`isRetryableMfaCodeError`); expiração do token pendente, desafio já utilizado
+  e estado inconsistente continuam reiniciando o fluxo.
+- ⏱️ **Token MFA temporário validado no cliente (site)**: os tokens pendente (3 min) e
+  de setup (30 min) ficam em sessionStorage; um reload da tela de MFA após o prazo usava
+  token morto e falhava com 401 logo no `begin`. Agora as telas de asserção e cadastro
+  checam `exp` do JWT antes de chamar a API (`isTemporaryTokenExpired`) e recomeçam o
+  login com mensagem clara.
+- 🚨 **CRÍTICO — asserção de MFA sempre rejeitada com 401**: o `UserAuthMiddleware`
+  validava o `jti` de QUALQUER JWT contra `user_sessions`, mas no token `mfa_pending`
+  o jti é o id do DESAFIO (uso único), não de sessão — `GetByIdAsync` falhava e toda
+  requisição `mfa/fido2/begin`, `mfa/fido2/complete` e `mfa/otp/complete` recebia
+  401 `session_revoked` antes do filtro `RequireMfaPending` rodar. A checagem de
+  sessão agora é pulada para tokens temporários (mfa_pending/mfa_setup/step_up).
 
 ### Added
 - 🏠 **Página inicial do agent (`agentHomeTab`)**: configuração herdável (servidor →

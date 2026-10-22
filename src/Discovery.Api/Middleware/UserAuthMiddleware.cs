@@ -103,7 +103,14 @@ public class UserAuthMiddleware
                         // token válido por até AccessTokenExpirationMinutes (60 min).
                         // jti só é SessionId em token de sessão completa (mfa_pending mapeia
                         // para MfaTokenId e mfa_setup/step_up não têm jti).
-                        if (Guid.TryParse(jti, out var sessionId))
+                        // BUGFIX: tokens temporários (mfa_pending) têm jti = id do DESAFIO,
+                        // não de sessão. Validar esse jti em user_sessions sempre falhava
+                        // (GetByIdAsync retorna null) e rejeitava TODA asserção de MFA com
+                        // 401 session_revoked antes do filtro RequireMfaPending rodar.
+                        var isTemporaryToken = context.Items["MfaPending"] is true
+                            || context.Items["MfaSetup"] is true
+                            || context.Items["StepUp"] is true;
+                        if (!isTemporaryToken && Guid.TryParse(jti, out var sessionId))
                         {
                             var session = await sessionRepo.GetByIdAsync(sessionId);
                             var tokenHash = Convert.ToBase64String(
