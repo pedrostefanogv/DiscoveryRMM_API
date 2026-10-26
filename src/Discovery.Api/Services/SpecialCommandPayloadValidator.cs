@@ -295,6 +295,21 @@ public sealed class SpecialCommandPayloadValidator
             }
         }
 
+        // runAs do terminal (opcional, aditivo): "user" (identidade do usuário
+        // da sessão de console — default do agent) ou "system" (identidade do
+        // agent). "inherit" é aceito por compatibilidade. O agent valida de
+        // novo (defesa em profundidade) e faz fallback com aviso no log.
+        if (payload.TryGetProperty("runAs", out var runAs) && runAs.ValueKind != JsonValueKind.Null)
+        {
+            if (runAs.ValueKind != JsonValueKind.String
+                || !TryReadString(runAs, out var runAsText)
+                || runAsText is not ("user" or "system" or "inherit"))
+            {
+                validationError = "field 'runAs' must be one of: user, system, inherit.";
+                return false;
+            }
+        }
+
         normalizedPayload = payload.GetRawText();
         return true;
     }
