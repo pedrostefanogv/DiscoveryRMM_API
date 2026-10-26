@@ -115,7 +115,20 @@ public class UserAuthMiddleware
                             var session = await sessionRepo.GetByIdAsync(sessionId);
                             var tokenHash = Convert.ToBase64String(
                                 SHA256.HashData(Encoding.UTF8.GetBytes(token)));
-                            if (session is null || !session.IsValid || session.AccessTokenHash != tokenHash)
+                            // Grace de rotação: quando o refresh do PRÓPRIO cliente rotacionou
+                            // a sessão (RevokeWithGracePeriodAsync), o access token antigo pode
+                            // ainda estar em voo (popup de acesso remoto, requests concorrentes).
+                            // Rejeitá-lo imediatamente causa a cascata 401 session_revoked
+                            // observada ao abrir o acesso remoto. Dentro do grace period o
+                            // access token permanece aceito; logout (RevokeAsync, sem grace)
+                            // e expiração continuam rejeitados imediatamente.
+                            var withinRotationGrace = session is not null
+                                && session.IsRevoked
+                                && session.IsWithinRefreshGracePeriod
+                                && session.ExpiresAt > DateTime.UtcNow;
+                            if (session is null
+                                || (!session.IsValid && !withinRotationGrace)
+                                || session.AccessTokenHash != tokenHash)
                             {
                                 _logger.LogWarning(
                                     "UserAuthMiddleware: sessão {SessionId} inválida/revogada ou access token obsoleto. Path={Path}",
