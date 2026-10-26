@@ -24,7 +24,7 @@ public sealed class PatchAutoInstallJob : IJob
 {
     public static readonly JobKey Key = new("patch-auto-install", "patches");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<PatchAutoInstallJob>();
@@ -142,7 +142,7 @@ public sealed class PatchMaintenanceJob : IJob
 {
     public static readonly JobKey Key = new("patch-maintenance", "patches");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<PatchMaintenanceJob>();

@@ -12,7 +12,7 @@ public sealed class AgentLabelingReconciliationJob : IJob
 {
     public static readonly JobKey Key = new("agent-labeling-reconciliation", "reconciliation");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<AgentLabelingReconciliationJob>();

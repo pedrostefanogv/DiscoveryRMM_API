@@ -21,7 +21,7 @@ public sealed class P2pMaintenanceJob : IJob
     private const int SeedPlanConfiguredPercent = 10;
     private const int SeedPlanMinSeeds = 2;
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<P2pMaintenanceJob>();

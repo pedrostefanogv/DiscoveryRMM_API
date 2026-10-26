@@ -54,7 +54,7 @@ public sealed class KnowledgeEmbeddingJob : IJob
     // ── Flag por ciclo: previne que AutoSync + GenerateBatch disparem 2 resets ──
     private static bool _resetPerformedThisCycle;
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         if (!await EmbeddingSemaphore.WaitAsync(TimeSpan.Zero))
         {

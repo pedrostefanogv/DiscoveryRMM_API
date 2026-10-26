@@ -23,7 +23,7 @@ public sealed class AiTicketAssignmentJob : IJob
 {
     public static readonly JobKey Key = new("ai-ticket-assignment", "tickets");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var config = context.GetScopedService<IConfiguration>();
@@ -60,7 +60,7 @@ public sealed class AiTicketAssignmentJob : IJob
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao processar a fila da triagem por IA.");
-            throw new JobExecutionException(ex, refireImmediately: false);
+            throw new JobExecutionException(ex) { RefireImmediately = false };
         }
     }
 }

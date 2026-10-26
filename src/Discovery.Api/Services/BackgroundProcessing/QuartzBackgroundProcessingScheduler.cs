@@ -20,7 +20,7 @@ public sealed class QuartzBackgroundProcessingScheduler(ISchedulerFactory schedu
             .WithIdentity(triggerKey)
             .StartAt(DateTimeOffset.UtcNow.AddSeconds(Math.Max(0, startupDelaySeconds)))
             .WithSimpleSchedule(schedule => schedule
-                .WithIntervalInSeconds(Math.Max(1, intervalSeconds))
+                .WithInterval(TimeSpan.FromSeconds(Math.Max(1, intervalSeconds)))
                 .RepeatForever())
             .WithDescription("Reprogramado a partir da configuração de processamento em segundo plano")
             .Build();
@@ -35,6 +35,6 @@ public sealed class QuartzBackgroundProcessingScheduler(ISchedulerFactory schedu
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
         var trigger = await scheduler.GetTrigger(new TriggerKey(jobName, jobGroup), ct);
-        return trigger?.GetNextFireTimeUtc();
+        return trigger?.NextFireTimeUtc;
     }
 }

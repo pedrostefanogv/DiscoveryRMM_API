@@ -18,7 +18,7 @@ public sealed class ReportRetentionJob : IJob
     private const int DefaultRetentionDays = 90;
     private static readonly int[] DefaultAllowedDays = [30, 60, 90];
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var optionsMonitor = context.GetScopedService<IOptionsMonitor<ReportingOptions>>();

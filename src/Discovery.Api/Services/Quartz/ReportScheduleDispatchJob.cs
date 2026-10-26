@@ -19,7 +19,7 @@ public sealed class ReportScheduleDispatchJob : IJob
     public static readonly JobKey Key = new("report-schedule-dispatch", "reports");
     private const int BatchSize = 50;
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<ReportScheduleDispatchJob>();

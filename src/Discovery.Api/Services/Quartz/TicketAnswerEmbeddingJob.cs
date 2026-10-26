@@ -29,7 +29,7 @@ public sealed class TicketAnswerEmbeddingJob : IJob
 {
     public static readonly JobKey Key = new("ticket-answer-embedding", "tickets");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var config = context.GetScopedService<IConfiguration>();
@@ -64,7 +64,7 @@ public sealed class TicketAnswerEmbeddingJob : IJob
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao processar embeddings das respostas do questionário.");
-            throw new JobExecutionException(ex, refireImmediately: false);
+            throw new JobExecutionException(ex) { RefireImmediately = false };
         }
     }
 }

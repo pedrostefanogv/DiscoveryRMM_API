@@ -33,7 +33,7 @@ public sealed class DataRetentionJob : IJob
 {
     public static readonly JobKey Key = new("data-retention", "maintenance");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<DataRetentionJob>();

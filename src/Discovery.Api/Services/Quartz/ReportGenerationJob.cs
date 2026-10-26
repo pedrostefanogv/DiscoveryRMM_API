@@ -13,7 +13,7 @@ public sealed class ReportGenerationJob : IJob
     public static readonly JobKey Key = new("report-generation", "reports");
     private const int BatchSize = 10;
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<ReportGenerationJob>();

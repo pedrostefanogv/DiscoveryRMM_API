@@ -13,7 +13,7 @@ public sealed class AlertSchedulerJob : IJob
 {
     public static readonly JobKey Key = new("alert-scheduler", "alerts");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<AlertSchedulerJob>();

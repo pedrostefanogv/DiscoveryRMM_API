@@ -11,10 +11,10 @@ namespace Discovery.Tests;
 /// </summary>
 public class JobsControllerJobKeyTests
 {
-    private static Func<JobKey, CancellationToken, Task<bool>> Existing(params string[] keys)
+    private static Func<JobKey, CancellationToken, ValueTask<bool>> Existing(params string[] keys)
     {
         var set = new HashSet<string>(keys, StringComparer.Ordinal);
-        return (key, _) => Task.FromResult(set.Contains($"{key.Group}.{key.Name}"));
+        return (key, _) => ValueTask.FromResult(set.Contains($"{key.Group}.{key.Name}"));
     }
 
     [Test]

@@ -20,7 +20,7 @@ public sealed class AiAssignmentLearningJob : IJob
 {
     public static readonly JobKey Key = new("ai-assignment-learning", "tickets");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var config = context.GetScopedService<IConfiguration>();
@@ -47,7 +47,7 @@ public sealed class AiAssignmentLearningJob : IJob
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha no ciclo de aprendizado da triagem por IA.");
-            throw new JobExecutionException(ex, refireImmediately: false);
+            throw new JobExecutionException(ex) { RefireImmediately = false };
         }
     }
 }

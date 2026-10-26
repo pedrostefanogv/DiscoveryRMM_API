@@ -13,7 +13,7 @@ public sealed class LogPurgeJob : IJob
 {
     public static readonly JobKey Key = new("log-purge", "maintenance");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var config = context.GetScopedService<IConfiguration>();

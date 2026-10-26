@@ -21,7 +21,7 @@ public sealed class TechnicianMetricsRefreshJob : IJob
 {
     public static readonly JobKey Key = new("technician-metrics-refresh", "tickets");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var config = context.GetScopedService<IConfiguration>();
@@ -57,7 +57,7 @@ public sealed class TechnicianMetricsRefreshJob : IJob
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao recalcular as métricas de atendentes.");
-            throw new JobExecutionException(ex, refireImmediately: false);
+            throw new JobExecutionException(ex) { RefireImmediately = false };
         }
     }
 }

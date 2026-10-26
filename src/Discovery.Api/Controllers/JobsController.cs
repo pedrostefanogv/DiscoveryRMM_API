@@ -3,7 +3,6 @@ using Discovery.Api.Services.Quartz;
 using Discovery.Core.Enums.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Quartz;
-using Quartz.Impl.Matchers;
 
 namespace Discovery.Api.Controllers;
 
@@ -29,13 +28,15 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     public async Task<IActionResult> GetAllJobs(CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var jobKeys = await scheduler.GetJobKeys(GroupMatcher<JobKey>.AnyGroup(), ct);
+        var jobPage = await scheduler.QueryJobs(new JobQuery { Take = 1000, IncludeTotalCount = true }, ct);
 
         var jobs = new List<object>();
-        foreach (var key in jobKeys)
+        foreach (var key in jobPage.Items.Select(h => h.Key))
         {
             var detail = await scheduler.GetJobDetail(key, ct);
-            var triggers = await scheduler.GetTriggersOfJob(key, ct);
+            var triggerPage = await scheduler.QueryTriggers(new TriggerQuery { Job = key, Take = 100 }, ct);
+            var triggerKeys = triggerPage.Items.Select(t => t.Key).ToList();
+            var triggers = triggerKeys.Count > 0 ? await scheduler.GetTriggers(triggerKeys, ct) : [];
 
             var triggerInfo = new List<object>();
             foreach (var trigger in triggers)
@@ -47,10 +48,10 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
                     triggerGroup = trigger.Key.Group,
                     state = state.ToString(),
                     description = trigger.Description,
-                    previousFireTimeUtc = trigger.GetPreviousFireTimeUtc()?.UtcDateTime,
-                    nextFireTimeUtc = trigger.GetNextFireTimeUtc()?.UtcDateTime,
+                    previousFireTimeUtc = trigger.PreviousFireTimeUtc?.UtcDateTime,
+                    nextFireTimeUtc = trigger.NextFireTimeUtc?.UtcDateTime,
                     finalFireTimeUtc = trigger.FinalFireTimeUtc?.UtcDateTime,
-                    mayFireAgain = trigger.GetMayFireAgain(),
+                    mayFireAgain = trigger.MayFireAgain,
                 });
             }
 
@@ -65,12 +66,14 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
             });
         }
 
+        SchedulerStatus schedulerStatus = await scheduler.GetStatus(ct);
+
         return Ok(new
         {
             schedulerName = scheduler.SchedulerName,
-            schedulerInstanceId = scheduler.SchedulerInstanceId,
-            isStarted = scheduler.IsStarted,
-            inStandbyMode = scheduler.InStandbyMode,
+            schedulerInstanceId = await scheduler.GetSchedulerInstanceId(ct),
+            isStarted = schedulerStatus is SchedulerStatus.Running or SchedulerStatus.ShuttingDown,
+            inStandbyMode = schedulerStatus == SchedulerStatus.Standby,
             jobCount = jobs.Count,
             jobs
         });
@@ -87,7 +90,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
         string jobGroup, string jobName, [FromQuery] bool force, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.CheckExists, ct);
+        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.Exists, ct);
 
         if (key is null)
             return NotFound(new { error = $"Job '{jobGroup}.{jobName}' not found." });
@@ -109,7 +112,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     public async Task<IActionResult> PauseJob(string jobGroup, string jobName, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.CheckExists, ct);
+        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.Exists, ct);
 
         if (key is null)
             return NotFound(new { error = $"Job '{jobGroup}.{jobName}' not found." });
@@ -127,7 +130,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     public async Task<IActionResult> ResumeJob(string jobGroup, string jobName, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.CheckExists, ct);
+        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.Exists, ct);
 
         if (key is null)
             return NotFound(new { error = $"Job '{jobGroup}.{jobName}' not found." });
@@ -173,7 +176,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     public async Task<IActionResult> GetJobDetail(string jobGroup, string jobName, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
-        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.CheckExists, ct);
+        var key = await ResolveJobKeyAsync(jobGroup, jobName, scheduler.Exists, ct);
 
         if (key is null)
             return NotFound(new { error = $"Job '{jobGroup}.{jobName}' not found." });
@@ -207,8 +210,8 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
                 name = t.Key.Name,
                 group = t.Key.Group,
                 description = t.Description,
-                previousFireTimeUtc = t.GetPreviousFireTimeUtc()?.UtcDateTime,
-                nextFireTimeUtc = t.GetNextFireTimeUtc()?.UtcDateTime,
+                previousFireTimeUtc = t.PreviousFireTimeUtc?.UtcDateTime,
+                nextFireTimeUtc = t.NextFireTimeUtc?.UtcDateTime,
             }),
             executionHistory = history
         });
@@ -231,7 +234,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     /// </summary>
     internal static async Task<JobKey?> ResolveJobKeyAsync(
         string jobGroup, string jobName,
-        Func<JobKey, CancellationToken, Task<bool>> exists,
+        Func<JobKey, CancellationToken, ValueTask<bool>> exists,
         CancellationToken ct)
     {
         var direct = new JobKey(jobName, jobGroup);

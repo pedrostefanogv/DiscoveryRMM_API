@@ -3,7 +3,6 @@ using Discovery.Api.Services.Quartz;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Quartz;
-using Quartz.Impl.Matchers;
 
 namespace Discovery.Tests;
 

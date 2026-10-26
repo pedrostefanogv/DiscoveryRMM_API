@@ -20,7 +20,7 @@ public sealed class TechnicianMetricsBackfillJob : IJob
 {
     public static readonly JobKey Key = new("technician-metrics-backfill", "tickets");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var config = context.GetScopedService<IConfiguration>();
@@ -48,7 +48,7 @@ public sealed class TechnicianMetricsBackfillJob : IJob
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha no backfill de snapshots de métricas.");
-            throw new JobExecutionException(ex, refireImmediately: false);
+            throw new JobExecutionException(ex) { RefireImmediately = false };
         }
     }
 }

@@ -39,7 +39,7 @@ public sealed class DatabaseMaintenanceJob : IJob
     /// <summary>Volume mínimo para uma tabela nunca vacuumada virar prioridade. Default: 1000.</summary>
     private const long NeverVacuumedMinLiveTuples = 1_000;
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<DatabaseMaintenanceJob>();

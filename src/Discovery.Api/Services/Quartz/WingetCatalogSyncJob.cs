@@ -15,7 +15,7 @@ public sealed class WingetCatalogSyncJob : IJob
 {
     public static readonly JobKey Key = new("winget-catalog-sync", "catalog");
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var config = context.GetScopedService<IConfiguration>();

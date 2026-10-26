@@ -19,7 +19,7 @@ public sealed class AiChatRetentionJob : IJob
     private const int RetentionDays = 180;
     private const int GracePeriodDays = 30;
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<AiChatRetentionJob>();

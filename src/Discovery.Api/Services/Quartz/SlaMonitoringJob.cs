@@ -23,7 +23,7 @@ public sealed class SlaMonitoringJob : IJob
     // Teto de tickets por execução: evita carregar a tabela inteira a cada 5 min.
     private const int MaxTicketsPerRun = 2000;
 
-    public async Task Execute(IJobExecutionContext context)
+    public async ValueTask Execute(IJobExecutionContext context, CancellationToken cancellationToken)
     {
         var scopeFactory = context.GetScopedService<IServiceScopeFactory>();
         var logger = context.GetLogger<SlaMonitoringJob>();

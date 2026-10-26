@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Quartz;
 
 namespace Discovery.Api.Services.Quartz;
@@ -10,20 +11,25 @@ public sealed class JobExecutionHistoryListener : IJobListener
 {
     public string Name => "Discovery-JobHistoryListener";
 
-    public Task JobToBeExecuted(IJobExecutionContext context, CancellationToken ct)
+    // Quartz 4 removeu context.Put/Get: armazenamos o início por FireInstanceId.
+    private static readonly ConcurrentDictionary<string, DateTime> StartedAtByFireInstance = new();
+
+    public ValueTask JobToBeExecuted(IJobExecutionContext context, CancellationToken ct)
     {
-        context.Put("startedAt", DateTime.UtcNow);
-        return Task.CompletedTask;
+        StartedAtByFireInstance[context.FireInstanceId] = DateTime.UtcNow;
+        return ValueTask.CompletedTask;
     }
 
-    public Task JobExecutionVetoed(IJobExecutionContext context, CancellationToken ct)
+    public ValueTask JobExecutionVetoed(IJobExecutionContext context, CancellationToken ct)
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public Task JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken ct)
+    public ValueTask JobWasExecuted(IJobExecutionContext context, JobExecutionException? jobException, CancellationToken ct)
     {
-        var startedAt = context.Get("startedAt") as DateTime? ?? context.FireTimeUtc.UtcDateTime;
+        var startedAt = StartedAtByFireInstance.TryRemove(context.FireInstanceId, out var s)
+            ? s
+            : context.FireTimeUtc.UtcDateTime;
         var completedAt = DateTime.UtcNow;
         var duration = completedAt - startedAt;
 
@@ -37,6 +43,6 @@ public sealed class JobExecutionHistoryListener : IJobListener
 
         JobExecutionHistoryStore.Record(context.JobDetail.Key, record);
 
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
