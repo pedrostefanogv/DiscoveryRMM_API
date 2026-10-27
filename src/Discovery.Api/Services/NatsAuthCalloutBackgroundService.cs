@@ -25,6 +25,11 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
     private readonly INatsAuthCalloutReloadSignal _reloadSignal;
     private readonly ILogger<NatsAuthCalloutBackgroundService> _logger;
 
+    // Limita a concorrencia do processamento de auth (flood de requests nao
+    // pode derrubar o banco): alto o bastante para nunca enfileirar viewers
+    // legitimos (a fila era o bug), baixo o bastante para proteger o banco.
+    private static readonly SemaphoreSlim AuthProcessingGate = new(16, 16);
+
     public NatsAuthCalloutBackgroundService(
         NatsConnection natsConnection,
         IConfiguration configuration,
@@ -112,6 +117,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
     private async Task ProcessAuthRequestAsync(NATS.Client.Core.NatsMsg<byte[]> msg, CancellationToken ct)
     {
+            await AuthProcessingGate.WaitAsync(ct);
             try
             {
                 await using var msgScope = _scopeFactory.CreateAsyncScope();
@@ -211,6 +217,10 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                         _logger.LogError(pubEx, "Failed to publish auth callout error response.");
                     }
                 }
+            }
+            finally
+            {
+                AuthProcessingGate.Release();
             }
     }
 
