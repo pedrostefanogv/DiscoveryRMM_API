@@ -49,7 +49,8 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         CancellationToken ct = default,
         bool consentRequired = false,
         DateTime? consentDeadlineAt = null,
-        string? consentPolicySource = null)
+        string? consentPolicySource = null,
+        Guid? id = null)
     {
         var activeSessions = (await _repo.GetActiveByAgentAsync(agentId, ct)).ToList();
         var activeCount = activeSessions.Count;
@@ -74,7 +75,7 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         var now = DateTime.UtcNow;
         var session = new RemoteSession
         {
-            Id = Guid.NewGuid(),
+            Id = id ?? Guid.NewGuid(),
             AgentId = agentId,
             UserId = userId,
             TenantId = tenantId,

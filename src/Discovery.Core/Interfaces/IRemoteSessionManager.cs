@@ -22,7 +22,8 @@ public interface IRemoteSessionManager
         CancellationToken ct = default,
         bool consentRequired = false,
         DateTime? consentDeadlineAt = null,
-        string? consentPolicySource = null);
+        string? consentPolicySource = null,
+        Guid? id = null);
 
     /// <summary>Renova o TTL da sessão.</summary>
     Task<RemoteSession> RenewSessionAsync(Guid sessionId, Guid userId, CancellationToken ct = default);

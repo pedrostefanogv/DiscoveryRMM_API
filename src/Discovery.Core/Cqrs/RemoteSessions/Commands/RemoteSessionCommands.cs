@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs.RemoteSessions.Queries;
 using Discovery.Core.Enums;
 
 namespace Discovery.Core.Cqrs.RemoteSessions.Commands;
@@ -118,7 +119,11 @@ public sealed record RemoteSessionResponseDto(
     string? ConsentOperator = null,
     // Janela adicional (s) em que o console deve continuar aguardando depois do
     // deadline: é a mesma em que a API ainda aceita a decisão tardia do agente.
-    int? ConsentDecisionGraceSeconds = null
+    int? ConsentDecisionGraceSeconds = null,
+    // Credenciais do viewer embutidas no start (aditivo, 2026-10-27): evita um
+    // RTT HTTP extra (start + /nats-credentials) no caminho crítico do terminal.
+    // Ausente quando a sessão exige consentimento pendente (screen).
+    SessionCredentialsDto? ViewerCredentials = null
 );
 
 /// <summary>Estado do consentimento de uma sessão de desktop.</summary>

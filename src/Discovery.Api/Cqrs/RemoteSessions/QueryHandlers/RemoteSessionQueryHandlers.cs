@@ -1,3 +1,4 @@
+using Discovery.Api.Services;
 using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.RemoteSessions.Commands;
@@ -58,64 +59,9 @@ public sealed class GetSessionCredentialsQueryHandler(
         if (string.IsNullOrWhiteSpace(session.NatsSubject))
             return Result<SessionCredentialsDto>.Failure(Error.Validation("NatsSubject", "Session has no NATS subject configured."));
 
-        // Permissões pub/sub scoped para o viewer da sessão remota.
-        // Alinhado com RemoteSessionJwtIssuer.BuildDefaultPermissions.
-        var natsSubject = session.NatsSubject;
-        var pubSubjects = new[]
-        {
-            $"{natsSubject}.input",
-            $"{natsSubject}.ack",
-            $"{natsSubject}.term.in",
-            // Terminal remoto: consulta de autocompletar (viewer -> agent).
-            // O viewer publica completion.req e recebe completion.res; sem a
-            // permissao de PUB o NATS rejeita com -ERR e derruba o WebSocket.
-            $"{natsSubject}.completion.req",
-            $"{natsSubject}.files.req",
-            $"{natsSubject}.proxy.req",
-            $"{natsSubject}.proc.req",
-            $"{natsSubject}.clipboard.req",
-            // Controle do viewer (keyframe ao voltar para a aba). Alinhado com
-            // RemoteSessionJwtIssuer.BuildDefaultPermissions — sem isso o NATS
-            // rejeita o PUB com -ERR e derruba o WebSocket do viewer.
-            $"{natsSubject}.control",
-        };
-        var subSubjects = new[]
-        {
-            $"{natsSubject}.frame",
-            $"{natsSubject}.frame.frag",
-            $"{natsSubject}.cursor",
-            $"{natsSubject}.cursor.img",
-            $"{natsSubject}.monitors",
-            $"{natsSubject}.event",
-            $"{natsSubject}.clipboard",
-            $"{natsSubject}.term.out",
-            $"{natsSubject}.term.ready",
-            // Terminal remoto: telemetria de 2s do agent (agent -> viewer).
-            $"{natsSubject}.stats",
-            // Terminal remoto: resposta de autocompletar (agent -> viewer).
-            $"{natsSubject}.completion.res",
-            $"{natsSubject}.files.ready",
-            $"{natsSubject}.files.resp",
-            $"{natsSubject}.files.progress",
-            $"{natsSubject}.proxy.resp",
-            $"{natsSubject}.proc.resp",
-            $"{natsSubject}.proc.ready",
-            // Liveness: o viewer precisa SUBSCREVER o .control para receber
-            // ping/pong/closed do agent. Sem isto o SUB e recusado pelo NATS e
-            // o viewer nunca ve o pong (sessao morre por viewer-timeout).
-            $"{natsSubject}.control",
-        };
-
-        // FIX (terminal/acesso remoto — item 1 do plano): TTL da credencial do
-        // viewer deve cobrir TODO o tempo restante da sessão + margem. Antes
-        // era fixo em 30 min (igual à duração padrão da sessão): sessão
-        // renovada, duração > 30 min ou fetch tardio das credenciais fazia o
-        // JWT expirar ANTES da sessão — o WebSocket do viewer caía no meio do
-        // uso (terminal/tela "morrem sozinhos" com -ERR authorization).
-        var remaining = session.ExpiresAt - DateTime.UtcNow;
-        var ttlMinutes = remaining > TimeSpan.Zero
-            ? (int)Math.Ceiling(remaining.Add(TimeSpan.FromMinutes(10)).TotalMinutes)
-            : 30;
+        // Fonte única de pub/sub e TTL (a resposta de start usa a MESMA lista).
+        var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(session.NatsSubject);
+        var ttlMinutes = RemoteSessionViewerPermissions.TtlMinutes(session.ExpiresAt);
 
         var (jwt, nkeySeed, _) = await credentialsService.IssueSessionCredentialsAsync(
             pubSubjects,

@@ -3,6 +3,7 @@ using Discovery.Api.Services;
 using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.RemoteSessions.Commands;
+using Discovery.Core.Cqrs.RemoteSessions.Queries;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
@@ -23,6 +24,7 @@ public sealed class StartRemoteSessionCommandHandler(
     IAgentCommandDispatcher dispatcher,
     SpecialCommandPayloadValidator payloadValidator,
     IConfigurationService configurationService,
+    INatsCredentialsService credentialsService,
     IRemoteConsentPolicyResolver consentResolver,
     IUserRepository userRepo,
     IClientRepository clientRepo,
@@ -115,24 +117,25 @@ public sealed class StartRemoteSessionCommandHandler(
             }
         }
 
+        // Subject canônico conforme contrato de comunicação v4.5.0:
+        // tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}
+        // Gerado ANTES do insert: o create já grava o subject real (antes havia
+        // um UPDATE de subject depois do create, no caminho crítico).
+        var sessionId = Guid.NewGuid();
+        var natsSubject = $"tenant.{tenantId:N}.site.{siteId:N}.agent.{cmd.AgentId:N}.remote.session.{sessionId:N}";
+
         RemoteSession session;
         try
         {
-            // Subject temporário — será substituído pelo canônico após obter sessionId
             session = await sessionManager.CreateSessionAsync(
                 cmd.AgentId, cmd.UserId, tenantId, siteId,
-                cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, "temp", cmd.Force, ct,
-                consentRequired, consentDeadline, policy.TopSource());
+                cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, natsSubject, cmd.Force, ct,
+                consentRequired, consentDeadline, policy.TopSource(), sessionId);
         }
         catch (InvalidOperationException ex)
         {
             return Result<RemoteSessionResponseDto>.Failure(Error.Validation("Session", ex.Message));
         }
-
-        // Subject canônico conforme contrato de comunicação v4.5.0:
-        // tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}
-        var natsSubject = $"tenant.{tenantId:N}.site.{siteId:N}.agent.{cmd.AgentId:N}.remote.session.{session.Id:N}";
-        session = await sessionManager.SetNatsSubjectAsync(session.Id, natsSubject, ct);
 
         logger.LogInformation(
             "[RemoteSession] Subject NATS canônico gerado: {Subject} para SessionId={SessionId}",
@@ -235,6 +238,36 @@ public sealed class StartRemoteSessionCommandHandler(
             serverConfig.NatsServerHostExternal,
             serverConfig.NatsUseWssExternal);
 
+        // Credenciais do viewer JÁ na resposta (sessões sem consentimento
+        // pendente): a UI conecta o NATS sem um segundo POST /nats-credentials.
+        // O JWT é o mesmo que aquele endpoint emitiria (mesmo escopo/TTL); não
+        // emitimos para screen com consentimento pendente, que precisa esperar
+        // a autorização do usuário local.
+        SessionCredentialsDto? viewerCredentials = null;
+        if (!consentRequired)
+        {
+            try
+            {
+                var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(natsSubject);
+                var (jwt, nkeySeed, expiresAt) = await credentialsService.IssueSessionCredentialsAsync(
+                    pubSubjects,
+                    subSubjects,
+                    RemoteSessionViewerPermissions.TtlMinutes(session.ExpiresAt),
+                    $"session:{session.Id:N}",
+                    ct);
+                viewerCredentials = new SessionCredentialsDto(jwt, nkeySeed, expiresAt, natsWsUrl);
+            }
+            catch (Exception ex)
+            {
+                // Falha ao embutir credenciais NÃO pode derrubar o start: a
+                // sessão já existe e o comando já foi despachado ao agent. O
+                // viewer cai no fallback POST /nats-credentials.
+                logger.LogWarning(ex,
+                    "Remote session {SessionId}: falha ao embutir viewerCredentials no start — o viewer usará /nats-credentials",
+                    session.Id);
+            }
+        }
+
         logger.LogInformation("Remote session {SessionId} started for agent {AgentId}", session.Id, cmd.AgentId);
 
         return Result<RemoteSessionResponseDto>.Success(new RemoteSessionResponseDto(
@@ -265,7 +298,8 @@ public sealed class StartRemoteSessionCommandHandler(
             ConsentOperator: consentRequired ? operatorName : null,
             ConsentDecisionGraceSeconds: consentRequired
                 ? Math.Max(0, options.Value.Consent.LateDecisionGraceSeconds)
-                : null));
+                : null,
+            ViewerCredentials: viewerCredentials));
     }
 
     private static bool AgentSupportsConsent(string? agentVersion, string minimumVersion)
