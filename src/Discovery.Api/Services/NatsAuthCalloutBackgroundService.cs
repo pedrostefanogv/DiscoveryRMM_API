@@ -127,6 +127,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                         _logger.LogWarning(
                             "xkey configurado mas header {Header} ausente na requisicao. Requisicao rejeitada.",
                             ServerXKeyHeader);
+                        await ReplyAuthErrorAsync(_natsConnection, msg.ReplyTo, "Auth request rejected (missing xkey header).", ct);
                         continue;
                     }
 
@@ -136,6 +137,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                         _logger.LogWarning(
                             "xkey configurado mas header {Header} esta vazio na requisicao. Requisicao rejeitada.",
                             ServerXKeyHeader);
+                        await ReplyAuthErrorAsync(_natsConnection, msg.ReplyTo, "Auth request rejected (empty xkey header).", ct);
                         continue;
                     }
 
@@ -175,8 +177,46 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to process NATS auth callout request.");
+                _logger.LogError(ex, "Failed to process NATS auth callout request. ReplyTo={ReplyTo}", msg.ReplyTo);
+                // SEM resposta aqui o NATS espera o auth_timeout e o cliente
+                // recebe o generico "Authentication Timeout" (incidente 2026-10-27).
+                // Responder SEMPRE com uma negacao explicita para o erro ficar
+                // visivel no cliente.
+                if (!string.IsNullOrWhiteSpace(msg.ReplyTo))
+                {
+                    try
+                    {
+                        await using var errScope = _scopeFactory.CreateAsyncScope();
+                        var errConfig = errScope.ServiceProvider.GetRequiredService<IConfigurationService>();
+                        var errorJwt = await BuildErrorResponseAsync(
+                            "Auth callout internal error.", null, null, errConfig, ct);
+                        await _natsConnection.PublishAsync(msg.ReplyTo, errorJwt, cancellationToken: ct);
+                    }
+                    catch (Exception pubEx)
+                    {
+                        _logger.LogError(pubEx, "Failed to publish auth callout error response.");
+                    }
+                }
             }
+        }
+    }
+
+    /// <summary>
+    /// Publica uma negacao de auth explicita para o servidor NATS nos
+    /// caminhos que antes apenas faziam continue/return sem responder.
+    /// </summary>
+    private static async Task ReplyAuthErrorAsync(
+        NatsConnection conn, string? replyTo, string reason, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(replyTo))
+            return;
+        try
+        {
+            await conn.PublishAsync(replyTo, Encoding.UTF8.GetBytes(reason), cancellationToken: ct);
+        }
+        catch
+        {
+            // o chamador loga o contexto
         }
     }
 
