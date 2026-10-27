@@ -97,8 +97,21 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         _logger.LogInformation("NATS auth callout listening on {Subject}.", subject);
 
         // Sempre subscreve como byte[] para suportar xkey (payload encriptado) e modo texto.
+        // CONCORRENTE (nao sequencial): cada autenticacao e processada em task
+        // propria. O processamento sequencial criava FILA quando multiplas
+        // conexoes autenticam juntas (liveness + terminal do mesmo viewer, cada
+        // uma com queries ao banco) — a segunda passava do authorization.timeout
+        // (30s) do servidor e recebia "Authentication Timeout" generico com o
+        // terminal em tela branca (incidente 2026-10-27).
         await foreach (var msg in _natsConnection.SubscribeAsync<byte[]>(subject, cancellationToken: ct))
         {
+            _ = ProcessAuthRequestAsync(msg, ct);
+        }
+    }
+
+
+    private async Task ProcessAuthRequestAsync(NATS.Client.Core.NatsMsg<byte[]> msg, CancellationToken ct)
+    {
             try
             {
                 await using var msgScope = _scopeFactory.CreateAsyncScope();
@@ -122,23 +135,24 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                     // xkey habilitado: decripta payload usando DH curve25519.
                     // Se o header xkey nao estiver presente ou vazio, rejeita a requisicao
                     // para evitar bypass de criptografia.
-                    if (msg.Headers == null || !msg.Headers.TryGetValue(ServerXKeyHeader, out var xkeyValue))
+                    Microsoft.Extensions.Primitives.StringValues xkeyValueRaw;
+                    if (msg.Headers == null || !msg.Headers.TryGetValue(ServerXKeyHeader, out xkeyValueRaw))
                     {
                         _logger.LogWarning(
                             "xkey configurado mas header {Header} ausente na requisicao. Requisicao rejeitada.",
                             ServerXKeyHeader);
                         await ReplyAuthErrorAsync(_natsConnection, msg.ReplyTo, "Auth request rejected (missing xkey header).", ct);
-                        continue;
+                        return;
                     }
 
-                    serverXKey = xkeyValue.ToString();
+                    serverXKey = xkeyValueRaw.ToString();
                     if (string.IsNullOrWhiteSpace(serverXKey))
                     {
                         _logger.LogWarning(
                             "xkey configurado mas header {Header} esta vazio na requisicao. Requisicao rejeitada.",
                             ServerXKeyHeader);
                         await ReplyAuthErrorAsync(_natsConnection, msg.ReplyTo, "Auth request rejected (empty xkey header).", ct);
-                        continue;
+                        return;
                     }
 
                     using var xKeyPair = KeyPair.FromSeed(xKeySeedPlain);
@@ -157,7 +171,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                     ct);
 
                 if (string.IsNullOrWhiteSpace(msg.ReplyTo))
-                    continue;
+                    return;
 
                 if (!string.IsNullOrWhiteSpace(xKeySeedPlain) && serverXKey != null)
                 {
@@ -173,7 +187,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             }
             catch (OperationCanceledException)
             {
-                throw; // propaga para o loop de reload
+                return; // task concorrente cancelada: encerra apenas esta autenticacao
             }
             catch (Exception ex)
             {
@@ -198,7 +212,6 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                     }
                 }
             }
-        }
     }
 
     /// <summary>
