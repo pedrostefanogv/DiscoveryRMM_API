@@ -35,7 +35,17 @@ public sealed record AgentWindowsUpdateDto(
     PatchUpdateStatus Status,
     int? InstallResultCode,
     string? InstallError,
-    string Source);
+    string Source)
+{
+    /// <summary>
+    /// Baixada pelo Windows Update mas ainda não instalada (persistida em
+    /// is_downloaded). Propriedade init — não muda o contrato posicional.
+    /// </summary>
+    public bool IsDownloaded { get; init; }
+
+    /// <summary>Marcada como obrigatória pela busca WUA (is_mandatory).</summary>
+    public bool IsMandatory { get; init; }
+}
 
 public sealed record AgentWindowsUpdatePageDto(
     IReadOnlyList<AgentWindowsUpdateDto> Items,
@@ -80,6 +90,32 @@ public sealed record AgentWindowsUpdateSnapshotDto(
     public string? StateHash { get; init; }
     /// <summary>Quando a assinatura da sonda mudou pela última vez.</summary>
     public DateTime? StateChangedAt { get; init; }
+    /// <summary>Código estável do erro do scan (ex.: service_disabled).</summary>
+    public string? ScanErrorCode { get; init; }
+    /// <summary>periodic | change | command | install (null = agente antigo).</summary>
+    public string? ScanTrigger { get; init; }
+    /// <summary>wua | qfe (null = agente antigo).</summary>
+    public string? ScanSource { get; init; }
+    /// <summary>Quantidade de resultados descartados pelo scan.</summary>
+    public int SkippedCount { get; init; }
+    /// <summary>Motivo → quantidade dos descartes: driver, no_identity, unreadable.</summary>
+    public IReadOnlyDictionary<string, int>? SkippedReasons { get; init; }
+    /// <summary>Servidor WSUS configurado na máquina (vazio = não configurado).</summary>
+    public string? WsusServer { get; init; }
+    /// <summary>AUOptions da política de Windows Update (0–5).</summary>
+    public int? AuOptions { get; init; }
+    /// <summary>NoAutoUpdate=1 (atualização automática desligada por política).</summary>
+    public bool? NoAutoUpdate { get; init; }
+    /// <summary>Deferral de quality/feature updates em dias.</summary>
+    public int? DeferralDays { get; init; }
+    /// <summary>Início da janela de horas ativas (0–23).</summary>
+    public int? ActiveHoursStart { get; init; }
+    /// <summary>Fim da janela de horas ativas (0–23).</summary>
+    public int? ActiveHoursEnd { get; init; }
+    /// <summary>KBs instaladas contadas no registro (CBS) pela sonda.</summary>
+    public int? QfeInstalledCount { get; init; }
+    /// <summary>Percentual do download em andamento (0–100).</summary>
+    public int? DownloadPercent { get; init; }
 
     /// <summary>
     /// Bloco <c>probe</c> consumido pela aba "Atualizações" do console.
@@ -95,7 +131,10 @@ public sealed record AgentWindowsUpdateSnapshotDto(
         get
         {
             if (ServiceState is null && WuOnline is null && PolicyManaged is null &&
-                LastInstallSuccessAt is null && DownloadInProgress is null)
+                LastInstallSuccessAt is null && DownloadInProgress is null &&
+                WsusServer is null && AuOptions is null && NoAutoUpdate is null &&
+                DeferralDays is null && ActiveHoursStart is null && ActiveHoursEnd is null &&
+                QfeInstalledCount is null && DownloadPercent is null)
             {
                 return null;
             }
@@ -103,13 +142,23 @@ public sealed record AgentWindowsUpdateSnapshotDto(
             return new AgentWindowsUpdateProbeDto(
                 ServiceState,
                 string.Equals(ServiceState, "disabled", StringComparison.OrdinalIgnoreCase),
-                null,
+                // WSUS quando há política OU servidor configurado (string vazia = não configurado).
+                PolicyManaged is true || !string.IsNullOrWhiteSpace(WsusServer),
                 PolicyManaged,
                 null,
                 LastInstallSuccessAt,
                 DownloadInProgress,
-                null,
-                StateChangedAt ?? LastCollectedAt);
+                DownloadPercent,
+                StateChangedAt ?? LastCollectedAt)
+            {
+                WsusServer = WsusServer,
+                AuOptions = AuOptions,
+                NoAutoUpdate = NoAutoUpdate,
+                DeferralDays = DeferralDays,
+                ActiveHoursStart = ActiveHoursStart,
+                ActiveHoursEnd = ActiveHoursEnd,
+                QfeInstalledCount = QfeInstalledCount
+            };
         }
     }
 }
@@ -124,7 +173,23 @@ public sealed record AgentWindowsUpdateProbeDto(
     DateTime? LastInstallSuccessAt,
     bool? DownloadInProgress,
     int? DownloadPercent,
-    DateTime? ProbedAt);
+    DateTime? ProbedAt)
+{
+    /// <summary>Nome do servidor WSUS configurado na máquina.</summary>
+    public string? WsusServer { get; init; }
+    /// <summary>AUOptions da política (0–5).</summary>
+    public int? AuOptions { get; init; }
+    /// <summary>NoAutoUpdate=1 (atualização automática desligada por política).</summary>
+    public bool? NoAutoUpdate { get; init; }
+    /// <summary>Deferral de quality/feature updates em dias.</summary>
+    public int? DeferralDays { get; init; }
+    /// <summary>Início da janela de horas ativas (0–23).</summary>
+    public int? ActiveHoursStart { get; init; }
+    /// <summary>Fim da janela de horas ativas (0–23).</summary>
+    public int? ActiveHoursEnd { get; init; }
+    /// <summary>KBs instaladas contadas no registro (CBS).</summary>
+    public int? QfeInstalledCount { get; init; }
+}
 
 public sealed record PatchInventoryGroupDto(
     string GroupKey,
@@ -294,7 +359,11 @@ public static class PatchDtoMapper
             update.Status,
             update.InstallResultCode,
             update.InstallError,
-            update.Source ?? "wua");
+            update.Source ?? "wua")
+        {
+            IsDownloaded = update.IsDownloaded,
+            IsMandatory = update.IsMandatory
+        };
     }
 
     public static AgentWindowsUpdateSnapshotDto ToSnapshotDto(
@@ -327,7 +396,22 @@ public static class PatchDtoMapper
             LastInstallSuccessAt = snapshot?.LastInstallSuccessAt,
             DownloadInProgress = snapshot?.DownloadInProgress,
             StateHash = snapshot?.StateHash,
-            StateChangedAt = snapshot?.StateChangedAt
+            StateChangedAt = snapshot?.StateChangedAt,
+            // Diagnóstico do scan (M239) — null/0 quando o agente é antigo.
+            ScanErrorCode = snapshot?.ScanErrorCode,
+            ScanTrigger = snapshot?.ScanTrigger,
+            ScanSource = snapshot?.ScanSource,
+            SkippedCount = snapshot?.SkippedCount ?? 0,
+            SkippedReasons = PatchJson.ParseIntDictionary(snapshot?.SkippedReasons),
+            // Sonda estendida (M239): WSUS/AU/deferral/horas ativas/CBS/download.
+            WsusServer = snapshot?.WsusServer,
+            AuOptions = snapshot?.AuOptions,
+            NoAutoUpdate = snapshot?.NoAutoUpdate,
+            DeferralDays = snapshot?.DeferralDays,
+            ActiveHoursStart = snapshot?.ActiveHoursStart,
+            ActiveHoursEnd = snapshot?.ActiveHoursEnd,
+            QfeInstalledCount = snapshot?.QfeInstalledCount,
+            DownloadPercent = snapshot?.DownloadPercent
         };
     }
 

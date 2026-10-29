@@ -4,6 +4,7 @@ using Discovery.Core.Cqrs.Patches;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Repositories;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Patches;
@@ -45,7 +46,9 @@ public sealed class GetAgentWindowsUpdatesPageQueryHandler(IPatchRepository repo
         CancellationToken ct)
     {
         var page = Math.Max(1, query.Page);
-        var pageSize = Math.Clamp(query.PageSize, 1, 2000);
+        // Mesmo teto do repositório (PatchRepository.MaxPageSize): a resposta
+        // devolve o pageSize efetivo, nunca um limite que o Take não aplica.
+        var pageSize = Math.Clamp(query.PageSize, 1, PatchRepository.MaxPageSize);
         var status = PatchScopeResolver.ParseStatus(query.Status);
 
         var result = await repo.GetAgentUpdatesPageAsync(

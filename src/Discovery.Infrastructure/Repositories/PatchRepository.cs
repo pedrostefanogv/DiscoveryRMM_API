@@ -17,7 +17,13 @@ namespace Discovery.Infrastructure.Repositories;
 /// </summary>
 public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 {
-    private const int MaxPageSize = 200;
+    /// <summary>
+    /// Teto da página do agente (offset). Única fonte da verdade: o handler de
+    /// query usa esta constante no clamp, para a página nunca pedir mais linhas
+    /// do que o repositório devolve.
+    /// </summary>
+    public const int MaxPageSize = 200;
+
     private const int MaxLimit = 500;
 
     // ── Agente ──────────────────────────────────────────────────────────────
@@ -33,14 +39,26 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         CancellationToken ct = default)
     {
         var safePage = Math.Max(1, page);
-        var safePageSize = Math.Clamp(pageSize, 1, 2000);
+        var safePageSize = Math.Clamp(pageSize, 1, MaxPageSize);
 
         var query = db.AgentWindowsUpdates
             .AsNoTracking()
             .Where(update => update.AgentId == agentId && update.IsPresent);
 
         if (status.HasValue)
-            query = query.Where(update => update.Status == status.Value);
+        {
+            // "pending"/"installed" são EIXOS de presença, não o status de
+            // aprovação: o resolver grava Status=Approved/Denied para
+            // pendentes aprovadas/recusadas, e filtrar Status==Pending sumia
+            // com elas da aba (contador 2, lista vazia). "approved"/"denied"
+            // continuam refinando por status.
+            query = status.Value switch
+            {
+                PatchUpdateStatus.Pending => query.Where(update => update.IsPending),
+                PatchUpdateStatus.Installed => query.Where(update => update.IsInstalled),
+                _ => query.Where(update => update.Status == status.Value)
+            };
+        }
 
         if (!string.IsNullOrWhiteSpace(severity))
         {
@@ -145,22 +163,39 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             return;
         }
 
+        // O bulk de "marcar ausente" e o SaveChanges das linhas precisam ser
+        // ATÔMICOS: se o SaveChanges falhar depois do UPDATE, o inventário
+        // inteiro ficaria is_present=false no banco (aba vazia) até o próximo
+        // scan. Em provider relacional, tudo roda numa transação.
+        var relational = db.Database.IsRelational();
+        await using var transaction = relational ? await db.Database.BeginTransactionAsync(ct) : null;
+
         // Marca tudo como ausente (será reativado o que veio no payload). Em
         // Postgres o bulk é 1 UPDATE; em providers sem ExecuteUpdate (InMemory dos
         // testes) cai para o update das próprias entidades — mesmo resultado.
-        var existing = await db.AgentWindowsUpdates
-            .Where(update => update.AgentId == agentId)
-            .ToListAsync(ct);
-
-        if (db.Database.IsRelational())
+        //
+        // ATENÇÃO: ExecuteUpdateAsync NÃO sincroniza o change tracker. Se as
+        // entidades fossem carregadas ANTES do bulk, elas continuariam com
+        // IsPresent=true na memória e o "row.IsPresent = true" do payload não
+        // viraria UPDATE — o inventário inteiro ficaria is_present=false no
+        // banco (aba vazia) a cada reenvio. Por isso o bulk roda primeiro e as
+        // entidades são carregadas depois (valores frescos), com o tracker
+        // limpo para não reaproveitar instâncias antigas.
+        if (relational)
         {
             await db.AgentWindowsUpdates
                 .Where(update => update.AgentId == agentId)
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(update => update.IsPresent, _ => false)
                     .SetProperty(update => update.UpdatedAt, _ => now), ct);
+            db.ChangeTracker.Clear();
         }
-        else
+
+        var existing = await db.AgentWindowsUpdates
+            .Where(update => update.AgentId == agentId)
+            .ToListAsync(ct);
+
+        if (!relational)
         {
             foreach (var update in existing)
             {
@@ -168,6 +203,11 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 update.UpdatedAt = now;
             }
         }
+
+        // Todas as linhas do agente depois desta rodada (existentes + novas),
+        // usadas para recalcular os contadores a partir do estado REAL das
+        // linhas — nunca do payload (que pode estar incompleto).
+        var rows = new List<AgentWindowsUpdate>(existing);
 
         var existingByKey = existing
             .GroupBy(update => update.UpdateKey, StringComparer.OrdinalIgnoreCase)
@@ -188,6 +228,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 };
                 db.AgentWindowsUpdates.Add(row);
                 existingByKey[entry.UpdateKey] = row;
+                rows.Add(row);
             }
 
             row.GroupKey = groupKey;
@@ -209,8 +250,11 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             row.SupportUrl = entry.SupportUrl;
             row.PublishedAt = entry.PublishedAt;
             row.LastDeployedAt = entry.LastDeployedAt;
+            // A data de instalação É corrigível: o agente pode ter enviado uma
+            // data errada por parsing de locale (QFE/WMI) e o próximo scan traz
+            // a correta. Sem data no payload, o valor conhecido é mantido.
             if (entry.InstalledAt.HasValue)
-                row.InstalledAt ??= entry.InstalledAt;
+                row.InstalledAt = entry.InstalledAt;
             row.ReportedAt = reportedAt;
             row.LastSeenAt = reportedAt;
             row.IsPresent = true;
@@ -253,6 +297,18 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         var preservePending = string.Equals(scan.Status, "partial", StringComparison.OrdinalIgnoreCase) &&
                               !validEntries.Any(entry => entry.IsPending);
 
+        // Descartado por falha de LEITURA não é prova de remoção: se o scan
+        // contou itens "unreadable" (ou um motivo que o servidor não conhece),
+        // a lista veio incompleta e marcar Superseded criaria pendência fantasma
+        // ao contrário — apagaria da aba uma atualização que ainda existe.
+        var scanIncomplete =
+            (scan.SkippedReasons is not null &&
+             scan.SkippedReasons.Any(reason =>
+                 reason.Value > 0 &&
+                 (!PatchScanSkipReasons.Known.Contains(reason.Key) ||
+                  string.Equals(reason.Key, PatchScanSkipReasons.Unreadable, StringComparison.OrdinalIgnoreCase)))) ||
+            (scan.SkippedCount is > 0 && scan.SkippedReasons is null);
+
         foreach (var row in existing)
         {
             if (row.IsPresent)
@@ -265,6 +321,10 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 continue;
             }
 
+            // Linha antiga do MESMO KB que veio como instalada via QFE: some da
+            // aba (não duplicar). Precisa vir ANTES do guard de leitura
+            // incompleta, senão a linha duplicada ressuscita quando o scan
+            // omite uma das duas.
             if (row.IsInstalled && installedGroupKeys.Contains(row.GroupKey))
             {
                 row.IsPresent = false;
@@ -272,12 +332,28 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 continue;
             }
 
+            // Leitura incompleta também não apaga INSTALADAS ausentes: a linha
+            // sumiu do payload porque não foi possível lê-la, não porque foi
+            // desinstalada.
+            if (row.IsInstalled && scanIncomplete)
+            {
+                row.IsPresent = true;
+                row.UpdatedAt = now;
+                continue;
+            }
+
             if (!row.IsPending)
                 continue;
 
-            if (preservePending)
+            if (preservePending || scanIncomplete)
             {
                 row.IsPresent = true;
+                // Linha que tinha sido marcada Superseded num scan anterior e
+                // reaparece (ainda pendente): volta a ser pendente de verdade —
+                // senão ela entra no contador e no "aprovar em lote" mas some da
+                // lista status=pending.
+                if (row.Status == PatchUpdateStatus.Superseded)
+                    row.Status = PatchUpdateStatus.Pending;
                 row.UpdatedAt = now;
                 continue;
             }
@@ -298,15 +374,16 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         snapshot.ScanStatus = string.IsNullOrWhiteSpace(scan.Status) ? "ok" : scan.Status;
         snapshot.ScanDurationMs = scan.DurationMs;
         snapshot.ScanError = scan.ErrorCode;
+        ApplyScanDiagnostics(snapshot, scan);
 
-        // Lista parcial (uma das fontes falhou): só aceita contadores que o
-        // agente realmente viu — contagem zero de uma fonte que falhou nunca
-        // sobrescreve o número conhecido (evita "0 pendentes" falso).
-        var isPartial = string.Equals(snapshot.ScanStatus, "partial", StringComparison.OrdinalIgnoreCase);
-        if (!isPartial || validEntries.Any(entry => entry.IsPending))
-            snapshot.PendingCount = validEntries.Count(entry => entry.IsPending);
-        if (!isPartial || validEntries.Any(entry => entry.IsInstalled))
-            snapshot.InstalledCount = validEntries.Count(entry => entry.IsInstalled);
+        // Contadores calculados a partir das LINHAS (preservadas + payload), não
+        // do payload: scan parcial ou incompleto ("unreadable") preserva linhas,
+        // e contar só o que veio deixaria a aba com número menor que a tabela
+        // (e vice-versa quando chegam itens novos junto de uma leitura falha).
+        snapshot.PendingCount = rows.Count(row =>
+            row.IsPresent && row.IsPending && row.Status != PatchUpdateStatus.Superseded);
+        snapshot.InstalledCount = rows.Count(row =>
+            row.IsPresent && row.IsInstalled && row.Status != PatchUpdateStatus.Superseded);
 
         if (pendingReboot is not null)
         {
@@ -323,6 +400,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             await ApplyAgentPendingRebootAsync(agentId, pendingReboot, now, ct);
 
         await db.SaveChangesAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
     }
 
     public Task UpdateScanStatusAsync(
@@ -351,6 +430,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         snapshot.ScanStatus = string.IsNullOrWhiteSpace(scan.Status) ? "error" : scan.Status;
         snapshot.ScanDurationMs = scan.DurationMs;
         snapshot.ScanError = scan.ErrorCode;
+        ApplyScanDiagnostics(snapshot, scan);
         ApplyServiceState(snapshot, serviceState, now);
         snapshot.UpdatedAt = now;
 
@@ -415,6 +495,30 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     }
 
     /// <summary>
+    /// Grava o diagnóstico do scan (bloco opcional "scan"). O código do erro
+    /// acompanha o status (limpa em scan ok, como <c>ScanError</c>); os demais
+    /// campos são preservados quando o agente não os envia.
+    /// </summary>
+    private static void ApplyScanDiagnostics(AgentWindowsUpdateSnapshot snapshot, PatchScanMeta scan)
+    {
+        snapshot.ScanErrorCode = scan.ErrorCode;
+        if (scan.SkippedCount.HasValue)
+        {
+            snapshot.SkippedCount = scan.SkippedCount.Value;
+            // Contador zerado LIMPA os motivos antigos: senão a aba mostraria
+            // "0 ignorados (drivers fora do escopo: 2)" para sempre.
+            if (scan.SkippedCount.Value == 0)
+                snapshot.SkippedReasons = null;
+        }
+        if (scan.SkippedReasons is not null)
+            snapshot.SkippedReasons = PatchJson.SerializeIntDictionary(scan.SkippedReasons);
+        if (!string.IsNullOrWhiteSpace(scan.Trigger))
+            snapshot.ScanTrigger = scan.Trigger;
+        if (!string.IsNullOrWhiteSpace(scan.Source))
+            snapshot.ScanSource = scan.Source;
+    }
+
+    /// <summary>
     /// Grava a sonda de estado (bloco opcional "state"). Campo ausente NUNCA
     /// zera o valor conhecido: o agente pode ser antigo ou omitir campos.
     /// </summary>
@@ -436,6 +540,47 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             snapshot.LastInstallSuccessAt = state.LastInstallSuccessAt.Value.ToUniversalTime();
         if (state.DownloadInProgress.HasValue)
             snapshot.DownloadInProgress = state.DownloadInProgress.Value;
+        // Campos de POLÍTICA (WSUS/AU/deferral/horas ativas) têm semântica
+        // diferente dos demais: "ausente" pode significar "a política saiu da
+        // máquina". O agente manda policyKnown=true quando conseguiu ler a
+        // política (inclusive "nenhuma configurada") — nesse caso atribuímos o
+        // valor, inclusive vazio/zero, para a UI parar de mostrar WSUS/deferral
+        // que não existem mais. Sem policyKnown (agente antigo/leitura falhou)
+        // vale a regra conservadora: nunca apagar o valor conhecido.
+        if (state.PolicyKnown == true)
+        {
+            snapshot.WsusServer = string.IsNullOrWhiteSpace(state.WsusServer) ? null : state.WsusServer;
+            snapshot.AuOptions = state.AuOptions is > 0 ? state.AuOptions : null;
+            snapshot.NoAutoUpdate = state.NoAutoUpdate ?? false;
+            snapshot.DeferralDays = state.DeferralDays is > 0 ? state.DeferralDays : null;
+            snapshot.ActiveHoursStart = state.ActiveHoursStart;
+            snapshot.ActiveHoursEnd = state.ActiveHoursEnd;
+        }
+        else
+        {
+            // wsusServer vazio ("não configurado") nunca apaga um servidor conhecido.
+            if (!string.IsNullOrWhiteSpace(state.WsusServer))
+                snapshot.WsusServer = state.WsusServer;
+            if (state.AuOptions.HasValue)
+                snapshot.AuOptions = state.AuOptions.Value;
+            if (state.NoAutoUpdate.HasValue)
+                snapshot.NoAutoUpdate = state.NoAutoUpdate.Value;
+            if (state.DeferralDays.HasValue)
+                snapshot.DeferralDays = state.DeferralDays.Value;
+            if (state.ActiveHoursStart.HasValue)
+                snapshot.ActiveHoursStart = state.ActiveHoursStart.Value;
+            if (state.ActiveHoursEnd.HasValue)
+                snapshot.ActiveHoursEnd = state.ActiveHoursEnd.Value;
+        }
+        if (state.QfeInstalledCount.HasValue)
+            snapshot.QfeInstalledCount = state.QfeInstalledCount.Value;
+        // Percentual só existe enquanto há download: quando a sonda diz que o
+        // download terminou, o valor antigo é limpo (senão a UI mostraria
+        // "42%" de um download que já acabou).
+        if (state.DownloadInProgress == false)
+            snapshot.DownloadPercent = null;
+        else if (state.DownloadPercent.HasValue)
+            snapshot.DownloadPercent = state.DownloadPercent.Value;
         if (!string.IsNullOrWhiteSpace(state.StateHash))
             snapshot.StateHash = state.StateHash;
 

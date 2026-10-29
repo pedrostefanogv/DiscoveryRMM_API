@@ -21,10 +21,30 @@ public static class WindowsUpdateInventoryParser
     private const int MaxSeverity = 40;
     private const int MaxSupportUrl = 1000;
     private const int MaxSource = 20;
+    private const int MaxWsusServer = 500;
+    private const int MaxCount = 100_000;
 
     private static readonly HashSet<string> ScanStatuses = new(StringComparer.OrdinalIgnoreCase)
     {
         "ok", "error", "timeout", "unsupported", "partial"
+    };
+
+    /// <summary>Disparos de scan aceitos no bloco "scan".</summary>
+    private static readonly HashSet<string> ScanTriggers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "periodic", "change", "command", "install"
+    };
+
+    /// <summary>Origens do scan aceitas no bloco "scan".</summary>
+    private static readonly HashSet<string> ScanSources = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "wua", "qfe"
+    };
+
+    /// <summary>Motivos de descarte aceitos em "skippedReasons".</summary>
+    private static readonly HashSet<string> SkippedReasonKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "driver", "no_identity", "unreadable"
     };
 
     /// <summary>Estados do serviço wuauserv aceitos no bloco "state".</summary>
@@ -86,7 +106,52 @@ public static class WindowsUpdateInventoryParser
 
         var startedAt = GetString(root, "startedAt");
         meta.StartedAt = ParseDate(startedAt);
+
+        // Diagnóstico opcional: ausente em agentes antigos (null = preserva o
+        // valor conhecido no snapshot).
+        meta.SkippedCount = GetNullableInt(root, "skippedCount", 0, MaxCount);
+        meta.SkippedReasons = ParseSkippedReasons(root);
+
+        var trigger = GetString(root, "trigger");
+        if (!string.IsNullOrWhiteSpace(trigger) && ScanTriggers.Contains(trigger.Trim()))
+            meta.Trigger = trigger.Trim().ToLowerInvariant();
+
+        var source = GetString(root, "source");
+        if (!string.IsNullOrWhiteSpace(source) && ScanSources.Contains(source.Trim()))
+            meta.Source = Truncate(source.Trim().ToLowerInvariant(), MaxSource);
+
         return meta;
+    }
+
+    /// <summary>
+    /// Mapa motivo → quantidade do bloco "scan". Só chaves conhecidas
+    /// (driver, no_identity, unreadable), no máximo 10, valores 0..100000.
+    /// Retorna null quando o agente não manda o objeto (compatibilidade).
+    /// </summary>
+    private static IReadOnlyDictionary<string, int>? ParseSkippedReasons(JsonElement root)
+    {
+        if (!root.TryGetProperty("skippedReasons", out var reasonsElement) ||
+            reasonsElement.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var reasons = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var property in reasonsElement.EnumerateObject().Take(10))
+        {
+            var key = property.Name.Trim().ToLowerInvariant();
+            if (!SkippedReasonKeys.Contains(key) || reasons.ContainsKey(key))
+                continue;
+            if (property.Value.ValueKind != JsonValueKind.Number ||
+                !property.Value.TryGetInt32(out var value) ||
+                value is <= 0 or > MaxCount)
+            {
+                continue;
+            }
+            reasons[key] = value;
+        }
+
+        return reasons.Count == 0 ? null : reasons;
     }
 
     public static PatchPendingRebootMeta? ParsePendingReboot(object? pendingReboot)
@@ -165,6 +230,19 @@ public static class WindowsUpdateInventoryParser
                 ?? GetString(root, "lastInstallSuccessAt")
                 ?? GetString(root, "lastSuccessTime")),
             DownloadInProgress = GetNullableBool(root, "downloadInProgress") ?? GetNullableBool(root, "isDownloading"),
+            // wsusServer vazio significa "não configurado" e NUNCA sobrescreve
+            // um servidor conhecido (o parser devolve null e o repositório ignora).
+            WsusServer = string.IsNullOrWhiteSpace(GetString(root, "wsusServer"))
+                ? null
+                : Truncate(GetString(root, "wsusServer"), MaxWsusServer),
+            AuOptions = GetNullableInt(root, "auOptions", 0, 5),
+            NoAutoUpdate = GetNullableBool(root, "noAutoUpdate"),
+            DeferralDays = GetNullableInt(root, "deferralDays", 0, 365),
+            ActiveHoursStart = GetNullableInt(root, "activeHoursStart", 0, 23),
+            ActiveHoursEnd = GetNullableInt(root, "activeHoursEnd", 0, 23),
+            QfeInstalledCount = GetNullableInt(root, "qfeInstalledCount", 0, MaxCount),
+            DownloadPercent = GetNullableInt(root, "downloadPercent", 0, 100),
+            PolicyKnown = GetNullableBool(root, "policyKnown"),
             StateHash = Truncate(GetString(root, "signature") ?? GetString(root, "hash") ?? GetString(root, "stateHash"), 80),
             StateChangedAt = ParseDate(GetString(root, "changedAt") ?? GetString(root, "stateChangedAt"))
         };
@@ -332,6 +410,15 @@ public static class WindowsUpdateInventoryParser
             JsonValueKind.String => bool.TryParse(element.GetString(), out var parsed) && parsed,
             _ => false
         };
+    }
+
+    private static int? GetNullableInt(JsonElement item, string property, int min, int max)
+    {
+        if (!item.TryGetProperty(property, out var element))
+            return null;
+        if (element.ValueKind != JsonValueKind.Number || !element.TryGetInt32(out var value))
+            return null;
+        return value >= min && value <= max ? value : null;
     }
 
     private static bool? GetNullableBool(JsonElement item, string property)

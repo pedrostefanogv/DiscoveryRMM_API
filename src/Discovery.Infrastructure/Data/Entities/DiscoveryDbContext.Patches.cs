@@ -87,6 +87,12 @@ public partial class DiscoveryDbContext
             entity.Property(snapshot => snapshot.PendingReboot).HasColumnName("pending_reboot");
             entity.Property(snapshot => snapshot.PendingRebootReasons).HasColumnName("pending_reboot_reasons").HasColumnType("jsonb");
             entity.Property(snapshot => snapshot.RebootCheckedAt).HasColumnName("reboot_checked_at").HasColumnType("timestamptz");
+            // Diagnóstico do scan (bloco opcional "scan") — M239.
+            entity.Property(snapshot => snapshot.ScanErrorCode).HasColumnName("scan_error_code").HasColumnType("text");
+            entity.Property(snapshot => snapshot.ScanTrigger).HasColumnName("scan_trigger").HasMaxLength(20);
+            entity.Property(snapshot => snapshot.ScanSource).HasColumnName("scan_source").HasMaxLength(20);
+            entity.Property(snapshot => snapshot.SkippedCount).HasColumnName("skipped_count");
+            entity.Property(snapshot => snapshot.SkippedReasons).HasColumnName("skipped_reasons").HasColumnType("jsonb");
             // Sonda de estado (bloco opcional "state" do envelope) — M238.
             entity.Property(snapshot => snapshot.ServiceState).HasColumnName("service_state").HasMaxLength(20);
             entity.Property(snapshot => snapshot.WuOnline).HasColumnName("wu_online");
@@ -95,6 +101,15 @@ public partial class DiscoveryDbContext
             entity.Property(snapshot => snapshot.DownloadInProgress).HasColumnName("download_in_progress");
             entity.Property(snapshot => snapshot.StateHash).HasColumnName("state_hash").HasMaxLength(80);
             entity.Property(snapshot => snapshot.StateChangedAt).HasColumnName("state_changed_at").HasColumnType("timestamptz");
+            // Sonda estendida (wsus/auOptions/deferral/active hours/qfe/download) — M239.
+            entity.Property(snapshot => snapshot.WsusServer).HasColumnName("wsus_server").HasMaxLength(500);
+            entity.Property(snapshot => snapshot.AuOptions).HasColumnName("au_options");
+            entity.Property(snapshot => snapshot.NoAutoUpdate).HasColumnName("no_auto_update");
+            entity.Property(snapshot => snapshot.DeferralDays).HasColumnName("deferral_days");
+            entity.Property(snapshot => snapshot.ActiveHoursStart).HasColumnName("active_hours_start");
+            entity.Property(snapshot => snapshot.ActiveHoursEnd).HasColumnName("active_hours_end");
+            entity.Property(snapshot => snapshot.QfeInstalledCount).HasColumnName("qfe_installed_count");
+            entity.Property(snapshot => snapshot.DownloadPercent).HasColumnName("download_percent");
             entity.Property(snapshot => snapshot.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 
             entity.HasOne<Agent>()

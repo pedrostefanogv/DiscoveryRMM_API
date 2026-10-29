@@ -142,7 +142,89 @@ public class WindowsUpdateSnapshotDtoTests
 
         Assert.That(meta, Is.Not.Null);
         Assert.That(meta!.ServiceState, Is.EqualTo("disabled"));
+        Assert.That(meta.WuOnline, Is.False);
+        Assert.That(meta.PolicyManaged, Is.True);
         Assert.That(meta.IsEmpty, Is.False);
-        Assert.That(PatchUpdateStatus.Installed, Is.Not.EqualTo(PatchUpdateStatus.Failed));
+    }
+
+    [Test]
+    public void ScanDiagnosticsAreExposedOnDto()
+    {
+        var snapshot = Snapshot();
+        snapshot.ScanErrorCode = "service_disabled";
+        snapshot.ScanTrigger = "change";
+        snapshot.ScanSource = "wua";
+        snapshot.SkippedCount = 3;
+        snapshot.SkippedReasons = "{\"driver\":2,\"no_identity\":1}";
+
+        var dto = PatchDtoMapper.ToSnapshotDto(snapshot.AgentId, snapshot, 2, 4, 0, 1);
+
+        Assert.That(dto.ScanErrorCode, Is.EqualTo("service_disabled"));
+        Assert.That(dto.ScanTrigger, Is.EqualTo("change"));
+        Assert.That(dto.ScanSource, Is.EqualTo("wua"));
+        Assert.That(dto.SkippedCount, Is.EqualTo(3));
+        Assert.That(dto.SkippedReasons, Is.Not.Null);
+        Assert.That(dto.SkippedReasons!["driver"], Is.EqualTo(2));
+        Assert.That(dto.SkippedReasons["no_identity"], Is.EqualTo(1));
+    }
+
+    [Test]
+    public void LegacySnapshotWithoutDiagnosticsMapsToEmptyValues()
+    {
+        var dto = PatchDtoMapper.ToSnapshotDto(Guid.NewGuid(), Snapshot(), 2, 4, 0, 1);
+
+        Assert.That(dto.ScanErrorCode, Is.Null);
+        Assert.That(dto.ScanTrigger, Is.Null);
+        Assert.That(dto.ScanSource, Is.Null);
+        Assert.That(dto.SkippedCount, Is.EqualTo(0));
+        Assert.That(dto.SkippedReasons, Is.Null);
+    }
+
+    [Test]
+    public void ExtendedProbeIsExposedWithWsusAndDownloadPercent()
+    {
+        var snapshot = Snapshot();
+        snapshot.ServiceState = "running";
+        snapshot.WsusServer = "http://wsus.empresa.local:8530";
+        snapshot.AuOptions = 4;
+        snapshot.NoAutoUpdate = false;
+        snapshot.DeferralDays = 7;
+        snapshot.ActiveHoursStart = 8;
+        snapshot.ActiveHoursEnd = 18;
+        snapshot.QfeInstalledCount = 42;
+        snapshot.DownloadPercent = 42;
+        snapshot.DownloadInProgress = true;
+
+        var dto = PatchDtoMapper.ToSnapshotDto(snapshot.AgentId, snapshot, 2, 4, 0, 1);
+
+        Assert.That(dto.WsusServer, Is.EqualTo("http://wsus.empresa.local:8530"));
+        Assert.That(dto.AuOptions, Is.EqualTo(4));
+        Assert.That(dto.DeferralDays, Is.EqualTo(7));
+        Assert.That(dto.DownloadPercent, Is.EqualTo(42));
+
+        var probe = dto.Probe;
+        Assert.That(probe, Is.Not.Null);
+        Assert.That(probe!.DownloadPercent, Is.EqualTo(42));
+        Assert.That(probe.Wsus, Is.True, "servidor WSUS configurado liga o flag de WSUS");
+        Assert.That(probe.WsusServer, Is.EqualTo("http://wsus.empresa.local:8530"));
+        Assert.That(probe.AuOptions, Is.EqualTo(4));
+        Assert.That(probe.DeferralDays, Is.EqualTo(7));
+        Assert.That(probe.ActiveHoursStart, Is.EqualTo(8));
+        Assert.That(probe.ActiveHoursEnd, Is.EqualTo(18));
+        Assert.That(probe.QfeInstalledCount, Is.EqualTo(42));
+    }
+
+    [Test]
+    public void ProbeExistsWithoutServiceStateWhenOnlyNewFieldsArrive()
+    {
+        var snapshot = Snapshot();
+        snapshot.DownloadPercent = 12;
+
+        var dto = PatchDtoMapper.ToSnapshotDto(snapshot.AgentId, snapshot, 2, 4, 0, 1);
+
+        Assert.That(dto.Probe, Is.Not.Null, "só o percentual já justifica o bloco probe");
+        Assert.That(dto.Probe!.DownloadPercent, Is.EqualTo(12));
+        Assert.That(dto.Probe.Wsus, Is.False);
     }
 }
+

@@ -15,6 +15,21 @@ public class AgentWindowsUpdateSnapshot
     public string? PendingRebootReasons { get; set; }
     public DateTime? RebootCheckedAt { get; set; }
 
+    // ── Diagnóstico do scan (M239) ──────────────────────────────────────────
+    // Campos do bloco "scan" que antes morriam no parser: código estável do
+    // erro, disparo/origem e o que o scan descartou. Ausente = preserva.
+
+    /// <summary>Código estável do erro (ex.: service_disabled) — distinto de ScanError.</summary>
+    public string? ScanErrorCode { get; set; }
+    /// <summary>periodic | change | command | install.</summary>
+    public string? ScanTrigger { get; set; }
+    /// <summary>wua | qfe.</summary>
+    public string? ScanSource { get; set; }
+    /// <summary>Resultados descartados pelo scan (drivers, sem identidade, ilegíveis).</summary>
+    public int SkippedCount { get; set; }
+    /// <summary>Motivo → quantidade em JSONB: {"driver":2,"no_identity":1}.</summary>
+    public string? SkippedReasons { get; set; }
+
     // ── Sonda de estado do serviço Windows Update (bloco opcional "state") ──
     // Colunas próprias (migration M238) e não um blob JSON: o suporte precisa
     // filtrar por estado de serviço e a UI lê campos tipados.
@@ -33,6 +48,22 @@ public class AgentWindowsUpdateSnapshot
     public string? StateHash { get; set; }
     /// <summary>Quando a assinatura da sonda mudou pela última vez.</summary>
     public DateTime? StateChangedAt { get; set; }
+    /// <summary>Servidor WSUS configurado na máquina (até 500 chars).</summary>
+    public string? WsusServer { get; set; }
+    /// <summary>AUOptions da política de Windows Update (0–5).</summary>
+    public int? AuOptions { get; set; }
+    /// <summary>NoAutoUpdate=1: atualização automática desligada por política.</summary>
+    public bool? NoAutoUpdate { get; set; }
+    /// <summary>Deferral de quality/feature updates em dias (0–365).</summary>
+    public int? DeferralDays { get; set; }
+    /// <summary>Início da janela de horas ativas (0–23).</summary>
+    public int? ActiveHoursStart { get; set; }
+    /// <summary>Fim da janela de horas ativas (0–23).</summary>
+    public int? ActiveHoursEnd { get; set; }
+    /// <summary>KBs instaladas contadas no registro (CBS) pela sonda.</summary>
+    public int? QfeInstalledCount { get; set; }
+    /// <summary>Percentual do download em andamento (0–100).</summary>
+    public int? DownloadPercent { get; set; }
 
     public DateTime? UpdatedAt { get; set; }
 }

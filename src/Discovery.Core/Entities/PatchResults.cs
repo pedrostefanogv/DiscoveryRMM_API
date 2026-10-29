@@ -29,6 +29,23 @@ public class AgentWindowsUpdateEntry
     public string? Raw { get; set; }
 }
 
+/// <summary>
+/// Motivos de descarte de um update no scan (contrato estável com o agente).
+/// "unreadable" é o único que indica leitura incompleta: a lista pode não
+/// representar a remoção de um item, então ele nunca vira "Superseded".
+/// </summary>
+public static class PatchScanSkipReasons
+{
+    public const string Driver = "driver";
+    public const string NoIdentity = "no_identity";
+    public const string Unreadable = "unreadable";
+
+    public static readonly HashSet<string> Known = new(StringComparer.OrdinalIgnoreCase)
+    {
+        Driver, NoIdentity, Unreadable
+    };
+}
+
 /// <summary>Metadados do scan reportados pelo agente.</summary>
 public class PatchScanMeta
 {
@@ -36,6 +53,19 @@ public class PatchScanMeta
     public int? DurationMs { get; set; }
     public string? ErrorCode { get; set; }
     public DateTime? StartedAt { get; set; }
+
+    // ── Diagnóstico do scan (bloco opcional) ────────────────────────────────
+    // Campos ausentes em agentes antigos: null = não informado, e o valor
+    // conhecido no snapshot é preservado (nunca zerado por omissão).
+
+    /// <summary>Resultados descartados pelo scan (drivers, sem identidade, ilegíveis).</summary>
+    public int? SkippedCount { get; set; }
+    /// <summary>Motivo → quantidade: driver, no_identity, unreadable.</summary>
+    public IReadOnlyDictionary<string, int>? SkippedReasons { get; set; }
+    /// <summary>periodic | change | command | install.</summary>
+    public string? Trigger { get; set; }
+    /// <summary>wua | qfe.</summary>
+    public string? Source { get; set; }
 }
 
 /// <summary>Sonda de reinício pendente reportada pelo agente.</summary>
@@ -88,6 +118,29 @@ public class PatchServiceStateMeta
     public bool? PolicyManaged { get; set; }
     public DateTime? LastInstallSuccessAt { get; set; }
     public bool? DownloadInProgress { get; set; }
+    /// <summary>Servidor WSUS configurado (WUServer/UpdateServiceUrlAlternate), até 500 chars.</summary>
+    public string? WsusServer { get; set; }
+    /// <summary>AUOptions da política (0–5).</summary>
+    public int? AuOptions { get; set; }
+    /// <summary>NoAutoUpdate=1: atualização automática desligada por política.</summary>
+    public bool? NoAutoUpdate { get; set; }
+    /// <summary>Deferral de quality/feature updates em dias (0–365).</summary>
+    public int? DeferralDays { get; set; }
+    /// <summary>Início da janela de horas ativas (0–23).</summary>
+    public int? ActiveHoursStart { get; set; }
+    /// <summary>Fim da janela de horas ativas (0–23).</summary>
+    public int? ActiveHoursEnd { get; set; }
+    /// <summary>KBs instaladas contadas no registro (CBS) pela sonda (0–100000).</summary>
+    public int? QfeInstalledCount { get; set; }
+    /// <summary>Percentual do download em andamento (0–100).</summary>
+    public int? DownloadPercent { get; set; }
+    /// <summary>
+    /// A politica de Windows Update foi LIDA (inclusive "nenhuma politica").
+    /// Quando true, campos de politica ausentes no payload CLEARAM o valor
+    /// antigo (WSUS removido, deferral desligado); quando false/null o valor
+    /// conhecido é preservado (leitura falhou).
+    /// </summary>
+    public bool? PolicyKnown { get; set; }
     /// <summary>Assinatura/hash da sonda — mudou quando vale a pena novo scan.</summary>
     public string? StateHash { get; set; }
     public DateTime? StateChangedAt { get; set; }
@@ -98,6 +151,15 @@ public class PatchServiceStateMeta
         PolicyManaged is null &&
         LastInstallSuccessAt is null &&
         DownloadInProgress is null &&
+        WsusServer is null &&
+        AuOptions is null &&
+        NoAutoUpdate is null &&
+        DeferralDays is null &&
+        ActiveHoursStart is null &&
+        ActiveHoursEnd is null &&
+        QfeInstalledCount is null &&
+        DownloadPercent is null &&
+        PolicyKnown is null &&
         StateHash is null &&
         StateChangedAt is null;
 }

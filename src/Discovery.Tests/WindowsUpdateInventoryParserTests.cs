@@ -221,4 +221,115 @@ public class WindowsUpdateInventoryParserTests
         Assert.That(reboot!.Pending, Is.True);
         Assert.That(reboot.Reasons, Is.EquivalentTo(new[] { "windows_update", "cbs" }));
     }
+
+    // ── Diagnóstico do scan + sonda estendida (M239) ────────────────────────
+
+    [Test]
+    public void ParsesScanDiagnostics()
+    {
+        var meta = WindowsUpdateInventoryParser.ParseScan(Json("""
+        {
+          "status": "ok",
+          "durationMs": 1500,
+          "skippedCount": 3,
+          "skippedReasons": { "driver": 2, "no_identity": 1, "unreadable": 0, "weird": 9 },
+          "trigger": "CHANGE",
+          "source": "wua"
+        }
+        """));
+
+        Assert.That(meta.SkippedCount, Is.EqualTo(3));
+        Assert.That(meta.SkippedReasons, Is.Not.Null);
+        Assert.That(meta.SkippedReasons!["driver"], Is.EqualTo(2));
+        Assert.That(meta.SkippedReasons["no_identity"], Is.EqualTo(1));
+        Assert.That(meta.SkippedReasons.ContainsKey("weird"), Is.False, "motivo fora da allowlist é descartado");
+        Assert.That(meta.SkippedReasons.ContainsKey("unreadable"), Is.False, "valor 0 não entra no mapa");
+        Assert.That(meta.Trigger, Is.EqualTo("change"), "trigger normalizado em minúsculas");
+        Assert.That(meta.Source, Is.EqualTo("wua"));
+    }
+
+    [Test]
+    public void LegacyScanBlockLeavesDiagnosticsNull()
+    {
+        var meta = WindowsUpdateInventoryParser.ParseScan(Json("""{ "status": "error", "errorCode": "service_disabled" }"""));
+
+        Assert.That(meta.Status, Is.EqualTo("error"));
+        Assert.That(meta.ErrorCode, Is.EqualTo("service_disabled"));
+        Assert.That(meta.SkippedCount, Is.Null, "agente antigo: null preserva o valor do snapshot");
+        Assert.That(meta.SkippedReasons, Is.Null);
+        Assert.That(meta.Trigger, Is.Null);
+        Assert.That(meta.Source, Is.Null);
+    }
+
+    [Test]
+    public void RejectsUnknownTriggerSourceAndOutOfRangeSkipCount()
+    {
+        var meta = WindowsUpdateInventoryParser.ParseScan(Json("""
+        { "status": "ok", "skippedCount": 999999, "trigger": "manual", "source": "winget" }
+        """));
+
+        Assert.That(meta.SkippedCount, Is.Null);
+        Assert.That(meta.Trigger, Is.Null);
+        Assert.That(meta.Source, Is.Null);
+    }
+
+    [Test]
+    public void ParsesExtendedStateProbe()
+    {
+        var meta = WindowsUpdateInventoryParser.ParseState(Json("""
+        {
+          "serviceState": "running",
+          "wsusServer": "http://wsus.empresa.local:8530",
+          "auOptions": 4,
+          "noAutoUpdate": false,
+          "deferralDays": 7,
+          "activeHoursStart": 8,
+          "activeHoursEnd": 18,
+          "qfeInstalledCount": 42,
+          "downloadInProgress": true,
+          "downloadPercent": 42,
+          "signature": "abc"
+        }
+        """));
+
+        Assert.That(meta, Is.Not.Null);
+        Assert.That(meta!.WsusServer, Is.EqualTo("http://wsus.empresa.local:8530"));
+        Assert.That(meta.AuOptions, Is.EqualTo(4));
+        Assert.That(meta.NoAutoUpdate, Is.False);
+        Assert.That(meta.DeferralDays, Is.EqualTo(7));
+        Assert.That(meta.ActiveHoursStart, Is.EqualTo(8));
+        Assert.That(meta.ActiveHoursEnd, Is.EqualTo(18));
+        Assert.That(meta.QfeInstalledCount, Is.EqualTo(42));
+        Assert.That(meta.DownloadPercent, Is.EqualTo(42));
+        Assert.That(meta.DownloadInProgress, Is.True);
+    }
+
+    [Test]
+    public void ExtendedStateIgnoresOutOfRangeValues()
+    {
+        var meta = WindowsUpdateInventoryParser.ParseState(Json("""
+        {
+          "wsusServer": "   ",
+          "auOptions": 9,
+          "deferralDays": 999,
+          "activeHoursStart": 24,
+          "activeHoursEnd": -1,
+          "downloadPercent": 150
+        }
+        """));
+
+        // Todos os campos inválidos ⇒ nada a persistir (meta null preserva o
+        // estado conhecido no snapshot, inclusive o WSUS já configurado).
+        Assert.That(meta, Is.Null);
+    }
+
+    [Test]
+    public void ParsesDownloadPercentZeroAndFull()
+    {
+        var zero = WindowsUpdateInventoryParser.ParseState(Json("""{ "downloadPercent": 0 }"""));
+        var full = WindowsUpdateInventoryParser.ParseState(Json("""{ "downloadPercent": 100 }"""));
+
+        Assert.That(zero!.DownloadPercent, Is.EqualTo(0), "0% é informação válida");
+        Assert.That(full!.DownloadPercent, Is.EqualTo(100));
+    }
 }
