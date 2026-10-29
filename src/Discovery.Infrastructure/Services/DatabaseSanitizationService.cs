@@ -871,7 +871,9 @@ public sealed class DatabaseSanitizationService(
     /// (TransactionIgnoredWarning); em PostgreSQL o comportamento é sempre transacional.
     /// </summary>
     private async Task<IDbContextTransaction?> BeginTransactionAsync(CancellationToken ct) =>
-        db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
+        db.Database.IsRelational() && db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
     private static string FormatState(Guid stateId) =>
         stateId == Guid.Empty ? "sem estado" : stateId.ToString();
