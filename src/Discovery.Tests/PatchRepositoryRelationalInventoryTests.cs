@@ -130,6 +130,61 @@ public class PatchRepositoryRelationalInventoryTests
         Assert.That(snapshot.InstalledCount, Is.EqualTo(1));
     }
 
+    [Test]
+    public async Task ReplaceInventoryInsideAmbientTransactionUsesItInsteadOfOpeningNestedOne()
+    {
+        // Reproduz o caminho REAL de produção: TransactionBehavior do pipeline
+        // MediatR abre a transação antes do handler; o repositório não pode abrir
+        // outra na mesma conexão (era o HTTP 500 em /agent-auth/me/windows-updates).
+        var (db, agentId) = Seed();
+        var repo = new PatchRepository(db);
+
+        await using var ambient = await db.Database.BeginTransactionAsync();
+        var entries = new[]
+        {
+            Entry("guid:22222222-2222-2222-2222-222222222222:200", installed: false, kb: "KB5127001")
+        };
+
+        await Assert.DoesNotThrowAsync(async () =>
+            await repo.ReplaceInventoryAsync(agentId, DateTime.UtcNow,
+                new PatchScanMeta { Status = "ok" }, null, entries));
+
+        await ambient.CommitAsync();
+
+        db.ChangeTracker.Clear();
+        var rows = await db.AgentWindowsUpdates.AsNoTracking()
+            .Where(row => row.AgentId == agentId)
+            .ToListAsync();
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].IsPresent, Is.True);
+        Assert.That(rows[0].IsPending, Is.True);
+    }
+
+    [Test]
+    public async Task ApplyInventoryDeltaInsideAmbientTransactionUsesItInsteadOfOpeningNestedOne()
+    {
+        var (db, agentId) = Seed();
+        var repo = new PatchRepository(db);
+
+        await using var ambient = await db.Database.BeginTransactionAsync();
+
+        await Assert.DoesNotThrowAsync(async () =>
+            await repo.ApplyInventoryDeltaAsync(agentId, DateTime.UtcNow,
+                new PatchScanMeta { Status = "ok" }, null,
+                [Entry("kb:KB5127002", installed: true, kb: "KB5127002")],
+                []));
+
+        await ambient.CommitAsync();
+
+        db.ChangeTracker.Clear();
+        var rows = await db.AgentWindowsUpdates.AsNoTracking()
+            .Where(row => row.AgentId == agentId)
+            .ToListAsync();
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.That(rows[0].IsPresent, Is.True);
+        Assert.That(rows[0].IsInstalled, Is.True);
+    }
+
     /// <summary>Modelo reduzido: só as entidades usadas, sem pgvector/jsonb do Postgres.</summary>
     private sealed class RelationalTestDbContext(DbContextOptions<DiscoveryDbContext> options)
         : DiscoveryDbContext(options)

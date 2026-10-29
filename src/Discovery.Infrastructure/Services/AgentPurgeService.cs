@@ -101,7 +101,12 @@ public class AgentPurgeService : IAgentPurgeService
         // Best-effort: uma falha de storage não impede a exclusão do agente.
         await _recordingCleanup.DeleteForAgentAsync(agentId, ct);
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        // PurgeAgentCommandHandler roda dentro do TransactionBehavior do pipeline
+        // MediatR: reutiliza a transação ambiente em vez de abrir outra na mesma
+        // conexão (Npgsql: "The connection is already in a transaction").
+        await using var transaction = _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
         var parameters = new object[] { agentId };
 
         // Só executa DML nas tabelas que realmente existem. Usa to_regclass (e não
@@ -147,7 +152,8 @@ public class AgentPurgeService : IAgentPurgeService
             parameters,
             ct);
 
-        await transaction.CommitAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
 
         // Best-effort: o cache de heartbeat (Redis) não deve sobreviver ao agente,
         // mas uma falha aqui não pode marcar como falha uma exclusão já commitada.

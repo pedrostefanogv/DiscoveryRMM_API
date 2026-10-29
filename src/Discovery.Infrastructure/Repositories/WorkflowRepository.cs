@@ -87,7 +87,10 @@ public class WorkflowRepository : IWorkflowRepository
     {
         // Transação explícita no provedor relacional (produção). O InMemory não
         // suporta transações e o SaveChanges já é atômico, então é dispensada.
-        var tx = _db.Database.IsRelational()
+        // O TransactionBehavior do pipeline MediatR já abre transação para todo
+        // ICommand: abrir outra na mesma conexão lança InvalidOperationException
+        // ("The connection is already in a transaction"). Reutiliza a ambiente.
+        var tx = _db.Database.IsRelational() && _db.Database.CurrentTransaction is null
             ? await _db.Database.BeginTransactionAsync()
             : null;
         try

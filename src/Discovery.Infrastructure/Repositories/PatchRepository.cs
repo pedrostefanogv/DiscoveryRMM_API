@@ -167,8 +167,16 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         // ATÔMICOS: se o SaveChanges falhar depois do UPDATE, o inventário
         // inteiro ficaria is_present=false no banco (aba vazia) até o próximo
         // scan. Em provider relacional, tudo roda numa transação.
+        //
+        // O pipeline MediatR (TransactionBehavior) já abre transação para TODO
+        // ICommand — inclusive este handler. Abrir uma segunda transação na
+        // mesma conexão lança "The connection is already in a transaction"
+        // (HTTP 500 em POST/PUT /agent-auth/me/windows-updates). Só criamos
+        // transação própria quando o repositório é chamado fora do pipeline.
         var relational = db.Database.IsRelational();
-        await using var transaction = relational ? await db.Database.BeginTransactionAsync(ct) : null;
+        await using var transaction = relational && db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         // Marca tudo como ausente (será reativado o que veio no payload). Em
         // Postgres o bulk é 1 UPDATE; em providers sem ExecuteUpdate (InMemory dos
@@ -435,7 +443,11 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         }
 
         var relational = db.Database.IsRelational();
-        await using var transaction = relational ? await db.Database.BeginTransactionAsync(ct) : null;
+        // Mesmo motivo do caminho completo: se o TransactionBehavior do pipeline
+        // já abriu transação, reutilizamos a dele em vez de abrir outra.
+        await using var transaction = relational && db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         // Guardas idênticas às do caminho completo.
         var scanIncomplete =

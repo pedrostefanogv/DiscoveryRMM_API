@@ -54,7 +54,13 @@ public sealed class MergeTicketsCommandHandler(
         var mergedBy = cmd.ChangedByUserId?.ToString();
         var mergedAt = DateTime.UtcNow;
 
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // O TransactionBehavior do pipeline MediatR já abre transação para este
+        // ICommand; abrir outra na mesma conexão lança InvalidOperationException
+        // ("The connection is already in a transaction and cannot participate in
+        // another transaction"). Reutiliza a ambiente quando existir.
+        await using var tx = db.Database.IsRelational() && db.Database.CurrentTransaction is null
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
         var mergedCount = 0;
         foreach (var sourceId in pending)
@@ -127,13 +133,15 @@ public sealed class MergeTicketsCommandHandler(
 
         if (mergedCount == 0)
         {
-            await tx.RollbackAsync(ct);
+            if (tx is not null)
+                await tx.RollbackAsync(ct);
             return Result<MergeTicketsResult>.Failure(
                 Error.Validation("SourceTicketIds", "No valid source tickets to merge"));
         }
 
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        if (tx is not null)
+            await tx.CommitAsync(ct);
 
         return Result<MergeTicketsResult>.Success(new MergeTicketsResult(target.Id, mergedCount));
     }
