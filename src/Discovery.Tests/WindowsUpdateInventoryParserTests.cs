@@ -42,6 +42,37 @@ public class WindowsUpdateInventoryParserTests
     }
 
     [Test]
+    public void ParsesWaaSFeatureUpgradeSyntheticEntry()
+    {
+        // Item sintetizado pelo agente a partir do WaaSFeatureAssessment
+        // (feature update nao e enumerado pelo WUA no Windows 11).
+        var entries = WindowsUpdateInventoryParser.ParseUpdates(Json("""
+        [{
+          "updateKey": "guid:11111111-2222-3333-4444-555555555555:1",
+          "updateId": "11111111-2222-3333-4444-555555555555",
+          "revision": 1,
+          "title": "Atualizacao de versao do Windows disponivel (versao atual 25H2)",
+          "description": "WaaS feature assessment: status=1 impact=2 daysOutOfDate=10.",
+          "classification": "Upgrades",
+          "updateType": "feature",
+          "severity": "Moderate",
+          "severitySource": "derived",
+          "isPending": true,
+          "isInstalled": false,
+          "source": "waas"
+        }]
+        """));
+
+        Assert.That(entries, Has.Count.EqualTo(1));
+        var entry = entries[0];
+        Assert.That(entry.Source, Is.EqualTo("waas"));
+        Assert.That(entry.UpdateType, Is.EqualTo("feature"));
+        Assert.That(entry.Classification, Is.EqualTo("Upgrades"));
+        Assert.That(entry.IsPending, Is.True);
+        Assert.That(entry.IsInstalled, Is.False);
+    }
+
+    [Test]
     public void ParsesSeveritySourceAndRejectsUnknownValues()
     {
         var entries = WindowsUpdateInventoryParser.ParseUpdates(Json("""
