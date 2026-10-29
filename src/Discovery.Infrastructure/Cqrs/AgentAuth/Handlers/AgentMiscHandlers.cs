@@ -255,6 +255,12 @@ public sealed class IssueZeroTouchDeployTokenHandler(
             deployKey = rawToken,
             clientId = token.ClientId,
             siteId = token.SiteId,
+            // expiresAt (RFC3339) é o campo que o agente Go lê para calcular o TTL da
+            // oferta assinada (/p2p/config/onboard → buildOnboardingOffer). Antes o
+            // handler só devolvia expiresAtUtc e o agente caía no fallback de 30 min,
+            // anunciando uma chave que o servidor já considerava expirada.
+            expiresAt = token.ExpiresAt.ToUniversalTime().ToString("O"),
+            // expiresAtUtc mantido para compatibilidade com consumidores existentes.
             expiresAtUtc = token.ExpiresAt
         });
     }

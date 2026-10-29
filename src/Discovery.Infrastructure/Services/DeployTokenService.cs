@@ -7,6 +7,21 @@ namespace Discovery.Infrastructure.Services;
 
 public class DeployTokenService : IDeployTokenService
 {
+    /// <summary>
+    /// TTL do deploy token one-shot do zero-touch (fluxo P2P de onboarding).
+    /// </summary>
+    /// <remarks>
+    /// Antes era 1 minuto: a oferta assinada entregue ao agente (p2p_onboarding_http.go,
+    /// onboardingDeployKeyTTL) anunciaria até 30 min, mas a chave morria no servidor em
+    /// 1 min. Como o agente não configurado pode levar minutos entre descobrir o peer
+    /// provisionador e concluir o POST /api/v1/agent-register (retries de discovery,
+    /// handshake libp2p, jitter do loop de onboarding), o registro falhava com 401/403 e
+    /// o agente ficava preso em "aguardando provisionamento".
+    /// 10 minutos cobrem a janela real do handshake sem transformar a chave em
+    /// credencial de longa duração; MaxUses=1 mantém o uso único (anti-replay).
+    /// </remarks>
+    private static readonly TimeSpan ZeroTouchTokenTtl = TimeSpan.FromMinutes(10);
+
     private readonly IDeployTokenRepository _tokenRepo;
 
     public DeployTokenService(IDeployTokenRepository tokenRepo)
@@ -110,7 +125,7 @@ public class DeployTokenService : IDeployTokenService
             TokenHash = tokenHash,
             TokenPrefix = prefix,
             Description = "zero-touch",
-            ExpiresAt = DateTime.UtcNow.AddMinutes(1),
+            ExpiresAt = DateTime.UtcNow.Add(ZeroTouchTokenTtl),
             CreatedAt = DateTime.UtcNow,
             UsedCount = 0,
             MaxUses = 1

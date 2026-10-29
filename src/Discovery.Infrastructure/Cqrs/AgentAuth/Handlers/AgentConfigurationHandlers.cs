@@ -61,6 +61,12 @@ public sealed class GetAgentConfigurationHandler(
             ["p2pFilesEnabled"] = siteConfig?.P2PFilesEnabled ?? clientConfig?.P2PFilesEnabled ?? serverConfig.P2PFilesEnabled,
             ["cloudBootstrapEnabled"] = clientConfig?.CloudBootstrapEnabled ?? serverConfig.CloudBootstrapEnabled,
             ["zeroTouchEnabled"] = siteConfig?.ZeroTouchEnabled ?? clientConfig?.ZeroTouchEnabled ?? serverConfig.ZeroTouchEnabled,
+            // Estado do próprio agente: provisionado por zero-touch mas aguardando
+            // aprovação de TI. O endpoint me/configuration aceita agentes pendentes
+            // (allowPending=true) exatamente para o agente conseguir ler este flag e
+            // mostrar "aguardando aprovação" em vez de tomar 403 nos demais endpoints
+            // (achado Z5). O agente Go lê via ParseZeroTouchPending (agentconfig/service.go).
+            ["zeroTouchPending"] = agent.ZeroTouchPending,
 
             // App store
             ["appStoreEnabled"] = serverConfig.AppStorePolicy != Core.Enums.AppStorePolicyType.Disabled,
