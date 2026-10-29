@@ -98,7 +98,14 @@ public sealed record UpdatePatchPolicyCommand(
     bool RebootAllowed,
     int MaxInstallsPerRun,
     bool HideDeniedUpdates,
-    string? UpdatedBy
+    string? UpdatedBy,
+    // WU-04/D09: dias de retenção por idade de publicação (0 = sem deferral).
+    int DeferralDays = 0,
+    // WU-05/D03: deadline de instalação em dias desde a publicação (0 = sem).
+    int DeadlineDays = 0,
+    // WU-19/WU-20/D22: origens habilitadas e consentimento de terceiros.
+    IReadOnlyList<string>? Sources = null,
+    bool AllowThirdPartyApps = false
 ) : ICommand<Result<PatchPolicyDto>>;
 
 // ── Frota (ações em lote) ─────────────────────────────────────────────────
@@ -123,5 +130,8 @@ public sealed record InstallPatchScopeCommand(
     IReadOnlyList<Guid> AllowedClientIds,
     string? CorrelationId = null,
     string? Reason = null,
-    string? RequestedBy = null
+    string? RequestedBy = null,
+    // WU-06/D07: instalação manual respeita a janela; o operador pode
+    // sobrepor com motivo obrigatório (auditado no relatório).
+    bool OverrideWindow = false
 ) : ICommand<Result<PatchDispatchDto>>;

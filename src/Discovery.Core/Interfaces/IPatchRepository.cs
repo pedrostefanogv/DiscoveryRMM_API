@@ -48,6 +48,23 @@ public interface IPatchRepository
         PatchServiceStateMeta? serviceState = null,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Aplica um upload DELTA (WU-13): mescla os itens alterados com o inventário
+    /// atual do agente, remove as chaves informadas e delega para
+    /// <see cref="ReplaceInventoryAsync"/> — preservando todas as guardas de scan
+    /// parcial/ilegível. Um delta que esvazia o inventário é ignorado (mesma
+    /// semântica de "upload vazio não prova remoção").
+    /// </summary>
+    Task ApplyInventoryDeltaAsync(
+        Guid agentId,
+        DateTime collectedAt,
+        PatchScanMeta scan,
+        PatchPendingRebootMeta? pendingReboot,
+        IReadOnlyList<AgentWindowsUpdateEntry> changedEntries,
+        IReadOnlyList<string>? removedKeys,
+        PatchServiceStateMeta? serviceState = null,
+        CancellationToken ct = default);
+
     /// <summary>Atualiza somente os metadados do scan (status/erro/duração).</summary>
     Task UpdateScanStatusAsync(
         Guid agentId,
@@ -79,6 +96,23 @@ public interface IPatchRepository
         DateTime checkedAt,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Agentes com reinício pendente (badge ligado), para o job que consome a
+    /// política de reboot. Limitado para não varrer a frota inteira por ciclo.
+    /// </summary>
+    Task<IReadOnlyList<Guid>> GetAgentsWithPendingRebootAsync(int limit, CancellationToken ct = default);
+
+    /// <summary>
+    /// Persiste a ação decidida pela política de reboot (decisão D02: nunca
+    /// reiniciar automaticamente; a política gera sinal operacional).
+    /// </summary>
+    Task UpdateRebootActionAsync(
+        Guid agentId,
+        PatchRebootAction action,
+        string reason,
+        DateTime decidedAt,
+        CancellationToken ct = default);
+
     /// <summary>Marca instalações sem resultado há mais de <paramref name="maxAge"/> como Failed.</summary>
     Task<int> ExpireStaleInstallingAsync(TimeSpan maxAge, CancellationToken ct = default);
 
@@ -89,6 +123,19 @@ public interface IPatchRepository
         Guid agentId,
         IReadOnlyCollection<string> updateKeys,
         PatchUpdateStatus status,
+        int? resultCode,
+        string? error,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Registra falha de instalação com classificação e backoff (WU-08). Incrementa
+    /// <c>attempt_count</c>, grava <c>failure_class</c> e agenda a próxima tentativa
+    /// (somente quando a classe permite retry).
+    /// </summary>
+    Task RecordInstallFailureAsync(
+        Guid agentId,
+        IReadOnlyCollection<string> updateKeys,
+        string failureClass,
         int? resultCode,
         string? error,
         CancellationToken ct = default);

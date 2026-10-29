@@ -19,6 +19,8 @@ public static class WindowsUpdateInventoryParser
     private const int MaxDescription = 2000;
     private const int MaxClassification = 80;
     private const int MaxSeverity = 40;
+    private const int MaxSeveritySource = 20;
+    private const int MaxUpdateType = 20;
     private const int MaxSupportUrl = 1000;
     private const int MaxSource = 20;
     private const int MaxWsusServer = 500;
@@ -45,6 +47,21 @@ public static class WindowsUpdateInventoryParser
     private static readonly HashSet<string> SkippedReasonKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "driver", "no_identity", "unreadable"
+    };
+
+    /// <summary>Tipo do update aceito no item (WU-15).</summary>
+    private static readonly HashSet<string> UpdateTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "feature", "driver", "software"
+    };
+
+    /// <summary>
+    /// Proveniência da severidade aceita no item (decisão D10). Valor fora da
+    /// allowlist vira null: campo é diagnóstico, nunca origem de decisão.
+    /// </summary>
+    private static readonly HashSet<string> SeveritySources = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "vendor", "derived", "unknown"
     };
 
     /// <summary>Estados do serviço wuauserv aceitos no bloco "state".</summary>
@@ -298,6 +315,8 @@ public static class WindowsUpdateInventoryParser
             Classification = Truncate(GetString(item, "classification"), MaxClassification),
             Categories = GetRawString(item, "categories"),
             Severity = Truncate(GetString(item, "severity"), MaxSeverity),
+            SeveritySource = NormalizeSeveritySource(GetString(item, "severitySource")),
+            UpdateType = NormalizeUpdateType(GetString(item, "updateType")),
             IsPending = isPending,
             IsInstalled = isInstalled,
             IsHidden = GetBool(item, "isHidden"),
@@ -312,6 +331,24 @@ public static class WindowsUpdateInventoryParser
             Source = Truncate(GetString(item, "source"), MaxSource) ?? "wua",
             Raw = null
         };
+    }
+
+    /// <summary>Normaliza o tipo do update (feature | driver | software).</summary>
+    private static string? NormalizeUpdateType(string? raw)
+    {
+        var value = raw?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(value) || value.Length > MaxUpdateType)
+            return null;
+        return UpdateTypes.Contains(value) ? value : null;
+    }
+
+    /// <summary>Normaliza a proveniência da severidade para a allowlist.</summary>
+    private static string? NormalizeSeveritySource(string? raw)
+    {
+        var value = raw?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(value) || value.Length > MaxSeveritySource)
+            return null;
+        return SeveritySources.Contains(value) ? value : null;
     }
 
     private static string? NormalizeUpdateKey(

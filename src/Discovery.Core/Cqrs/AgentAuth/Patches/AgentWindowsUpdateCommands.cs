@@ -20,7 +20,17 @@ public sealed record ReportAgentWindowsUpdatesCommand(
     object? Scan,
     object? PendingReboot,
     object? Updates,
-    object? State = null
+    object? State = null,
+    // ── Contrato de delta (WU-13, D06) ─────────────────────────────────────
+    // Agente antigo não envia nada disto: a API cai no caminho completo.
+    /// <summary>Versão do envelope (2 = delta/capabilities).</summary>
+    int? EnvelopeVersion = null,
+    /// <summary>Capacidades anunciadas pelo agente (delta_inventory, ...).</summary>
+    IReadOnlyList<string>? Capabilities = null,
+    /// <summary>true = Updates traz só os alterados e RemovedKeys o que saiu.</summary>
+    bool Delta = false,
+    /// <summary>Chaves ausentes desde o último full (aplicado com guardas).</summary>
+    IReadOnlyList<string>? RemovedKeys = null
 ) : ICommand<Result<VoidResult>>;
 
 /// <summary>

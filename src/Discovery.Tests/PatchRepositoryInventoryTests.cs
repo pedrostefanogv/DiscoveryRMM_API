@@ -308,6 +308,108 @@ public class PatchRepositoryInventoryTests
     }
 
     [Test]
+    public async Task DeltaAppliesChangesAndRemovalsOnly()
+    {
+        var (db, agentId) = Seed();
+        await SeedGoodInventoryAsync(db, agentId);
+        var repo = new PatchRepository(db);
+
+        // Delta: muda o título da pendente, mantém a instalada e remove... nada
+        // (a instalada continua presente). Deve atualizar a pendente sem tocar
+        // na instalada.
+        await repo.ApplyInventoryDeltaAsync(
+            agentId,
+            DateTime.UtcNow,
+            Scan(),
+            new PatchPendingRebootMeta { Pending = false, CheckedAt = DateTime.UtcNow },
+            [Entry("guid:11111111-1111-1111-1111-111111111111:200", installed: false, kb: "KB5127000")],
+            removedKeys: []);
+
+        var pending = await db.AgentWindowsUpdates.SingleAsync(u =>
+            u.UpdateKey == "guid:11111111-1111-1111-1111-111111111111:200");
+        Assert.That(pending.IsPresent, Is.True, "update alterado continua presente");
+        Assert.That(pending.Title, Does.Contain("KB5127000"), "conteúdo do delta foi aplicado");
+
+        var installed = await db.AgentWindowsUpdates.SingleAsync(u => u.UpdateKey == "kb:KB5127690");
+        Assert.That(installed.IsPresent, Is.True, "linha não citada no delta é preservada (mesclada do banco)");
+        Assert.That(installed.Status, Is.EqualTo(PatchUpdateStatus.Installed));
+    }
+
+    [Test]
+    public async Task DeltaRemovalSupersedesPendingAndKeepsUntouchedRows()
+    {
+        var (db, agentId) = Seed();
+        await SeedGoodInventoryAsync(db, agentId);
+        var repo = new PatchRepository(db);
+
+        await repo.ApplyInventoryDeltaAsync(
+            agentId,
+            DateTime.UtcNow,
+            Scan(),
+            new PatchPendingRebootMeta { Pending = false, CheckedAt = DateTime.UtcNow },
+            changedEntries: [],
+            removedKeys: ["guid:11111111-1111-1111-1111-111111111111:200"]);
+
+        var pending = await db.AgentWindowsUpdates.SingleAsync(u =>
+            u.UpdateKey == "guid:11111111-1111-1111-1111-111111111111:200");
+        Assert.That(pending.IsPresent, Is.False, "pendente removida pelo delta sai do inventário");
+        Assert.That(pending.Status, Is.EqualTo(PatchUpdateStatus.Superseded));
+
+        var installed = await db.AgentWindowsUpdates.SingleAsync(u => u.UpdateKey == "kb:KB5127690");
+        Assert.That(installed.IsPresent, Is.True, "linha não citada permanece presente");
+    }
+
+    [Test]
+    public async Task DeltaThatWouldEmptyInventoryIsIgnored()
+    {
+        var (db, agentId) = Seed();
+        await SeedGoodInventoryAsync(db, agentId);
+        var repo = new PatchRepository(db);
+
+        // Remover TUDO num delta é ambíguo (pode ser bug do agente): a mesma
+        // semântica de "upload vazio não prova remoção" se aplica.
+        await repo.ApplyInventoryDeltaAsync(
+            agentId,
+            DateTime.UtcNow,
+            Scan(),
+            new PatchPendingRebootMeta { Pending = false, CheckedAt = DateTime.UtcNow },
+            changedEntries: [],
+            removedKeys:
+            [
+                "guid:11111111-1111-1111-1111-111111111111:200",
+                "kb:KB5127690"
+            ]);
+
+        var rows = await db.AgentWindowsUpdates.Where(u => u.AgentId == agentId).ToListAsync();
+        Assert.That(rows, Has.Count.EqualTo(2));
+        Assert.That(rows.All(row => row.IsPresent), Is.True,
+            "delta que esvaziaria o inventário é ignorado (só metadados atualizados)");
+    }
+
+    [Test]
+    public async Task DeltaWithPartialScanDoesNotRemoveRows()
+    {
+        var (db, agentId) = Seed();
+        await SeedGoodInventoryAsync(db, agentId);
+        var repo = new PatchRepository(db);
+
+        // Scan parcial não é prova de remoção: as guardas do caminho completo
+        // precisam valer também para o delta.
+        await repo.ApplyInventoryDeltaAsync(
+            agentId,
+            DateTime.UtcNow,
+            Scan("partial"),
+            new PatchPendingRebootMeta { Pending = false, CheckedAt = DateTime.UtcNow },
+            changedEntries: [],
+            removedKeys: ["guid:11111111-1111-1111-1111-111111111111:200"]);
+
+        var pending = await db.AgentWindowsUpdates.SingleAsync(u =>
+            u.UpdateKey == "guid:11111111-1111-1111-1111-111111111111:200");
+        Assert.That(pending.IsPresent, Is.True, "delta parcial preserva pendências");
+        Assert.That(pending.Status, Is.Not.EqualTo(PatchUpdateStatus.Superseded));
+    }
+
+    [Test]
     public async Task InstalledAtIsPreservedWhenAgentOmitsIt()
     {
         var (db, agentId) = Seed();

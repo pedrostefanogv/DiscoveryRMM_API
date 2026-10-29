@@ -91,6 +91,36 @@ public class ReportAgentWindowsUpdatesHandlerTests
     }
 
     [Test]
+    public async Task DeltaUploadGoesThroughDeltaPath()
+    {
+        var (handler, repo, agentId) = Build();
+
+        var command = new ReportAgentWindowsUpdatesCommand(
+            agentId,
+            DateTime.UtcNow,
+            new { status = "ok", trigger = "change" },
+            new { pending = false },
+            new object[]
+            {
+                new { updateKey = "guid:3c3f1f1a-1111-2222-3333-444455556666:1", title = "Cumulative", isPending = true }
+            },
+            null,
+            EnvelopeVersion: 2,
+            Capabilities: new[] { "delta_inventory" },
+            Delta: true,
+            RemovedKeys: new[] { "KB5034441", " kb5034440 " });
+
+        var result = await handler.Handle(command, CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(repo.DeltaCallCount, Is.EqualTo(1), "payload delta usa o caminho de delta");
+        Assert.That(repo.ReplaceCallCount, Is.EqualTo(0), "delta não substitui o inventário inteiro");
+        Assert.That(repo.LastDeltaEntries, Has.Count.EqualTo(1));
+        Assert.That(repo.LastDeltaRemoved, Is.EquivalentTo(new[] { "kb5034441", "kb5034440" }),
+            "chaves normalizadas (trim + lowercase) e sem duplicata");
+    }
+
+    [Test]
     public async Task LegacyEnvelopeWithoutStateStillWorks()
     {
         var (handler, repo, agentId) = Build();
@@ -177,6 +207,34 @@ public class ReportAgentWindowsUpdatesHandlerTests
             Guid agentId, bool pending, IReadOnlyList<string> reasons, DateTime checkedAt,
             CancellationToken ct = default)
             => Task.CompletedTask;
+
+        public Task<IReadOnlyList<Guid>> GetAgentsWithPendingRebootAsync(int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<Guid>>([]);
+
+        public Task UpdateRebootActionAsync(
+            Guid agentId, Discovery.Core.Enums.PatchRebootAction action, string reason, DateTime decidedAt,
+            CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task RecordInstallFailureAsync(
+            Guid agentId, IReadOnlyCollection<string> updateKeys, string failureClass, int? resultCode,
+            string? error, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public int DeltaCallCount { get; private set; }
+        public IReadOnlyList<AgentWindowsUpdateEntry>? LastDeltaEntries { get; private set; }
+        public IReadOnlyList<string>? LastDeltaRemoved { get; private set; }
+
+        public Task ApplyInventoryDeltaAsync(
+            Guid agentId, DateTime collectedAt, PatchScanMeta scan, PatchPendingRebootMeta? pendingReboot,
+            IReadOnlyList<AgentWindowsUpdateEntry> changedEntries, IReadOnlyList<string>? removedKeys,
+            PatchServiceStateMeta? serviceState = null, CancellationToken ct = default)
+        {
+            DeltaCallCount++;
+            LastDeltaEntries = changedEntries;
+            LastDeltaRemoved = removedKeys;
+            return Task.CompletedTask;
+        }
 
         public Task<int> ExpireStaleInstallingAsync(TimeSpan maxAge, CancellationToken ct = default)
             => Task.FromResult(0);

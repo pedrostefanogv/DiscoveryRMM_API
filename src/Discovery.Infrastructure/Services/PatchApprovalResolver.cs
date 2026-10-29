@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs.Patches;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -58,7 +59,11 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
             .Where(update => update.AgentId == agentId && update.IsPresent)
             .ToListAsync(ct);
 
-        return await ApplyAsync(agentId, rows, approvals, effectivePolicy, ct);
+        // WU-21/D24: apps de terceiros só são auto-aprovados se a versão estiver
+        // no catálogo curado e ativa. Carrega uma vez por agente.
+        var catalogKeys = await LoadActiveCatalogKeysAsync(rows, ct);
+
+        return await ApplyAsync(agentId, rows, approvals, effectivePolicy, catalogKeys, ct);
     }
 
     public async Task<int> RecomputeForGroupKeyAsync(string groupKey, CancellationToken ct = default)
@@ -165,11 +170,37 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>Chaves "source:packageId" ativas no catálogo curado (WU-21).</summary>
+    private async Task<IReadOnlySet<string>> LoadActiveCatalogKeysAsync(
+        IReadOnlyList<AgentWindowsUpdate> rows,
+        CancellationToken ct)
+    {
+        var sources = rows
+            .Where(row => PatchSourcePolicy.IsThirdPartySource(row.Source))
+            .Select(row => (row.Source ?? string.Empty).Trim().ToLowerInvariant())
+            .Distinct()
+            .ToList();
+        if (sources.Count == 0)
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var entries = await db.AppCatalogEntries
+            .AsNoTracking()
+            .Where(entry => entry.Status == "active" && sources.Contains(entry.Source))
+            .Select(entry => new { entry.Source, entry.PackageId })
+            .ToListAsync(ct);
+
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries)
+            keys.Add((entry.Source ?? string.Empty).ToLowerInvariant() + ":" + (entry.PackageId ?? string.Empty).ToLowerInvariant());
+        return keys;
+    }
+
     private async Task<int> ApplyAsync(
         Guid agentId,
         IReadOnlyList<AgentWindowsUpdate> rows,
         IReadOnlyList<PatchApproval> approvals,
         PatchPolicy? policy,
+        IReadOnlySet<string> catalogKeys,
         CancellationToken ct)
     {
         var changed = 0;
@@ -177,7 +208,7 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
 
         foreach (var row in rows)
         {
-            var (state, source) = ResolveApproval(row, approvals, policy);
+            var (state, source) = ResolveApproval(row, approvals, policy, now, catalogKeys);
             var status = ResolveStatus(row, state);
 
             if (row.ApprovalState == state && row.ApprovalSource == source && row.Status == status)
@@ -202,7 +233,9 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
     private static (PatchApprovalState State, string? Source) ResolveApproval(
         AgentWindowsUpdate update,
         IReadOnlyList<PatchApproval> approvals,
-        PatchPolicy? policy)
+        PatchPolicy? policy,
+        DateTime now,
+        IReadOnlySet<string> catalogKeys)
     {
         var candidates = approvals
             .Where(rule => string.Equals(rule.UpdateKey, update.GroupKey, StringComparison.OrdinalIgnoreCase))
@@ -219,14 +252,81 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
                 : (PatchApprovalState.Approved, "rule");
         }
 
-        if (policy is not null && AutoApproveMatches(update, policy))
+        // Auto-aprovação por política passa antes pelo gate de deferral por
+        // idade de publicação (D09). Regras explícitas acima NÃO são afetadas:
+        // aprovação manual do operador vence o deferral por decisão de produto.
+        if (policy is not null && AutoApproveMatches(update, policy, catalogKeys))
+        {
+            // Deferral por idade só se aplica a update de OS: apps de terceiros
+            // raramente têm data de publicação no inventário, e aplicar o gate
+            // fail-closed (D09) os reteria para sempre. Para terceiros, o
+            // controle é o duplo consentimento (D22) — já checado acima.
+            if (!PatchSourcePolicy.IsThirdPartySource(update.Source) &&
+                !IsDeferralSatisfied(update, policy, now))
+                return (PatchApprovalState.Unknown, null);
+
             return (PatchApprovalState.AutoApproved, "policy");
+        }
 
         return (PatchApprovalState.Unknown, null);
     }
 
-    private static bool AutoApproveMatches(AgentWindowsUpdate update, PatchPolicy policy)
+    /// <summary>
+    /// Gate de deferral por idade de publicação (decisão D09, fail-closed).
+    ///
+    /// Com <c>DeferralDays &gt; 0</c>, o update só pode ser AUTO-aprovado pela
+    /// política depois de <c>PublishedAt + DeferralDays</c>. Antes disso ele
+    /// permanece Unknown ("aguardando aprovação"): a frota segura o patch recém
+    /// publicado até o mercado sinalizar estabilidade, e o operador ainda pode
+    /// aprovar manualmente se quiser antecipar.
+    ///
+    /// FAIL-CLOSED: sem <c>PublishedAt</c> não há como provar a idade do update,
+    /// então ele NÃO é auto-aprovado (retorna false). Preferimos reter demais a
+    /// aprovar pela política um patch de idade desconhecida.
+    ///
+    /// Aprovação manual explícita (linha em <c>patch_approvals</c> com
+    /// <c>Action = Approve</c>) continua vencendo o deferral: esse caminho é
+    /// resolvido antes, no bloco de regras explícitas de <see cref="ResolveApproval"/>,
+    /// porque o operador decidiu conscientemente sobre aquele update.
+    ///
+    /// <c>DeferralDays &lt;= 0</c> = sem deferral (comportamento anterior).
+    /// </summary>
+    private static bool IsDeferralSatisfied(AgentWindowsUpdate update, PatchPolicy policy, DateTime now)
     {
+        if (policy.DeferralDays <= 0)
+            return true;
+
+        if (!update.PublishedAt.HasValue)
+            return false;
+
+        return update.PublishedAt.Value.AddDays(policy.DeferralDays) <= now;
+    }
+
+    private static bool AutoApproveMatches(
+        AgentWindowsUpdate update,
+        PatchPolicy policy,
+        IReadOnlySet<string> catalogKeys)
+    {
+        // Consentimento de ORIGEM (WU-19/WU-20, D22): app de terceiros só é
+        // auto-aprovado com duplo consentimento; update de OS respeita "os".
+        // Aprovação MANUAL continua possível para qualquer origem (operador
+        // decide caso a caso), mas sem consentimento não há automação.
+        if (PatchSourcePolicy.IsThirdPartySource(update.Source))
+        {
+            if (!PatchSourcePolicy.ThirdPartyConsented(policy.Sources, policy.AllowThirdPartyApps))
+                return false;
+            // WU-21/D24: sem versão curada e ativa, terceiro fica aguardando
+            // aprovação manual — o catálogo é a barreira de integridade.
+            var appId = Discovery.Infrastructure.Cqrs.Patches.PatchCommandPayloads.ExtractAppId(update.UpdateKey);
+            var key = (update.Source ?? string.Empty).Trim().ToLowerInvariant() + ":" + appId.Trim().ToLowerInvariant();
+            if (!catalogKeys.Contains(key))
+                return false;
+        }
+        else if (!PatchSourcePolicy.AllowsOs(policy.Sources))
+        {
+            return false;
+        }
+
         var severities = PatchJson.ParseStringArray(policy.AutoApproveSeverities);
         if (severities.Count > 0 && !string.IsNullOrWhiteSpace(update.Severity) &&
             severities.Any(value => string.Equals(value, update.Severity, StringComparison.OrdinalIgnoreCase)))

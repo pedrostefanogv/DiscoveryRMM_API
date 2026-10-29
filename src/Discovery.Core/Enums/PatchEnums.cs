@@ -60,6 +60,24 @@ public enum PatchRebootPolicy
     MaintenanceWindow = 2
 }
 
+/// <summary>
+/// Ação que a POLÍTICA de reboot produz para um agente com reinício pendente.
+///
+/// Decisão D02 (2026-10-29): o produto NÃO reinicia máquinas automaticamente.
+/// A política existe para transformar "reinício pendente" em sinal operacional
+/// (notificar/escalar), nunca em reboot autônomo. Reiniciar continua sendo ação
+/// explícita do operador (postAction do comando de instalação).
+/// </summary>
+public enum PatchRebootAction
+{
+    /// <summary>Nada a fazer (sem reinício pendente, ou política Never).</summary>
+    None = 0,
+    /// <summary>Notificar o operador: há reinício pendente que a política manda tratar.</summary>
+    NotifyOperator = 1,
+    /// <summary>Notificar indicando a janela de manutenção (aberta ou a próxima).</summary>
+    NotifyWithWindowHint = 2
+}
+
 /// <summary>Tipo de mudança registrada na auditoria de aprovações de patch.</summary>
 public enum PatchApprovalAuditChangeType
 {

@@ -58,8 +58,31 @@ public sealed class ReportAgentWindowsUpdatesHandler(
                     scan.Status, cmd.AgentId, serviceState?.ServiceState, serviceState?.WuOnline);
             }
 
-            await patchRepo.ReplaceInventoryAsync(
-                cmd.AgentId, collectedAt.ToUniversalTime(), scan, pendingReboot, entries, serviceState, ct);
+            if (cmd.Delta)
+            {
+                // WU-13: payload com apenas os itens alterados. O repositório
+                // mescla com o inventário atual e remove as chaves informadas,
+                // reutilizando as guardas de scan parcial/ilegível.
+                var removedKeys = (cmd.RemovedKeys ?? [])
+                    .Where(key => !string.IsNullOrWhiteSpace(key))
+                    .Select(key => key.Trim().ToLowerInvariant())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(5000)
+                    .ToList();
+
+                await patchRepo.ApplyInventoryDeltaAsync(
+                    cmd.AgentId, collectedAt.ToUniversalTime(), scan, pendingReboot,
+                    entries, removedKeys, serviceState, ct);
+
+                logger?.LogInformation(
+                    "Windows Update DELTA para {AgentId}: changed={Changed} removed={Removed} envelope={Version}.",
+                    cmd.AgentId, entries.Count, removedKeys.Count, cmd.EnvelopeVersion);
+            }
+            else
+            {
+                await patchRepo.ReplaceInventoryAsync(
+                    cmd.AgentId, collectedAt.ToUniversalTime(), scan, pendingReboot, entries, serviceState, ct);
+            }
             await resolver.RecomputeForAgentAsync(cmd.AgentId, ct);
 
             var site = await siteRepo.GetByIdAsync(agent.SiteId);

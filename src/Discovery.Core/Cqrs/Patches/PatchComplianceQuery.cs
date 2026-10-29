@@ -10,7 +10,13 @@ namespace Discovery.Core.Cqrs.Patches;
 ///   e zero pendencias obrigatorias; agente sem scan e fail-closed (nao-compliant,
 ///   LastScanUtc nulo);
 /// • Score = agentes com zero patches pendentes falhos / total de agentes x 100,
-///   arredondado a 1 casa;
+///   arredondado a 1 casa (métrica legada, mantida sem alteração);
+/// • ScoreV2 = agentes conformes / agentes COM scan válido na janela x 100
+///   (decisão D05): agente sem scan não conta como conforme NEM no denominador
+///   — ele é medido por ScanCoverage; 0 quando nenhum agente tem scan válido
+///   (nada medido = fail-closed, não "100%");
+/// • ScanCoverage = agentes com scan válido na janela / total de agentes x 100;
+/// • AgentsWithoutScan = agentes sem scan válido na janela.
 /// • Agregacao: com SiteId uma row por agente; sem, uma row por site
 ///   (totals sempre sobre o escopo inteiro da consulta).
 /// </summary>
@@ -35,7 +41,10 @@ public sealed record PatchComplianceTotalsDto(
     int Compliant,
     double Score,
     int PendingPatches,
-    int FailedPatches);
+    int FailedPatches,
+    double ScoreV2,
+    double ScanCoverage,
+    int AgentsWithoutScan);
 
 public sealed record PatchComplianceRowDto(
     Guid ClientId,
@@ -47,4 +56,7 @@ public sealed record PatchComplianceRowDto(
     double Score,
     int PendingPatches,
     int FailedPatches,
-    DateTime? LastScanUtc);
+    DateTime? LastScanUtc,
+    double ScoreV2,
+    double ScanCoverage,
+    int AgentsWithoutScan);

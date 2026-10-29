@@ -39,7 +39,13 @@ public sealed class PatchesController(
         PatchRebootPolicy RebootPolicy = PatchRebootPolicy.Never,
         bool RebootAllowed = false,
         int MaxInstallsPerRun = 50,
-        bool HideDeniedUpdates = false);
+        bool HideDeniedUpdates = false,
+        // WU-04/WU-05: retenção por idade e deadline de instalação.
+        int DeferralDays = 0,
+        int DeadlineDays = 0,
+        // WU-19/WU-20/D22: origens e duplo consentimento de terceiros.
+        IReadOnlyList<string>? Sources = null,
+        bool AllowThirdPartyApps = false);
 
     public sealed record ScanScopeRequest(
         PatchScope Scope = PatchScope.Global,
@@ -53,7 +59,9 @@ public sealed class PatchesController(
         bool Force = false,
         bool Confirm = false,
         string? PostAction = null,
-        string? Reason = null);
+        string? Reason = null,
+        // WU-06/D07: sobrepor a janela de manutenção (exige Reason).
+        bool OverrideWindow = false);
 
     // ── Consultas ──────────────────────────────────────────────────────────
 
@@ -244,7 +252,11 @@ public sealed class PatchesController(
             request.RebootAllowed,
             request.MaxInstallsPerRun,
             request.HideDeniedUpdates,
-            CurrentUserId()), ct);
+            CurrentUserId(),
+            request.DeferralDays,
+            request.DeadlineDays,
+            request.Sources,
+            request.AllowThirdPartyApps), ct);
 
         return result.Match<IActionResult>(
             success: dto => Ok(dto),
@@ -253,6 +265,81 @@ public sealed class PatchesController(
                 "Validation" => BadRequest(new { error = errors[0].Message }),
                 _ => BadRequest(new { error = errors[0].Message })
             });
+    }
+
+    // ── Catálogo de apps de terceiros (WU-21/D24) ─────────────────────────
+
+    public sealed record UpsertCatalogEntryRequest(
+        string Source,
+        string PackageId,
+        string Name,
+        string Version,
+        string InstallerUrl,
+        string Sha256,
+        string? Publisher = null,
+        string? InstallerType = null,
+        string? SilentArgs = null,
+        string? ProductCode = null,
+        DateTime? ReleaseDate = null,
+        string? Notes = null);
+
+    public sealed record RevokeCatalogEntryRequest(string? Reason = null);
+
+    [HttpGet("app-catalog")]
+    public async Task<IActionResult> ListCatalog(
+        [FromQuery] string? source = null,
+        [FromQuery] string? status = null,
+        [FromQuery] string? search = null,
+        [FromQuery] int limit = 100,
+        CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new ListAppCatalogEntriesQuery(source, status, search, limit), ct);
+        return result.Match<IActionResult>(
+            success: dto => Ok(dto),
+            failure: errors => BadRequest(new { error = errors[0].Message }));
+    }
+
+    [HttpPost("app-catalog")]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    public async Task<IActionResult> UpsertCatalogEntry(
+        [FromBody] UpsertCatalogEntryRequest request,
+        CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new UpsertAppCatalogEntryCommand(
+            request.Source,
+            request.PackageId,
+            request.Name,
+            request.Version,
+            request.InstallerUrl,
+            request.Sha256,
+            request.Publisher,
+            request.InstallerType,
+            request.SilentArgs,
+            request.ProductCode,
+            request.ReleaseDate,
+            request.Notes,
+            CurrentUserId()), ct);
+
+        return result.Match<IActionResult>(
+            success: dto => Ok(dto),
+            failure: errors => errors[0].Code == "Validation"
+                ? BadRequest(new { error = errors[0].Message })
+                : BadRequest(new { error = errors[0].Message }));
+    }
+
+    [HttpPost("app-catalog/{id:guid}/revoke")]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    public async Task<IActionResult> RevokeCatalogEntry(
+        Guid id,
+        [FromBody] RevokeCatalogEntryRequest? request = null,
+        CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new RevokeAppCatalogEntryCommand(id, CurrentUserId(), request?.Reason), ct);
+        return result.Match<IActionResult>(
+            success: dto => Ok(dto),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { error = errors[0].Message })
+                : BadRequest(new { error = errors[0].Message }));
     }
 
     // ── Ações em lote ──────────────────────────────────────────────────────
@@ -289,7 +376,8 @@ public sealed class PatchesController(
             access.AllowedClientIds,
             CorrelationId(),
             request.Reason,
-            CurrentUserId()), ct);
+            CurrentUserId(),
+            request.OverrideWindow), ct);
 
         return AcceptedOrError(result);
     }

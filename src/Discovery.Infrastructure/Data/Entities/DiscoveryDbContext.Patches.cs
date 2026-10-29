@@ -38,8 +38,10 @@ public partial class DiscoveryDbContext
             entity.Property(update => update.Title).HasColumnName("title").HasMaxLength(500);
             entity.Property(update => update.Description).HasColumnName("description").HasMaxLength(2000);
             entity.Property(update => update.Classification).HasColumnName("classification").HasMaxLength(80);
+            entity.Property(update => update.UpdateType).HasColumnName("update_type").HasMaxLength(20);
             entity.Property(update => update.Categories).HasColumnName("categories").HasColumnType("jsonb");
             entity.Property(update => update.Severity).HasColumnName("severity").HasMaxLength(40);
+            entity.Property(update => update.SeveritySource).HasColumnName("severity_source").HasMaxLength(20);
             entity.Property(update => update.IsPending).HasColumnName("is_pending");
             entity.Property(update => update.IsInstalled).HasColumnName("is_installed");
             entity.Property(update => update.IsHidden).HasColumnName("is_hidden");
@@ -55,6 +57,10 @@ public partial class DiscoveryDbContext
             entity.Property(update => update.InstallStartedAt).HasColumnName("install_started_at").HasColumnType("timestamptz");
             entity.Property(update => update.InstallResultCode).HasColumnName("install_result_code");
             entity.Property(update => update.InstallError).HasColumnName("install_error").HasMaxLength(1000);
+            // Retry/classificação de falha (M247, WU-08).
+            entity.Property(update => update.FailureClass).HasColumnName("failure_class").HasMaxLength(30);
+            entity.Property(update => update.AttemptCount).HasColumnName("attempt_count");
+            entity.Property(update => update.NextAttemptAt).HasColumnName("next_attempt_at").HasColumnType("timestamptz");
             entity.Property(update => update.ApprovalState).HasColumnName("approval_state");
             entity.Property(update => update.ApprovalSource).HasColumnName("approval_source").HasMaxLength(30);
             entity.Property(update => update.Status).HasColumnName("status");
@@ -110,6 +116,12 @@ public partial class DiscoveryDbContext
             entity.Property(snapshot => snapshot.ActiveHoursEnd).HasColumnName("active_hours_end");
             entity.Property(snapshot => snapshot.QfeInstalledCount).HasColumnName("qfe_installed_count");
             entity.Property(snapshot => snapshot.DownloadPercent).HasColumnName("download_percent");
+            // Decisão da política de reboot (M245). Guardada como string para o
+            // suporte ler o estado sem decodificar inteiro.
+            entity.Property(snapshot => snapshot.RebootAction).HasColumnName("reboot_action")
+                .HasMaxLength(30).HasConversion<string>();
+            entity.Property(snapshot => snapshot.RebootActionReason).HasColumnName("reboot_action_reason").HasMaxLength(200);
+            entity.Property(snapshot => snapshot.RebootActionAt).HasColumnName("reboot_action_at").HasColumnType("timestamptz");
             entity.Property(snapshot => snapshot.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 
             entity.HasOne<Agent>()
@@ -186,8 +198,14 @@ public partial class DiscoveryDbContext
             entity.Property(policy => policy.AutoApproveSeverities).HasColumnName("auto_approve_severities").HasColumnType("jsonb");
             entity.Property(policy => policy.AutoInstallEnabled).HasColumnName("auto_install_enabled");
             entity.Property(policy => policy.MaintenanceWindowJson).HasColumnName("maintenance_window_json").HasColumnType("jsonb");
+            // Deferral por idade (D09/M246) e deadline (D03/M248).
+            entity.Property(policy => policy.DeferralDays).HasColumnName("deferral_days");
+            entity.Property(policy => policy.DeadlineDays).HasColumnName("deadline_days");
             entity.Property(policy => policy.RebootPolicy).HasColumnName("reboot_policy");
             entity.Property(policy => policy.RebootAllowed).HasColumnName("reboot_allowed");
+            // Consentimento de terceiros (D22/M250).
+            entity.Property(policy => policy.Sources).HasColumnName("sources").HasColumnType("jsonb");
+            entity.Property(policy => policy.AllowThirdPartyApps).HasColumnName("allow_third_party_apps");
             entity.Property(policy => policy.MaxInstallsPerRun).HasColumnName("max_installs_per_run");
             entity.Property(policy => policy.HideDeniedUpdates).HasColumnName("hide_denied_updates");
             entity.Property(policy => policy.UpdatedBy).HasColumnName("updated_by").HasMaxLength(200);
@@ -215,6 +233,38 @@ public partial class DiscoveryDbContext
                 .WithMany()
                 .HasForeignKey(state => state.AgentId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Catálogo de apps de terceiros (WU-21/D24, M251).
+        modelBuilder.Entity<AppCatalogEntry>(entity =>
+        {
+            entity.ToTable("app_catalog_entries");
+            entity.HasKey(entry => entry.Id);
+            entity.HasIndex(entry => new { entry.Source, entry.PackageId, entry.Version })
+                .IsUnique()
+                .HasDatabaseName("ux_app_catalog_entries_pkg_version");
+            entity.HasIndex(entry => entry.Status).HasDatabaseName("ix_app_catalog_entries_status");
+
+            entity.Property(entry => entry.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(entry => entry.Source).HasColumnName("source").HasMaxLength(20);
+            entity.Property(entry => entry.PackageId).HasColumnName("package_id").HasMaxLength(200);
+            entity.Property(entry => entry.Name).HasColumnName("name").HasMaxLength(300);
+            entity.Property(entry => entry.Publisher).HasColumnName("publisher").HasMaxLength(200);
+            entity.Property(entry => entry.Version).HasColumnName("version").HasMaxLength(100);
+            entity.Property(entry => entry.InstallerUrl).HasColumnName("installer_url").HasMaxLength(2000);
+            entity.Property(entry => entry.Sha256).HasColumnName("sha256").HasMaxLength(64);
+            entity.Property(entry => entry.InstallerType).HasColumnName("installer_type").HasMaxLength(20);
+            entity.Property(entry => entry.SilentArgs).HasColumnName("silent_args").HasMaxLength(500);
+            entity.Property(entry => entry.ProductCode).HasColumnName("product_code").HasMaxLength(100);
+            entity.Property(entry => entry.Status).HasColumnName("status").HasMaxLength(20);
+            entity.Property(entry => entry.ReleaseDate).HasColumnName("release_date").HasColumnType("timestamptz");
+            entity.Property(entry => entry.Notes).HasColumnName("notes").HasMaxLength(1000);
+            entity.Property(entry => entry.CuratedBy).HasColumnName("curated_by").HasMaxLength(200);
+            entity.Property(entry => entry.CuratedAt).HasColumnName("curated_at").HasColumnType("timestamptz");
+            entity.Property(entry => entry.RevokedBy).HasColumnName("revoked_by").HasMaxLength(200);
+            entity.Property(entry => entry.RevokedAt).HasColumnName("revoked_at").HasColumnType("timestamptz");
+            entity.Property(entry => entry.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            entity.Property(entry => entry.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });
     }
 }

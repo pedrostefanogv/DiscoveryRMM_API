@@ -97,6 +97,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<PatchApprovalAudit> PatchApprovalAudits => Set<PatchApprovalAudit>();
     public DbSet<PatchPolicy> PatchPolicies => Set<PatchPolicy>();
     public DbSet<PatchOsState> PatchOsStates => Set<PatchOsState>();
+    public DbSet<AppCatalogEntry> AppCatalogEntries => Set<AppCatalogEntry>();
 
     // Knowledge Base
     public DbSet<KnowledgeArticle> KnowledgeArticles => Set<KnowledgeArticle>();

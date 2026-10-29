@@ -1,3 +1,5 @@
+using Discovery.Core.Enums;
+
 namespace Discovery.Core.Entities;
 
 /// <summary>Metadados do último scan de Windows Update de um agente.</summary>
@@ -64,6 +66,16 @@ public class AgentWindowsUpdateSnapshot
     public int? QfeInstalledCount { get; set; }
     /// <summary>Percentual do download em andamento (0–100).</summary>
     public int? DownloadPercent { get; set; }
+
+    // ── Ação da política de reboot (M245, decisão D02) ─────────────────────
+    // Nunca reiniciamos automaticamente: a política vira sinal operacional.
+
+    /// <summary>Ação decidida pela política: None | NotifyOperator | NotifyWithWindowHint.</summary>
+    public PatchRebootAction? RebootAction { get; set; }
+    /// <summary>Motivo legível da decisão (ex.: "política Notify: avisar o operador").</summary>
+    public string? RebootActionReason { get; set; }
+    /// <summary>Quando a decisão foi calculada.</summary>
+    public DateTime? RebootActionAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }
 }

@@ -12,8 +12,10 @@ public class AgentWindowsUpdateEntry
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? Classification { get; set; }
+    public string? UpdateType { get; set; }
     public string? Categories { get; set; }
     public string? Severity { get; set; }
+    public string? SeveritySource { get; set; }
     public bool IsPending { get; set; }
     public bool IsInstalled { get; set; }
     public bool IsHidden { get; set; }

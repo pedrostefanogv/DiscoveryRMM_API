@@ -238,8 +238,10 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             row.Title = string.IsNullOrWhiteSpace(entry.Title) ? entry.UpdateKey : entry.Title;
             row.Description = entry.Description;
             row.Classification = entry.Classification;
+            row.UpdateType = entry.UpdateType;
             row.Categories = entry.Categories;
             row.Severity = entry.Severity;
+            row.SeveritySource = entry.SeveritySource;
             row.IsPending = entry.IsPending;
             row.IsInstalled = entry.IsInstalled;
             row.IsHidden = entry.IsHidden;
@@ -404,6 +406,84 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             await transaction.CommitAsync(ct);
     }
 
+    public async Task ApplyInventoryDeltaAsync(
+        Guid agentId,
+        DateTime collectedAt,
+        PatchScanMeta scan,
+        PatchPendingRebootMeta? pendingReboot,
+        IReadOnlyList<AgentWindowsUpdateEntry> changedEntries,
+        IReadOnlyList<string>? removedKeys,
+        PatchServiceStateMeta? serviceState = null,
+        CancellationToken ct = default)
+    {
+        var removed = new HashSet<string>(removedKeys ?? [], StringComparer.OrdinalIgnoreCase);
+
+        // Inventário atual (só linhas presentes): o delta é aplicado POR CIMA.
+        var currentRows = await db.AgentWindowsUpdates
+            .AsNoTracking()
+            .Where(update => update.AgentId == agentId && update.IsPresent)
+            .ToListAsync(ct);
+
+        var merged = new Dictionary<string, AgentWindowsUpdateEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in currentRows)
+        {
+            if (removed.Contains(row.UpdateKey))
+                continue;
+            merged[row.UpdateKey] = ToEntry(row);
+        }
+
+        foreach (var entry in changedEntries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.UpdateKey))
+                continue;
+            if (removed.Contains(entry.UpdateKey))
+                continue;
+            merged[entry.UpdateKey] = entry;
+        }
+
+        if (merged.Count == 0)
+        {
+            // Delta que esvaziaria o inventário: mesma semântica do upload vazio
+            // (não prova remoção). Só metadados/sonda são atualizados.
+            await UpdateScanStatusAsync(agentId, scan, pendingReboot, serviceState, ct);
+            return;
+        }
+
+        // Delega para o caminho completo: TODAS as guardas de scan parcial e de
+        // leitura incompleta continuam valendo (o delta só reduz o payload).
+        await ReplaceInventoryAsync(
+            agentId, collectedAt, scan, pendingReboot, merged.Values.ToList(), serviceState, ct);
+    }
+
+    /// <summary>Mapeia a linha persistida de volta para o formato de entrada.</summary>
+    private static AgentWindowsUpdateEntry ToEntry(AgentWindowsUpdate row) => new()
+    {
+        UpdateKey = row.UpdateKey,
+        KbIds = row.KbIds,
+        UpdateId = row.UpdateId,
+        Revision = row.Revision,
+        Title = row.Title,
+        Description = row.Description,
+        Classification = row.Classification,
+        UpdateType = row.UpdateType,
+        Categories = row.Categories,
+        Severity = row.Severity,
+        SeveritySource = row.SeveritySource,
+        IsPending = row.IsPending,
+        IsInstalled = row.IsInstalled,
+        IsHidden = row.IsHidden,
+        IsDownloaded = row.IsDownloaded,
+        IsMandatory = row.IsMandatory,
+        RequiresReboot = row.RequiresReboot,
+        MaxDownloadSize = row.MaxDownloadSize,
+        SupportUrl = row.SupportUrl,
+        PublishedAt = row.PublishedAt,
+        LastDeployedAt = row.LastDeployedAt,
+        InstalledAt = row.InstalledAt,
+        Source = row.Source,
+        Raw = row.Raw
+    };
+
     public Task UpdateScanStatusAsync(
         Guid agentId,
         PatchScanMeta scan,
@@ -489,8 +569,47 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             snapshot.PendingReboot = badgePending;
             snapshot.PendingRebootReasons = PatchJson.SerializeStringArray(reasons.ToArray());
             snapshot.RebootCheckedAt = checkedAt.Kind == DateTimeKind.Utc ? checkedAt : checkedAt.ToUniversalTime();
+            // Sem reinício pendente a decisão da política deixa de valer: limpar
+            // evita a UI mostrar "notificar operador" para uma máquina já reiniciada.
+            if (!badgePending)
+            {
+                snapshot.RebootAction = null;
+                snapshot.RebootActionReason = null;
+                snapshot.RebootActionAt = null;
+            }
             snapshot.UpdatedAt = DateTime.UtcNow;
         }
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<Guid>> GetAgentsWithPendingRebootAsync(int limit, CancellationToken ct = default)
+    {
+        var take = Math.Clamp(limit <= 0 ? 500 : limit, 1, 2000);
+        return await db.AgentWindowsUpdateSnapshots
+            .AsNoTracking()
+            .Where(snapshot => snapshot.PendingReboot)
+            .OrderBy(snapshot => snapshot.RebootCheckedAt)
+            .Select(snapshot => snapshot.AgentId)
+            .Take(take)
+            .ToListAsync(ct);
+    }
+
+    public async Task UpdateRebootActionAsync(
+        Guid agentId,
+        PatchRebootAction action,
+        string reason,
+        DateTime decidedAt,
+        CancellationToken ct = default)
+    {
+        var snapshot = await db.AgentWindowsUpdateSnapshots
+            .FirstOrDefaultAsync(item => item.AgentId == agentId, ct);
+        if (snapshot is null)
+            return;
+
+        snapshot.RebootAction = action;
+        snapshot.RebootActionReason = reason.Length > 200 ? reason[..200] : reason;
+        snapshot.RebootActionAt = decidedAt.Kind == DateTimeKind.Utc ? decidedAt : decidedAt.ToUniversalTime();
+        snapshot.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
     }
 
@@ -674,7 +793,42 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 row.IsPending = false;
                 row.IsInstalled = true;
                 row.InstalledAt ??= now;
+                // Sucesso encerra o ciclo de retry (WU-08).
+                row.FailureClass = null;
+                row.NextAttemptAt = null;
+                row.AttemptCount = 0;
             }
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task RecordInstallFailureAsync(
+        Guid agentId,
+        IReadOnlyCollection<string> updateKeys,
+        string failureClass,
+        int? resultCode,
+        string? error,
+        CancellationToken ct = default)
+    {
+        if (updateKeys.Count == 0)
+            return;
+
+        var now = DateTime.UtcNow;
+        var rows = await db.AgentWindowsUpdates
+            .Where(update => update.AgentId == agentId && updateKeys.Contains(update.UpdateKey))
+            .ToListAsync(ct);
+
+        foreach (var row in rows)
+        {
+            row.Status = PatchUpdateStatus.Failed;
+            row.InstallResultCode = resultCode;
+            row.InstallError = error;
+            row.FailureClass = failureClass;
+            row.AttemptCount += 1;
+            // O backoff depende do número de falhas JÁ registradas (WU-08):
+            // só classe transient agenda nova tentativa; as demais exigem ação.
+            row.NextAttemptAt = PatchFailureClassifier.NextAttemptAt(failureClass, row.AttemptCount, now);
+            row.UpdatedAt = now;
         }
         await db.SaveChangesAsync(ct);
     }

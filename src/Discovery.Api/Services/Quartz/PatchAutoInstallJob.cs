@@ -1,6 +1,7 @@
 using Discovery.Core.Cqrs.Patches;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Cqrs.Patches;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,6 +39,7 @@ public sealed class PatchAutoInstallJob : IJob
         var redis = scope.ServiceProvider.GetRequiredService<IRedisService>();
         var dispatcher = scope.ServiceProvider.GetRequiredService<IAgentCommandDispatcher>();
         var reportRepo = scope.ServiceProvider.GetRequiredService<IAutomationExecutionReportRepository>();
+        var catalogRepo = scope.ServiceProvider.GetRequiredService<IAppCatalogRepository>();
 
         try
         {
@@ -46,9 +48,16 @@ public sealed class PatchAutoInstallJob : IJob
             if (agentIds.Count == 0)
                 return;
 
+            var nowUtc = DateTime.UtcNow;
             var pending = await patchRepo.GetPendingForAgentsAsync(agentIds, ct);
             var approved = pending
                 .Where(update => update.ApprovalState is PatchApprovalState.Approved or PatchApprovalState.AutoApproved)
+                // WU-08: linha que já falhou só volta quando o backoff venceu e a
+                // classe permite retry (transient, até MaxTransientAttempts).
+                // Antes, toda linha Failed era reprocessada a cada execução.
+                .Where(update => update.FailureClass is null ||
+                                 PatchFailureClassifier.IsRetryDue(
+                                     update.FailureClass, update.AttemptCount, update.NextAttemptAt, nowUtc))
                 .GroupBy(update => update.AgentId)
                 .ToList();
 
@@ -79,10 +88,30 @@ public sealed class PatchAutoInstallJob : IJob
                 // Timezone: o JSON da política manda; sem ele, usa o timezone do
                 // site (SiteConfiguration.Timezone) antes de cair para UTC.
                 var siteConfig = await configService.GetSiteConfigAsync(site.Id);
-                if (!Discovery.Core.Helpers.PatchMaintenanceWindow.IsOpen(
-                        policy.MaintenanceWindowJson, now, siteConfig?.Timezone))
+                var recurringWindowOpen = PatchMaintenanceWindow.IsOpen(
+                    policy.MaintenanceWindowJson, nowUtc, siteConfig?.Timezone);
+
+                // WU-05/D03: deadline vencido AMPLIA a janela até o prazo. Usa a
+                // publicação mais antiga do lote: se qualquer alvo venceu, o lote
+                // pode ser instalado fora da janela recorrente — com log auditado.
+                DateTime? oldestPublished = null;
+                foreach (var update in group)
                 {
+                    if (!update.PublishedAt.HasValue)
+                        continue;
+                    if (oldestPublished is null || update.PublishedAt.Value < oldestPublished.Value)
+                        oldestPublished = update.PublishedAt.Value;
+                }
+
+                var window = PatchDeadline.EvaluateWindow(
+                    recurringWindowOpen, policy.DeadlineDays, oldestPublished, nowUtc);
+                if (!window.Open)
                     continue;
+                if (!recurringWindowOpen)
+                {
+                    logger.LogWarning(
+                        "Patch auto-install: janela ampliada por deadline (agent={AgentId} policy={Scope} reason={Reason})",
+                        agent.Id, policy.ScopeType, window.Reason);
                 }
 
                 var lockKey = $"patch:auto-install:{agent.Id}";
@@ -95,28 +124,74 @@ public sealed class PatchAutoInstallJob : IJob
                 if (targets.Count == 0)
                     continue;
 
-                var payload = PatchCommandPayloads.Install(targets, force: false, postAction: "none");
-                var command = new AgentCommand
+                // WU-19/WU-20: OS e terceiros são comandos distintos (o agente
+                // tem executores diferentes); ambos contam como a mesma execução.
+                var (osTargets, thirdPartyTargets) = PatchCommandPayloads.SplitBySource(targets);
+                var dispatchedForAgent = 0;
+
+                if (osTargets.Count > 0)
                 {
-                    AgentId = agent.Id,
-                    CommandType = CommandType.WindowsUpdate,
-                    Payload = payload
-                };
-                var created = await dispatcher.DispatchAsync(command, ct);
-                await Discovery.Infrastructure.Cqrs.Agents.CommandHandlers.RunAutomationTaskCommandHandler.CreateReportAsync(
-                    reportRepo, created, null, null, AutomationExecutionSourceType.PatchInstall,
-                    new
+                    var osCommand = new AgentCommand
                     {
-                        mode = "auto-install",
-                        policyScope = policy.ScopeType.ToString(),
-                        updateKeys = targets.Select(update => update.UpdateKey).ToList()
-                    });
+                        AgentId = agent.Id,
+                        CommandType = CommandType.WindowsUpdate,
+                        Payload = PatchCommandPayloads.Install(osTargets, force: false, postAction: "none")
+                    };
+                    var created = await dispatcher.DispatchAsync(osCommand, ct);
+                    await Discovery.Infrastructure.Cqrs.Agents.CommandHandlers.RunAutomationTaskCommandHandler.CreateReportAsync(
+                        reportRepo, created, null, null, AutomationExecutionSourceType.PatchInstall,
+                        new
+                        {
+                            mode = "auto-install",
+                            sources = new[] { "os" },
+                            policyScope = policy.ScopeType.ToString(),
+                            updateKeys = osTargets.Select(update => update.UpdateKey).ToList()
+                        });
+                    dispatchedForAgent++;
+                }
+
+                if (thirdPartyTargets.Count > 0)
+                {
+                    // Só chega aqui se a política tem duplo consentimento: o
+                    // resolver não auto-aprova terceiros sem ele.
+                    foreach (var groupBySource in thirdPartyTargets.GroupBy(
+                                 update => (update.Source ?? string.Empty).ToLowerInvariant()))
+                    {
+                        // WU-21: leva metadados do catálogo curado (URL+hash) para
+                        // o agente baixar do fornecedor e validar antes de executar.
+                        var appIds = groupBySource
+                            .Select(update => PatchCommandPayloads.ExtractAppId(update.UpdateKey))
+                            .ToList();
+                        var catalogEntries = await catalogRepo.GetActiveEntriesForAsync(
+                            groupBySource.Key, appIds, ct);
+                        var catalogMap = PatchCommandPayloads.BuildCatalogMap(catalogEntries);
+
+                        var tpCommand = new AgentCommand
+                        {
+                            AgentId = agent.Id,
+                            CommandType = CommandType.WindowsUpdate,
+                            Payload = PatchCommandPayloads.InstallThirdParty(
+                                groupBySource.Key, groupBySource.ToList(), 1800, catalogMap)
+                        };
+                        var created = await dispatcher.DispatchAsync(tpCommand, ct);
+                        await Discovery.Infrastructure.Cqrs.Agents.CommandHandlers.RunAutomationTaskCommandHandler.CreateReportAsync(
+                            reportRepo, created, null, null, AutomationExecutionSourceType.PatchInstall,
+                            new
+                            {
+                                mode = "auto-install",
+                                sources = new[] { groupBySource.Key },
+                                policyScope = policy.ScopeType.ToString(),
+                                updateKeys = groupBySource.Select(update => update.UpdateKey).ToList()
+                            });
+                        dispatchedForAgent++;
+                    }
+                }
 
                 await patchRepo.UpdateInstallStateAsync(
                     agent.Id, targets.Select(update => update.UpdateKey).ToList(),
                     PatchUpdateStatus.Installing, null, null, ct);
 
-                dispatched++;
+                dispatched += dispatchedForAgent;
             }
 
             if (dispatched > 0)

@@ -42,6 +42,51 @@ public class WindowsUpdateInventoryParserTests
     }
 
     [Test]
+    public void ParsesSeveritySourceAndRejectsUnknownValues()
+    {
+        var entries = WindowsUpdateInventoryParser.ParseUpdates(Json("""
+        [
+          {
+            "updateKey": "guid:3c3f1f1a-1111-2222-3333-444455556666:1",
+            "title": "2024-01 Cumulative Update",
+            "severity": "Important",
+            "severitySource": "Derived"
+          },
+          {
+            "updateKey": "guid:3c3f1f1a-1111-2222-3333-444455556667:1",
+            "title": "Sem rating",
+            "severitySource": "inventado"
+          },
+          {
+            "updateKey": "guid:3c3f1f1a-1111-2222-3333-444455556668:1",
+            "title": "Sem proveniencia",
+            "severity": "Critical"
+          }
+        ]
+        """));
+
+        Assert.That(entries, Has.Count.EqualTo(3));
+        Assert.That(entries[0].SeveritySource, Is.EqualTo("derived"));
+        Assert.That(entries[1].SeveritySource, Is.Null, "valor fora da allowlist deve virar null");
+        Assert.That(entries[2].SeveritySource, Is.Null, "agente antigo (campo ausente) deve ficar null");
+    }
+
+    [Test]
+    public void SeveritySourceIsTruncatedAtColumnLimit()
+    {
+        var entries = WindowsUpdateInventoryParser.ParseUpdates(Json("""
+        [{
+          "updateKey": "guid:3c3f1f1a-1111-2222-3333-444455556666:1",
+          "title": "x",
+          "severitySource": "vendor-derived-unknown-vendor"
+        }]
+        """));
+
+        Assert.That(entries, Has.Count.EqualTo(1));
+        Assert.That(entries[0].SeveritySource, Is.Null, "valor maior que a coluna nao entra (nem truncado)");
+    }
+
+    [Test]
     public void DerivesKeyWhenMissing()
     {
         var entries = WindowsUpdateInventoryParser.ParseUpdates(Json("""

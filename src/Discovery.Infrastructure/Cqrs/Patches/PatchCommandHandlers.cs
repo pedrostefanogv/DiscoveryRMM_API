@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Patches;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.Extensions.Logging;
@@ -300,6 +301,7 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
     ISiteRepository siteRepo,
     IPatchRepository patchRepo,
     IPatchApprovalResolver resolver,
+    IAppCatalogRepository catalogRepo,
     IAgentCommandDispatcher dispatcher,
     IAutomationExecutionReportRepository reportRepo,
     IPatchEventPublisher events
@@ -365,20 +367,60 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
                     "Nenhuma das atualizações selecionadas está aprovada para instalação."));
             }
 
-            var payload = PatchCommandPayloads.Install(targets, force: false, postAction: null);
-            var created = await PatchOperations.DispatchAsync(
-                dispatcher, reportRepo, cmd.AgentId, payload,
-                AutomationExecutionSourceType.PatchInstall,
-                new { mode = "bulk-install", updateKeys = targets.Select(update => update.UpdateKey).ToList() },
-                null, ct);
+            // WU-19/WU-20: OS e terceiros em comandos separados. Terceiros só
+            // executam com duplo consentimento na política aplicável (D22).
+            var (osTargets, thirdPartyTargets) = PatchCommandPayloads.SplitBySource(targets);
+            var bulkPolicies = await patchRepo.GetApplicablePoliciesForAgentAsync(site.ClientId, site.Id, ct);
+            var bulkPolicy = bulkPolicies.OrderByDescending(item => (int)item.ScopeType).FirstOrDefault();
+            var bulkThirdPartyConsented = bulkPolicy is not null &&
+                PatchSourcePolicy.ThirdPartyConsented(bulkPolicy.Sources, bulkPolicy.AllowThirdPartyApps);
+            var skippedThirdParty = 0;
+            if (!bulkThirdPartyConsented && thirdPartyTargets.Count > 0)
+            {
+                skippedThirdParty = thirdPartyTargets.Count;
+                thirdPartyTargets.Clear();
+            }
+            var commandIds = new List<Guid>();
+
+            if (osTargets.Count > 0)
+            {
+                var created = await PatchOperations.DispatchAsync(
+                    dispatcher, reportRepo, cmd.AgentId,
+                    PatchCommandPayloads.Install(osTargets, force: false, postAction: null),
+                    AutomationExecutionSourceType.PatchInstall,
+                    new { mode = "bulk-install", sources = new[] { "os" }, updateKeys = osTargets.Select(update => update.UpdateKey).ToList() },
+                    null, ct);
+                commandIds.Add(created.Id);
+            }
+
+            foreach (var groupBySource in thirdPartyTargets.GroupBy(
+                         update => (update.Source ?? string.Empty).ToLowerInvariant()))
+            {
+                // WU-21: payload leva URL + SHA-256 do catálogo curado.
+                var appIds = groupBySource
+                    .Select(update => PatchCommandPayloads.ExtractAppId(update.UpdateKey))
+                    .ToList();
+                var catalogEntries = await catalogRepo.GetActiveEntriesForAsync(groupBySource.Key, appIds, ct);
+                var created = await PatchOperations.DispatchAsync(
+                    dispatcher, reportRepo, cmd.AgentId,
+                    PatchCommandPayloads.InstallThirdParty(
+                        groupBySource.Key, groupBySource.ToList(), 1800,
+                        PatchCommandPayloads.BuildCatalogMap(catalogEntries)),
+                    AutomationExecutionSourceType.PatchInstall,
+                    new { mode = "bulk-install", sources = new[] { groupBySource.Key }, updateKeys = groupBySource.Select(update => update.UpdateKey).ToList() },
+                    null, ct);
+                commandIds.Add(created.Id);
+            }
 
             await patchRepo.UpdateInstallStateAsync(
                 cmd.AgentId, targets.Select(update => update.UpdateKey).ToList(),
                 PatchUpdateStatus.Installing, null, null, ct);
 
             return Result<PatchDispatchDto>.Success(new PatchDispatchDto(
-                1, cmd.UpdateKeys.Count - targets.Count, [created.Id],
-                $"{targets.Count} atualização(ões) aprovada(s) enviada(s) para instalação."));
+                commandIds.Count, cmd.UpdateKeys.Count - targets.Count, commandIds,
+                skippedThirdParty > 0
+                    ? $"{targets.Count - skippedThirdParty} atualização(ões) enviada(s); {skippedThirdParty} app(s) de terceiros sem duplo consentimento."
+                    : $"{targets.Count} atualização(ões) aprovada(s) enviada(s) para instalação."));
         }
 
         return Result<PatchDispatchDto>.Failure(Error.Validation("action", "Ação inválida. Use approve, deny ou install."));
@@ -563,6 +605,18 @@ public sealed class UpdatePatchPolicyCommandHandler(
             RebootAllowed = cmd.RebootAllowed,
             MaxInstallsPerRun = Math.Clamp(cmd.MaxInstallsPerRun <= 0 ? 50 : cmd.MaxInstallsPerRun, 1, 500),
             HideDeniedUpdates = cmd.HideDeniedUpdates,
+            // Deferral: 0..365 dias (fail-closed quando o update não tem data).
+            DeferralDays = Math.Clamp(cmd.DeferralDays, 0, 365),
+            // Deadline: 0..365 dias; vencido, amplia a janela até o prazo (D03).
+            DeadlineDays = Math.Clamp(cmd.DeadlineDays, 0, 365),
+            // Origens (D22): allowlist {os, third_party}; ausente = só os.
+            Sources = PatchJson.SerializeStringArray(
+                (cmd.Sources ?? [])
+                    .Where(value => PatchSourcePolicy.Known.Contains(value))
+                    .Select(value => value.ToLowerInvariant())
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()),
+            AllowThirdPartyApps = cmd.AllowThirdPartyApps,
             UpdatedBy = cmd.UpdatedBy,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
@@ -614,6 +668,10 @@ public sealed class ScanPatchScopeCommandHandler(
 
 public sealed class InstallPatchScopeCommandHandler(
     IPatchRepository patchRepo,
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IConfigurationService configService,
+    IAppCatalogRepository catalogRepo,
     IAgentCommandDispatcher dispatcher,
     IAutomationExecutionReportRepository reportRepo
 ) : IRequestHandler<InstallPatchScopeCommand, Result<PatchDispatchDto>>
@@ -636,6 +694,13 @@ public sealed class InstallPatchScopeCommandHandler(
                 "Informe o motivo para forçar a instalação em lote (registro de auditoria)."));
         }
 
+        // WU-06/D07: sobrepor a janela exige motivo (auditoria).
+        if (cmd.OverrideWindow && string.IsNullOrWhiteSpace(cmd.Reason))
+        {
+            return Result<PatchDispatchDto>.Failure(Error.Validation("reason",
+                "Informe o motivo para instalar fora da janela de manutenção (registro de auditoria)."));
+        }
+
         var (clientId, siteId) = PatchScopeResolver.Resolve(cmd.Scope, cmd.ScopeId);
         var scopeAgentIds = await patchRepo.GetAgentIdsInScopeAsync(
             clientId, siteId, cmd.HasGlobalAccess, cmd.AllowedClientIds,
@@ -646,6 +711,10 @@ public sealed class InstallPatchScopeCommandHandler(
 
         var commandIds = new List<Guid>();
         var skipped = 0;
+
+        var nowUtc = DateTime.UtcNow;
+        var skippedOutsideWindow = 0;
+        var skippedNoConsent = 0;
 
         foreach (var group in pending.GroupBy(update => update.AgentId))
         {
@@ -662,27 +731,121 @@ public sealed class InstallPatchScopeCommandHandler(
                 continue;
             }
 
-            var payload = PatchCommandPayloads.Install(targets, cmd.Force, cmd.PostAction);
-            var created = await PatchOperations.DispatchAsync(
-                dispatcher, reportRepo, group.Key, payload,
-                AutomationExecutionSourceType.PatchInstall,
-                new
+            var agent = await agentRepo.GetByIdAsync(group.Key);
+            var site = agent is null ? null : await siteRepo.GetByIdAsync(agent.SiteId);
+            if (agent is null || site is null)
+            {
+                skipped++;
+                continue;
+            }
+
+            var policies = await patchRepo.GetApplicablePoliciesForAgentAsync(site.ClientId, site.Id, ct);
+            var policy = policies.OrderByDescending(item => (int)item.ScopeType).FirstOrDefault();
+
+            // WU-19/WU-20 (D22): sem duplo consentimento NÃO se instala app de
+            // terceiros — nem por comando manual (o operador pode habilitar na
+            // política). OS continua com o comportamento anterior.
+            var thirdPartyConsented = policy is not null &&
+                PatchSourcePolicy.ThirdPartyConsented(policy.Sources, policy.AllowThirdPartyApps);
+
+            // WU-06/D07: a instalação MANUAL também respeita a janela (antes só o
+            // job automático checava). O operador pode sobrepor com motivo —
+            // comportamento auditado no relatório de execução.
+            if (!cmd.OverrideWindow)
+            {
+                // Sem política = sem janela configurada: a ação manual do operador
+                // não deve ser bloqueada (comportamento anterior preservado).
+                if (policy is not null)
                 {
-                    mode = "scope-install",
-                    scope = cmd.Scope.ToString(),
-                    updateKeys = targets.Select(update => update.UpdateKey).ToList(),
-                    forced = cmd.Force,
-                    postAction,
-                    reason = cmd.Reason,
-                    requestedBy = cmd.RequestedBy
-                },
-                cmd.CorrelationId, ct);
+                    var siteConfig = await configService.GetSiteConfigAsync(site.Id);
+                    var recurringOpen = PatchMaintenanceWindow.IsOpen(
+                        policy.MaintenanceWindowJson, nowUtc, siteConfig?.Timezone);
+
+                    DateTime? oldestPublished = null;
+                    foreach (var update in targets)
+                    {
+                        if (!update.PublishedAt.HasValue)
+                            continue;
+                        if (oldestPublished is null || update.PublishedAt.Value < oldestPublished.Value)
+                            oldestPublished = update.PublishedAt.Value;
+                    }
+
+                    var window = PatchDeadline.EvaluateWindow(
+                        recurringOpen, policy.DeadlineDays, oldestPublished, nowUtc);
+                    if (!window.Open)
+                    {
+                        skippedOutsideWindow++;
+                        skipped++;
+                        continue;
+                    }
+                }
+            }
+
+            // WU-19/WU-20: OS e apps de terceiros usam comandos diferentes.
+            var (osTargets, thirdPartyTargets) = PatchCommandPayloads.SplitBySource(targets);
+
+            if (!thirdPartyConsented && thirdPartyTargets.Count > 0)
+            {
+                skippedNoConsent += thirdPartyTargets.Count;
+                thirdPartyTargets.Clear();
+            }
+
+            if (osTargets.Count > 0)
+            {
+                var created = await PatchOperations.DispatchAsync(
+                    dispatcher, reportRepo, group.Key,
+                    PatchCommandPayloads.Install(osTargets, cmd.Force, cmd.PostAction),
+                    AutomationExecutionSourceType.PatchInstall,
+                    new
+                    {
+                        mode = "scope-install",
+                        sources = new[] { "os" },
+                        scope = cmd.Scope.ToString(),
+                        updateKeys = osTargets.Select(update => update.UpdateKey).ToList(),
+                        forced = cmd.Force,
+                        postAction,
+                        reason = cmd.Reason,
+                        requestedBy = cmd.RequestedBy,
+                        // D07: instalação fora da janela fica registrada na auditoria.
+                        windowOverridden = cmd.OverrideWindow
+                    },
+                    cmd.CorrelationId, ct);
+                commandIds.Add(created.Id);
+            }
+
+            foreach (var groupBySource in thirdPartyTargets.GroupBy(
+                         update => (update.Source ?? string.Empty).ToLowerInvariant()))
+            {
+                // WU-21: payload leva URL + SHA-256 do catálogo curado.
+                var appIds = groupBySource
+                    .Select(update => PatchCommandPayloads.ExtractAppId(update.UpdateKey))
+                    .ToList();
+                var catalogEntries = await catalogRepo.GetActiveEntriesForAsync(groupBySource.Key, appIds, ct);
+                var created = await PatchOperations.DispatchAsync(
+                    dispatcher, reportRepo, group.Key,
+                    PatchCommandPayloads.InstallThirdParty(
+                        groupBySource.Key, groupBySource.ToList(), 1800,
+                        PatchCommandPayloads.BuildCatalogMap(catalogEntries)),
+                    AutomationExecutionSourceType.PatchInstall,
+                    new
+                    {
+                        mode = "scope-install",
+                        sources = new[] { groupBySource.Key },
+                        scope = cmd.Scope.ToString(),
+                        updateKeys = groupBySource.Select(update => update.UpdateKey).ToList(),
+                        forced = cmd.Force,
+                        postAction = "none",
+                        reason = cmd.Reason,
+                        requestedBy = cmd.RequestedBy,
+                        windowOverridden = cmd.OverrideWindow
+                    },
+                    cmd.CorrelationId, ct);
+                commandIds.Add(created.Id);
+            }
 
             await patchRepo.UpdateInstallStateAsync(
                 group.Key, targets.Select(update => update.UpdateKey).ToList(),
                 PatchUpdateStatus.Installing, null, null, ct);
-
-            commandIds.Add(created.Id);
         }
 
         if (commandIds.Count == 0)
@@ -691,8 +854,15 @@ public sealed class InstallPatchScopeCommandHandler(
                 "Nenhuma atualização selecionada está pendente e aprovada nos agentes deste escopo."));
         }
 
+        var windowNote = skippedOutsideWindow > 0
+            ? $" {skippedOutsideWindow} fora da janela de manutenção (use 'overrideWindow' com motivo para instalar mesmo assim)."
+            : string.Empty;
+        var consentNote = skippedNoConsent > 0
+            ? $" {skippedNoConsent} app(s) de terceiros sem duplo consentimento na política (habilite origem + instalação automática)."
+            : string.Empty;
+
         return Result<PatchDispatchDto>.Success(new PatchDispatchDto(
             commandIds.Count, skipped, commandIds,
-            $"{commandIds.Count} agente(s) receberam a instalação; {skipped} sem atualizações elegíveis."));
+            $"{commandIds.Count} agente(s) receberam a instalação; {skipped} sem atualizações elegíveis.{windowNote}{consentNote}"));
     }
 }

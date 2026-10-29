@@ -45,6 +45,22 @@ public sealed record AgentWindowsUpdateDto(
 
     /// <summary>Marcada como obrigatória pela busca WUA (is_mandatory).</summary>
     public bool IsMandatory { get; init; }
+
+    /// <summary>
+    /// Proveniência da severidade: vendor | derived | unknown (decisão D10).
+    /// Null em linhas antigas (antes da coluna existir) e em linhas de QFE.
+    /// </summary>
+    public string? SeveritySource { get; init; }
+
+    /// <summary>feature | driver | software (WU-15; null em linha antiga).</summary>
+    public string? UpdateType { get; init; }
+
+    /// <summary>Classe da última falha (WU-08; null quando não houve falha).</summary>
+    public string? FailureClass { get; init; }
+    /// <summary>Tentativas de instalação já feitas.</summary>
+    public int AttemptCount { get; init; }
+    /// <summary>Quando o backoff vence (só classe transient).</summary>
+    public DateTime? NextAttemptAt { get; init; }
 }
 
 public sealed record AgentWindowsUpdatePageDto(
@@ -116,6 +132,18 @@ public sealed record AgentWindowsUpdateSnapshotDto(
     public int? QfeInstalledCount { get; init; }
     /// <summary>Percentual do download em andamento (0–100).</summary>
     public int? DownloadPercent { get; init; }
+
+    /// <summary>
+    /// Ação decidida pela POLÍTICA de reboot (decisão D02): None |
+    /// NotifyOperator | NotifyWithWindowHint. Null = nenhuma decisão calculada
+    /// (agente sem política ou sem reinício pendente). O produto nunca reinicia
+    /// automaticamente — isto é sinal para o operador.
+    /// </summary>
+    public string? RebootAction { get; init; }
+    /// <summary>Motivo legível da decisão (ex.: "política Notify: avisar o operador").</summary>
+    public string? RebootActionReason { get; init; }
+    /// <summary>Quando a decisão foi calculada.</summary>
+    public DateTime? RebootActionAt { get; init; }
 
     /// <summary>
     /// Bloco <c>probe</c> consumido pela aba "Atualizações" do console.
@@ -319,7 +347,15 @@ public sealed record PatchPolicyDto(
     int MaxInstallsPerRun,
     bool HideDeniedUpdates,
     string? UpdatedBy,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    // WU-04/D09: retenção por idade (0 = sem deferral).
+    int DeferralDays = 0,
+    // WU-05/D03: deadline de instalação em dias (0 = sem deadline).
+    int DeadlineDays = 0,
+    // WU-19/WU-20 (D22): origens habilitadas ("os"/"third_party") e o segundo
+    // consentimento para apps de terceiros.
+    IReadOnlyList<string>? Sources = null,
+    bool AllowThirdPartyApps = false);
 
 public sealed record PatchDispatchDto(
     int Dispatched,
@@ -362,7 +398,12 @@ public static class PatchDtoMapper
             update.Source ?? "wua")
         {
             IsDownloaded = update.IsDownloaded,
-            IsMandatory = update.IsMandatory
+            IsMandatory = update.IsMandatory,
+            SeveritySource = update.SeveritySource,
+            UpdateType = update.UpdateType,
+            FailureClass = update.FailureClass,
+            AttemptCount = update.AttemptCount,
+            NextAttemptAt = update.NextAttemptAt
         };
     }
 
@@ -411,7 +452,11 @@ public static class PatchDtoMapper
             ActiveHoursStart = snapshot?.ActiveHoursStart,
             ActiveHoursEnd = snapshot?.ActiveHoursEnd,
             QfeInstalledCount = snapshot?.QfeInstalledCount,
-            DownloadPercent = snapshot?.DownloadPercent
+            DownloadPercent = snapshot?.DownloadPercent,
+            // Decisão da política de reboot (M245) — null quando não calculada.
+            RebootAction = snapshot?.RebootAction?.ToString(),
+            RebootActionReason = snapshot?.RebootActionReason,
+            RebootActionAt = snapshot?.RebootActionAt
         };
     }
 
@@ -462,5 +507,9 @@ public static class PatchDtoMapper
         policy.MaxInstallsPerRun,
         policy.HideDeniedUpdates,
         policy.UpdatedBy,
-        policy.UpdatedAt);
+        policy.UpdatedAt,
+        policy.DeferralDays,
+        policy.DeadlineDays,
+        Discovery.Core.Helpers.PatchSourcePolicy.EffectiveSources(policy.Sources),
+        policy.AllowThirdPartyApps);
 }

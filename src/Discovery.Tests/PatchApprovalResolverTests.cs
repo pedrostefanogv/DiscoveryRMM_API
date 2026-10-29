@@ -40,7 +40,8 @@ public class PatchApprovalResolverTests
                 typeof(AgentWindowsUpdate),
                 typeof(AgentWindowsUpdateSnapshot),
                 typeof(PatchApproval),
-                typeof(PatchPolicy)
+                typeof(PatchPolicy),
+                typeof(AppCatalogEntry)
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -60,6 +61,7 @@ public class PatchApprovalResolverTests
             modelBuilder.Entity<AgentWindowsUpdateSnapshot>(entity => entity.HasKey(item => item.AgentId));
             modelBuilder.Entity<PatchApproval>(entity => entity.HasKey(item => item.Id));
             modelBuilder.Entity<PatchPolicy>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<AppCatalogEntry>(entity => entity.HasKey(item => item.Id));
         }
     }
 
@@ -78,9 +80,14 @@ public class PatchApprovalResolverTests
         return (db, agentId, clientId, siteId);
     }
 
-    private static AgentWindowsUpdate Update(Guid agentId, string groupKey, string? severity = null)
+    private static AgentWindowsUpdate Update(
+        Guid agentId,
+        string groupKey,
+        string? severity = null,
+        DateTime? publishedAt = null)
         => new()
         {
+            PublishedAt = publishedAt,
             Id = Guid.NewGuid(),
             AgentId = agentId,
             UpdateKey = groupKey.StartsWith("kb:") ? "guid:" + Guid.NewGuid() + ":1" : groupKey,
@@ -186,6 +193,126 @@ public class PatchApprovalResolverTests
         Assert.That(low.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown));
     }
 
+    // ── Deferral por idade de publicação (D09, fail-closed) ──
+    //
+    // Política auto-aprova Critical, mas com deferral de 7 dias. O update só
+    // pode ser auto-aprovado depois de PublishedAt + 7d; sem data é
+    // fail-closed (retido). Aprovação manual explícita vence o deferral.
+
+    private static PatchPolicy DeferralPolicy(int deferralDays) => new()
+    {
+        Id = Guid.NewGuid(),
+        ScopeType = PatchApprovalScopeType.Global,
+        AutoApproveSeverities = "[\"Critical\"]",
+        DeferralDays = deferralDays,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow
+    };
+
+    [Test]
+    public async Task Deferral_PublicacaoRecente_NaoAutoAprova()
+    {
+        var (db, agentId, _, _) = Seed();
+        db.AgentWindowsUpdates.Add(Update(agentId, "kb:KB5034441", "Critical", DateTime.UtcNow.AddDays(-2)));
+        db.PatchPolicies.Add(DeferralPolicy(7));
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown));
+            Assert.That(row.ApprovalSource, Is.Null);
+            Assert.That(row.Status, Is.EqualTo(PatchUpdateStatus.Pending));
+        });
+    }
+
+    [Test]
+    public async Task Deferral_PublicacaoAntiga_AutoAprova()
+    {
+        var (db, agentId, _, _) = Seed();
+        db.AgentWindowsUpdates.Add(Update(agentId, "kb:KB5034441", "Critical", DateTime.UtcNow.AddDays(-30)));
+        db.PatchPolicies.Add(DeferralPolicy(7));
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.AutoApproved));
+            Assert.That(row.ApprovalSource, Is.EqualTo("policy"));
+            Assert.That(row.Status, Is.EqualTo(PatchUpdateStatus.Approved));
+        });
+    }
+
+    [Test]
+    public async Task Deferral_SemPublishedAt_EhFailClosed()
+    {
+        var (db, agentId, _, _) = Seed();
+        db.AgentWindowsUpdates.Add(Update(agentId, "kb:KB5034441", "Critical", publishedAt: null));
+        db.PatchPolicies.Add(DeferralPolicy(7));
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown));
+            Assert.That(row.ApprovalSource, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task Deferral_AprovacaoManualVence()
+    {
+        var (db, agentId, _, _) = Seed();
+        // Publicado ontem: ainda dentro do deferral de 7 dias.
+        db.AgentWindowsUpdates.Add(Update(agentId, "kb:KB5034441", "Critical", DateTime.UtcNow.AddDays(-1)));
+        db.PatchPolicies.Add(DeferralPolicy(7));
+        db.PatchApprovals.Add(new PatchApproval
+        {
+            Id = Guid.NewGuid(),
+            ScopeType = PatchApprovalScopeType.Global,
+            UpdateKey = "kb:KB5034441",
+            Action = PatchApprovalActionType.Approve,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Approved));
+            Assert.That(row.ApprovalSource, Is.EqualTo("rule"));
+        });
+    }
+
+    [Test]
+    public async Task Deferral_Zero_MantemComportamentoAnterior()
+    {
+        var (db, agentId, _, _) = Seed();
+        // Sem PublishedAt e sem deferral: política auto-aprova como antes.
+        db.AgentWindowsUpdates.Add(Update(agentId, "kb:KB5034441", "Critical"));
+        db.PatchPolicies.Add(DeferralPolicy(0));
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.AutoApproved));
+    }
+
     [Test]
     public async Task SnapshotCountsReflectApprovals()
     {
@@ -209,5 +336,102 @@ public class PatchApprovalResolverTests
         var snapshot = await db.AgentWindowsUpdateSnapshots.SingleAsync();
         Assert.That(snapshot.PendingCount, Is.EqualTo(2));
         Assert.That(snapshot.DeniedCount, Is.EqualTo(0));
+    }
+
+    // ── WU-21 (D24): catálogo curado para apps de terceiros ─────────────────
+
+    private static PatchPolicy ThirdPartyPolicy() => new()
+    {
+        Id = Guid.NewGuid(),
+        ScopeType = PatchApprovalScopeType.Global,
+        AutoApproveSeverities = "[\"Important\"]",
+        Sources = "[\"os\",\"third_party\"]",
+        AllowThirdPartyApps = true,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow
+    };
+
+    private static AgentWindowsUpdate ThirdPartyUpdate(Guid agentId, string appId) => new()
+    {
+        Id = Guid.NewGuid(),
+        AgentId = agentId,
+        UpdateKey = "choco:" + appId,
+        GroupKey = "choco:" + appId,
+        Title = appId,
+        Severity = "Important",
+        Classification = "Third-party",
+        Source = "choco",
+        IsPending = true,
+        IsPresent = true,
+        Status = PatchUpdateStatus.Pending,
+        FirstSeenAt = DateTime.UtcNow,
+        LastSeenAt = DateTime.UtcNow,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow
+    };
+
+    private static AppCatalogEntry CatalogEntry(string appId, string status) => new()
+    {
+        Id = Guid.NewGuid(),
+        Source = "choco",
+        PackageId = appId,
+        Name = appId,
+        Version = "2.0.0",
+        InstallerUrl = "https://example.com/app.msi",
+        Sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        Status = status,
+        CuratedAt = DateTime.UtcNow,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow
+    };
+
+    [Test]
+    public async Task ThirdPartyWithoutCuratedCatalogStaysUnknown()
+    {
+        var (db, agentId, _, _) = Seed();
+        db.AgentWindowsUpdates.Add(ThirdPartyUpdate(agentId, "googlechrome"));
+        db.PatchPolicies.Add(ThirdPartyPolicy());
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown),
+            "sem versão curada não há auto-aprovação de app de terceiros");
+    }
+
+    [Test]
+    public async Task ThirdPartyWithActiveCatalogEntryIsAutoApproved()
+    {
+        var (db, agentId, _, _) = Seed();
+        db.AgentWindowsUpdates.Add(ThirdPartyUpdate(agentId, "googlechrome"));
+        db.PatchPolicies.Add(ThirdPartyPolicy());
+        db.AppCatalogEntries.Add(CatalogEntry("googlechrome", "active"));
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.AutoApproved));
+        Assert.That(row.ApprovalSource, Is.EqualTo("policy"));
+    }
+
+    [Test]
+    public async Task RevokedCatalogEntryBlocksAutoApproval()
+    {
+        var (db, agentId, _, _) = Seed();
+        db.AgentWindowsUpdates.Add(ThirdPartyUpdate(agentId, "googlechrome"));
+        db.PatchPolicies.Add(ThirdPartyPolicy());
+        db.AppCatalogEntries.Add(CatalogEntry("googlechrome", "revoked"));
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown),
+            "versão revogada (CVE/regressão) não pode ser auto-aprovada");
     }
 }

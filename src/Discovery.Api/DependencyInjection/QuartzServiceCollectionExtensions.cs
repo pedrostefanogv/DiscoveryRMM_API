@@ -223,6 +223,20 @@ public static class QuartzServiceCollectionExtensions
                     .WithDescription("Instala patches aprovados dentro da janela de manutenção (opt-in por política)"));
             }
 
+            var patchRebootNoticeEnabled = configuration.GetValue<bool?>("BackgroundJobs:PatchRebootNotice:Enabled") ?? true;
+            if (patchRebootNoticeEnabled)
+            {
+                var patchRebootNoticeIntervalMinutes = Math.Max(5, configuration
+                    .GetValue<int?>("BackgroundJobs:PatchRebootNotice:IntervalMinutes") ?? 15);
+
+                q.ScheduleJob<PatchRebootNoticeJob>(trigger => trigger
+                    .WithIdentity(PatchRebootNoticeJob.Key.Name, PatchRebootNoticeJob.Key.Group)
+                    .WithSimpleSchedule(s => s
+                        .WithInterval(TimeSpan.FromMinutes(patchRebootNoticeIntervalMinutes))
+                        .RepeatForever())
+                    .WithDescription("Consome a política de reboot para agentes com reinício pendente (nunca reinicia)"));
+            }
+
             var patchMaintenanceEnabled = configuration.GetValue<bool?>("BackgroundJobs:PatchMaintenance:Enabled") ?? true;
             if (patchMaintenanceEnabled)
             {

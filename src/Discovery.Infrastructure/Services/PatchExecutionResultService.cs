@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -49,19 +50,36 @@ public sealed class PatchExecutionResultService(
 
         var installed = new List<string>();
         var failed = new List<string>();
+        // WU-07: skipped NÃO é falha. "already_installed" confirma o estado
+        // desejado; "not_offered" = update saiu do catálogo (superseded/expirado).
+        var alreadyInstalled = new List<string>();
+        var notOffered = new List<string>();
         var failureCode = (int?)null;
         var failureMessage = errorMessage;
+        var errorCode = (string?)null;
 
         if (parsed is not null)
         {
             installed.AddRange(parsed.Installed.Where(updateKeys.Contains));
             failed.AddRange(parsed.Failed.Where(updateKeys.Contains));
+            errorCode = parsed.ErrorCode;
+
+            foreach (var (key, reason) in parsed.Skipped.Where(item => updateKeys.Contains(item.Key)))
+            {
+                if (string.Equals(reason, "already_installed", StringComparison.Ordinal))
+                    alreadyInstalled.Add(key);
+                else
+                    notOffered.Add(key);
+            }
 
             var missing = updateKeys
                 .Where(key => !installed.Contains(key, StringComparer.OrdinalIgnoreCase) &&
-                              !failed.Contains(key, StringComparer.OrdinalIgnoreCase))
+                              !failed.Contains(key, StringComparer.OrdinalIgnoreCase) &&
+                              !alreadyInstalled.Contains(key, StringComparer.OrdinalIgnoreCase) &&
+                              !notOffered.Contains(key, StringComparer.OrdinalIgnoreCase))
                 .ToList();
-            // "notFound" = update saiu do catálogo entre aprovação e instalação.
+            // Agente antigo não envia "skipped": o alvo não citado continua
+            // contando como falha (comportamento anterior, sem esconder problema).
             foreach (var key in missing)
                 failed.Add(key);
 
@@ -85,13 +103,33 @@ public sealed class PatchExecutionResultService(
                 command.AgentId, installed, PatchUpdateStatus.Installed, null, null, ct);
         }
 
+        if (alreadyInstalled.Count > 0)
+        {
+            // Já estava instalado: o estado desejado é o atual.
+            await patchRepo.UpdateInstallStateAsync(
+                command.AgentId, alreadyInstalled, PatchUpdateStatus.Installed, null, null, ct);
+        }
+
+        if (notOffered.Count > 0)
+        {
+            // Saiu do catálogo entre a aprovação e a execução.
+            await patchRepo.UpdateInstallStateAsync(
+                command.AgentId, notOffered, PatchUpdateStatus.Superseded, null,
+                "atualização não é mais oferecida pelo Windows Update", ct);
+        }
+
         if (failed.Count > 0)
         {
             var message = string.IsNullOrWhiteSpace(failureMessage)
                 ? "instalação não confirmada pelo agente"
                 : failureMessage.Trim();
-            await patchRepo.UpdateInstallStateAsync(
-                command.AgentId, failed, PatchUpdateStatus.Failed, failureCode, message, ct);
+            // WU-08: classificação determinística + backoff (só transient re-tenta).
+            var failureClass = PatchFailureClassifier.Classify(errorCode, message, failureCode);
+            await patchRepo.RecordInstallFailureAsync(
+                command.AgentId, failed, failureClass, failureCode, message, ct);
+            logger?.LogWarning(
+                "Patch install failed: command={CommandId} agent={AgentId} class={FailureClass} errorCode={ErrorCode} keys={Count}",
+                commandId, command.AgentId, failureClass, errorCode, failed.Count);
         }
 
         await resolver.RecomputeForAgentAsync(command.AgentId, ct);
@@ -202,6 +240,8 @@ public sealed class PatchExecutionResultService(
     private sealed record ParsedOutput(
         IReadOnlyList<string> Installed,
         IReadOnlyList<string> Failed,
+        IReadOnlyList<(string Key, string Reason)> Skipped,
+        string? ErrorCode,
         bool RebootRequired);
 
     private static ParsedOutput? ParseOutput(string? output)
@@ -226,6 +266,10 @@ public sealed class PatchExecutionResultService(
             var failed = ReadKeyArray(document.RootElement, "failed");
             var notFound = ReadKeyArray(document.RootElement, "notFound");
             failed.AddRange(notFound);
+            // WU-07: skipped não é falha. O agente informa o motivo estável.
+            var skipped = ReadSkippedArray(document.RootElement);
+            // WU-06: motivo estruturado do preflight (disk_space, service_stopped…).
+            var errorCode = ReadStringProperty(document.RootElement, "errorCode");
 
             var rebootRequired = false;
             if (document.RootElement.TryGetProperty("rebootRequired", out var rebootElement))
@@ -238,12 +282,49 @@ public sealed class PatchExecutionResultService(
                 };
             }
 
-            return new ParsedOutput(installed, failed, rebootRequired);
+            return new ParsedOutput(installed, failed, skipped, errorCode, rebootRequired);
         }
         catch (JsonException)
         {
             return null;
         }
+    }
+
+    private static string? ReadStringProperty(JsonElement root, string property)
+    {
+        if (!root.TryGetProperty(property, out var element) || element.ValueKind != JsonValueKind.String)
+            return null;
+        var value = element.GetString()?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    private static List<(string Key, string Reason)> ReadSkippedArray(JsonElement root)
+    {
+        var skipped = new List<(string Key, string Reason)>();
+        if (!root.TryGetProperty("skipped", out var element) || element.ValueKind != JsonValueKind.Array)
+            return skipped;
+
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object ||
+                !item.TryGetProperty("updateKey", out var keyElement) ||
+                keyElement.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var key = keyElement.GetString()?.Trim();
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
+
+            var reason = item.TryGetProperty("skipReason", out var reasonElement) &&
+                         reasonElement.ValueKind == JsonValueKind.String
+                ? reasonElement.GetString()?.Trim().ToLowerInvariant() ?? string.Empty
+                : string.Empty;
+            skipped.Add((key, reason));
+        }
+
+        return skipped;
     }
 
     private static List<string> ReadKeyArray(JsonElement root, string property)

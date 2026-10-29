@@ -29,8 +29,16 @@ public class AgentWindowsUpdate
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? Classification { get; set; }
+    /// <summary>feature | driver | software — derivado no AGENTE (WU-15).</summary>
+    public string? UpdateType { get; set; }
     public string? Categories { get; set; }
     public string? Severity { get; set; }
+    /// <summary>
+    /// Proveniência da severidade: <c>vendor</c> (rating do MSRC), <c>derived</c>
+    /// (inferida pelo agente com teto Important) ou <c>unknown</c>. A UI mostra
+    /// o rótulo para ninguém confundir inferência com rating oficial.
+    /// </summary>
+    public string? SeveritySource { get; set; }
 
     public bool IsPending { get; set; }
     public bool IsInstalled { get; set; }
@@ -49,6 +57,14 @@ public class AgentWindowsUpdate
     public DateTime? InstallStartedAt { get; set; }
     public int? InstallResultCode { get; set; }
     public string? InstallError { get; set; }
+
+    // ── Retry de instalação (M247, WU-08) ──────────────────────────────────
+    /// <summary>disk_space | store_corrupt | needs_reboot | permanent | transient | unknown.</summary>
+    public string? FailureClass { get; set; }
+    /// <summary>Tentativas de instalação já feitas (incrementa a cada falha).</summary>
+    public int AttemptCount { get; set; }
+    /// <summary>Quando o backoff vence e a linha pode ser re-tentada (só transient).</summary>
+    public DateTime? NextAttemptAt { get; set; }
 
     /// <summary>Estado efetivo de aprovação (denormalizado para filtros rápidos).</summary>
     public PatchApprovalState ApprovalState { get; set; } = PatchApprovalState.Unknown;
